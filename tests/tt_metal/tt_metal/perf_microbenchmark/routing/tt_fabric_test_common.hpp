@@ -1110,35 +1110,32 @@ public:
         return tt::tt_fabric::get_forwarding_link_indices_in_direction(src_node_id, dst_node_id, direction);
     }
 
-    FabricNodeId get_neighbor_node_id(
-        const FabricNodeId& src_node_id,
-        const RoutingDirection& direction,
-        const bool hard_exit = true) const override {
+    FabricNodeId get_neighbor_node_id_soft_exit(
+        const FabricNodeId& src_node_id, const RoutingDirection& direction) const override {
+        // This function is used to get the neighbor node ID for a given source node ID and direction, returning the
+        // source node ID if no neighbor is found.
         const auto& neighbors =
             tt::tt_metal::MetalContext::instance().get_control_plane().get_chip_neighbors(src_node_id, direction);
 
-        // Case 1: More than 1 mesh returned.
+        // If more than 1 mesh is returned, throw an error.
         TT_FATAL(
             neighbors.size() <= 1,
             "Expected at most one neighbor mesh for {} in direction: {}",
             src_node_id,
             direction);
 
-        // Case 2: No neighbor chips found.
-        if (neighbors.empty()) {
-            // If hard exit is enabled, we throw an error.
-            if (hard_exit) {
-                TT_FATAL(false, "No neighbor chips found for {} in direction: {}", src_node_id, direction);
-            }
-            // In a soft exit option, we return the original node ID as the neighbor. This allows us to check every
-            // direction for neighbors, without erroring out.
-            else {
-                return src_node_id;
-            }
-        }
+        // If no neighbor chips are found, return the original node ID as the neighbor.
+        return (neighbors.empty() ? src_node_id : FabricNodeId(neighbors.begin()->first, neighbors.begin()->second[0]));
+    }
 
-        // Case 3: Valid neighbor chips returned.
-        return FabricNodeId(neighbors.begin()->first, neighbors.begin()->second[0]);
+    FabricNodeId get_neighbor_node_id(
+        const FabricNodeId& src_node_id, const RoutingDirection& direction) const override {
+        // This function is used to get the neighbor node ID for a given source node ID and direction, throwing an error
+        // if no neighbor is found.
+        FabricNodeId neighbor_node_id = get_neighbor_node_id_soft_exit(src_node_id, direction);
+        TT_FATAL(
+            neighbor_node_id != src_node_id, "No neighbor chips found for {} in direction: {}", src_node_id, direction);
+        return neighbor_node_id;
     }
 
     std::vector<uint32_t> get_forwarding_link_indices_in_direction(
@@ -1493,10 +1490,9 @@ public:
     std::unordered_map<RoutingDirection, uint32_t> get_hops_to_nearest_neighbors(
         const FabricNodeId& src_device) const override {
         std::unordered_map<RoutingDirection, uint32_t> hops_to_nearest_neighbors;
-        const bool hard_exit = false;
         for (const auto& direction :
              {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W}) {
-            const FabricNodeId neighbor_node_id = get_neighbor_node_id(src_device, direction, hard_exit);
+            const FabricNodeId neighbor_node_id = get_neighbor_node_id_soft_exit(src_device, direction);
             // If there is no neighbor, function will return src_device
             if (neighbor_node_id != src_device) {
                 hops_to_nearest_neighbors[direction] = 1;

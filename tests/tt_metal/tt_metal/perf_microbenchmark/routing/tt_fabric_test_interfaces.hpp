@@ -110,8 +110,10 @@ public:
         const FabricNodeId& src_device, const std::vector<FabricNodeId>& devices) const = 0;
     virtual std::vector<uint32_t> get_forwarding_link_indices_in_direction(
         const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id, const RoutingDirection& direction) const = 0;
+    virtual FabricNodeId get_neighbor_node_id_soft_exit(
+        const FabricNodeId& src_node_id, const RoutingDirection& direction) const = 0;
     virtual FabricNodeId get_neighbor_node_id(
-        const FabricNodeId& src_node_id, const RoutingDirection& direction, const bool hard_exit = true) const = 0;
+        const FabricNodeId& src_node_id, const RoutingDirection& direction) const = 0;
     virtual std::unordered_map<RoutingDirection, uint32_t> get_hops_to_nearest_neighbors(
         const FabricNodeId& src_node_id) const = 0;
     virtual bool validate_num_links_supported(uint32_t num_links) const = 0;
