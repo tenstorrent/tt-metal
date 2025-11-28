@@ -537,13 +537,13 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         curr_row += num_tile_rows_per_core;
     }
 
-    shared_variables_t shared_variables = {
-        .reader_kernel_id = reader_kernels_id,
-        .writer_kernel_id = writer_kernels_id,
-        .num_cores = num_cores,
-        .grid_size = grid_size};
-
-    return cached_program_t{std::move(program), std::move(shared_variables)};
+    return cached_program_t{
+        std::move(program),
+        shared_variables_t{
+            .reader_kernel_id = reader_kernels_id,
+            .writer_kernel_id = writer_kernels_id,
+            .num_cores = num_cores,
+            .grid_size = grid_size}};
 }
 
 void LayerNormMultiCoreProgramFactory::override_runtime_arguments(

@@ -1396,20 +1396,20 @@ LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory:
         }
     }
 
-    shared_variables_t shared_variables{
-        writer_kernel_ids,
-        writer_mcast_sender_kernels_id,
-        writer_mcast_receiver_kernels_id,
-        num_none_all_to_all_workers,
-        is_pre_all_gather,
-        cb_in0,
-        cb_in1,
-        cb_stats,
-        cb_add_out,
-        cb_output,
-        cores};
-
-    return cached_program_t{std::move(program), std::move(shared_variables)};
+    return cached_program_t{
+        std::move(program),
+        shared_variables_t{
+            .writer_kernel_ids = writer_kernel_ids,
+            .writer_mcast_sender_kernels_id = writer_mcast_sender_kernels_id,
+            .writer_mcast_receiver_kernels_id = writer_mcast_receiver_kernels_id,
+            .num_none_all_to_all_workers = num_none_all_to_all_workers,
+            .is_pre_all_gather = is_pre_all_gather,
+            .cb_in0 = cb_in0,
+            .cb_in1 = cb_in1,
+            .cb_stats = cb_stats,
+            .cb_add_out = cb_add_out,
+            .cb_output = cb_output,
+            .cores = cores}};
 }
 
 void LayerNormShardedProgramFactory::override_runtime_arguments(
