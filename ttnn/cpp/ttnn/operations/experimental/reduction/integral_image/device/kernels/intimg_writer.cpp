@@ -81,7 +81,7 @@ void kernel_main() {
                     const uint32_t previous_row_chunk_i = row_chunk_i - 1;
                     receive_upper_block(
                         output_addr_gtor,
-                        ctas.axis_3_buffer_0_cb,
+                        ctas.axis_3_buffer_cb,
                         my_channel,
                         column_block_i,
                         previous_row_chunk_i,
