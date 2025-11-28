@@ -31,6 +31,7 @@ from models.tt_transformers.tt.load_checkpoints import (
 )
 from models.tt_transformers.tt.model_config import (
     DecodersPrecision,
+    HfModelWrapper,
     MathFidelitySetting,
     OpGroup,
     PrecisionSetting,
@@ -2347,53 +2348,6 @@ class HfAttentionWrapper:
         return v.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
 
-class HfDecoderWrapper:
-    def __init__(self, decoder, head_dim, rotary_emb, rotary_emb_local=None):
-        from transformers import DynamicCache
-
-        self.decoder = decoder
-        self.head_dim = head_dim
-        self.rotary_emb = rotary_emb
-        self.rotary_emb_local = rotary_emb_local
-        self.past_key_values = DynamicCache()
-
-    def forward(self, x, start_pos, freqs_cis_i, mask=None):
-        position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
-        position_embeddings = self.rotary_emb(x, position_ids)
-
-        if mask is not None:
-            while len(mask.shape) < 4:
-                mask = mask.unsqueeze(0)
-        if self.rotary_emb_local is not None:
-            position_embeddings_local = self.rotary_emb_local(x, position_ids)
-            result = self.decoder.forward(
-                x,
-                position_embeddings_global=position_embeddings,
-                position_embeddings_local=position_embeddings_local,
-                past_key_value=self.past_key_values,
-                use_cache=True,
-                position_ids=position_ids,
-                attention_mask=mask,
-            )
-        else:
-            result = self.decoder.forward(
-                x,
-                position_embeddings=position_embeddings,
-                past_key_value=self.past_key_values,
-                use_cache=True,
-                position_ids=position_ids,
-                attention_mask=mask,
-            )
-        output = result[0]
-        return output
-
-    def __call__(self, *args, **kwargs):
-        return self.forward(*args, **kwargs)
-
-    def load_state_dict(self, state_dict):
-        return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim))
-
-
 class HfGemmaDecoderWrapper:
     def __init__(self, decoder, head_dim, rotary_emb, rotary_emb_local):
         from transformers import DynamicCache
@@ -2430,59 +2384,3 @@ class HfGemmaDecoderWrapper:
 
     def load_state_dict(self, state_dict):
         return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim))
-
-
-class HfModelWrapper:
-    def __init__(self, model, head_dim):
-        from transformers import DynamicCache
-
-        self.model = model
-        self.head_dim = head_dim
-        self.past_key_values = DynamicCache()
-
-    def forward(self, inputs_embeds, start_pos, mode="decode"):
-        position_ids = torch.tensor(
-            [list(range(start_pos, start_pos + inputs_embeds.shape[1]))] * inputs_embeds.shape[0]
-        )
-        logits, new_cache, hidden_states = self.model.forward(
-            inputs_embeds=inputs_embeds,
-            position_ids=position_ids,
-            use_cache=True,
-            past_key_values=self.past_key_values,
-            return_dict=False,
-            output_hidden_states=True,
-        )
-        self.past_key_values = new_cache
-        return logits if mode == "decode" else hidden_states[-2]  # last hidden state is final norm
-
-    def __call__(self, *args, **kwargs):
-        return self.forward(*args, **kwargs)
-
-    def load_state_dict(self, state_dict):
-        return self.model.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim))
-
-    def eval(self):
-        self.model.eval()
-
-    @property
-    def cache_k(self):
-        [(k, v)] = self.past_key_values.to_legacy_cache()
-        hf_k = k.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
-        batch_size, seq_len, n_heads, head_dim = hf_k.shape
-
-        meta_k = torch.zeros_like(hf_k)
-        for b in range(batch_size):
-            for s in range(seq_len):
-                # Flatten just heads and head_dim
-                flat = hf_k[b, s].flatten()
-                # Apply reverse_permute
-                transformed = reverse_permute(flat.unsqueeze(-1), n_heads, flat.shape[0], 1).squeeze(-1)
-                # Restore heads and head_dim shape
-                meta_k[b, s] = transformed.reshape(n_heads, head_dim)
-
-        return meta_k
-
-    @property
-    def cache_v(self):
-        [(k, v)] = self.past_key_values.to_legacy_cache()
-        return v.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
