@@ -172,9 +172,12 @@ target_sources(
         sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial.cpp
         sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.cpp
         sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial.cpp
-        slice/device/slice_op.cpp
-        slice/device/slice_program_factory.cpp
-        slice/device/slice_program_factory_stride.cpp
+        slice/device/slice_device_operation.cpp
+        slice/device/slice_program_factory_rm.cpp
+        slice/device/slice_program_factory_rm_sharded.cpp
+        slice/device/slice_program_factory_rm_stride.cpp
+        slice/device/slice_program_factory_tile.cpp
+        slice/device/slice_program_factory_tile_tensor_args.cpp
         slice/slice.cpp
         split/device/split_device_operation.cpp
         split/device/split_program_factory.cpp
