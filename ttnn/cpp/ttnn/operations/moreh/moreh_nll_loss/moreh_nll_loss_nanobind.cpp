@@ -8,6 +8,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 
 #include "moreh_nll_loss.hpp"
 #include "ttnn-nanobind/decorators.hpp"

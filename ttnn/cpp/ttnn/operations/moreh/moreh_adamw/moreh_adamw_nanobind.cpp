@@ -47,7 +47,7 @@ void bind_moreh_adamw_operation(nb::module_& mod) {
             nb::arg("grad"),
             nb::arg("exp_avg_in"),
             nb::arg("exp_avg_sq_in"),
-            nb::arg("lr") = 0.001f,
+            nb::arg("lr") = 0.001f,  // these defaults are set in moreh_adamw_device_operation.cpp
             nb::arg("beta1") = 0.9f,
             nb::arg("beta2") = 0.999f,
             nb::arg("eps") = 1e-8f,

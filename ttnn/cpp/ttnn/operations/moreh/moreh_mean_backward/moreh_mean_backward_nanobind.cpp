@@ -21,7 +21,7 @@ void bind_moreh_mean_backward_operation(nb::module_& mod) {
         ttnn::nanobind_arguments_t{
             nb::arg("output_grad"),
             nb::kw_only(),
-            nb::arg("dim"),
+            nb::arg("dim") = nb::none(),
             nb::arg("keepdim"),
             nb::arg("input_grad_shape") = nb::none(),
             nb::arg("input_grad") = nb::none(),

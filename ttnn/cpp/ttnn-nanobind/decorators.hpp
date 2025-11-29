@@ -17,8 +17,10 @@
 
 // variants are used for a lot of config types and nanobind otherwise will autogenerate
 // the appropriate binding if the typecaster is present. This comes up everywhere
-// so include it here.
+// so include it here. Missing typecasters is a major source of:
+// TypeError: __call__(): incompatible function arguments
 #include <nanobind/stl/variant.h>
+#include <nanobind/stl/vector.h>
 
 // used all over the place so just include it here to make the typecaster visible
 #include "ttnn-nanobind/small_vector_caster.hpp"

@@ -20,7 +20,7 @@ void bind_moreh_sum_operation(nb::module_& mod) {
         "Moreh Sum Operation",
         ttnn::nanobind_arguments_t{
             nb::arg("input"),
-            nb::arg("dim"),
+            nb::arg("dim") = nb::none(),
             nb::kw_only(),
             nb::arg("keepdim") = false,
             nb::arg("output") = nb::none(),
