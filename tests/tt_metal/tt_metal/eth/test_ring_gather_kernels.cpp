@@ -348,7 +348,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
             device_range, std::move(programs[device->get_devices()[0]->id()]));
         ths.emplace_back([&] {
             distributed::EnqueueMeshWorkload(
-                device->mesh_command_queue(), workloads[device->get_devices()[0]->id()], false);
+                device->mesh_command_queue(), workloads[device->get_devices()[0]->id()], true);
         });
     }
     for (auto& th : ths) {
@@ -505,7 +505,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
             device_range, std::move(programs[device->get_devices()[0]->id()]));
         ths.emplace_back([&] {
             distributed::EnqueueMeshWorkload(
-                device->mesh_command_queue(), workloads[device->get_devices()[0]->id()], false);
+                device->mesh_command_queue(), workloads[device->get_devices()[0]->id()], true);
         });
     }
     for (auto& th : ths) {
