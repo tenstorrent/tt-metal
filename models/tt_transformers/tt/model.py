@@ -32,6 +32,7 @@ class Transformer(LightweightModule):
         use_paged_kv_cache=False,
         attention_class=None,
         rope_setup_class=None,
+        prefetcher=None,
     ):
         super().__init__()
         self.args = args
@@ -44,6 +45,7 @@ class Transformer(LightweightModule):
         self.grid_size = self.args.max_grid_size
         state_dict_prefix = args.get_state_dict_prefix("", None)
 
+        self.prefetcher = prefetcher
         self.tt_ccl = TT_CCL(self.mesh_device)
 
         embd_kwargs = {
@@ -94,6 +96,7 @@ class Transformer(LightweightModule):
                 paged_attention_config=paged_attention_config,
                 use_paged_kv_cache=use_paged_kv_cache,
                 attention_class=attention_class,
+                prefetcher=prefetcher,
             )
             for i in tqdm(range(self.n_layers))
         ]
@@ -128,6 +131,7 @@ class Transformer(LightweightModule):
             state_dict_prefix=state_dict_prefix,
             weight_cache_path=weight_cache_path,
             max_columns_per_device=self.args.max_columns_per_device_lm_head,
+            prefetcher=prefetcher,
         )
 
         # Initialize on-device sampling if supported
@@ -480,6 +484,11 @@ class Transformer(LightweightModule):
         get_last_token=-1,
         kv_cache=None,
     ):
+        if mode == "decode":
+            # Run prefetcher if it is enabled
+            if self.prefetcher is not None:
+                self.prefetcher.run()
+
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
             activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
@@ -502,6 +511,10 @@ class Transformer(LightweightModule):
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
             )
+
+        if mode == "decode":
+            if self.prefetcher is not None:
+                self.prefetcher.stop()
 
         if mode == "prefill" and get_last_token == -1:
             return x

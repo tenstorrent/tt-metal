@@ -91,7 +91,7 @@ class MLP(LightweightModule):
         )
 
         # Insert the tensors into the prefetcher if it is used
-        if self.prefetcher is not None:
+        if self.prefetcher is not None and self.prefetcher.mode == "decode":
             self.prefetcher.insert_tensor(self.w1)
             self.prefetcher.insert_tensor(self.w3)
             self.prefetcher.insert_tensor(self.w2)
@@ -112,14 +112,13 @@ class MLP(LightweightModule):
         li_ff1_3_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_FF1_FF3, configuration=self.args
         )
-
         if mode == "decode":  # Sharded config
             if TG:  # TODO: Fix this when TG supports DRAM sharded matmuls
                 pc_1 = self.model_config["FF1_3_TG_PROGCFG"] if self.dim >= 4096 else None
                 pc_2 = self.model_config["FF2_TG_PROGCFG"] if self.dim >= 4096 else None
                 pc_3 = self.model_config["FF1_3_TG_PROGCFG"] if self.dim >= 4096 else None
             else:
-                if self.prefetcher is not None:
+                if self.prefetcher:
                     # program configs do not take core range sets, just need to know ring size
                     pc_1 = self.model_config["PREFETCHER_MLP_W1_W3_PRG_CONFIG"]
                     pc_2 = self.model_config["PREFETCHER_MLP_W2_PRG_CONFIG"]
@@ -139,13 +138,13 @@ class MLP(LightweightModule):
         # In decode mode (seqlen <= 32) do DRAM sharded matmuls
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
         def get_ff1_3_memory_config():
-            if self.prefetcher is not None:
+            if self.prefetcher is not None and mode == "decode":
                 return self.model_config["PREFETCHER_SHARDED_FF13_OUT_RING_MEMCFG"]
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
 
         def get_ff2_memory_config():
-            if self.prefetcher is not None:
+            if self.prefetcher is not None and mode == "decode":
                 return self.model_config["PREFETCHER_SHARDED_FF2_OUT_RING_MEMCFG"]  # takes in the active receiver cores
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
@@ -158,10 +157,11 @@ class MLP(LightweightModule):
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
             program_config=pc_1,
             memory_config=get_ff1_3_memory_config(),
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
-            sub_device_id=self.prefetcher.worker_sub_device_id if mode == "decode" else None,
+            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == "decode" else None,
+            sub_device_id=self.prefetcher.worker_sub_device_id
+            if self.prefetcher is not None and mode == "decode"
+            else None,
         )
-
         w3_out = ttnn.linear(
             x,
             self.w3,
@@ -170,9 +170,9 @@ class MLP(LightweightModule):
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
             program_config=pc_3,
             memory_config=get_ff1_3_memory_config(),
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
+            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == "decode" else None,
             sub_device_id=self.prefetcher.worker_sub_device_id
-            if mode == "decode" and self.prefetcher is not None
+            if self.prefetcher is not None and mode == "decode"
             else None,
         )
         ttnn.deallocate(x)
@@ -284,9 +284,9 @@ class MLP(LightweightModule):
             program_config=pc_2,
             memory_config=get_ff2_memory_config(),
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
+            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == "decode" else None,
             sub_device_id=self.prefetcher.worker_sub_device_id
-            if mode == "decode" and self.prefetcher is not None
+            if self.prefetcher is not None and mode == "decode"
             else None,
         )
         ttnn.deallocate(w2_in)

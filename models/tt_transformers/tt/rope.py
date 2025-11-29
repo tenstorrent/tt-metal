@@ -348,7 +348,7 @@ def get_rot_mats(
     theta: float,
     rope_scaling: Optional[RopeScaling],
     datatype: Any = ttnn.bfloat16,
-    rot_mats_layout: ttnn.Layout = ttnn.ROW_MAJOR_LAYOUT,
+    rot_mats_layout: ttnn.Layout = ttnn.TILE_LAYOUT,
 ) -> List[ttnn.Tensor]:
     cos_matrix, sin_matrix = compute_gather_cos_sin(
         dhead=head_dim,
@@ -371,7 +371,6 @@ def get_rot_mats(
         dtype=datatype,
         mesh_mapper=replicate_tensor_to_mesh_mapper(device),
     )
-
     return [cos_matrix, sin_matrix]
 
 
@@ -497,6 +496,35 @@ class RotarySetup(LightweightModule):
 
         return rot_idxs
 
+    def get_rm_rot_idxs(self, position_idxs, on_host=False):
+        breakpoint()
+        assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"
+        assert len(position_idxs.shape) == 1, "position idxs must be a [batch] tensor"
+        assert position_idxs.shape[0] == 32, "position idxs must be a [32] tensor"
+        position_idxs = position_idxs.view(-1, 8)  # [4, 8]
+        position_idxs = position_idxs.repeat(1, 2)  # [4, 16]
+        position_idxs = position_idxs.view(-1, 1)  # [64, 1]
+        position_idxs = position_idxs.repeat(1, self.n_kv_heads)  # [64, 8]
+
+        batch = position_idxs.shape[0]
+
+        rot_idxs = ttnn.as_tensor(
+            position_idxs,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=None if on_host else self.device,
+            memory_config=None if on_host else ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.device,
+                dims=(None, 0) if (self.num_devices == 32 and batch > 1) else (None, None),
+                mesh_shape=list(self.device.shape),
+            )
+            if self.is_mesh_device
+            else None,
+        )
+
+        return rot_idxs
+
     def get_rot_mats(
         self,
         position_idxs: Union[torch.Tensor, ttnn.Tensor],
@@ -533,6 +561,7 @@ class RotarySetup(LightweightModule):
         else:
             mem_config = None
 
+        breakpoint()
         cos = ttnn.embedding(
             rot_idxs, self.cos_matrix, layout=embedding_layout, memory_config=mem_config
         )  # [1, batch, head_dim]
@@ -543,6 +572,7 @@ class RotarySetup(LightweightModule):
         cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, head_dim]
         sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch, head_dim]
 
+        breakpoint()
         if prefetcher is None:
             cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], head_dim]
             sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], head_dim]
@@ -565,7 +595,6 @@ class RotarySetup(LightweightModule):
             sin = ttnn.interleaved_to_sharded(
                 sin, mem_config
             )  # [1, 1 (= batch / shard_num_cores), 1[32], self.head_dim]
-
         if return_rot_idxs:
             return [cos, sin], rot_idxs
         return [cos, sin]

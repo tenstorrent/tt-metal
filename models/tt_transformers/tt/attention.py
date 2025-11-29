@@ -305,7 +305,7 @@ class Attention(LightweightModule):
 
         def get_wo_memory_config():
             if self.use_fused_all_gather_matmul or self.TG:
-                if self.prefetcher is not None:
+                if self.prefetcher is not None and self.prefetcher.mode == "decode":
                     return self.model_config["PREFETCHER_SHARDED_WO_RING_MEMCFG"]
                 else:
                     return ttnn.DRAM_MEMORY_CONFIG
@@ -338,8 +338,8 @@ class Attention(LightweightModule):
         else:
             self.scale = self.head_dim**-0.5
 
-        # Insert the tensors into the prefetcher if it is used
-        if self.prefetcher is not None:
+        # Insert the tensors into the prefetcher only in decode mode, we do not use prefetcher in prefill mode
+        if self.prefetcher is not None and self.prefetcher.mode == "decode":
             self.prefetcher.insert_tensor(self.wqkv)
             self.prefetcher.insert_tensor(self.wo)
 
@@ -494,14 +494,13 @@ class Attention(LightweightModule):
         breakpoint()
         q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode="decode")
         k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode="decode")
-        breakpoint()
         ttnn.deallocate(xqkv_fused)
-
+        breakpoint()
         # Q Rotary Embeddings
         q_heads_1BQD = ttnn.experimental.rotary_embedding_llama(
             q_heads_pre_rot_1BQD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
         )
-
+        #
         # K Rotary Embeddings
         k_heads_1BKD = ttnn.experimental.rotary_embedding_llama(
             k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True

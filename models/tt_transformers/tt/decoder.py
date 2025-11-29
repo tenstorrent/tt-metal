@@ -27,6 +27,7 @@ class TransformerBlock(LightweightModule):
         paged_attention_config=None,
         use_paged_kv_cache=False,
         attention_class=None,
+        prefetcher=None,
     ):
         super().__init__()
 
@@ -60,6 +61,7 @@ class TransformerBlock(LightweightModule):
             configuration=args,
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
+            prefetcher=prefetcher,
         )
 
         if getattr(self.args, "is_mixture_of_experts", False):
@@ -92,6 +94,7 @@ class TransformerBlock(LightweightModule):
                 layer_num=layer_num,
                 dtype=dtype,
                 model_config=self.model_config,
+                prefetcher=prefetcher,
             )
 
         self.attention_norm = DistributedNorm(
