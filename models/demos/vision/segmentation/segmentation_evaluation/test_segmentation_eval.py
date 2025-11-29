@@ -399,7 +399,7 @@ def run_segformer_eval(device, model_location_generator, model_type, res, device
 
     if not os.path.exists("models/demos/vision/segmentation/segformer/demo/validation_data_ade20k"):
         logger.info("downloading data")
-        os.system("python models/demos/segmentation_evaluation/dataset_download.py segformer")
+        os.system("python models/demos/vision/segmentation/segmentation_evaluation/dataset_download.py segformer")
 
     model_name = "segformer"
     input_dtype = ttnn.bfloat16
