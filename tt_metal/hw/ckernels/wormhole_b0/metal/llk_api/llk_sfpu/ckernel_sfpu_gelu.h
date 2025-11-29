@@ -13,12 +13,12 @@ namespace sfpu {
 
 template <ApproximationMode APPROX_MODE>
 void gelu_init() {
-    _init_gelu_<(APPROX_MODE == ApproximationMode::Fast)>();
+    _init_gelu_<(APPROX_MODE)>();
 }
 
 template <ApproximationMode APPROX_MODE>
 void gelu_derivative_init() {
-    _init_gelu_derivative_<(APPROX_MODE == ApproximationMode::Fast)>();
+    _init_gelu_derivative_<(APPROX_MODE)>();
 }
 
 template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
@@ -41,7 +41,7 @@ inline void calculate_gelu() {
 
 template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_gelu_derivative() {
-    _calculate_gelu_derivative_<(APPROX_MODE == ApproximationMode::Fast), ITERATIONS>();
+    _calculate_gelu_derivative_<(APPROX_MODE), ITERATIONS>();
 }
 
 }  // namespace sfpu

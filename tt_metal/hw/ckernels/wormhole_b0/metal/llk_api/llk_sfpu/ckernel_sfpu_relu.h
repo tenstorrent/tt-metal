@@ -42,7 +42,7 @@ inline void relu_max(uint uint_threshold) {
 
 template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_lrelu(const uint slope) {
-    _calculate_lrelu_<(APPROX_MODE == ApproximationMode::Fast)>(ITERATIONS, slope);
+    _calculate_lrelu_<(APPROX_MODE)>(ITERATIONS, slope);
 }
 
 }  // namespace sfpu
