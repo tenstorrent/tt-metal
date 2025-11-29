@@ -54,9 +54,13 @@ uint32_t default_workers(
     uint32_t num_links,
     uint32_t ring_size,
     uint32_t num_directions_per_link,
-    uint32_t num_mux_cores_per_direction_per_link) {
+    uint32_t num_mux_cores_per_direction_per_link,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     auto sd_id = sub_device_id.value_or(mesh_device.get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    if (sub_core_grid.has_value()) {
+        subdevice_core_range_set = subdevice_core_range_set.intersection(sub_core_grid.value());
+    }
     uint32_t num_cores = subdevice_core_range_set.num_cores();
     // Above 4 workers we start getting performance drops, so we limit to 4 workers or less, depending on the number of
     // available cores This was determined by the sweep
@@ -206,7 +210,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    const bool reverse_order) {
+    const bool reverse_order,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     tt::tt_metal::Program program{};
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
     return all_gather_async_minimal_default_helper(
@@ -230,7 +235,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
         num_workers_per_link,
         num_buffers_per_channel,
         CoreCoord(0, 0),
-        reverse_order);
+        reverse_order,
+        sub_core_grid);
 }
 
 AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifacts(
@@ -254,7 +260,8 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset,
-    const bool reverse_order) {
+    const bool reverse_order,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto& input_tensor_shape = input_tensor.padded_shape();
@@ -288,7 +295,8 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         num_links,
         ring_size,
         num_directions_per_link,
-        num_mux_cores_per_direction_per_link));
+        num_mux_cores_per_direction_per_link,
+        sub_core_grid));
     uint32_t num_cores_per_link = detail::all_gather_async_core_count_per_link(
         num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
 
@@ -334,9 +342,8 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
 
     TT_FATAL(
         !((topology == ccl::Topology::Linear) && fuse_op), "linear is not support when using fused for all-gather");
-
     const auto [all_core_range, all_cores] =
-        choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
+        choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset, sub_core_grid);
 
     std::vector<CoreRange> sender_worker_core_ranges;
     std::vector<CoreRange> mux_core_ranges;
@@ -769,7 +776,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset,
-    const bool reverse_order) {
+    const bool reverse_order,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     // Call the builder to create the program and get artifacts
     auto
         [reader_kernel_ids,
@@ -800,7 +808,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                 num_workers_per_direction_opt,
                 num_buffers_per_channel,
                 core_grid_offset,
-                reverse_order);
+                reverse_order,
+                sub_core_grid);
 
     // Create the callback using the artifacts returned by the builder
     auto override_runtime_arguments_callback =
