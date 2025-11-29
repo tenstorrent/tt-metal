@@ -38,5 +38,12 @@ inline void calculate_selu(uint scale, uint alpha) {
     }
 }
 
+template <bool APPROXIMATION_MODE>
+inline void selu_init() {
+    if constexpr (!APPROXIMATION_MODE) {
+        exp_init<false, false>();
+    }
+}
+
 }  // namespace sfpu
 }  // namespace ckernel
