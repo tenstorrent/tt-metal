@@ -59,7 +59,7 @@ CPMAddPackage(
     NAME protobuf
     GITHUB_REPOSITORY protocolbuffers/protobuf
     GIT_TAG
-        v21.12 # Using 21.12 to avoid using abseil and utf8_range
+        v32.1 # Using 21.12 to avoid using abseil and utf8_range
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "protobuf_BUILD_TESTS OFF"
