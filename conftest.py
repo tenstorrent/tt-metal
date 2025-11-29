@@ -995,7 +995,6 @@ def _watchdog_main(parent_pid, cmd_queue):
             expired = [tid for tid, deadline in deadlines.items() if deadline <= now]
             if expired:
                 logger.debug(f"Watchdog detected timeout for {expired}")
-                run_debug_script()
                 logger.debug(f"Watchdog killing parent process {parent_pid}")
                 os.kill(parent_pid, signal.SIGKILL)
                 break
@@ -1093,41 +1092,6 @@ def pytest_timeout_set_timer(item, settings):
 @pytest.hookimpl(tryfirst=True)
 def pytest_handlecrashitem(crashitem, report, sched):
     reset_tensix()
-
-
-def run_debug_script():
-    """Run the tt-triage.py debug script to check system state before cleanup."""
-
-    # Check if ttexalens module is available
-    try:
-        import ttexalens
-    except ImportError:
-        logger.warning(
-            "ttexalens module not found. Debug script requires ttexalens to be installed. Skipping debug collection."
-        )
-        return
-
-    debug_script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "tt-triage.py")
-
-    if not os.path.exists(debug_script_path):
-        logger.warning(f"Debug script not found at {debug_script_path}. Skipping debug collection.")
-        return
-
-    try:
-        logger.info("Running debug script to check system state")
-        # Remove LD_LIBRARY_PATH to avoid conflicts with prebuilt libraries
-        extra_env = {
-            "LD_LIBRARY_PATH": None,
-        }
-        debug_result = run_process_and_get_result(f"python {debug_script_path}", extra_env)
-
-        logger.info(f"Debug script status: {debug_result.returncode}")
-        if debug_result.stdout:
-            logger.info(f"Debug script output: {debug_result.stdout.decode('utf-8')}")
-        if debug_result.stderr:
-            logger.info(f"Debug script stderr: {debug_result.stderr.decode('utf-8')}")
-    except Exception as e:
-        logger.error(f"Failed to run debug script: {e}")
 
 
 def reset_tensix(tt_open_devices=None):
