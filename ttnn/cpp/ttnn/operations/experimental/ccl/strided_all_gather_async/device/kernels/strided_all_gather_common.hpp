@@ -75,10 +75,20 @@ if new chunk col > chunk w {
 }
 
 **/
+
+FORCE_INLINE void advance_subchunk(
+    uint32_t& tensor_row, uint32_t& subchunk_start_row, uint32_t& subchunk_end_row, uint32_t subchunk_height_stride) {
+    uint32_t new_subchunk_rows = tensor_row - subchunk_end_row;
+    subchunk_start_row = subchunk_start_row + subchunk_height_stride;
+    subchunk_end_row = subchunk_end_row + subchunk_height_stride;
+    tensor_row = subchunk_start_row + (new_subchunk_rows - 1);
+}
+
 FORCE_INLINE int32_t get_chunk_tile(
     uint32_t& tensor_row,
     uint32_t& tensor_col,
     uint32_t num_workers,
+    uint32_t& subchunk_start_row,
     uint32_t& subchunk_end_row,
     uint32_t subchunk_height_stride,
     uint32_t chunk_start_col,
@@ -97,9 +107,7 @@ FORCE_INLINE int32_t get_chunk_tile(
         tensor_col = chunk_start_col + (tensor_col - chunk_end_col - 1);
         tensor_row = tensor_row + 1;
         if (tensor_row > subchunk_end_row) {
-            uint32_t new_subchunk_rows = tensor_row - subchunk_end_row;
-            tensor_row = subchunk_end_row + subchunk_height_stride + new_subchunk_rows - 1;
-            subchunk_end_row = subchunk_end_row + subchunk_height_stride;
+            advance_subchunk(tensor_row, subchunk_start_row, subchunk_end_row, subchunk_height_stride);
         }
     }
 
@@ -155,14 +163,19 @@ FORCE_INLINE uint32_t read_chunk(
     uint32_t packets_in_curr_chunk = div_up(worker_tiles_in_curr_chunk, num_tiles_per_packet);
     uint32_t chunk_tile_iter = 0;
     uint32_t worker_chunk_start_tile = chunk_start_tile + worker_tile_offset;
-    uint32_t chunk_start_row = worker_chunk_start_tile / input_tensor_Wt;
-    uint32_t chunk_start_col = worker_chunk_start_tile % input_tensor_Wt;
+    uint32_t chunk_start_row = chunk_start_tile / input_tensor_Wt;
+    uint32_t chunk_start_col = chunk_start_tile % input_tensor_Wt;
+    uint32_t subchunk_start_row = chunk_start_row;
+    uint32_t subchunk_end_row = chunk_start_row + subchunk_height - 1;
+    uint32_t worker_chunk_row = worker_chunk_start_tile / input_tensor_Wt;
+    if (worker_chunk_row > subchunk_end_row) {
+        advance_subchunk(worker_chunk_row, subchunk_start_row, subchunk_end_row, subchunk_height_stride);
+    }
+    uint32_t worker_chunk_col = worker_chunk_start_tile % input_tensor_Wt;
     if (read_output) {
+        worker_chunk_col = worker_chunk_col + actual_sender_chip_id * input_tensor_Wt;
         chunk_start_col = chunk_start_col + actual_sender_chip_id * input_tensor_Wt;
     }
-    uint32_t subchunk_end_row = chunk_start_row + subchunk_height - 1;
-    uint32_t chunk_row = chunk_start_row;
-    uint32_t chunk_col = chunk_start_col;
     uint32_t chunk_end_col = chunk_start_col + chunk_width - 1;
     for (uint32_t packet_idx = 0; packet_idx < packets_in_curr_chunk; packet_idx++) {
         uint32_t tiles_left_in_chunk = worker_tiles_in_curr_chunk - chunk_tile_iter;
@@ -172,9 +185,10 @@ FORCE_INLINE uint32_t read_chunk(
         size_t l1_write_addr = get_write_ptr(cb_output_id);
         for (uint32_t j = 0; j < tiles_to_read_in_packet; ++j) {
             int32_t tile_id = get_chunk_tile(
-                chunk_row,
-                chunk_col,
+                worker_chunk_row,
+                worker_chunk_col,
                 ag_worker_cores,
+                subchunk_start_row,
                 subchunk_end_row,
                 subchunk_height_stride,
                 chunk_start_col,
