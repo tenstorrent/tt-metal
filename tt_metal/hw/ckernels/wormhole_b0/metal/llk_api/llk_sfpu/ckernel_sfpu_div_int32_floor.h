@@ -72,8 +72,8 @@ sfpi_inline void calculate_div_int32_body(
     q = q << 10;
 
     sfpi::vFloat MANTISSA_ALIGNMENT_OFFSET = 8388608.0f;
-    sfpi::vFloat lo = q1 * b0 + MANTISSA_ALIGNMENT_OFFSET;
     sfpi::vFloat hi = q2 * b0 + MANTISSA_ALIGNMENT_OFFSET;
+    sfpi::vFloat lo = q1 * b0 + MANTISSA_ALIGNMENT_OFFSET;
     hi = q1 * b1 + hi;
 
     sfpi::vInt qb = sfpi::exman9(lo) << 10;
