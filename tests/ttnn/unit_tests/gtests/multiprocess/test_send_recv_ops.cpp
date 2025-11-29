@@ -14,6 +14,7 @@
 #include "tt_metal/multihost/fabric_tests/multihost_fabric_fixtures.hpp"
 #include <tt-metalium/mesh_socket.hpp>
 #include <tt-metalium/distributed_context.hpp>
+#include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tests/ttnn/unit_tests/gtests/ccl/send_recv_op_utils.hpp"
 
 namespace tt::tt_metal {
@@ -87,8 +88,10 @@ void test_send_recv_async_(
         .socket_mem_config = socket_mem_config,
         .sender_rank = receiver_rank,
         .receiver_rank = sender_rank};
-    auto forward_socket = distributed::MeshSocket(mesh_device, forward_socket_config);
-    auto backward_socket = distributed::MeshSocket(mesh_device, backward_socket_config);
+    // Initialize socket connections - this performs all the side effects needed for socket communication
+    // (creates buffers, performs handshaking, writes configs, synchronizes) without requiring MeshSocket objects
+    distributed::initialize_socket_connection(mesh_device, forward_socket_config);
+    distributed::initialize_socket_connection(mesh_device, backward_socket_config);
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
     const auto& input_shape = tensor_spec.logical_shape();
@@ -103,7 +106,7 @@ void test_send_recv_async_(
                 *ttnn::distributed::replicate_tensor_to_mesh_mapper(*mesh_device),
                 std::nullopt)
                 .to_device(mesh_device.get(), memory_config);
-        ttnn::experimental::send_async(input_tensor, forward_socket);
+        ttnn::experimental::send_async(input_tensor, mesh_device, forward_socket_config);
         distributed::Synchronize(mesh_device.get(), std::nullopt);
         auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*mesh_device, /*dim=*/0);
         auto input_data = ttnn::distributed::aggregate_tensor(input_tensor, *composer).to_vector<T>();
@@ -116,7 +119,7 @@ void test_send_recv_async_(
         auto output_tensor = tt::tt_metal::allocate_tensor_on_device(
             TensorSpec(input_shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(layout), memory_config)),
             mesh_device.get());
-        ttnn::experimental::recv_async(output_tensor, backward_socket);
+        ttnn::experimental::recv_async(output_tensor, mesh_device, backward_socket_config);
         distributed::Synchronize(mesh_device.get(), std::nullopt);
         auto output_data = ttnn::distributed::aggregate_tensor(output_tensor, *composer).to_vector<T>();
         std::vector<T> inc_output_data(output_data.size());
@@ -131,7 +134,7 @@ void test_send_recv_async_(
         auto output_tensor = tt::tt_metal::allocate_tensor_on_device(
             TensorSpec(input_shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(layout), memory_config)),
             mesh_device.get());
-        ttnn::experimental::recv_async(output_tensor, forward_socket);
+        ttnn::experimental::recv_async(output_tensor, mesh_device, forward_socket_config);
         distributed::Synchronize(mesh_device.get(), std::nullopt);
         auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*mesh_device, /*dim=*/0);
         auto output_data = ttnn::distributed::aggregate_tensor(output_tensor, *composer).to_vector<T>();
@@ -143,7 +146,7 @@ void test_send_recv_async_(
         );
         EXPECT_EQ(input_data, output_data);
         auto inc_output_tensor = ttnn::add(output_tensor, 1);
-        ttnn::experimental::send_async(inc_output_tensor, backward_socket);
+        ttnn::experimental::send_async(inc_output_tensor, mesh_device, backward_socket_config);
         distributed::Synchronize(mesh_device.get(), std::nullopt);
         auto inc_output_data = ttnn::distributed::aggregate_tensor(inc_output_tensor, *composer).to_vector<T>();
         distributed_context->send(
