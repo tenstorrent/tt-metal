@@ -62,7 +62,7 @@ sfpi_inline void calculate_unary_max_min_int32_body() {
     }
 }
 
-template <bool IS_MAX_OP = true, bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool IS_MAX_OP = true, ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_unary_max_min(uint value) {
     // Load value param to lreg2
     load_value_param_float(value);
