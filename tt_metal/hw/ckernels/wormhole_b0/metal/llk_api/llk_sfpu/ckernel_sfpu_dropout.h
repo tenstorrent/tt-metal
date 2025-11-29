@@ -16,7 +16,7 @@ namespace sfpu {
 
 template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_dropout(uint probability, uint scale) {
-    _calculate_dropout_<(APPROX_MODE == ApproximationMode::Fast), ITERATIONS>(ITERATIONS, probability, scale);
+    _calculate_dropout_<(APPROX_MODE), ITERATIONS>(ITERATIONS, probability, scale);
 }
 
 template <ApproximationMode APPROX_MODE>
