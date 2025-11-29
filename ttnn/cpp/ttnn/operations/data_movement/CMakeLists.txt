@@ -52,6 +52,8 @@ target_sources(
             concat/concat.hpp
             copy/copy.hpp
             copy/device/copy_device_operation.hpp
+            copy/device/copy_device_operation_types.hpp
+            copy/device/copy_program_factory.hpp
             pad/pad.hpp
             permute/permute.hpp
             repeat/repeat.hpp
