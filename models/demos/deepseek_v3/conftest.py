@@ -184,3 +184,30 @@ def cache_path():
     cache = Path(os.getenv("DEEPSEEK_V3_CACHE", default_cache))
     logger.debug(f"Using cache path: {cache}")
     return cache
+
+
+def _read_proc_self_rss_bytes() -> int:
+    """
+    Read current RSS from /proc/self/status (Linux) in bytes.
+    """
+    with open("/proc/self/status", "r", encoding="utf-8") as f:
+        for line in f:
+            if line.startswith("VmRSS:"):
+                parts = line.split()
+                if len(parts) >= 3 and parts[1].isdigit():
+                    return int(parts[1]) * 1024
+    return -1
+
+
+@pytest.fixture(autouse=True)
+def _log_rss_per_test(request):
+    """
+    Logs per-test RSS delta and total to help track memory growth across the suite.
+    """
+    before = _read_proc_self_rss_bytes()
+    yield
+    after = _read_proc_self_rss_bytes()
+    if before >= 0 and after >= 0:
+        delta_mb = (after - before) / 1e6
+        total_mb = after / 1e6
+        logger.debug(f"RSS delta={delta_mb:.2f} MB; total={total_mb:.2f} MB (test={request.node.name})")

@@ -54,12 +54,13 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
                 raise ValueError(f"Failed to parse index JSON at {index_path}: {e}") from e
             self._full_to_file = dict(index_obj["weight_map"])
             elapsed_ms = (perf_counter() - t0) * 1e3
-            try:
-                num_keys = len(self._full_to_file)
-                num_files = len(set(self._full_to_file.values()))
-            except Exception:
-                num_keys = -1
-                num_files = -1
+
+            num_keys = len(self._full_to_file)
+            num_files = len(set(self._full_to_file.values()))
+            if num_keys <= 0:
+                raise ValueError(f"No keys found in index file at {index_path}")
+            if num_files <= 0:
+                raise ValueError(f"No files found in index file at {index_path}")
             logger.info(
                 f"LazyStateDict initialized from {index_path} ({num_keys} keys across {num_files} files) in {elapsed_ms:.1f} ms"
             )
@@ -67,6 +68,9 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
             self._full_to_file = _full_to_file
         self._cache: dict[str, torch.Tensor] = {} if _cache is None else _cache
         self._num_layers: Optional[int] = _num_layers
+        # Track total cached host bytes for visibility
+        self._bytes_cached: int = 0
+        self._tensor_bytes: dict[str, int] = {}
 
     def view_with_prefix(self, prefix: str, num_layers: Optional[int] = None) -> "LazyStateDict":
         """
@@ -118,7 +122,6 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         """
         full_key = self._full_key(key)
         if full_key in self._cache:
-            logger.debug(f"LazyStateDict cache hit: '{full_key}'")
             return self._cache[full_key]
         if full_key not in self._full_to_file or not self._passes_layer_filter(full_key):
             raise KeyError(key)
@@ -140,6 +143,19 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         except Exception:
             logger.debug(f"Loaded '{full_key}' from '{filename}' in {load_ms:.1f} ms")
         self._cache[full_key] = tensor
+        # Cache accounting and debug log
+        try:
+            size_bytes = tensor.element_size() * tensor.numel()
+            # Avoid double counting if key somehow reinserted
+            if full_key not in self._tensor_bytes:
+                self._tensor_bytes[full_key] = size_bytes
+                self._bytes_cached += size_bytes
+            logger.debug(
+                f"LazyStateDict cached {size_bytes/1e6:.2f} MB (key={full_key}); "
+                f"total={self._bytes_cached/1e6:.2f} MB; tensors={len(self._cache)}"
+            )
+        except Exception:
+            pass
         return tensor
 
     def __contains__(self, key: object) -> bool:
@@ -169,3 +185,14 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         filtered keys at call time.
         """
         return sum(1 for _ in self.__iter__())
+
+    # Introspection
+    def cached_bytes(self) -> int:
+        return self._bytes_cached
+
+    def cache_info(self) -> dict:
+        return {
+            "num_tensors": len(self._cache),
+            "bytes": self._bytes_cached,
+            "mb": self._bytes_cached / (1024 * 1024),
+        }
