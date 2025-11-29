@@ -31,7 +31,7 @@ Both API versions run the same test cases but use different underlying implement
 
 | Name                        | ID(s)                           | Description                                                                             |
 | ----------                  | -----                           | ----------------------------------------------------                                    |
-| DRAM Unary                  | 0-3                             | Transactions between DRAM and a single Tensix core.                                     |
+| DRAM Unary                  | 0-3, 40                         | Transactions between DRAM and a single Tensix core.                                     |
 | One to One                  | 4, 50, 150-151, 158             | Write transactions between two Tensix cores.                                            |
 | One From One                | 5, 51, 152-153, 159             | Read transactions between two Tensix cores.                                             |
 | One to all                  | 6-8, 52, 154-155, 170-172       | Writes transaction from one core to all cores.                                          |
