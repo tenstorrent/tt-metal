@@ -12,7 +12,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/add_int_sfpu.h"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -38,7 +38,7 @@ void MAIN {
 
     constexpr uint32_t split_reader = get_compile_time_arg_val(2);
 
-    constexpr uint32_t nsticks_per_core_by_nblocks = get_compile_time_arg_val(3);
+    constexpr uint32_t max_out_sticks_per_core = get_compile_time_arg_val(3);
     constexpr uint32_t in_c = get_compile_time_arg_val(4);
     constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(5);
     constexpr uint32_t max_sticks_for_reduction = get_compile_time_arg_val(6);
@@ -127,8 +127,8 @@ void MAIN {
     uint32_t current_idx_col;
     uint32_t current_idx_row;
     if constexpr (return_indices) {
-        const uint16_t start_row = (uint16_t)get_arg_val<uint32_t>(0);
-        const uint16_t start_col = (uint16_t)get_arg_val<uint32_t>(1);
+        const uint16_t start_row = (uint16_t)get_arg_val<uint32_t>(1);
+        const uint16_t start_col = (uint16_t)get_arg_val<uint32_t>(2);
         current_idx_col = start_col;
         current_idx_row = start_row;
 
@@ -141,8 +141,16 @@ void MAIN {
         cb_push_back(in_idx_cb_id, 1);
     }
 
+    uint32_t num_out_sticks_this_core = get_arg_val<uint32_t>(0);
+    uint32_t last_tile_height =
+        num_out_sticks_this_core % TILE_HEIGHT == 0 ? TILE_HEIGHT : num_out_sticks_this_core % TILE_HEIGHT;
+    DPRINT << "num_out_sticks_this_core: " << num_out_sticks_this_core
+           << ", max_out_sticks_per_core: " << max_out_sticks_per_core << ", last_tile_height: " << last_tile_height
+           << "\n";
+
     uint32_t tilize_stick_counter = 0;
-    for (uint32_t n = 0; n < nsticks_per_core_by_nblocks; ++n) {
+    uint32_t tilize_stick_total = 0;
+    for (uint32_t n = 0; n < num_out_sticks_this_core; ++n) {
         const bool reader0 = !(use_split_reader && (n & 0x1));
         const uint32_t curr_scalar_cb_id = (!reader0 && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
         const uint32_t curr_in_cb_id = !reader0 ? in_cb_id_1 : in_cb_id_0;
@@ -243,6 +251,7 @@ void MAIN {
                             pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
                         cb_push_back(pre_tilize_cb_id, partial_iter_output_tiles);
                         tilize_stick_counter++;
+                        tilize_stick_total++;
                     } else {
                         pack_untilize_dest<max_tiles_per_iter>(
                             pre_tilize_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
@@ -250,7 +259,23 @@ void MAIN {
                     }
                     tile_regs_release();
 
-                    if (tilize_stick_counter == TILE_HEIGHT) {
+                    bool last_tile = num_out_sticks_this_core - tilize_stick_total < last_tile_height;
+                    PACK(
+                        DPRINT << "tilize_stick_counter: " << tilize_stick_counter << ", tilize_stick_total: "
+                               << tilize_stick_total << ", last_tile: " << (uint32_t)last_tile << "\n");
+                    if (tilize_stick_counter == TILE_HEIGHT ||
+                        (last_tile && tilize_stick_counter == last_tile_height)) {
+                        if (last_tile && last_tile_height != TILE_HEIGHT) {
+                            // if the last tile is not whole we won't have pushed enough sticks, so we need to
+                            // push some filler sticks to reach TILE_HEIGHT to make sure the CB pointers are correct
+                            // before calling tilize
+                            uint32_t filler_stick_tiles =
+                                (TILE_HEIGHT - last_tile_height) *
+                                ((in_nblocks_c - 1) * max_tiles_per_iter + partial_iter_output_tiles);
+                            cb_push_back(pre_tilize_cb_id, filler_stick_tiles);
+                            PACK(DPRINT << "Pushing filler sticks: " << filler_stick_tiles << "\n");
+                        }
+                        PACK(DPRINT << "PACKING TILE\n");
                         PACK((pack_untilize_uninit(pre_tilize_cb_id)));
 
                         // Workaround until #27504 is not closed
@@ -263,9 +288,13 @@ void MAIN {
                         tensix_sync();
                         pack_reconfig_data_format(out_cb_id);
 
+                        PACK(tt::compute::common::print_full_tile(pre_tilize_cb_id));
+
                         fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
                         fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
                         fast_tilize_uninit(pre_tilize_cb_id, out_cb_id);
+
+                        PACK(tt::compute::common::print_full_tile(out_cb_id));
 
                         cb_push_back(out_cb_id, in_ntiles_c);
 
