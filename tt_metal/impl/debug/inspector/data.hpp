@@ -23,6 +23,7 @@ private:
     void rpc_get_mesh_devices(rpc::Inspector::GetMeshDevicesResults::Builder& results);
     void rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Builder& results);
     void rpc_get_devices_in_use(rpc::Inspector::GetDevicesInUseResults::Builder& results);
+    void rpc_get_operations(rpc::Inspector::GetOperationsResults::Builder& results);
     void rpc_get_kernel(
         rpc::Inspector::GetKernelParams::Reader params, rpc::Inspector::GetKernelResults::Builder results);
     void rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builder results);
@@ -61,6 +62,17 @@ private:
     std::unordered_map<tt_cxy_pair, inspector::CoreInfo> dispatch_s_core_info;
     // store prefetcher core info by virtual core
     std::unordered_map<tt_cxy_pair, inspector::CoreInfo> prefetcher_core_info;
+
+    // Operation tracking
+    struct OperationInfo {
+        std::optional<std::int64_t> device_operation_id;
+        std::string operation_name;
+        std::string call_stack;
+        std::string arguments;
+        std::chrono::time_point<std::chrono::steady_clock> timestamp;
+    };
+    mutable std::mutex operations_mutex;
+    std::vector<OperationInfo> operations_;
 
     // fw_compile_hash needs to be atomic because it is set in MetalContext::initialize()
     std::atomic<uint64_t> fw_compile_hash;

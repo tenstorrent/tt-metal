@@ -146,6 +146,7 @@ enum class EnvVarID {
     TT_METAL_RISCV_DEBUG_INFO,                       // Enable RISC-V debug info
     TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS,           // Inspector RPC server address (host:port)
     TT_METAL_INSPECTOR_RPC,                          // Enable/disable inspector RPC server
+    TT_METAL_INSPECTOR_TRACK_OPERATIONS,             // Enable/disable operation tracking in inspector
 
     // ========================================
     // DEBUG PRINTING (DPRINT)
@@ -996,6 +997,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->inspector_settings.rpc_server_enabled = true;
             if (std::strncmp(value, "0", 1) == 0) {
                 this->inspector_settings.rpc_server_enabled = false;
+            }
+            break;
+
+        // TT_METAL_INSPECTOR_TRACK_OPERATIONS
+        // Enables or disables operation tracking in inspector. Set to '0' to disable.
+        // Default: false (disabled)
+        // Usage: export TT_METAL_INSPECTOR_TRACK_OPERATIONS=1
+        case EnvVarID::TT_METAL_INSPECTOR_TRACK_OPERATIONS:
+            this->inspector_settings.track_operations = true;
+            if (strcmp(value, "0") == 0) {
+                this->inspector_settings.track_operations = false;
             }
             break;
 

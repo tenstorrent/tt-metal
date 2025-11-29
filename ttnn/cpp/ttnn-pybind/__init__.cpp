@@ -327,8 +327,4 @@ PYBIND11_MODULE(_ttnn, module) {
         "set_device_operation_id",
         [](std::uint64_t id) { ttnn::CoreIDs::instance().set_device_operation_id(id); },
         "Set device operation id");
-    module.def(
-        "fetch_and_increment_device_operation_id",
-        []() -> std::uint64_t { return ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id(); },
-        "Increment device operation id and return the previously held id");
 }

@@ -9,6 +9,21 @@
 #include <tracy/Tracy.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/core.hpp"
+#include "ttnn/graph/graph_argument_serializer.hpp"
+#include <sstream>
+#include <array>
+#include <span>
+
+// Forward declare Inspector methods
+namespace tt::tt_metal {
+class Inspector {
+public:
+    static bool is_operation_tracking_enabled();
+    static void track_operation(
+        std::optional<std::int64_t> device_op_id, const std::string& operation_name, const std::string& arguments);
+};
+}  // namespace tt::tt_metal
 
 namespace ttnn {
 namespace decorators {
@@ -85,11 +100,49 @@ struct registered_operation_t {
 
 private:
     template <typename... args_t>
+    std::string serialize_arguments(args_t&&... args) const {
+        // Capture and serialize arguments
+        std::string arguments;
+        if constexpr (sizeof...(args) > 0) {
+            std::array<std::any, sizeof...(args)> params{std::any(std::ref(args))...};
+            std::span<std::any> span_params(params);
+            auto serialized = ttnn::graph::GraphArgumentSerializer::instance().to_list(span_params);
+            std::ostringstream oss;
+            for (size_t i = 0; i < serialized.size(); ++i) {
+                if (i > 0) {
+                    oss << ", ";
+                }
+                oss << serialized[i];
+            }
+            arguments = oss.str();
+        }
+        return arguments;
+    }
+
+    template <typename... args_t>
     auto traced_invoke(args_t&&... args) const {
         log_debug(tt::LogOp, "Started C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
+
+        // Capture operation start for tracking
         tt::tt_metal::GraphTracker::instance().track_function_start(cpp_fully_qualified_name, args...);
 
+        // Reset device operation ID and serialize arguments if tracking enabled
+        std::string serialized_arguments;
+        if (tt::tt_metal::Inspector::is_operation_tracking_enabled()) {
+            ttnn::CoreIDs::instance().reset_host_assigned_device_operation_id();
+            serialized_arguments = serialize_arguments(args...);
+        }
+
         auto output = invoke(std::forward<args_t>(args)...);
+
+        // Track operation only if enabled AND device_op_id exists
+        if (tt::tt_metal::Inspector::is_operation_tracking_enabled()) {
+            auto device_op_id = ttnn::CoreIDs::instance().get_host_assigned_device_operation_id();
+            if (device_op_id.has_value()) {
+                tt::tt_metal::Inspector::track_operation(
+                    device_op_id, std::string{cpp_fully_qualified_name}, serialized_arguments);
+            }
+        }
 
         tt::tt_metal::GraphTracker::instance().track_function_end(output);
         log_debug(tt::LogOp, "Finished invoking C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});

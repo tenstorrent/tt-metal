@@ -67,4 +67,14 @@ std::int64_t CoreIDs::get_device_operation_id() { return device_operation_id.loa
 void CoreIDs::set_device_operation_id(std::int64_t device_operation_id_) { device_operation_id = device_operation_id_; }
 std::int64_t CoreIDs::fetch_and_increment_device_operation_id() { return device_operation_id.fetch_add(1); }
 
+// Thread-local storage for tracking and report the host-assigned device operation ID during a hang.
+thread_local std::optional<std::int64_t> CoreIDs::host_assigned_device_operation_id;
+void CoreIDs::set_host_assigned_device_operation_id(std::int64_t device_operation_id_) {
+    host_assigned_device_operation_id = device_operation_id_;
+}
+std::optional<std::int64_t> CoreIDs::get_host_assigned_device_operation_id() {
+    return host_assigned_device_operation_id;
+}
+void CoreIDs::reset_host_assigned_device_operation_id() { host_assigned_device_operation_id = std::nullopt; }
+
 }  // namespace ttnn
