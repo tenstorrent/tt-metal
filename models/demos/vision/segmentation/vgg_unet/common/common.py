@@ -9,9 +9,9 @@ import torch
 
 def load_torch_model(torch_model, model_location_generator=None):
     if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
-        weights_path = "models/demos/vgg_unet/vgg_unet_torch.pth"
+        weights_path = "models/demos/vision/segmentation/vgg_unet/common/vgg_unet_torch.pth"
         if not os.path.exists(weights_path):
-            os.system("bash models/demos/vgg_unet/weights_download.sh")
+            os.system("bash models/demos/vision/segmentation/vgg_unet/common/weights_download.sh")
     else:
         weights_path = (
             model_location_generator("vision-models/unet_vgg", model_subdir="", download_if_ci_v2=True)

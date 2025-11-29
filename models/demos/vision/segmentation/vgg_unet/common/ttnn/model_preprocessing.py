@@ -6,7 +6,7 @@ import torch
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_module_args, preprocess_model_parameters
 
 import ttnn
-from models.demos.vgg_unet.reference.vgg_unet import UNetVGG19
+from models.demos.vision.segmentation.vgg_unet.common.reference.vgg_unet import UNetVGG19
 
 
 def create_custom_mesh_preprocessor(mesh_mapper=None):

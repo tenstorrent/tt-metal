@@ -9,8 +9,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_wormhole_b0
-from models.demos.vgg_unet.runner.performant_runner import VggUnetTrace2CQ
+from models.common.utility_functions import run_for_blackhole
+from models.demos.vision.segmentation.vgg_unet.common.runner.performant_runner import VggUnetTrace2CQ
 
 
 def run_vgg_unet_e2e(device, device_batch_size, model_location_generator, channels=3, resolution=256):
@@ -37,7 +37,7 @@ def run_vgg_unet_e2e(device, device_batch_size, model_location_generator, channe
     )
 
 
-@run_for_wormhole_b0()
+@run_for_blackhole()
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 32768, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
@@ -49,7 +49,7 @@ def test_vgg_unet_e2e(device, batch_size, model_location_generator):
     return run_vgg_unet_e2e(device, batch_size, model_location_generator)
 
 
-@run_for_wormhole_b0()
+@run_for_blackhole()
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 32768, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )

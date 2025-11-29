@@ -7,10 +7,13 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import divup, is_blackhole, is_wormhole_b0
-from models.demos.vgg_unet.common import load_torch_model
-from models.demos.vgg_unet.reference.vgg_unet import UNetVGG19
-from models.demos.vgg_unet.ttnn.model_preprocessing import create_vgg_unet_model_parameters, get_mesh_mappers
-from models.demos.vgg_unet.ttnn.ttnn_vgg_unet import Tt_vgg_unet
+from models.demos.vision.segmentation.vgg_unet.common.common import load_torch_model
+from models.demos.vision.segmentation.vgg_unet.common.reference.vgg_unet import UNetVGG19
+from models.demos.vision.segmentation.vgg_unet.common.ttnn.model_preprocessing import (
+    create_vgg_unet_model_parameters,
+    get_mesh_mappers,
+)
+from models.demos.vision.segmentation.vgg_unet.common.ttnn.ttnn_vgg_unet import Tt_vgg_unet
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

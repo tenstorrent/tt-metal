@@ -71,11 +71,11 @@ def evaluation(
 ):
     if model_name == "vgg_unet":
         if is_blackhole():
-            from models.demos.blackhole.vgg_unet.demo.demo_utils import prediction, preprocess
+            from models.demos.vision.segmentation.vgg_unet.blackhole.demo.demo_utils import prediction, preprocess
 
             output_path = "models/demos/blackhole/"
         elif is_wormhole_b0():
-            from models.demos.wormhole.vgg_unet.demo.demo_utils import prediction, preprocess
+            from models.demos.vision.segmentation.vgg_unet.wormhole.demo.demo_utils import prediction, preprocess
 
             output_path = "models/demos/wormhole/"
         else:
@@ -281,9 +281,9 @@ def evaluation(
 def run_vgg_unet(
     device, model_type, use_pretrained_weight, res, model_location_generator, reset_seeds, device_batch_size
 ):
-    from models.demos.vgg_unet.common import load_torch_model
-    from models.demos.vgg_unet.reference.vgg_unet import UNetVGG19
-    from models.demos.vgg_unet.runner.performant_runner import VggUnetTrace2CQ
+    from models.demos.vision.segmentation.vgg_unet.common.common import load_torch_model
+    from models.demos.vision.segmentation.vgg_unet.common.reference.vgg_unet import UNetVGG19
+    from models.demos.vision.segmentation.vgg_unet.common.runner.performant_runner import VggUnetTrace2CQ
 
     model_seg = UNetVGG19()
     if use_pretrained_weight:

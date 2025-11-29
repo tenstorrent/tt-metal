@@ -3,7 +3,7 @@
 #!/bin/bash
 
 # Output filename
-OUTPUT="models/demos/vgg_unet/vgg_unet_torch.pth"
+OUTPUT="models/demos/vision/segmentation/vgg_unet/common/vgg_unet_torch.pth"
 
 # Create output directory if it doesn't exist
 mkdir -p "$(dirname "$OUTPUT")"
