@@ -182,7 +182,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         B);
 
     // balance the number of cores to use based on batch
-    uint32_t max_num_cores_for_compute = program_config->max_cores_per_head_batch * B * num_kv_heads;
+    uint32_t max_num_cores_for_compute =
+        program_config.has_value() ? program_config->max_cores_per_head_batch * B * num_kv_heads : num_cores_available;
     uint32_t num_cores_per_batch = std::min(num_cores_available, max_num_cores_for_compute) / B;
     //// for core assignment, it is the same whether there's 1 core for head or 1 core for many heads
     uint32_t num_cores_per_head = std::max((uint32_t)1, num_cores_per_batch / num_kv_heads);
@@ -267,6 +268,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     log_debug(tt::LogOp, "num_output_cores: {}", num_output_cores);
     log_debug(tt::LogOp, "core_group: {}", core_group);
     log_debug(tt::LogOp, "core_group_idle: {}", core_group_idle);
+    log_debug(tt::LogOp, "max_num_cores_for_compute: {}", max_num_cores_for_compute);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
 
