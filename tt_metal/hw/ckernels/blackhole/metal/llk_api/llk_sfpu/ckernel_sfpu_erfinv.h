@@ -8,13 +8,13 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_log.h"
 #include "sfpi.h"
-
+#include "llk_defs.h"
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 sfpi_inline vFloat calculate_sqrt_custom(vFloat in) {
     vFloat val = in;
     vFloat out;
@@ -31,7 +31,7 @@ sfpi_inline vFloat calculate_sqrt_custom(vFloat in) {
     return out;
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 sfpi_inline vFloat calculate_erfinv_body(vFloat in) {
     vFloat log_value = in * in;
     log_value = 1 - log_value;
@@ -42,14 +42,14 @@ sfpi_inline vFloat calculate_erfinv_body(vFloat in) {
     temp = 4.5469 + temp;
     temp = -temp;
     vFloat calculated_value = (temp * temp) - (log_value * 7.1427);
-    vFloat intermediate_result = calculate_sqrt_custom<false>(calculated_value);
+    vFloat intermediate_result = calculate_sqrt_custom<APPROX_MODE>(calculated_value);
     calculated_value = temp + intermediate_result;
-    log_value = calculate_sqrt_custom<false>(calculated_value);
+    log_value = calculate_sqrt_custom<APPROX_MODE>(calculated_value);
     dst_reg[0] = log_value;
     return log_value;
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 inline void calculate_erfinv() {
     // SFPU microcode
     for (int d = 0; d < 8; d++) {
@@ -69,7 +69,7 @@ inline void calculate_erfinv() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 void erfinv_init() {
     vConstFloatPrgm0 = 0.692871f;  // ln2
     vConstFloatPrgm1 = 0.1058f;

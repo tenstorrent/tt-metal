@@ -6,12 +6,13 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "llk_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void hardmish() {
     // hardmish(x) = x * (x + 2.8).clamp(0.0, 5.0) / 5
     for (int d = 0; d < ITERATIONS; d++) {

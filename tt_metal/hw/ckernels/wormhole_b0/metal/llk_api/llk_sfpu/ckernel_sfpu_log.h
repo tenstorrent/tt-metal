@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "llk_defs.h"
 
 using namespace sfpi;
 
@@ -75,7 +76,7 @@ sfpi_inline void calculate_log_body(const uint log_base_scale_factor) {
     dst_reg[0] = result;
 }
 
-template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool HAS_BASE_SCALING, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, bool FAST_APPROX, bool HAS_BASE_SCALING, int ITERATIONS = 8>
 inline void calculate_log(uint log_base_scale_factor) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -84,7 +85,7 @@ inline void calculate_log(uint log_base_scale_factor) {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool FAST_APPROX>
+template <ApproximationMode APPROX_MODE, bool FAST_APPROX>
 inline void log_init() {
     vConstFloatPrgm0 = 0.692871f;  // ln2
 
