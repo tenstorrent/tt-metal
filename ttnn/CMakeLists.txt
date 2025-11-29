@@ -532,9 +532,9 @@ target_sources(
         cpp/ttnn/operations/generic/generic_op.cpp
         cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp
         cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp
-        cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_op.cpp
+        cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_device_operation.cpp
+        cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_program_factory.cpp
         cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather.cpp
-        cpp/ttnn/operations/experimental/ccl/rms_allgather/device/multi_core/rms_allgather_pf.cpp
         cpp/ttnn/operations/experimental/test/hang_device/hang_device_program_factory.cpp
         cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_pre_all_gather.cpp
         cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.cpp
