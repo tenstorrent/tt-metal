@@ -58,6 +58,7 @@ target_sources(
             reshape_view/reshape.hpp
             reshape_view/reshape_common.hpp
             sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
+            sharded/interleaved_to_sharded/interleaved_to_sharded.hpp
             sharded/reshard/device/reshard_op.hpp
             sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.hpp
             slice/slice.hpp
@@ -169,6 +170,7 @@ target_sources(
         sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.cpp
         sharded/sharded_to_interleaved/sharded_to_interleaved.cpp
         sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op.cpp
+        sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_program_factory.cpp
         sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial.cpp
         sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.cpp
         sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial.cpp
