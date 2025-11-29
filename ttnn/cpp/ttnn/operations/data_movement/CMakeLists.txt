@@ -52,6 +52,8 @@ target_sources(
             concat/concat.hpp
             copy/copy.hpp
             copy/device/copy_device_operation.hpp
+            fill_pad/fill_pad.hpp
+            fill_pad/device/fill_pad_device_operation.hpp
             fill_rm/fill_rm.hpp
             fill_rm/device/fill_rm_device_operation.hpp
             pad/pad.hpp
@@ -110,7 +112,7 @@ target_sources(
         copy/device/copy_device_operation.cpp
         copy/device/copy_program_factory.cpp
         expand/expand.cpp
-        fill_pad/device/fill_pad_op.cpp
+        fill_pad/device/fill_pad_device_operation.cpp
         fill_pad/device/fill_pad_program_factory.cpp
         fill_pad/fill_pad.cpp
         fill_rm/device/fill_rm_device_operation.cpp
