@@ -18,7 +18,7 @@ inline void calculate_rdiv(const uint value) {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat recip;
-        if constexpr (APPROXIMATION_MODE) {
+        if constexpr (APPROX_MODE == ApproximationMode::Fast) {
             recip = _sfpu_reciprocal_<0>(in);
         } else {
             if constexpr (is_fp32_dest_acc_en) {
