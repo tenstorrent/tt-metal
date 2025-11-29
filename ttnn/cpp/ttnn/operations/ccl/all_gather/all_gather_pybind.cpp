@@ -32,6 +32,7 @@ void py_bind_all_gather(py::module& module) {
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor.
             num_links (int, optional): The number of links to use for the all-gather operation. Defaults to `None`, for which the number of links is determined automatically.
             topology (ttnn.Topology, optional): Fabric topology. Defaults to `None`.
+            sub_core_grids (CoreRangeSet, optional): Specifies sub-core grid ranges for advanced core selection control. Default uses all the cores in the device.
 
         Returns:
             ttnn.Tensor: The gathered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] * num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices along the mesh.
@@ -65,7 +66,8 @@ void py_bind_all_gather(py::module& module) {
                const std::optional<ttnn::MemoryConfig>& memory_config,
                std::optional<ttnn::Tensor>& optional_output_tensor,
                const std::optional<uint32_t> num_links,
-               const std::optional<tt::tt_fabric::Topology> topology) {
+               const std::optional<tt::tt_fabric::Topology> topology,
+               const std::optional<CoreRangeSet>& sub_core_grids) {
                 return self(
                     input_tensor,
                     dim,
@@ -74,7 +76,8 @@ void py_bind_all_gather(py::module& module) {
                     memory_config,
                     optional_output_tensor,
                     num_links,
-                    topology);
+                    topology,
+                    sub_core_grids);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("dim"),
@@ -85,7 +88,7 @@ void py_bind_all_gather(py::module& module) {
             py::arg("output_tensor") = std::nullopt,
             py::arg("num_links") = std::nullopt,
             py::arg("topology").noconvert() = std::nullopt,
-        });
+            py::arg("sub_core_grids") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::ccl

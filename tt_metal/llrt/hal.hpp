@@ -27,7 +27,8 @@
 #include <vector>
 
 #include "tt_memory.h"
-#include "hal/generated/dev_msgs.hpp"  // IWYU pragma: export
+#include "hal/generated/dev_msgs.hpp"          // IWYU pragma: export
+#include "hal/generated/fabric_telemetry.hpp"  // IWYU pragma: export
 
 #include <tt_stl/overloaded.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -151,6 +152,7 @@ private:
     bool supports_cbs_ = false;
     bool supports_receiving_multicast_cmds_ = false;
     dev_msgs::Factory dev_msgs_factory_;
+    tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory_;
 
 public:
     HalCoreInfoType(
@@ -163,7 +165,8 @@ public:
         std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names,
         bool supports_cbs,
         bool supports_receiving_multicast_cmds,
-        dev_msgs::Factory dev_msgs_factory) :
+        dev_msgs::Factory dev_msgs_factory,
+        tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory) :
         programmable_core_type_(programmable_core_type),
         core_type_(core_type),
         processor_classes_(std::move(processor_classes)),
@@ -173,7 +176,8 @@ public:
         eth_fw_mailbox_msgs_{std::move(eth_fw_mailbox_msgs)},
         supports_cbs_(supports_cbs),
         supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds),
-        dev_msgs_factory_(dev_msgs_factory) {}
+        dev_msgs_factory_(dev_msgs_factory),
+        fabric_telemetry_factory_(fabric_telemetry_factory) {}
 
     DeviceAddr get_dev_addr(HalL1MemAddrType addr_type) const;
     uint32_t get_dev_size(HalL1MemAddrType addr_type) const;
@@ -184,6 +188,7 @@ public:
     const HalJitBuildConfig& get_jit_build_config(uint32_t processor_class_idx, uint32_t processor_type_idx) const;
     const std::string& get_processor_class_name(uint32_t processor_index, bool is_abbreviated) const;
     const dev_msgs::Factory& get_dev_msgs_factory() const;
+    const tt::tt_fabric::fabric_telemetry::Factory& get_fabric_telemetry_factory() const;
 };
 
 inline DeviceAddr HalCoreInfoType::get_dev_addr(HalL1MemAddrType addr_type) const {
@@ -215,6 +220,10 @@ inline const HalJitBuildConfig& HalCoreInfoType::get_jit_build_config(
 }
 
 inline const dev_msgs::Factory& HalCoreInfoType::get_dev_msgs_factory() const { return this->dev_msgs_factory_; }
+
+inline const tt::tt_fabric::fabric_telemetry::Factory& HalCoreInfoType::get_fabric_telemetry_factory() const {
+    return this->fabric_telemetry_factory_;
+}
 
 // HalJitBuildQueryInterface is an interface for querying arch-specific build options.
 // These are generated on demand instead of stored in HalJitBuildConfig,
@@ -470,6 +479,13 @@ public:
         auto index = get_programmable_core_type_index(programmable_core_type);
         TT_ASSERT(index < this->core_info_.size());
         return this->core_info_[index].get_dev_msgs_factory();
+    }
+
+    const tt::tt_fabric::fabric_telemetry::Factory& get_fabric_telemetry_factory(
+        HalProgrammableCoreType programmable_core_type) const {
+        TT_ASSERT(programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH);
+        auto index = get_programmable_core_type_index(programmable_core_type);
+        return this->core_info_[index].get_fabric_telemetry_factory();
     }
 
     // This interface guarantees that go_msg_t is 4B and has the same layout for all core types.
