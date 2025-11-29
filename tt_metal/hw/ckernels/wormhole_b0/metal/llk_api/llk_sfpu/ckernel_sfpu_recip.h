@@ -22,12 +22,12 @@ sfpi_inline vFloat sfpu_reciprocal(const vFloat in) {
 
 template <ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_reciprocal() {
-    _calculate_reciprocal_<(APPROX_MODE == ApproximationMode::Fast), ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);
+    _calculate_reciprocal_<(APPROX_MODE), ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);
 }
 
 template <ApproximationMode APPROX_MODE>
 void recip_init() {
-    _init_reciprocal_<(APPROX_MODE == ApproximationMode::Fast)>();
+    _init_reciprocal_<(APPROX_MODE)>();
 }
 
 }  // namespace sfpu

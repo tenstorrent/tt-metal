@@ -15,7 +15,7 @@ inline void calculate_softsign() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         sfpi::vFloat tmp = sfpi::abs(v) + sfpi::vConst1;
-        tmp = _sfpu_reciprocal_<(APPROX_MODE == ApproximationMode::Fast) ? 2 : 3>(tmp);
+        tmp = _sfpu_reciprocal_<(APPROX_MODE) ? 2 : 3>(tmp);
         sfpi::dst_reg[0] = v * tmp;
         sfpi::dst_reg++;
     }
@@ -23,7 +23,7 @@ inline void calculate_softsign() {
 
 template <ApproximationMode APPROX_MODE>
 void init_softsign() {
-    _init_reciprocal_<(APPROX_MODE == ApproximationMode::Fast)>();
+    _init_reciprocal_<(APPROX_MODE)>();
 }
 
 }  // namespace ckernel::sfpu
