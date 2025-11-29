@@ -1,38 +1,64 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "groupnorm_op.hpp"
-#include "groupnorm_types.hpp"
+#include "groupnorm_device_operation.hpp"
 
-#include <optional>
-
-#include "ttnn/operations/math.hpp"
 #include <tt-metalium/constants.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::normalization {
+namespace ttnn::operations::normalization::group_norm {
 
-void GroupNorm::validate(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    TT_FATAL(input_tensors.size() == 1, "Must have exactly 1 input tensor, got {} tensors", input_tensors.size());
-    TT_FATAL(
-        optional_input_tensors.size() <= 5,
-        "Must have at most 5 optional input tensors (for a total of 1 to 6 input tensors), got {} optional tensors",
-        optional_input_tensors.size());
-    auto& a = input_tensors.at(0);
-    const auto& gamma = optional_input_tensors.at(0);
-    const auto& beta = optional_input_tensors.at(1);
-    const auto& input_mask = optional_input_tensors.at(2);
-    const auto& negative_mask = optional_input_tensors.at(3);
-    const auto& reciprocals = optional_input_tensors.at(4);
+GroupNormDeviceOperation::program_factory_t GroupNormDeviceOperation::select_program_factory(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.input;
+
+    if (input.is_sharded()) {
+        return GroupNormShardedProgramFactory{};
+    }
+
+    // For non-sharded: determine if we need mcast or no-mcast based on batch vs virtual rows
+    const auto& program_config = std::get<GroupNormMultiCoreProgramConfig>(args.program_config);
+    CoreCoord grid_size = program_config.compute_with_storage_grid_size;
+    uint32_t batch = input.padded_shape()[0];
+    uint32_t W = input.padded_shape()[3];
+    uint32_t num_virtual_cols = std::min<uint32_t>(grid_size.x, args.num_groups);
+
+    while (num_virtual_cols > 0 &&
+           ((W / num_virtual_cols) % TILE_WIDTH != 0 || (args.num_groups % num_virtual_cols) != 0)) {
+        num_virtual_cols -= 1;
+    }
+
+    uint32_t num_actual_rows = grid_size.y;
+    uint32_t num_virtual_rows = (grid_size.x / num_virtual_cols) * num_actual_rows;
+
+    if (batch >= num_virtual_rows) {
+        return GroupNormNoMcastProgramFactory{};
+    } else {
+        return GroupNormMcastProgramFactory{};
+    }
+}
+
+void GroupNormDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(args, tensor_args);
+}
+
+void GroupNormDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& a = tensor_args.input;
+    const auto& gamma = tensor_args.gamma;
+    const auto& beta = tensor_args.beta;
+    const auto& input_mask = tensor_args.input_mask;
+    const auto& negative_mask = tensor_args.negative_mask;
+    const auto& reciprocals = tensor_args.reciprocals;
+
     TT_FATAL(a.dtype() == DataType::BFLOAT16, "Input tensor must be BFLOAT16, got: {}", a.dtype());
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to groupnorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
-    TT_FATAL(a.padded_shape()[3] % this->num_groups == 0, "channel must be divisible by num_groups!");
+    TT_FATAL(a.padded_shape()[3] % args.num_groups == 0, "channel must be divisible by num_groups!");
     TT_FATAL(a.padded_shape()[1] == 1, "input tensor shape[1] must be 1!");
 
     if (gamma.has_value()) {
@@ -114,10 +140,10 @@ void GroupNorm::validate(
             "Input mask must have TILE layout, got: {}",
             input_mask.value().layout());
         TT_FATAL(
-            input_mask.value().padded_shape()[1] == this->num_groups,
+            input_mask.value().padded_shape()[1] == args.num_groups,
             "Input mask dim1 must match number of groups, got: {} vs {}",
             input_mask.value().padded_shape()[1],
-            this->num_groups);
+            args.num_groups);
         TT_FATAL(
             input_mask.value().padded_shape()[2] == TILE_HEIGHT,
             "Input mask height must be TILE_HEIGHT (32), got: {}",
@@ -138,10 +164,10 @@ void GroupNorm::validate(
             "Negative musk must be in TILE layout, but layout is {}",
             negative_mask.value().layout());
         TT_FATAL(
-            negative_mask.value().padded_shape()[1] == this->num_groups,
+            negative_mask.value().padded_shape()[1] == args.num_groups,
             "Negative mask padded shape[1] must be equal to num_groups, but is {} and num_groups is {}",
             negative_mask.value().padded_shape()[1],
-            this->num_groups);
+            args.num_groups);
         TT_FATAL(
             negative_mask.value().padded_shape()[2] == TILE_HEIGHT,
             "Negative mask padded shape[2] must be equal to TILE_HEIGHT, but is {} and TILE_HEIGHT is {}",
@@ -158,7 +184,7 @@ void GroupNorm::validate(
             "If using negative mask, input tensor must be in ROW_MAJOR layout, but layout is {}",
             a.layout());
         Layout output_layout =
-            std::visit([](const auto& config) -> Layout { return config.output_layout; }, this->program_config);
+            std::visit([](const auto& config) -> Layout { return config.output_layout; }, args.program_config);
         TT_FATAL(
             output_layout == Layout::ROW_MAJOR,
             "If using negative mask, output tensor must be in ROW_MAJOR layout, but layout is {}",
@@ -167,7 +193,7 @@ void GroupNorm::validate(
 
     // Reciprocals tensor validation
     if (reciprocals.has_value()) {
-        TT_FATAL(this->use_welford, "Reciprocals tensor can only be provided when use_welford is True");
+        TT_FATAL(args.use_welford, "Reciprocals tensor can only be provided when use_welford is True");
         TT_FATAL(
             reciprocals.value().dtype() == DataType::FLOAT32,
             "Reciprocals tensor must be FLOAT32, got: {}",
@@ -177,143 +203,84 @@ void GroupNorm::validate(
         TT_FATAL(a.device() == reciprocals.value().device(), "Input and reciprocals tensors must be on same device");
     }
 }
-std::vector<TensorSpec> GroupNorm::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
+
+spec_return_value_t GroupNormDeviceOperation::compute_output_specs(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input;
 
     return std::visit(
-        [&](const auto& program_config) -> std::vector<TensorSpec> {
+        [&](const auto& program_config) -> spec_return_value_t {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if (program_config.inplace) {
                 if constexpr (std::is_same_v<ProgramConfigType, GroupNormShardedMultiCoreProgramConfig>) {
-                    return {input_tensor.tensor_spec()};
+                    return input_tensor.tensor_spec();
                 } else {
                     TT_THROW("inplace groupnorm not supported for unsharded tensors");
                 }
             }
 
-            auto mem_config = this->output_mem_config;
-            return {TensorSpec(
+            auto mem_config = args.output_mem_config;
+            return TensorSpec(
                 input_tensor.logical_shape(),
                 TensorLayout::fromPaddedShape(
                     program_config.out_data_format,
                     PageConfig(program_config.output_layout),
                     mem_config,
                     input_tensor.logical_shape(),
-                    input_tensor.padded_shape()))};
+                    input_tensor.padded_shape()));
         },
-        this->program_config);
+        args.program_config);
 }
-std::vector<Tensor> GroupNorm::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
+
+tensor_return_value_t GroupNormDeviceOperation::create_output_tensors(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input;
 
     return std::visit(
-        [&](const auto& program_config) -> std::vector<Tensor> {
+        [&](const auto& program_config) -> tensor_return_value_t {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if (program_config.inplace) {
                 if constexpr (std::is_same_v<ProgramConfigType, GroupNormShardedMultiCoreProgramConfig>) {
-                    return {input_tensor};
+                    return input_tensor;
                 } else {
                     TT_THROW("inplace groupnorm not supported for unsharded tensors");
                 }
             }
-            return {create_device_tensor(this->compute_output_specs(input_tensors).at(0), input_tensor.device())};
+            return create_device_tensor(compute_output_specs(args, tensor_args), input_tensor.device());
         },
-        this->program_config);
+        args.program_config);
 }
 
-operation::ProgramWithCallbacks GroupNorm::create_program(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors) const {
-    const auto& a = input_tensors.at(0);
-    const auto& gamma = optional_input_tensors.at(0);
-    const auto& beta = optional_input_tensors.at(1);
-    const auto& input_mask = optional_input_tensors.at(2);
-    const auto& negative_mask = optional_input_tensors.at(3);
-    const auto& reciprocals = optional_input_tensors.at(4);
-    auto& output_tensor = output_tensors.at(0);
-
-    return std::visit(
-        [&](const auto& program_config) -> operation::ProgramWithCallbacks {
-            using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            if constexpr (std::is_same_v<ProgramConfigType, GroupNormShardedMultiCoreProgramConfig>) {
-                uint32_t num_cores_x = program_config.compute_with_storage_grid_size.x;
-                uint32_t num_cores_y = program_config.compute_with_storage_grid_size.y;
-                bool inplace = program_config.inplace;
-                CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
-                uint32_t batch = a.padded_shape()[0];
-
-                return groupnorm_multi_core_sharded(
-                    a,
-                    gamma,
-                    beta,
-                    input_mask,
-                    negative_mask,
-                    output_tensor,
-                    this->eps,
-                    this->num_groups,
-                    batch,
-                    program_config.im_data_format,
-                    program_config.compute_with_storage_grid_size,
-                    inplace,
-                    this->compute_kernel_config,
-                    this->use_welford);
-            } else {
-                uint32_t num_cores_x = program_config.compute_with_storage_grid_size.x;
-                uint32_t num_cores_y = program_config.compute_with_storage_grid_size.y;
-                bool inplace = program_config.inplace;
-                uint32_t num_out_blocks = program_config.num_out_blocks;
-                CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
-                uint32_t batch = a.padded_shape()[0];
-                uint32_t W = a.padded_shape()[3];
-                uint32_t num_virtual_cols = std::min<uint32_t>(grid_size.x, this->num_groups);
-                while (num_virtual_cols > 0 &&
-                       ((W / num_virtual_cols) % TILE_WIDTH != 0 || (this->num_groups % num_virtual_cols) != 0)) {
-                    num_virtual_cols -= 1;
-                }
-                if (num_virtual_cols == 0) {
-                    TT_THROW("Core Grid resulted in virtual cores x = 0, Please try another core grid");
-                }
-                uint32_t num_actual_rows = grid_size.y;
-                uint32_t num_virtual_rows = (grid_size.x / num_virtual_cols) * num_actual_rows;
-                if (batch >= num_virtual_rows) {
-                    return groupnorm_multi_core_no_mcast(
-                        a,
-                        gamma,
-                        beta,
-                        input_mask,
-                        reciprocals,
-                        output_tensor,
-                        this->eps,
-                        this->num_groups,
-                        batch,
-                        program_config.im_data_format,
-                        program_config.compute_with_storage_grid_size,
-                        inplace,
-                        num_out_blocks,
-                        this->compute_kernel_config,
-                        this->use_welford);
-                } else {
-                    return groupnorm_multi_core_mcast(
-                        a,
-                        gamma,
-                        beta,
-                        input_mask,
-                        reciprocals,
-                        output_tensor,
-                        this->eps,
-                        this->num_groups,
-                        batch,
-                        program_config.im_data_format,
-                        program_config.compute_with_storage_grid_size,
-                        inplace,
-                        num_out_blocks,
-                        this->compute_kernel_config,
-                        this->use_welford);
-                }
-            }
+std::tuple<GroupNormDeviceOperation::operation_attributes_t, GroupNormDeviceOperation::tensor_args_t>
+GroupNormDeviceOperation::invoke(
+    const Tensor& input,
+    float eps,
+    uint32_t num_groups,
+    const MemoryConfig& output_mem_config,
+    const GroupNormProgramConfig& program_config,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool use_welford,
+    std::optional<Tensor> gamma,
+    std::optional<Tensor> beta,
+    std::optional<Tensor> input_mask,
+    std::optional<Tensor> negative_mask,
+    std::optional<Tensor> reciprocals) {
+    return {
+        operation_attributes_t{
+            .eps = eps,
+            .num_groups = num_groups,
+            .output_mem_config = output_mem_config,
+            .program_config = program_config,
+            .compute_kernel_config = compute_kernel_config,
+            .use_welford = use_welford,
         },
-        this->program_config);
+        tensor_args_t{
+            .input = input,
+            .gamma = std::move(gamma),
+            .beta = std::move(beta),
+            .input_mask = std::move(input_mask),
+            .negative_mask = std::move(negative_mask),
+            .reciprocals = std::move(reciprocals)}};
 }
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::operations::normalization::group_norm

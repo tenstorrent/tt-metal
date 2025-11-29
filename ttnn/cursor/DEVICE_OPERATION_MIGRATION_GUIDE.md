@@ -151,11 +151,11 @@ struct Embeddings {
 
 ```cpp
 struct operation_attributes_t {
-    const MemoryConfig output_mem_config;
-    const bool tilized;
-    const EmbeddingsType embeddings_type;
-    const std::optional<uint32_t> pad_token;
-    const DataType output_dtype;
+    MemoryConfig output_mem_config;
+    bool tilized;
+    EmbeddingsType embeddings_type;
+    std::optional<uint32_t> pad_token;
+    DataType output_dtype;
 };
 ```
 
@@ -183,9 +183,9 @@ struct Embedding {
 
 ```cpp
 struct tensor_args_t {
-    const Tensor& input_tensor_arg;
-    const Tensor& weight_arg;
-    const std::optional<Tensor>& optional_output_tensor;
+    Tensor input_tensor_arg;
+    Tensor weight_arg;
+    std::optional<Tensor> optional_output_tensor;
 };
 ```
 
