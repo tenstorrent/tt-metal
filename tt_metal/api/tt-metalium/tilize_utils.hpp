@@ -25,14 +25,6 @@ std::ostream& operator<<(std::ostream& os, TensorLayoutType layout);
 
 using PhysicalSize = std::array<uint32_t, 2>;
 
-struct TensAddr {
-    std::vector<std::uint32_t> sh;
-
-    TensAddr(const std::vector<std::uint32_t>& shape);
-    std::uint32_t numel() const;
-    int offs(int n, int c, int h, int w);
-};
-
 std::uint32_t round_up_to_mul16(std::uint32_t val);
 
 std::uint32_t round_up_to_mul32(std::uint32_t val);
