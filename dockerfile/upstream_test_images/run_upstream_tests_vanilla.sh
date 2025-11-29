@@ -31,7 +31,7 @@ test_suite_bh_umd_unit_tests() {
 # Function to run BH single PCIe small ML model tests
 test_suite_bh_single_pcie_small_ml_model_tests() {
     echo "[upstream-tests] Running BH upstream small model tests"
-    pytest --disable-warnings --input-path="models/demos/whisper/demo/dataset/conditional_generation" models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation
+    pytest --disable-warnings --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation
     pytest models/demos/vision/classification/resnet50/blackhole/tests/upstream_pipeline
 }
 

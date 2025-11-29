@@ -18,13 +18,13 @@ Read more about Whisper at [huggingface.co/distil-whisper/distil-large-v3](https
 - To run the conditional generation demo with custom inputs:
 
 ```sh
-pytest --disable-warnings --input-path="models/demos/whisper/demo/dataset/conditional_generation" models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation
+pytest --disable-warnings --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation
 ```
 
 - To run the conditional generation demo with inputs from the `hf-internal-testing/librispeech_asr_dummy` dataset:
 
 ```sh
-pytest --disable-warnings models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset
+pytest --disable-warnings models/demos/audio/whisper/demo/demo.py::test_demo_for_conditional_generation_dataset
 ```
 
 ### Audio Classification Demo
@@ -32,13 +32,13 @@ pytest --disable-warnings models/demos/whisper/demo/demo.py::test_demo_for_condi
 - To run the audio classification demo with custom inputs:
 
 ```sh
-pytest --disable-warnings models/demos/whisper/demo/demo.py::test_demo_for_audio_classification_inference --input-path="models/demos/whisper/demo/dataset/audio_classification"
+pytest --disable-warnings models/demos/audio/whisper/demo/demo.py::test_demo_for_audio_classification_inference --input-path="models/demos/audio/whisper/demo/dataset/audio_classification"
 ```
 
 - To run the audio classification demo with inputs from the `google/fleurs` dataset:
 
 ```sh
-pytest --disable-warnings models/demos/whisper/demo/demo.py::test_demo_for_audio_classification_dataset
+pytest --disable-warnings models/demos/audio/whisper/demo/demo.py::test_demo_for_audio_classification_dataset
 ```
 
 ### Translation Demo
@@ -46,7 +46,7 @@ pytest --disable-warnings models/demos/whisper/demo/demo.py::test_demo_for_audio
 - To run the translation demo with inputs from the `google/fleurs` dataset:
 
 ```sh
-pytest --disable-warnings models/demos/whisper/demo/demo.py::test_demo_for_translation_dataset
+pytest --disable-warnings models/demos/audio/whisper/demo/demo.py::test_demo_for_translation_dataset
 ```
 
 ## Notes:
