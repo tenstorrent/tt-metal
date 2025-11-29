@@ -123,6 +123,14 @@ TEST(MeshGraphValidation, TestMGDConnections) {
     EXPECT_EQ(rev_count, 1);
 }
 
+TEST_F(ControlPlaneFixture, TestControlPlaneInitNoMGD) {
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    tt::tt_metal::MetalContext::instance().get_control_plane();
+}
+
 TEST(MeshGraphValidation, TestT3kMeshGraphInit) {
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
@@ -991,5 +999,4 @@ TEST(MeshGraphValidation, TestFabricConfigInvalidMeshToTorus) {
         { MeshGraph mesh_graph_invalid(mesh_mgd_path.string(), tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY); },
         std::runtime_error);
 }
-
 }  // namespace tt::tt_fabric::fabric_router_tests
