@@ -27,6 +27,11 @@ on:
         required: false
         default: "false"
         type: string
+      main-os-version:
+        description: "Main OS version that all test workflows should run on"
+        required: false
+        default: 22.04
+        type: number
 
 permissions:
   contents: write
@@ -49,7 +54,7 @@ jobs:
 
   single-card-demo-tests:
     needs: build-artifact
-    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
+    if: ${{ inputs.tag-version != '' }}
     secrets: inherit
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
     with:
@@ -61,7 +66,7 @@ jobs:
 
   t3000-demo-tests:
     needs: build-artifact
-    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
+    if: ${{ inputs.version == inputs.main-os-version && inputs.tag-version != '' }}
     secrets: inherit
     uses: ./.github/workflows/t3000-demo-tests-impl.yaml
     with:
@@ -72,7 +77,7 @@ jobs:
 
   galaxy-demos:
     needs: build-artifact
-    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
+    if: ${{ inputs.version == inputs.main-os-version && inputs.tag-version != '' }}
     uses: ./.github/workflows/galaxy-demo-tests-impl.yaml
     secrets: inherit
     with:
@@ -113,7 +118,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write  # Required for AWS OIDC
-    if: ${{ github.ref == 'refs/heads/main' || inputs.dry-run }}
+    if: ${{ github.ref == 'refs/heads/main' }}
     steps:
       - name: Set up Python
         uses: actions/setup-python@v4
