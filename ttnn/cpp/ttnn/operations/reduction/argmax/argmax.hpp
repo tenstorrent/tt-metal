@@ -1,12 +1,9 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
-#include "ttnn/operations/core/core.hpp"
 
 namespace ttnn {
 namespace operations::reduction {
@@ -14,7 +11,7 @@ namespace operations::reduction {
 struct ArgMaxOperation {
     static ttnn::Tensor invoke(
         const Tensor& input_tensor,
-        std::optional<int> dim = std::nullopt,
+        const std::optional<int>& dim = std::nullopt,
         bool keepdim = false,
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
         bool use_muticore = false,
