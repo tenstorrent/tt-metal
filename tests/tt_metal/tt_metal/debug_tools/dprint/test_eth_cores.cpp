@@ -22,6 +22,7 @@
 #include <tt-metalium/program.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include "tests/tt_metal/tt_metal/eth/eth_test_common.hpp"
 
 ////////////////////////////////////////////////////////////////////////////////
 // A test for printing from ethernet cores.
@@ -67,6 +68,7 @@ void RunTest(
         test_cores = device->get_inactive_ethernet_cores();
         config.eth_mode = Eth::IDLE;
     }
+    eth_test_common::set_arch_specific_eth_config(config);
     for (const auto& core : test_cores) {
         // Set up program and command queue
         distributed::MeshWorkload workload;
