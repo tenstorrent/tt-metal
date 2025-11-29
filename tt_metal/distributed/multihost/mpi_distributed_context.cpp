@@ -448,6 +448,9 @@ ContextPtr MPIContext::duplicate() const {
 
 ContextPtr MPIContext::split(Color color, Key key) const {
     MPI_Comm split_comm;
+    if (*color == SPLIT_COLOR_UNDEFINED) {
+        color = Color(MPI_UNDEFINED);
+    }
     MPI_CHECK(MPI_Comm_split(comm_, *color, *key, &split_comm));
     return std::make_shared<MPIContext>(split_comm);
 }
