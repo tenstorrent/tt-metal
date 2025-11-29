@@ -1,0 +1,32 @@
+# --- Mesh Descriptors ------------------------------------------------------
+# 2 meshes, each 4x8 Blackhole mesh connected with 2 connections
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 8 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Graphs ---------------------------------------------------------------
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  # Instances: mesh ids 0..1 (all 4x8)
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  # Explicit connections: 2 connections between the two meshes
+  # Connection 1: Mesh 0 device 0 <-> Mesh 1 device 0
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0} }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1} }
+    channels { count: 4 policy: STRICT }
+    directional: false
+  }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
