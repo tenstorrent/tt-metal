@@ -70,12 +70,12 @@ sfpi_inline void calculate_div_int32_body(
 
     // Compute correction value in float32.
     sfpi::vFloat correction_f = r_f * inv_b_f;
+    sfpi::vInt b1 = b >> 23;
     sfpi::vInt correction = sfpi::float_to_uint16(correction_f, 0);
 
     // Compute tmp = correction * b.
     sfpi::vInt tmp_hi;
     sfpi::vInt tmp_lo;
-    sfpi::vInt b1 = b >> 23;
     b1.get() = __builtin_rvtt_bh_sfpmul24(correction.get(), b1.get(), 0);
     tmp_hi.get() = __builtin_rvtt_bh_sfpmul24(correction.get(), b.get(), 1);
     tmp_lo.get() = __builtin_rvtt_bh_sfpmul24(correction.get(), b.get(), 0);
