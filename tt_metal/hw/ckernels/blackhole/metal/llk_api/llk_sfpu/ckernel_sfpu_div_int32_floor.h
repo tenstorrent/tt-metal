@@ -61,8 +61,8 @@ sfpi_inline void calculate_div_int32_body(
     // do not need to be masked as this is done internally.
     qb.get() = __builtin_rvtt_bh_sfpmul24(q.get(), b.get(), 0);
 
-    qb <<= 9;
     q <<= 9;
+    qb <<= 9;
 
     // Compute remainder.
     sfpi::vInt r = a - qb;
