@@ -477,4 +477,6 @@ ALWI void fast_tilize_block(
 #endif
 }
 
+ALWI void unpack_tilizeA_B_uninit(uint32_t icb) { UNPACK((llk_unpack_tilizeA_B_uninit(icb))); }
+
 }  // namespace ckernel

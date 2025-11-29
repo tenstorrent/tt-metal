@@ -220,3 +220,8 @@ inline void llk_unpack_tilizeA_B_block(
         llk_unpack_tilizeA_B<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a, num_faces, unpA_face_r_dim);
     }
 }
+
+inline void llk_unpack_tilizeA_B_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {
+    std::uint32_t operand_id = get_operand_id(operand);
+    _llk_unpack_tilizeA_B_uninit_((uint)unpack_dst_format[operand_id], face_r_dim);
+}
