@@ -308,7 +308,7 @@ run_yolov8s_perf() {
 run_mobilenetv2_perf(){
 
 #  mobilenetv2 demo
- pytest models/demos/mobilenetv2/demo/demo.py
+ pytest models/demos/vision/classification/mobilenetv2/demo/demo.py
 
 }
 
