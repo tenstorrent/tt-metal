@@ -154,8 +154,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
 
         log_info(LogTest, "Enqueue AllGather");
 
-        auto aggregated_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(device_tensors);
-        auto aggregated_output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
+        auto aggregated_tensor = tt::tt_metal::unit_mesh::aggregate(device_tensors);
+        auto aggregated_output_tensor = tt::tt_metal::unit_mesh::aggregate(output_tensors);
         // Quiesce parent mesh before all gather
         mesh_device_->quiesce_devices();
 
@@ -334,8 +334,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
 
         log_info(LogTest, "Enqueue AllGather");
 
-        auto aggregated_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(device_tensors);
-        auto aggregated_output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
+        auto aggregated_tensor = tt::tt_metal::unit_mesh::aggregate(device_tensors);
+        auto aggregated_output_tensor = tt::tt_metal::unit_mesh::aggregate(output_tensors);
 
         // Quiesce parent mesh before all gather
         mesh_device_->quiesce_devices();
@@ -540,8 +540,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
 
         log_info(LogTest, "Enqueue AllGather");
 
-        auto aggregated_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(device_tensors);
-        auto aggregated_output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
+        auto aggregated_tensor = tt::tt_metal::unit_mesh::aggregate(device_tensors);
+        auto aggregated_output_tensor = tt::tt_metal::unit_mesh::aggregate(output_tensors);
 
         // Quiesce parent mesh before all gather
         mesh_device_->quiesce_devices();
