@@ -59,8 +59,7 @@ struct InternalReceiverChannelMapping {
  * Channel indices are relative to each VC:
  * - VC0 (1D): [0] = local worker, [1] = forwarding from upstream
  * - VC0 (2D): [0] = local worker, [1-3] = forwarding from upstream routers
- * - VC1: [0] = vc1 forward channel (ring/torus only, for deadlock avoidance)
- * - VC2: [0-2] or [0-3] = intermesh channels (2D/2D+Z only)
+ * - VC1: [0-2] or [0-3] = intermesh channels (2D/2D+Z only)
  */
 class FabricRouterChannelMapping {
 public:
@@ -91,7 +90,6 @@ private:
     void initialize_mappings();
     void initialize_vc0_mappings();
     void initialize_vc1_mappings();
-    void initialize_vc2_mappings();
     bool is_2d_topology() const;
     bool is_ring_or_torus() const;
 };

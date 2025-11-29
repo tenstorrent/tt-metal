@@ -2114,11 +2114,8 @@ void ControlPlane::populate_fabric_connection_info(
 
     const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     // Always populate fabric router config for normal workers
-    const auto& edm_config = fabric_context.get_fabric_router_config(
-        tt::tt_fabric::FabricEriscDatamoverType::Default,
-        tt::tt_fabric::FabricEriscDatamoverAxis::Short,
-        fabric_tensix_config,
-        static_cast<eth_chan_directions>(sender_channel));
+    const auto& edm_config =
+        fabric_context.get_fabric_router_config(fabric_tensix_config, static_cast<eth_chan_directions>(sender_channel));
     CoreCoord fabric_router_virtual_core = cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_channel_id);
 
     fill_connection_info_fields(

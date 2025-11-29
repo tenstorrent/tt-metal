@@ -57,12 +57,11 @@ class ChannelConnectionWriterAdapter {
 public:
     // Adds downstream noc x/y
     virtual void add_downstream_connection(
-        SenderWorkerAdapterSpec const& adapter_spec,
+        const SenderWorkerAdapterSpec& adapter_spec,
         uint32_t inbound_vc_idx,
         eth_chan_directions downstream_direction,
         CoreCoord downstream_noc_xy,
-        bool is_2D_routing,
-        bool is_vc1) = 0;
+        bool is_2D_routing) = 0;
 
     virtual void pack_inbound_channel_rt_args(uint32_t vc_idx, std::vector<uint32_t>& args_out) const = 0;
     virtual void pack_adaptor_to_relay_rt_args(std::vector<uint32_t>& args_out) const = 0;
@@ -97,8 +96,7 @@ public:
         uint32_t inbound_vc_idx,
         eth_chan_directions downstream_direction,
         CoreCoord downstream_noc_xy,
-        bool is_2D_routing,
-        bool is_vc1) override;
+        bool is_2D_routing) override;
 
     void add_local_tensix_connection(
         const SenderWorkerAdapterSpec& adapter_spec,
@@ -108,7 +106,7 @@ public:
     void pack_inbound_channel_rt_args(uint32_t vc_idx, std::vector<uint32_t>& args_out) const override;
     void pack_adaptor_to_relay_rt_args(std::vector<uint32_t>& args_out) const override;
 
-    uint32_t get_downstream_edms_connected(bool is_2d_routing, bool is_vc1) const;
+    uint32_t get_downstream_edms_connected() const;
 
     // Get buffer index semaphore address for a specific VC and compact index
     std::optional<size_t> get_buffer_index_semaphore_address(uint32_t vc_idx, size_t compact_idx) const {
@@ -140,7 +138,6 @@ private:
     std::array<size_t, builder_config::num_receiver_channels> downstream_sender_channels_num_buffers = {};
 
     // For VC0: holds base addresses for up to 3 downstream EDMs (indexed by compact index)
-    // For VC1: only index 0 is used (single VC1 downstream connection)
     std::array<
         std::array<std::optional<size_t>, builder_config::max_downstream_edms>,
         builder_config::num_receiver_channels>
