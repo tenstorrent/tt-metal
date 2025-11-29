@@ -137,7 +137,7 @@ run_llama3_func() {
 
 run_ufld_v2_func() {
   #ufld_v2 demo
-  pytest models/demos/wormhole/ufld_v2/demo/demo.py
+  pytest models/demos/vision/segmentation/ufld_v2/wormhole/demo/demo.py
 }
 
 run_vgg_func() {

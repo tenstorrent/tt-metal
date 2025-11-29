@@ -293,9 +293,9 @@ models/demos/grayskull @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeow
 models/demos/**/*resnet* @tenstorrent/metalium-developers-convolutions @mradosavljevicTT @tenstorrent/codeowner-bypass
 models/experimental/ @dgomezTT @jmalone-tt @ayerofieiev-tt @uaydonat @tenstorrent/codeowner-bypass
 models/experimental/functional_unet @esmalTT @uaydonat @tenstorrent/codeowner-bypass
-models/demos/ufld_v2 @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
-models/demos/wormhole/ufld_v2 @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
-models/demos/blackhole/ufld_v2 @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/demos/vision/segmentation/ufld_v2/common @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/demos/vision/segmentation/ufld_v2/wormhole @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/demos/vision/segmentation/ufld_v2/blackhole @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/demos/vgg_unet @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/demos/wormhole/vgg_unet @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/demos/blackhole/vgg_unet @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
