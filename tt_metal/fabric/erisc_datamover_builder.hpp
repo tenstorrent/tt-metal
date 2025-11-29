@@ -26,6 +26,7 @@
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
 #include "tt_metal/fabric/fabric_datamover_builder_base.hpp"
+#include "tt_metal/fabric/hw/inc/fabric_stream_ids.hpp"
 
 namespace tt::tt_fabric {
 
@@ -136,71 +137,8 @@ Receiver channel side registers are defined here to receive free-slot credits fr
                           └─────────────────────────────────┘
                                    South Router
 */
-struct StreamRegAssignments {
-    // Packet send/ack/complete stream IDs
-    static constexpr uint32_t to_receiver_0_pkts_sent_id = 0;
-    static constexpr uint32_t to_receiver_1_pkts_sent_id = 1;
-    static constexpr uint32_t to_sender_0_pkts_acked_id = 2;
-    static constexpr uint32_t to_sender_1_pkts_acked_id = 3;
-    static constexpr uint32_t to_sender_2_pkts_acked_id = 4;
-    static constexpr uint32_t to_sender_3_pkts_acked_id = 5;
-    static constexpr uint32_t to_sender_4_pkts_acked_id = 6;
-    static constexpr uint32_t to_sender_0_pkts_completed_id = 7;
-    static constexpr uint32_t to_sender_1_pkts_completed_id = 8;
-    static constexpr uint32_t to_sender_2_pkts_completed_id = 9;
-    static constexpr uint32_t to_sender_3_pkts_completed_id = 10;
-    static constexpr uint32_t to_sender_4_pkts_completed_id = 11;
-    // Receiver channel free slots stream IDs
-    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_1 = 12;
-    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_2 = 13;
-    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_3 = 14;
-    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_1 = 15;
-    // Sender channel free slots stream IDs
-    static constexpr uint32_t sender_channel_0_free_slots_stream_id = 17;  // for tensix worker
-    static constexpr uint32_t sender_channel_1_free_slots_stream_id = 18;  // for upstream edge on: 1D->VC0, 2D->VC0
-    static constexpr uint32_t sender_channel_2_free_slots_stream_id = 19;  // for upstream edge on: 1D->VC1, 2D->VC0
-    static constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;  // for upstream edge on: 2D->VC0
-    static constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;  // for upstream edge on: 2D->VC1
-    // Used by Lite Fabric
-    // Consult tt_metal/lite_fabric/hw/inc/constants.hpp to ensure no conflicts
-    static constexpr uint32_t reserved_lite_fabric_0_stream_id = 23;
-    static constexpr uint32_t reserved_lite_fabric_1_stream_id = 24;
-    static constexpr uint32_t reserved_lite_fabric_2_stream_id = 25;
-    static constexpr uint32_t reserved_lite_fabric_3_stream_id = 26;
-    static constexpr uint32_t reserved_lite_fabric_4_stream_id = 27;
-    static constexpr uint32_t reserved_lite_fabric_5_stream_id = 28;
-    // Local tensix relay free slots stream ID (UDM mode only)
-    static constexpr uint32_t tensix_relay_local_free_slots_stream_id = 29;
-    // Multi-RISC teardown synchronization stream ID
-    static constexpr uint32_t multi_risc_teardown_sync_stream_id = 31;
-
-    static const auto& get_all_stream_ids() {
-        static constexpr std::array stream_ids = {
-            to_receiver_0_pkts_sent_id,
-            to_receiver_1_pkts_sent_id,
-            to_sender_0_pkts_acked_id,
-            to_sender_1_pkts_acked_id,
-            to_sender_2_pkts_acked_id,
-            to_sender_3_pkts_acked_id,
-            to_sender_4_pkts_acked_id,
-            to_sender_0_pkts_completed_id,
-            to_sender_1_pkts_completed_id,
-            to_sender_2_pkts_completed_id,
-            to_sender_3_pkts_completed_id,
-            to_sender_4_pkts_completed_id,
-            vc_0_free_slots_from_downstream_edge_1,
-            vc_0_free_slots_from_downstream_edge_2,
-            vc_0_free_slots_from_downstream_edge_3,
-            vc_1_free_slots_from_downstream_edge_1,
-            sender_channel_1_free_slots_stream_id,
-            sender_channel_2_free_slots_stream_id,
-            sender_channel_3_free_slots_stream_id,
-            sender_channel_4_free_slots_stream_id,
-            tensix_relay_local_free_slots_stream_id,
-            multi_risc_teardown_sync_stream_id};
-        return stream_ids;
-    }
-};
+// Moved to tt_metal/fabric/hw/inc/fabric_stream_ids.hpp
+using StreamRegAssignments = tt::tt_fabric::StreamRegAssignments;
 
 struct FabricEriscDatamoverConfig {
     static constexpr uint32_t WR_CMD_BUF = 0;      // for large writes

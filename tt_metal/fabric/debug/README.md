@@ -59,20 +59,21 @@ python3 tt_metal/fabric/debug/fabric_erisc_dumper.py --fabric-streams --stream-g
 The tool provides specialized fabric stream register modes for different aspects of fabric debugging:
 
 #### Flow Control Debugging (Buffer Free Slots)
-- **`sender_free_slots`**: Monitor sender channel buffer space (streams 17-21)
-- **`receiver_free_slots`**: Monitor receiver channel buffer space (streams 12-16)
+- **`sender_free_slots`**: Monitor sender channel buffer space (streams 18-25)
+- **`receiver_free_slots`**: Monitor receiver channel buffer space (streams 11-17)
 - **`all_fabric_free_slots`**: Complete view of all fabric flow control registers (DEFAULT)
 
 **Interpretation:** HIGH values = good (buffers have space for more packets)
 
-#### Acknowledgment and Completion Stream Monitoring (Remote Buffer Status)
-- **`sender_acks`**: Monitor ack stream remote buffer status (streams 2-6)
-- **`sender_completions`**: Monitor completion stream remote buffer status (streams 7-11)
-- **`receiver_pkts_sent`**: Monitor packet sent stream remote buffer status (streams 0-1)
-- **`all_acks_and_completions`**: Combined view of all ack/completion streams (streams 2-11)
+#### Completion Stream Monitoring (Remote Buffer Status)
+- **`sender_completions`**: Monitor completion stream remote buffer status (streams 3-10)
+- **`receiver_pkts_sent`**: Monitor packet sent stream remote buffer status (streams 0-2)
+- **`all_acks_and_completions`**: Combined view of all completion streams (streams 0-10)
 
-**Interpretation:** LOW/ZERO values = good (remote side consuming acks/completions immediately)
-These streams send credits/acks to remote routers. The BUF_SPACE_AVAILABLE register shows buffer space at the remote destination. Zero means the remote side is processing immediately (expected when idle or running smoothly). **Increasing values may indicate the remote side is NOT consuming acks/completions**
+**Note:** Ack streams (streams 2-6) have been removed - only completion streams are now used.
+
+**Interpretation:** LOW/ZERO values = good (remote side consuming completions immediately)
+These streams send credits to remote routers. The BUF_SPACE_AVAILABLE register shows buffer space at the remote destination. Zero means the remote side is processing immediately (expected when idle or running smoothly). **Increasing values may indicate the remote side is NOT consuming completions**
 
 Example matrix output:
 ```
@@ -80,9 +81,9 @@ Example matrix output:
 ALL FABRIC STREAM FREE SLOTS:
 (Complete view of all fabric EDM sender/receiver buffer space for flow control debugging)
 
-                    Stream12   Stream13   Stream14   Stream15   Stream16   Stream17   Stream18   Stream19   Stream20   Stream21
-Dev0 Core(0,5):     0x00001234 0x00001235 0x00001236 0x00001237 0x00001238 0x00001239 0x0000123a 0x0000123b 0x0000123c 0x0000123d
-Dev0 Core(0,7):     0x00001244 0x00001245 0x00001246 0x00001247 0x00001248 0x00001249 0x0000124a 0x0000124b 0x0000124c 0x0000124d
+                    Stream11   Stream12   Stream13   Stream14   Stream15   Stream16   Stream17   Stream18   Stream19   Stream20   Stream21   Stream22   Stream23   Stream24   Stream25
+Dev0 Core(0,5):     0x00001234 0x00001235 0x00001236 0x00001237 0x00001238 0x00001239 0x0000123a 0x0000123b 0x0000123c 0x0000123d 0x0000123e 0x0000123f 0x00001240 0x00001241 0x00001242
+Dev0 Core(0,7):     0x00001244 0x00001245 0x00001246 0x00001247 0x00001248 0x00001249 0x0000124a 0x0000124b 0x0000124c 0x0000124d 0x0000124e 0x0000124f 0x00001250 0x00001251 0x00001252
 ```
 
 ### Requirements
