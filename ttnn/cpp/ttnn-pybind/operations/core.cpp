@@ -208,7 +208,7 @@ void py_module(py::module& module) {
         .def(
             "allocate_tensor_on_device",
             [](const ttnn::TensorSpec& spec, MeshDevice* device) {
-                return tt::tt_metal::allocate_tensor_on_device(spec, device);
+                return tt::tt_metal::create_device_tensor(spec, device);
             },
             py::arg("tensor_spec"),
             py::arg("mesh_device"))
@@ -228,7 +228,7 @@ void py_module(py::module& module) {
                ttnn::Layout layout,
                MeshDevice* device,
                const std::optional<ttnn::MemoryConfig>& mem_config) {
-                return tt::tt_metal::allocate_tensor_on_device(
+                return tt::tt_metal::create_device_tensor(
                     TensorSpec(
                         shape,
                         tt::tt_metal::TensorLayout(
