@@ -1,0 +1,17 @@
+{
+  "model": "maskformer-swin-base-coco",
+  "mode": "tt_run",
+  "device": "wormhole_n300",
+  "dtype": "auto",
+  "image_h": 1365,
+  "image_w": 2048,
+  "batch_size": 1,
+  "num_queries": 100,
+  "latency_ms": 3687.367407000238,
+  "fps": 0.271196192194345,
+  "tt_submodules": [
+    "decoder",
+    "heads",
+    "mask_projection"
+  ]
+}
