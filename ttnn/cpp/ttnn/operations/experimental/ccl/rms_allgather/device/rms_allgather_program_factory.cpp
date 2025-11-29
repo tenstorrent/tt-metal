@@ -2,36 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
+#include "rms_allgather_program_factory.hpp"
 
+#include <algorithm>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include "ttnn/tensor/tensor_impl.hpp"
-
-#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-
 #include <tt-metalium/circular_buffer_config.hpp>
-#include "ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_op.hpp"
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/math.hpp"
-
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
-
 #include "ttnn/operations/ccl/common/uops/command_lowering.hpp"
-
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
-
-#include <sstream>
 #include <type_traits>
 #include <ranges>
 #include <optional>
@@ -40,40 +28,64 @@ using uint32_t = std::uint32_t;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::fused::normalization {
+namespace ttnn::operations::fused::normalization::program {
 
-// computes layernorm(a+*b)*gamma
-// if b is nullptr it's treated as zero (no addition)
+RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactory::create_at(
+    const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinate& mesh_coord,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    // Setup device information
+    ttnn::MeshDevice* mesh_device = tensor_args.input.device();
+    const auto target_device = mesh_device->get_device(mesh_coord);
+    const auto mesh_view = mesh_device->get_view();
+    TT_FATAL(
+        mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
+    std::vector<IDevice*> devices = (operation_attributes.cluster_axis == 0)
+                                        ? mesh_view.get_devices_on_column(mesh_coord[1])
+                                        : mesh_view.get_devices_on_row(mesh_coord[0]);
 
-operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
-    const Tensor& a,                       // input
-    const std::optional<const Tensor>& b,  // residual
-    const std::optional<const Tensor>& gamma,
-    const std::optional<const Tensor>& stats,
-    Tensor& output,
-    float eps,
-    CoreCoord compute_grid_size,
-    uint32_t subblock_wt,
-    uint32_t block_wt,
-    DeviceComputeKernelConfig compute_kernel_config,
-    // New Parameters
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
-    ccl::Topology topology,
-    const GlobalSemaphore& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    bool use_noc1_only) {
+    std::optional<IDevice*> forward_device = std::nullopt;
+    std::optional<IDevice*> backward_device = std::nullopt;
+    uint32_t device_index = 0;
+    for (uint32_t i = 0; i < operation_attributes.ring_size; ++i) {
+        if (devices.at(i) == target_device) {
+            device_index = i;
+            if (i != 0) {
+                backward_device = devices.at(i - 1);
+            } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
+                backward_device = devices.at(operation_attributes.ring_size - 1);
+            }
+            if (i != operation_attributes.ring_size - 1) {
+                forward_device = devices.at(i + 1);
+            } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
+                forward_device = devices.at(0);
+            }
+        }
+    }
+
+    const auto& a = tensor_args.input;
+    const auto& b = tensor_args.residual_input_tensor;
+    const auto& gamma = tensor_args.weight;
+    const auto& stats = tensor_args.stats;
+    auto& output = tensor_return_value;
+
+    // Program creation logic (previously in frmsnorm_multi_core_sharded)
+    float eps = operation_attributes.eps;
+    uint32_t subblock_wt = operation_attributes.subblock_wt;
+    uint32_t block_wt = operation_attributes.block_wt;
+    DeviceComputeKernelConfig compute_kernel_config = operation_attributes.compute_kernel_config;
+    uint32_t num_links = operation_attributes.num_links;
+    uint32_t ring_size = operation_attributes.ring_size;
+    ::ttnn::ccl::Topology topology = operation_attributes.topology;
+    const GlobalSemaphore& semaphore = operation_attributes.semaphore;
+    bool use_noc1_only = operation_attributes.use_noc1_only;
     uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / TILE_WIDTH;
     bool skip_write_back = output.shard_spec().value() == a.shard_spec().value();
 
     ////////////////////////////////////////////////////////////////////////////
     //                            Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    ttnn::MeshDevice* mesh_device = a.device();
     tt::tt_metal::Program program{};
     uint32_t output_page_size = 0;
     uint32_t stats_page_size;
@@ -81,8 +93,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.value().dtype());
     tt::DataFormat residual_data_format = in_data_format;
-    if (b)
-    {
+    if (b) {
         residual_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.value().dtype());
     }
     if (output.layout() == Layout::TILE) {
@@ -99,13 +110,13 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     size_t num_targets_forward = 0;
     size_t num_targets_backward = 0;
     if (topology == ccl::Topology::Linear) {
-        ccl::LineTopology line_topology(ring_size, ring_index);
+        ccl::LineTopology line_topology(ring_size, device_index);
         num_targets_forward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::FORWARD);
         num_targets_backward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::BACKWARD);
     } else if (topology == ccl::Topology::Ring) {
         num_targets_forward = tt::div_up(ring_size - 1, 2);
         num_targets_backward = ring_size - 1 - num_targets_forward;
-        if (ring_index % 2 == 0) {
+        if (device_index % 2 == 0) {
             std::swap(num_targets_forward, num_targets_backward);
         }
     }
@@ -839,8 +850,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     // Runtime Args
     std::vector<KernelHandle> writer_kernel_ids;
     writer_kernel_ids.reserve(cores.size());
-    float winv = 1.0f / block_w;                                                               // bcast-w scaler
-    float cinv_pre = (1.0f / num_blocks);                                                      // bcast-cores scaler
+    float winv = 1.0f / block_w;           // bcast-w scaler
+    float cinv_pre = (1.0f / num_blocks);  // bcast-cores scaler
     float cinv = (1.0f / num_distributed_devices);
     float cinv_one = 1.0f;  // bcast-cores scaler for all-to-all cores not on first row/col
     auto bfloat_cinv_value = bfloat16(cinv);
@@ -883,7 +894,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     auto input_cores_vec = corerange_to_cores(input_tensor_cores, std::nullopt, true);
     auto stats_cores_vec = corerange_to_cores(stats_tensor_cores, std::nullopt, true);
     auto cores_per_device = stats_cores_vec.size() + ring_size - (1 / ring_size);
-    uint32_t start_core_index_for_device = stats_cores_vec.size() / ring_size * ring_index;
+    uint32_t start_core_index_for_device = stats_cores_vec.size() / ring_size * device_index;
     uint32_t end_core_index_for_device = start_core_index_for_device + cores_per_device;
     auto stats_cores_this_device = std::vector<CoreCoord>(
         stats_cores_vec.begin() + start_core_index_for_device, stats_cores_vec.begin() + end_core_index_for_device);
@@ -999,7 +1010,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             uint32_t input_tile_id_start = (i * base_pages_per_worker) + std::min(i, remainder);
             uint32_t input_tile_id_end = ((i + 1) * base_pages_per_worker) + std::min(i + 1, remainder);
             uint32_t stats_first_core_tile_start_offset =
-                (ring_index + input_tile_id_start) % stats_tensor_shard_num_pages;
+                (device_index + input_tile_id_start) % stats_tensor_shard_num_pages;
             std::vector<uint32_t> stats_tensor_cores_x;
             std::vector<uint32_t> stats_tensor_cores_y;
             for (uint32_t i = input_tile_id_start / stats_tensor_shard_num_pages;
@@ -1196,75 +1207,102 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         }
     }
 
-    auto override_runtime_arguments_callback =
-        [writer_kernel_ids,
-         writer_mcast_sender_kernels_id,
-         writer_mcast_receiver_kernels_id,
-         num_none_all_to_all_workers,
-         pre_cb_in0,
-         cb_in1,
-         cb_add_out,
-         cb_in0,
-         cb_stats,
-         cb_output,
-         cb_output_reshard,
-         cores](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            const auto src_buffer_a = input_tensors.at(0).buffer();
-            const auto& b_tensor = optional_input_tensors.at(0);
-            const auto& gamma_tensor = optional_input_tensors.at(1);
-            const auto stats_tensor = optional_input_tensors.at(2).value();
-            const auto dst_buffer = output_tensors.at(0).buffer();
-            bool skip_write_back =
-                output_tensors.at(0).shard_spec().value() == input_tensors.at(0).shard_spec().value();
-            auto& writer_sender_args_by_core = GetRuntimeArgs(program, writer_mcast_sender_kernels_id);
-            auto& writer_receiver_args_by_core = num_none_all_to_all_workers > 0
-                                                     ? GetRuntimeArgs(program, writer_mcast_receiver_kernels_id)
-                                                     : writer_sender_args_by_core;
-            auto semaphore = static_cast<const RMSAllGather*>(operation)->semaphore;
-            const auto gamma_address = gamma_tensor.has_value() ? gamma_tensor.value().buffer()->address() : 0;
-            for (uint32_t i = 0; i < cores.size(); ++i) {
-                const CoreCoord& core = cores[i];
-
-                const auto writer_kernel_id = writer_kernel_ids.at(i);
-
-                if (writer_kernel_id == writer_mcast_sender_kernels_id) {
-                    auto& runtime_args = writer_sender_args_by_core[core.x][core.y];
-                    runtime_args[8] = semaphore.address();
-                    runtime_args[10] = stats_tensor.buffer()->address();
-                    // runtime_args[0] holds the start of the post arguments, apply that offset
-                    runtime_args[runtime_args[0] + 2] = gamma_address;
-                } else if (writer_kernel_id == writer_mcast_receiver_kernels_id) {
-                    auto& runtime_args = writer_receiver_args_by_core[core.x][core.y];
-                    runtime_args[8] = semaphore.address();
-                    runtime_args[10] = stats_tensor.buffer()->address();
-                    runtime_args[runtime_args[0] + 2] = gamma_address;
-                }
-            }
-            // Repoint to the input buffers
-            if (b_tensor.has_value()) {
-                UpdateDynamicCircularBufferAddress(program, cb_in1, *src_buffer_a);
-                UpdateDynamicCircularBufferAddress(program, cb_add_out, *b_tensor.value().buffer());
-                UpdateDynamicCircularBufferAddress(program, cb_in0, *b_tensor.value().buffer());
-                UpdateDynamicCircularBufferAddress(program, pre_cb_in0, *b_tensor.value().buffer());
-            } else {
-                UpdateDynamicCircularBufferAddress(program, cb_in0, *src_buffer_a);
-                UpdateDynamicCircularBufferAddress(program, pre_cb_in0, *src_buffer_a);
-            }
-            if (!skip_write_back) {
-                UpdateDynamicCircularBufferAddress(program, cb_output_reshard, *dst_buffer);
-            } else {
-                UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
-            }
-            const auto stats_buffer = stats_tensor.buffer();
-            UpdateDynamicCircularBufferAddress(program, cb_stats, *stats_buffer);
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return cached_program_t(
+        std::move(program),
+        RMSAllGatherSharedVariables{
+            .writer_kernel_ids = std::move(writer_kernel_ids),
+            .writer_mcast_sender_kernels_id = writer_mcast_sender_kernels_id,
+            .writer_mcast_receiver_kernels_id = writer_mcast_receiver_kernels_id,
+            .num_none_all_to_all_workers = num_none_all_to_all_workers,
+            .pre_cb_in0 = pre_cb_in0,
+            .cb_in1 = cb_in1,
+            .cb_add_out = cb_add_out,
+            .cb_in0 = cb_in0,
+            .cb_stats = cb_stats,
+            .cb_output = cb_output,
+            .cb_output_reshard = cb_output_reshard,
+            .cores = cores});
 }
 
-}  // namespace ttnn::operations::fused::normalization
+RMSAllGatherMeshWorkloadFactory::cached_mesh_workload_t RMSAllGatherMeshWorkloadFactory::create_mesh_workload(
+    const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    tt::tt_metal::distributed::MeshWorkload mesh_workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+
+    // Create programs for each coordinate in tensor_coords
+    for (const auto& mesh_coord_range : tensor_coords.ranges()) {
+        for (const auto& mesh_coord : mesh_coord_range) {
+            const ttnn::MeshCoordinateRange single_coord_range{mesh_coord, mesh_coord};
+            auto cached_program = create_at(operation_attributes, mesh_coord, tensor_args, tensor_return_value);
+            shared_variables[single_coord_range] = std::move(cached_program.shared_variables);
+            mesh_workload.add_program(single_coord_range, std::move(cached_program.program));
+        }
+    }
+
+    return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
+}
+
+void RMSAllGatherMeshWorkloadFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    // Update runtime arguments for each program in the workload using shared variables
+    for (auto& [range, shared_vars] : cached_workload.shared_variables) {
+        auto& program = cached_workload.workload.get_programs().at(range);
+
+        const auto src_buffer_a = tensor_args.input.buffer();
+        const auto& b_tensor = tensor_args.residual_input_tensor;
+        const auto& gamma_tensor = tensor_args.weight;
+        const auto& stats_tensor = tensor_args.stats;
+        const auto dst_buffer = tensor_return_value.buffer();
+        bool skip_write_back = tensor_return_value.shard_spec().value() == tensor_args.input.shard_spec().value();
+
+        auto& writer_sender_args_by_core = GetRuntimeArgs(program, shared_vars.writer_mcast_sender_kernels_id);
+        auto& writer_receiver_args_by_core = shared_vars.num_none_all_to_all_workers > 0
+                                                 ? GetRuntimeArgs(program, shared_vars.writer_mcast_receiver_kernels_id)
+                                                 : writer_sender_args_by_core;
+        const auto gamma_address = gamma_tensor.has_value() ? gamma_tensor.value().buffer()->address() : 0;
+
+        for (uint32_t i = 0; i < shared_vars.cores.size(); ++i) {
+            const CoreCoord& core = shared_vars.cores[i];
+            const auto writer_kernel_id = shared_vars.writer_kernel_ids.at(i);
+
+            if (writer_kernel_id == shared_vars.writer_mcast_sender_kernels_id) {
+                auto& runtime_args = writer_sender_args_by_core[core.x][core.y];
+                runtime_args[8] = operation_attributes.semaphore.address();
+                runtime_args[10] = stats_tensor.value().buffer()->address();
+                // runtime_args[0] holds the start of the post arguments, apply that offset
+                runtime_args[runtime_args[0] + 2] = gamma_address;
+            } else if (writer_kernel_id == shared_vars.writer_mcast_receiver_kernels_id) {
+                auto& runtime_args = writer_receiver_args_by_core[core.x][core.y];
+                runtime_args[8] = operation_attributes.semaphore.address();
+                runtime_args[10] = stats_tensor.value().buffer()->address();
+                runtime_args[runtime_args[0] + 2] = gamma_address;
+            }
+        }
+
+        // Repoint to the input buffers
+        if (b_tensor.has_value()) {
+            UpdateDynamicCircularBufferAddress(program, shared_vars.cb_in1, *src_buffer_a);
+            UpdateDynamicCircularBufferAddress(program, shared_vars.cb_add_out, *b_tensor.value().buffer());
+            UpdateDynamicCircularBufferAddress(program, shared_vars.cb_in0, *b_tensor.value().buffer());
+            UpdateDynamicCircularBufferAddress(program, shared_vars.pre_cb_in0, *b_tensor.value().buffer());
+        } else {
+            UpdateDynamicCircularBufferAddress(program, shared_vars.cb_in0, *src_buffer_a);
+            UpdateDynamicCircularBufferAddress(program, shared_vars.pre_cb_in0, *src_buffer_a);
+        }
+        if (!skip_write_back) {
+            UpdateDynamicCircularBufferAddress(program, shared_vars.cb_output_reshard, *dst_buffer);
+        } else {
+            UpdateDynamicCircularBufferAddress(program, shared_vars.cb_output, *dst_buffer);
+        }
+        const auto stats_buffer = stats_tensor.value().buffer();
+        UpdateDynamicCircularBufferAddress(program, shared_vars.cb_stats, *stats_buffer);
+    }
+}
+
+}  // namespace ttnn::operations::fused::normalization::program
