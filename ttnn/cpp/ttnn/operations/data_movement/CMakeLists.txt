@@ -179,7 +179,7 @@ target_sources(
         slice/device/slice_program_factory_tile.cpp
         slice/device/slice_program_factory_tile_tensor_args.cpp
         slice/slice.cpp
-        split/device/split_op.cpp
+        split/device/split_device_operation.cpp
         split/device/split_program_factory.cpp
         split/split.cpp
         squeeze/squeeze.cpp
