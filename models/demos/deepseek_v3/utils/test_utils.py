@@ -5,6 +5,7 @@
 import itertools
 import json
 import os
+import time
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Literal, Sequence
@@ -26,23 +27,45 @@ from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
 def load_state_dict(model_path: Path, module_path: str):
+    logger.debug(f"Attempting to load model state_dict from {model_path}")
+
     if module_path:
         module_path += "."  # So that the later matches include the separating dot
 
-    weight_paths = json.load(open(model_path / "model.safetensors.index.json", "r"))["weight_map"]
-    per_safetensor_weights = {}
+    weight_path_index_filename = model_path / "model.safetensors.index.json"
+    if not weight_path_index_filename.exists():
+        raise RuntimeError(
+            f"Unable to load model state_dict due to missing index file (expected {weight_path_index_filename}) to exist"
+        )
 
+    logger.debug(f"Loading index file {weight_path_index_filename}...")
+    weight_paths = json.load(open(weight_path_index_filename, "r"))["weight_map"]
+
+    per_safetensor_weights = {}
+    logger.debug(f"Done loading index file - found {len(weight_paths)} weights")
     for weight_name in weight_paths.keys():
         if not weight_name.startswith(module_path):
             continue
         per_safetensor_weights.setdefault(weight_paths[weight_name], []).append(weight_name)
 
-    return {
-        weight_name[len(module_path) :]: safetensor_state_dict[weight_name]
-        for safetensor_file_path, weight_names in per_safetensor_weights.items()
-        for safetensor_state_dict in [safetensors.torch.load_file(model_path / safetensor_file_path)]
-        for weight_name in weight_names
-    }
+    result = {}
+    for safetensor_filename, weight_names in per_safetensor_weights.items():
+        logger.debug(f"Attempting to load weights from {safetensor_filename}")
+        safetensor_filepath = model_path / safetensor_filename
+        if not safetensor_filepath.exists():
+            raise FileNotFoundError(
+                f"Unable to load weights from safetensor {safetensor_filepath} - file does not exist"
+            )
+
+        start = time.time()
+        safetensor_state_dict = safetensors.torch.load_file(safetensor_filepath)
+        logger.debug(
+            f"Done loading safetensor file containing {len(safetensor_state_dict)} entries in {time.time() - start:.2f}s"
+        )
+        for weight_name in weight_names:
+            trimmed_name = weight_name[len(module_path) :]
+            result[trimmed_name] = safetensor_state_dict[weight_name]
+    return result
 
 
 def get_quant_scale(tensor: torch.Tensor, block_shape: Sequence[int]) -> torch.Tensor:
@@ -479,7 +502,7 @@ def get_test_weight_config(
     force_recalculate: bool,
 ) -> Any:
     """Get the weight config, either by loading from cache or recalculating."""
-    per_test_weight_cache_path = cache_path / "tests_cache" / os.environ.get("PYTEST_CURRENT_TEST")
+    per_test_weight_cache_path = cache_path
     return get_weight_config(
         ModuleClass, hf_config, state_dicts, per_test_weight_cache_path, mesh_device, force_recalculate
     )

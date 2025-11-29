@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import os
 from pathlib import Path
 from typing import Any
 
@@ -63,13 +62,7 @@ def test_forward_pass(
     reference_output = reference_model(torch_input)
 
     # Setup: Convert weights and get weight_config
-    weight_cache_path = (
-        cache_path
-        / "tests_cache"
-        / os.environ.get("PYTEST_CURRENT_TEST")
-        / f"{hf_config.num_hidden_layers}_layers"
-        / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
-    )
+    weight_cache_path = cache_path / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
 
     weight_config = LMHead1D.convert_weights(hf_config, (state_dict,), weight_cache_path, mesh_device)
     _check_weights_exist_and_convert(weight_cache_path, weight_config)
