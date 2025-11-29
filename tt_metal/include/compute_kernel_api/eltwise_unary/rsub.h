@@ -29,9 +29,8 @@ namespace ckernel {
  * | scalar         | Constant value that is being subtracted from                               | uint32_t |                                                       | True     |
  */
 // clang-format on
-enum { RSUB_UNARY = 4 };
 ALWI void rsub_tile(uint32_t idst, uint32_t scalar) {
-    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, RSUB_UNARY>(idst, scalar)));
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, 4>(idst, scalar)));  // RSUB_UNARY = 4
 }
 
 /**

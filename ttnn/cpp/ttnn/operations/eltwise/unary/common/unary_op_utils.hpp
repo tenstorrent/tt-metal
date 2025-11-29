@@ -95,6 +95,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::THRESHOLD:
         case UnaryOpType::CLAMP_TSS:
         case UnaryOpType::SELU:
+        case UnaryOpType::LOGIT:
         case UnaryOpType::RPOW: return true;
         default: return false;
     }
@@ -105,6 +106,9 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
 
 std::string get_compute_kernel_path(
     UnaryOpType op_type, const std::string& compute_root, std::optional<DataType> input_dtype = std::nullopt);
+
+template <typename T>
+uint32_t pack_scalar_runtime_arg_impl(const T& param, DataType dtype);
 
 uint32_t pack_scalar_runtime_arg(const EltwiseUnaryWithParam& op, size_t index, DataType dtype);
 }  // namespace ttnn::operations::unary::utils
