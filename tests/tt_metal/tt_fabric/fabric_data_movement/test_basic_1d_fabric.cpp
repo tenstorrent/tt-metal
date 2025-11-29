@@ -914,8 +914,8 @@ void RunTestMCastConnAPI(
     auto left_recv_device = fixture->get_device(left_recv_phys_chip_id);
     auto right_recv_device = fixture->get_device(right_recv_phys_chip_id);
 
-    auto left_fabric_node_id = end_fabric_node_ids_by_dir[fwd_dir][fwd_hops - 1];
-    auto right_fabric_node_id = end_fabric_node_ids_by_dir[bwd_dir][bwd_hops - 1];
+    auto left_fabric_node_id = end_fabric_node_ids_by_dir[fwd_dir][0];
+    auto right_fabric_node_id = end_fabric_node_ids_by_dir[bwd_dir][0];
 
     CoreCoord receiver_virtual_core = left_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
@@ -1103,6 +1103,33 @@ void RunTestMCastConnAPI(
             EXPECT_EQ(sender_bytes, recv_bytes);
         }
     }
+}
+
+std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> get_neighbor_fabric_nodes_by_direction(
+    const FabricNodeId& src_fabric_node_id) {
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> neighbors_by_dir;
+
+    for (auto direction : tt::tt_fabric::FabricContext::routing_directions) {
+        const auto neighbors_by_mesh = control_plane.get_chip_neighbors(src_fabric_node_id, direction);
+        auto& direction_neighbors = neighbors_by_dir[direction];
+
+        for (const auto& [mesh_id, chip_ids] : neighbors_by_mesh) {
+            for (auto chip_id : chip_ids) {
+                FabricNodeId neighbor(mesh_id, chip_id);
+                if (neighbor == src_fabric_node_id) {
+                    continue;
+                }
+
+                if (std::find(direction_neighbors.begin(), direction_neighbors.end(), neighbor) ==
+                    direction_neighbors.end()) {
+                    direction_neighbors.push_back(neighbor);
+                }
+            }
+        }
+    }
+
+    return neighbors_by_dir;
 }
 
 void RunTest2DMCastConnAPI(
@@ -1448,7 +1475,15 @@ void RunTest2DMCastConnAPI(
     };
 
     // append the EDM connection rt args for fwd connection
+    auto neighbors_by_direction = get_neighbor_fabric_nodes_by_direction(src_fabric_node_id);
     uint32_t link_idx;
+    if (!neighbors_by_direction[RoutingDirection::N].empty()) {
+        sender_runtime_args.push_back(neighbors_by_direction[RoutingDirection::N].begin()->chip_id);
+        sender_runtime_args.push_back(*src_fabric_node_id.mesh_id);
+    } else {
+        sender_runtime_args.push_back(255);
+        sender_runtime_args.push_back(255);
+    }
     if (north_hops > 0) {
         if (north_branch_east_hops > 0) {
             link_idx = get_forwarding_link_indices(src_fabric_node_id, north_east_fabric_node_id)[0];
@@ -1491,6 +1526,13 @@ void RunTest2DMCastConnAPI(
     sender_runtime_args.push_back(south_hops);
     sender_runtime_args.push_back((south_branch_west_hops << 16) | south_branch_east_hops);
 
+    if (!neighbors_by_direction[RoutingDirection::S].empty()) {
+        sender_runtime_args.push_back(neighbors_by_direction[RoutingDirection::S].begin()->chip_id);
+        sender_runtime_args.push_back(*src_fabric_node_id.mesh_id);
+    } else {
+        sender_runtime_args.push_back(255);
+        sender_runtime_args.push_back(255);
+    }
     if (south_hops > 0) {
         if (south_branch_west_hops > 0) {
             link_idx = get_forwarding_link_indices(src_fabric_node_id, south_west_fabric_node_id)[0];
@@ -1533,6 +1575,14 @@ void RunTest2DMCastConnAPI(
     sender_runtime_args.push_back(left_fabric_node_id.chip_id);
     sender_runtime_args.push_back(right_fabric_node_id.chip_id);
     sender_runtime_args.push_back((west_hops << 16) | east_hops);
+
+    if (!neighbors_by_direction[RoutingDirection::W].empty()) {
+        sender_runtime_args.push_back(neighbors_by_direction[RoutingDirection::W].begin()->chip_id);
+        sender_runtime_args.push_back(*src_fabric_node_id.mesh_id);
+    } else {
+        sender_runtime_args.push_back(255);
+        sender_runtime_args.push_back(255);
+    }
     if (west_hops > 0) {
         link_idx = get_forwarding_link_indices(src_fabric_node_id, left_fabric_node_id)[0];
         append_fabric_connection_rt_args(
@@ -1551,6 +1601,13 @@ void RunTest2DMCastConnAPI(
             sender_program,
             {sender_logical_core},
             sender_runtime_args);
+    }
+    if (!neighbors_by_direction[RoutingDirection::E].empty()) {
+        sender_runtime_args.push_back(neighbors_by_direction[RoutingDirection::E].begin()->chip_id);
+        sender_runtime_args.push_back(*src_fabric_node_id.mesh_id);
+    } else {
+        sender_runtime_args.push_back(255);
+        sender_runtime_args.push_back(255);
     }
     if (east_hops > 0) {
         link_idx = get_forwarding_link_indices(src_fabric_node_id, right_fabric_node_id)[0];

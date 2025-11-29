@@ -37,7 +37,11 @@ inline void setup_header_routing_1d(
 }
 
 void set_mcast_header(
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header, const eth_chan_directions& direction, uint32_t num_hops) {
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
+    uint32_t dst_dev_id,
+    uint32_t dst_mesh_id,
+    const eth_chan_directions& direction,
+    uint32_t num_hops) {
     uint16_t e_num_hops = 0;
     uint16_t w_num_hops = 0;
     uint16_t n_num_hops = 0;
@@ -56,7 +60,13 @@ void set_mcast_header(
     // dst_dev_id is ignored since Low Latency Mesh Fabric does not support arbitrary 2D Mcasts yet
     // dst_mesh_id is ignored since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
     fabric_set_mcast_route(
-        (HybridMeshPacketHeader*)packet_header, 0, 0, e_num_hops, w_num_hops, n_num_hops, s_num_hops);
+        (HybridMeshPacketHeader*)packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        e_num_hops,
+        w_num_hops,
+        n_num_hops,
+        s_num_hops);
 }
 
 inline void setup_header_routing_2d(
@@ -68,7 +78,7 @@ inline void setup_header_routing_2d(
     uint32_t dst_mesh_id,
     uint32_t ew_dim) {
     if constexpr (is_chip_multicast) {
-        set_mcast_header(packet_header, direction, range);
+        set_mcast_header(packet_header, dst_dev_id, dst_mesh_id, direction, range);
     } else {
         fabric_set_unicast_route((HybridMeshPacketHeader*)packet_header, dst_dev_id, dst_mesh_id);
     }
