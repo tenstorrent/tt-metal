@@ -12,7 +12,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::program {
+namespace ttnn::operations::data_movement::reshard::program {
 
 template <bool local_is_output>
 ReshardSameWidthFactory<local_is_output>::cached_program_t ReshardSameWidthFactory<local_is_output>::create(
@@ -181,4 +181,4 @@ void ReshardSameWidthFactory<is_reader>::override_runtime_arguments(
 template struct ReshardSameWidthFactory<true>;
 template struct ReshardSameWidthFactory<false>;
 
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::operations::data_movement::reshard::program

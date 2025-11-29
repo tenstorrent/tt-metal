@@ -14,7 +14,7 @@
 #include "ttnn/operations/data_movement/sharded/reshard/device/nd_reshard_program_factory_copy_pages.hpp"
 #include "ttnn/operations/data_movement/sharded/reshard/device/nd_reshard_program_factory_copy_local.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::data_movement::reshard {
 
 struct ReshardDeviceOperation {
     using operation_attributes_t = reshard::operation_attributes_t;
@@ -22,14 +22,14 @@ struct ReshardDeviceOperation {
     using spec_return_value_t = reshard::spec_return_value_t;
     using tensor_return_value_t = reshard::tensor_return_value_t;
     using program_factory_t = std::variant<
-        program::ReshardSameWidthFactory</*local_is_output*/ true>,
-        program::ReshardSameWidthFactory</*local_is_output*/ false>,
-        program::ReshardSameHeightFactory</*local_is_output*/ true>,
-        program::ReshardSameHeightFactory</*local_is_output*/ false>,
-        program::ReshardGenericFactory,
-        program::NdReshardCopyPagesFactory,
-        program::NdReshardCopyLocalShardFactory</*local_is_input*/ true>,
-        program::NdReshardCopyLocalShardFactory</*local_is_input*/ false>>;
+        reshard::program::ReshardSameWidthFactory</*local_is_output*/ true>,
+        reshard::program::ReshardSameWidthFactory</*local_is_output*/ false>,
+        reshard::program::ReshardSameHeightFactory</*local_is_output*/ true>,
+        reshard::program::ReshardSameHeightFactory</*local_is_output*/ false>,
+        reshard::program::ReshardGenericFactory,
+        reshard::program::NdReshardCopyPagesFactory,
+        reshard::program::NdReshardCopyLocalShardFactory</*local_is_input*/ true>,
+        reshard::program::NdReshardCopyLocalShardFactory</*local_is_input*/ false>>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -52,9 +52,9 @@ struct ReshardDeviceOperation {
         const std::optional<Tensor>& optional_output_tensor);
 };
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::reshard
 
 namespace ttnn::prim {
 constexpr auto reshard =
-    ttnn::register_operation<"ttnn::prim::reshard", ttnn::operations::data_movement::ReshardDeviceOperation>();
+    ttnn::register_operation<"ttnn::prim::reshard", ttnn::operations::data_movement::reshard::ReshardDeviceOperation>();
 }  // namespace ttnn::prim

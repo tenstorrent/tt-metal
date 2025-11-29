@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::data_movement::reshard {
 
 namespace CMAKE_UNIQUE_NAMESPACE {
 bool is_valid_for_legacy_reshard(const Tensor& input_tensor, const MemoryConfig& out_mem_config) {
@@ -232,4 +232,4 @@ ReshardDeviceOperation::invoke(
         tensor_args_t{.input = input_tensor, .preallocated_output = optional_output_tensor}};
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::reshard

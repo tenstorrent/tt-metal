@@ -9,7 +9,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::program {
+namespace ttnn::operations::data_movement::reshard::program {
 
 NdReshardCopyPagesFactory::cached_program_t NdReshardCopyPagesFactory::create(
     const reshard::operation_attributes_t& operation_attributes,
@@ -130,4 +130,4 @@ void NdReshardCopyPagesFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::operations::data_movement::reshard::program

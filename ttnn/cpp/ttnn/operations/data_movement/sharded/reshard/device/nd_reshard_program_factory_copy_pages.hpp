@@ -7,7 +7,7 @@
 #include "ttnn/device_operation.hpp"
 #include "reshard_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::program {
+namespace ttnn::operations::data_movement::reshard::program {
 
 // Factory for DRAM->DRAM nd reshard (simple page by page copy)
 struct NdReshardCopyPagesFactory {
@@ -33,4 +33,4 @@ struct NdReshardCopyPagesFactory {
         reshard::tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::operations::data_movement::reshard::program

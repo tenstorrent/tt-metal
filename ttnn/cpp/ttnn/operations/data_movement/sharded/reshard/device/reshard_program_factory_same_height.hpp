@@ -7,7 +7,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/sharded/reshard/device/reshard_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::program {
+namespace ttnn::operations::data_movement::reshard::program {
 
 // WIDTH_SHARDED -> WIDTH_SHARDED reshard
 template <bool local_is_output>
@@ -34,4 +34,4 @@ struct ReshardSameHeightFactory {
         reshard::tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::operations::data_movement::reshard::program

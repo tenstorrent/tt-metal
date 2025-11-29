@@ -10,7 +10,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::data_movement::reshard {
 
 namespace detail {
 // start is inclusive, end is exclusive
@@ -785,4 +785,4 @@ void ReshardGenericFactory::override_runtime_arguments(
         cached_program.program, cached_program.shared_variables.cb_dst0, *output.buffer());
 }
 }  // namespace program
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::reshard

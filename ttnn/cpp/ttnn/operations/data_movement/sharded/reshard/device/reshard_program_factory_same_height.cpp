@@ -11,7 +11,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::program {
+namespace ttnn::operations::data_movement::reshard::program {
 
 template <bool local_is_output>
 ReshardSameHeightFactory<local_is_output>::cached_program_t ReshardSameHeightFactory<local_is_output>::create(
@@ -144,4 +144,4 @@ void ReshardSameHeightFactory<is_reader>::override_runtime_arguments(
 template struct ReshardSameHeightFactory<true>;
 template struct ReshardSameHeightFactory<false>;
 
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::operations::data_movement::reshard::program

@@ -9,7 +9,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::program {
+namespace ttnn::operations::data_movement::reshard::program {
 
 template <bool local_is_input>
 NdReshardCopyLocalShardFactory<local_is_input>::cached_program_t NdReshardCopyLocalShardFactory<local_is_input>::create(
@@ -202,4 +202,4 @@ void NdReshardCopyLocalShardFactory<is_reader>::override_runtime_arguments(
 template struct NdReshardCopyLocalShardFactory<true>;
 template struct NdReshardCopyLocalShardFactory<false>;
 
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::operations::data_movement::reshard::program
