@@ -39,15 +39,17 @@ struct TileDescriptor {
     uint32_t height = constants::TILE_HEIGHT;
     uint32_t width = constants::TILE_WIDTH;
     bool transpose = false;
+
+    bool operator==(const TileDescriptor& other) const {
+        return height == other.height && width == other.width && transpose == other.transpose;
+    }
 };
 
 struct CBFormatDescriptor {
     uint8_t buffer_index = 0;
     tt::DataFormat data_format = tt::DataFormat::Float32;
     uint32_t page_size = 0;
-
-    // TODO: #21392 - Needs a program hash definition
-    // std::optional<TileDescriptor> tile;
+    std::optional<TileDescriptor> tile;
 };
 
 struct CBDescriptor {
@@ -138,3 +140,24 @@ struct ProgramDescriptor {
 };
 
 }  // namespace tt::tt_metal
+
+// Hash support for TileDescriptor (needed for reflection system)
+namespace std {
+template <>
+struct hash<tt::tt_metal::TileDescriptor> {
+    std::size_t operator()(const tt::tt_metal::TileDescriptor& tile_desc) const noexcept {
+        return tt::stl::hash::hash_objects_with_default_seed(tile_desc.height, tile_desc.width, tile_desc.transpose);
+    }
+};
+}  // namespace std
+
+// Formatter support for TileDescriptor (needed for reflection/logging)
+template <>
+struct fmt::formatter<tt::tt_metal::TileDescriptor> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const tt::tt_metal::TileDescriptor& tile_desc, format_context& ctx) const -> format_context::iterator {
+        return fmt::format_to(
+            ctx.out(), "TileDescriptor({}x{}{})", tile_desc.height, tile_desc.width, tile_desc.transpose ? ",T" : "");
+    }
+};

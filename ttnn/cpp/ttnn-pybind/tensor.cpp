@@ -159,7 +159,14 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def_property_readonly("partial_face", &Tile::get_partial_face)
         .def_property_readonly("narrow_tile", &Tile::get_narrow_tile)
         .def_property_readonly("transpose_within_face", &Tile::get_transpose_within_face)
-        .def_property_readonly("transpose_of_faces", &Tile::get_transpose_of_faces);
+        .def_property_readonly("transpose_of_faces", &Tile::get_transpose_of_faces)
+        .def(
+            "get_tile_size",
+            [](const Tile& self, DataType dtype) {
+                return self.get_tile_size(datatype_to_dataformat_converter(dtype));
+            },
+            py::arg("dtype"),
+            "Get tile size in bytes for the given data type");
 
     auto pyTensorSpec = static_cast<py::class_<TensorSpec>>(m_tensor.attr("TensorSpec"));
     pyTensorSpec
