@@ -3,4 +3,5 @@ find_package(Python3 REQUIRED COMPONENTS Development)
 
 add_subdirectory(unit_tests/gtests)
 add_subdirectory(benchmark/cpp)
+add_subdirectory(tools)
 add_subdirectory(tracy/cpp)

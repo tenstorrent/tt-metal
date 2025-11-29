@@ -4,6 +4,9 @@
 
 #include "data.hpp"
 #include <stdexcept>
+#include <fstream>
+#include <sstream>
+#include "impl/debug/inspector/inspector.hpp"
 #include "impl/debug/inspector/rpc_server_controller.hpp"
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/dispatch/system_memory_manager.hpp"
@@ -31,6 +34,7 @@ Data::Data()
             get_rpc_server().setGetMeshDevicesCallback([this](auto result) { this->rpc_get_mesh_devices(result); });
             get_rpc_server().setGetMeshWorkloadsCallback([this](auto result) { this->rpc_get_mesh_workloads(result); });
             get_rpc_server().setGetDevicesInUseCallback([this](auto result) { this->rpc_get_devices_in_use(result); });
+            get_rpc_server().setGetOperationsCallback([this](auto result) { this->rpc_get_operations(result); });
             get_rpc_server().setGetKernelCallback(
                 [this](auto params, auto result) { this->rpc_get_kernel(params, result); });
             get_rpc_server().setGetAllBuildEnvsCallback([this](auto result) { this->rpc_get_all_build_envs(result); });
@@ -43,6 +47,8 @@ Data::Data()
 }
 
 Data::~Data() {
+    // Serialize operation tracking before shutting down
+    serialize_rpc();
     rpc_server_controller.stop();
 }
 
@@ -189,6 +195,32 @@ void Data::rpc_get_kernel(rpc::Inspector::GetKernelParams::Reader params, rpc::I
     kernel.setPath(kernel_data.path);
     kernel.setSource(kernel_data.source);
     kernel.setProgramId(program_id);
+}
+
+void Data::rpc_get_operations(rpc::Inspector::GetOperationsResults::Builder& results) {
+    std::lock_guard<std::mutex> lock(operations_mutex);
+
+    auto operations_list = results.initOperations(operations_.size());
+    for (size_t i = 0; i < operations_.size(); ++i) {
+        const auto& op = operations_[i];
+        auto capnp_op = operations_list[i];
+
+        // Set device operation ID - use "none" for host-only operations
+        if (op.device_operation_id.has_value()) {
+            capnp_op.setDeviceOperationId(std::to_string(op.device_operation_id.value()));
+        } else {
+            capnp_op.setDeviceOperationId("none");
+        }
+
+        capnp_op.setOperationName(op.operation_name);
+        capnp_op.setCallstack(op.call_stack);
+        capnp_op.setArguments(op.arguments);
+
+        // Convert timestamp to nanoseconds since epoch
+        auto time_since_epoch = op.timestamp.time_since_epoch();
+        auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(time_since_epoch).count();
+        capnp_op.setTimestamp(static_cast<uint64_t>(nanos));
+    }
 }
 
 // Get build environment information for all devices
