@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "llk_defs.h"
 #include "sfpu/ckernel_sfpu_max_pool_indices.h"
 
 using namespace sfpi;
@@ -14,7 +15,7 @@ namespace ckernel {
 namespace sfpu {
 
 template <
-    bool APPROXIMATION_MODE,
+    ApproximationMode APPROX_MODE,
     bool is_fp32_dest_acc_en,
     int num_rows,
     int ITERATIONS = 8,
@@ -33,7 +34,7 @@ inline void calculate_max_pool_with_indices(uint values_tile_idx, uint indices_t
     }
 }
 
-template <bool APPROXIMATION_MODE, DataLayout layout = DataLayout::TILE>
+template <ApproximationMode APPROX_MODE, DataLayout layout = DataLayout::TILE>
 inline void init_max_pool_with_indices() {
     _init_max_pool_with_indices_<layout>();
 }
