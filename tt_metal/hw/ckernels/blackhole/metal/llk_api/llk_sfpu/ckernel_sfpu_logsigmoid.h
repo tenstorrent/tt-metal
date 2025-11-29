@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "llk_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_exp.h"
@@ -13,7 +14,7 @@
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_logsigmoid(
     const uint dst_index_in0,  // Index for input (x)
     const uint dst_index_in1,  // Index for exp(-x)
@@ -56,7 +57,7 @@ inline void calculate_logsigmoid(
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 void logsigmoid_init() {}
 
 }  // namespace sfpu

@@ -6,6 +6,7 @@
 
 #include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
+#include "llk_defs.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -22,7 +23,7 @@ inline void calculate_logical_not_unary() {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_logical_not_unary_uint16() {
     for (int d = 0; d < ITERATIONS; d++) {
         // full tile size
