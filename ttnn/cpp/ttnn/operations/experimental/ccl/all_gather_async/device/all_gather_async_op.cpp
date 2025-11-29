@@ -285,7 +285,7 @@ Tensor all_gather_async_impl(
     bool use_optimal_ccl_for_llama,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     bool reverse_order) {
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required");
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, std::nullopt);
 

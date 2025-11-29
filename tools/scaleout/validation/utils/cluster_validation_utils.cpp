@@ -153,9 +153,9 @@ void configure_local_kernels(
                     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(curr_chip_id);
                     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(neighbor_chip_id);
 
-                    auto sender_kernel_path =
+                    const auto* sender_kernel_path =
                         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp";
-                    auto receiver_kernel_path =
+                    const auto* receiver_kernel_path =
                         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp";
                     std::vector<uint32_t> sender_compile_args = {packet_size_bytes, packet_size_words};
                     std::vector<uint32_t> receiver_compile_args = {};
@@ -1527,7 +1527,9 @@ std::string get_factory_system_descriptor_path(
         fsd_file_path = std::filesystem::path(output_path) / filename;
 
         if (!deployment_descriptor_path.has_value()) {
-            TT_FATAL(hostnames.size() == 1, "Expected exactly one host in the cluster when no deployment descriptor is provided");
+            TT_FATAL(
+                hostnames.size() == 1,
+                "Expected exactly one host in the cluster when no deployment descriptor is provided");
             cabling_generator = tt::scaleout_tools::CablingGenerator(cabling_descriptor_path.value(), hostnames);
         } else {
             cabling_generator = tt::scaleout_tools::CablingGenerator(

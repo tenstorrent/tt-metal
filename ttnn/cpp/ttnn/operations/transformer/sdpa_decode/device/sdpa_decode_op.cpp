@@ -24,7 +24,7 @@ void ScaledDotProductAttentionDecode::validate(
         TT_FATAL(input_tensors.size() == 3, "Must have 3 input tensors and mask");
     }
 
-    for (auto& input_tensor : input_tensors) {
+    for (const auto& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device!");
         TT_FATAL(input_tensor.buffer() != nullptr, "Operands to SDPA need to be allocated in buffers on device!");
         TT_FATAL(
@@ -315,7 +315,7 @@ void ScaledDotProductAttentionDecode::validate(
 
 std::vector<TensorSpec> ScaledDotProductAttentionDecode::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
-    auto& input = input_tensors.at(0);
+    const auto& input = input_tensors.at(0);
     Layout output_layout = Layout::TILE;
     ttnn::Shape output_shape = input.logical_shape();
     if (input.layout() == Layout::ROW_MAJOR) {
@@ -333,14 +333,14 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto& input_tensor_q = input_tensors.at(0);
-    auto& input_tensor_k = input_tensors.at(1);
-    auto& input_tensor_v = this->use_mla.value_or(false) ? input_tensors.at(1) : input_tensors.at(2);
+    const auto& input_tensor_q = input_tensors.at(0);
+    const auto& input_tensor_k = input_tensors.at(1);
+    const auto& input_tensor_v = this->use_mla.value_or(false) ? input_tensors.at(1) : input_tensors.at(2);
 
-    auto& cur_pos_tensor = optional_input_tensors.at(0);
-    auto& page_table_tensor = optional_input_tensors.at(1);
-    auto& attn_mask = optional_input_tensors.at(2);
-    auto& attention_sink = optional_input_tensors.at(3);
+    const auto& cur_pos_tensor = optional_input_tensors.at(0);
+    const auto& page_table_tensor = optional_input_tensors.at(1);
+    const auto& attn_mask = optional_input_tensors.at(2);
+    const auto& attention_sink = optional_input_tensors.at(3);
 
     auto& output_tensor = output_tensors.at(0);
 

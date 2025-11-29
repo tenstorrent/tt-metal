@@ -615,16 +615,16 @@ operation::ProgramWithCallbacks joint_sdpa(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             // Get addresses for regular tensors
-            auto q_buffer = input_tensors.at(0).buffer();
-            auto k_buffer = input_tensors.at(1).buffer();
-            auto v_buffer = input_tensors.at(2).buffer();
-            auto joint_q_buffer = input_tensors.at(3).buffer();
-            auto joint_k_buffer = input_tensors.at(4).buffer();
-            auto joint_v_buffer = input_tensors.at(5).buffer();
+            auto* q_buffer = input_tensors.at(0).buffer();
+            auto* k_buffer = input_tensors.at(1).buffer();
+            auto* v_buffer = input_tensors.at(2).buffer();
+            auto* joint_q_buffer = input_tensors.at(3).buffer();
+            auto* joint_k_buffer = input_tensors.at(4).buffer();
+            auto* joint_v_buffer = input_tensors.at(5).buffer();
 
             // Get addresses for output tensors
-            auto out_buffer = output_tensors.at(0).buffer();
-            auto joint_out_buffer = output_tensors.at(1).buffer();
+            auto* out_buffer = output_tensors.at(0).buffer();
+            auto* joint_out_buffer = output_tensors.at(1).buffer();
 
             uint32_t q_addr = q_buffer->address();
             uint32_t k_addr = k_buffer->address();

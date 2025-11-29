@@ -71,18 +71,15 @@ const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mes
         {tt::tt_fabric::FabricType::TORUS_X,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_x_graph_descriptor.textproto"},
-             {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_x_graph_descriptor.textproto"}
-         }},
+             {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_x_graph_descriptor.textproto"}}},
         {tt::tt_fabric::FabricType::TORUS_Y,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_y_graph_descriptor.textproto"},
-             {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_y_graph_descriptor.textproto"}
-         }},
+             {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_y_graph_descriptor.textproto"}}},
         {tt::tt_fabric::FabricType::TORUS_XY,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_xy_graph_descriptor.textproto"},
-             {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_xy_graph_descriptor.textproto"}
-         }}});
+             {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_xy_graph_descriptor.textproto"}}}});
 
 MeshGraph::MeshGraph(const std::string& mesh_graph_desc_file_path, std::optional<FabricConfig> fabric_config) {
     log_debug(tt::LogFabric, "mesh_graph_desc_file_path: {}", mesh_graph_desc_file_path);
@@ -180,7 +177,7 @@ std::unordered_map<ChipId, RouterEdge> MeshGraph::get_valid_connections(
         N = MeshCoordinate((src_mesh_coord[0] - 1 + mesh_shape[0]) % mesh_shape[0], src_mesh_coord[1]);
         S = MeshCoordinate((src_mesh_coord[0] + 1) % mesh_shape[0], src_mesh_coord[1]);
     }
-    for (auto& [coord, direction] :
+    for (const auto& [coord, direction] :
          {std::pair{N, RoutingDirection::N},
           std::pair{E, RoutingDirection::E},
           std::pair{S, RoutingDirection::S},
@@ -777,7 +774,7 @@ std::filesystem::path MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type
     const tt::tt_metal::ClusterType cluster_type,
     const std::string& root_dir,
     const tt::tt_fabric::FabricType fabric_type) {
-    auto& fabric_to_cluster_map = cluster_type_to_mesh_graph_descriptor.get();
+    const auto& fabric_to_cluster_map = cluster_type_to_mesh_graph_descriptor.get();
     auto fabric_it = fabric_to_cluster_map.find(fabric_type);
     if (fabric_it != fabric_to_cluster_map.end()) {
         const auto& cluster_to_descriptor_map = fabric_it->second;

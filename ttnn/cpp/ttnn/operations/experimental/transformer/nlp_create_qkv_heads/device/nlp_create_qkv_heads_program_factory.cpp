@@ -239,16 +239,16 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            auto src_buffer = input_tensors.at(0).buffer();
+            auto* src_buffer = input_tensors.at(0).buffer();
 
             uint32_t src_kv_buffer_addr = 0;
             if (read_from_input_tensor_kv) {
                 src_kv_buffer_addr = optional_input_tensors.at(0).value().buffer()->address();
             }
 
-            auto dst_buffer_query = output_tensors.at(0).buffer();
-            auto dst_buffer_key = output_tensors.at(1).buffer();
-            auto dst_buffer_value = output_tensors.at(2).buffer();
+            auto* dst_buffer_query = output_tensors.at(0).buffer();
+            auto* dst_buffer_key = output_tensors.at(1).buffer();
+            auto* dst_buffer_value = output_tensors.at(2).buffer();
 
             for (uint32_t i = 0; i < num_cores; i++) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -280,16 +280,16 @@ void NlpCreateHeadsDeviceOperation::Interleaved::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto src_buffer = tensor_args.input_tensor_q.buffer();
+    auto* src_buffer = tensor_args.input_tensor_q.buffer();
 
     uint32_t src_kv_buffer_addr = 0;
     if (cached_program.shared_variables.read_from_input_tensor_kv) {
         src_kv_buffer_addr = tensor_args.input_tensor_kv.value().buffer()->address();
     }
 
-    auto dst_buffer_query = std::get<0>(tensor_return_value).buffer();
-    auto dst_buffer_key = std::get<1>(tensor_return_value).buffer();
-    auto dst_buffer_value = std::get<2>(tensor_return_value).buffer();
+    auto* dst_buffer_query = std::get<0>(tensor_return_value).buffer();
+    auto* dst_buffer_key = std::get<1>(tensor_return_value).buffer();
+    auto* dst_buffer_value = std::get<2>(tensor_return_value).buffer();
 
     for (uint32_t i = 0; i < cached_program.shared_variables.num_cores; i++) {
         CoreCoord core = {
@@ -319,8 +319,8 @@ NlpCreateHeadsDeviceOperation::Sharded::cached_program_t NlpCreateHeadsDeviceOpe
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto& input_tensor = tensor_args.input_tensor_q;
-    auto& input_tensor_kv = tensor_args.input_tensor_kv;
+    const auto& input_tensor = tensor_args.input_tensor_q;
+    const auto& input_tensor_kv = tensor_args.input_tensor_kv;
     auto& output = tensor_return_value;
     auto head_dim = operation_attributes.head_dim;
     auto num_q_heads = operation_attributes.num_q_heads;
@@ -616,9 +616,9 @@ void NlpCreateHeadsDeviceOperation::Sharded::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto dst_buffer_query = std::get<0>(tensor_return_value).buffer();
-    auto dst_buffer_key = std::get<1>(tensor_return_value).buffer();
-    auto dst_buffer_value = std::get<2>(tensor_return_value).buffer();
+    auto* dst_buffer_query = std::get<0>(tensor_return_value).buffer();
+    auto* dst_buffer_key = std::get<1>(tensor_return_value).buffer();
+    auto* dst_buffer_value = std::get<2>(tensor_return_value).buffer();
 
     UpdateDynamicCircularBufferAddress(
         cached_program.program, cached_program.shared_variables.cb_q_output, *dst_buffer_query);

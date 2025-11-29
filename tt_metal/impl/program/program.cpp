@@ -230,17 +230,17 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
 
-    for (auto& cb_descriptor : descriptor.cbs) {
+    for (const auto& cb_descriptor : descriptor.cbs) {
         internal_->add_circular_buffer_(std::make_shared<CircularBuffer>(cb_descriptor));
     }
 
     for (size_t i = 0; i < descriptor.semaphores.size(); i++) {
-        auto& semaphore_descriptor = descriptor.semaphores[i];
+        const auto& semaphore_descriptor = descriptor.semaphores[i];
         internal_->add_semaphore(
             semaphore_descriptor.core_ranges, i, semaphore_descriptor.initial_value, semaphore_descriptor.core_type);
     }
 
-    for (auto& kernel_descriptor : descriptor.kernels) {
+    for (const auto& kernel_descriptor : descriptor.kernels) {
         bool is_file = kernel_descriptor.source_type == KernelDescriptor::SourceType::FILE_PATH;
         std::vector<uint32_t> compile_args(
             kernel_descriptor.compile_time_args.begin(), kernel_descriptor.compile_time_args.end());
@@ -927,7 +927,7 @@ std::vector<std::vector<CoreCoord>> detail::ProgramImpl::logical_cores() const {
     std::vector<std::set<CoreCoord>> unique_cores;
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < kernels_.size();
          programmable_core_type_index++) {
-        auto& kernels = this->kernels_[programmable_core_type_index];
+        const auto& kernels = this->kernels_[programmable_core_type_index];
         cores_in_program.push_back({});
         unique_cores.push_back({});
         for (const auto& [id, kernel] : kernels) {
@@ -1358,7 +1358,7 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
 
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     // ZoneScoped;
-    auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->build_id());
+    const auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->build_id());
 
     if (compiled_.contains(build_env.build_key())) {
         Inspector::program_compile_already_exists(this, device, build_env.build_key());
@@ -1725,7 +1725,7 @@ void detail::ProgramCompileGroup::add_program(
 void detail::ProgramCompileGroup::compile_all(bool force_slow_dispatch) {
     std::vector<std::shared_future<void>> events;
     for (auto& [device, program] : program_device_map_) {
-        auto pgm = program.get();
+        auto* pgm = program.get();
         launch_build_step(
             [device, pgm, force_slow_dispatch]() { pgm->impl().compile(device, force_slow_dispatch); }, events);
     }

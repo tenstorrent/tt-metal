@@ -18,7 +18,7 @@
 namespace ttnn::operations::data_movement::detail {
 
 void py_bind_moe_expert_token_remap(py::module& module) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
 
 Remap MoE CCL Metadata from global experts to local device experts
 

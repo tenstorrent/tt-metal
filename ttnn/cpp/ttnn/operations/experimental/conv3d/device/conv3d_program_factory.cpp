@@ -227,7 +227,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // Matmul parameters
-    auto device = input_tensor.device();
+    auto* device = input_tensor.device();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 

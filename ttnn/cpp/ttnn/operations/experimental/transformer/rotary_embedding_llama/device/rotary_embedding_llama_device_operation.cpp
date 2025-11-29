@@ -31,7 +31,7 @@ void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
     const auto& sin = tensor_args.sin_cache;
     const auto& trans_mat = tensor_args.trans_mat;
 
-    auto ref_device = input_tensor.device();
+    auto* ref_device = input_tensor.device();
     // Validate inputs are on device and same device
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE, "input tensor to rotary embedding need to be on device!");

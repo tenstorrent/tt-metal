@@ -26,7 +26,7 @@ void LayerNorm::validate(
         "tensors",
         input_tensors.size(),
         optional_input_tensors.size());
-    auto& a = input_tensors.at(0);
+    const auto& a = input_tensors.at(0);
     const auto& b = optional_input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(1);
     const auto& beta = optional_input_tensors.at(2);

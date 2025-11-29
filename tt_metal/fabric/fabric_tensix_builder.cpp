@@ -125,7 +125,7 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
     TT_FATAL(!logical_fabric_mux_cores_.empty(), "No logical fabric mux cores found for device {}", device_id);
 
     // Initialize translated mux cores (coordinates should be same across devices)
-    auto device = tt::DevicePool::instance().get_active_device(device_id);
+    auto* device = tt::DevicePool::instance().get_active_device(device_id);
     TT_FATAL(device != nullptr, "Device {} not found in DevicePool", device_id);
     for (const auto& logical_core : logical_fabric_mux_cores_) {
         CoreCoord translated_core = device->worker_core_from_logical_core(logical_core);

@@ -943,8 +943,8 @@ void Pool2D::MultiCore::override_runtime_arguments(
     auto& out_cb = cached_program.shared_variables.out_cb;
 
     const auto& input_tensor = tensor_args.input_tensor_;
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = output_tensors[0].buffer();
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = output_tensors[0].buffer();
 
     bool input_sharded = input_tensor.is_sharded();
     if (input_sharded) {
@@ -957,7 +957,7 @@ void Pool2D::MultiCore::override_runtime_arguments(
 
     if (operation_attributes.return_indices_) {
         auto& out_idx_cb = cached_program.shared_variables.out_idx_cb;
-        auto dst_idx_buffer = output_tensors.size() > 1 ? output_tensors[1].buffer() : nullptr;
+        auto* dst_idx_buffer = output_tensors.size() > 1 ? output_tensors[1].buffer() : nullptr;
         if (out_sharded && dst_idx_buffer) {
             UpdateDynamicCircularBufferAddress(program, out_idx_cb, *dst_idx_buffer);
         }

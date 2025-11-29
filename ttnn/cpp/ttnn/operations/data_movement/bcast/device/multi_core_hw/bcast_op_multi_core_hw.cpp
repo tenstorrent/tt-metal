@@ -66,9 +66,9 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
 
-    auto src0_buffer = a.buffer();
-    auto src1_buffer = b.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src0_buffer = a.buffer();
+    auto* src1_buffer = b.buffer();
+    auto* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = 0;
@@ -220,8 +220,8 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
         uint32_t num_cores_y = compute_with_storage_grid_size.y;
         const auto& output_tensor = inplace ? input_tensors.at(0) : output_tensors.at(0);
 
-        auto src_buffer_a = input_tensors.at(0).buffer();
-        auto src_dram_buffer_b = input_tensors.at(1).buffer();
+        auto* src_buffer_a = input_tensors.at(0).buffer();
+        auto* src_dram_buffer_b = input_tensors.at(1).buffer();
         std::optional<ShardSpec> shard_spec = std::nullopt;
         bool src0_sharded = input_tensors.at(0).memory_config().is_sharded();
         bool out_sharded = output_tensor.memory_config().is_sharded();
@@ -232,7 +232,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
             shard_spec = output_tensor.shard_spec().value();
         }
 
-        auto dst_buffer = output_tensor.buffer();
+        auto* dst_buffer = output_tensor.buffer();
 
         const auto ashape = input_tensors.at(0).padded_shape();
         const auto bshape = input_tensors.at(1).padded_shape();

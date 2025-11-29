@@ -51,7 +51,7 @@ protected:
 
     bool validate_dispatch_mode() {
         this->slow_dispatch_ = true;
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (!slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
             this->slow_dispatch_ = false;
@@ -111,7 +111,7 @@ protected:
 
     virtual bool validate_dispatch_mode() {
         this->slow_dispatch_ = true;
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (!slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
             this->slow_dispatch_ = false;

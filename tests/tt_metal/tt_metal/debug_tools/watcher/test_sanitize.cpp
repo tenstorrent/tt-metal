@@ -111,7 +111,7 @@ void RunTestOnCore(
     Program program = Program();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
 
     CoreCoord virtual_core;
@@ -193,7 +193,7 @@ void RunTestOnCore(
     bool use_inline_dw_write = false;
     bool bad_linked_transaction = false;
     uint32_t l1_overflow_addr = 0;
-    switch(feature) {
+    switch (feature) {
         case SanitizeNOCAddress:
             output_buf_noc_xy.x = 26;
             output_buf_noc_xy.y = 18;
@@ -258,7 +258,7 @@ void RunTestOnCore(
     if (use_ncrisc) {
         risc_name = "ncrisc";
     }
-    switch(feature) {
+    switch (feature) {
         case SanitizeNOCAddress:
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc0 tried to unicast write {} "
@@ -414,7 +414,7 @@ void RunTestEth(
     MeshWatcherFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     watcher_features_t feature) {
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     if (fixture->IsSlowDispatch()) {
         GTEST_SKIP();
     }
@@ -431,7 +431,7 @@ void RunTestIEth(
     MeshWatcherFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     watcher_features_t feature) {
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     if (fixture->IsSlowDispatch()) {
         GTEST_SKIP();
     }
@@ -446,7 +446,7 @@ void RunTestIEth(
 
 // Run tests for host-side sanitization (uses functions that are from watcher_server.hpp).
 void CheckHostSanitization(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     // Try reading from a core that doesn't exist
     constexpr CoreCoord core = {99, 99};
     uint64_t addr = 0;

@@ -259,7 +259,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto& output_tensor_shape = output_tensor.padded_shape();
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device not found");
 
     // When reverse_order is enabled, tensor width must be divisible by 32*num_devices for proper sharding
@@ -860,7 +860,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     bool use_optimal_ccl_for_llama = false) {
     tt::tt_metal::Program program{};
 
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     if (!mesh_device) {
         mesh_device = input_tensor.device();
     }

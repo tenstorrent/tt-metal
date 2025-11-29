@@ -21,7 +21,7 @@ void py_graph_module_types(py::module& m) {
 }
 
 void py_graph_module(py::module& m) {
-    auto doc_begin =
+    const auto* doc_begin =
         R"doc(begin_graph_capture()
     )doc";
 
@@ -31,7 +31,7 @@ void py_graph_module(py::module& m) {
         doc_begin,
         py::arg("run_mode") = IGraphProcessor::RunMode::NORMAL);
 
-    auto doc_end =
+    const auto* doc_end =
         R"doc(end_graph_capture() -> Union[None, bool, int, float, list, dict]
         returns the value captured graph as a json object converted to python object
     )doc";

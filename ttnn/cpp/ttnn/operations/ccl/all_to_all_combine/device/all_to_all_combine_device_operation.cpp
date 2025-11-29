@@ -122,7 +122,7 @@ AllToAllCombineDeviceOperation::spec_return_value_t AllToAllCombineDeviceOperati
     const auto& input_shape = input_tensor.tensor_spec().logical_shape();
     const auto& metadata_shape = tensor_args.metadata_tensor.tensor_spec().logical_shape();
 
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
     const auto num_devices = mesh_view.num_devices();

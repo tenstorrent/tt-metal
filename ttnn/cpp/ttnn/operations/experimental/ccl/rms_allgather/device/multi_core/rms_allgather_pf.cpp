@@ -1214,11 +1214,11 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            const auto src_buffer_a = input_tensors.at(0).buffer();
+            auto* const src_buffer_a = input_tensors.at(0).buffer();
             const auto& b_tensor = optional_input_tensors.at(0);
             const auto& gamma_tensor = optional_input_tensors.at(1);
             const auto stats_tensor = optional_input_tensors.at(2).value();
-            const auto dst_buffer = output_tensors.at(0).buffer();
+            auto* const dst_buffer = output_tensors.at(0).buffer();
             bool skip_write_back =
                 output_tensors.at(0).shard_spec().value() == input_tensors.at(0).shard_spec().value();
             auto& writer_sender_args_by_core = GetRuntimeArgs(program, writer_mcast_sender_kernels_id);
@@ -1260,7 +1260,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             } else {
                 UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
             }
-            const auto stats_buffer = stats_tensor.buffer();
+            auto* const stats_buffer = stats_tensor.buffer();
             UpdateDynamicCircularBufferAddress(program, cb_stats, *stats_buffer);
         };
 

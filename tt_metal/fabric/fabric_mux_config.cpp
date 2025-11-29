@@ -217,8 +217,8 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const 
             tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_tensix_config();
         fabric_endpoint_channel_num_buffers_ = fabric_tensix_config.get_num_buffers_per_channel();
     } else {
-        auto channel_allocator = fabric_router_config.channel_allocator.get();
-        const auto static_channel_allocator =
+        auto* channel_allocator = fabric_router_config.channel_allocator.get();
+        auto* const static_channel_allocator =
             dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
         TT_FATAL(
             static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
@@ -234,8 +234,8 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const 
 std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args_for_relay_mux() const {
     const auto& fabric_router_config =
         tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_router_config();
-    auto channel_allocator = fabric_router_config.channel_allocator.get();
-    const auto static_channel_allocator =
+    auto* channel_allocator = fabric_router_config.channel_allocator.get();
+    auto* const static_channel_allocator =
         dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
     TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
 

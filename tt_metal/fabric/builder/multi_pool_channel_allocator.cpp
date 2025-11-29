@@ -39,10 +39,10 @@ void MultiPoolChannelAllocator::emit_ct_args(
         [](FabricChannelAllocator* allocator) -> std::pair<size_t, size_t> {
         size_t num_sender_channels = 0;
         size_t num_receiver_channels = 0;
-        if (auto static_allocator = dynamic_cast<FabricStaticSizedChannelsAllocator*>(allocator)) {
+        if (auto* static_allocator = dynamic_cast<FabricStaticSizedChannelsAllocator*>(allocator)) {
             num_sender_channels += static_allocator->get_num_sender_channels();
             num_receiver_channels += static_allocator->get_num_receiver_channels();
-        } else if (auto remote_allocator = dynamic_cast<FabricRemoteChannelsAllocator*>(allocator)) {
+        } else if (auto* remote_allocator = dynamic_cast<FabricRemoteChannelsAllocator*>(allocator)) {
             num_receiver_channels += remote_allocator->get_num_receiver_channels();
         } else {
             TT_FATAL(false, "Allocator is not a static or remote allocator");
