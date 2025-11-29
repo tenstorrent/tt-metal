@@ -268,13 +268,11 @@ void MAIN {
             tile_regs_wait();
             pack_tile<true>(0, sigmoid_input_cb_index, 0);
             tile_regs_release();
-            if (width_tile == 3 || width_tile == 6) {
-                PACK(DPRINT << "Post-sigmoid Width tile: " << width_tile << ENDL());
-                PACK(print_tile(sigmoid_input_cb_index, 0, true, 0, 1));
-            }
+            // if (width_tile == 3 || width_tile == 6) {
+            //     PACK(DPRINT << "Post-sigmoid Width tile: " << width_tile << ENDL());
+            //     PACK(print_tile(sigmoid_input_cb_index, 0, true, 0, 1));
+            // }
             cb_push_back(sigmoid_input_cb_index, 1);
-
-            cb_pop_front(scores_cb_index, 1);
         }
 
         // Perform add bias on sigmoid input – should I do full or partial init here?
