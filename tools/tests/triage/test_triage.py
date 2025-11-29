@@ -23,6 +23,8 @@ sys.path.insert(0, triage_home)
 
 
 from triage import run_script, FAILURE_CHECKS
+from ttexalens.context import Context
+from ttexalens.tt_exalens_init import init_ttexalens
 
 
 @pytest.fixture(scope="class")
@@ -59,6 +61,7 @@ def cause_hang_with_app(request):
     else:
         time.sleep(timeout)
     request.cls.app_configuration = app_configuration
+    request.cls.exalens_context = init_ttexalens()
     try:
         yield
     finally:
@@ -104,6 +107,7 @@ def cause_hang_with_app(request):
 @pytest.mark.usefixtures("cause_hang_with_app")
 class TestTriage:
     app_configuration: dict
+    exalens_context: Context
 
     def test_triage_help(self):
         global triage_script
@@ -139,7 +143,7 @@ class TestTriage:
         result = run_script(
             script_path=os.path.join(triage_home, "check_binary_integrity.py"),
             args=None,
-            context=None,
+            context=self.exalens_context,
             argv=[],
             return_result=True,
         )
@@ -155,7 +159,7 @@ class TestTriage:
         result = run_script(
             script_path=os.path.join(triage_home, "dump_fast_dispatch.py"),
             args=None,
-            context=None,
+            context=self.exalens_context,
             argv=[],
             return_result=True,
         )
@@ -171,12 +175,14 @@ class TestTriage:
         result = run_script(
             script_path=os.path.join(triage_home, "check_arc.py"),
             args=None,
-            context=None,
+            context=self.exalens_context,
             argv=[],
             return_result=True,
         )
 
         assert len(FAILURE_CHECKS) == 0, f"Arc check failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
         for check in result:
-            assert check.location == check.device.arc_block.location, f"Incorrect ARC location: {check.location}"
-            assert 0 < check.clock_mhz < 10000, f"Invalid ARC clock: {check.clock_mhz}"
+            assert (
+                check.result.location == check.device.arc_block.location
+            ), f"Incorrect ARC location: {check.result.location}"
+            assert 0 < check.result.clock_mhz < 10000, f"Invalid ARC clock: {check.result.clock_mhz}"
