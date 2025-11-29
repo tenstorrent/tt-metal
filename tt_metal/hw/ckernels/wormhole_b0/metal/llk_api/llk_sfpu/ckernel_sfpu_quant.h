@@ -31,7 +31,7 @@ inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_ind
 
 template <ApproximationMode APPROX_MODE>
 void quant_init(const uint zero_point) {
-    _init_quant_zero_point_<(APPROX_MODE == ApproximationMode::Fast)>(zero_point);
+    _init_quant_zero_point_<(APPROX_MODE)>(zero_point);
 }
 
 }  // namespace sfpu

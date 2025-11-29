@@ -64,7 +64,7 @@ sfpi_inline vFloat sfpu_tan<ApproximationMode::Fast>(vFloat x) {
 }
 
 template <>
-sfpi_inline vFloat sfpu_tan<ApproximationMode::Precise>(vFloat x) {
+sfpi_inline vFloat sfpu_tan<APPROX_MODE>(vFloat x) {
     const vFloat xx = x * x;
 
     v_if(sfpi::abs(x) <= 1.0f) {
@@ -103,7 +103,7 @@ sfpi_inline vFloat sfpu_sinpi<ApproximationMode::Fast>(vFloat x) {
 }
 
 template <>
-sfpi_inline vFloat sfpu_sinpi<ApproximationMode::Precise>(vFloat x) {
+sfpi_inline vFloat sfpu_sinpi<APPROX_MODE>(vFloat x) {
     vFloat xx = x * x;
 
     return x *
