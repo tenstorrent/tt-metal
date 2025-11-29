@@ -51,12 +51,12 @@ pytest models/demos/vision/classification/mobilenetv2/demo/demo.py::test_mobilen
 ### Performant Data evaluation with Trace+2CQ
 #### Single Device (BS=10):
 ```
-pytest models/demos/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval
+pytest models/demos/vision/classification/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval
 ```
 
 #### Multi Device (DP=2, n300):
 ```
-pytest models/demos/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval_dp
+pytest models/demos/vision/classification/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval_dp
 ```
 Note: The model is evaluated with 512 samples.
 
