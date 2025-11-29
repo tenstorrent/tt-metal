@@ -6,11 +6,12 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "llk_defs.h"
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, RoundingMode rounding_mode, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, RoundingMode rounding_mode, int ITERATIONS>
 inline void calculate_rdiv(const uint value) {
     sfpi::vFloat val = Converter::as_float(value);
 #pragma GCC unroll 8
@@ -51,7 +52,7 @@ inline void calculate_rdiv(const uint value) {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 void rdiv_init() {
     _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
 }

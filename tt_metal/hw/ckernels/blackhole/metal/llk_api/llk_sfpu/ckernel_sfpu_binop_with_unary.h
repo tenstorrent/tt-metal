@@ -76,7 +76,7 @@ void calculate_rsub(uint32_t param) {
     return;
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 void calculate_add_int32(uint32_t scalar) {
     int int_scalar = scalar;
 
@@ -91,7 +91,7 @@ void calculate_add_int32(uint32_t scalar) {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 void calculate_sub_int32(uint32_t scalar) {
     int int_scalar = scalar;
 

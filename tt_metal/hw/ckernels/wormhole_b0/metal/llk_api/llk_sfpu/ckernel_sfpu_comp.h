@@ -162,7 +162,7 @@ inline void calculate_comp_uint16() {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 inline void calculate_eqz_uint32() {
     int scalar = -5;  // used for shift operation
     _sfpu_load_imm32_(p_sfpu::LREG2, scalar);
@@ -175,7 +175,7 @@ inline void calculate_eqz_uint32() {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 inline void calculate_nez_uint32() {
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_3, 0);

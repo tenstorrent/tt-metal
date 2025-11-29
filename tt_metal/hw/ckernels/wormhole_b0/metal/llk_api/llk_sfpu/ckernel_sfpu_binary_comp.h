@@ -5,13 +5,14 @@
 #pragma once
 
 #include "ckernel_addrmod.h"
+#include "llk_defs.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
 
 // Comparison ops use int32 subtract (whose result is also in the int32 range) + sign check.
 // In order to avoid overflow for inputs of opposite signs, the output is determined directly from a sign check.
-template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
+template <ApproximationMode APPROX_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
 inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
