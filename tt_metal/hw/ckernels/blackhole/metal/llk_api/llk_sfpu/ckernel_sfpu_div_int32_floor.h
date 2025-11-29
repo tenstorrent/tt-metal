@@ -71,7 +71,6 @@ sfpi_inline void calculate_div_int32_body(
     // Compute correction value in float32.
     sfpi::vFloat correction_f = r_f * inv_b_f;
     sfpi::vInt correction = sfpi::float_to_uint16(correction_f, 0);
-    correction_f = sfpi::int32_to_float(correction);
 
     // Compute tmp = correction * b.
     sfpi::vInt tmp_hi;
