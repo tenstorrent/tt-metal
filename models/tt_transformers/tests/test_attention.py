@@ -56,7 +56,12 @@ from models.tt_transformers.tt.rope import RotarySetup
     (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+@pytest.mark.parametrize(
+    "mode",
+    ("decode",),
+)
 def test_attention_inference(
+    mode,
     max_seq_len,
     batch_size,
     paged_attention,
@@ -68,8 +73,11 @@ def test_attention_inference(
 ):
     dtype = ttnn.bfloat8_b
     pcc = 0.99
+    num_tensors = 2
+    prefetcher = Prefetcher(mesh_device, num_tensors=num_tensors, num_layers=1) if use_prefetcher else None
 
-    prefetcher = Prefetcher(mesh_device, num_tensors=2, num_layers=1) if use_prefetcher else None
+    if use_prefetcher:
+        prefetcher.init(mode)
 
     model_args = ModelArgs(
         mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True, prefetcher=prefetcher
@@ -177,25 +185,26 @@ def test_attention_inference(
             batch_size, seq_len, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
         )  # Qwen2.5 0.5B sees 0.1 to 2.1
 
-        if prefetcher is not None:
+        if prefetcher is not None and mode == "decode":
             prefetcher.run()
 
         tt_attention_input = pt_attention_input.clone()
         attention_input = model_args.prepare_residual_tensor_decode(
             tt_attention_input,
             model_args.model_config["PREFETCHER_SHARDED_ATTN_INPUT_MEMCFG"]
-            if prefetcher is not None
+            if prefetcher is not None and mode == "decode"
             else model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
             force_replicated=False if model_args.is_galaxy else True,
         )
 
         # Get cos/sin matrices for the current position of each user
-        rot_mats = rope_setup.get_rot_mats(current_pos, prefetcher=prefetcher)
+        rot_mats = rope_setup.get_rot_mats(current_pos, prefetcher=prefetcher if mode == "decode" else None)
+
         tt_out = tt_model(
             attention_input,
             current_pos_tensor,
             rot_mats=rot_mats,
-            mode="decode",
+            mode=mode,
             page_table=page_table_tt,
         )
         # multi-device attention module returns replicated output

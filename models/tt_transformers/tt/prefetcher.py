@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Union
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -152,7 +153,6 @@ class Prefetcher(LightweightModule):
         mesh_device: ttnn.MeshDevice,
         num_tensors: int,
         num_layers: int,
-        mode: Optional[str] = None,
     ):
         """
         Prefetcher class that prefetches tensors from DRAM to
@@ -190,15 +190,7 @@ class Prefetcher(LightweightModule):
         self.sender_cores = None
         self.receiver_cores = None
         self.all_cores = None
-
-        ### Initialize sub device manager
-        mode = "decode" if mode is None else mode
-        assert mode in [
-            "decode",
-            "prefill",
-        ], f"Provided mode {mode} is not supported, only `decode` and `prefill` are supported"
-        self.init(mode)
-        self.worker_sub_device_id = self.prefetcher_sub_device.sub_devices_id[-1]
+        self.mode = "prefill"
 
     def get_optimal_receiver_cores(self):
         if self.mesh_device.shape == ttnn.MeshShape([1, 2]):
@@ -224,7 +216,17 @@ class Prefetcher(LightweightModule):
             raise ValueError(f"Provided cores {cores} is not a list of CoreCoords or CoreRanges")
 
     def init(self, mode: str = "decode") -> None:
-        """ """
+        """
+        Initializes the prefetcher
+        Args:
+            mode: The mode to run the prefetcher in, either "decode" or "prefill"
+        """
+        self.mode = "decode" if mode is None else mode
+        assert self.mode in [
+            "decode",
+            "prefill",
+        ], f"Provided mode {mode} is not supported, only `decode` and `prefill` are supported"
+
         # Get the sender and receiver cores
         self.sender_cores = PrefetcherCoreConfig(
             num_receiver_cores=self.num_receiver_cores, mesh_device=self.mesh_device
@@ -234,7 +236,9 @@ class Prefetcher(LightweightModule):
             num_receiver_cores=self.num_receiver_cores, mesh_device=self.mesh_device
         ).receiver_cores
 
-        self.all_cores = [ttnn.CoreCoord(i, j) for i in range(self.width_cores) for j in range(self.height_cores)]
+        self.all_core_range_set = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.width_cores - 1, self.height_cores - 1))]
+        )
 
         self.all_worker_cores_range_set = ttnn.CoreRangeSet(
             [
@@ -254,19 +258,20 @@ class Prefetcher(LightweightModule):
                 self.prefetcher_sub_device.add_sub_device(self.all_worker_cores_range_set)
                 self.prefetcher_sub_device.init_sub_device_manager()
             case "prefill":
-                self.prefetcher_sub_device.add_sub_device(self.to_core_range_set(self.all_cores))
+                self.prefetcher_sub_device.add_sub_device(self.all_core_range_set)
                 self.prefetcher_sub_device.init_sub_device_manager()
-
-        from loguru import logger
 
         logger.info("=" * 50)
         logger.info("[Prefetcher Initialization]")
+        logger.info(f"  Mode: {mode}")
+        logger.info(f"  All cores: {self.all_cores}")
         logger.info(f"  Sender cores: {self.sender_cores(active=True)}")
         logger.info(f"  Receiver cores: {self.receiver_cores(sender_active=None, receiver_active=True)}")
         logger.info(f"  Number of receiver cores: {self.num_receiver_cores}")
         logger.info(f"  Number of tensors to prefetch: {self.num_tensors}")
         logger.info(f"  Number of layers: {self.num_layers}")
         logger.info("=" * 50)
+        # self.worker_sub_device_id = self.prefetcher_sub_device.sub_devices_id[-1]
 
     def create_address_tensor(self):
         """
@@ -313,6 +318,9 @@ class Prefetcher(LightweightModule):
         )
         self.prefetched_tensors.append(tensor)
         self.prefetched_tensor_addr.append(tensor.buffer_address())
+        logger.info(
+            f"Inserted tensor {tensor.shape} into prefetcher, total number of tensors: {len(self.prefetched_tensor_addr)}"
+        )
 
     def run(self):
         """
