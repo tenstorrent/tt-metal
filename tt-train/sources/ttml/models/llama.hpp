@@ -28,6 +28,7 @@ struct LlamaConfig {
     uint32_t max_sequence_length = 256U;
     RunnerType runner_type = RunnerType::Default;
     WeightTyingType weight_tying = WeightTyingType::Enabled;
+    bool inference = false;  // Enable KV cache for inference mode
 
     // RoPE NTK-aware scaling parameters
     float scaling_factor = 0.0F;  // 0.0 means no scaling
@@ -47,6 +48,10 @@ private:
     ops::RotaryEmbeddingParams m_rope_params;
     uint32_t m_original_vocab_size = 0U;
 
+    // KV cache for inference mode
+    std::vector<std::pair<autograd::TensorPtr, autograd::TensorPtr>> m_kv_cache;  // [(k_cache, v_cache)] per layer
+    uint32_t m_cache_position = 0U;                                               // Current position in cache
+
 public:
     explicit Llama(const LlamaConfig& config);
     virtual ~Llama() = default;
@@ -57,6 +62,24 @@ public:
     // Get the original vocabulary size for token validation
     [[nodiscard]] uint32_t get_original_vocab_size() const {
         return m_original_vocab_size;
+    }
+
+    // Initialize KV cache for inference
+    void initialize_kv_cache(uint32_t batch_size = 1);
+
+    // Reset cache position for new sequence
+    void reset_cache() {
+        m_cache_position = 0U;
+    }
+
+    // Get current cache position
+    [[nodiscard]] uint32_t get_cache_position() const {
+        return m_cache_position;
+    }
+
+    // Set cache position (useful after prefill to set to actual prompt length)
+    void set_cache_position(uint32_t position) {
+        m_cache_position = position;
     }
 };
 
