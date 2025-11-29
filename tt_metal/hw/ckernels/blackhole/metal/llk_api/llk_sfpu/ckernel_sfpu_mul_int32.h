@@ -87,7 +87,7 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
     TTI_SFPNOP;
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 inline void mul_int32_init() {
     constexpr uint b1 = p_sfpu::LREG2;
     constexpr uint c = p_sfpu::LREG4;

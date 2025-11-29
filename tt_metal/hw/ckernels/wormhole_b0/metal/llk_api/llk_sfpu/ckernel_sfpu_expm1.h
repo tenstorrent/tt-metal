@@ -38,7 +38,7 @@ inline void calculate_expm1() {
     return y;
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void calculate_expm1() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
