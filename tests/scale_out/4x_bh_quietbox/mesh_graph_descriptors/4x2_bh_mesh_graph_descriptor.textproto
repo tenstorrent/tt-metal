@@ -4,7 +4,7 @@
 mesh_descriptors {
   name: "M0"
   arch: BLACKHOLE
-  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, RING ] }
+  device_topology { dims: [ 4, 2 ] dim_types: [ RING, LINE ] }
   host_topology   { dims: [ 1, 2 ] }
   channels { count: 2 policy: STRICT }
 }
