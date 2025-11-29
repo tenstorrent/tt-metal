@@ -63,6 +63,7 @@ void MAIN {
     constexpr bool use_half_tile = get_compile_time_arg_val(27);
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(28);
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(29);
+    constexpr bool fp32_dest_acc_en = get_compile_time_arg_val(30) == 1;
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -351,8 +352,14 @@ void MAIN {
                  * else:
                  *  cur_max = max(qk, dim=-1)
                  */
-                reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
-                    cb_cur_max, cb_prev_max, Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
+                reduce_c<
+                    PoolType::MAX,
+                    ReduceDim::REDUCE_ROW,
+                    cb_qk_im,
+                    cb_identity_scale_in,
+                    Sq_chunk_t,
+                    vector_mode,
+                    fp32_dest_acc_en>(cb_cur_max, cb_prev_max, Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
 
                 /* QK -= cb_cur_max */
                 /* QK = exp(QK)*/
