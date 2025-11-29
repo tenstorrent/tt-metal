@@ -77,8 +77,8 @@ void bind_sdpa(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("attn_mask").noconvert() = nb::none(),
             nb::arg("is_causal").noconvert() = true,
-            nb::arg("scale").noconvert() = nb::none(),
-            nb::arg("sliding_window_size").noconvert() = nb::none(),
+            nb::arg("scale") = nb::none(),
+            nb::arg("sliding_window_size") = nb::none(),
             nb::arg("memory_config").noconvert() = nb::none(),
             nb::arg("program_config").noconvert() = nb::none(),
             nb::arg("compute_kernel_config").noconvert() = nb::none()});
