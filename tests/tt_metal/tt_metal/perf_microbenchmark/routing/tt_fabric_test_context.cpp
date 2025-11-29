@@ -7,6 +7,76 @@
 #include "impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
 
+void TestContext::add_sync_traffic_to_devices(const TestConfig& config) {
+    for (const auto& sync_config : config.sync_configs) {
+        // currently initializing our sync configs to be on senders local to the current host
+        const auto& sync_sender = sync_config.sender_config;
+        if (fixture_->is_local_fabric_node_id(sync_sender.device)) {
+            CoreCoord sync_core = sync_sender.core.value();
+            const auto& device_coord = this->fixture_->get_device_coord(sync_sender.device);
+
+            // Track global sync core for this device
+            device_global_sync_cores_[sync_sender.device] = sync_core;
+
+            // Process each already-split sync pattern for this device
+            for (const auto& sync_pattern : sync_sender.patterns) {
+                // Convert sync pattern to TestTrafficSenderConfig format
+                const auto& dest = sync_pattern.destination.value();
+
+                TrafficParameters sync_traffic_parameters = {
+                    .chip_send_type = sync_pattern.ftype.value(),
+                    .noc_send_type = sync_pattern.ntype.value(),
+                    .payload_size_bytes = sync_pattern.size.value(),
+                    .num_packets = sync_pattern.num_packets.value(),
+                    .atomic_inc_val = sync_pattern.atomic_inc_val,
+                    .mcast_start_hops = sync_pattern.mcast_start_hops,
+                    .seed = config.seed,
+                    .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
+                    .mesh_shape = this->fixture_->get_mesh_shape(),
+                    .topology = this->fixture_->get_topology()};
+
+                // For sync patterns, we use a dummy destination core and fixed sync address
+                // The actual sync will be handled by atomic operations
+                CoreCoord dummy_dst_core = {0, 0};  // Sync doesn't need specific dst core
+                uint32_t sync_address = this->sender_memory_map_.get_global_sync_address();  // Hard-coded sync address
+                uint32_t dst_noc_encoding =
+                    this->fixture_->get_worker_noc_encoding(sync_core);  // populate the master coord
+
+                TestTrafficSenderConfig sync_traffic_sender_config = {
+                    .parameters = sync_traffic_parameters,
+                    .src_node_id = sync_sender.device,
+                    .dst_logical_core = dummy_dst_core,
+                    .target_address = sync_address,
+                    .atomic_inc_address = sync_address,
+                    .dst_noc_encoding = dst_noc_encoding,
+                    .link_id = sync_sender.link_id};  // Derive from SenderConfig (always 0 for sync)
+
+                // Determine destination node IDs
+                auto single_direction_hops = dest.hops.value();
+                sync_traffic_sender_config.hops = single_direction_hops;
+                // for 2d mcast case
+                sync_traffic_sender_config.dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
+                    sync_sender.device, single_direction_hops, sync_traffic_parameters.chip_send_type);
+                // for 2d, we need to specify the mcast start node id
+                if (fixture_->is_2D_routing_enabled() &&
+                    sync_traffic_parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
+                    sync_traffic_sender_config.mcast_start_node_id =
+                        fixture_->get_mcast_start_node_id(sync_sender.device, single_direction_hops);
+                } else {
+                    sync_traffic_sender_config.mcast_start_node_id = std::nullopt;
+                }
+
+                // Add sync config to the master sender on this device
+                TestTrafficSyncConfig sync_traffic_sync_config = {
+                    .sync_val = sync_config.sync_val, .sender_config = std::move(sync_traffic_sender_config)};
+
+                this->test_devices_.at(device_coord)
+                    .add_sender_sync_config(sync_core, std::move(sync_traffic_sync_config));
+            }
+        }
+    }
+}
+
 void TestContext::wait_for_programs_with_progress() {
     if (!progress_config_.enabled) {
         fixture_->wait_for_programs();

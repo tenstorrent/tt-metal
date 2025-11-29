@@ -19,6 +19,7 @@
 #include "tt_fabric_test_context.hpp"
 
 const std::unordered_map<Topology, FabricConfig> TestFixture::topology_to_fabric_config_map = {
+    {Topology::NeighborExchange, FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE},
     {Topology::Linear, FabricConfig::FABRIC_1D},
     {Topology::Ring, FabricConfig::FABRIC_1D_RING},
     {Topology::Mesh, FabricConfig::FABRIC_2D},

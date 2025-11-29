@@ -397,6 +397,12 @@ void FabricEriscDatamoverConfig::configure_skip_connection_flags(Topology topolo
             default: break;
         }
     }
+    // A neighbor exchange topology only has 1 sender channel and 1 receiver channel, and no possibility of deadlock.
+    else if (topology == Topology::NeighborExchange) {
+        this->skip_sender_channel_1_connection = true;
+        this->skip_receiver_channel_1_connection = true;
+        this->skip_sender_vc1_channel_connection = true;
+    }
 }
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
@@ -407,21 +413,24 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         update_sender_channel_servicing(options.fabric_tensix_config, this->risc_configs, topology);
     }
 
-    const bool is_2D_routing = FabricContext::is_2D_topology(topology);
-
     this->channel_buffer_size_bytes = channel_buffer_size_bytes;
-    this->num_used_sender_channels = builder_config::get_sender_channel_count(is_2D_routing);
+    this->num_used_sender_channels = builder_config::get_num_used_sender_channel_count(topology);
     this->num_used_receiver_channels = builder_config::num_receiver_channels;
 
     // Default, assuming deadlock avoidance is enabled
     // -1 to discount for the tensix worker channel
     this->num_fwd_paths = this->num_used_sender_channels - 1;
 
-    // If not a Ring/Torus, we need to discount for Dateline VC sender and receiver channels
+    // If not a Ring/Torus, we need to discount for receiver channels
+    // Dateline VC sender channel has already been discounted for in get_num_used_sender_channel_count
     if (topology == Topology::Linear || topology == Topology::Mesh) {
-        this->num_used_sender_channels -= 1;
         this->num_used_receiver_channels -= 1;
-        this->num_fwd_paths -= 1;
+    }
+
+    // Routers in NeighborExchange topology do not forward messages between non-adjacent devices. Therefore, they only
+    // require 1 receiver channel, for packets destined for local workers.
+    if (topology == Topology::NeighborExchange) {
+        this->num_used_receiver_channels = 1;
     }
 
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
@@ -823,6 +832,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     const size_t default_handshake_context_switch_timeout = 4096;
     size_t num_sender_channels = config.num_used_sender_channels;
     size_t num_receiver_channels = config.num_used_receiver_channels;
+
     auto dispatch_core_type =
         tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config().get_core_type();
     uint32_t my_eth_channel_ = [&]() -> uint32_t {

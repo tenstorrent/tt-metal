@@ -2221,6 +2221,23 @@ constexpr size_t get_credits_init_val() {
     return i == 0 ? 0 : SENDER_NUM_BUFFERS_ARRAY[i];
 };
 
+// Helper to safely access SENDER_NUM_BUFFERS_ARRAY at compile time
+// Prevents out-of-bounds array access errors when NUM_SENDER_CHANNELS < INDEX
+template <size_t NUM_SENDER_CHANNELS, size_t INDEX, typename = void>
+struct get_sender_num_buffers_safe_impl {
+    // Default template: used when INDEX is out of bounds
+    static constexpr size_t value = 0;
+};
+template <size_t NUM_SENDER_CHANNELS, size_t INDEX>
+struct get_sender_num_buffers_safe_impl<NUM_SENDER_CHANNELS, INDEX, std::enable_if_t<(INDEX < NUM_SENDER_CHANNELS)>> {
+    static constexpr size_t value = SENDER_NUM_BUFFERS_ARRAY[INDEX];
+};
+
+template <size_t NUM_SENDER_CHANNELS, size_t INDEX>
+constexpr size_t get_sender_num_buffers_safe() {
+    return get_sender_num_buffers_safe_impl<NUM_SENDER_CHANNELS, INDEX>::value;
+}
+
 template <size_t NUM_SENDER_CHANNELS, typename EdmChannelWorkerIFs>
 void
 #ifdef FABRIC_2D
@@ -2248,13 +2265,15 @@ void
                 get_credits_init_val<0>(),
                 notify_worker_of_read_counter_update_src_address);
     }
-    {
+    if constexpr (NUM_SENDER_CHANNELS > 1) {
         auto connection_live_semaphore_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_connection_live_semaphore_addresses[1]);
         auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
             local_sender_connection_info_addresses[1]);
-        new (&local_sender_channel_worker_interfaces.template get<1>()) tt::tt_fabric::
-            StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[1]>(
+        new (&local_sender_channel_worker_interfaces.template get<1>())
+            tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<
+                tt::tt_fabric::worker_handshake_noc,
+                get_sender_num_buffers_safe<NUM_SENDER_CHANNELS, 1>()>(
                 connection_worker_info_ptr,
                 0,  // Not used for credits.
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),

@@ -241,6 +241,9 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
             case tt::tt_fabric::Topology::Ring:
                 num_channels_for_mux_ = tt::tt_fabric::builder_config::num_sender_channels_1d_linear;
                 break;
+            case tt::tt_fabric::Topology::NeighborExchange:
+                num_channels_for_mux_ = tt::tt_fabric::builder_config::num_sender_channels_1d_neighbor_exchange;
+                break;
             case tt::tt_fabric::Topology::Mesh:
             case tt::tt_fabric::Topology::Torus:
                 num_channels_for_mux_ = tt::tt_fabric::builder_config::num_sender_channels_2d_mesh;
@@ -251,8 +254,15 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
 
     // Calculate buffers per channel based on available space and max channels
     size_t space_needed_for_max_channels = num_channels_for_mux_ * buffer_size_bytes_full_size_channel_;
-    num_buffers_per_channel_ = std::bit_floor(space_per_risc / space_needed_for_max_channels);
-    TT_FATAL(num_buffers_per_channel_ > 0, "num_buffers_per_channel_ msut be non-zero");
+    size_t number_of_buffers_per_channel = std::bit_floor(space_per_risc / space_needed_for_max_channels);
+    // To prevent overflow of num_buffers_per_channel_ (which is uint8_t), we max number of buffers per channel to 128
+    if (number_of_buffers_per_channel > 128) {
+        log_warning(
+            tt::LogMetal, "Number of buffers per channel is greater than 128, setting to 128 to prevent byte overflow");
+        num_buffers_per_channel_ = 128;
+    } else {
+        num_buffers_per_channel_ = static_cast<uint8_t>(number_of_buffers_per_channel);
+    }
 
     // Set base addresses for each core type with proper L1 alignment
     for (size_t i = 0; i < num_used_riscs_per_tensix_; ++i) {
