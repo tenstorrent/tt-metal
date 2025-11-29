@@ -16,6 +16,8 @@ from ttnn.types import (
     BufferType,
 )
 
+from ttnn._ttnn.operations.core import split_work_to_cores
+
 set_printoptions = ttnn._ttnn.core.set_printoptions
 
 
