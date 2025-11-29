@@ -95,7 +95,7 @@ sfpi_inline void calculate_div_int32_body(
     // correction should fit into 11 bits, thus:
     // tmp = correction * (b2<<22 + b1<<11 + b0)
 
-    sfpi::vFloat b2 = sfpi::int32_to_float(b >> 22);
+    sfpi::vFloat b2 = sfpi::int32_to_float(b >> 22, 0);
     sfpi::vFloat low = correction_f * b0 + MANTISSA_ALIGNMENT_OFFSET;
     sfpi::vFloat mid = correction_f * b1 + MANTISSA_ALIGNMENT_OFFSET;
     sfpi::vFloat top = correction_f * b2 + MANTISSA_ALIGNMENT_OFFSET;
