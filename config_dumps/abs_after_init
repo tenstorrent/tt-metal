@@ -1,0 +1,174 @@
+Tensix registers for location 0,0 on device 0
+ALU
+тттттттттттттттттттттЌттттттттттттттттттттттттттттт
+т ALU CONFIG        т VALUES                     т
+тттттттттттттттттттттМтттттттттттттттттттттттттттттЄ
+т Fpu_srnd_en       т False                      т
+т Gasket_srnd_en    т False                      т
+т Packer_srnd_en    т False                      т
+т Padding           т 0                          т
+т GS_LF             т False                      т
+т Bfp8_HF           т False                      т
+т SrcAUnsigned      т False                      т
+т SrcBUnsigned      т False                      т
+т Format_SrcA       т TensixDataFormat.Float16_b т
+т Format_SrcB       т TensixDataFormat.Float16_b т
+т Format_Dstacc     т TensixDataFormat.Float16_b т
+т Fp32_enabled      т False                      т
+т SFPU_Fp32_enabled т False                      т
+т INT8_math_enabled т False                      т
+тттттттттттттттттттттДттттттттттттттттттттттттттттт
+UNPACKER
+тттттттттттттттттттттттттттЌтттттттттттттттттттттттттттттЌттттттттттттттттттттттттттттт   ттттттттттттттттттттттЌтттттттттттттттттттттттттттттЌттттттттттттттттттттттттттттт
+т UNPACK CONFIG           т REG_ID = 1                 т REG_ID = 2                 т   т TILE DESCRIPTOR    т REG_ID = 1                 т REG_ID = 2                 т
+тттттттттттттттттттттттттттМтттттттттттттттттттттттттттттМтттттттттттттттттттттттттттттЄ   ттттттттттттттттттттттМтттттттттттттттттттттттттттттМтттттттттттттттттттттттттттттЄ
+т out_data_format         т TensixDataFormat.Float16_b т TensixDataFormat.Float16_b т   т in_data_format     т TensixDataFormat.Float16_b т TensixDataFormat.Float16_b т
+т throttle_mode           т 2                          т 2                          т   т uncompressed       т True                       т True                       т
+т context_count           т 0                          т 0                          т   т reserved_0         т 0                          т 0                          т
+т haloize_mode            т 0                          т 0                          т   т blobs_per_xy_plane т 0                          т 0                          т
+т tileize_mode            т 0                          т 0                          т   т reserved_1         т 0                          т 0                          т
+т unpack_src_reg_set_upd  т False                      т False                      т   т x_dim              т 0                          т 256                        т
+т unpack_if_sel           т False                      т False                      т   т y_dim              т 1                          т 1                          т
+т upsample_rate           т 0                          т 0                          т   т z_dim              т 4                          т 4                          т
+т reserved_1              т 0                          т 0                          т   т w_dim              т 0                          т 0                          т
+т upsample_and_interleave т False                      т False                      т   т blobs_y_start      т 0                          т 0                          т
+т shift_amount            т 0                          т 0                          т   т digest_type        т 0                          т 0                          т
+т uncompress_cntx0_3      т 15                         т 15                         т   т digest_size        т 0                          т 0                          т
+т unpack_if_sel_cntx0_3   т 0                          т 0                          т   ттттттттттттттттттттттДтттттттттттттттттттттттттттттДттттттттттттттттттттттттттттт
+т force_shared_exp        т False                      т False                      т
+т reserved_2              т 0                          т 0                          т
+т uncompress_cntx4_7      т 15                         т 15                         т
+т unpack_if_sel_cntx4_7   т 0                          т 0                          т
+т reserved_3              т 0                          т 0                          т
+т limit_addr              т 0x0                        т 0x0                        т
+т reserved_4              т 0                          т 0                          т
+т fifo_size               т 0                          т 0                          т
+т reserved_5              т 0                          т 0                          т
+тттттттттттттттттттттттттттДтттттттттттттттттттттттттттттДттттттттттттттттттттттттттттт
+PACKER
+ттттттттттттттттттттттттттттЌтттттттттттттттЌтттттттттттттттЌтттттттттттттттЌттттттттттттттт
+т COUNTERS                 т REG_ID = 1   т REG_ID = 2   т REG_ID = 3   т REG_ID = 4   т
+ттттттттттттттттттттттттттттМтттттттттттттттМтттттттттттттттМтттттттттттттттМтттттттттттттттЄ
+т pack_per_xy_plane        т 0            т 0            т 0            т 0            т
+т pack_reads_per_xy_plane  т 16           т 16           т 16           т 16           т
+т pack_xys_per_til         т 0            т 0            т 0            т 0            т
+т pack_yz_transposed       т False        т False        т False        т False        т
+т pack_per_xy_plane_offset т 0            т 0            т 0            т 0            т
+ттттттттттттттттттттттттттттДтттттттттттттттДтттттттттттттттДтттттттттттттттДттттттттттттттт
+ттттттттттттттттттттттттттттттттттттттЌтттттттттттттттттттттттттттттЌтттттттттттттттттттттттттттттЌтттттттттттттттттттттттттттттЌттттттттттттттттттттттттттттт
+т PACK CONFIG                        т REG_ID = 1                 т REG_ID = 2                 т REG_ID = 3                 т REG_ID = 4                 т
+ттттттттттттттттттттттттттттттттттттттМтттттттттттттттттттттттттттттМтттттттттттттттттттттттттттттМтттттттттттттттттттттттттттттМтттттттттттттттттттттттттттттЄ
+т row_ptr_section_size               т 0                          т 0                          т 0                          т 0                          т
+т exp_section_size                   т 4                          т 4                          т 4                          т 4                          т
+т l1_dest_addr                       т 0x0                        т 0x1f                       т 0x3f                       т 0x5f                       т
+т uncompress                         т True                       т True                       т True                       т True                       т
+т add_l1_dest_addr_offset            т False                      т False                      т False                      т False                      т
+т reserved_0                         т 0                          т 0                          т 0                          т 0                          т
+т out_data_format                    т TensixDataFormat.Float16_b т TensixDataFormat.Float16_b т TensixDataFormat.Float16_b т TensixDataFormat.Float16_b т
+т in_data_format                     т TensixDataFormat.Float16_b т TensixDataFormat.Float16_b т TensixDataFormat.Float16_b т TensixDataFormat.Float16_b т
+т reserved_1                         т 0                          т 0                          т 0                          т 0                          т
+т src_if_sel                         т False                      т False                      т False                      т False                      т
+т l1_src_addr                        т 0x0                        т 0x0                        т 0x0                        т 0x0                        т
+т downsample_mask                    т 0x0                        т 0x0                        т 0x0                        т 0x0                        т
+т downsample_shift_count             т 0                          т 0                          т 0                          т 0                          т
+т read_mode                          т 0                          т 0                          т 0                          т 0                          т
+т exp_threshold_en                   т False                      т False                      т False                      т False                      т
+т pack_l1_acc_disable_pack_zero_flag т False,False                т False,False                т False,False                т False,False                т
+т reserved_2                         т 0                          т 0                          т 0                          т 0                          т
+т exp_threshold                      т 0                          т 0                          т 0                          т 0                          т
+ттттттттттттттттттттттттттттттттттттттДтттттттттттттттттттттттттттттДтттттттттттттттттттттттттттттДтттттттттттттттттттттттттттттДттттттттттттттттттттттттттттт
+тттттттттттттттттттттттттттттЌтттттттттттттттЌтттттттттттттттЌтттттттттттттттЌттттттттттттттт   тттттттттттттЌтттттттттттттттЌттттттттттттттт
+т EDGE OFFSET               т REG_ID = 1   т REG_ID = 2   т REG_ID = 3   т REG_ID = 4   т   т STRIDES   т REG_ID = 1   т REG_ID = 2   т
+тттттттттттттттттттттттттттттМтттттттттттттттМтттттттттттттттМтттттттттттттттМтттттттттттттттЄ   тттттттттттттМтттттттттттттттМтттттттттттттттЄ
+т mask                      т 0xffff       т 0x0          т 0x0          т 0x0          т   т x_stride  т 2            т 0            т
+т mode                      т 0            т /            т /            т /            т   т y_stride  т 32           т 0            т
+т tile_row_set_select_pack0 т 0            т /            т /            т /            т   т z_stride  т 512          т 0            т
+т tile_row_set_select_pack1 т 0            т /            т /            т /            т   т w_stride  т 2048         т 0            т
+т tile_row_set_select_pack2 т 0            т /            т /            т /            т   тттттттттттттДтттттттттттттттДттттттттттттттт
+т tile_row_set_select_pack3 т 0            т /            т /            т /            т
+тттттттттттттттттттттттттттттДтттттттттттттттДтттттттттттттттДтттттттттттттттДттттттттттттттт
+ттттттттттттттттттттттттттттЌтттттттттттттттттттт   ттттттттттттттттттЌттттттттттт
+т RELU CONFIG              т VALUES            т   т DEST RD CTRL   т VALUES   т
+ттттттттттттттттттттттттттттМттттттттттттттттттттЄ   ттттттттттттттттттМтттттттттттЄ
+т disabled_src             т True              т   т read_32b_data  т False    т
+т disabled_dst             т False             т   т read_unsigned  т False    т
+т apply_relu               т 0                 т   т read_int8      т False    т
+т relu_threshold           т 0                 т   т round_10b_mant т False    т
+т disable_main             т False             т   т reserved       т 0        т
+т disable_trisc            т False,False,False т   ттттттттттттттттттДттттттттттт
+т disable_ncrisc           т False             т
+т disable_bmp_clear_main   т False             т
+т disable_bmp_clear_trisc  т False,False,False т
+т disable_bmp_clear_ncrisc т False             т
+ттттттттттттттттттттттттттттДтттттттттттттттттттт
+GPR
+тттттттттттттттттттттттттттттттЌттттттттттт   ттттттттттттттттттттттттттттЌттттттттттт   тттттттттттттттттттттттЌттттттттттт
+т Thread 0                    т Values   т   т Thread 1                 т Values   т   т Thread 2            т Values   т
+тттттттттттттттттттттттттттттттМтттттттттттЄ   ттттттттттттттттттттттттттттМтттттттттттЄ   тттттттттттттттттттттттМтттттттттттЄ
+т zero                        т 0        т   т zero                     т 0        т   т zero                т 0        т
+т dbg_reserved                т 0        т   т dbg_reserved             т 0        т   т dbg_reserved        т 0        т
+т dbg_msg                     т 0        т   т dbg_msg                  т 0        т   т dbg_msg             т 0        т
+т dbg_ckid                    т 0        т   т dbg_ckid                 т 0        т   т dbg_ckid            т 0        т
+т operand_base_addr           т 0x0      т   т perf_dbus_cntl           т 0        т   т dest_offset_lo      т 0        т
+т operand_offset_addr         т 0x0      т   т perf_mem_dump_cntl_clear т 0        т   т gpr_5               т 16       т
+т gpr_6                       т 0        т   т perf_mem_dump_cntl_set   т 0        т   т gpr_6               т 32       т
+т gpr_7                       т 0        т   т perf_cnt_start           т 0        т   т gpr_7               т 48       т
+т zero_0                      т 0        т   т perf_cnt_stop            т 0        т   т dest_offset_hi      т 512      т
+т zero_1                      т 0        т   т perf_epoch_base_addr     т 0x0      т   т gpr_9               т 528      т
+т zero_2                      т 0        т   т perf_epoch_offset        т 0        т   т gpr_10              т 544      т
+т zero_3                      т 0        т   т gpr_11                   т 0        т   т gpr_11              т 560      т
+т tmp0                        т 0        т   т gpr_12                   т 0        т   т output_addr         т 0x0      т
+т tmp1                        т 0        т   т gpr_13                   т 0        т   т gpr_13              т 0        т
+т tile_size                   т 0        т   т gpr_14                   т 0        т   т gpr_14              т 0        т
+т tile_offset                 т 0        т   т gpr_15                   т 0        т   т gpr_15              т 0        т
+т gpr_16                      т 0        т   т gpr_16                   т 0        т   т tile_header         т 128      т
+т l1_buffer_addr              т 0x0      т   т gpr_17                   т 0        т   т gpr_17              т 0        т
+т tmp_lo                      т 0        т   т gpr_18                   т 0        т   т gpr_18              т 0        т
+т tmp_hi                      т 0        т   т gpr_19                   т 0        т   т gpr_19              т 0        т
+т gpr_20                      т 0        т   т gpr_20                   т 0        т   т temp_tile_offset    т 0        т
+т gpr_21                      т 0        т   т gpr_21                   т 0        т   т gpr_21              т 0        т
+т gpr_22                      т 0        т   т gpr_22                   т 0        т   т gpr_22              т 0        т
+т gpr_23                      т 0        т   т gpr_23                   т 0        т   т gpr_23              т 0        т
+т gpr_24                      т 0        т   т gpr_24                   т 0        т   т num_msgs_received   т 0        т
+т gpr_25                      т 0        т   т gpr_25                   т 0        т   т one_msg_received    т 0        т
+т gpr_26                      т 0        т   т gpr_26                   т 0        т   т header_addr         т 0x0      т
+т gpr_27                      т 0        т   т gpr_27                   т 0        т   т gpr_27              т 0        т
+т gpr_28                      т 0        т   т gpr_28                   т 0        т   т tmp0                т 8389120  т
+т gpr_29                      т 0        т   т gpr_29                   т 0        т   т tmp1                т 0        т
+т gpr_30                      т 0        т   т gpr_30                   т 0        т   т tmp_lo              т 95       т
+т gpr_31                      т 0        т   т gpr_31                   т 0        т   т tmp_hi              т 0        т
+т perf_first_unp_lo           т 0        т   т gpr_32                   т 0        т   т pack_stream_sync    т 0        т
+т perf_first_unp_hi           т 0        т   т gpr_33                   т 0        т   т gpr_33              т 0        т
+т gpr_34                      т 0        т   т gpr_34                   т 0        т   т gpr_34              т 0        т
+т gpr_35                      т 0        т   т gpr_35                   т 0        т   т gpr_35              т 0        т
+т tile_size_a                 т 0        т   т gpr_36                   т 0        т   т gpr_36              т 0        т
+т tile_size_b                 т 0        т   т gpr_37                   т 0        т   т gpr_37              т 0        т
+т kt_dim                      т 0        т   т gpr_38                   т 0        т   т gpr_38              т 0        т
+т gpr_39                      т 0        т   т gpr_39                   т 0        т   т gpr_39              т 0        т
+т face_dim_16x16              т 16777472 т   т gpr_40                   т 0        т   т gpr_40              т 0        т
+т face_dim_8x16               т 8388736  т   т gpr_41                   т 0        т   т gpr_41              т 0        т
+т face_dim_4x16               т 4194368  т   т gpr_42                   т 0        т   т gpr_42              т 0        т
+т face_dim_2x16               т 2097184  т   т gpr_43                   т 0        т   т gpr_43              т 0        т
+т face_dim_1x16               т 1048592  т   т gpr_44                   т 0        т   т gpr_44              т 0        т
+т perf_unpack_num_tiles_0     т 0        т   т gpr_45                   т 0        т   т gpr_45              т 0        т
+т perf_unpack_num_tiles_1     т 0        т   т gpr_46                   т 0        т   т gpr_46              т 0        т
+т perf_unpack_num_tiles_2     т 0        т   т gpr_47                   т 0        т   т gpr_47              т 0        т
+т perf_unpack_num_tiles_3     т 0        т   т dest_op0_base            т 0        т   т gpr_48              т 0        т
+т gpr_49                      т 0        т   т dest_op1_base            т 0        т   т gpr_49              т 0        т
+т gpr_50                      т 0        т   т dest_regw_offset         т 0        т   т output_addr_offset  т 0        т
+т gpr_51                      т 0        т   т dest_regw_incr           т 0        т   т perf_pack_num_tiles т 0        т
+т unpack_stride               т 0        т   т dest_regw_offset2        т 0        т   т exp0_sec_size_bfp   т 262144   т
+т gpr_53                      т 0        т   т dest_regw_incr2          т 0        т   т exp1_sec_size_bfp8  т 1245184  т
+т sr_unpack_tilizer_state_0   т 0        т   т gpr_54                   т 0        т   т exp2_sec_size_bfp8  т 2228224  т
+т sr_unpack_tilizer_state_1   т 0        т   т gpr_55                   т 0        т   т exp3_sec_size_bfp8  т 3211264  т
+т sr_unpack_untilizer_state_0 т 0        т   т gpr_56                   т 0        т   т gpr_56              т 0        т
+т sr_unpack_untilizer_state_1 т 0        т   т gpr_57                   т 0        т   т exp1_sec_size_bfp4  т 720896   т
+т sr_unpack_untilizer_state_2 т 0        т   т gpr_58                   т 0        т   т exp2_sec_size_bfp4  т 1179648  т
+т sr_unpack_untilizer_state_3 т 0        т   т gpr_59                   т 0        т   т exp3_sec_size_bfp4  т 1638400  т
+т gpr_60                      т 0        т   т tmp0                     т 0        т   т gpr_60              т 0        т
+т gpr_61                      т 0        т   т num_dram_reqs            т 0        т   т exp1_sec_size_bfp2  т 458752   т
+т gpr_62                      т 0        т   т gpr_62                   т 0        т   т exp2_sec_size_bfp2  т 655360   т
+т gpr_63                      т 0        т   т gpr_63                   т 0        т   т exp3_sec_size_bfp2  т 851968   т
+т tmp                         т 0        т   ттттттттттттттттттттттттттттДттттттттттт   т dest_offset         т 33554432 т
+т perf_first_unp              т 0        т                                             т tmp                 т 95       т
+тттттттттттттттттттттттттттттттДттттттттттт                                             тттттттттттттттттттттттДттттттттттт
