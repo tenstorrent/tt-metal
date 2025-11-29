@@ -367,7 +367,7 @@ void MAIN {
                     if (tilize_stick_counter == TILE_HEIGHT) {
                         PACK(DPRINT << "TILIZE" << ENDL());
                         PACK((pack_untilize_uninit(pre_tilize_cb_id)));
-                        PACK((tt::compute::common::print_full_tile(pre_tilize_cb_id, 0)));
+                        // PACK((tt::compute::common::print_full_tile(pre_tilize_cb_id, 0)));
 
                         // Workaround until #27504 is not closed
                         // We should be calling tilizeA_B_uninit and for BFP4 output may be a reconfig_data_format
@@ -388,7 +388,7 @@ void MAIN {
                         fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
                         fast_tilize_uninit(pre_tilize_cb_id, out_cb_id);
 
-                        PACK((tt::compute::common::print_full_tile(out_cb_id, 0, true)));
+                        // PACK((tt::compute::common::print_full_tile(out_cb_id, 0, true)));
 
                         cb_push_back(out_cb_id, in_ntiles_c);
 

@@ -30,6 +30,110 @@ namespace operations::conv {
 using namespace tt;
 using sliding_window::ParallelConfig;
 
+// Helper function to print full tensor content on host
+template <typename T>
+static void print_full_tensor_on_host(
+    const Tensor& tensor, const std::string& tensor_name, uint32_t max_elements = 1000) {
+    if (tensor.layout() != Layout::ROW_MAJOR) {
+        log_info(
+            tt::LogOp,
+            "DEBUG: Skipping print for tensor '{}' - not in ROW_MAJOR layout (layout: {})",
+            tensor_name,
+            tensor.layout());
+        return;
+    }
+
+    auto host_buffer = tt::tt_metal::host_buffer::get_as<T>(tensor);
+    const auto& shape = tensor.logical_shape();
+    uint32_t total_elements = shape.volume();
+
+    log_info(tt::LogOp, "DEBUG: Full tensor '{}' content:", tensor_name);
+    log_info(
+        tt::LogOp,
+        "DEBUG: Shape: [{}, {}, {}, {}], Total elements: {}, DataType: {}",
+        shape[0],
+        shape[1],
+        shape[2],
+        shape[3],
+        total_elements,
+        tensor.dtype());
+
+    // Print up to max_elements to avoid excessive logging
+    uint32_t elements_to_print = std::min(total_elements, max_elements);
+
+    if (elements_to_print == total_elements) {
+        log_info(tt::LogOp, "DEBUG: Printing all {} elements:", total_elements);
+    } else {
+        log_info(tt::LogOp, "DEBUG: Printing first {} of {} elements:", elements_to_print, total_elements);
+    }
+
+    // For 4D tensor, print with structure [batch][channel][height][width]
+    std::string content;
+    for (uint32_t i = 0; i < elements_to_print; i++) {
+        // Calculate 4D indices from flat index
+        uint32_t remaining = i;
+        uint32_t w_idx = remaining % shape[3];
+        remaining /= shape[3];
+        uint32_t h_idx = remaining % shape[2];
+        remaining /= shape[2];
+        uint32_t c_idx = remaining % shape[1];
+        remaining /= shape[1];
+        uint32_t b_idx = remaining;
+
+        float value = static_cast<float>(host_buffer[i]);
+
+        // Add structure markers for readability
+        if (w_idx == 0 && h_idx == 0 && c_idx == 0) {
+            content += "\n  Batch[" + std::to_string(b_idx) + "]:";
+        }
+        if (w_idx == 0 && h_idx == 0) {
+            content += "\n    Channel[" + std::to_string(c_idx) + "]:";
+        }
+        if (w_idx == 0) {
+            content += "\n      Row[" + std::to_string(h_idx) + "]: ";
+        }
+
+        content += std::to_string(value);
+        if (w_idx < shape[3] - 1) {
+            content += ", ";
+        }
+
+        // Break into chunks to avoid overly long log lines
+        if ((i + 1) % 50 == 0 || i == elements_to_print - 1) {
+            log_info(tt::LogOp, "DEBUG: {}", content);
+            content.clear();
+        }
+    }
+
+    if (elements_to_print < total_elements) {
+        log_info(tt::LogOp, "DEBUG: ... (remaining {} elements not shown)", total_elements - elements_to_print);
+    }
+}
+
+// Overloaded function to automatically determine template parameter
+// static void print_full_tensor_on_host(const Tensor& tensor, const std::string& tensor_name, uint32_t max_elements =
+// 1000) {
+//     switch (tensor.dtype()) {
+//         case DataType::FLOAT32:
+//             print_full_tensor_on_host<float>(tensor, tensor_name, max_elements);
+//             break;
+//         case DataType::BFLOAT16:
+//             print_full_tensor_on_host<bfloat16>(tensor, tensor_name, max_elements);
+//             break;
+//         case DataType::UINT32:
+//             print_full_tensor_on_host<uint32_t>(tensor, tensor_name, max_elements);
+//             break;
+//         case DataType::INT32:
+//             print_full_tensor_on_host<int32_t>(tensor, tensor_name, max_elements);
+//             break;
+//         case DataType::UINT16:
+//             print_full_tensor_on_host<uint16_t>(tensor, tensor_name, max_elements);
+//             break;
+//         default:
+//             log_info(tt::LogOp, "DEBUG: Unsupported data type {} for tensor '{}'", tensor.dtype(), tensor_name);
+//     }
+// }
+
 namespace conv2d {
 
 /**
@@ -807,6 +911,147 @@ Tensor convert_conv_weight_tensor_to_depthwise_layout(
         output_conv_weight_tensor_shape);
 }
 
+/*
+Helper function for converting 2D depthwise weight tensor to stick-by-stick TILED layout
+*/
+template <typename T>
+static Tensor conv_2d_depthwise_weight_layout_helper(
+    const Tensor& conv_weight_tensor,
+    const ttnn::Shape& original_weight_shape,
+    const ttnn::Shape& output_weight_shape,
+    DataType output_dtype) {
+    auto compute = [&original_weight_shape, &output_weight_shape, output_dtype](
+                       const tt::tt_metal::HostBuffer& conv_weight_tensor_host_buffer) {
+        auto conv_weight_tensor_buffer = tt::tt_metal::host_buffer::get_as<T>(conv_weight_tensor_host_buffer);
+        // Create a new buffer with the output shape
+        auto output_buffer = std::vector<T>(output_weight_shape.volume());
+
+        uint32_t out_channels = original_weight_shape[0];
+        uint32_t kernel_h = original_weight_shape[2];
+        uint32_t kernel_w = original_weight_shape[3];
+        uint32_t total_kernel_positions = kernel_h * kernel_w;
+
+        // Initialize output buffer to zeros
+        std::fill(output_buffer.begin(), output_buffer.end(), static_cast<T>(0));
+
+        // Transform: [out_channels, 1, kernel_h, kernel_w] -> [out_channels, kernel_positions, 1, 1]
+        // Each output channel gets all its kernel weights as separate "input channels"
+        for (uint32_t ch = 0; ch < out_channels; ch++) {
+            for (uint32_t kh = 0; kh < kernel_h; kh++) {
+                for (uint32_t kw = 0; kw < kernel_w; kw++) {
+                    uint32_t kernel_pos = kh * kernel_w + kw;  // Linear kernel position
+
+                    // Get input value from [ch, 0, kh, kw] in original tensor
+                    auto input_flat_index = tt::tt_metal::compute_flat_indices(
+                        ttnn::SmallVector<int>{(int)ch, 0, (int)kh, (int)kw}, compute_strides(original_weight_shape));
+                    T value = conv_weight_tensor_buffer[input_flat_index];
+
+                    // Place value at [ch, kernel_pos, 0, 0] in output tensor
+                    auto output_flat_index = tt::tt_metal::compute_flat_indices(
+                        ttnn::SmallVector<int>{(int)ch, (int)kernel_pos, 0, 0}, compute_strides(output_weight_shape));
+                    output_buffer[output_flat_index] = value;
+
+                    // Debug print for sample values from first few channels and kernel positions
+                    if (ch < 3 && kernel_pos < 4) {
+                        log_debug(
+                            tt::LogOp,
+                            "DEBUG: ch[{}] kernel_pos[{}] = {} (from input[{}][0][{}][{}])",
+                            ch,
+                            kernel_pos,
+                            static_cast<float>(value),
+                            ch,
+                            kh,
+                            kw);
+                    }
+                }
+            }
+        }
+
+        // Debug: Print sample of final output layout
+        log_debug(tt::LogOp, "DEBUG: Sample output layout (first 3 channels):");
+        for (uint32_t ch = 0; ch < std::min(3u, out_channels); ch++) {
+            std::string channel_values;
+            for (uint32_t kpos = 0; kpos < std::min(8u, total_kernel_positions); kpos++) {
+                auto output_flat_index = tt::tt_metal::compute_flat_indices(
+                    ttnn::SmallVector<int>{(int)ch, (int)kpos, 0, 0}, compute_strides(output_weight_shape));
+                T value = output_buffer[output_flat_index];
+                channel_values += std::to_string(static_cast<float>(value)) + " ";
+            }
+            log_debug(
+                tt::LogOp,
+                "DEBUG:   Channel {} (first {} kernel positions): {}",
+                ch,
+                std::min(8u, total_kernel_positions),
+                channel_values);
+        }
+
+        return tt::tt_metal::HostBuffer(std::move(output_buffer));
+    };
+    const TensorSpec output_spec(
+        output_weight_shape,
+        tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
+    return convert_tensor<T>(conv_weight_tensor, compute, output_spec);
+}
+
+/*
+Converts 2D depthwise convolution weights to layout that preserves output channels
+This function takes in a depthwise weight tensor with shape [out_channels, 1, kernel_h, kernel_w]
+and returns a tensor with shape [out_channels, kernel_h * kernel_w, 1, 1] where each output channel
+contains all its kernel weights as separate "input channels".
+
+For a 3x3 kernel:
+- Input: [32, 1, 3, 3] - 32 channels, each with a 3x3 kernel
+- Output: [32, 9, 1, 1] - 32 channels, each with 9 "input channels" (one per kernel position)
+- Channel 0: [weight_k0, weight_k1, ..., weight_k8] where k0=(0,0), k1=(0,1), etc.
+
+This preserves the output channel structure required by the pipeline while enabling
+stick-by-stick organization in later processing stages.
+*/
+Tensor convert_conv_weight_tensor_to_2d_depthwise_layout(const Tensor& conv_weight_tensor, DataType output_dtype) {
+    const auto& original_conv_weight_tensor_shape = conv_weight_tensor.logical_shape();
+    uint32_t out_channels = original_conv_weight_tensor_shape[0];
+    uint32_t kernel_h = original_conv_weight_tensor_shape[2];
+    uint32_t kernel_w = original_conv_weight_tensor_shape[3];
+    uint32_t total_kernel_positions = kernel_h * kernel_w;
+
+    log_info(
+        tt::LogOp,
+        "DEBUG: 2D depthwise layout conversion - out_channels={}, kernel={}x{}, total_positions={}",
+        out_channels,
+        kernel_h,
+        kernel_w,
+        total_kernel_positions);
+
+    // Preserve output channels in dimension 0, expand kernel positions in dimension 1
+    // This maintains compatibility with the weight preparation pipeline
+    ttnn::Shape output_conv_weight_tensor_shape{out_channels, total_kernel_positions, 1, 1};
+
+    log_info(
+        tt::LogOp,
+        "DEBUG: Output tensor shape - [{}x{}x{}x{}], preserving {} output channels",
+        out_channels,
+        total_kernel_positions,
+        1,
+        1,
+        out_channels);
+
+    // Create newly allocated buffer depending on the datatype of the weight tensor
+    const static std::unordered_map<DataType, std::function<Tensor(const Tensor&, ttnn::Shape, ttnn::Shape, DataType)>>
+        to_2d_depthwise_layout_map = {
+            {DataType::INT32, &conv_2d_depthwise_weight_layout_helper<int32_t>},
+            {DataType::FLOAT32, &conv_2d_depthwise_weight_layout_helper<float>},
+            {DataType::BFLOAT16, &conv_2d_depthwise_weight_layout_helper<bfloat16>},
+            {DataType::UINT16, &conv_2d_depthwise_weight_layout_helper<uint16_t>},
+            {DataType::BFLOAT8_B, &conv_2d_depthwise_weight_layout_helper<float>},
+            {DataType::UINT32, &conv_2d_depthwise_weight_layout_helper<uint32_t>},
+            {DataType::BFLOAT4_B, &conv_2d_depthwise_weight_layout_helper<uint32_t>},
+        };
+    output_dtype = ((output_dtype == DataType::BFLOAT8_B) || (output_dtype == DataType::BFLOAT4_B)) ? DataType::FLOAT32
+                                                                                                    : output_dtype;
+    return to_2d_depthwise_layout_map.at(conv_weight_tensor.dtype())(
+        conv_weight_tensor, original_conv_weight_tensor_shape, output_conv_weight_tensor_shape, output_dtype);
+}
+
 static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::array<uint32_t, 2> stride) {
     auto w_shape = conv_weight_tensor.padded_shape();
     uint32_t out_channels = w_shape[0];
@@ -1365,6 +1610,9 @@ static ttnn::Tensor prepare_conv_weights_internal(
     }
     validate_host_conv_weights(weight_tensor_);
     log_trace(tt::LogOp, "Prepare Conv Weights with params: {}", params);
+
+    // Print original input weight tensor
+    // print_full_tensor_on_host(weight_tensor_, "Original Input Weights", 500);
     const auto& original_weights_shape = weight_tensor_.logical_shape();
     uint32_t original_weights_out_channels = original_weights_shape[0];
     uint32_t original_weights_in_channels = original_weights_shape[1];
@@ -1380,8 +1628,93 @@ static ttnn::Tensor prepare_conv_weights_internal(
         params.has_bias);
     // Convert weight tensor to 0 padded shape if groups > 1
     if (!is_conv1d and params.groups > 1) {
-        weight_tensor_ =
-            convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, params.groups, weight_tensor_.dtype());
+        if (is_2d_depthwise_conv(
+                params.groups,
+                original_weights_in_channels * params.groups,
+                original_weights_out_channels,
+                original_weights_shape[2],
+                original_weights_window_w,
+                params.input_width)) {
+            log_info(
+                tt::LogOp,
+                "Using 2D depthwise layout conversion for groups={}, channels={}, kernel={}x{}",
+                params.groups,
+                original_weights_out_channels,
+                original_weights_shape[2],
+                original_weights_window_w);
+
+            // Debug: Print input tensor info
+            const auto& input_shape = weight_tensor_.logical_shape();
+            log_info(
+                tt::LogOp,
+                "DEBUG: Input weight tensor shape: [{}, {}, {}, {}], layout: {}, dtype: {}",
+                input_shape[0],
+                input_shape[1],
+                input_shape[2],
+                input_shape[3],
+                weight_tensor_.layout(),
+                weight_tensor_.dtype());
+
+            weight_tensor_ = convert_conv_weight_tensor_to_2d_depthwise_layout(weight_tensor_, weight_tensor_.dtype());
+            print_full_tensor_on_host<bfloat16>(weight_tensor_, "Converted 2D Depthwise Weights", 500);
+
+            // Debug: Print output tensor info
+            const auto& output_shape = weight_tensor_.logical_shape();
+            log_info(
+                tt::LogOp,
+                "DEBUG: Output weight tensor shape: [{}, {}, {}, {}], layout: {}, dtype: {}",
+                output_shape[0],
+                output_shape[1],
+                output_shape[2],
+                output_shape[3],
+                weight_tensor_.layout(),
+                weight_tensor_.dtype());
+
+            // Debug: Print full prepared tensor content to verify layout
+            if (weight_tensor_.layout() == Layout::ROW_MAJOR) {
+                auto host_buffer = tt::tt_metal::host_buffer::get_as<bfloat16>(weight_tensor_);
+                log_info(tt::LogOp, "DEBUG: Full prepared weight tensor content:");
+                log_info(
+                    tt::LogOp,
+                    "DEBUG: Expected layout: [out_channels={}, kernel_positions={}, 1, 1]",
+                    output_shape[0],
+                    output_shape[1]);
+
+                // Print each output channel's kernel positions
+                for (uint32_t ch = 0; ch < std::min(4u, (uint32_t)output_shape[0]); ch++) {
+                    std::string channel_data = "  Channel " + std::to_string(ch) + ": [";
+                    for (uint32_t kpos = 0; kpos < output_shape[1]; kpos++) {
+                        // Calculate flat index for [ch, kpos, 0, 0]
+                        uint32_t flat_index = ch * output_shape[1] * output_shape[2] * output_shape[3] +
+                                              kpos * output_shape[2] * output_shape[3] + 0 * output_shape[3] + 0;
+                        float value = static_cast<float>(host_buffer[flat_index]);
+                        channel_data += std::to_string(value);
+                        if (kpos < output_shape[1] - 1) {
+                            channel_data += ", ";
+                        }
+                    }
+                    channel_data += "]";
+                    log_info(tt::LogOp, "DEBUG: {}", channel_data);
+                }
+
+                // Show mapping: kernel_position -> (kh, kw)
+                log_info(tt::LogOp, "DEBUG: Kernel position mapping (for 3x3 kernel):");
+                log_info(
+                    tt::LogOp,
+                    "DEBUG:   pos0=(0,0), pos1=(0,1), pos2=(0,2), pos3=(1,0), pos4=(1,1), pos5=(1,2), pos6=(2,0), "
+                    "pos7=(2,1), pos8=(2,2)");
+            }
+        } else {
+            log_info(
+                tt::LogOp,
+                "Using regular grouped layout conversion for groups={}, channels={}, kernel={}x{}",
+                params.groups,
+                original_weights_out_channels,
+                original_weights_shape[2],
+                original_weights_window_w);
+            weight_tensor_ =
+                convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, params.groups, weight_tensor_.dtype());
+        }
     } else if (is_conv1d and params.groups > 1) {
         if (is_conv_1d_depthwise_conv) {
             weight_tensor_ = convert_conv_weight_tensor_to_depthwise_layout(

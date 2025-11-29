@@ -481,11 +481,13 @@ bool is_2d_depthwise_conv(
     uint32_t groups,
     uint32_t input_channels,
     uint32_t output_channels,
+    uint32_t kernel_height,
     uint32_t kernel_width,
-    uint32_t image_width,
-    bool has_bias) {
-    bool is_depthwise_conv = groups == input_channels && groups == output_channels;
-    return is_depthwise_conv && !is_1d_conv(kernel_width, image_width) && !has_bias;
+    uint32_t image_width) {
+    bool is_depthwise = groups == input_channels && groups == output_channels;
+    bool is_2d_conv = !is_1d_conv(kernel_width, image_width);
+    bool is_actual_conv = kernel_height > 1 || kernel_width > 1;  // Not 1x1 conv
+    return is_depthwise && is_2d_conv && is_actual_conv;
 }
 
 SkipMcast conv_skip_mcast(const Conv2dParallelizationConfig& parallelization_config, TensorMemoryLayout memory_layout) {

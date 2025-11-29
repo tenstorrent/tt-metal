@@ -5036,11 +5036,11 @@ def test_conv2d_1kX1k(
     "batch, input_channels, output_channels, input_height, input_width, groups, kernel, stride, padding, dilation, shard_layout, dtype, weights_dtype, bias_dtype, activation, enable_act_double_buffer, enable_weight_double_buffer",
     (
         # (1, 32, 32, 40, 40, 32, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, False, True), # random - back to HEIGHT_SHARDED, will adjust shard config (no activation)
-        # (1, 32, 32, 4, 8, 32, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "relu", False, True), # random - back to HEIGHT_SHARDED, will adjust shard config (SILU activation)
+        (1, 32, 32, 4, 8, 32, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, None, False, True), # random - back to HEIGHT_SHARDED, will adjust shard config (SILU activation)
         # (1, 32, 32, 4, 8, 32, (3, 3), (1, 1), (0, 0), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "gelu", False, True), # random - back to HEIGHT_SHARDED, will adjust shard config (RELU activation)
         # (1, 32, 32, 4, 8, 32, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "gelu", False, True),
 
-        (10, 32, 32, 40, 8, 32, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, "relu6", False, True), # mobilenetv2 - 1.
+        # (10, 32, 32, 40, 8, 32, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, "relu6", False, True), # mobilenetv2 - 1.
         # (10, 576, 576, 14, 14, 576, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, "relu6", True, True), # mobilenetv2 - 2.
         # (10, 960, 960, 7, 7, 960, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, "relu6", True, True), # mobilenetv2 - 3.
         # (10, 112, 112, 7, 7, 112, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat8_b, "relu6", True, True), # mobilenetv2 - 4.
@@ -5082,7 +5082,20 @@ def test_groups_vs_pool2(device, torch_tensor_map, batch, input_channels, output
         mode="single", fill_value=1.0
     )
 
-    torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()
+    # Create debug-friendly weight tensor where each stick has unique identifiable values
+    # Each stick corresponds to a (kernel_h, kernel_w) position
+    # stick_id = kh * kernel_w + kw + 1, so stick values are: 1, 2, 3, ..., 9 for 3x3 kernel
+    torch_weight_tensor = torch.zeros(conv_weight_shape, dtype=torch.bfloat16).float()
+
+    for out_ch in range(conv_weight_shape[0]):
+        for in_ch in range(conv_weight_shape[1]):
+            for kh in range(conv_weight_shape[2]):
+                for kw in range(conv_weight_shape[3]):
+                    stick_id = kh * kernel[1] + kw + 1  # +1 to avoid zero values
+                    torch_weight_tensor[out_ch, in_ch, kh, kw] = stick_id
+
+    # Debug weight pattern verified: Each stick has consistent values across all channels
+    # Stick pattern: kh=0,kw=0->1, kh=0,kw=1->2, ..., kh=2,kw=2->9
     conv_bias_shape = (1, 1, 1, output_channels)
 
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))

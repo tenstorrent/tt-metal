@@ -54,6 +54,14 @@ bool is_1d_deptwise_conv(
     uint32_t image_width,
     bool has_bias);
 
+bool is_2d_depthwise_conv(
+    uint32_t groups,
+    uint32_t input_channels,
+    uint32_t output_channels,
+    uint32_t kernel_height,
+    uint32_t kernel_width,
+    uint32_t image_width);
+
 struct SkipMcast {
     bool skip_activation_mcast;
     bool skip_weights_mcast;
