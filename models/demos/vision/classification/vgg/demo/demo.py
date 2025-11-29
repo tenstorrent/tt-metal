@@ -11,8 +11,8 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import profiler
-from models.demos.vgg.demo_utils import get_batch, get_data_loader
-from models.demos.vgg.tt import ttnn_vgg
+from models.demos.vision.classification.vgg.demo_utils import get_batch, get_data_loader
+from models.demos.vision.classification.vgg.tt import ttnn_vgg
 
 vgg_model_config = {
     "MATH_FIDELITY": ttnn.MathFidelity.LoFi,

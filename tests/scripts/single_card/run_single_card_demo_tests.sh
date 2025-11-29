@@ -143,7 +143,7 @@ run_ufld_v2_func() {
 run_vgg_func() {
 
   #VGG11/VGG16
-  pytest models/demos/vgg/demo/demo.py
+  pytest models/demos/vision/classification/vgg/demo/demo.py
 
 }
 
