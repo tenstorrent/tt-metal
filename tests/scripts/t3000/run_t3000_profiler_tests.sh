@@ -43,7 +43,7 @@ run_async_tracing_T3000_test() {
         remove_default_log_locations
         mkdir -p $PROFILER_ARTIFACTS_DIR
 
-        python -m tracy -v -r -p --cpp-post-process -m "pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        python -m tracy -v -r -p --cpp-post-process -m "pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
 
         if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
         then
@@ -79,7 +79,7 @@ run_async_tracing_mid_run_dump_T3000_test() {
         remove_default_log_locations
         mkdir -p $PROFILER_ARTIFACTS_DIR
 
-        python -m tracy -v -r -p --cpp-post-process --dump-device-data-mid-run -m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0] | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+        python -m tracy -v -r -p --cpp-post-process --dump-device-data-mid-run -m pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0] | tee $PROFILER_ARTIFACTS_DIR/test_out.log
 
         if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
         then
@@ -90,7 +90,7 @@ run_async_tracing_mid_run_dump_T3000_test() {
         midRunDumpRunDate=$(ls $PROFILER_OUTPUT_DIR/)
         mv $PROFILER_ARTIFACTS_DIR/.logs/cpp_device_perf_report.csv $PROFILER_OUTPUT_DIR/$midRunDumpRunDate/cpp_device_perf_report.csv
 
-        python -m tracy -v -r -p --cpp-post-process -m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]
+        python -m tracy -v -r -p --cpp-post-process -m pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]
 
         nonMidRunDumpRunDate=$(ls $PROFILER_OUTPUT_DIR/ | grep -v $midRunDumpRunDate)
         mv $PROFILER_ARTIFACTS_DIR/.logs/cpp_device_perf_report.csv $PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/cpp_device_perf_report.csv

@@ -5,7 +5,7 @@
 import pytest
 
 import ttnn
-from models.common.utility_functions import run_for_grayskull
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.vision.classification.resnet50.ttnn_resnet.tests.common.resnet50_performant import (
     run_resnet50_2cqs_inference,
     run_resnet50_inference,
@@ -14,21 +14,32 @@ from models.demos.vision.classification.resnet50.ttnn_resnet.tests.common.resnet
 )
 
 
-@run_for_grayskull()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@run_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
-    ((20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
+    ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
-def test_run_resnet50_inference(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator):
-    run_resnet50_inference(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator)
+@pytest.mark.parametrize("skip_compile_run", [True, False])
+def test_run_resnet50_inference(
+    device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator, skip_compile_run
+):
+    run_resnet50_inference(
+        device,
+        batch_size,
+        act_dtype,
+        weight_dtype,
+        math_fidelity,
+        model_location_generator,
+        skip_compile_run=skip_compile_run,
+    )
 
 
-@run_for_grayskull()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 1332224}], indirect=True)
+@run_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 845824}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
-    ((20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
+    ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
 def test_run_resnet50_trace_inference(
     device,
@@ -48,11 +59,11 @@ def test_run_resnet50_trace_inference(
     )
 
 
-@run_for_grayskull()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_command_queues": 2}], indirect=True)
+@run_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
-    ((20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
+    ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
 def test_run_resnet50_2cqs_inference(
     device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator
@@ -60,13 +71,13 @@ def test_run_resnet50_2cqs_inference(
     run_resnet50_2cqs_inference(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator)
 
 
-@run_for_grayskull()
+@run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768, "trace_region_size": 1332224, "num_command_queues": 2}], indirect=True
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 845824, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
-    ((20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
+    ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
 def test_run_resnet50_trace_2cqs_inference(
     device,

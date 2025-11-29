@@ -4,20 +4,18 @@
 
 import pytest
 
-from models.common.utility_functions import run_for_grayskull
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.vision.classification.resnet50.ttnn_resnet.tests.common.perf_device_resnet50 import run_perf_device
 
 
-@run_for_grayskull()
+@run_for_wormhole_b0()
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, test, expected_perf",
     [
-        [20, "20-act_dtype0-weight_dtype0-math_fidelity0-device_params0", 6820],
+        [16, "True-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0", 6140.0],
     ],
 )
 def test_perf_device(batch_size, test, expected_perf):
-    command = (
-        f"pytest models/demos/grayskull/resnet50/tests/test_resnet50_performant.py::test_run_resnet50_inference[{test}]"
-    )
+    command = f"pytest models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_performant.py::test_run_resnet50_inference[{test}]"
     run_perf_device(batch_size, test, command, expected_perf)
