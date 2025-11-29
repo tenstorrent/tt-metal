@@ -1633,6 +1633,9 @@ void bind_inplace_operation(
             input_tensor_a (ttnn.Tensor): the input tensor.
             input_tensor_b (ttnn.Tensor or Number): the input tensor.
 
+        Keyword Args:
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
+
         Returns:
             ttnn.Tensor: the output tensor.
 
@@ -1674,14 +1677,16 @@ void bind_inplace_operation(
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy) {
+               const std::optional<bool>& use_legacy,
+               const std::optional<CoreRangeSet>& sub_core_grids) {
                 return self(
                     input_tensor,
                     scalar,
                     activations,
                     input_tensor_a_activations,
                     input_tensor_b_activations,
-                    use_legacy);
+                    use_legacy,
+                    sub_core_grids);
             },
             py::arg("input_a"),
             py::arg("input_b"),
@@ -1689,6 +1694,7 @@ void bind_inplace_operation(
             py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("use_legacy") = std::nullopt,
+            py::arg("sub_core_grids") = std::nullopt,
         },
 
         // tensor and tensor
@@ -1699,14 +1705,16 @@ void bind_inplace_operation(
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy) {
+               const std::optional<bool>& use_legacy,
+               const std::optional<CoreRangeSet>& sub_core_grids) {
                 return self(
                     input_tensor_a,
                     input_tensor_b,
                     activations,
                     input_tensor_a_activations,
                     input_tensor_b_activations,
-                    use_legacy);
+                    use_legacy,
+                    sub_core_grids);
             },
             py::arg("input_a"),
             py::arg("input_b"),
@@ -1715,6 +1723,7 @@ void bind_inplace_operation(
             py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("use_legacy") = std::nullopt,
+            py::arg("sub_core_grids") = std::nullopt,
         });
 }
 
@@ -1739,6 +1748,7 @@ void bind_inplace_operation_with_fast_approx(
 
         Keyword args:
             fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `False`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1781,7 +1791,8 @@ void bind_inplace_operation_with_fast_approx(
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy) {
+               const std::optional<bool>& use_legacy,
+               const std::optional<CoreRangeSet>& sub_core_grids) {
                 return self(
                     input_tensor_a,
                     input_tensor_b,
@@ -1789,7 +1800,8 @@ void bind_inplace_operation_with_fast_approx(
                     input_tensor_a_activations,
                     input_tensor_b_activations,
                     use_legacy,
-                    fast_and_approximate_mode);
+                    fast_and_approximate_mode,
+                    sub_core_grids);
             },
             py::arg("input_a"),
             py::arg("input_b"),
@@ -1798,7 +1810,9 @@ void bind_inplace_operation_with_fast_approx(
             py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            py::arg("use_legacy") = std::nullopt},
+            py::arg("use_legacy") = std::nullopt,
+            py::arg("sub_core_grids") = std::nullopt,
+        },
 
         // tensor and scalar
         ttnn::pybind_overload_t{
@@ -1809,7 +1823,8 @@ void bind_inplace_operation_with_fast_approx(
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy) {
+               const std::optional<bool>& use_legacy,
+               const std::optional<CoreRangeSet>& sub_core_grids) {
                 return self(
                     input_tensor_a,
                     value,
@@ -1817,7 +1832,8 @@ void bind_inplace_operation_with_fast_approx(
                     input_tensor_a_activations,
                     input_tensor_b_activations,
                     use_legacy,
-                    fast_and_approximate_mode);
+                    fast_and_approximate_mode,
+                    sub_core_grids);
             },
             py::arg("input_a"),
             py::arg("value"),
@@ -1826,7 +1842,9 @@ void bind_inplace_operation_with_fast_approx(
             py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            py::arg("use_legacy") = std::nullopt});
+            py::arg("use_legacy") = std::nullopt,
+            py::arg("sub_core_grids") = std::nullopt,
+        });
 }
 
 template <typename binary_operation_t>
@@ -1888,14 +1906,16 @@ void bind_logical_inplace_operation(
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy) {
+               const std::optional<bool>& use_legacy,
+               const std::optional<CoreRangeSet>& sub_core_grids) {
                 return self(
                     input_tensor_a,
                     input_tensor_b,
                     activations,
                     input_tensor_a_activations,
                     input_tensor_b_activations,
-                    use_legacy);
+                    use_legacy,
+                    sub_core_grids);
             },
             py::arg("input_a"),
             py::arg("input_b"),
@@ -1903,6 +1923,7 @@ void bind_logical_inplace_operation(
             py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("use_legacy") = std::nullopt,
+            py::arg("sub_core_grids") = std::nullopt,
         });
 }
 
@@ -1939,14 +1960,16 @@ void bind_binary_inplace_operation(
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy) {
+               const std::optional<bool>& use_legacy,
+               const std::optional<CoreRangeSet>& sub_core_grids) {
                 return self(
                     input_tensor,
                     scalar,
                     activations,
                     input_tensor_a_activations,
                     input_tensor_b_activations,
-                    use_legacy);
+                    use_legacy,
+                    sub_core_grids);
             },
             py::arg("input_a"),
             py::arg("input_b"),
@@ -1955,6 +1978,7 @@ void bind_binary_inplace_operation(
             py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("use_legacy") = std::nullopt,
+            py::arg("sub_core_grids") = std::nullopt,
         },
 
         // tensor and tensor
@@ -1965,14 +1989,16 @@ void bind_binary_inplace_operation(
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy) {
+               const std::optional<bool>& use_legacy,
+               const std::optional<CoreRangeSet>& sub_core_grids) {
                 return self(
                     input_tensor_a,
                     input_tensor_b,
                     activations,
                     input_tensor_a_activations,
                     input_tensor_b_activations,
-                    use_legacy);
+                    use_legacy,
+                    sub_core_grids);
             },
             py::arg("input_a"),
             py::arg("input_b"),
@@ -1981,6 +2007,7 @@ void bind_binary_inplace_operation(
             py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("use_legacy") = std::nullopt,
+            py::arg("sub_core_grids") = std::nullopt,
         });
 }
 

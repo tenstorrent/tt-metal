@@ -20,9 +20,8 @@
 #include <unordered_set>
 #include <utility>
 
-
-#include "control_plane.hpp"
-#include "fabric_types.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "get_platform_architecture.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
@@ -34,6 +33,7 @@
 #include <umd/device/cluster.hpp>
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/simulation/simulation_chip.hpp>
+#include <umd/device/pcie/pci_device.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/cluster_types.hpp>
@@ -201,8 +201,10 @@ bool Cluster::is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type)
     return (
         cluster_type == tt::tt_metal::ClusterType::INVALID || cluster_type == tt::tt_metal::ClusterType::N150 ||
         cluster_type == tt::tt_metal::ClusterType::N300 || cluster_type == tt::tt_metal::ClusterType::T3K ||
-        cluster_type == tt::tt_metal::ClusterType::TG);
+        cluster_type == tt::tt_metal::ClusterType::N300_2x2 || cluster_type == tt::tt_metal::ClusterType::TG);
 }
+
+bool Cluster::is_iommu_enabled() const { return this->iommu_enabled_; }
 
 Cluster::Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rtoptions_(rtoptions), hal_(hal) {
     ZoneScoped;
@@ -317,6 +319,19 @@ void Cluster::initialize_device_drivers() {
     this->start_driver(default_params);
     this->generate_virtual_to_umd_coord_mapping();
     this->generate_virtual_to_profiler_flat_id_mapping();
+
+    // Cache IOMMU status (expensive to query repeatedly)
+    this->iommu_enabled_ = false;
+    if (this->target_type_ == tt::TargetDevice::Silicon) {
+        const auto& mmio_ids = this->driver_->get_target_mmio_device_ids();
+        if (!mmio_ids.empty()) {
+            ChipId mmio_id = *mmio_ids.begin();
+            auto pci = this->driver_->get_chip(mmio_id)->get_tt_device()->get_pci_device();
+            if (pci) {
+                this->iommu_enabled_ = pci->is_iommu_enabled();
+            }
+        }
+    }
 }
 
 void Cluster::assert_risc_reset() {
@@ -841,6 +856,24 @@ void Cluster::read_sysmem(
     void* vec, uint32_t size_in_bytes, uint64_t addr, ChipId src_device_id, uint16_t channel) const {
     TT_ASSERT(this->cluster_desc_->is_chip_mmio_capable(src_device_id));
     this->driver_->read_from_sysmem(vec, addr, channel & HOST_MEM_CHANNELS_MASK, size_in_bytes, src_device_id);
+}
+
+std::unique_ptr<tt::umd::SysmemBuffer> Cluster::allocate_sysmem_buffer(
+    ChipId device_id, size_t sysmem_buffer_size, bool map_to_noc) const {
+    tt::umd::SysmemManager* sysmem_manager = this->driver_->get_chip(device_id)->get_sysmem_manager();
+    if (!sysmem_manager) {
+        TT_THROW("Failed to get SysmemManager for device {}", device_id);
+    }
+    return sysmem_manager->allocate_sysmem_buffer(sysmem_buffer_size, map_to_noc);
+}
+
+std::unique_ptr<tt::umd::SysmemBuffer> Cluster::map_sysmem_buffer(
+    ChipId device_id, void* buffer, size_t sysmem_buffer_size, bool map_to_noc) const {
+    tt::umd::SysmemManager* sysmem_manager = this->driver_->get_chip(device_id)->get_sysmem_manager();
+    if (!sysmem_manager) {
+        TT_THROW("Failed to get SysmemManager for device {}", device_id);
+    }
+    return sysmem_manager->map_sysmem_buffer(buffer, sysmem_buffer_size, map_to_noc);
 }
 
 void Cluster::verify_sw_fw_versions(

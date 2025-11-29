@@ -15,7 +15,6 @@ class MidBlock:
         input_height,
         input_width,
         resnet_norm_num_blocks=[(1, 1), (1, 1)],
-        resnet_conv_channel_split_factors=[((1, 1), (1, 1)), ((1, 1), (1, 1))],
     ):
         self.resnets = []
         self.resnets.append(
@@ -28,8 +27,6 @@ class MidBlock:
                 in_channels,
                 resnet_norm_num_blocks[0][0],
                 resnet_norm_num_blocks[0][1],
-                resnet_conv_channel_split_factors[0][0],
-                resnet_conv_channel_split_factors[0][1],
             )
         )
         self.attention = Attention(
@@ -48,8 +45,6 @@ class MidBlock:
                 in_channels,
                 resnet_norm_num_blocks[1][0],
                 resnet_norm_num_blocks[1][1],
-                resnet_conv_channel_split_factors[1][0],
-                resnet_conv_channel_split_factors[1][1],
             )
         )
 

@@ -16,6 +16,7 @@
 #include <cabling_generator/cabling_generator.hpp>
 #include <tt-metalium/hal.hpp>
 #include "tools/scaleout/validation/utils/cluster_validation_utils.hpp"
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::scaleout_tools {
 
@@ -116,29 +117,6 @@ InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
     return input_args;
 }
 
-std::string get_factory_system_descriptor_path(const InputArgs& input_args, const std::vector<std::string>& hostnames) {
-    std::string fsd_path;
-    if (input_args.cabling_descriptor_path.has_value()) {
-        const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-        log_output_rank0("Creating Factory System Descriptor (Golden Representation)");
-        CablingGenerator cabling_generator;
-        std::string filename =
-                "generated_factory_system_descriptor_" + std::to_string(*distributed_context.rank()) + ".textproto";
-            fsd_path = input_args.output_path / filename;
-        if (not input_args.deployment_descriptor_path.has_value()) {
-            TT_FATAL(hostnames.size() == 1, "Expected exactly one host in the cluster when no deployment descriptor is provided");
-            cabling_generator = tt::scaleout_tools::CablingGenerator(input_args.cabling_descriptor_path.value(), hostnames);
-        } else {
-            cabling_generator = tt::scaleout_tools::CablingGenerator(
-                input_args.cabling_descriptor_path.value(), input_args.deployment_descriptor_path.value());
-        }
-        cabling_generator.emit_factory_system_descriptor(fsd_path);
-    } else {
-        fsd_path = input_args.fsd_path.value();
-    }
-    return fsd_path;
-}
-
 PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& input_args) {
     auto log_hostnames = [&](const std::vector<std::string>& hostnames) {
         std::stringstream ss;
@@ -181,29 +159,32 @@ void cleanup_metadata(const InputArgs& input_args, const std::string& gsd_file, 
     }
 }
 
-AsicTopology validate_connectivity(const InputArgs& input_args, PhysicalSystemDescriptor& physical_system_descriptor) {
+AsicTopology run_connectivity_validation(
+    const InputArgs& input_args, PhysicalSystemDescriptor& physical_system_descriptor) {
     if (!input_args.validate_connectivity) {
         return {};
     }
-    // Set output path for the YAML file
-    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     std::string gsd_yaml_filename = "global_system_descriptor_" + std::to_string(*distributed_context.rank()) + ".yaml";
     std::string gsd_yaml_path = input_args.output_path / gsd_yaml_filename;
-    // Dump the discovered system to YAML
     physical_system_descriptor.dump_to_yaml(gsd_yaml_path);
-    log_output_rank0("Validating Factory System Descriptor (Golden Representation) against Global System Descriptor");
-    bool log_output = *distributed_context.rank() == 0;
-    const auto fsd_path = get_factory_system_descriptor_path(input_args, physical_system_descriptor.get_all_hostnames());
-    auto missing_physical_connections = tt::scaleout_tools::validate_fsd_against_gsd(
-        fsd_path, gsd_yaml_path, true, input_args.fail_on_warning, log_output);
-    log_output_rank0("Factory System Descriptor (Golden Representation) Validation Complete");
+
+    const auto fsd_path = get_factory_system_descriptor_path(
+        input_args.cabling_descriptor_path,
+        input_args.deployment_descriptor_path,
+        input_args.fsd_path,
+        input_args.output_path.string(),
+        physical_system_descriptor.get_all_hostnames());
+    auto missing_topology =
+        validate_connectivity(fsd_path, gsd_yaml_path, input_args.fail_on_warning, physical_system_descriptor);
+
     // TODO (AS): We shouldn't need to dump files to disk for validation, once validate_fsd_against_gsd can support
     // comparing string representations of the FSD and GSD. For now, each rank dumps a file to disk, which gets deleted
     // post validation (for all ranks except rank 0).
     if (*distributed_context.rank() != 0) {
         cleanup_metadata(input_args, gsd_yaml_path, fsd_path);
     }
-    return generate_asic_topology_from_connections(missing_physical_connections, physical_system_descriptor);
+    return missing_topology;
 }
 
 void print_usage_info() {
@@ -264,7 +245,7 @@ int main(int argc, char* argv[]) {
     // Create physical system descriptor and discover the system
     auto physical_system_descriptor = generate_physical_system_descriptor(input_args);
 
-    AsicTopology missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
+    AsicTopology missing_asic_topology = run_connectivity_validation(input_args, physical_system_descriptor);
     bool links_reset = false;
     // Ethernet Link Retraining through SW is currently only supported for Wormhole
     bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
@@ -276,7 +257,7 @@ int main(int argc, char* argv[]) {
         links_reset = true;
         num_retrains++;
         physical_system_descriptor.run_discovery(true, true);
-        missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
+        missing_asic_topology = run_connectivity_validation(input_args, physical_system_descriptor);
     }
 
     if (num_retrains == MAX_RETRAINS_BEFORE_FAILURE && !missing_asic_topology.empty()) {
@@ -288,6 +269,13 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
+    ConnectivityValidationConfig validation_config{
+        .output_path = input_args.output_path,
+        .cabling_descriptor_path = input_args.cabling_descriptor_path,
+        .deployment_descriptor_path = input_args.deployment_descriptor_path,
+        .fsd_path = input_args.fsd_path,
+        .fail_on_warning = input_args.fail_on_warning};
+
     eth_connections_healthy = generate_link_metrics(
         physical_system_descriptor,
         input_args.num_iterations,
@@ -296,7 +284,7 @@ int main(int argc, char* argv[]) {
         input_args.sweep_traffic_configs,
         input_args.packet_size_bytes,
         input_args.data_size,
-        input_args.output_path);
+        validation_config);
 
     if (*distributed_context.rank() == 0 && input_args.print_connectivity) {
         print_ethernet_connectivity(input_args.print_connectivity, physical_system_descriptor);

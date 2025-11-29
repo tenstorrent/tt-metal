@@ -43,6 +43,9 @@ def _print_performance_metrics(results: dict) -> None:
         logger.info(f"Prefill tokens/sec: {statistics['prefill_t/s']:.2f}")
         logger.info(f"Decode tokens/sec/user: {statistics['decode_t/s/u']:.2f}")
         logger.info(f"Decode tokens/sec (total): {statistics['decode_t/s']:.2f}")
+        trace_metric = statistics["trace_execution_t/s/u @128th token"]
+        trace_str = f"{trace_metric:.2f}" if trace_metric is not None else "N/A (requires --max-new-tokens >= 128)"
+        logger.info(f"Trace execution tokens/sec/user @128th token: {trace_str}")
         logger.info(f"Full demo runtime: {statistics['Full demo runtime']:.2f}s")
 
 
@@ -257,7 +260,7 @@ def run_demo(
     logger.info(f"Opening mesh device with shape {mesh_shape}")
     if enable_trace:
         logger.info("Enabling trace for decode forward pass")
-        trace_region_size = 2789376 + int(0.20 * 2789376)  # 20% additional
+        trace_region_size = 4880384 + int(0.20 * 4880384)  # 20% additional
         logger.info(f"Trace region size set to {trace_region_size}")
         mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, trace_region_size=trace_region_size)
     else:

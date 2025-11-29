@@ -19,6 +19,7 @@ struct operation_attributes_t {
     const bool fp32_dest_acc_en = false;
     const bool preserve_fp32_precision = false;
     const bool bfp8_pack_precise = false;
+    const std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
 };
 
 struct tensor_args_t {

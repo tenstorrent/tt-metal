@@ -8,15 +8,16 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "common/tt_backend_api_types.hpp"
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
@@ -156,7 +157,9 @@ protected:
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
-class Fabric1DTensixFixture : public BaseFabricFixture {
+// Template base class for Tensix fixtures with Galaxy skip logic
+template <tt::tt_fabric::FabricConfig FabricConfigValue, tt::tt_fabric::FabricTensixConfig TensixConfigValue>
+class FabricTensixFixtureTemplate : public BaseFabricFixture {
 private:
     inline static bool should_skip_ = false;
 
@@ -167,21 +170,29 @@ protected:
             should_skip_ = true;
             return;
         }
-        BaseFabricFixture::DoSetUpTestSuite(
-            tt::tt_fabric::FabricConfig::FABRIC_1D, std::nullopt, tt::tt_fabric::FabricTensixConfig::MUX);
+        BaseFabricFixture::DoSetUpTestSuite(FabricConfigValue, std::nullopt, TensixConfigValue);
     }
+
     static void TearDownTestSuite() {
         if (!should_skip_) {
             BaseFabricFixture::DoTearDownTestSuite();
         }
     }
+
     void SetUp() override {
         if (should_skip_) {
-            GTEST_SKIP() << "Fabric1DTensixFixture tests are not supported on Galaxy systems";
+            GTEST_SKIP() << "Tensix fixture tests are not supported on Galaxy systems";
         }
         BaseFabricFixture::SetUp();
     }
 };
+
+// Concrete fixture types using the template
+using Fabric1DTensixFixture =
+    FabricTensixFixtureTemplate<tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricTensixConfig::MUX>;
+
+using NightlyFabric2DTensixUdmFixture =
+    FabricTensixFixtureTemplate<tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricTensixConfig::UDM>;
 
 class NightlyFabric1DFixture : public BaseFabricFixture {
 protected:

@@ -15,7 +15,7 @@ from loguru import logger
 from skimage import io
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache, is_blackhole, is_wormhole_b0
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 
 
 def iou(y_true, y_pred):
@@ -284,8 +284,6 @@ def run_vgg_unet(
     from models.demos.vision.segmentation.vgg_unet.common.common import load_torch_model
     from models.demos.vision.segmentation.vgg_unet.common.reference.vgg_unet import UNetVGG19
     from models.demos.vision.segmentation.vgg_unet.common.runner.performant_runner import VggUnetTrace2CQ
-
-    disable_persistent_kernel_cache()
 
     model_seg = UNetVGG19()
     if use_pretrained_weight:

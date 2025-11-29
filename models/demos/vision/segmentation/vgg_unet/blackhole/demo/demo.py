@@ -9,7 +9,6 @@ import kagglehub
 import pytest
 from loguru import logger
 
-from models.common.utility_functions import disable_persistent_kernel_cache
 from models.demos.vision.segmentation.vgg_unet.blackhole.demo.demo_utils import (
     postprocess,
     prediction,
@@ -31,7 +30,6 @@ def run_demo(
 ):
     # The below line is commented due to the issue https://github.com/tenstorrent/tt-metal/issues/23270
     # device.disable_and_clear_program_cache()
-    disable_persistent_kernel_cache()
     # Download latest version of the dataset
     path = kagglehub.dataset_download("mateuszbuda/lgg-mri-segmentation")
     batch_size = device_batch_size * device.get_num_devices()

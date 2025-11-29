@@ -45,7 +45,6 @@ public:
      * @param edm_config The EDM configuration
      * @param fabric_edm_type The fabric EDM type
      * @param eth_direction The ethernet direction
-     * @param fabric_tensix_extension_enabled Whether fabric tensix extension is enabled
      * @param dispatch_link Whether this is a dispatch link
      * @param eth_chan The ethernet channel (for tensix builder)
      * @param topology The fabric topology
@@ -60,7 +59,6 @@ public:
         const tt::tt_fabric::FabricEriscDatamoverConfig& edm_config,
         tt::tt_fabric::FabricEriscDatamoverType fabric_edm_type,
         tt::tt_fabric::eth_chan_directions eth_direction,
-        bool fabric_tensix_extension_enabled,
         bool dispatch_link,
         tt::tt_fabric::chan_id_t eth_chan,
         tt::tt_fabric::Topology topology);
@@ -110,6 +108,14 @@ public:
     }
 
 private:
+    /**
+     * Connect the local tensix builder to the erisc builder in UDM mode
+     * This sets up the receiver-to-relay connection for the local tensix relay interface
+     *
+     * @param tensix_builder The tensix builder to connect
+     */
+    void connect_to_local_tensix_builder(FabricTensixDatamoverBuilder& tensix_builder);
+
     std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder_;
     std::optional<FabricTensixDatamoverBuilder> tensix_builder_;
     FabricRouterChannelMapping channel_mapping_;

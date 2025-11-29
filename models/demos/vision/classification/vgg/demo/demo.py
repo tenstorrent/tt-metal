@@ -10,7 +10,7 @@ from torchvision import models
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache, profiler
+from models.common.utility_functions import profiler
 from models.demos.vision.classification.vgg.demo_utils import get_batch, get_data_loader
 from models.demos.vision.classification.vgg.tt import ttnn_vgg
 
@@ -31,7 +31,6 @@ def run_vgg_imagenet_inference_vgg(
     device,
     model_config=vgg_model_config,
 ):
-    disable_persistent_kernel_cache()
     profiler.clear()
 
     # Setup model

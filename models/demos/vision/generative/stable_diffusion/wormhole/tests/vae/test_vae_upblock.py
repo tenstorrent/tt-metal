@@ -6,22 +6,18 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import skip_for_blackhole
 from models.demos.vision.generative.stable_diffusion.wormhole.common import SD_L1_SMALL_SIZE
 from models.demos.vision.generative.stable_diffusion.wormhole.sd_helper_funcs import get_reference_vae
 from models.demos.vision.generative.stable_diffusion.wormhole.tt.vae.ttnn_vae_configs import (
-    UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
     UPBLOCK_RESNET_NORM_NUM_BLOCKS,
-    UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS,
 )
 from models.demos.vision.generative.stable_diffusion.wormhole.tt.vae.ttnn_vae_upblock import UpDecoderBlock
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@skip_for_blackhole("Blackhole PCC bad until GN issues fixed (#20760)")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
-    "input_channels, input_height, input_width, out_channels, output_height, output_width, resnet_norm_blocks, resnet_conv_in_channel_split_factors, upsample_conv_channel_split_factors, block_id",
+    "input_channels, input_height, input_width, out_channels, output_height, output_width, resnet_norm_blocks, block_id",
     [
         (
             512,
@@ -31,8 +27,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             128,
             128,
             UPBLOCK_RESNET_NORM_NUM_BLOCKS[0],
-            UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS[0],
-            UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS[0],
             0,
         ),
         (
@@ -43,8 +37,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             256,
             256,
             UPBLOCK_RESNET_NORM_NUM_BLOCKS[1],
-            UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS[1],
-            UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS[1],
             1,
         ),
         (
@@ -55,8 +47,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             512,
             512,
             UPBLOCK_RESNET_NORM_NUM_BLOCKS[2],
-            UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS[2],
-            UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS[2],
             2,
         ),
         (
@@ -67,8 +57,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             512,
             512,
             UPBLOCK_RESNET_NORM_NUM_BLOCKS[3],
-            UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS[3],
-            UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS[3],
             3,
         ),
     ],
@@ -82,8 +70,6 @@ def test_vae_upblock(
     output_height,
     output_width,
     resnet_norm_blocks,
-    resnet_conv_in_channel_split_factors,
-    upsample_conv_channel_split_factors,
     block_id,
     is_ci_env,
     is_ci_v2_env,
@@ -109,8 +95,6 @@ def test_vae_upblock(
         output_height,
         output_width,
         resnet_norm_blocks,
-        resnet_conv_in_channel_split_factors,
-        upsample_conv_channel_split_factors,
     )
 
     # Prepare ttnn input
