@@ -103,6 +103,14 @@ struct Selu {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Bitcast {
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        const DataType& output_dtype,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 struct Softplus {
     static Tensor invoke(
         const Tensor& input,
@@ -479,6 +487,7 @@ constexpr auto tanhshrink = ttnn::register_operation<"ttnn::tanhshrink", ttnn::o
 constexpr auto prelu_sfpu = ttnn::register_operation<"ttnn::prelu_sfpu", ttnn::operations::unary::Prelu>();
 constexpr auto where_tss = ttnn::register_operation<"ttnn::where_tss", ttnn::operations::unary::Where>();
 constexpr auto selu = ttnn::register_operation<"ttnn::selu", ttnn::operations::unary::Selu>();
+constexpr auto bitcast = ttnn::register_operation<"ttnn::bitcast", ttnn::operations::unary::Bitcast>();
 constexpr auto rdiv = ttnn::register_operation<"ttnn::rdiv", ttnn::operations::unary::Rdiv>();
 constexpr auto fill = ttnn::register_operation<
     "ttnn::fill",
