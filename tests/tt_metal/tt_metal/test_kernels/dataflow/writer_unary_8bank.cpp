@@ -15,16 +15,13 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<0>();
     const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
 
+    experimental::CircularBuffer cb(cb_id_out0);
+    experimental::Noc noc;
+
     for (uint32_t i = 0; i < num_tiles; i++) {
-        uint64_t dst_noc_addr = get_noc_addr(i, s);
-
-        cb_wait_front(cb_id_out0, onetile);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
-
-        noc_async_write(l1_read_addr, dst_noc_addr, tile_bytes);
-
-        noc_async_write_barrier();
-
-        cb_pop_front(cb_id_out0, onetile);
+        cb.wait_front(onetile);
+        noc.async_write(cb, s, tile_bytes, {}, {.page_id = i});
+        noc.async_write_barrier();
+        cb.pop_front(onetile);
     }
 }

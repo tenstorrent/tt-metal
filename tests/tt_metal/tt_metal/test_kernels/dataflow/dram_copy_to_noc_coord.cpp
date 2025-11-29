@@ -4,8 +4,7 @@
 
 #include <cstdint>
 #include "dataflow_api.h"
-#include "debug/dprint.h"
-#include "debug/sanitize.h"
+
 /**
  * NOC APIs are prefixed w/ "ncrisc" (legacy name) but there's nothing NCRISC specific, they can be used on BRISC or
  * other RISCs Any two RISC processors cannot use the same CMD_BUF non_blocking APIs shouldn't be mixed with slow noc.h
@@ -60,24 +59,48 @@ void kernel_main() {
     }
 
     // NOC src address
-    std::uint64_t buffer_src_noc_addr = get_noc_addr(src_noc_x, src_noc_y, buffer_src_addr);
-    noc_async_read(buffer_src_noc_addr, local_buffer_addr, buffer_size);
-    noc_async_read_barrier();
+    experimental::Noc noc;
+    experimental::CoreLocalMem<std::uint32_t> local_buffer(local_buffer_addr);
+    experimental::UnicastEndpoint src_unicast_endpoint;
+
+    noc.async_read(
+        src_unicast_endpoint,
+        local_buffer,
+        buffer_size,
+        {.noc_x = src_noc_x, .noc_y = src_noc_y, .addr = buffer_src_addr},
+        {});
+    noc.async_read_barrier();
 
     // NOC dst address
     if (bad_linked_transaction) {
-        uint64_t dst_noc_multicast_addr =
-            get_noc_multicast_addr(dst_noc_x, dst_noc_y, dst_noc_x, dst_noc_y, buffer_dst_addr);
-        noc_async_write_multicast(local_buffer_addr, dst_noc_multicast_addr, buffer_size, 1, true);
+        experimental::MulticastEndpoint dst_mcast_endpoint;
+        noc.async_write_multicast(
+            local_buffer,
+            dst_mcast_endpoint,
+            buffer_size,
+            1,
+            {},
+            {.noc_x_start = dst_noc_x,
+             .noc_y_start = dst_noc_y,
+             .noc_x_end = dst_noc_x,
+             .noc_y_end = dst_noc_y,
+             .addr = buffer_dst_addr},
+            true);
         // linked transaction not closed, the next unicast will hang.
     }
-    std::uint64_t buffer_dst_noc_addr = get_noc_addr(dst_noc_x, dst_noc_y, buffer_dst_addr);
+
+    experimental::UnicastEndpoint dst_unicast_endpoint;
     if (use_inline_dw_write) {
-        auto src_data = reinterpret_cast<volatile uint32_t*>(local_buffer_addr);
         // Just write something to trigger the watcher assertion. Result data doesn't matter.
-        noc_inline_dw_write(buffer_dst_noc_addr, src_data[0] /*val*/);
+        noc.inline_dw_write(
+            dst_unicast_endpoint, local_buffer[0], {.noc_x = dst_noc_x, .noc_y = dst_noc_y, .addr = buffer_dst_addr});
     } else {
-        noc_async_write(local_buffer_addr, buffer_dst_noc_addr, buffer_size);
-        noc_async_write_barrier();
+        noc.async_write(
+            local_buffer,
+            dst_unicast_endpoint,
+            buffer_size,
+            {},
+            {.noc_x = dst_noc_x, .noc_y = dst_noc_y, .addr = buffer_dst_addr});
+        noc.async_write_barrier();
     }
 }
