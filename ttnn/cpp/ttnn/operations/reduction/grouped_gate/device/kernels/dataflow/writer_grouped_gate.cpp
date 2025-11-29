@@ -198,6 +198,131 @@ FORCE_INLINE void generate_summed_experts_tiles(
     cb_push_back(summed_experts_cb_index, summed_experts_per_group);
 }
 
+FORCE_INLINE void generate_winning_group_tiles(
+    const uint32_t sorted_group_indices_cb_index,
+    const uint32_t scores_cb_index,
+    const uint32_t topk_index_creation_cb_index,
+    const uint32_t winning_group_scores_cb_index,
+    const uint32_t winning_group_indices_cb_index,
+    uint32_t width_tiles,
+    uint32_t topk_groups,
+    uint32_t num_group_tiles,
+    uint32_t tokens_per_tile) {
+    constexpr uint32_t tile_size_bytes = 2048;
+    constexpr uint32_t face_size_bytes = 512;
+    constexpr uint32_t face_line_bytes = 32;  // 16 elements * 2 bytes
+
+    cb_wait_front(scores_cb_index, width_tiles);
+    cb_wait_front(topk_index_creation_cb_index, width_tiles);
+    cb_wait_front(sorted_group_indices_cb_index, num_group_tiles);
+
+    cb_reserve_back(winning_group_scores_cb_index, topk_groups);
+    cb_reserve_back(winning_group_indices_cb_index, topk_groups);
+
+    // Pointers
+    uint64_t scores_base_noc_addr = get_noc_addr(get_read_ptr(scores_cb_index));
+    uint64_t indices_base_noc_addr = get_noc_addr(get_read_ptr(topk_index_creation_cb_index));
+    uint32_t scores_dest_base_addr = get_write_ptr(winning_group_scores_cb_index);
+    uint32_t indices_dest_base_addr = get_write_ptr(winning_group_indices_cb_index);
+
+    // Indices pointer (in L1)
+    volatile tt_l1_ptr uint16_t* sorted_indices_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(sorted_group_indices_cb_index));
+
+    // Iterate over rows (tokens)
+    for (uint32_t t = 0; t < tokens_per_tile; t++) {
+        // Calculate indices for the token `t` in sorted_group_indices
+        // Transposed layout: topk_groups along rows, tokens along columns (width)
+
+        // sorted_group_indices is a single tile (32x32)
+        // We want the column `t` for this token.
+        // The column `t` contains `topk_groups` rows, which are the winning group indices.
+
+        // For a tile, column `t` spans across faces vertically.
+        // Face 0: cols 0-15, rows 0-15
+        // Face 1: cols 16-31, rows 0-15
+        // Face 2: cols 0-15, rows 16-31
+        // Face 3: cols 16-31, rows 16-31
+
+        // To get the `k`-th winning group for token `t`:
+        // We need to access (row=k, col=t) in the sorted_group_indices tile.
+
+        // Calculate row offset part for the output/scores/indices tiles (which are standard row-major per token)
+        // These follow standard layout: row `t` corresponds to token `t`.
+        uint32_t row_offset_part1;  // Face 0 or 2
+        uint32_t row_offset_part2;  // Face 1 or 3
+
+        if (t < 16) {
+            row_offset_part1 = t * face_line_bytes;
+            row_offset_part2 = face_size_bytes + t * face_line_bytes;
+        } else {
+            row_offset_part1 = 2 * face_size_bytes + (t - 16) * face_line_bytes;
+            row_offset_part2 = 3 * face_size_bytes + (t - 16) * face_line_bytes;
+        }
+
+        // Iterate over ranks (k) to copy
+        for (uint32_t k = 0; k < topk_groups; k++) {
+            // Get the winning group index from (row=k, col=t) in sorted_group_indices
+            // We need to map (k, t) to the linear offset in the tile buffer.
+
+            uint16_t winning_group_idx;
+            uint32_t index_offset_elements = 0;
+
+            // Determine face of (k, t)
+            if (k < 16 && t < 16) {
+                // Face 0
+                index_offset_elements = k * 16 + t;
+            } else if (k < 16 && t >= 16) {
+                // Face 1
+                index_offset_elements = 256 + k * 16 + (t - 16);
+            } else if (k >= 16 && t < 16) {
+                // Face 2
+                index_offset_elements = 512 + (k - 16) * 16 + t;
+            } else {
+                // Face 3
+                index_offset_elements = 768 + (k - 16) * 16 + (t - 16);
+            }
+
+            winning_group_idx = sorted_indices_ptr[index_offset_elements];
+
+            // Source Tile Address: Base + winning_group_idx * tile_size
+            uint64_t src_tile_offset = winning_group_idx * tile_size_bytes;
+
+            // Dest Tile Address: Base + k * tile_size
+            uint32_t dest_tile_offset = k * tile_size_bytes;
+
+            // Copy Part 1 (Face 0 or 2)
+            noc_async_read(
+                scores_base_noc_addr + src_tile_offset + row_offset_part1,
+                scores_dest_base_addr + dest_tile_offset + row_offset_part1,
+                face_line_bytes);
+            noc_async_read(
+                indices_base_noc_addr + src_tile_offset + row_offset_part1,
+                indices_dest_base_addr + dest_tile_offset + row_offset_part1,
+                face_line_bytes);
+
+            // Copy Part 2 (Face 1 or 3)
+            noc_async_read(
+                scores_base_noc_addr + src_tile_offset + row_offset_part2,
+                scores_dest_base_addr + dest_tile_offset + row_offset_part2,
+                face_line_bytes);
+            noc_async_read(
+                indices_base_noc_addr + src_tile_offset + row_offset_part2,
+                indices_dest_base_addr + dest_tile_offset + row_offset_part2,
+                face_line_bytes);
+        }
+    }
+
+    noc_async_read_barrier();
+    cb_push_back(winning_group_scores_cb_index, topk_groups);
+    cb_push_back(winning_group_indices_cb_index, topk_groups);
+
+    // Pop inputs
+    cb_pop_front(scores_cb_index, width_tiles);
+    cb_pop_front(topk_index_creation_cb_index, width_tiles);
+    cb_pop_front(sorted_group_indices_cb_index, num_group_tiles);
+}
+
 void kernel_main() {
     constexpr uint32_t weights_cb_index = get_named_compile_time_arg_val("weights_cb_index");
     constexpr uint32_t indices_cb_index = get_named_compile_time_arg_val("indices_cb_index");
@@ -207,6 +332,11 @@ void kernel_main() {
     constexpr uint32_t group_indices_cb_index = get_named_compile_time_arg_val("group_indices_cb_index");
     constexpr uint32_t summed_experts_cb_index = get_named_compile_time_arg_val("summed_experts_cb_index");
     constexpr uint32_t topk_input_cb_index = get_named_compile_time_arg_val("topk_input_cb_index");
+    constexpr uint32_t sorted_group_indices_cb_index = get_named_compile_time_arg_val("sorted_group_indices_cb_index");
+    constexpr uint32_t scores_cb_index = get_named_compile_time_arg_val("scores_cb_index");
+    constexpr uint32_t winning_group_scores_cb_index = get_named_compile_time_arg_val("winning_group_scores_cb_index");
+    constexpr uint32_t winning_group_indices_cb_index =
+        get_named_compile_time_arg_val("winning_group_indices_cb_index");
 
     constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
     constexpr uint32_t width_tiles = get_named_compile_time_arg_val("width_tiles");
@@ -237,5 +367,15 @@ void kernel_main() {
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
         generate_summed_experts_tiles(
             summed_experts_cb_index, topk_input_cb_index, width_tiles, summed_experts_per_group);
+        generate_winning_group_tiles(
+            sorted_group_indices_cb_index,
+            scores_cb_index,
+            topk_index_creation_cb_index,
+            winning_group_scores_cb_index,
+            winning_group_indices_cb_index,
+            width_tiles,
+            topk_groups,
+            1,  // num_group_tiles (assuming 1 tile of indices per 32 tokens)
+            tokens_per_tile);
     }
 }
