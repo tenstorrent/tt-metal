@@ -11,15 +11,15 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import run_for_wormhole_b0
-from models.demos.vanilla_unet.tt.common import (
+from models.demos.vision.segmentation.vanilla_unet.tt.common import (
     VANILLA_UNET_L1_SMALL_SIZE,
     VANILLA_UNET_PCC_WH,
     VANILLA_UNET_TRACE_SIZE,
     create_unet_preprocessor,
     load_reference_model,
 )
-from models.demos.vanilla_unet.tt.config import create_unet_configs_from_parameters
-from models.demos.vanilla_unet.tt.model import create_unet_from_configs
+from models.demos.vision.segmentation.vanilla_unet.tt.config import create_unet_configs_from_parameters
+from models.demos.vision.segmentation.vanilla_unet.tt.model import create_unet_from_configs
 from models.experimental.functional_unet.tt.model_preprocessing import create_unet_input_tensors
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
@@ -38,7 +38,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ((1, 201.0) if is_wormhole_b0() else (1, 400.0),),
 )
 def test_vanilla_unet_perf_device(batch: int, expected_device_perf_fps: float):
-    command = f"pytest models/demos/vanilla_unet/tests/test_unet_model.py::test_vanilla_unet_model"
+    command = f"pytest models/demos/vision/segmentation/vanilla_unet/tests/test_unet_model.py::test_vanilla_unet_model"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
