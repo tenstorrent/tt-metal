@@ -10,6 +10,13 @@
 
 namespace tt::tt_fabric {
 
+namespace builder {
+
+bool is_east_or_west(eth_chan_directions direction);
+bool is_north_or_south(eth_chan_directions direction);
+eth_chan_directions get_sender_channel_direction(eth_chan_directions my_direction, size_t sender_channel_index);
+}  // namespace builder
+
 inline uint32_t get_worker_connected_sender_channel() {
     // Sender channel 0 is always for local worker in the new design
     return 0;

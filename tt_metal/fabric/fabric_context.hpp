@@ -40,8 +40,6 @@ public:
     size_t get_fabric_channel_buffer_size_bytes() const;
 
     tt::tt_fabric::FabricEriscDatamoverConfig& get_fabric_router_config(
-        tt::tt_fabric::FabricEriscDatamoverType fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default,
-        tt::tt_fabric::FabricEriscDatamoverAxis fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short,
         tt::tt_fabric::FabricTensixConfig fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED,
         eth_chan_directions direction = eth_chan_directions::EAST) const;
 
@@ -71,7 +69,6 @@ private:
     size_t get_packet_header_size_bytes() const;
     size_t get_max_payload_size_bytes() const;
     std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType edm_type,
         tt::tt_fabric::FabricEriscDatamoverAxis edm_axis,
         tt::tt_fabric::FabricTensixConfig fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED,
         eth_chan_directions direction = eth_chan_directions::EAST);

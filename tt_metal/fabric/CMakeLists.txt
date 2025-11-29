@@ -38,6 +38,7 @@ target_sources(
         erisc_datamover_builder.cpp
         fabric_router_channel_mapping.cpp
         fabric_router_builder.cpp
+        builder/fabric_builder_helpers.cpp
         builder/fabric_core_placement.cpp
         builder/fabric_channel_allocator.cpp
         builder/fabric_static_sized_channels_allocator.cpp
