@@ -13,7 +13,7 @@ on:
     outputs:
       artifact-name:
         description: "Name to give download-artifact to get the Wheel"
-        value: ${{ steps.set_artifact_name.outputs.artifact_name }}
+        value: ${{ jobs.build-wheel.result == 'success' && jobs.build-wheel.outputs.artifact_name }}
 
 
 jobs:
@@ -23,7 +23,7 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
-      wheel_artifact_name: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name }}
+      artifact_name: ${{ steps.set_artifact_name.outputs.artifact_name }}
     defaults:
       run:
         shell: bash
