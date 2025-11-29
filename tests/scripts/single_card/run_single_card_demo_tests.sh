@@ -81,10 +81,10 @@ run_phi4_func() {
 
 run_segformer_func() {
   #Segformer Segmentation Demo
-  pytest models/demos/segformer/demo/demo_for_semantic_segmentation.py
+  pytest models/demos/vision/segmentation/segformer/demo/demo_for_semantic_segmentation.py
 
   #Segformer Classification Demo
-  pytest models/demos/segformer/demo/demo_for_image_classification.py
+  pytest models/demos/vision/segmentation/segformer/demo/demo_for_image_classification.py
 
 }
 
