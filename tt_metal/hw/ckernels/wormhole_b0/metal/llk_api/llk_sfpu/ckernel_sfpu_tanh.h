@@ -47,7 +47,7 @@ inline void calculate_tanh() {
 
 template <ApproximationMode APPROX_MODE>
 inline void tanh_init() {
-    if constexpr (APPROXIMATION_MODE) {
+    if constexpr (APPROX_MODE == ApproximationMode::Fast) {
         uint imm0 = 0x1DFF;  // 0.90625*x
         uint imm1 = 0x481A;  // 0.09375*x + 0.8125
         uint imm2 = 0xFF00;  // 1
