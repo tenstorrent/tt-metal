@@ -190,7 +190,7 @@ jobs:
         with:
           device_perf_model_name: "stable_diffusion"
           commands: |
-            pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/stable_diffusion/tests -m models_device_performance_bare_metal --timeout=600
+            pytest models/demos/vision/generative/stable_diffusion/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests -m models_device_performance_bare_metal --timeout=600
             ${{ matrix.test-info.arch == 'wormhole_b0' && 'pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal' || '' }}
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['stable-diffusion'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
@@ -219,7 +219,7 @@ jobs:
         with:
           device_perf_model_name: "vgg_unet"
           commands: |
-            pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/vgg_unet/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/vision/segmentation/vgg_unet/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['vgg-unet'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -248,7 +248,7 @@ jobs:
         with:
           device_perf_model_name: "resnet50"
           commands: |
-            pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/resnet50/tests -m models_device_performance_bare_metal
+            pytest models/demos/vision/classification/resnet50/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['resnet50'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -257,7 +257,7 @@ jobs:
         with:
           device_perf_model_name: "ufld_v2"
           commands: |
-            pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/ufld_v2/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/vision/segmentation/ufld_v2/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['ufld-v2'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -311,7 +311,7 @@ jobs:
         with:
           device_perf_model_name: "vit"
           commands: |
-            pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/vit/tests/ -m models_device_performance_bare_metal
+            pytest models/demos/vision/classification/vit/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests/ -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['vit'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
