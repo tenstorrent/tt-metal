@@ -100,6 +100,13 @@ class MasterConfigLoader:
             configs = self.master_data["operations"][ttnn_op_name].get("configurations", [])
             return self._normalize_configs(configs)
 
+        # Try with experimental:: namespace (e.g., experimental::nlp_concat_heads)
+        if operation_name.startswith("experimental::"):
+            experimental_op_name = f"ttnn::{operation_name}"
+            if experimental_op_name in self.master_data.get("operations", {}):
+                configs = self.master_data["operations"][experimental_op_name].get("configurations", [])
+                return self._normalize_configs(configs)
+
         # Try with transformer:: namespace (e.g., transformer::paged_scaled_dot_product_attention_decode)
         transformer_op_name = f"ttnn::transformer::{operation_name}"
         if transformer_op_name in self.master_data.get("operations", {}):
@@ -169,65 +176,19 @@ class MasterConfigLoader:
     def _is_valid_sharding_config(self, memory_config: Dict, tensor_shape: list = None) -> bool:
         """
         Check if a sharding configuration is valid for the current hardware.
-        Validates that num_shards <= num_compute_banks and shard shape is tile-aligned.
+        Since traced configs come from real model runs that worked, we trust them as-is.
+        No validation is performed - all traced configs are considered valid.
 
         Args:
             memory_config: Memory config dictionary
             tensor_shape: Tensor shape (optional, for validation)
 
         Returns:
-            True if sharding config is valid, False otherwise
+            True - all traced configs are considered valid
         """
-        try:
-            shard_spec = memory_config.get("nd_shard_spec") or memory_config.get("shard_spec")
-            if not shard_spec or shard_spec == "std::nullopt":
-                return True  # Non-sharded configs are always valid
-
-            # Check if shard shape is tile-aligned (must be divisible by 32x32)
-            shape_data = shard_spec.get("shape", [])
-            if shape_data and isinstance(shape_data, list) and len(shape_data) >= 2:
-                height, width = shape_data[0], shape_data[1]
-                TILE_HEIGHT, TILE_WIDTH = 32, 32
-                if height % TILE_HEIGHT != 0 or width % TILE_WIDTH != 0:
-                    return False  # Shard shape not tile-aligned
-
-            grid_data = shard_spec.get("grid", [])
-            if not grid_data:
-                return True
-
-            # Calculate number of cores from grid
-            num_cores = 0
-            if isinstance(grid_data, list):
-                if isinstance(grid_data[0], list):
-                    # Multiple core ranges
-                    for range_pair in grid_data:
-                        if len(range_pair) >= 2:
-                            start = range_pair[0]
-                            end = range_pair[1]
-                            if isinstance(start, dict) and isinstance(end, dict):
-                                start_x, start_y = start.get("x", 0), start.get("y", 0)
-                                end_x, end_y = end.get("x", 0), end.get("y", 0)
-                                num_cores += (end_x - start_x + 1) * (end_y - start_y + 1)
-                else:
-                    # Single core range
-                    if len(grid_data) >= 2:
-                        start = grid_data[0]
-                        end = grid_data[1]
-                        if isinstance(start, dict) and isinstance(end, dict):
-                            start_x, start_y = start.get("x", 0), start.get("y", 0)
-                            end_x, end_y = end.get("x", 0), end.get("y", 0)
-                            num_cores = (end_x - start_x + 1) * (end_y - start_y + 1)
-
-            # For wormhole_b0, we have 56 compute banks
-            # Filter out configs that require more cores than available
-            MAX_COMPUTE_BANKS = 56
-            if num_cores > MAX_COMPUTE_BANKS:
-                return False
-
-            return True
-        except Exception:
-            # If we can't validate, assume it's valid (let it fail at runtime if needed)
-            return True
+        # Trust traced configs - they come from real model runs that worked
+        # No validation needed - use configs directly as requested by user
+        return True
 
     def _is_valid_ttnn_memory_config(self, mem_config, operation_name: str = None) -> bool:
         """
@@ -245,29 +206,8 @@ class MasterConfigLoader:
             if not mem_config:
                 return False
 
-            # Check shard spec if present
-            if hasattr(mem_config, "shard_spec") and mem_config.shard_spec:
-                shard_shape = mem_config.shard_spec.shape
-                core_range_set = mem_config.shard_spec.core_range_set
-
-                # Check tile alignment
-                if shard_shape and len(shard_shape) >= 2:
-                    height, width = shard_shape[0], shard_shape[1]
-                    if height % 32 != 0 or width % 32 != 0:
-                        return False
-
-                # Check number of cores
-                if core_range_set:
-                    num_cores = 0
-                    for core_range in core_range_set.core_ranges:
-                        start = core_range.start
-                        end = core_range.end
-                        num_cores += (end.x - start.x + 1) * (end.y - start.y + 1)
-
-                    MAX_COMPUTE_BANKS = 56
-                    if num_cores > MAX_COMPUTE_BANKS:
-                        return False
-
+            # Trust traced configs - no validation needed
+            # Traced configs come from real model runs that worked
             return True
         except Exception:
             return True  # If we can't check, assume valid
@@ -319,8 +259,6 @@ class MasterConfigLoader:
                 shard_spec = nd_shard_spec
 
             if shard_spec and shard_spec != "std::nullopt" and tensor_shape:
-                import re
-
                 # Extract shard shape - prefer cleaner array format from nd_shard_spec
                 shard_shape = None
                 if "shard_shape" in shard_spec:
@@ -336,17 +274,9 @@ class MasterConfigLoader:
                         if len(numbers) >= 2:
                             shard_shape = [int(numbers[0]), int(numbers[1])]
 
-                # Adjust shard shape to be tile-aligned (round to nearest multiple of 32)
-                # This ensures compatibility even if traced configs have non-tile-aligned shapes
-                if shard_shape and len(shard_shape) >= 2:
-                    TILE_SIZE = 32
-                    height, width = shard_shape[0], shard_shape[1]
-                    # Round to nearest tile-aligned size (round up to ensure we don't shrink)
-                    adjusted_height = ((height + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
-                    adjusted_width = ((width + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
-                    if adjusted_height != height or adjusted_width != width:
-                        # Only adjust if needed - prefer rounding up to preserve data
-                        shard_shape = [adjusted_height, adjusted_width]
+                # Use shard shape directly from traced config - no validation or adjustment
+                # Traced configs come from real model runs that worked, so use them as-is
+                # shard_shape is already extracted above, use it directly
 
                 # Parse orientation
                 orientation_str = shard_spec.get("orientation", "ShardOrientation::ROW_MAJOR")
@@ -731,26 +661,66 @@ class MasterConfigLoader:
                                     parsed_layout = ttnn.ROW_MAJOR_LAYOUT
 
                         # Determine output memory config based on operation
-                        if operation_name == "sharded_to_interleaved":
-                            # This operation converts sharded to interleaved, so output must be INTERLEAVED
-                            output_mem_config = ttnn.DRAM_MEMORY_CONFIG  # Interleaved DRAM
-                        elif operation_name in ["upsample", "ttnn::upsample"]:
-                            # upsample output also needs INTERLEAVED
-                            output_mem_config = ttnn.DRAM_MEMORY_CONFIG
-                        elif operation_name in ["untilize_with_unpadding", "ttnn::untilize_with_unpadding"]:
-                            # untilize_with_unpadding: Output memory config must be INTERLEAVED for block sharded input
-                            # (see untilize_with_unpadding_op.cpp:37)
-                            if parsed_mem_config.memory_layout in [
-                                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                            ]:
-                                output_mem_config = ttnn.DRAM_MEMORY_CONFIG  # INTERLEAVED DRAM
+                        # First, try to extract output memory config from arg1 (for operations like interleaved_to_sharded)
+                        output_mem_config = None
+                        if operation_name in ["interleaved_to_sharded", "ttnn::interleaved_to_sharded"]:
+                            # interleaved_to_sharded has output memory config in arg1
+                            for arg in config:
+                                if isinstance(arg, dict) and "UnparsedElement" in arg:
+                                    element_info = arg["UnparsedElement"].get("element_info", "")
+                                    if "MemoryConfig" in element_info:
+                                        try:
+                                            # Apply regex fixes for C++ style formats (same as extract_tensor_config)
+                                            fixed_json_str = element_info
+                                            # Fix C++ style braces in values like "{32, 32}" -> "[32, 32]"
+                                            fixed_json_str = re.sub(
+                                                r':\s*"{\s*([^}]+)\s*}"', r': "[\1]"', fixed_json_str
+                                            )
+                                            # Fix grid format: "grid":{[...], [...]} -> "grid":[[...], [...]]
+                                            fixed_json_str = re.sub(
+                                                r'"grid"\s*:\s*\{(\[.*?\](?:\s*,\s*\[.*?\])*)\}',
+                                                r'"grid":[\1]',
+                                                fixed_json_str,
+                                            )
+                                            # Fix grid ranges like {"x":0,"y":0} - {"x":7,"y":7} -> {"x":0,"y":0}, {"x":7,"y":7}
+                                            fixed_json_str = re.sub(
+                                                r'(\{"x":\d+,"y":\d+\})\s*-\s*(\{"x":\d+,"y":\d+\})',
+                                                r"\1, \2",
+                                                fixed_json_str,
+                                            )
+
+                                            parsed = json.loads(fixed_json_str)
+                                            if "arg1" in parsed and "MemoryConfig" in parsed["arg1"]:
+                                                output_mem_config = self.parse_memory_config(
+                                                    parsed["arg1"]["MemoryConfig"], tensor_config.shape
+                                                )
+                                                break
+                                        except Exception as e:
+                                            # If parsing fails, continue to next arg or use default
+                                            pass
+
+                        # If not extracted from arg1, use operation-specific defaults
+                        if output_mem_config is None:
+                            if operation_name == "sharded_to_interleaved":
+                                # This operation converts sharded to interleaved, so output must be INTERLEAVED
+                                output_mem_config = ttnn.DRAM_MEMORY_CONFIG  # Interleaved DRAM
+                            elif operation_name in ["upsample", "ttnn::upsample"]:
+                                # upsample output also needs INTERLEAVED
+                                output_mem_config = ttnn.DRAM_MEMORY_CONFIG
+                            elif operation_name in ["untilize_with_unpadding", "ttnn::untilize_with_unpadding"]:
+                                # untilize_with_unpadding: Output memory config must be INTERLEAVED for block sharded input
+                                # (see untilize_with_unpadding_op.cpp:37)
+                                if parsed_mem_config.memory_layout in [
+                                    ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                                    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                                ]:
+                                    output_mem_config = ttnn.DRAM_MEMORY_CONFIG  # INTERLEAVED DRAM
+                                else:
+                                    output_mem_config = parsed_mem_config
                             else:
+                                # For most unary ops, output matches input
                                 output_mem_config = parsed_mem_config
-                        else:
-                            # For most unary ops, output matches input
-                            output_mem_config = parsed_mem_config
 
                         # Extract storage_type from tensor_config
                         storage_type_str = (
@@ -945,48 +915,9 @@ class MasterConfigLoader:
                     # Check for invalid shard specs (too many cores, non-tile-aligned shard shapes)
                     invalid_reasons = []
 
-                    if mem_config and hasattr(mem_config, "shard_spec") and mem_config.shard_spec:
-                        shard_shape = mem_config.shard_spec.shape
-
-                        # Check tile alignment of shard shape
-                        if shard_shape and len(shard_shape) >= 2:
-                            height, width = shard_shape[0], shard_shape[1]
-                            if height % 32 != 0 or width % 32 != 0:
-                                # Round up to tile-aligned (only allowed conversion)
-                                height_aligned = ((height + 31) // 32) * 32
-                                width_aligned = ((width + 31) // 32) * 32
-                                # Update shard shape in memory config
-                                mem_config.shard_spec.shape = (height_aligned, width_aligned)
-                                invalid_reasons.append(
-                                    f"shard_shape adjusted from ({height}, {width}) to ({height_aligned}, {width_aligned})"
-                                )
-
-                        # Check number of cores (report but don't filter)
-                        if hasattr(mem_config.shard_spec, "num_cores"):
-                            num_cores = mem_config.shard_spec.num_cores()
-                            MAX_COMPUTE_BANKS = 56
-                            if num_cores > MAX_COMPUTE_BANKS:
-                                invalid_reasons.append(f"too_many_cores: {num_cores} > {MAX_COMPUTE_BANKS}")
-
-                    # Check output memory config too
-                    if output_mem_config and hasattr(output_mem_config, "shard_spec") and output_mem_config.shard_spec:
-                        shard_shape = output_mem_config.shard_spec.shape
-                        if shard_shape and len(shard_shape) >= 2:
-                            height, width = shard_shape[0], shard_shape[1]
-                            if height % 32 != 0 or width % 32 != 0:
-                                height_aligned = ((height + 31) // 32) * 32
-                                width_aligned = ((width + 31) // 32) * 32
-                                output_mem_config.shard_spec.shape = (height_aligned, width_aligned)
-                                invalid_reasons.append(
-                                    f"output_shard_shape adjusted from ({height}, {width}) to ({height_aligned}, {width_aligned})"
-                                )
-
-                        # Check number of cores for output too
-                        if hasattr(output_mem_config.shard_spec, "num_cores"):
-                            num_cores = output_mem_config.shard_spec.num_cores()
-                            MAX_COMPUTE_BANKS = 56
-                            if num_cores > MAX_COMPUTE_BANKS:
-                                invalid_reasons.append(f"output_too_many_cores: {num_cores} > {MAX_COMPUTE_BANKS}")
+                    # Trust traced configs - no validation needed
+                    # Traced configs come from real model runs that worked
+                    # Input and output memory configs are used directly from config
 
                     # Check operation-specific requirements (report but don't convert)
                     # Note: tilize and upsample are hardcoded above, so these checks are just for reporting
@@ -1658,8 +1589,6 @@ class MasterConfigLoader:
                 value = value.strip()
                 if value.startswith("[") and value.endswith("]"):
                     # Use json.loads for safer parsing
-                    import json
-
                     return json.loads(value.replace("'", '"'))
             return None
         except Exception as e:
@@ -1733,6 +1662,9 @@ class MasterConfigLoader:
         """Get parameters for conv2d operation which uses input_specs format"""
         try:
             input_specs_list = []
+            compute_configs_list = []
+            dtypes_list = []
+            config_tensors_in_dram_list = []
 
             for config in configs:
                 params = self._extract_conv2d_parameters(config)
@@ -1758,16 +1690,30 @@ class MasterConfigLoader:
                         params["has_bias"],
                     ]
                     input_specs_list.append(input_spec)
+                    # Extract compute_config if available
+                    compute_configs_list.append(params.get("compute_config"))
+                    # Extract dtype if available
+                    dtypes_list.append(params.get("dtype", "bfloat16"))
+                    # Extract config_tensors_in_dram if available (default True for model_traced to help with OOM)
+                    config_tensors_in_dram_list.append(params.get("config_tensors_in_dram", True))
 
             if input_specs_list:
                 print(
                     f"✅ Loaded {len(input_specs_list)} traced configurations for {operation_name} (model_traced suite)"
                 )
-                # Pair input_specs with is_conv1d to prevent Cartesian product
+                # Pair input_specs with is_conv1d, compute_config, dtype, and config_tensors_in_dram to prevent Cartesian product
                 # Use comma-separated parameter name to pass tuples together
-                paired_configs = list(zip(input_specs_list, [False] * len(input_specs_list)))
+                paired_configs = list(
+                    zip(
+                        input_specs_list,
+                        [False] * len(input_specs_list),
+                        compute_configs_list,
+                        dtypes_list,
+                        config_tensors_in_dram_list,
+                    )
+                )
                 return {
-                    "input_specs,is_conv1d": paired_configs,
+                    "input_specs,is_conv1d,compute_config,dtype,config_tensors_in_dram": paired_configs,
                 }
 
             return {"input_specs": [], "is_conv1d": []}
@@ -2289,9 +2235,10 @@ class MasterConfigLoader:
                                     except:
                                         pass
 
-                    if not tensor_config or num_q_heads is None or num_kv_heads is None:
+                    if not tensor_config:
                         failed_configs += 1
                         continue
+                    # Allow None values for num_q_heads and num_kv_heads - test files will infer them
 
                     # Parse tensor config
                     parsed_dtype = self.parse_dtype(tensor_config.dtype)
@@ -2398,9 +2345,10 @@ class MasterConfigLoader:
                                     except:
                                         pass
 
-                    if not tensor_config or num_heads is None or num_kv_heads is None:
+                    if not tensor_config:
                         failed_configs += 1
                         continue
+                    # Allow None values for num_heads and num_kv_heads - test files will infer them
 
                     # Parse tensor config
                     parsed_dtype = self.parse_dtype(tensor_config.dtype)
@@ -2479,7 +2427,8 @@ class MasterConfigLoader:
             # arg6: input_height, arg7: input_width
             # arg8: [kernel_h, kernel_w], arg9: [stride_h, stride_w]
             # arg10: [pad_h1, pad_h2, pad_w1, pad_w2], arg11: [dilation_h, dilation_w]
-            # arg12: groups, arg14: bias tensor (optional)
+            # arg12: groups, arg13: dtype, arg14: bias tensor (optional)
+            # arg15: conv_config (unsupported type), arg16: compute_config
 
             params = {}
             for arg in config:
@@ -2527,13 +2476,39 @@ class MasterConfigLoader:
                         params["dilation_w"] = dilation[1]
                 if "arg12" in arg:
                     params["groups"] = int(arg["arg12"]) if isinstance(arg["arg12"], (int, str)) else None
+                if "arg13" in arg:
+                    # Extract dtype (e.g., "DataType::BFLOAT8_B" -> "bfloat8_b")
+                    dtype_str = str(arg["arg13"])
+                    if "BFLOAT8_B" in dtype_str or "bfloat8_b" in dtype_str:
+                        params["dtype"] = "bfloat8_b"
+                    elif "BFLOAT16" in dtype_str or "bfloat16" in dtype_str:
+                        params["dtype"] = "bfloat16"
+                    elif "FLOAT32" in dtype_str or "float32" in dtype_str:
+                        params["dtype"] = "float32"
                 if "arg14" in arg and isinstance(arg["arg14"], dict):
                     # Bias tensor exists
                     params["has_bias"] = True
+                if "arg16" in arg and isinstance(arg["arg16"], dict):
+                    # Extract compute_config (WormholeComputeKernelConfig)
+                    compute_config_dict = arg["arg16"]
+                    if "WormholeComputeKernelConfig" in compute_config_dict:
+                        wormhole_config = compute_config_dict["WormholeComputeKernelConfig"]
+                        params["compute_config"] = {
+                            "math_fidelity": wormhole_config.get("math_fidelity", "LoFi"),
+                            "math_approx_mode": wormhole_config.get("math_approx_mode", 0),
+                            "fp32_dest_acc_en": wormhole_config.get("fp32_dest_acc_en", 1),
+                            "packer_l1_acc": wormhole_config.get("packer_l1_acc", 1),
+                            "dst_full_sync_en": wormhole_config.get("dst_full_sync_en", 0),
+                            "throttle_level": wormhole_config.get("throttle_level", "ThrottleLevel::NO_THROTTLE"),
+                        }
 
             # Set has_bias to False if not found
             if "has_bias" not in params:
                 params["has_bias"] = False
+
+            # Set default dtype if not found
+            if "dtype" not in params:
+                params["dtype"] = "bfloat16"
 
             # Check if we have all required params
             required = [
