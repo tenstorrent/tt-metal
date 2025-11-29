@@ -51,6 +51,7 @@
 #include "ttnn/operations/experimental/where/where_pybind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_pybind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_pybind.hpp"
+#include "ttnn/operations/experimental/isin/isin_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -121,6 +122,7 @@ void py_module(py::module& module) {
     operations::experimental::ternary::detail::bind_where(module);
 
     minimal_matmul::detail::py_bind_minimal_matmul(module);
+    isin::detail::bind_isin_operation(module);
 }
 
 }  // namespace ttnn::operations::experimental
