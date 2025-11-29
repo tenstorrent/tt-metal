@@ -54,6 +54,8 @@ target_sources(
             copy/device/copy_device_operation.hpp
             fill_pad/fill_pad.hpp
             fill_pad/device/fill_pad_device_operation.hpp
+            fill_rm/fill_rm.hpp
+            fill_rm/device/fill_rm_device_operation.hpp
             pad/pad.hpp
             permute/permute.hpp
             repeat/repeat.hpp
@@ -113,7 +115,8 @@ target_sources(
         fill_pad/device/fill_pad_device_operation.cpp
         fill_pad/device/fill_pad_program_factory.cpp
         fill_pad/fill_pad.cpp
-        fill_rm/device/fill_rm_op.cpp
+        fill_rm/device/fill_rm_device_operation.cpp
+        fill_rm/device/fill_rm_program_factory.cpp
         fill_rm/fill_rm.cpp
         fold/device/fold_device_op.cpp
         fold/device/fold_multi_core_dram_program_factory.cpp
@@ -174,11 +177,14 @@ target_sources(
         sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial.cpp
         sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.cpp
         sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial.cpp
-        slice/device/slice_op.cpp
-        slice/device/slice_program_factory.cpp
-        slice/device/slice_program_factory_stride.cpp
+        slice/device/slice_device_operation.cpp
+        slice/device/slice_program_factory_rm.cpp
+        slice/device/slice_program_factory_rm_sharded.cpp
+        slice/device/slice_program_factory_rm_stride.cpp
+        slice/device/slice_program_factory_tile.cpp
+        slice/device/slice_program_factory_tile_tensor_args.cpp
         slice/slice.cpp
-        split/device/split_op.cpp
+        split/device/split_device_operation.cpp
         split/device/split_program_factory.cpp
         split/split.cpp
         squeeze/squeeze.cpp
