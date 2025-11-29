@@ -47,8 +47,11 @@ target_sources(
         batch_norm/device/running_statistics_device_operation.cpp
         batch_norm/device/running_statistics_program_factory.cpp
         batch_norm/device/batch_norm_utils.cpp
-        groupnorm/device/groupnorm_op.cpp
-        groupnorm/device/multi_core/groupnorm_op_multi_core.cpp
+        groupnorm/device/groupnorm_program_utils.cpp
+        groupnorm/device/groupnorm_device_operation.cpp
+        groupnorm/device/groupnorm_sharded_program_factory.cpp
+        groupnorm/device/groupnorm_no_mcast_program_factory.cpp
+        groupnorm/device/groupnorm_mcast_program_factory.cpp
         groupnorm/groupnorm.cpp
         groupnorm/groupnorm_input_mask.cpp
         layernorm/device/layernorm_op.cpp
