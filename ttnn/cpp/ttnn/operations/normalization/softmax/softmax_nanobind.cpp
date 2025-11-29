@@ -475,8 +475,8 @@ void bind_normalization_softmax_scale_mask_inplace_operation(nb::module_& mod) {
                     input_tensor, scale, mask, program_config, is_causal_mask, compute_kernel_config, numeric_stable);
             },
             nb::arg("input_tensor").noconvert(),
-            nb::arg("scale").noconvert() = nb::none(),
-            nb::arg("mask").noconvert() = nb::none(),
+            nb::arg("scale") = nb::none(),
+            nb::arg("mask") = nb::none(),
             nb::kw_only(),
             nb::arg("program_config") = nb::cast(SoftmaxDefaultProgramConfig{}),
             nb::arg("is_causal_mask") = false,
