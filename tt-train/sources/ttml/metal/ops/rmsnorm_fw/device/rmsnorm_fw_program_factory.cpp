@@ -9,7 +9,7 @@
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include "metal/ops/common/program_utils.hpp"
+#include "metal/common/program_utils.hpp"
 #include "rmsnorm_fw_device_operation_types.hpp"
 
 namespace {
