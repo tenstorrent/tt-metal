@@ -14,6 +14,7 @@ Description:
 from dataclasses import dataclass
 from triage import ScriptConfig, triage_field, hex_serializer, log_check_device, run_script
 from run_checks import run as get_run_checks
+from datetime import timedelta
 import time
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
@@ -32,6 +33,7 @@ script_config = ScriptConfig(
 class ArcCheckData:
     location: OnChipCoordinate = triage_field("Loc")
     postcode: int = triage_field("Postcode", hex_serializer)
+    uptime: timedelta = triage_field("Up time")
     clock_mhz: int = triage_field("Clock MHz")
     heartbeats_per_second: float = triage_field("Heartbeats/s")
 
@@ -49,6 +51,11 @@ def check_arc_block(arc: NocBlock, postcode: int) -> ArcCheckData:
     arcclk_mhz = read_arc_telemetry_entry(device_id, "ARCCLK")
     heartbeats_per_second = (heartbeat_1 - heartbeat_0) / delay_seconds
 
+    # Оn Wormhole, heartbeat is reseting to 0xa5a5a5a5 instead of 0
+    # This should be fixed by firmware team, but for now we need to subtract this offset
+    heartbeat_offset = 0xA5A5A5A5 if device.is_wormhole() else 0
+    uptime_seconds = (heartbeat_1 - heartbeat_offset) / heartbeats_per_second
+
     # Heartbeat must be between 10 and 50
     log_check_device(
         device,
@@ -64,6 +71,7 @@ def check_arc_block(arc: NocBlock, postcode: int) -> ArcCheckData:
     return ArcCheckData(
         location=arc.location,
         postcode=postcode,
+        uptime=timedelta(seconds=uptime_seconds),
         clock_mhz=arcclk_mhz,
         heartbeats_per_second=heartbeats_per_second,
     )
