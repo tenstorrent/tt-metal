@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ckernel.h"
-#include "sfpi.h" 
+#include "sfpi.h"
 #include "llk_defs.h"
 using namespace sfpi;
 
