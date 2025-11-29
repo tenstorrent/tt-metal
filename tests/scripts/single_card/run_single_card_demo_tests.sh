@@ -224,7 +224,7 @@ run_efficientnet_b0_func(){
 
 run_stable_diffusion_func() {
 
-  pytest --input-path="models/demos/wormhole/stable_diffusion/demo/input_data.json" models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo
+  pytest --input-path="models/demos/vision/generative/stable_diffusion/wormhole/demo/input_data.json" models/demos/vision/generative/stable_diffusion/wormhole/demo/demo.py::test_demo
 
 }
 
