@@ -937,30 +937,30 @@ def test_demo_text(
             else:
                 is_enable_trace = enable_trace if not pcc_check else False
             # Run decode forward
-            try:
-                # Save logits only for PCC check when tracing is disabled
-                tt_out_logits_saved = torch.zeros(vocab_size) if (pcc_check and not is_enable_trace) else None
-                tt_out_tok, read_event = generator.decode_forward_text(
-                    out_tok,
-                    current_pos,
-                    enable_trace=is_enable_trace,
-                    page_table=page_table,
-                    kv_cache=tt_kv_cache,
-                    read_from_device=True,
-                    async_read=True,
-                    sampling_params=device_sampling_params,
-                    reset_inputs=iteration == 0,
-                    tt_out_logits_saved=tt_out_logits_saved,
-                    is_cur_pos_sharded=is_cur_pos_sharded,
-                    is_page_table_sharded=is_page_table_sharded,
-                )
-                read_events.append(read_event)
-                tt_out_toks.append(tt_out_tok)
-                if apc_test and iteration == 0:
-                    tt_out_logits_saved_iter_0 = tt_out_logits_saved
-            except Exception as e:
-                logger.error(f"Error during decoding: {str(e)}")
-                break
+            # try:
+            # Save logits only for PCC check when tracing is disabled
+            tt_out_logits_saved = torch.zeros(vocab_size) if (pcc_check and not is_enable_trace) else None
+            tt_out_tok, read_event = generator.decode_forward_text(
+                out_tok,
+                current_pos,
+                enable_trace=is_enable_trace,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                read_from_device=True,
+                async_read=True,
+                sampling_params=device_sampling_params,
+                reset_inputs=iteration == 0,
+                tt_out_logits_saved=tt_out_logits_saved,
+                is_cur_pos_sharded=is_cur_pos_sharded,
+                is_page_table_sharded=is_page_table_sharded,
+            )
+            read_events.append(read_event)
+            tt_out_toks.append(tt_out_tok)
+            if apc_test and iteration == 0:
+                tt_out_logits_saved_iter_0 = tt_out_logits_saved
+            # except Exception as e:
+            #     logger.error(f"Error during decoding: {str(e)}")
+            #     break
 
             if iteration == 0:  # First iteration will account the compile time
                 profiler.end(f"compile_decode", iteration=batch_idx)

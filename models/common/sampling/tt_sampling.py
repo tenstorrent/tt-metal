@@ -12,6 +12,7 @@ import ttnn
 
 logger = logging.getLogger(__name__)
 from models.common.lightweightmodule import LightweightModule
+from models.common.utils import LogProbsCalculator
 
 
 class TTSampling(LightweightModule):
@@ -118,6 +119,11 @@ class TTSampling(LightweightModule):
         # Create device offset indices for global indexing
         self._create_indices_tensors()
         self.warmup_done = False
+        self.tt_log_probs = None
+        self.log_probs_calculator = LogProbsCalculator(self.vocab_size, self.mesh_device)
+
+    def set_log_probs_mode(self, enable_log_probs: bool = False):
+        self.log_probs_calculator.enable_log_probs = enable_log_probs
 
     def _create_indices_tensors(self):
         """Create the indices tensors needed for distributed top-k operations."""
@@ -184,7 +190,7 @@ class TTSampling(LightweightModule):
             )
             return tt_logits
 
-    def reset_params(self, k, p, temp):
+    def reset_params(self, k, p, temp, enable_log_probs: bool | list[bool] = None):
         """Update sampling parameters (k, p, temperature) dynamically."""
         self.k_tensor_new = ttnn.from_torch(
             torch.tensor(k),
@@ -208,6 +214,15 @@ class TTSampling(LightweightModule):
         ttnn.copy_host_to_device_tensor(self.k_tensor_new, self.k_tensor)
         ttnn.copy_host_to_device_tensor(self.p_tensor_new, self.p_tensor)
         ttnn.copy_host_to_device_tensor(self.temp_tensor_new, self.temp_tensor)
+
+        if enable_log_probs is not None:
+            if isinstance(enable_log_probs, list):
+                # If any of the users in the batch have log_probs enabled,
+                # then whole batch will run log-probs calculation
+                enable_log_probs_result = any(enable_log_probs)
+            else:
+                enable_log_probs_result = enable_log_probs
+            self.log_probs_calculator.set_log_probs_mode(enable_log_probs_result)
 
     def forward(
         self,
@@ -360,7 +375,16 @@ class TTSampling(LightweightModule):
         ttnn.deallocate(topk_values_gathered_bf16_interleaved)
         ttnn.deallocate(topk_global_indices_interleaved_untilised)
 
-        return tt_out_tok
+        if self.log_probs_calculator.enable_log_probs:
+            self.log_probs_calculator.compute_global_stats(x)
+            relevant_logits = self.log_probs_calculator.prepare_relevant_logits(x, tt_out_tok)
+            self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(relevant_logits)
+        else:
+            # Return dummy log-probs tensor with same shape as regular log-probs would be
+            # to satisfy the return type and for later post-processing
+            self.tt_log_probs = self.log_probs_calculator.output_tensor
+
+        return tt_out_tok, self.tt_log_probs
 
 
 def clamp(value, min_value, max_value):
@@ -381,12 +405,44 @@ def format_sampling_params(sampling_params, max_batch_size):
         sampling_params = replace(sampling_params, **update_dict)
 
     # Must pad sampling_params to max_batch_size
-    default_params = {"temp": 0.0, "p": 1.0, "k": 1}
+    default_params = {
+        "temp": 0.0,
+        "p": 1.0,
+        "k": 1,
+        "presence_penalty": 0.0,
+        "frequency_penalty": 0.0,
+        "repetition_penalty": 1.0,
+        "log_probs": False,
+    }
     target_len = max_batch_size
     assert target_len == 32, "Sampling only support batch_size=32"
     for name, tensor in zip(
-        ("temp", "p", "k"), (sampling_params.temperature, sampling_params.top_p, sampling_params.top_k)
+        ("temp", "p", "k", "log_probs"),
+        (sampling_params.temperature, sampling_params.top_p, sampling_params.top_k, sampling_params.log_probs),
     ):
+        current_len = len(tensor)
+        if current_len < target_len:
+            tensor.extend([default_params[name]] * (target_len - current_len))
+
+    penalties = {}
+    for name in ("presence_penalty", "frequency_penalty", "repetition_penalty"):
+        value = getattr(sampling_params, name, None)
+        if value is None:
+            penalties[name] = [default_params[name]]
+        elif isinstance(value, List):
+            penalties[name] = list(value)
+        else:
+            penalties[name] = [value]
+
+    sampling_params = replace(
+        sampling_params,
+        presence_penalty=penalties["presence_penalty"],
+        frequency_penalty=penalties["frequency_penalty"],
+        repetition_penalty=penalties["repetition_penalty"],
+    )
+
+    for name in ("presence_penalty", "frequency_penalty", "repetition_penalty"):
+        tensor = getattr(sampling_params, name)
         current_len = len(tensor)
         if current_len < target_len:
             tensor.extend([default_params[name]] * (target_len - current_len))
@@ -410,4 +466,6 @@ def format_sampling_params(sampling_params, max_batch_size):
             sampling_params.top_k[i] = 1
         else:
             sampling_params.temperature[i] = 1 / temp
+        if sampling_params.repetition_penalty[i] == 0:
+            sampling_params.repetition_penalty[i] = default_params["repetition_penalty"]
     return sampling_params
