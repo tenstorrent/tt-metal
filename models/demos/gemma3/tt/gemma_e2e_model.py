@@ -58,7 +58,13 @@ class TtGemmaModel(Transformer):
             weight_cache_path=weight_cache_path,
         )
 
-    def prepare_inputs_prefill(self, pt_tokens, start_pos=0, page_table=None, chunk_page_table=None, **kwargs):
+    def transform_and_embed_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table):
+        tokens_embd = ttnn.unsqueeze_to_4D(tokens)
+        return tokens_embd, tt_page_table, tt_chunk_page_table
+
+    def prepare_inputs_prefill(
+        self, pt_tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False, **kwargs
+    ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
@@ -91,28 +97,35 @@ class TtGemmaModel(Transformer):
 
         tokens_embd = self.args.prepare_residual_tensor_prefill(
             tokens_embd,
+            trace_enabled=trace_enabled,
         )
 
-        tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
+        if not trace_enabled:
+            tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
+
+        start_pos = 0 if trace_enabled else start_pos
+        end_pos = self.args.max_seq_len if trace_enabled else start_pos + S
         # Slice the rot mats to the prefill seqlen
         assert (
-            self.rope_setup.cos_matrix.shape[2] >= start_pos + S
-        ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
+            self.rope_setup.cos_matrix.shape[2] >= end_pos
+        ), f"Padded prefill end idx {end_pos} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
 
         tt_rot_mats_prefill_global = [
-            self.rope_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
-            self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
+            self.rope_setup.cos_matrix[:, :, start_pos:end_pos, :],
+            self.rope_setup.sin_matrix[:, :, start_pos:end_pos, :],
         ]
 
         tt_rot_mats_prefill_local = [
-            self.rope_local_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
-            self.rope_local_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
+            self.rope_local_setup.cos_matrix[:, :, start_pos:end_pos, :],
+            self.rope_local_setup.sin_matrix[:, :, start_pos:end_pos, :],
         ]
+
+        device = self.mesh_device if not trace_enabled else None
 
         if page_table is not None:
             tt_page_table = ttnn.from_torch(
                 page_table,
-                device=self.mesh_device,
+                device=device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -123,7 +136,7 @@ class TtGemmaModel(Transformer):
         if chunk_page_table is not None:
             tt_chunk_page_table = ttnn.from_torch(
                 chunk_page_table,
-                device=self.mesh_device,
+                device=device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),

@@ -1222,9 +1222,9 @@ class ModelArgs:
         # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
         # TODO: should be empty until https://github.com/tenstorrent/tt-metal/issues/33041 is fixed
         model_specific_supported_seq_lens = {
-            # EXAMPLE: "gemma-3-4b": {
-            #     "N150": [128, 256, 512, 1024, 2048],
-            # }
+            "gemma-3-27b": {
+                "T3K": [128, 256, 512, 1024],
+            }
         }
 
         model_name = self.base_model_name
@@ -1334,7 +1334,7 @@ class ModelArgs:
             x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
         return x
 
-    def prepare_residual_tensor_prefill(self, x_bsh, force_replicated=False):
+    def prepare_residual_tensor_prefill(self, x_bsh, force_replicated=False, trace_enabled=False):
         """
         Prepare inputs for prefill mode.
         x: (batch, seq, hidden_dim)
@@ -1348,10 +1348,12 @@ class ModelArgs:
 
         mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
 
+        device = self.mesh_device if not trace_enabled else None
+
         # input goes to DRAM
         xs_1BSH = ttnn.from_torch(
             x_1BSH,
-            device=self.mesh_device,
+            device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
