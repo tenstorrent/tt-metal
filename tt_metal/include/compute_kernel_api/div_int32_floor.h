@@ -37,7 +37,7 @@ ALWI void div_int32_trunc_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 }
 
 /**
- * Please refer to documentation for XXX.
+ * Please refer to documentation for any_init.
  */
 ALWI void div_int32_floor_tile_init() { MATH((llk_math_eltwise_binary_sfpu_div_int32_floor_init<APPROX>())); }
 ALWI void div_int32_trunc_tile_init() { MATH((llk_math_eltwise_binary_sfpu_div_int32_trunc_init<APPROX>())); }
