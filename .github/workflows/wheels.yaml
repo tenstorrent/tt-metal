@@ -34,7 +34,7 @@ jobs:
         run: |
           PYTHON_VERSION_NODOT=$(echo "${{ inputs.python-version }}" | tr -d '.')
           echo "python_version_nodot=${PYTHON_VERSION_NODOT}" >> $GITHUB_OUTPUT
-          echo "Selected Python ${inputs.python-version} (${PYTHON_VERSION_NODOT})"
+          echo "Selected Python ${{ inputs.python-version }} (${PYTHON_VERSION_NODOT})"
 
       - name: Check Redis credentials
         # Failing internal jobs draws attention immediately so we can fix them and make them fast.
