@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import os
 
 from inspector_data import run as get_inspector_data, InspectorData
+from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from triage import triage_singleton, ScriptConfig, run_script, log_check_location
 from ttexalens.coordinate import OnChipCoordinate
@@ -27,7 +28,7 @@ from run_checks import RunChecks
 
 script_config = ScriptConfig(
     data_provider=True,
-    depends=["inspector_data", "elfs_cache", "run_checks"],
+    depends=["inspector_data", "elfs_cache", "run_checks", "metal_device_id_mapping"],
 )
 
 
@@ -57,13 +58,21 @@ class DispatcherCoreData:
 
 
 class DispatcherData:
-    def __init__(self, inspector_data: InspectorData, context: Context, elfs_cache: ElfsCache, run_checks: RunChecks):
+    def __init__(
+        self,
+        inspector_data: InspectorData,
+        context: Context,
+        elfs_cache: ElfsCache,
+        run_checks: RunChecks,
+        metal_device_id_mapping: MetalDeviceIdMapping,
+    ):
         self.inspector_data = inspector_data
         self.programs = inspector_data.getPrograms().programs
         self.kernels = {kernel.watcherKernelId: kernel for program in self.programs for kernel in program.kernels}
         self.use_rpc_kernel_find = True
         # Cache build_env per device to avoid multiple RPC calls
         # Each device needs to have its own build_env to get the correct firmware path
+        # Cache is keyed by unique_id for consistency
         self._build_env_cache = {}
 
         # Get the firmware paths from Inspector RPC build environment instead of relative paths
@@ -72,7 +81,9 @@ class DispatcherData:
         try:
             all_build_envs = inspector_data.getAllBuildEnvs().buildEnvs
             for build_env in all_build_envs:
-                self._build_env_cache[build_env.deviceId] = build_env.buildInfo
+                # build_env.metalDeviceId is logical - remap to unique_id for cache key
+                unique_id = metal_device_id_mapping.get_unique_id(build_env.metalDeviceId)
+                self._build_env_cache[unique_id] = build_env.buildInfo
         except Exception:
             pass
 
@@ -80,9 +91,10 @@ class DispatcherData:
         try:
             if not (run_checks and getattr(run_checks, "devices", None)):
                 raise TTTriageError("RunChecks.devices not available. Ensure run_checks is a dependency or pass --dev.")
-            device_id = run_checks.devices[0]._id
+            # Use unique_id for device lookup
+            device_unique_id = run_checks.devices[0].unique_id
 
-            build_env = self._build_env_cache[device_id]
+            build_env = self._build_env_cache[device_unique_id]
             # Use build_env for initial firmware paths
             brisc_elf_path = os.path.join(build_env.firmwarePath, "brisc", "brisc.elf")
             idle_erisc_elf_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
@@ -157,15 +169,15 @@ class DispatcherData:
         }
         self._launch_msg_buffer_num_entries = get_const_value("launch_msg_buffer_num_entries")
 
-    def _get_build_env_for_device(self, device_id: int):
+    def _get_build_env_for_device(self, device_unique_id: int):
         """Get build_env for a specific device, with caching"""
-        if device_id not in self._build_env_cache:
+        if device_unique_id not in self._build_env_cache:
             raise TTTriageError(
                 "Failed to get firmware path from Inspector RPC. "
                 "Make sure Inspector RPC is available or serialized RPC data exists. "
                 "Set TT_METAL_INSPECTOR_RPC=1 when running your Metal application."
             )
-        return self._build_env_cache[device_id]
+        return self._build_env_cache[device_unique_id]
 
     def find_kernel(self, watcher_kernel_id):
         # Try to get kernel from RPC inspector data first, then fallback to cached kernels
@@ -202,8 +214,8 @@ class DispatcherData:
 
         # Get the build_env for the device to get the correct firmware path
         # Each device may have different firmware paths based on its build configuration
-        device_id = location.device_id
-        build_env = self._get_build_env_for_device(device_id)
+        device_unique_id = location._device.unique_id
+        build_env = self._get_build_env_for_device(device_unique_id)
         proc_name = risc_name.upper()
         proc_type = enum_values["ProcessorTypes"][proc_name]
         mailboxes = fw_elf.read_global("mailboxes", loc_mem_access)
@@ -368,7 +380,8 @@ def run(args, context: Context):
     inspector_data = get_inspector_data(args, context)
     elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)
-    return DispatcherData(inspector_data, context, elfs_cache, run_checks)
+    metal_device_id_mapping = get_metal_device_id_mapping(args, context)
+    return DispatcherData(inspector_data, context, elfs_cache, run_checks, metal_device_id_mapping)
 
 
 if __name__ == "__main__":
