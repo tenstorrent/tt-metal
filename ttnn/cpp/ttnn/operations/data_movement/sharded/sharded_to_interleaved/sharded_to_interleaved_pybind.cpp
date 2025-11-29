@@ -2,12 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 
 #include "ttnn-pybind/decorators.hpp"
-#include "sharded_to_interleaved.hpp"
 #include "ttnn/types.hpp"
+
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 
 using namespace tt::tt_metal;
 
