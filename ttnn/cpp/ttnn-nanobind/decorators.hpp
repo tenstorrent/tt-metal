@@ -19,6 +19,7 @@
 // the appropriate binding if the typecaster is present. This comes up everywhere
 // so include it here. Missing typecasters is a major source of:
 // TypeError: __call__(): incompatible function arguments
+#include <nanobind/stl/array.h>
 #include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 

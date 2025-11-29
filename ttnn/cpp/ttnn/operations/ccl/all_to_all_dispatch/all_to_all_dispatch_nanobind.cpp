@@ -8,6 +8,7 @@
 #include <optional>
 
 #include <nanobind/nanobind.h>
+
 #include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/decorators.hpp"
@@ -80,7 +81,7 @@ void bind_all_to_all_dispatch(nb::module_& mod) {
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<std::array<ttnn::Tensor, 2>>& output_tensors,
                const std::optional<uint32_t> num_links,
-               const std::optional<tt::tt_fabric::Topology> topology) {
+               const std::optional<tt::tt_fabric::Topology> topology) /*-> std::array*/ {
                 return self(
                     input_tensor,
                     expert_indices_tensor,

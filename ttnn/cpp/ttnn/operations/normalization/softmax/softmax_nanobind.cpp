@@ -343,7 +343,7 @@ void bind_normalization_softmax_inplace_operation(nb::module_& mod) {
             nb::arg("input_tensor").noconvert(),
             nb::arg("dim") = -1,
             nb::kw_only(),
-            nb::arg("program_config") = SoftmaxDefaultProgramConfig{},
+            nb::arg("program_config") = nb::cast(SoftmaxDefaultProgramConfig{}),
             nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("numeric_stable") = true});
 }
@@ -478,7 +478,7 @@ void bind_normalization_softmax_scale_mask_inplace_operation(nb::module_& mod) {
             nb::arg("scale").noconvert() = nb::none(),
             nb::arg("mask").noconvert() = nb::none(),
             nb::kw_only(),
-            nb::arg("program_config") = SoftmaxDefaultProgramConfig{},
+            nb::arg("program_config") = nb::cast(SoftmaxDefaultProgramConfig{}),
             nb::arg("is_causal_mask") = false,
             nb::arg("compute_kernel_config") = nb::none(),
             // TODO: switch the default value to 'true' once model accuracy is fixed
@@ -599,7 +599,7 @@ void bind_normalization_softmax_scale_casual_mask_HW_inplace_operation(nb::modul
             nb::arg("scale").noconvert() = nb::none(),
             nb::arg("mask").noconvert() = nb::none(),
             nb::kw_only(),
-            nb::arg("program_config") = SoftmaxDefaultProgramConfig{},
+            nb::arg("program_config") = nb::cast(SoftmaxDefaultProgramConfig{}),
             nb::arg("compute_kernel_config") = nb::none(),
             // TODO: switch the default value to 'true' once model accuracy is fixed
             // See issue #28531

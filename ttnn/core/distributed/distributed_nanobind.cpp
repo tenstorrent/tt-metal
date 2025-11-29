@@ -729,7 +729,7 @@ void py_module(nb::module_& mod) {
                 Tensor: The aggregated tensor.
             )doc");
     mod.def(
-        "from_host_shards",
+        "from_host_shards",  // TODO_NANOBIND: python list not casting properly here?
         [](const std::vector<Tensor>& tensors, const MeshShape& mesh_shape) -> Tensor {
             return from_host_shards(tensors, mesh_shape);
         },

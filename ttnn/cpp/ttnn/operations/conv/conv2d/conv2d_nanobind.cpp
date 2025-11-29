@@ -25,7 +25,6 @@
 #include "ttnn/types.hpp"
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
-#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 namespace ttnn::operations::conv::conv2d {
 
@@ -127,9 +126,9 @@ void bind_conv2d(nb::module_& mod) {
             nb::arg("input_height"),
             nb::arg("input_width"),
             nb::arg("kernel_size"),
-            nb::arg("stride") = std::array<uint32_t, 2>{1, 1},
-            nb::arg("padding") = std::array<uint32_t, 2>{0, 0},
-            nb::arg("dilation") = std::array<uint32_t, 2>{1, 1},
+            nb::arg("stride") = nb::cast(std::array<uint32_t, 2>{1, 1}),
+            nb::arg("padding") = nb::cast(std::array<uint32_t, 2>{0, 0}),
+            nb::arg("dilation") = nb::cast(std::array<uint32_t, 2>{1, 1}),
             nb::arg("groups") = 1,
             nb::arg("dtype") = nb::none(),
             nb::arg("bias_tensor") = nb::none(),
@@ -345,7 +344,7 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("shard_layout") = nb::none(),
         nb::arg("core_grid") = nb::none(),
         nb::arg("transpose_shards") = false,
-        nb::arg("output_layout") = Layout::TILE,
+        nb::arg("output_layout") = nb::cast(Layout::TILE),
         nb::arg("enable_act_double_buffer") = false,
         nb::arg("enable_weights_double_buffer") = false,
         nb::arg("full_inner_dim") = false,

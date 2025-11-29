@@ -68,7 +68,7 @@ void bind_all_gather_async(nb::module_& mod, const ccl_operation_t& operation, c
             nb::kw_only(),
             nb::arg("num_links") = 1,
             nb::arg("memory_config") = nb::none(),
-            nb::arg("topology") = ttnn::ccl::Topology::Ring,
+            nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
             nb::arg("subdevice_id") = nb::none(),
             nb::arg("use_optimal_ccl_for_llama") = false,
             nb::arg("barrier_semaphore") = nb::none()},
@@ -108,13 +108,13 @@ void bind_all_gather_async(nb::module_& mod, const ccl_operation_t& operation, c
                     false);
             },
             nb::arg("input_tensor"),
-            nb::arg("persistent_output_buffer"),
+            nb::arg("persistent_output_buffer") = nb::none(),
             nb::arg("dim"),
             nb::arg("multi_device_global_semaphore"),
             nb::kw_only(),
             nb::arg("num_links") = 1,
             nb::arg("memory_config") = nb::none(),
-            nb::arg("topology") = ttnn::ccl::Topology::Ring,
+            nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
             nb::arg("subdevice_id") = nb::none(),
             nb::arg("cluster_axis") = nb::none(),
             nb::arg("use_optimal_ccl_for_llama") = false,
@@ -173,11 +173,9 @@ void bind_all_gather_async(nb::module_& mod, const ccl_operation_t& operation, c
 void bind_all_gather_async(nb::module_& mod) {
     // Define GlobalSemaphoreArg once, outside the template
     nb::class_<GlobalSemaphoreArg>(mod, "GlobalSemaphoreArg")
-        .def(nb::init<const GlobalSemaphore&>())
-        .def(nb::init<const std::vector<GlobalSemaphore>&>());
-
-    nb::implicitly_convertible<GlobalSemaphore, GlobalSemaphoreArg>();
-    nb::implicitly_convertible<std::vector<GlobalSemaphore>, GlobalSemaphoreArg>();
+        .def(nb::init_implicit<const GlobalSemaphore&>())
+        .def(nb::init_implicit<const std::vector<GlobalSemaphore>&>())
+        .def(nb::init_implicit<std::vector<GlobalSemaphore>>());
 
     bind_all_gather_async(
         mod,
