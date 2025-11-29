@@ -75,6 +75,7 @@ public:
         std::unordered_map<std::string, std::string> params;
         std::vector<std::string> arguments;
         std::vector<int> connections;
+        std::vector<int> input_tensors;
         int stacking_level = 0;
     };
 
@@ -88,6 +89,7 @@ private:
     std::unordered_map<std::int64_t, int> tensor_id_to_counter;
     int last_finished_op_id = -1;
     std::vector<Vertex> graph;
+    std::vector<int> current_input_tensors;
 
     int add_tensor(const Tensor& t);
     int add_buffer(const tt::tt_metal::Buffer* buffer);
