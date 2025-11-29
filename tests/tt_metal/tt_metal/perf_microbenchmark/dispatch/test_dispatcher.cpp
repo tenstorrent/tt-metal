@@ -621,16 +621,29 @@ int main(int argc, char** argv) {
             {"FABRIC_WORKER_TEARDOWN_SEM", "0"},
             {"FABRIC_WORKER_BUFFER_INDEX_SEM", "0"},
             {"NUM_HOPS", "0"},
-            {"MY_DEV_ID", "0"},
             {"EW_DIM", "0"},
             {"TO_MESH_ID", "0"},
-            {"TO_DEV_ID", "0"},
-            {"ROUTER_DIRECTION", "0"},
             {"WORKER_MCAST_GRID", "0"},
             {"NUM_WORKER_CORES_TO_MCAST", "0"},
             {"IS_D_VARIANT", "1"},
             {"IS_H_VARIANT", "1"},
         };
+
+        // Initialize runtime args offsets for dispatch kernel
+        int rta_offset = 0;
+        uint32_t offsetof_my_dev_id = rta_offset++;
+        uint32_t offsetof_to_dev_id = rta_offset++;
+        uint32_t offsetof_router_direction = rta_offset++;
+        std::vector<uint32_t> runtime_args(rta_offset);
+
+        dispatch_defines["OFFSETOF_MY_DEV_ID"] = std::to_string(offsetof_my_dev_id);
+        dispatch_defines["OFFSETOF_TO_DEV_ID"] = std::to_string(offsetof_to_dev_id);
+        dispatch_defines["OFFSETOF_ROUTER_DIRECTION"] = std::to_string(offsetof_router_direction);
+
+        // Initialize runtime args
+        runtime_args[offsetof_my_dev_id] = 0;
+        runtime_args[offsetof_to_dev_id] = 0;
+        runtime_args[offsetof_router_direction] = 0;
 
         std::vector<uint32_t> spoof_prefetch_compile_args = {
             l1_buf_base,
@@ -670,7 +683,7 @@ int main(int argc, char** argv) {
         constexpr NOC my_noc_index = NOC::NOC_0;
         constexpr NOC dispatch_upstream_noc_index = NOC::NOC_1;
 
-        configure_kernel_variant<true, true>(
+        auto kernel_handle = configure_kernel_variant<true, true>(
             program,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
             dispatch_defines,
@@ -683,6 +696,8 @@ int main(int argc, char** argv) {
             my_noc_index,
             dispatch_upstream_noc_index,
             my_noc_index);
+
+        tt_metal::SetRuntimeArgs(program, kernel_handle, dispatch_core, runtime_args);
 
         switch (test_type_g) {
             case 0: log_info(LogTest, "Running linear unicast test"); break;
