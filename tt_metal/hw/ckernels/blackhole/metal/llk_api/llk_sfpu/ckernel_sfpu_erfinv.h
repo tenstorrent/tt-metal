@@ -42,9 +42,9 @@ sfpi_inline vFloat calculate_erfinv_body(vFloat in) {
     temp = 4.5469 + temp;
     temp = -temp;
     vFloat calculated_value = (temp * temp) - (log_value * 7.1427);
-    vFloat intermediate_result = calculate_sqrt_custom<ApproximationMode::Precise>(calculated_value);
+    vFloat intermediate_result = calculate_sqrt_custom<APPROX_MODE>(calculated_value);
     calculated_value = temp + intermediate_result;
-    log_value = calculate_sqrt_custom<ApproximationMode::Precise>(calculated_value);
+    log_value = calculate_sqrt_custom<APPROX_MODE>(calculated_value);
     dst_reg[0] = log_value;
     return log_value;
 }
