@@ -391,7 +391,7 @@ run_vovnet_demo(){
 
 run_vit_demo(){
 
- pytest models/demos/wormhole/vit/tests/test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
+ pytest models/demos/vision/classification/vit/wormhole/tests/test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
 
 }
 
