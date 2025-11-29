@@ -13,7 +13,6 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
-from models.demos.deepseek_v3.tt.generator_pp import DeepseekGenerator as DeepseekGeneratorPP
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 
 
@@ -110,9 +109,9 @@ def create_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--generator",
-        choices=["pp", "bp"],
+        choices=["bp"],
         default="bp",
-        help="Select generator implementation: default = bp (batch parallel), pp (pipeline parallel).",
+        help="Select generator implementation: bp (batch parallel).",
     )
     p.add_argument(
         "--enable-trace",
@@ -297,31 +296,17 @@ def run_demo(
             from models.demos.deepseek_v3.demo.token_accuracy import TokenAccuracy
 
             token_acc = TokenAccuracy(str(reference_file), prompt_len=tf_prompt_len)
-        if generator == "bp":
-            gen = DeepseekGeneratorDP(
-                mesh_device=mesh_device,
-                model_path=Path(model_path),
-                cache_dir=Path(cache_dir),
-                tokenizer=tokenizer,
-                random_weights=bool(random_weights),
-                dense_layers=(1 if random_weights and single_layer else None),
-                override_num_layers=(1 if random_weights else None),
-                single_layer=(single_layer if random_weights else None),
-                enable_trace=enable_trace,
-            )
-        else:  # generator == "pp"
-            if enable_trace:
-                assert False, "Tracing is not supported for pp generator."
-            gen = DeepseekGeneratorPP(
-                mesh_device=mesh_device,
-                model_path=Path(model_path),
-                cache_dir=Path(cache_dir),
-                tokenizer=tokenizer,
-                random_weights=bool(random_weights),
-                dense_layers=(1 if random_weights and single_layer else None),
-                override_num_layers=(1 if random_weights else None),
-                single_layer=(single_layer if random_weights else None),
-            )
+        gen = DeepseekGeneratorDP(
+            mesh_device=mesh_device,
+            model_path=Path(model_path),
+            cache_dir=Path(cache_dir),
+            tokenizer=tokenizer,
+            random_weights=bool(random_weights),
+            dense_layers=(1 if random_weights and single_layer else None),
+            override_num_layers=(1 if random_weights else None),
+            single_layer=(single_layer if random_weights else None),
+            enable_trace=enable_trace,
+        )
         # Build the prompt list
         if random_weights:
             prompt_list = [""]

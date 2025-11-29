@@ -156,6 +156,7 @@ def _merge_run_config(
         model_state_config_item, FromWeightConfig
     ):  # TODO: bring regular tensor saving back once Issue #26763 is resolved
         if isinstance(weight_config_item, SavedWeight):
+            breakpoint()
             # Check if we have cached weights first
             if cached_ttnn_weights is not None and weight_config_item.path in cached_ttnn_weights:
                 return cached_ttnn_weights[weight_config_item.path]
