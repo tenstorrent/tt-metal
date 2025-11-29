@@ -135,11 +135,11 @@
 // Tensix routing table for fabric networking
 #define MEM_TENSIX_ROUTING_TABLE_BASE (MEM_FABRIC_COUNTER_BASE + MEM_FABRIC_COUNTER_L1_SIZE)
 #define MEM_ROUTING_TABLE_SIZE \
-    2096  // struct layout: base(484) + 1d_path(64) + 2d_path(512) + exit_table(1024) + padding(12)
+    2288  // struct layout: base(484) + 1d_path(256) + 2d_path(512) + exit_table(1024) + padding(12)
 #define MEM_OFFSET_OF_ROUTING_PATHS 484
 #define MEM_ROUTING_TABLE_PADDING 12
 
-#define ROUTING_PATH_SIZE_1D 64
+#define ROUTING_PATH_SIZE_1D 256
 // 2D uncompressed size is too large to fit in L1 memory
 #define COMPRESSED_ROUTING_PATH_SIZE_1D 0    // sizeof(intra_mesh_routing_path_t<1, true>)
 #define COMPRESSED_ROUTING_PATH_SIZE_2D 512  // sizeof(intra_mesh_routing_path_t<2, true>)
