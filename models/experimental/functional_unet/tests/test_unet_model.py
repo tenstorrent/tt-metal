@@ -7,8 +7,8 @@ import ttnn
 
 from ttnn.device import is_wormhole_b0
 
+from models.tt_cnn.tt.testing import create_random_input_tensor
 from models.experimental.functional_unet.tt.model_preprocessing import (
-    create_unet_input_tensors,
     create_unet_model_parameters,
 )
 from models.experimental.functional_unet.tt import unet_shallow_torch
@@ -22,7 +22,7 @@ from models.experimental.functional_unet.tests.common import (
 
 
 def run_unet_model(batch, groups, device, iterations=1):
-    torch_input, ttnn_input = create_unet_input_tensors(
+    torch_input, ttnn_input = create_random_input_tensor(
         batch,
         groups,
         channel_order="first",
@@ -48,7 +48,7 @@ def run_unet_model(batch, groups, device, iterations=1):
     )
 
     for _ in range(iterations - 1):
-        _, ttnn_input = create_unet_input_tensors(
+        _, ttnn_input = create_random_input_tensor(
             batch,
             groups,
             channel_order="first",
