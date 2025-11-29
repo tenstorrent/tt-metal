@@ -23,7 +23,7 @@ void bind_moreh_mean_operation(nb::module_& mod) {
         ttnn::nanobind_arguments_t{
             nb::arg("input"),
             nb::kw_only(),
-            nb::arg("dim"),
+            nb::arg("dim") = nb::none(),
             nb::arg("keepdim") = false,
             nb::arg("divisor") = nb::none(),
             nb::arg("output") = nb::none(),

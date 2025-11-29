@@ -62,7 +62,7 @@ def test_graph_capture_with_all_parameters(device):
     assert node1[1] == "1"
     assert node1[2] == "2"
     assert node1[3] == "nullopt"
-    assert node1[4] == "0"
+    assert node1[4] == "nullopt"
 
     # ttnn::prim::permute
     node4 = captured_graph[4]["arguments"]
