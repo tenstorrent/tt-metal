@@ -1,30 +1,59 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/run_operation.hpp"
+#pragma once
 
-namespace ttnn::operations::reduction::detail {
+#include <vector>
 
-tt::tt_metal::operation::ProgramWithCallbacks topk_single_core_interleaved(
-    const Tensor& input_tensor,
-    uint32_t k,
-    int8_t dim,
-    bool largest,
-    bool sorted,
-    bool uint16_output,
-    const CoreRangeSet& sub_core_grids,
-    Tensor& value_tensor,
-    Tensor& index_tensor);
+#include "ttnn/device_operation.hpp"
+#include "ttnn/operations/reduction/topk/device/topk_device_operation_types.hpp"
 
-tt::tt_metal::operation::ProgramWithCallbacks topk_multicore_interleaved(
-    const Tensor& input_tensor,
-    const std::optional<Tensor>& indices_tensor,
-    uint32_t k,
-    int8_t dim,
-    bool largest,
-    bool sorted,
-    const CoreRangeSet& sub_core_grids,
-    Tensor& value_tensor,
-    Tensor& index_tensor);
-}  // namespace ttnn::operations::reduction::detail
+namespace ttnn::operations::reduction::topk::program {
+
+struct TopKSingleCoreSharedVariables {
+    tt::tt_metal::KernelHandle unary_reader_kernel_id{};
+    tt::tt_metal::KernelHandle binary_writer_kernel_id{};
+    tt::tt_metal::CoreCoord core;
+};
+
+struct TopKSingleCoreProgramFactory {
+    using shared_variables_t = TopKSingleCoreSharedVariables;
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
+
+    static void override_runtime_arguments(
+        cached_program_t& cached_program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
+};
+
+struct TopKMultiCoreSharedVariables {
+    tt::tt_metal::KernelHandle unary_reader_kernel_id{};
+    tt::tt_metal::KernelHandle binary_writer_final_kernel_id{};
+    std::vector<tt::tt_metal::CoreCoord> local_cores;
+    tt::tt_metal::CoreCoord final_core;
+};
+
+struct TopKMultiCoreProgramFactory {
+    using shared_variables_t = TopKMultiCoreSharedVariables;
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
+
+    static void override_runtime_arguments(
+        cached_program_t& cached_program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
+};
+
+}  // namespace ttnn::operations::reduction::topk::program

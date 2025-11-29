@@ -61,7 +61,7 @@ target_sources(
         prod/device/prod_nc_program_factory.cpp
         prod/device/prod_op_all.cpp
         prod/prod.cpp
-        topk/device/topk_op.cpp
+        topk/device/topk_device_operation.cpp
         topk/device/topk_utils.cpp
         topk/topk.cpp
         topk/device/topk_program_factory.cpp
