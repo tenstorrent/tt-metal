@@ -183,6 +183,6 @@ class TestTriage:
         assert len(FAILURE_CHECKS) == 0, f"Arc check failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
         for check in result:
             assert (
-                check.result.location == check.device.arc_block.location
+                check.result.location == check.device_description.device.arc_block.location
             ), f"Incorrect ARC location: {check.result.location}"
             assert 0 < check.result.clock_mhz < 10000, f"Invalid ARC clock: {check.result.clock_mhz}"
