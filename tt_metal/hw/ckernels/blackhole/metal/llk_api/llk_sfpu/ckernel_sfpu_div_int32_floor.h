@@ -19,7 +19,6 @@ sfpi_inline void calculate_div_int32_body(
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr uint dst_tile_size_sfpi = 32;
 
-    sfpi::vInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
     sfpi::vInt b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
     // When converting to float, the integers are treated as sign-magnitude.
@@ -27,32 +26,38 @@ sfpi_inline void calculate_div_int32_body(
     // original inputs are two's complement integers.  Note that
     // sfpi::abs(-2**31) will return -2**31, which will give -0.0 when
     // converted to float via sfpi::int32_to_float.
-    a = sfpi::abs(a);
     b = sfpi::abs(b);
 
     // Convert to floats, but check for the edge case mentioned above.
-    sfpi::vFloat a_f = sfpi::int32_to_float(a, 0);
-    v_if(a_f < 0.0f) { a_f = 2147483648.0f; }
-    v_endif;
     sfpi::vFloat b_f = sfpi::int32_to_float(b, 0);
     v_if(b_f < 0.0f) { b_f = 2147483648.0f; }
     v_endif;
 
-    // This is accurate to ~23 bits of precision.  Since the inputs can be as
-    // large as 2**31-1, so this only gives us an initial approximation.
-    sfpi::vFloat inv_b_f = _sfpu_reciprocal_<2>(b_f);
+    // Compute 1/b accurate to ~22 bits of precision via Halley's Method.
+    // Since the inputs can be as large as 2**31-1, this only gives us an
+    // initial approximation.
+    // We interleave SFPMAD with the loading and conversion of `a`.
+    sfpi::vFloat inv_b_f = sfpi::approx_recip(b_f);
+    sfpi::vFloat e = -inv_b_f * b_f + sfpi::vConst1;
+    sfpi::vInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+    e = e * e + e;
+    a = sfpi::abs(a);
+    inv_b_f = e * inv_b_f + inv_b_f;
+    sfpi::vFloat a_f = sfpi::int32_to_float(a, 0);
+    v_if(a_f < 0.0f) { a_f = 2147483648.0f; }
+    v_endif;
 
     // Initial approximation q = a * 1/b.
-    // We add a special mantissa alignment factor 2.0f**(23+9), which shifts
+    // We add a special mantissa alignment factor 2.0f**(23+10), which shifts
     // the mantissa so that we extract the top 23 bits of the result.
-    sfpi::vFloat q_f = a_f * inv_b_f + 4294967296.0f;
+    sfpi::vFloat q_f = a_f * inv_b_f + vConstFloatPrgm0;
     sfpi::vUInt q = sfpi::exman9(q_f);
 
     // Compute qb = q * b.  This tells us how close our approximation `q` is to
     // the target `a`.  We split into 23-bit chunks.
     // Since inv_b is only accurate to ~23 bits, we only care about the upper
-    // 23 bits, so we can compute qb = (q1<<9 + 0) * (b1<<23 + b0)
-    //                               = (q1<<9) * b0
+    // 22 bits, so we can compute qb = (q1<<10 + 0) * (b1<<22 + b0)
+    //                               = (q1<<10) * b0
 
     sfpi::vInt qb;
 
@@ -61,8 +66,8 @@ sfpi_inline void calculate_div_int32_body(
     // do not need to be masked as this is done internally.
     qb.get() = __builtin_rvtt_bh_sfpmul24(q.get(), b.get(), 0);
 
-    q <<= 9;
-    qb <<= 9;
+    q <<= 10;
+    qb <<= 10;
 
     // Compute remainder.
     sfpi::vInt r = a - qb;
@@ -151,12 +156,12 @@ inline void calculate_div_int32_trunc(const uint dst_index_in0, const uint dst_i
 
 template <bool APPROXIMATION_MODE>
 inline void div_floor_init() {
-    _init_sfpu_reciprocal_<false>();
+    sfpi::vConstFloatPrgm0 = 8589934592.0f;
 }
 
 template <bool APPROXIMATION_MODE>
 inline void div_trunc_init() {
-    _init_sfpu_reciprocal_<false>();
+    sfpi::vConstFloatPrgm0 = 8589934592.0f;
 }
 
 }  // namespace ckernel::sfpu
