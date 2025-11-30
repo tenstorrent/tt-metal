@@ -1012,7 +1012,7 @@ void pytensor_module(nb::module_& mod) {
                 }
                 TT_THROW("Unreachable");
             },
-            nb::keep_alive<0, 1>(),
+            nb::rv_policy::copy,
             R"doc(
                  Extract the scalar value from a tensor containing exactly one element.
 
