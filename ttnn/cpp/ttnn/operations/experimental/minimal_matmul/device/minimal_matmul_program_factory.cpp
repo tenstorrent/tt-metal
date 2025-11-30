@@ -103,7 +103,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     const Tensor& output_tensor,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-    auto device = input_tensor.device();
+    auto* device = input_tensor.device();
 
     if (!config.has_value()) {
         log_debug(tt::LogOp, "No config provided, using default block sizes and core grid");

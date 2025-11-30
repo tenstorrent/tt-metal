@@ -11,7 +11,7 @@ namespace ttnn::operations::reduction::detail {
 namespace py = pybind11;
 
 void bind_reduction_topk_operation(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Returns the :attr:`k` largest or :attr:`k` smallest elements of the :attr:`input_tensor` along a given dimension :attr:`dim`.
 
