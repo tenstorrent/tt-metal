@@ -24,10 +24,7 @@ sfpi_inline void calculate_div_int32_body(
     // want to use MOD0_FMT_INT32=4, which gives us the original two's
     // complement integers.
 
-    // sfpi::vUInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
     // sfpi::vUInt b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-    sfpi::vUInt a = __builtin_rvtt_sfpload(
-        4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].get());
     sfpi::vUInt b = __builtin_rvtt_sfpload(
         4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].get());
 
@@ -36,48 +33,72 @@ sfpi_inline void calculate_div_int32_body(
     // original inputs are two's complement integers.  Note that
     // sfpi::abs(-2**31) will return -2**31, which will give -0.0 when
     // converted to float via sfpi::int32_to_float.
-    a = sfpi::abs(a);
     b = sfpi::abs(b);
 
     // Convert to floats, but check for the edge case mentioned above.
-    sfpi::vFloat a_f = sfpi::int32_to_float(a, 0);
-    v_if(a_f < 0.0f) { a_f = 2147483648.0f; }
-    v_endif;
     sfpi::vFloat b_f = sfpi::int32_to_float(b, 0);
     v_if(b_f < 0.0f) { b_f = 2147483648.0f; }
     v_endif;
 
-    // This is accurate to ~23 bits of precision.  Since the inputs can be as
-    // large as 2**31-1, so this only gives us an initial approximation.
-    sfpi::vFloat inv_b_f = _sfpu_reciprocal_<2>(b_f);
+    // Compute 1/b accurate to ~21 bits of precision via Halley's Method.
+    // Since the inputs can be as large as 2**31-1, this only gives us an
+    // initial approximation.
+    // We interleave SFPMAD with the loading and conversion of `a`.
+
+    // Combines the sign and exponent of -1.0 with the mantissa of `b_f`.
+    // Scale the input value to the range [1.0, 2.0), and make it negative.
+    sfpi::vFloat neg_b_f = sfpi::setman(sfpi::vConstNeg1, sfpi::reinterpret<sfpi::vInt>(b_f));
+    sfpi::vFloat inv_b_f = sfpi::vConstFloatPrgm2 + sfpi::vConstFloatPrgm1 * neg_b_f;
+    sfpi::vFloat scale = sfpi::setman(b_f, 0);
+
+    // N-R
+    sfpi::vFloat t = inv_b_f * neg_b_f + sfpi::vConst1;
+    scale = sfpi::reinterpret<sfpi::vFloat>((254 << 23) - sfpi::reinterpret<sfpi::vInt>(scale));
+    inv_b_f = t * inv_b_f + inv_b_f;
+
+    // Halley
+    sfpi::vFloat e = inv_b_f * neg_b_f + sfpi::vConst1;
+
+    // sfpi::vUInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+    sfpi::vUInt a = __builtin_rvtt_sfpload(
+        4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].get());
+
+    e = e * e + e;
+    a = sfpi::abs(a);
+
+    inv_b_f = e * inv_b_f + inv_b_f;
+    sfpi::vFloat a_f = sfpi::int32_to_float(a, 0);
+    inv_b_f = inv_b_f * scale;
+    v_if(a_f < 0.0f) { a_f = 2147483648.0f; }
+    v_endif;
 
     // Initial approximation q = a * 1/b.
-    // We add a special mantissa alignment factor 2.0f**(23+10), which shifts
-    // the mantissa so that we extract the top 22 bits of the result.
-    sfpi::vFloat q_f = a_f * inv_b_f + 8589934592.0f;
+    // We add a special mantissa alignment factor 2.0f**(23+11), which shifts
+    // the mantissa so that we extract the top 21 bits of the result.
+    sfpi::vFloat q_f = a_f * inv_b_f + sfpi::vConstFloatPrgm0;
 
     sfpi::vUInt MASK_11 = 0x7ff;
     sfpi::vUInt q = sfpi::exman9(q_f);
 
     // Compute qb = q * b.  This tells us how close our approximation `q` is to
-    // the target `a`.  Note: we only care about the top ~23 bits.
-    // Keep the top 22 bits of 32-bit q: q_hi = q>>10
-    // Now q2 = q>>21, q1 = q>>10
-    // And so qb = (q2<<21 + q1<<10) * (b2<<22 + b1<<11 + b0)
-    //           = (q2<<21 * b0) + (q1<<10 * b1<<11) + (q1<<10 * b0)
+    // the target `a`.  Note: we only care about the top ~21 bits.
+    // Keep the top 21 bits of 32-bit q: q_hi = q>>11
+    // Now q2 = q>>22, q1 = q>>11
+    // And so qb = (q2<<22 + q1<<11) * (b2<<22 + b1<<11 + b0)
+    //           = (q2<<22 * b0) + (q1<<11 * b1<<11) + (q1<<11 * b0)
     sfpi::vFloat q1 = int32_to_float(q & MASK_11, 0);
     sfpi::vFloat q2 = int32_to_float(q >> 11, 0);
     sfpi::vFloat b1 = int32_to_float((b >> 11) & MASK_11, 0);
     sfpi::vFloat b0 = int32_to_float(b & MASK_11, 0);
-    q = q << 10;
+    q = q << 11;
 
     sfpi::vFloat MANTISSA_ALIGNMENT_OFFSET = 8388608.0f;
     sfpi::vFloat hi = q2 * b0 + MANTISSA_ALIGNMENT_OFFSET;
     sfpi::vFloat lo = q1 * b0 + MANTISSA_ALIGNMENT_OFFSET;
     hi = q1 * b1 + hi;
 
-    sfpi::vInt qb = sfpi::exman9(lo) << 10;
-    qb += sfpi::exman9(hi) << 21;
+    sfpi::vInt qb = sfpi::exman9(lo) << 11;
+    qb += sfpi::exman9(hi) << 22;
 
     // Compute remainder.
     // a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
@@ -174,13 +195,15 @@ inline void calculate_div_int32_trunc(const uint dst_index_in0, const uint dst_i
 }
 
 template <bool APPROXIMATION_MODE>
-inline void div_floor_init() {
-    _init_sfpu_reciprocal_<false>();
+inline void div_trunc_init() {
+    sfpi::vConstFloatPrgm0 = 17179869184.0f;
+    sfpi::vConstFloatPrgm1 = 0.470588266849517822265625f;
+    sfpi::vConstFloatPrgm2 = 1.41176474094390869140625f;
 }
 
 template <bool APPROXIMATION_MODE>
-inline void div_trunc_init() {
-    _init_sfpu_reciprocal_<false>();
+inline void div_floor_init() {
+    div_trunc_init<APPROXIMATION_MODE>();
 }
 
 }  // namespace ckernel::sfpu
