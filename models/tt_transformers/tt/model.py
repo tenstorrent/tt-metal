@@ -153,13 +153,13 @@ class Transformer(LightweightModule):
         logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return logits
 
-    def prepare_prefill_inputs_trace(self, tokens, page_table=None, chunk_page_table=None):
+    def prepare_prefill_inputs_trace(self, tokens, page_table=None, chunk_page_table=None, **kwargs):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on host.
         """
         host_inputs = self.prepare_inputs_prefill(
-            tokens, page_table=page_table, chunk_page_table=chunk_page_table, trace_enabled=True
+            tokens, page_table=page_table, chunk_page_table=chunk_page_table, trace_enabled=True, **kwargs
         )
         return host_inputs
 
@@ -168,7 +168,9 @@ class Transformer(LightweightModule):
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
         return tt_tokens, tt_page_table, tt_chunk_page_table
 
-    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False):
+    def prepare_inputs_prefill(
+        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False, **kwargs
+    ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device if trace is disabled or on host if trace is enabled.

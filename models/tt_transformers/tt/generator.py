@@ -117,8 +117,9 @@ class Generator:
         page_table=None,
         kv_cache=None,
         model_id=-1,
+        **kwargs,
     ):
-        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table)
+        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table, **kwargs)
         # These matrices will actually be pointing to the whole cos_matrix and sin_matrix that was allocated on device in the RotarySetup class
         tt_rot_mats_prefill_global = host_inputs[1]
         tt_rot_mats_prefill_local = host_inputs[2]
@@ -172,6 +173,7 @@ class Generator:
                 page_table=page_table,
                 kv_cache=kv_cache,
                 model_id=model_id,
+                **kwargs,
             )
             self.trace_id_prefill[trace_key] = trace_id
             self.trace_inputs_prefill[trace_key] = device_inputs
@@ -184,6 +186,7 @@ class Generator:
             prefill_ids,
             page_table=page_table,
             model_id=model_id,
+            **kwargs,
         )
 
         return tt_out_trace
@@ -197,8 +200,9 @@ class Generator:
         user_id=0,
         page_table=None,
         model_id=-1,
+        **kwargs,
     ):
-        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table)
+        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table, **kwargs)
         host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
 
         device_inputs = copy_host_to_device(
