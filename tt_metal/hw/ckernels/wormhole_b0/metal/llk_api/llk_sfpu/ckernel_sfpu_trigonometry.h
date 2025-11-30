@@ -9,12 +9,9 @@
 #include "sfpi.h"
 #include "noc_nonblocking_api.h"
 #include "ckernel_sfpu_recip.h"
-<<<<<<< HEAD
 #include "ckernel_sfpu_exp.h"
-=======
 #include "llk_defs.h"
 
->>>>>>> 433bfec2d9 (wormhole_b0 update)
 using namespace sfpi;
 
 namespace ckernel::sfpu {
@@ -64,7 +61,7 @@ sfpi_inline vFloat sfpu_tan<ApproximationMode::Fast>(vFloat x) {
 }
 
 template <>
-sfpi_inline vFloat sfpu_tan<APPROX_MODE>(vFloat x) {
+sfpi_inline vFloat sfpu_tan<false>(vFloat x) {
     const vFloat xx = x * x;
 
     v_if(sfpi::abs(x) <= 1.0f) {
@@ -103,7 +100,7 @@ sfpi_inline vFloat sfpu_sinpi<ApproximationMode::Fast>(vFloat x) {
 }
 
 template <>
-sfpi_inline vFloat sfpu_sinpi<APPROX_MODE>(vFloat x) {
+sfpi_inline vFloat sfpu_sinpi<false>(vFloat x) {
     vFloat xx = x * x;
 
     return x *
@@ -177,13 +174,7 @@ sfpi_inline vFloat sfpu_atan_maclaurin_series(vFloat val) {
 template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_atan() {
     for (int d = 0; d < ITERATIONS; d++) {
-<<<<<<< HEAD
         dst_reg[0] = sfpu_atan_maclaurin_series<APPROX_MODE>(dst_reg[0]);
-=======
-        vFloat val = dst_reg[0];
-        val = sfpu_atan_maclaurin_series<APPROX_MODE>(val);
-        dst_reg[0] = val;
->>>>>>> 433bfec2d9 (wormhole_b0 update)
         dst_reg++;
     }
 }
@@ -227,8 +218,9 @@ inline void calculate_asin() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
-        v = sfpu_asine_maclaurin_series<APPROX_MODE>(v);
-        dst_reg[0] = v;
+        v_if(v < vConstNeg1 || v > vConst1) { dst_reg[0] = std::numeric_limits<float>::quiet_NaN(); }
+        v_else { dst_reg[0] = sfpu_asine_maclaurin_series<APPROX_MODE>(v); }
+        v_endif;
         dst_reg++;
     }
 }
@@ -239,9 +231,33 @@ inline void calculate_acos() {
     // acos = (pi/2 - asin)
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
-        v = sfpu_asine_maclaurin_series<APPROX_MODE>(v);
-        v = PI_2 - v;
-        dst_reg[0] = v;
+        v_if(v < vConstNeg1 || v > vConst1) { dst_reg[0] = std::numeric_limits<float>::quiet_NaN(); }
+        v_else { dst_reg[0] = PI_2 - sfpu_asine_maclaurin_series<APPROX_MODE>(v); }
+        v_endif;
+        dst_reg++;
+    }
+}
+
+// cosh = (exp(x) + exp(-x)) / 2
+template <ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
+inline void calculate_cosh() {
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0];
+        vFloat result = (_sfpu_exp_21f_<is_fp32_dest_acc_en>(v) + _sfpu_exp_21f_<is_fp32_dest_acc_en>(-v)) * 0.5f;
+        dst_reg[0] = result;
+        dst_reg++;
+    }
+}
+
+// sinh = (exp(x) - exp(-x)) / 2
+template <ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
+inline void calculate_sinh() {
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0];
+        vFloat result = (_sfpu_exp_21f_<is_fp32_dest_acc_en>(v) - _sfpu_exp_21f_<is_fp32_dest_acc_en>(-v)) * 0.5f;
+        dst_reg[0] = result;
         dst_reg++;
     }
 }

@@ -12,7 +12,7 @@
 
 namespace ckernel::sfpu {
 
-template <ApproximationMode APPROX_MODE int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
