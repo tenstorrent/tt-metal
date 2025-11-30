@@ -283,7 +283,7 @@ void FabricRouterBuilder::connect_to_local_tensix_builder(FabricTensixDatamoverB
     // Only one local relay connection (we can consider the local relay connection as one ds tensix connection)
     erisc_builder_->num_downstream_tensix_connections = 1;
 
-    auto adapter_ptr = erisc_builder_->receiver_channel_to_downstream_adapter.get();
+    auto* adapter_ptr = erisc_builder_->receiver_channel_to_downstream_adapter.get();
     const auto tensix_noc_x = tensix_builder.get_noc_x();
     const auto tensix_noc_y = tensix_builder.get_noc_y();
     adapter_ptr->add_local_tensix_connection(adapter_spec, local_tensix_dir, CoreCoord(tensix_noc_x, tensix_noc_y));

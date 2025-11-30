@@ -15,7 +15,7 @@ namespace ttnn::operations::experimental::copy::detail {
 namespace py = pybind11;
 
 void py_bind_typecast(py::module& module) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
         Returns a new tensor which is a typecast of input tensor with new datatype``{0}``.
 
         Input tensors must be on device, in ROW MAJOR or TILE layout, and have matching data type.

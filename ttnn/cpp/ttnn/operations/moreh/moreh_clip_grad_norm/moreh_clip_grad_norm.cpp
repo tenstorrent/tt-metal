@@ -41,7 +41,7 @@ Tensor MorehClipGradNorm::invoke(
             "`error_if_nonfinite=False`",
             norm_type);
     }
-    auto device = inputs.at(0).device();
+    auto* device = inputs.at(0).device();
     const auto compute_kernel_config_val =
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 

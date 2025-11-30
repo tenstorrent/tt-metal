@@ -1417,12 +1417,12 @@ void LayerNormShardedProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    const auto src_buffer_a = tensor_args.input.buffer();
+    auto* const src_buffer_a = tensor_args.input.buffer();
     const auto& b_tensor = tensor_args.residual_input_tensor;
     const auto& gamma_tensor = tensor_args.weight;
     const auto& beta_tensor = tensor_args.bias;
     const auto& stats_tensor = tensor_args.stats;
-    const auto dst_buffer = tensor_return_value.buffer();
+    auto* const dst_buffer = tensor_return_value.buffer();
 
     const auto& capture = cached_program.shared_variables;
     auto& program = cached_program.program;

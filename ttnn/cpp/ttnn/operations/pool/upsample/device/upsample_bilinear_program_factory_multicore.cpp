@@ -347,11 +347,11 @@ void UpsampleBilinearProgramFactory::override_runtime_arguments(
     auto& cb_src0 = cached_program.shared_variables.cb_src0;
     auto& out_cb = cached_program.shared_variables.out_cb;
 
-    auto& input_tensor = tensor_args.input_tensor;
+    const auto& input_tensor = tensor_args.input_tensor;
 
     auto halo_in = HaloTensorCreation(input_tensor);
-    auto src_buffer = halo_in.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    auto* src_buffer = halo_in.buffer();
+    auto* dst_buffer = output_tensor.buffer();
 
     UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
     UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);

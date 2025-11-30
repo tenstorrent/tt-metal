@@ -9,7 +9,7 @@
 
 namespace ttnn::operations::data_movement::clone {
 void bind_clone_operation(py::module& module) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
         Clones the input tensor, creating a copy with the specified memory configuration and converting its data type to dtype. This operation does not alter the tensor's layout.
 
         Args:

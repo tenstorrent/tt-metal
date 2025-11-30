@@ -554,7 +554,7 @@ void Cluster::generate_virtual_to_profiler_flat_id_mapping() {
             continue;
         }
         this->virtual_routing_to_profiler_flat_id_.insert({board_type, {}});
-        auto& soc_desc = this->get_soc_desc(chip_id);
+        const auto& soc_desc = this->get_soc_desc(chip_id);
         for (const auto& core_to_profiler_id : soc_desc.physical_routing_to_profiler_flat_id) {
             this->virtual_routing_to_profiler_flat_id_.at(board_type)
                 .insert(
@@ -595,7 +595,7 @@ CoreCoord Cluster::get_virtual_coordinate_from_logical_coordinates(
         TT_THROW("Undefined conversion for core type.");
     }
 
-    auto& soc_desc = this->get_soc_desc(chip_id);
+    const auto& soc_desc = this->get_soc_desc(chip_id);
     if (core_type == CoreType::DRAM) {
         return soc_desc.get_physical_dram_core_from_logical(logical_coord);
     }
@@ -610,7 +610,7 @@ tt_cxy_pair Cluster::get_virtual_coordinate_from_logical_coordinates(tt_cxy_pair
     return tt_cxy_pair(logical_coordinate.chip, xy_virtual_coord);
 }
 CoreCoord Cluster::get_virtual_coordinate_from_physical_coordinates(ChipId chip_id, CoreCoord physical_coord) const {
-    auto& soc_desc = this->get_soc_desc(chip_id);
+    const auto& soc_desc = this->get_soc_desc(chip_id);
     tt::umd::CoreCoord translated_coord =
         soc_desc.translate_coord_to(physical_coord, CoordSystem::NOC0, CoordSystem::TRANSLATED);
     return {translated_coord.x, translated_coord.y};
@@ -624,7 +624,7 @@ CoreCoord Cluster::get_physical_coordinate_from_logical_coordinates(
             "Conversion requested to Physical Coordinates. Please note that Physical Coordinates are not expected to "
             "be used in tt-metal APIs.");
     }
-    auto& soc_desc = this->get_soc_desc(chip_id);
+    const auto& soc_desc = this->get_soc_desc(chip_id);
     return soc_desc.get_physical_core_from_logical_core(logical_coord, core_type);
 }
 

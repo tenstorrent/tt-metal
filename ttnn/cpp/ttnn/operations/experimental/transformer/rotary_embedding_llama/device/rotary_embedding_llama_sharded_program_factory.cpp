@@ -68,11 +68,11 @@ RotaryEmbeddingLlamaMultiCoreSharded::cached_program_t RotaryEmbeddingLlamaMulti
     uint32_t num_cos_sin_tiles = head_dim_t * num_sin_cos_rows_per_core;
 
     // Set up the CBs
-    auto src_buffer = input.buffer();
-    auto cos_buffer = cos.buffer();
-    auto sin_buffer = sin.buffer();
-    auto trans_mat_buffer = trans_mat.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* cos_buffer = cos.buffer();
+    auto* sin_buffer = sin.buffer();
+    auto* trans_mat_buffer = trans_mat.buffer();
+    auto* dst_buffer = output.buffer();
 
     uint32_t input_cb_index = CBIndex::c_0;
     tt_metal::CircularBufferConfig cb_input_config =
@@ -179,11 +179,11 @@ void RotaryEmbeddingLlamaMultiCoreSharded::override_runtime_arguments(
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
 
-    auto src_buffer = tensor_args.input_tensor.buffer();
-    auto cos_buffer = tensor_args.cos_cache.buffer();
-    auto sin_buffer = tensor_args.sin_cache.buffer();
-    auto trans_mat_buffer = tensor_args.trans_mat.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = tensor_args.input_tensor.buffer();
+    auto* cos_buffer = tensor_args.cos_cache.buffer();
+    auto* sin_buffer = tensor_args.sin_cache.buffer();
+    auto* trans_mat_buffer = tensor_args.trans_mat.buffer();
+    auto* dst_buffer = output.buffer();
 
     UpdateDynamicCircularBufferAddress(program, shared_variables.cb_input, *src_buffer);
     UpdateDynamicCircularBufferAddress(program, shared_variables.cb_cos, *cos_buffer);

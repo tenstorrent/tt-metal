@@ -304,7 +304,7 @@ UpsampleMultiCoreShardedProgramFactory::cached_program_t UpsampleMultiCoreSharde
 
     tt::DataFormat config_df = tt::DataFormat::RawUInt16;
     const auto& config_storage = config_tensor_device.device_storage();
-    auto config_buffer = config_storage.get_buffer();
+    auto* config_buffer = config_storage.get_buffer();
     auto config_buffer_page_size = config_buffer->page_size();
 
     auto [config_cb_id, config_cb] = tt::tt_metal::create_cb(
@@ -354,8 +354,8 @@ void UpsampleMultiCoreShardedProgramFactory::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     auto& program = cached_program.program;
-    auto src_buffer = tensor_args.input_tensor.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    auto* src_buffer = tensor_args.input_tensor.buffer();
+    auto* dst_buffer = output_tensor.buffer();
 
     UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_src0, *src_buffer);
     UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.out_cb, *dst_buffer);

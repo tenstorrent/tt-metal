@@ -88,7 +88,7 @@ bool verify_single_core_cost(const std::vector<ttnn::Tensor>& input_tensors, uin
     uint32_t transposed_cb_tile_count = 4;
     uint32_t result_prep_cb_tile_count = 2 * Ktiles;  // intermediate output
     uint32_t output_cb_tile_count = Ktiles;
-    auto device = input_tensors.at(0).device();
+    auto* device = input_tensors.at(0).device();
     tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype());
     tt::DataFormat index_cb_data_format = uint16_output ? tt::DataFormat::UInt16 : tt::DataFormat::UInt32;
     uint32_t value_tile_size = tt::tile_size(value_cb_data_format);

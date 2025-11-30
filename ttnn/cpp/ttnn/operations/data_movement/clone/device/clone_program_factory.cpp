@@ -58,8 +58,8 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
         CreateCircularBuffer(program, all_cores, dst_cb_config);
     }
 
-    auto input_buffer = input.buffer();
-    auto output_buffer = output.buffer();
+    auto* input_buffer = input.buffer();
+    auto* output_buffer = output.buffer();
 
     std::vector<uint32_t> reader_compile_time_args, writer_compile_time_args;
     if (tilized) {

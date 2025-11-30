@@ -192,8 +192,8 @@ void append_fabric_connection_rt_args(
                 src_chip_id, fabric_router_channel);
 
         const auto& edm_config = fabric_context.get_fabric_router_config();
-        auto channel_allocator = edm_config.channel_allocator.get();
-        const auto static_channel_allocator =
+        auto* channel_allocator = edm_config.channel_allocator.get();
+        auto* const static_channel_allocator =
             dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
         TT_FATAL(
             static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");

@@ -350,11 +350,11 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         compute_defines["RMSNORM"] = "1";
     }
 
-    auto reader_kernel_path = use_row_major_kernel
-                                  ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                    "reader_unary_interleaved_ln_rm_gb.cpp"
-                                  : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                                    "reader_unary_interleaved_ln.cpp";
+    const auto* reader_kernel_path = use_row_major_kernel
+                                         ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                           "reader_unary_interleaved_ln_rm_gb.cpp"
+                                         : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                           "reader_unary_interleaved_ln.cpp";
     reader_kernel_path = large_tensor_needed
                              ? (use_welford_and_not_rms_norm
                                     ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
@@ -551,15 +551,15 @@ void LayerNormMultiCoreProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    const auto src_a_dram_buffer = tensor_args.input.buffer();
+    auto* const src_a_dram_buffer = tensor_args.input.buffer();
     const auto& src_b_tensor = tensor_args.residual_input_tensor;
     const auto& gamma_tensor = tensor_args.weight;
     const auto& beta_tensor = tensor_args.bias;
-    const auto dst_dram_buffer = tensor_return_value.buffer();
+    auto* const dst_dram_buffer = tensor_return_value.buffer();
 
-    auto src_b_dram_buffer = src_b_tensor.has_value() ? src_b_tensor.value().buffer() : nullptr;
-    auto gamma_dram_buffer = gamma_tensor.has_value() ? gamma_tensor.value().buffer() : nullptr;
-    auto beta_dram_buffer = beta_tensor.has_value() ? beta_tensor.value().buffer() : nullptr;
+    auto* src_b_dram_buffer = src_b_tensor.has_value() ? src_b_tensor.value().buffer() : nullptr;
+    auto* gamma_dram_buffer = gamma_tensor.has_value() ? gamma_tensor.value().buffer() : nullptr;
+    auto* beta_dram_buffer = beta_tensor.has_value() ? beta_tensor.value().buffer() : nullptr;
 
     const auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;

@@ -15,7 +15,7 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_repeat_interleave(py::module& module) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
         Repeats elements of a :attr:`tensor` in the given :attr:`dim`.
 
         Args:

@@ -12,7 +12,7 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void py_bind_bcast(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Perform a binary elementwise operation ``math_op`` between tensors ``input_a`` and ``input_b``, where values from tensor ``input_b`` are broadcast.
 

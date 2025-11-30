@@ -101,11 +101,11 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    auto q_buffer = input_tensor_q.buffer();
-    auto k_buffer = input_tensor_k.buffer();
-    auto v_buffer = input_tensor_v.buffer();
-    auto cu_window_seqlens_buffer = cu_window_seqlens.buffer();
-    auto out0_buffer = output_tensor.buffer();
+    auto* q_buffer = input_tensor_q.buffer();
+    auto* k_buffer = input_tensor_k.buffer();
+    auto* v_buffer = input_tensor_v.buffer();
+    auto* cu_window_seqlens_buffer = cu_window_seqlens.buffer();
+    auto* out0_buffer = output_tensor.buffer();
 
     CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
                                                      : device->compute_with_storage_grid_size();
@@ -595,11 +595,11 @@ operation::ProgramWithCallbacks sdpa_windowed_multi_core(
             const operation::Tensors& input_tensors,
             const operation::OptionalConstTensors& optional_input_tensors,
             const operation::Tensors& output_tensors) {
-            auto q_buffer = input_tensors.at(0).buffer();
-            auto k_buffer = input_tensors.at(1).buffer();
-            auto v_buffer = input_tensors.at(2).buffer();
-            auto cu_window_seqlens_buffer = input_tensors.at(3).buffer();
-            auto out0_buffer = output_tensors.at(0).buffer();
+            auto* q_buffer = input_tensors.at(0).buffer();
+            auto* k_buffer = input_tensors.at(1).buffer();
+            auto* v_buffer = input_tensors.at(2).buffer();
+            auto* cu_window_seqlens_buffer = input_tensors.at(3).buffer();
+            auto* out0_buffer = output_tensors.at(0).buffer();
 
             const uint32_t q_addr = q_buffer->address();
             const uint32_t k_addr = k_buffer->address();

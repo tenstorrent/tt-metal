@@ -92,8 +92,8 @@ void ReshapeTileProgramFactory::override_runtime_arguments(
     const reshape_on_device::operation_attributes_t& operation_attributes,
     const reshape_on_device::tensor_args_t& tensor_args,
     reshape_on_device::tensor_return_value_t& output_tensor) {
-    auto src_buffer = tensor_args.input_tensor.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    auto* src_buffer = tensor_args.input_tensor.buffer();
+    auto* dst_buffer = output_tensor.buffer();
 
     CoreCoord core = {0, 0};
 

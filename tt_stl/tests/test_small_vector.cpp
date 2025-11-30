@@ -146,7 +146,7 @@ TEST_F(SmallVectorTrackedTest, CopyConstructorSmallAndLarge) {
     small.emplace_back(1);
     small.emplace_back(2);
     small.emplace_back(3);
-    const auto smallData = small.data();
+    auto* const smallData = small.data();
     Vec copySmall(small);
     EXPECT_EQ(copySmall.size(), small.size());
     for (std::size_t i = 0; i < copySmall.size(); ++i) {
@@ -160,7 +160,7 @@ TEST_F(SmallVectorTrackedTest, CopyConstructorSmallAndLarge) {
     for (int i = 0; i < kInlineCapacity + 4; ++i) {
         large.emplace_back(i);
     }
-    const auto largeData = large.data();
+    auto* const largeData = large.data();
     EXPECT_GT(large.capacity(), kInlineCapacity);
     Vec copyLarge(large);
     EXPECT_EQ(copyLarge.size(), large.size());
@@ -195,7 +195,7 @@ TEST_F(SmallVectorTrackedTest, MoveConstructorSmallAndLarge) {
             large.emplace_back(i);
         }
         // Force allocation beyond inline capacity
-        const auto oldData = large.data();
+        auto* const oldData = large.data();
         const std::size_t oldCapacity = large.capacity();
         Vec moved = std::move(large);
         EXPECT_EQ(moved.size(), kInlineCapacity + 2);
@@ -237,7 +237,7 @@ TEST_F(SmallVectorIntTest, PushWithinSmallBufferKeepsInplaceStorage) {
     // returned by data().  Subsequent pushes up to the inline capacity
     // should not change this pointer.
     vec.push_back(0);
-    auto initialPtr = vec.data();
+    auto* initialPtr = vec.data();
     auto initialCap = vec.capacity();
     for (int i = 1; i < kInlineCapacity; ++i) {
         vec.push_back(i);
@@ -252,7 +252,7 @@ TEST_F(SmallVectorIntTest, PushBeyondSmallBufferTriggersHeapAllocation) {
     for (int i = 0; i < kInlineCapacity; ++i) {
         vec.push_back(i);
     }
-    const auto smallPtr = vec.data();
+    auto* const smallPtr = vec.data();
     const auto smallCap = vec.capacity();
     // Pushing the fifth element should trigger a reallocation to the heap.
     vec.push_back(4);
@@ -279,7 +279,7 @@ TEST_F(SmallVectorIntTest, ForwardAndReverseIterators) {
     Vec vec{1, 2, 3, 4};
     // Sum elements via forward iterators.
     int sum = 0;
-    for (auto it = vec.begin(); it != vec.end(); ++it) {
+    for (auto* it = vec.begin(); it != vec.end(); ++it) {
         sum += *it;
     }
     EXPECT_EQ(sum, 10);
@@ -354,7 +354,7 @@ TEST_F(SmallVectorTrackedTest, PushPopEmplaceBack) {
 TEST_F(SmallVectorIntTest, InsertAtVariousPositions) {
     Vec vec{1, 4};
     // Insert a single element in the middle.
-    auto it = vec.insert(vec.begin() + 1, 2);
+    auto* it = vec.insert(vec.begin() + 1, 2);
     EXPECT_EQ(vec.size(), 3u);
     EXPECT_EQ(vec[1], 2);
     EXPECT_EQ(*it, 2);
@@ -376,7 +376,7 @@ TEST_F(SmallVectorIntTest, InsertAtVariousPositions) {
 TEST_F(SmallVectorIntTest, EraseSingleAndRange) {
     Vec vec{0, 1, 2, 3, 4};
     // Erase a single element.
-    auto it = vec.erase(vec.begin() + 1);
+    auto* it = vec.erase(vec.begin() + 1);
     EXPECT_EQ(*it, 2);
     EXPECT_EQ(vec.size(), 4u);
     std::vector<int> expected1{0, 2, 3, 4};

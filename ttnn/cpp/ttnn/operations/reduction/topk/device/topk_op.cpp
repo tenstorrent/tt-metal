@@ -71,7 +71,7 @@ void TopK::validate_with_output_tensors(
 
     bool uint16_output = (input_shape[this->dim] <= std::numeric_limits<uint16_t>::max());
     if (input_shape[dim] >= topk::constants::multi_core_min_width) {  // multicore implementation
-        auto device = input_tensors.at(0).device();
+        auto* device = input_tensors.at(0).device();
         tt::DataFormat value_cb_data_format =
             tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype());
         tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;
@@ -157,7 +157,7 @@ operation::ProgramWithCallbacks TopK::create_program(
                                              // supported, we default to single core
     multicore_supported &= (this->k <= 64);  // multicore implementation only supports k <= 64
     if (multicore_supported) {               // don't bother with longer check if already false
-        auto device = input_tensors.at(0).device();
+        auto* device = input_tensors.at(0).device();
         tt::DataFormat value_cb_data_format =
             tt::tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype());
         tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;

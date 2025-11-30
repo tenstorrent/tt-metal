@@ -15,7 +15,7 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_split(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Returns a tensor that is in num_splits ways on dim.
 

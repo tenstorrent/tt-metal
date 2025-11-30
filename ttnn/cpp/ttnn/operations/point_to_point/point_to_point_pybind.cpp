@@ -15,7 +15,7 @@ namespace ttnn::operations::point_to_point {
 namespace py = pybind11;
 
 void py_bind_point_to_point(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Point-to-point send and receive operation. Send a tensor from one device to another.
 
