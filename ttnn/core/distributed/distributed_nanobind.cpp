@@ -9,12 +9,14 @@
 #include <optional>
 #include <sstream>
 #include <vector>
+#include <list>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/make_iterator.h>
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/vector.h>
+#include <nanobind/stl/list.h>
 
 #include "ttnn-nanobind/nanobind_helpers.hpp"
 #include "ttnn-nanobind/small_vector_caster.hpp"
@@ -729,14 +731,34 @@ void py_module(nb::module_& mod) {
                 Tensor: The aggregated tensor.
             )doc");
     mod.def(
-        "from_host_shards",  // TODO_NANOBIND: python list not casting properly here?
-        [](const std::vector<Tensor>& tensors, const MeshShape& mesh_shape) -> Tensor {
-            return from_host_shards(tensors, mesh_shape);
-        },
-        nb::kw_only(),
-        nb::arg("tensors"),
-        nb::arg("mesh_shape"),
-        R"doc(
+           "from_host_shards",
+           [](const std::list<Tensor>& tensors, const MeshShape& mesh_shape) -> Tensor {
+               std::vector<Tensor> vec{tensors.begin(), tensors.end()};
+
+               return from_host_shards(vec, mesh_shape);
+           },
+           nb::kw_only(),
+           nb::arg("tensors"),
+           nb::arg("mesh_shape"),
+           R"doc(
+            Creates a multi-device host tensor from a set of individual host shards.
+
+            Args:
+                tensors (List[Tensor]): The tensor shards to aggregate.
+                mesh_shape (MeshShape): The shape of the mesh to aggregate the shards over.
+
+            Returns:
+                Tensor: The multi-device host tensor.
+            )doc")
+        .def(
+            "from_host_shards",  // TODO_NANOBIND: python list not casting properly here?
+            [](const std::vector<Tensor>& tensors, const MeshShape& mesh_shape) -> Tensor {
+                return from_host_shards(tensors, mesh_shape);
+            },
+            nb::kw_only(),
+            nb::arg("tensors"),
+            nb::arg("mesh_shape"),
+            R"doc(
             Creates a multi-device host tensor from a set of individual host shards.
 
             Args:
