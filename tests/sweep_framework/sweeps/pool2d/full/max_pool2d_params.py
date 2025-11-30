@@ -5,7 +5,7 @@
 import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from tests.sweep_framework.sweep_utils.max_pool2d_common import run_max_pool2d, mesh_device_fixture, invalidate_vector
+from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import run_max_pool2d
 
 # Shapes are taken from existing unit tests
 input_shapes = [
@@ -56,21 +56,16 @@ def run(
     [pad_h, pad_w] = padding
     [dilation_h, dilation_w] = [1, 1]  # dilation is fix
 
-    return run_max_pool2d(
-        in_n,
-        in_c,
-        in_h,
-        in_w,
-        kernel_h,
-        kernel_w,
-        stride_h,
-        stride_w,
-        pad_h,
-        pad_w,
-        dilation_h,
-        dilation_w,
-        dtype,
+    run_max_pool2d(
+        [in_n, in_c, in_h, in_w],
+        (kernel_h, kernel_w),
+        (pad_h, pad_w),
+        (stride_h, stride_w),
+        (dilation_h, dilation_w),
         device,
-        sharding,
-        ceil_mode,
+        tensor_map,
+        dtype,
+        shard_scheme=sharding,
+        ceil_mode=ceil_mode,
+        nightly_skips=False,
     )
