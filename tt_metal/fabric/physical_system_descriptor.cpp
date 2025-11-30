@@ -4,6 +4,7 @@
 
 #include <yaml-cpp/yaml.h>
 #include <algorithm>
+#include <map>
 #include <set>
 #include <fstream>
 
@@ -64,8 +65,30 @@ TrayID get_tray_id_for_chip(
     return TrayID{tray_id};
 }
 
+uint64_t get_board_id_for_chip(ChipId chip_id, umd::ClusterDescriptor* cluster_desc, bool using_mock_cluster_desc) {
+    // This is a workaround for the Simulation Backend, using Mock Cluster Descriptors.
+    // Mock Cluster Descriptors do not populate the board id for chips, so we need to assign a default value.
+    // This is conceptually okay, since we don't use the PhysicalSystemDescriptor to report physical placement
+    // of boards or chips for Simulation Devices.
+    // Mock Cluster Descriptors should populate these fields correctly.
+    if (using_mock_cluster_desc) {
+        try {
+            return cluster_desc->get_board_id_for_chip(chip_id);
+        } catch (const std::exception& e) {
+            static constexpr uint32_t num_boards = 4;
+            static constexpr uint64_t board_id_base = 0x1000000000000000ULL;
+            return board_id_base + (chip_id % num_boards);
+        }
+    }
+
+    return cluster_desc->get_board_id_for_chip(chip_id);
+}
+
 std::pair<TrayID, ASICLocation> get_asic_position(
-    tt::umd::Cluster& cluster, ChipId chip_id, bool using_mock_cluster_desc) {
+    tt::umd::Cluster& cluster,
+    ChipId chip_id,
+    bool using_mock_cluster_desc,
+    std::unordered_map<uint64_t, TrayID>& board_id_to_tray_id) {
     auto cluster_desc = cluster.get_cluster_description();
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB_WORMHOLE ||
         cluster_desc->get_board_type(chip_id) == BoardType::UBB_BLACKHOLE) {
@@ -74,7 +97,23 @@ std::pair<TrayID, ASICLocation> get_asic_position(
         TT_FATAL(
             using_mock_cluster_desc || get_mobo_name() == ubb_mobo_name, "UBB systems must use S7T-MB motherboard.");
         auto ubb_id = tt::tt_fabric::get_ubb_id(cluster, chip_id);
+        board_id_to_tray_id[get_board_id_for_chip(chip_id, cluster_desc, using_mock_cluster_desc)] =
+            TrayID{ubb_id.tray_id};
         return {TrayID{ubb_id.tray_id}, ASICLocation{ubb_id.asic_id}};
+    } else if (cluster_desc->get_board_type(chip_id) == BoardType::P300 && cluster_desc->get_number_of_chips() == 4) {
+        // Special Handling for Blackhole Quietbox GE - since this MOBO does not expose a clean way of deriving
+        // tray ids from bus ids.
+        TT_FATAL(
+            using_mock_cluster_desc || get_mobo_name() == "B850M-C",
+            "Blackhole Quietbox GE systems must use B850M-C motherboard.");
+        // Assign Tray ID arbitrarily based on board id (this works because the cross-board/WARP connections in the QBGE
+        // are completely symmetric)
+        auto curr_board_id = get_board_id_for_chip(chip_id, cluster_desc, using_mock_cluster_desc);
+        if (board_id_to_tray_id.find(curr_board_id) == board_id_to_tray_id.end()) {
+            auto new_tray_id = board_id_to_tray_id.size() + 1;
+            board_id_to_tray_id[curr_board_id] = TrayID{new_tray_id};
+        }
+        return {board_id_to_tray_id[curr_board_id], ASICLocation{cluster_desc->get_asic_location(chip_id)}};
     } else {
         auto tray_id = get_tray_id_for_chip(cluster, chip_id, get_mobo_name(), using_mock_cluster_desc);
         ASICLocation asic_location;
@@ -102,6 +141,7 @@ std::pair<TrayID, ASICLocation> get_asic_position(
         } else {
             TT_THROW("Unrecognized Architecture. Cannot determine asic location.");
         }
+        board_id_to_tray_id[get_board_id_for_chip(chip_id, cluster_desc, using_mock_cluster_desc)] = TrayID{tray_id};
         return {tray_id, asic_location};
     }
 }
@@ -247,7 +287,11 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
         // the hardware.
         cluster_desc_ = tt::umd::Cluster::create_cluster_descriptor();
     }
-    const auto& chip_unique_ids = cluster_desc_->get_chip_unique_ids();
+    // Use sorted chip IDs here to ensure consistent ordering of any attributes derived from chip/board ids.
+    // For example - QBGE tray ids are a function of the board ID ordering - this step ensures consistency
+    // across runs.
+    const auto& unsorted_chip_unique_ids = cluster_desc_->get_chip_unique_ids();
+    std::map<ChipId, uint64_t> chip_unique_ids(unsorted_chip_unique_ids.begin(), unsorted_chip_unique_ids.end());
     const auto& eth_connections = cluster_desc_->get_ethernet_connections();
     auto cross_host_eth_connections = cluster_desc_->get_ethernet_connections_to_remote_devices();
 
@@ -266,7 +310,7 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
             "discovery");
         tt::umd::Cluster& cluster = *cluster_;
         auto [tray_id, asic_location] =
-            get_asic_position(cluster, src_chip_id, target_device_type_ != TargetDevice::Silicon);
+            get_asic_position(cluster, src_chip_id, target_device_type_ != TargetDevice::Silicon, board_id_to_tray_id);
         asic_descriptors_[src_unique_id] = ASICDescriptor{
             TrayID{tray_id}, asic_location, cluster_desc_->get_board_type(src_chip_id), src_unique_id, hostname};
     };
