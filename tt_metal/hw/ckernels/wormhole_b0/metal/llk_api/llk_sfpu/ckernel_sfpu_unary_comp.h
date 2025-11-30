@@ -158,5 +158,45 @@ inline void calculate_unary_comparison(uint value) {
     }
 }
 
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+inline void calculate_unary_comparison_uint(uint value) {
+    sfpi::vUInt scalar = value;
+    sfpi::vUInt one = 1u;
+    sfpi::vUInt zero = 0u;
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vUInt in = sfpi::dst_reg[0];
+
+        if constexpr (COMP_MODE == SfpuType::unary_ne) {
+            v_if(in == scalar) { in = zero; }
+            v_else { in = one; }
+            v_endif;
+        } else if constexpr (COMP_MODE == SfpuType::unary_eq) {
+            v_if(in == scalar) { in = one; }
+            v_else { in = zero; }
+            v_endif;
+        } else if constexpr (COMP_MODE == SfpuType::unary_gt) {
+            v_if(in > scalar) { in = one; }
+            v_else { in = 0u; }
+            v_endif;
+        } else if constexpr (COMP_MODE == SfpuType::unary_lt) {
+            v_if(in < scalar) { in = one; }
+            v_else { in = zero; }
+            v_endif;
+        } else if constexpr (COMP_MODE == SfpuType::unary_ge) {
+            v_if(in < scalar) { in = zero; }
+            v_else { in = one; }
+            v_endif;
+        } else if constexpr (COMP_MODE == SfpuType::unary_le) {
+            v_if(in > scalar) { in = zero; }
+            v_else { in = one; }
+            v_endif;
+        }
+
+        sfpi::dst_reg[0] = in;
+        sfpi::dst_reg++;
+    }
+}
+
 }  // namespace sfpu
 }  // namespace ckernel
