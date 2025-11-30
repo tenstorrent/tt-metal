@@ -51,9 +51,12 @@ def check_arc_block(arc: NocBlock, postcode: int) -> ArcCheckData:
     arcclk_mhz = read_arc_telemetry_entry(device_id, "ARCCLK")
     heartbeats_per_second = (heartbeat_1 - heartbeat_0) / delay_seconds
 
-    # Оn Wormhole, heartbeat is reseting to 0xa5a5a5a5 instead of 0
+    # On Wormhole, heartbeat is resetting to 0xA5A5A5A5 instead of 0
     # This should be fixed by firmware team, but for now we need to subtract this offset
     heartbeat_offset = 0xA5A5A5A5 if device.is_wormhole() else 0
+    assert (
+        heartbeat_1 > heartbeat_offset
+    ), f"ARC heartbeat lower than default value: {RED}{heartbeat_1}{RST}. Expected at least {BLUE}{heartbeat_offset}{RST}"
     uptime_seconds = (heartbeat_1 - heartbeat_offset) / heartbeats_per_second
     if uptime_seconds < 0:
         uptime_seconds = None
