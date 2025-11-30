@@ -33,7 +33,7 @@ std::pair<std::optional<tt::tt_metal::Tensor>, uint32_t> create_reciprocal_tenso
             std::copy(reciprocals.begin(), reciprocals.begin() + W, reciprocals.begin() + i * W);
         }
 
-        if (auto p_mesh_device = dynamic_cast<tt::tt_metal::distributed::MeshDevice*>(device)) {
+        if (auto* p_mesh_device = dynamic_cast<tt::tt_metal::distributed::MeshDevice*>(device)) {
             recip_tensor = tt::tt_metal::Tensor::from_vector(std::move(reciprocals), tensor_spec, p_mesh_device);
         } else {
             TT_THROW("Cannot cast to MeshDevice");

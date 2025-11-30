@@ -21,7 +21,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_r
     uint32_t num_cores_total,
     uint32_t num_cores_x,
     uint32_t num_tiles_per_core) {
-    auto input_buffer = input_tensor.buffer();
+    auto* input_buffer = input_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
 
     std::vector<uint32_t> common_reader_kernel_args = {input_buffer->address(), 0};
@@ -131,7 +131,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice
                                               const std::vector<Tensor>& output_tensors) {
         const auto& src_tensor = input_tensors.at(0);
         auto dst_tensor = output_tensors.at(0);
-        auto dst_tensor_buffer = dst_tensor.buffer();
+        auto* dst_tensor_buffer = dst_tensor.buffer();
 
         UpdateDynamicCircularBufferAddress(program, cb_src0, *dst_tensor_buffer);
 

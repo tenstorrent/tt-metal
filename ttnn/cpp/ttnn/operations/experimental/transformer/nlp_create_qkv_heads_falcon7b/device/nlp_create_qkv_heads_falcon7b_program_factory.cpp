@@ -156,10 +156,10 @@ void NlpCreateQkvHeadsFalcon7BProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
     const auto& shared = cached_program.shared_variables;
 
-    auto src_dram_buffer = tensor_args.input.buffer();
-    auto dst_dram_buffer_query = tensor_return_value.q.buffer();
-    auto dst_dram_buffer_key = tensor_return_value.k.buffer();
-    auto dst_dram_buffer_value = tensor_return_value.v.buffer();
+    auto* src_dram_buffer = tensor_args.input.buffer();
+    auto* dst_dram_buffer_query = tensor_return_value.q.buffer();
+    auto* dst_dram_buffer_key = tensor_return_value.k.buffer();
+    auto* dst_dram_buffer_value = tensor_return_value.v.buffer();
 
     for (uint32_t i = 0; i < shared.num_cores; i++) {
         CoreCoord core = {i / shared.num_cores_y, i % shared.num_cores_y};
