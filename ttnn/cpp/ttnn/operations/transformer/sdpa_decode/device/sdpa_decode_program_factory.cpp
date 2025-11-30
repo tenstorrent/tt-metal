@@ -162,7 +162,10 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         core_grid = program_config->sub_core_grids.value();
         TT_FATAL(
             core_grid.num_cores() == num_cores_available,
-            "Number of cores in sub_core_grids must match the number of cores available");
+            "Number of cores in sub_core_grids must match the number of cores available, got {} cores in "
+            "sub_core_grids and {} cores available",
+            core_grid.num_cores(),
+            num_cores_available);
         on_subcoregrid = true;
     } else {
         core_grid = CoreRangeSet(std::vector{CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1})});
@@ -208,18 +211,50 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     std::vector<CoreCoord> core_group_idle;
     if (on_subcoregrid) {
         if (is_q_sharded || is_output_sharded) {
-            auto cores_vec = corerange_to_cores(core_grid, num_cores_available, true);
-            int reducer_idx = 0;
-            int worker_idx = num_output_cores;
+            log_debug(tt::LogOp, "Sub core grid: {}", core_grid);
+            log_debug(tt::LogOp, "Sub core grid num_cores: {}", core_grid.num_cores());
+            auto cores_vec = corerange_to_cores(core_grid, core_grid.num_cores(), true);
+            log_debug(tt::LogOp, "Sub core grid cores_vec before sorting: {}", cores_vec);
+            // Sort by (y, x) to group rows together
+            std::sort(cores_vec.begin(), cores_vec.end(), [](const CoreCoord& a, const CoreCoord& b) {
+                return std::tie(a.y, a.x) < std::tie(b.y, b.x);
+            });
+            // Calculate how many cores per row (first distinct y == all in a row)
+            size_t cores_per_row = 0;
+            if (!cores_vec.empty()) {
+                int first_y = cores_vec[0].y;
+                for (const auto& core : cores_vec) {
+                    if (core.y == first_y) {
+                        ++cores_per_row;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            log_debug(tt::LogOp, "cores_per_row: {}", cores_per_row);
+            log_debug(tt::LogOp, "Sub core grid cores_vec after sorting: {}", cores_vec);
+            TT_FATAL(cores_per_row > 0, "Expected cores_per_row to be greater than 0, got {}", cores_per_row);
+            TT_FATAL(
+                cores_per_row >= num_cores_per_batch,
+                "Expected cores_per_row to be greater than or equal to num_cores_per_batch, got {} and {}",
+                cores_per_row,
+                num_cores_per_batch);
+            int core_row_idx = 0;
+            int core_col_idx = 0;
             for (int i = 0; i < num_cores_available; ++i) {
-                if (i % num_cores_per_batch == 0 && reducer_idx < num_output_cores) {
-                    i < num_active_cores ? core_group.push_back(cores_vec[reducer_idx])
-                                         : core_group_idle.push_back(cores_vec[reducer_idx]);
-                    reducer_idx++;
+                if (i % num_cores_per_batch == 0 && core_row_idx < num_output_cores) {
+                    core_col_idx = 0;
+                    i < num_active_cores
+                        ? core_group.push_back(cores_vec[core_row_idx * cores_per_row + num_cores_per_batch - 1])
+                        : core_group_idle.push_back(cores_vec[core_row_idx * cores_per_row + num_cores_per_batch - 1]);
                 } else {
-                    i < num_active_cores ? core_group.push_back(cores_vec[worker_idx])
-                                         : core_group_idle.push_back(cores_vec[worker_idx]);
-                    worker_idx++;
+                    i < num_active_cores
+                        ? core_group.push_back(cores_vec[core_row_idx * cores_per_row + core_col_idx])
+                        : core_group_idle.push_back(cores_vec[core_row_idx * cores_per_row + core_col_idx]);
+                    core_col_idx++;
+                    if (core_col_idx == num_cores_per_batch - 1) {
+                        core_row_idx++;
+                    }
                 }
             }
         } else {
@@ -689,12 +724,13 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     uint32_t output_core_noc_y{};
     output_core_physical_xs.reserve(num_output_cores);  // num output cores is equal to batch size
     output_core_physical_ys.reserve(num_output_cores);
-
+    log_debug(tt::LogOp, "num_output_cores: {}", num_output_cores);
     for (uint32_t i = 0; i < num_active_cores; ++i) {
         CoreCoord core = core_group[i];
         uint32_t worker_id_for_output = (i % num_cores_per_batch) - 1;
         bool do_output = (worker_id_for_output == -1);
         if (do_output) {
+            log_debug(tt::LogOp, "output core x: {}, y: {}", core.x, core.y);
             output_core_noc_x = core.x;
             output_core_noc_y = core.y;
             // get physical core
