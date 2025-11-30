@@ -68,7 +68,6 @@ class TtUpsample2D(LightweightModule):
             weight_tensor=self.tt_weights,
             in_channels=self.conv_params["input_channels"],
             out_channels=self.conv_params["output_channels"],
-            device=self.device,
             bias_tensor=self.tt_bias,
             kernel_size=self.conv_params["kernel_size"],
             stride=self.stride,

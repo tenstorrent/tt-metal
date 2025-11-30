@@ -101,7 +101,6 @@ def prepare_conv_weights_func(
         "padding": (pad_h, pad_w),
         "dilation": (1, 1),
         "groups": groups,
-        "device": device,
         "conv_config": conv_config,
         "slice_config": slice_config,
     }
@@ -375,7 +374,6 @@ def test_prepare_bias(
         "padding": (pad_h, pad_w),
         "dilation": (1, 1),
         "groups": 1,
-        "device": device,
         "conv_config": conv_config,
     }
 

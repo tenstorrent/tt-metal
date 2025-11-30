@@ -112,7 +112,6 @@ class resnet50Bottleneck:
                 "padding": (0, 0),
                 "dilation": (1, 1),
                 "groups": 1,
-                "device": device,
                 "conv_config": ttnn.Conv2dConfig(
                     weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                     shard_layout=(
@@ -180,7 +179,6 @@ class resnet50Bottleneck:
             "padding": (0, 0),
             "dilation": (1, 1),
             "groups": 1,
-            "device": device,
             "conv_config": ttnn.Conv2dConfig(
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
@@ -222,7 +220,6 @@ class resnet50Bottleneck:
             "padding": (1, 1),
             "dilation": (1, 1),
             "groups": 1,
-            "device": device,
             "conv_config": ttnn.Conv2dConfig(
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
@@ -283,7 +280,6 @@ class resnet50Bottleneck:
             "padding": (0, 0),
             "dilation": (1, 1),
             "groups": 1,
-            "device": device,
             "conv_config": ttnn.Conv2dConfig(
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 shard_layout=(
@@ -632,7 +628,6 @@ class resnet50:
             "padding": self.conv1_padding,
             "dilation": (1, 1),
             "groups": 1,
-            "device": device,
             "conv_config": self.conv1_config,
         }
 

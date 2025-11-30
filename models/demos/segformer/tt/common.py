@@ -72,7 +72,6 @@ class Conv:
             "padding": (self.conv_params[2], self.conv_params[3]),
             "dilation": (1, 1),
             "groups": self.groups,
-            "device": device,
             "conv_config": conv_config,
             "slice_config": ttnn.Conv2dL1FullSliceConfig,
         }

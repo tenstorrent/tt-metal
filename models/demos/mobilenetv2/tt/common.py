@@ -97,7 +97,6 @@ class TtMobileNetV2Conv2D:
             weight_tensor=self.weights,
             in_channels=x.shape[3],
             out_channels=self.input_params[3],
-            device=self.device,
             bias_tensor=self.bias,
             kernel_size=(self.input_params[0], self.input_params[0]),
             stride=(self.input_params[1], self.input_params[1]),

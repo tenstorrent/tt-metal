@@ -41,7 +41,6 @@ def main():
             bias_tensor=bias_tensor,
             in_channels=C,
             out_channels=out_channels,
-            device=device,
             kernel_size=kernel_size,
             stride=(1, 1),
             padding=(1, 1),

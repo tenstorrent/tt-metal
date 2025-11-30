@@ -58,7 +58,6 @@ Result Conv1dOperation::invoke(
         std::get<static_cast<int>(ResultType::OUTPUT_DIM_WEIGHTS_AND_BIAS)>(ttnn::conv2d(
             input_tensor_4d,
             weight_tensor,
-            device,
             in_channels,
             out_channels,
             batch_size,

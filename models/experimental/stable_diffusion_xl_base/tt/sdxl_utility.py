@@ -177,7 +177,6 @@ def split_conv2d(
                 weight_tensor=conv_weights[idx_out][idx_in],
                 in_channels=conv_params[idx_out][idx_in]["input_channels"],
                 out_channels=conv_params[idx_out][idx_in]["output_channels"],
-                device=device,
                 bias_tensor=conv_bias[idx_out],
                 kernel_size=conv_params[idx_out][idx_in]["kernel_size"],
                 stride=stride,

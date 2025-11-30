@@ -317,7 +317,6 @@ class resnetBlock2D:
             "padding": (1, 1),
             "dilation": (1, 1),
             "groups": 1,
-            "device": self.device,
             "conv_config": conv_config,
             "slice_config": ttnn.Conv2dL1FullSliceConfig,
         }
@@ -423,7 +422,6 @@ class resnetBlock2D:
             "padding": (1, 1),
             "dilation": (1, 1),
             "groups": 1,
-            "device": self.device,
             "conv_config": conv_config,
             "slice_config": ttnn.Conv2dL1FullSliceConfig,
         }
@@ -478,7 +476,6 @@ class resnetBlock2D:
                 "padding": (0, 0),
                 "dilation": (1, 1),
                 "groups": 1,
-                "device": self.device,
                 "conv_config": conv_config,
                 "slice_config": ttnn.Conv2dL1FullSliceConfig,
             }

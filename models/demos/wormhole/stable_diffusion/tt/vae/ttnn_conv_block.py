@@ -57,7 +57,6 @@ class ConvBlock:
             "padding": (self.padding, self.padding),
             "dilation": (1, 1),
             "groups": 1,
-            "device": self.device,
             "conv_config": self.conv_config,
         }
 

@@ -672,7 +672,6 @@ Result conv2d_DRAM(
 ResultWithOptions Conv2dOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    MeshDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
@@ -691,6 +690,9 @@ ResultWithOptions Conv2dOperation::invoke(
     const std::optional<const Conv2dSliceConfig>& slice_config_,
     bool return_output_dim,
     bool return_weights_and_bias) {
+    // Get device from input tensor
+    auto* device = input_tensor.device();
+
     // Determine execution path based on configuration and input properties
     Conv2dExecutionPath path = determine_conv2d_execution_path(input_tensor, slice_config_);
 

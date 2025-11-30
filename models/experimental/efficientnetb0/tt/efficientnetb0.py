@@ -71,7 +71,6 @@ class EfficientNetb0Conv2D:
             weight_tensor=self.weights,
             in_channels=self.in_channels,
             out_channels=self.out_channels,
-            device=self.device,
             bias_tensor=self.bias,
             kernel_size=self.kernel_size,
             stride=self.stride,

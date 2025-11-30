@@ -241,7 +241,6 @@ class transformer_2d_model:
             "padding": (0, 0),
             "dilation": (1, 1),
             "groups": 1,
-            "device": self.device,
             "conv_config": conv_config,
             "slice_config": ttnn.Conv2dL1FullSliceConfig,
         }
@@ -304,7 +303,6 @@ class transformer_2d_model:
                     "padding": (0, 0),
                     "dilation": (1, 1),
                     "groups": 1,
-                    "device": self.device,
                     "conv_config": conv_config,
                     "slice_config": ttnn.Conv2dL1FullSliceConfig,
                 }

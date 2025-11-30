@@ -282,7 +282,6 @@ class Conv2d(Module):
                 bias_tensor=self.bias.data if self.bias is not None else None,
                 in_channels=self.in_channels // self.in_mesh_axis_size,
                 out_channels=self.weight.data.shape[0],
-                device=self.mesh_device,
                 kernel_size=self.kernel_size,
                 stride=self.stride,
                 padding=self.padding,

@@ -107,7 +107,6 @@ def main():
             bias_tensor=B,
             in_channels=input_NHWC[3],
             out_channels=conv_outchannels,
-            device=device,
             kernel_size=conv_kernel_size,
             stride=conv_stride,
             padding=conv_padding,

@@ -164,7 +164,6 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
             std::get<static_cast<int>(ttnn::operations::conv::ResultType::OUTPUT_DIM)>(ttnn::conv2d(
                 input_tensor,
                 weight_tensor,
-                device.get(),
                 param.input_channels,
                 param.output_channels,
                 param.batch_size,

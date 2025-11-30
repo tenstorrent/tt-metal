@@ -581,7 +581,6 @@ class TtConv2d:
             "dilation": self.configuration.dilation,
             "groups": self.configuration.groups,
             "dtype": self.configuration.output_dtype,
-            "device": self.device,
             "conv_config": self.conv2d_config,
             "slice_config": self.slice_config,
         }

@@ -116,7 +116,6 @@ def ttnn_vgg16(
                 "padding": (1, 1),
                 "dilation": (1, 1),
                 "groups": 1,
-                "device": device,
                 "conv_config": conv_config,
             }
 
@@ -261,7 +260,6 @@ def ttnn_vgg11(
                 "padding": (1, 1),
                 "dilation": (1, 1),
                 "groups": 1,
-                "device": device,
                 "conv_config": conv_config,
             }
 

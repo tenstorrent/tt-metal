@@ -73,7 +73,6 @@ class OpenPDNMnistConv2D:
             input_tensor=tt_tensor,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
-            device=self.device,
             in_channels=self.in_channels,
             out_channels=self.out_channels,
             input_height=self.input_height,

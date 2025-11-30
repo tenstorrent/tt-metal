@@ -172,7 +172,6 @@ class Conv:
             bias_tensor=self.bias if self.has_bias else None,
             in_channels=self.conv_pt.in_channels,
             out_channels=self.conv_pt.out_channels,
-            device=device,
             kernel_size=self.kernel_size,
             stride=self.stride,
             padding=self.padding,

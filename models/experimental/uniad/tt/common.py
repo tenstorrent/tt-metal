@@ -82,7 +82,6 @@ class TtnnConv2D:
             input_tensor=x,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
-            device=self.device,
             in_channels=self.in_channels,
             out_channels=self.out_channels,
             input_height=input_height,

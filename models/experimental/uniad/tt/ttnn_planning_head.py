@@ -94,7 +94,6 @@ class TtConv2d:
             bias_tensor=self.bias if self.has_bias else None,
             in_channels=self.in_channels,
             out_channels=self.out_channels,
-            device=self.device,
             kernel_size=self.kernel_size,
             stride=self.stride,
             padding=self.padding,

@@ -129,7 +129,6 @@ class Conv:
             weight_tensor=self.weights,
             in_channels=in_channel,
             out_channels=self.out_channels,
-            device=self.device,
             bias_tensor=self.bias if self.bias else None,
             kernel_size=self.kernel_size,
             stride=(self.conv_params[0], self.conv_params[1]),

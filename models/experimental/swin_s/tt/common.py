@@ -83,7 +83,6 @@ class Conv:
             bias_tensor=self.bias,
             in_channels=input_tensor.shape[3],
             out_channels=self.out_channels,
-            device=device,
             kernel_size=self.kernel_size,
             stride=(self.conv_params[0], self.conv_params[1]),
             padding=(self.conv_params[2], self.conv_params[3]),

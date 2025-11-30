@@ -89,7 +89,6 @@ class Conv:
             "padding": conv_param.padding,
             "dilation": conv_param.dilation,
             "groups": conv_param.groups,
-            "device": device,
             "conv_config": self.conv_config,
         }
 
@@ -176,7 +175,6 @@ class Conv_transpose:
             "padding": conv_param.padding,
             "dilation": conv_param.dilation,
             "groups": conv_param.groups,
-            "device": device,
             "conv_config": self.conv_config,
             "output_padding": conv_param.output_padding,
         }

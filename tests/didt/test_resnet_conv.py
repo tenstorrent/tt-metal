@@ -124,7 +124,6 @@ class ResnetConvTest(OpTestBase):
             weight_tensor=self.weights,
             in_channels=self.input_channels,
             out_channels=self.out_channels,
-            device=self.mesh_device,
             bias_tensor=None,
             kernel_size=(self.filter_height, self.filter_width),
             stride=(self.stride_h, self.stride_w),

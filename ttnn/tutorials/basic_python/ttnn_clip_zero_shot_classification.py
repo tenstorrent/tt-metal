@@ -317,7 +317,6 @@ def main():
                 padding=(0, 0),  # No padding needed
                 dilation=(1, 1),  # Standard convolution (no dilation)
                 groups=0,  # Standard convolution (not grouped/depthwise)
-                device=get_device(),
                 return_weights_and_bias=False,  # We already have weights, don't return them
                 return_output_dim=False,  # We know the output dimensions
             )
