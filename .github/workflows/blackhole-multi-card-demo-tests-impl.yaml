@@ -55,7 +55,7 @@ jobs:
             arch: blackhole
             cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_8b-2-1024-2-2-1-1-False"
             owner_id: U08GELBB1AP # Ambrose Ling
-    name: ${{ matrix.test-group.name || 'multi-card-demo-tests' }}
+    name: ${{ matrix.test-group.name }}
     runs-on:
       - "in-service"
       - arch-blackhole
@@ -166,7 +166,7 @@ jobs:
             arch: blackhole
             cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_70b-2-1024-2-10-1-1-False"
             owner_id: U08GELBB1AP # Ambrose Ling
-    name: ${{ matrix.test-group.name || 'multi-card-demo-tests-large' }}
+    name: ${{ matrix.test-group.name }}
     runs-on:
       - "in-service"
       - arch-blackhole
@@ -267,7 +267,7 @@ jobs:
               if [ "${{ inputs.runner-label }}" == "P300-viommu" ]; then echo "Skipping - not supported on viommu"; exit 0; fi
               HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Wan-AI TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" pytest models/experimental/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "1x4sp0tp1 and resolution_480p"
             owner_id: U08TED0JM9D # Samuel Adesoye
-    name: ${{ matrix.test-group.name || 'multi-card-demo-tt_dit-tests' }}
+    name: ${{ matrix.test-group.name }}
     runs-on:
       - "in-service"
       - arch-blackhole
