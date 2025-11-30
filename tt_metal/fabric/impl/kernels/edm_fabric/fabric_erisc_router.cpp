@@ -1567,7 +1567,7 @@ template <
     typename DownstreamSenderVC0T,
     typename LocalRelayInterfaceT,
     typename LocalTelemetryT>
-FORCE_INLINE void run_receiver_channel_step_impl(
+FORCE_INLINE bool run_receiver_channel_step_impl(
     ReceiverChannelBufferT& local_receiver_channel,
     std::array<DownstreamSenderVC0T, NUM_DOWNSTREAM_SENDERS_VC0>& downstream_edm_interfaces_vc0,
     LocalRelayInterfaceT& local_relay_interface,
