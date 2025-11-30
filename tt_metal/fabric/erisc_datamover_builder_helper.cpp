@@ -170,6 +170,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                     src_device->id(),
                     dest_device->id(),
                     src_curr_edm_config,
+                    std::vector<bool>(),  // Empty injection flags for legacy helper - not used
                     build_in_worker_connection_mode));
 
             log_trace(
@@ -185,6 +186,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                     dest_device->id(),
                     src_device->id(),
                     dest_curr_edm_config,
+                    std::vector<bool>(),  // Empty injection flags for legacy helper - not used
                     build_in_worker_connection_mode));
         }
     };
@@ -355,6 +357,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 device_pairs[i].first->id(),
                 device_pairs[i].second.value()->id(),
                 config,
+                std::vector<bool>(),  // Empty injection flags for legacy helper - not used
                 build_in_worker_connection_mode));
         }
         if (!counted_num_links.has_value()) {

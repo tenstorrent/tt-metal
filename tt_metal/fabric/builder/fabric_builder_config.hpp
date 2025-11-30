@@ -55,10 +55,8 @@ struct FabricEriscDatamoverOptions {
 };
 
 namespace builder_config {
-// linear/mesh: for fabric with tensix extension, only one sender channel will be present on fabric router
-// ring/torus: for fabric with tensix extension, two sender channel will be present on fabric router (vc0 and vc1)
+// linear/mesh/ring/torus: for fabric with tensix extension, only one sender channel will be present on fabric router
 static constexpr std::size_t num_sender_channels_with_tensix_config = 1;
-static constexpr std::size_t num_sender_channels_with_tensix_config_deadlock_avoidance = 2;
 
 // num sender channels based on more accurate topology
 static constexpr std::size_t num_sender_channels_1d_linear = 2;

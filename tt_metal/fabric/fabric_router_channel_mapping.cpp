@@ -16,7 +16,6 @@ FabricRouterChannelMapping::FabricRouterChannelMapping(
 
 void FabricRouterChannelMapping::initialize_mappings() {
     initialize_vc0_mappings();
-    initialize_vc1_mappings();
     initialize_vc2_mappings();
 }
 
@@ -57,27 +56,6 @@ void FabricRouterChannelMapping::initialize_vc0_mappings() {
     }
 }
 
-void FabricRouterChannelMapping::initialize_vc1_mappings() {
-    const bool has_ring_or_torus = is_ring_or_torus();
-    if (!has_ring_or_torus) {
-        // VC1 only exists for Ring/Torus topologies
-        return;
-    }
-
-    const bool is_2d = is_2d_topology();
-    // VC1: [0] = vc1 forward channel
-    // Maps to erisc builder's last sender channel
-    uint32_t vc1_sender_channel = is_2d ? builder_config::num_sender_channels_2d_torus - 1
-                                         : builder_config::num_sender_channels_1d_ring - 1;
-
-    sender_channel_map_[LogicalSenderChannelKey{1, 0}] =
-        InternalSenderChannelMapping{BuilderType::ERISC, vc1_sender_channel};
-
-    // Receiver channel for VC1
-    receiver_channel_map_[LogicalReceiverChannelKey{1, 0}] =
-        InternalReceiverChannelMapping{BuilderType::ERISC, 1};  // VC1 uses receiver channel 1
-}
-
 void FabricRouterChannelMapping::initialize_vc2_mappings() {
     const bool is_2d = is_2d_topology();
     if (!is_2d) {
@@ -94,7 +72,7 @@ void FabricRouterChannelMapping::initialize_vc2_mappings() {
     for (uint32_t i = 0; i < num_vc2_channels; ++i) {
         // Map to erisc builder for now - tensix mapping would be added if needed
         sender_channel_map_[LogicalSenderChannelKey{2, i}] =
-            InternalSenderChannelMapping{BuilderType::ERISC, i};
+            InternalSenderChannelMapping{BuilderType::ERISC, i};  // VC2 is externally-facing (intermesh)
 
         receiver_channel_map_[LogicalReceiverChannelKey{2, i}] =
             InternalReceiverChannelMapping{BuilderType::ERISC, i};
@@ -124,6 +102,35 @@ InternalReceiverChannelMapping FabricRouterChannelMapping::get_receiver_mapping(
     TT_FATAL(
         it != receiver_channel_map_.end(), "No mapping found for VC{} receiver channel {}", vc, receiver_channel_idx);
     return it->second;
+}
+
+uint32_t FabricRouterChannelMapping::get_num_virtual_channels() const {
+    // For now, only handle VC0
+    // intermesh vc suport not added yet (Issue https://github.com/tenstorrent/tt-metal/issues/32561)
+    return 1;  // VC0 only
+}
+
+uint32_t FabricRouterChannelMapping::get_num_sender_channels_for_vc(uint32_t vc) const {
+    switch (vc) {
+        case 0:  // VC0
+            return is_2d_topology() ? 4 : 2;
+        default:
+            // intermesh vc support not added yet (Issue https://github.com/tenstorrent/tt-metal/issues/32561)
+            return 0;
+    }
+}
+
+std::vector<InternalSenderChannelMapping> FabricRouterChannelMapping::get_all_sender_mappings() const {
+    std::vector<InternalSenderChannelMapping> result;
+
+    // Iterate through VCs in order and flatten
+    for (uint32_t vc = 0; vc < get_num_virtual_channels(); ++vc) {
+        for (uint32_t ch_idx = 0; ch_idx < get_num_sender_channels_for_vc(vc); ++ch_idx) {
+            result.push_back(get_sender_mapping(vc, ch_idx));
+        }
+    }
+
+    return result;
 }
 
 }  // namespace tt::tt_fabric

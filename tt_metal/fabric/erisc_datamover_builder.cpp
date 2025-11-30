@@ -146,13 +146,13 @@ void configure_risc_settings(
     }
 }
 
-// for fabric with tensix extension, for linear/mesh topology, only one sender channel is used, and all
+// for fabric with tensix extension, only one sender channel is used, and all
 // other sender channels are marked as skipped. For ring/torus topology, one extra vc1 sender channel will
 // also be used.
 void update_sender_channel_servicing(
     tt::tt_fabric::FabricTensixConfig fabric_tensix_config,
     std::vector<FabricRiscConfig>& risc_configs,
-    Topology topology) {
+    Topology /*topology*/) {
     switch (fabric_tensix_config) {
         case tt::tt_fabric::FabricTensixConfig::MUX: break;
         default: TT_FATAL(false, "Error, invalid fabric_tensix_config: {}", static_cast<int>(fabric_tensix_config));
@@ -161,23 +161,20 @@ void update_sender_channel_servicing(
     // Determine which channel corresponds to the current direction
     uint32_t target_channel = get_worker_connected_sender_channel();
 
-    // For ring/torus topologies, determine VC1 channel (last channel) and service it
-    uint32_t vc1_target_channel = get_worker_or_vc1_connected_sender_channel(topology);
-
     auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
     if (arch == tt::ARCH::WORMHOLE_B0) {
         for (auto& risc_config : risc_configs) {
             risc_config.reset_sender_channel_serviced();
             // Set the channel corresponding to the current direction and VC1 channel to true
             for (size_t i = 0; i < builder_config::num_sender_channels; i++) {
-                risc_config.set_sender_channel_serviced(i, i == target_channel || i == vc1_target_channel);
+                risc_config.set_sender_channel_serviced(i, i == target_channel);
             }
         }
     } else if (arch == tt::ARCH::BLACKHOLE) {
         risc_configs[0].reset_sender_channel_serviced();
         // Set the channel corresponding to the current direction and VC1 channel to true
         for (size_t i = 0; i < builder_config::num_sender_channels; i++) {
-            risc_configs[0].set_sender_channel_serviced(i, i == target_channel || i == vc1_target_channel);
+            risc_configs[0].set_sender_channel_serviced(i, i == target_channel);
         }
     }
 }
@@ -640,38 +637,6 @@ size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args
     return starting_arg_idx + 10;
 }
 
-void FabricEriscDatamoverBuilder::initialize_sender_channel_is_traffic_injection_channel_array() {
-    // the worker sender channel is always an injection channel because it is never forwarded traffic
-    if (this->config.topology == Topology::Linear || this->config.topology == Topology::Mesh) {
-        return;
-    }
-
-    constexpr size_t worker_sender_channel_index = 0;
-    sender_channel_is_traffic_injection_channel_array[worker_sender_channel_index] = true;
-
-    if (this->config.topology != Topology::Torus) {
-        return;
-    }
-
-    // Any turn channels are are also injection channels:
-    // my_direction is EAST/WEST and this sender channel holds NORTH/SOUTH traffic
-    // my_direction is NORTH/SOUTH and this sender channel holds EAST/WEST traffic
-    bool I_am_ew = builder::is_east_or_west(this->get_direction());
-    bool I_am_ns = builder::is_north_or_south(this->get_direction());
-    TT_FATAL(
-        I_am_ew ^ I_am_ns,
-        "Internal error: In initialize_sender_channel_is_traffic_injection_channel_array, I_am_ew and I_am_ns cannot "
-        "both be true");
-    for (size_t i = 1; i < builder_config::num_sender_channels; i++) {
-        auto sender_channel_direction = builder::get_sender_channel_direction(this->get_direction(), i);
-
-        bool sender_channel_is_ew = builder::is_east_or_west(sender_channel_direction);
-        bool sender_channel_is_ns = builder::is_north_or_south(sender_channel_direction);
-        bool sender_channel_is_turn = (I_am_ew && !sender_channel_is_ew) || (I_am_ns && !sender_channel_is_ns);
-        sender_channel_is_traffic_injection_channel_array[i] = sender_channel_is_turn;
-    }
-}
-
 FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     const CoreCoord& my_eth_core_logical,
     size_t my_noc_x,
@@ -689,6 +654,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
 
     const FabricEriscDatamoverConfig& config,
     eth_chan_directions direction,
+    std::vector<bool>&& sender_channel_injection_flags,
     bool build_in_worker_connection_mode,
     bool has_tensix_extension) :
     FabricDatamoverBuilderBase(my_noc_x, my_noc_y, direction),
@@ -712,17 +678,23 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     sender_channels_flow_control_semaphore_id(sender_channels_flow_control_semaphore_id),
     sender_channels_connection_semaphore_id(sender_channels_connection_semaphore_id),
     sender_channels_buffer_index_semaphore_id(sender_channels_buffer_index_semaphore_id),
+    sender_channel_is_traffic_injection_channel_array(std::move(sender_channel_injection_flags)),
     build_in_worker_connection_mode(build_in_worker_connection_mode),
     has_tensix_extension(has_tensix_extension),
     // First level ack is enabled to support bubble flow control
     enable_first_level_ack(
         config.topology == tt::tt_fabric::Topology::Ring || config.topology == tt::tt_fabric::Topology::Torus) {
+    // Validate injection flags vector size matches the number of sender channels
+    TT_FATAL(
+        sender_channel_is_traffic_injection_channel_array.size() == config.num_used_sender_channels,
+        "Internal error: injection_flags vector size {} does not match num_used_sender_channels {}",
+        sender_channel_is_traffic_injection_channel_array.size(),
+        config.num_used_sender_channels);
+
     std::fill(
         sender_channel_connection_liveness_check_disable_array.begin(),
         sender_channel_connection_liveness_check_disable_array.end(),
         false);
-
-    initialize_sender_channel_is_traffic_injection_channel_array();
 
     TT_FATAL(config.channel_allocator.get() != nullptr, "Channel allocator is not set. Failed to build TT-Fabric router. Internal error.");
     auto static_allocator =
@@ -943,7 +915,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         config.risc_configs[risc_id].is_sender_channel_serviced(3),
         false,  // config.risc_configs[risc_id].is_sender_channel_serviced(4),
         config.risc_configs[risc_id].is_receiver_channel_serviced(0),
-        config.risc_configs[risc_id].is_receiver_channel_serviced(1),
+        false,  // DELETEME config.risc_configs[risc_id].is_receiver_channel_serviced(1),  // num_receiver_channels = 1,
+                // so index 1 is out of bounds
         config.risc_configs[risc_id].enable_handshake(),
         config.risc_configs[risc_id].enable_context_switch(),
         config.risc_configs[risc_id].enable_interrupts(),
@@ -1027,7 +1000,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     }
 
     for (size_t i = 0; i < num_sender_channels; i++) {
-        ct_args.push_back(this->sender_channel_is_traffic_injection_channel_array[i]);
+        ct_args.push_back(this->sender_channel_is_traffic_injection_channel_array.at(i));
     }
 
     // Sender channel args
@@ -1132,6 +1105,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     ChipId local_physical_chip_id,
     ChipId peer_physical_chip_id,
     const FabricEriscDatamoverConfig& config,
+    std::vector<bool>&& sender_channel_injection_flags,
     bool build_in_worker_connection_mode,
     eth_chan_directions direction,
     bool has_tensix_extension) {
@@ -1152,6 +1126,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         control_plane.get_fabric_node_id_from_physical_chip_id(local_physical_chip_id),
         control_plane.get_fabric_node_id_from_physical_chip_id(peer_physical_chip_id),
         config,
+        std::move(sender_channel_injection_flags),
         build_in_worker_connection_mode,
         direction,
         has_tensix_extension);
@@ -1164,6 +1139,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     const FabricNodeId& local_fabric_node_id,
     const FabricNodeId& peer_fabric_node_id,
     const FabricEriscDatamoverConfig& config,
+    std::vector<bool>&& sender_channel_injection_flags,
     bool build_in_worker_connection_mode,
     eth_chan_directions direction,
     bool has_tensix_extension) {
@@ -1250,6 +1226,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
 
         config,
         direction,
+        std::move(sender_channel_injection_flags),
         build_in_worker_connection_mode,
         has_tensix_extension);
 }

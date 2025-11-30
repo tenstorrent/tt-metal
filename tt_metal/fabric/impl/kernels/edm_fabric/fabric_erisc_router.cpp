@@ -1898,33 +1898,26 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 sender_channel_from_receiver_credits,
                 inner_loop_perf_telemetry_collector,
                 local_fabric_telemetry);
-            if constexpr (!dateline_connection) {
-                rx_progress |= run_receiver_channel_step<
-                    0,
-                    DownstreamSenderVC0T,
-                    decltype(local_relay_interface)>(
-                    local_receiver_channels,
-                    downstream_edm_noc_interfaces_vc0,
-                    local_relay_interface,
-                    receiver_channel_pointers_ch0,
-                    receiver_channel_0_trid_tracker,
-                    port_direction_table,
-                    receiver_channel_response_credit_senders,
-                    routing_table,
-                    local_fabric_telemetry);
-            }
-            if constexpr (is_sender_channel_serviced[1]) {
-                tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 1>(
-                    local_sender_channels,
-                    local_sender_channel_worker_interfaces,
-                    outbound_to_receiver_channel_pointer_ch0,
-                    remote_receiver_channels,
-                    channel_connection_established,
-                    local_sender_channel_free_slots_stream_ids,
-                    sender_channel_from_receiver_credits,
-                    inner_loop_perf_telemetry_collector,
-                    local_fabric_telemetry);
-            }
+            rx_progress |= run_receiver_channel_step<0, DownstreamSenderVC0T, decltype(local_relay_interface)>(
+                local_receiver_channels,
+                downstream_edm_noc_interfaces_vc0,
+                local_relay_interface,
+                receiver_channel_pointers_ch0,
+                receiver_channel_0_trid_tracker,
+                port_direction_table,
+                receiver_channel_response_credit_senders,
+                routing_table,
+                local_fabric_telemetry);
+            tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 1>(
+                local_sender_channels,
+                local_sender_channel_worker_interfaces,
+                outbound_to_receiver_channel_pointer_ch0,
+                remote_receiver_channels,
+                channel_connection_established,
+                local_sender_channel_free_slots_stream_ids,
+                sender_channel_from_receiver_credits,
+                inner_loop_perf_telemetry_collector,
+                local_fabric_telemetry);
             if constexpr (is_2d_fabric) {
                 tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 2>(
                     local_sender_channels,
@@ -1994,7 +1987,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     }
 }
 
-template <typename EdmChannelWorkerIFs>
+template <typename EdmChannelWorkerIFs, size_t NUM_SENDER_CHANNELS>
 void
 #ifdef FABRIC_2D
     __attribute__((noinline))
@@ -2037,6 +2030,34 @@ constexpr size_t get_credits_init_val() {
     return i == 0 ? 0 : SENDER_NUM_BUFFERS_ARRAY[i];
 };
 
+// SFINAE helper to initialize a single sender channel worker interface
+// Only enabled when I < NUM_SENDER_CHANNELS
+template <size_t I, size_t NUM_SENDER_CHANNELS, typename EdmChannelWorkerIFs>
+FORCE_INLINE typename std::enable_if<(I < NUM_SENDER_CHANNELS), void>::type init_sender_channel_worker_interface(
+    std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_live_semaphore_addresses,
+    std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_info_addresses,
+    EdmChannelWorkerIFs& local_sender_channel_worker_interfaces) {
+    auto connection_live_semaphore_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_connection_live_semaphore_addresses[I]);
+    auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
+        local_sender_connection_info_addresses[I]);
+    new (&local_sender_channel_worker_interfaces.template get<I>()) tt::tt_fabric::
+        StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[I]>(
+            connection_worker_info_ptr,
+            0,  // Not used for credits.
+            reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
+            sender_channel_ack_cmd_buf_ids[I],
+            get_credits_init_val<I>(),
+            notify_worker_of_read_counter_update_src_address);
+}
+
+// SFINAE overload - no-op when I >= NUM_SENDER_CHANNELS
+template <size_t I, size_t NUM_SENDER_CHANNELS, typename EdmChannelWorkerIFs>
+typename std::enable_if<(I >= NUM_SENDER_CHANNELS), void>::type init_sender_channel_worker_interface(
+    std::array<size_t, NUM_SENDER_CHANNELS>&, std::array<size_t, NUM_SENDER_CHANNELS>&, EdmChannelWorkerIFs&) {
+    // No-op when channel index is out of range
+}
+
 template <size_t NUM_SENDER_CHANNELS, typename EdmChannelWorkerIFs>
 void
 #ifdef FABRIC_2D
@@ -2050,67 +2071,34 @@ void
     // lead to a performance regression. Having these unrolled is needed to enable some performance optimizations
     // because setup will differ in that each will be a different type. Keeping them unrolled here let's us
     // stay safe from perf regression due to weirdness of codegen.
-    {
-        auto connection_live_semaphore_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_connection_live_semaphore_addresses[0]);
-        auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
-            local_sender_connection_info_addresses[0]);
-        new (&local_sender_channel_worker_interfaces.template get<0>()) tt::tt_fabric::
-            StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[0]>(
-                connection_worker_info_ptr,
-                0,  // Not used for credits.
-                reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
-                sender_channel_ack_cmd_buf_ids[0],
-                get_credits_init_val<0>(),
-                notify_worker_of_read_counter_update_src_address);
-    }
-    {
-        auto connection_live_semaphore_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_connection_live_semaphore_addresses[1]);
-        auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
-            local_sender_connection_info_addresses[1]);
-        new (&local_sender_channel_worker_interfaces.template get<1>()) tt::tt_fabric::
-            StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[1]>(
-                connection_worker_info_ptr,
-                0,  // Not used for credits.
-                reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
-                sender_channel_ack_cmd_buf_ids[1],
-                get_credits_init_val<1>(),
-                notify_worker_of_read_counter_update_src_address);
+    init_sender_channel_worker_interface<0, NUM_SENDER_CHANNELS>(
+        local_sender_connection_live_semaphore_addresses,
+        local_sender_connection_info_addresses,
+        local_sender_channel_worker_interfaces);
+    if constexpr (NUM_SENDER_CHANNELS > 1) {
+        init_sender_channel_worker_interface<1, NUM_SENDER_CHANNELS>(
+            local_sender_connection_live_semaphore_addresses,
+            local_sender_connection_info_addresses,
+            local_sender_channel_worker_interfaces);
     }
 #ifdef FABRIC_2D
-    {
-        auto connection_live_semaphore_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_connection_live_semaphore_addresses[2]);
-        auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
-            local_sender_connection_info_addresses[2]);
-        new (&local_sender_channel_worker_interfaces.template get<2>()) tt::tt_fabric::
-            StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[2]>(
-                connection_worker_info_ptr,
-                0,  // Not used for credits.
-                reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
-                sender_channel_ack_cmd_buf_ids[2],
-                get_credits_init_val<2>(),
-                notify_worker_of_read_counter_update_src_address);
+    if constexpr (NUM_SENDER_CHANNELS > 2) {
+        init_sender_channel_worker_interface<2, NUM_SENDER_CHANNELS>(
+            local_sender_connection_live_semaphore_addresses,
+            local_sender_connection_info_addresses,
+            local_sender_channel_worker_interfaces);
     }
-    {
-        auto connection_live_semaphore_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_connection_live_semaphore_addresses[3]);
-        auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
-            local_sender_connection_info_addresses[3]);
-        new (&local_sender_channel_worker_interfaces.template get<3>()) tt::tt_fabric::
-            StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY[3]>(
-                connection_worker_info_ptr,
-                0,  // Not used for credits.
-                reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
-                sender_channel_ack_cmd_buf_ids[3],
-                get_credits_init_val<3>(),
-                notify_worker_of_read_counter_update_src_address);
+    if constexpr (NUM_SENDER_CHANNELS > 3) {
+        init_sender_channel_worker_interface<3, NUM_SENDER_CHANNELS>(
+            local_sender_connection_live_semaphore_addresses,
+            local_sender_connection_info_addresses,
+            local_sender_channel_worker_interfaces);
     }
 #endif
 }
 
 // copy the sender_channel_free_slots_stream_ids (in L1) to local memory for performance.
+template <size_t NUM_SENDER_CHANNELS>
 void populate_local_sender_channel_free_slots_stream_id_ordered_map(
     uint32_t has_downstream_edm_vc0_buffer_connection,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
@@ -2246,7 +2234,6 @@ void kernel_main() {
     init_ptr_val<vc_0_free_slots_from_downstream_edge_1_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
     init_ptr_val<vc_0_free_slots_from_downstream_edge_2_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
     init_ptr_val<vc_0_free_slots_from_downstream_edge_3_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
-    init_ptr_val<vc_1_free_slots_from_downstream_edge_1_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC1);
 
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
@@ -2411,7 +2398,9 @@ void kernel_main() {
     //////////////////////////////
     //////////////////////////////
 
-    std::array<uint32_t, NUM_SENDER_CHANNELS> local_sender_channel_free_slots_stream_ids;
+    // Hack for mux mode until all remaining VC1 logic is removed from fabric
+    // Needed so `downstream_edm_noc_interfaces_vc0` can be initialized properly below
+    std::array<uint32_t, NUM_SENDER_CHANNELS == 1 ? 2 : NUM_SENDER_CHANNELS> local_sender_channel_free_slots_stream_ids;
 
     const auto& local_sem_for_teardown_from_downstream_edm =
         take_first_n_elements<NUM_DOWNSTREAM_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
@@ -2536,6 +2525,7 @@ void kernel_main() {
 #if defined(FABRIC_2D)
                         get_vc0_downstream_sender_channel_free_slots_stream_id(compact_index),
 #else
+                        // sender_channel_1_free_slots_stream_id,//
                         local_sender_channel_free_slots_stream_ids[1],
 #endif
                         // This is our local stream register for the copy of the downstream router's

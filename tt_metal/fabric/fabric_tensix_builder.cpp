@@ -484,7 +484,8 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
     tt::tt_fabric::FabricNodeId local_fabric_node_id,
     tt::tt_fabric::FabricNodeId remote_fabric_node_id,
     uint32_t ethernet_channel_id,
-    eth_chan_directions direction) {
+    eth_chan_directions direction,
+    std::vector<bool>&& sender_channel_injection_flags) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto& tensix_config = fabric_context.get_tensix_config();
@@ -528,7 +529,7 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
             direction);
     }
 
-    return FabricTensixDatamoverBuilder(
+    auto builder = FabricTensixDatamoverBuilder(
         std::move(mux_builder),
         std::move(relay_builder),
         my_core_logical,
@@ -537,6 +538,11 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
         noc_x,
         noc_y,
         direction);
+
+    // Set injection flags on the builder's configs
+    builder.set_sender_channel_injection_flags_from_vector(std::move(sender_channel_injection_flags));
+
+    return builder;
 }
 
 void FabricTensixDatamoverBuilder::create_and_compile(tt::tt_metal::Program& program) {
@@ -580,6 +586,37 @@ void FabricTensixDatamoverBuilder::append_upstream_routers_noc_xy(uint32_t noc_x
 void FabricTensixDatamoverBuilder::append_relay_router_noc_xy(uint32_t noc_x, uint32_t noc_y) {
     TT_FATAL(relay_builder_ != nullptr, "Relay builder must not be null in UDM mode");
     relay_builder_->append_router_noc_xy(noc_x, noc_y);
+}
+
+void FabricTensixDatamoverBuilder::set_sender_channel_injection_flags_from_vector(std::vector<bool>&& flags) {
+    // Validate that input vector size matches the number of channels
+    if (mux_builder_ != nullptr) {
+        uint8_t num_full_size = mux_builder_->config_->get_num_channels(FabricMuxChannelType::FULL_SIZE_CHANNEL);
+        uint8_t num_header_only = mux_builder_->config_->get_num_channels(FabricMuxChannelType::HEADER_ONLY_CHANNEL);
+        uint8_t total_num_channels = num_full_size + num_header_only;
+
+        TT_FATAL(
+            flags.size() == total_num_channels,
+            "Internal error: injection flags vector size {} does not match total number of mux channels {}",
+            flags.size(),
+            total_num_channels);
+
+        // Move flags to mux config (transfers ownership via setter)
+        mux_builder_->set_sender_channel_injection_flags(std::move(flags));
+    } else if (relay_builder_ != nullptr) {
+        uint8_t num_full_size = relay_builder_->config_->get_num_channels(FabricMuxChannelType::FULL_SIZE_CHANNEL);
+        uint8_t num_header_only = relay_builder_->config_->get_num_channels(FabricMuxChannelType::HEADER_ONLY_CHANNEL);
+        uint8_t total_num_channels = num_full_size + num_header_only;
+
+        TT_FATAL(
+            flags.size() == total_num_channels,
+            "Internal error: injection flags vector size {} does not match total number of relay channels {}",
+            flags.size(),
+            total_num_channels);
+
+        // Move flags to relay config (transfers ownership via setter)
+        relay_builder_->set_sender_channel_injection_flags(std::move(flags));
+    }
 }
 
 }  // namespace tt::tt_fabric

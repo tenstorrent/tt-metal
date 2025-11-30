@@ -445,6 +445,7 @@ public:
 
         const FabricEriscDatamoverConfig& config,
         eth_chan_directions direction,
+        std::vector<bool>&& sender_channel_injection_flags,
         bool build_in_worker_connection_mode = false,
         bool has_tensix_extension = false);
 
@@ -455,6 +456,7 @@ public:
         const FabricNodeId& local_fabric_node_id,
         const FabricNodeId& peer_fabric_node_id,
         const FabricEriscDatamoverConfig& config,
+        std::vector<bool>&& sender_channel_injection_flags,
         bool build_in_worker_connection_mode = false,
         eth_chan_directions direction = eth_chan_directions::EAST,
         bool has_tensix_extension = false);
@@ -466,6 +468,7 @@ public:
         ChipId local_physical_chip_id,
         ChipId peer_physical_chip_id,
         const FabricEriscDatamoverConfig& config,
+        std::vector<bool>&& sender_channel_injection_flags,
         bool build_in_worker_connection_mode = false,
         eth_chan_directions direction = eth_chan_directions::EAST,
         bool has_tensix_extension = false);
@@ -544,8 +547,7 @@ public:
 
     mutable std::array<bool, builder_config::num_sender_channels> sender_channel_connection_liveness_check_disable_array = {};
 
-    mutable std::array<bool, builder_config::num_sender_channels> sender_channel_is_traffic_injection_channel_array =
-        {};
+    mutable std::vector<bool> sender_channel_is_traffic_injection_channel_array;
 
     bool build_in_worker_connection_mode = false;
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
@@ -559,9 +561,6 @@ public:
 
 private:
     bool enable_first_level_ack = false;
-
-    // initializes the sender_channel_is_traffic_injection_channel_array
-    void initialize_sender_channel_is_traffic_injection_channel_array();
 
     // Shared helper for setting up VC connections
     void setup_downstream_vc_connection(

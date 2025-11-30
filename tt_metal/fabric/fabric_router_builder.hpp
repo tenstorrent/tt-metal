@@ -106,7 +106,63 @@ public:
         return tensix_builder_.value();
     }
 
+    /**
+     * Determine if bubble flow control should be enabled based on topology.
+     * Bubble flow control is enabled for Ring and Torus topologies to prevent deadlocks.
+     *
+     * @param topology The fabric topology
+     * @return True if bubble flow control should be enabled
+     */
+    static bool is_bubble_flow_control_enabled(Topology topology) {
+        return topology == Topology::Ring || topology == Topology::Torus;
+    }
+
 private:
+    /**
+     * Compute which sender channels are traffic injection channels for a specific VC.
+     * Injection channels are channels where traffic originates (not forwarded):
+     * - VC0: Worker channel (channel 0) is always an injection channel
+     * - VC1+: No worker channel; channel 0 maps to VC0's channel 1 semantics
+     * - In Torus topology, "turn channels" are injection channels (where traffic changes direction)
+     *
+     * @param topology The fabric topology
+     * @param direction The router's direction
+     * @param vc The virtual channel to compute flags for
+     * @param num_channels Number of channels in this VC
+     * @return Array indicating which sender channels are injection channels for this VC
+     */
+    static std::vector<bool> compute_sender_channel_injection_flags_for_vc(
+        Topology topology, eth_chan_directions direction, uint32_t vc, uint32_t num_channels);
+
+    /**
+     * Map router-level injection flags to a child builder variant's channel space.
+     * This is a generic helper that doesn't know which builder variant it's serving.
+     *
+     * @param router_injection_flags Injection flags indexed by router's semantic channel IDs
+     * @param variant_to_router_channel_map Maps variant's internal channel index to optional router channel index
+     *        (nullopt for internal-only channels)
+     * @return Injection flags for the variant builder (false for internal-only channels)
+     */
+    static std::vector<bool> get_child_builder_variant_sender_channel_injection_flags(
+        const std::vector<bool>& router_injection_flags,
+        const std::vector<std::optional<size_t>>& variant_to_router_channel_map);
+
+    /**
+     * Build a reverse mapping from a builder variant's internal channels to router semantic channel IDs.
+     * Iterates through the channel mapping to find which logical channels are handled by the given builder type,
+     * then maps their internal channel IDs to router channel IDs.
+     *
+     * @param channel_mapping The channel mapping to use (already knows topology and mode)
+     * @param builder_type Which builder variant (ERISC or TENSIX)
+     * @param variant_num_sender_channels Number of sender channels the variant has
+     * @return Vector where index is the variant's internal channel ID, value is optional router channel ID
+     *         (nullopt for internal-only channels not exposed to external topology)
+     */
+    static std::vector<std::optional<size_t>> get_variant_to_router_channel_map(
+        const FabricRouterChannelMapping& channel_mapping,
+        BuilderType builder_type,
+        size_t variant_num_sender_channels);
+
     /**
      * Connect the local tensix builder to the erisc builder in UDM mode
      * This sets up the receiver-to-relay connection for the local tensix relay interface
