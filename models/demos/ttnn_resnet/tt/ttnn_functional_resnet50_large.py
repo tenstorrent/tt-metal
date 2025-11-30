@@ -130,7 +130,6 @@ class resnet50Bottleneck:
                 "padding": (0, 0),
                 "dilation": (1, 1),
                 "groups": 1,
-                "device": device,
                 "conv_config": ttnn.Conv2dConfig(
                     weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                     shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
@@ -191,7 +190,6 @@ class resnet50Bottleneck:
             "padding": (0, 0),
             "dilation": (1, 1),
             "groups": 1,
-            "device": device,
             "conv_config": ttnn.Conv2dConfig(
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
@@ -301,7 +299,6 @@ class resnet50Bottleneck:
             "padding": (1, 1),
             "dilation": (1, 1),
             "groups": 1,
-            "device": device,
             "conv_config": ttnn.Conv2dConfig(
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
@@ -342,7 +339,6 @@ class resnet50Bottleneck:
             "padding": (0, 0),
             "dilation": (1, 1),
             "groups": 1,
-            "device": device,
             "conv_config": ttnn.Conv2dConfig(
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
@@ -550,7 +546,6 @@ class resnet50:
             "padding": (3, 3),
             "dilation": (1, 1),
             "groups": 1,
-            "device": device,
             "conv_config": ttnn.Conv2dConfig(
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
@@ -887,7 +882,6 @@ class resnet50:
             "padding": (3, 3),
             "dilation": (1, 1),
             "groups": 1,
-            "device": device,
             "conv_config": ttnn.Conv2dConfig(
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),

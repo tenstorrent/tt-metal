@@ -83,6 +83,7 @@ class Conv:
                 input_memory_config=input_tensor.memory_config(),
                 input_layout=input_tensor.get_layout(),
                 has_bias=True,
+                device=device,
                 **conv_kwargs,
                 input_dtype=self.dtype,
             )
@@ -92,6 +93,7 @@ class Conv:
                 input_layout=input_tensor.get_layout(),
                 **conv_kwargs,
                 input_dtype=self.dtype,
+                device=device,
             )
             self.weights = ttnn.to_device(self.weights, device)
             self.bias = ttnn.to_device(self.bias, device)
