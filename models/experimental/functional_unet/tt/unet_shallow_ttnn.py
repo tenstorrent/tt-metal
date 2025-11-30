@@ -224,7 +224,6 @@ class UNetConv2D:
             "padding": self.padding,
             "dilation": [1, 1],
             "groups": self.groups,
-            "device": self.device,
             "conv_config": self.conv_config,
         }
 
