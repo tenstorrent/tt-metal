@@ -70,13 +70,22 @@ def calculate_key_values(config, key_value_states, *, parameters):
     fused_kv = ttnn.unsqueeze_to_4D(fused_kv)  # 1, 1, S, 2xHxd
 
     key_states = fused_kv[:, :, :, :hidden_size]
-    key_states = ttnn.transpose(key_states, 2, 3)  # 1, 1, Hxd, S
-    key_states = ttnn.reshape(key_states, (bsz, config.encoder_attention_heads, head_size, tgt_len))  # 1, H, d, S
-
     value_states = fused_kv[:, :, :, hidden_size:]
-    value_states = ttnn.transpose(value_states, 1, 2)  # 1, S, 1, Hxd
-    value_states = ttnn.reshape(value_states, (bsz, tgt_len, config.encoder_attention_heads, head_size))
-    value_states = ttnn.transpose(value_states, 1, 2)  # 1, H, S, d
+
+    key_states = ttnn.experimental.nlp_create_qkv_heads(
+        key_states,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        num_heads=config.encoder_attention_heads,
+        num_kv_heads=0,
+    )[0]
+    key_states = ttnn.permute(key_states, [0, 1, 3, 2])
+
+    value_states = ttnn.experimental.nlp_create_qkv_heads(
+        value_states,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        num_heads=config.encoder_attention_heads,
+        num_kv_heads=0,
+    )[0]
 
     return key_states, value_states
 
