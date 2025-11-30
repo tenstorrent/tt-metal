@@ -178,7 +178,7 @@ template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_atan() {
     for (int d = 0; d < ITERATIONS; d++) {
 <<<<<<< HEAD
-        dst_reg[0] = sfpu_atan_maclaurin_series<APPROXIMATION_MODE>(dst_reg[0]);
+        dst_reg[0] = sfpu_atan_maclaurin_series<APPROX_MODE>(dst_reg[0]);
 =======
         vFloat val = dst_reg[0];
         val = sfpu_atan_maclaurin_series<APPROX_MODE>(val);

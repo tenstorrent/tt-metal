@@ -21,7 +21,7 @@ template <
     int ITERATIONS = 8>
 inline void calculate_sfpu_binary_bitwise(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    _calculate_sfpu_binary_bitwise_<APPROXIMATION_MODE, BITWISE_OP, INSTRUCTION_MODE, ITERATIONS>(
+    _calculate_sfpu_binary_bitwise_<APPROX_MODE, BITWISE_OP, INSTRUCTION_MODE, ITERATIONS>(
         dst_index_in0, dst_index_in1, dst_index_out);
 }
 
