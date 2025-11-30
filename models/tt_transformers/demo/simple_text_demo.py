@@ -309,6 +309,9 @@ def prepare_generator_args(
                 "temperature": torch.linspace(0.0, 1.0, steps=32).tolist(),
                 "top_p": torch.linspace(0.08, 1.0, steps=32).tolist(),
                 "top_k": torch.arange(1, 33).tolist(),  # 1 to 32 inclusive
+                "frequency_penalty": torch.linspace(0.0, 1.0, steps=32).tolist(),
+                "presence_penalty": torch.linspace(0.0, 1.0, steps=32).tolist(),
+                "repetition_penalty": torch.linspace(0.0, 1.0, steps=32).tolist(),
             },  # sampling_params (non-uniform)
             True,  # stop_at_eos
             False,  # ci_only
@@ -997,6 +1000,13 @@ def test_demo_text(
                 temperature=sampling_params["temperature"],
                 top_k=sampling_params["top_k"],
                 top_p=sampling_params["top_p"],
+                frequency_penalty=sampling_params["frequency_penalty"]
+                if "frequency_penalty" in sampling_params
+                else 0.0,
+                presence_penalty=sampling_params["presence_penalty"] if "presence_penalty" in sampling_params else 0.0,
+                repetition_penalty=sampling_params["repetition_penalty"]
+                if "repetition_penalty" in sampling_params
+                else 1.0,
             )
             if model[0]._supports_on_device_sampling
             else None
@@ -1046,6 +1056,8 @@ def test_demo_text(
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 sampling_params=device_sampling_params,
+                prompt_tokens=input_tokens_prefill_pt,
+                output_tokens=out_tok,
             )
 
             # Get the next token
