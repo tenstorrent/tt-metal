@@ -6,9 +6,9 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "llk_defs.h"
 #include "noc_nonblocking_api.h"
 #include "sfpu/ckernel_sfpu_max_pool_indices.h"
+#include "llk_defs.h"
 
 using namespace sfpi;
 
@@ -23,13 +23,13 @@ template <
     DataLayout layout = DataLayout::TILE>
 inline void calculate_max_pool_with_indices(uint values_tile_idx, uint indices_tile_idx, uint tile_idx) {
     if constexpr (num_rows <= 9) {
-        _calculate_max_pool_with_indices_<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, layout>(
+        _calculate_max_pool_with_indices_<APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS, layout>(
             values_tile_idx, indices_tile_idx, tile_idx);
     } else {
         static_assert(num_rows <= 32, "num_rows must be <= 32");
         static_assert(
             layout == DataLayout::ROW_MAJOR, "generic max pool with indices is only implemented for ROW_MAJOR layout");
-        _calculate_max_pool_with_indices_generic_<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS>(
+        _calculate_max_pool_with_indices_generic_<APPROX_MODE is_fp32_dest_acc_en, ITERATIONS>(
             values_tile_idx, indices_tile_idx, tile_idx);
     }
 }
