@@ -162,7 +162,6 @@ def run_conv_transpose2d(
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
         out_channels=output_channels,
-        device=device,
         bias_tensor=tt_bias_tensor,
         kernel_size=(filter_height, filter_width),
         stride=(stride_h, stride_w),

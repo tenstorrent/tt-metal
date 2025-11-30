@@ -20,7 +20,6 @@ namespace ttnn::operations::conv::conv_transpose2d {
 Result ConvTranpose2dOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    MeshDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
@@ -42,6 +41,7 @@ Result ConvTranpose2dOperation::invoke(
     bool return_weights_and_bias) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     const DataType output_dtype = dtype.value_or(input_tensor.dtype());
+    MeshDevice* device = input_tensor.device();
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
 
     // Inverse of sliding_window.get_output_shape()
@@ -119,8 +119,7 @@ Result ConvTranpose2dOperation::invoke(
             input_tensor.layout(),
             input_tensor.dtype(),
             output_dtype,
-            tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
-                                                         : std::nullopt,
+            input_tensor.memory_config(),
             kernel_size,
             stride,
             dilation,

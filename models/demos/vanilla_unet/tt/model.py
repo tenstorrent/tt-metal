@@ -88,7 +88,6 @@ def transpose_conv2d(
         input_width=upconv_config.input_width,
         conv_config=conv_config,
         compute_config=compute_config,
-        device=input_tensor.device(),
         return_output_dim=False,
         return_weights_and_bias=True,
     )

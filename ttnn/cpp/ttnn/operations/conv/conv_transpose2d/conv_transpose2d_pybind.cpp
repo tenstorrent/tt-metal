@@ -52,7 +52,6 @@ void py_bind_conv_transpose2d(py::module& module) {
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
             weight_tensor (ttnn.Tensor): the weight tensor.
-            device (ttnn.MeshDevice): the device to use.
             in_channels (int): number of input channels.
             out_channels (int): number of output channels.
             batch_size (int): batch size.
@@ -86,7 +85,6 @@ void py_bind_conv_transpose2d(py::module& module) {
             [](const decltype(ttnn::conv_transpose2d)& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& weight_tensor,
-               ttnn::MeshDevice* device,
                uint32_t in_channels,
                uint32_t out_channels,
                uint32_t batch_size,
@@ -109,7 +107,6 @@ void py_bind_conv_transpose2d(py::module& module) {
                 return self(
                     input_tensor,
                     weight_tensor,
-                    device,
                     in_channels,
                     out_channels,
                     batch_size,
@@ -133,7 +130,6 @@ void py_bind_conv_transpose2d(py::module& module) {
             py::kw_only(),
             py::arg("input_tensor"),
             py::arg("weight_tensor"),
-            py::arg("device"),
             py::arg("in_channels"),
             py::arg("out_channels"),
             py::arg("batch_size"),
