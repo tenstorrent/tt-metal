@@ -7,7 +7,6 @@
 #include "ckernel_defs.h"
 #include "ckernel.h"
 #include "llk_defs.h"
-
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_recip.h"
 using namespace sfpi;
@@ -20,14 +19,19 @@ sfpi_inline vFloat sfpu_reciprocal(const vFloat in) {
     return _sfpu_reciprocal_<APPROXIMATE ? 0 : 2>(in);
 }
 
-template <ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_reciprocal() {
-    _calculate_reciprocal_<(APPROX_MODE), ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);
+template <bool APPROXIMATE = false>
+sfpi_inline void sfpu_reciprocal_init() {
+    _init_sfpu_reciprocal_<APPROXIMATE>();
 }
 
-template <ApproximationMode APPROX_MODE>
+template <ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8, bool legacy_compat = false>
+inline void calculate_reciprocal() {
+    _calculate_reciprocal_<APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, legacy_compat>(ITERATIONS);
+}
+
+template <ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, bool legacy_compat = false>
 void recip_init() {
-    _init_reciprocal_<(APPROX_MODE)>();
+    _init_reciprocal_<APPROX_MODE, is_fp32_dest_acc_en, legacy_compat>();
 }
 
 }  // namespace sfpu
