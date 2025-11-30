@@ -90,7 +90,6 @@ def ttnn_conv1d(
         weight_tensor=weights,
         in_channels=tt_input_tensor.shape[-1],
         out_channels=weights.shape[0],
-        device=device,
         bias_tensor=bias,
         kernel_size=1,
         stride=1,

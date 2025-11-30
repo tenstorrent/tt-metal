@@ -29,7 +29,6 @@ void py_bind_conv1d(py::module& module) {
         Args:
             input_tensor (ttnn.Tensor): The input tensor. This must be in the format [N, H, W, C]. It can be on host or device.
             weight_tensor (ttnn.Tensor): The weight tensor. The weights can be passed in the same format as PyTorch, [out_channels, in_channels, kernel_height, kernel_width].
-            device (ttnn.MeshDevice): The device to use.
             in_channels (int): Number of input channels.
             out_channels (int): Number of output channels.
             batch_size (int): Batch size.
@@ -61,7 +60,6 @@ void py_bind_conv1d(py::module& module) {
             [](const decltype(ttnn::conv1d)& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& weight_tensor,
-               ttnn::MeshDevice* device,
                uint32_t in_channels,
                uint32_t out_channels,
                uint32_t batch_size,
@@ -81,7 +79,6 @@ void py_bind_conv1d(py::module& module) {
                 return self(
                     input_tensor,
                     weight_tensor,
-                    device,
                     in_channels,
                     out_channels,
                     batch_size,
@@ -102,7 +99,6 @@ void py_bind_conv1d(py::module& module) {
             py::kw_only(),
             py::arg("input_tensor"),
             py::arg("weight_tensor"),
-            py::arg("device"),
             py::arg("in_channels"),
             py::arg("out_channels"),
             py::arg("batch_size"),

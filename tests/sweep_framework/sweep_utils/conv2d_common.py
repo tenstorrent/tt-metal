@@ -370,7 +370,6 @@ def run_conv1d_short_sweep(
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
         out_channels=output_channels,
-        device=device,
         bias_tensor=tt_bias_tensor,
         kernel_size=kernel_size,
         stride=stride,

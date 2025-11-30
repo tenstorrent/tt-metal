@@ -90,7 +90,6 @@ class MambaConv:
                 weight_tensor=self.tt_weight_tensor_splits[i],
                 in_channels=self.config.input_channels // self.config.channels_split_factor,
                 out_channels=self.config.output_channels // self.config.channels_split_factor,
-                device=self.device,
                 bias_tensor=None,
                 kernel_size=self.config.kernel_size,
                 stride=self.config.stride,

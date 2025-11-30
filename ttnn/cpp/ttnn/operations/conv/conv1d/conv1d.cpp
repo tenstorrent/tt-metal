@@ -16,7 +16,6 @@ namespace ttnn::operations::conv::conv1d {
 Result Conv1dOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    MeshDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,

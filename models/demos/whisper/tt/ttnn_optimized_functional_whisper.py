@@ -485,7 +485,6 @@ def preprocess_encoder_inputs(config, input_features, *, parameters, device, inp
     input_embeds, [weights_device, _] = ttnn.conv1d(
         input_tensor=input_features,
         weight_tensor=parameters.conv1.weight,
-        device=device,
         in_channels=config.num_mel_bins,
         out_channels=config.d_model,
         batch_size=1,
@@ -509,7 +508,6 @@ def preprocess_encoder_inputs(config, input_features, *, parameters, device, inp
         out_split, [weights_device, _] = ttnn.conv1d(
             input_tensor=input_embeds,
             weight_tensor=parameters.conv2.weight[i],
-            device=device,
             in_channels=config.d_model,
             out_channels=conv2_out_channels,
             batch_size=1,
