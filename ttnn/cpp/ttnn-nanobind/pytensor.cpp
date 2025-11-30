@@ -422,7 +422,8 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
                 storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
                 TT_FATAL(
                     buffers.size() == 1,
-                    "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh composer "
+                    "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh "
+                    "composer "
                     "to concatenate multi-device shards.",
                     storage.buffer().shape());
                 return buffers.front();
@@ -466,7 +467,11 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(
     TT_THROW("Unreachable");
 }
 
-nb::ndarray<nb::pytorch> convert_tt_tensor_to_torch_tensor(
+template <typename Framework>
+    requires requires {
+        { Framework::is_framework == true };
+    }
+nb::ndarray<Framework> convert_tt_tensor_to_framework_tensor(
     RowMajorHostBuffer& row_major_host_buffer, nb::rv_policy policy = nb::rv_policy::copy) {
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::detail::convert_tt_tensor_to_torch_tensor", row_major_host_buffer);
@@ -483,16 +488,6 @@ nb::ndarray<nb::pytorch> convert_tt_tensor_to_torch_tensor(
 
     nb::capsule owner(buffer, [](void* p) noexcept { delete static_cast<HostBuffer*>(p); });
 
-    // ndarray(VoidPtr data,
-    //         size_t ndim,
-    //         const size_t *shape,
-    //         handle owner = { },
-    //         const int64_t *strides = nullptr,
-    //         dlpack::dtype dtype = nanobind::dtype<Scalar>(),
-    //         int device_type = DeviceType,
-    //         int device_id = 0,
-    //         char order = Order) {
-
     // whose sign bit is it anyway
     nb::dlpack::dtype dt = get_dtype_from_ttnn_datatype(row_major_host_buffer.data_type);
     if (dt.code == static_cast<std::uint8_t>(nb::dlpack::dtype_code::UInt) && dt.bits > 8) {
@@ -501,118 +496,20 @@ nb::ndarray<nb::pytorch> convert_tt_tensor_to_torch_tensor(
 
     // ndarray constructor will make a deep copy of shape/stride, so no need to worry about ownership
     // with shape/stride pointers
-    auto torch_tensor = nb::ndarray<nb::pytorch>(
+    auto framework_tensor = nb::ndarray<Framework>(
         buffer->view_bytes().data(),
         shape_vec.size(),
         shape_vec.data(),
-        owner,
-        nullptr,
+        std::move(owner),
+        nullptr /*strides*/,
         dt,
         nb::device::cpu::value,
-        0,
+        0 /*device_id*/,
         nb::c_contig::value);
 
-    GraphTracker::instance().track_function_end(torch_tensor);
+    GraphTracker::instance().track_function_end(framework_tensor);
 
-    return torch_tensor;
-
-    // nb::object torch = nb::module_::import_("torch");
-
-    //// pytorch frombuffer functions as a reinterpret_cast
-    // auto torch_frombuffer = torch.attr("frombuffer");
-
-    // nb::object torch_dtype = [&]() {
-    //     switch (row_major_host_buffer.data_type) {
-    //         case DataType::UINT8: return torch.attr("uint8");
-    //         case DataType::UINT16: return torch.attr("int16");
-    //         case DataType::INT32:
-    //         case DataType::UINT32: return torch.attr("int32");
-    //         case DataType::BFLOAT16: return torch.attr("bfloat16");
-    //         case DataType::BFLOAT8_B:
-    //         case DataType::BFLOAT4_B:
-    //         case DataType::FLOAT32: return torch.attr("float32");
-    //         case DataType::INVALID: TT_THROW("Invalid data type");
-    //     }
-    //     TT_THROW("Unreachable");
-    // }();
-
-    // auto torch_tensor = [&]() {
-    //     if (row_major_host_buffer.buffer.view_bytes().empty()) {
-    //         auto torch_empty = torch.attr("empty");
-    //         return torch_empty(row_major_host_buffer.shape, nb::arg("dtype") = torch_dtype);
-    //     }
-    //     return torch_frombuffer(row_major_host_buffer.buffer, nb::arg("dtype") = torch_dtype);
-    // }();
-
-    // torch_tensor = torch_tensor.attr("reshape")(row_major_host_buffer.shape);
-    // torch_tensor = torch_tensor.attr("contiguous")();
-
-    // GraphTracker::instance().track_function_end(torch_tensor);
-    // return torch_tensor;
-}
-
-nb::ndarray<nb::numpy> convert_tt_tensor_to_numpy_tensor(
-    RowMajorHostBuffer& row_major_host_buffer, nb::rv_policy policy = nb::rv_policy::copy) {
-    GraphTracker::instance().track_function_start(
-        "tt::tt_metal::detail::convert_tt_tensor_to_numpy_tensor", row_major_host_buffer);
-
-    auto shape_vec = ttnn_shape_to_ndarray(row_major_host_buffer.shape);
-
-    HostBuffer* buffer = [&row_major_host_buffer, policy]() {
-        if (policy == nb::rv_policy::move) {
-            return new HostBuffer{std::move(row_major_host_buffer.buffer)};
-        }
-
-        return new HostBuffer{row_major_host_buffer.buffer};
-    }();
-
-    nb::capsule owner(buffer, [](void* p) noexcept { delete static_cast<HostBuffer*>(p); });
-
-    // whose sign bit is it anyway
-    nb::dlpack::dtype dt = get_dtype_from_ttnn_datatype(row_major_host_buffer.data_type);
-    if (dt.code == static_cast<std::uint8_t>(nb::dlpack::dtype_code::UInt) && dt.bits > 8) {
-        dt.code = static_cast<std::uint8_t>(nb::dlpack::dtype_code::Int);
-    }
-    // ndarray constructor will make a deep copy of shape/stride, so no need to worry about ownership
-    // with shape/stride pointers
-    auto np_tensor = nb::ndarray<nb::numpy>(
-        buffer->view_bytes().data(),
-        shape_vec.size(),
-        shape_vec.data(),
-        owner,
-        nullptr,
-        dt,
-        nb::device::cpu::value,
-        0,
-        nb::c_contig::value);
-
-    GraphTracker::instance().track_function_end(np_tensor);
-
-    return np_tensor;
-
-    // nb::object np = nb::module_::import_("numpy");
-    // auto np_frombuffer = np.attr("frombuffer");
-
-    // nb::object np_dtype = [&]() {
-    //     switch (row_major_host_buffer.data_type) {
-    //         case DataType::UINT8: return np.attr("ubyte");
-    //         case DataType::UINT16: return np.attr("int16");
-    //         case DataType::INT32:
-    //         case DataType::UINT32: return np.attr("int32");
-    //         case DataType::BFLOAT16: TT_THROW("Bfloat16 is not supported for numpy!");
-    //         case DataType::BFLOAT8_B:
-    //         case DataType::BFLOAT4_B:
-    //         case DataType::FLOAT32: return np.attr("float32");
-    //         case DataType::INVALID: TT_THROW("Invalid data type");
-    //     }
-    //     TT_THROW("Unreachable");
-    // }();
-
-    // auto np_tensor = np_frombuffer(row_major_host_buffer.buffer, nb::arg("dtype") = np_dtype);
-    // np_tensor = np_tensor.attr("reshape")(row_major_host_buffer.shape);
-    // np_tensor = np.attr("ascontiguousarray")(np_tensor);
-    // GraphTracker::instance().track_function_end(np_tensor);
-    // return np_tensor;
+    return framework_tensor;
 }
 
 auto parse_external_operation(
@@ -728,6 +625,7 @@ void pytensor_module(nb::module_& mod) {
                     return output;
                 }));
         },
+        nb::rv_policy::move,
         nb::arg("function").noconvert(),
         nb::arg("function_name").noconvert() = nb::none(),
         R"doc(
@@ -818,7 +716,7 @@ void pytensor_module(nb::module_& mod) {
                     std::nullopt,
                     pad_value));
             },
-            nb::keep_alive<1, 6>(),
+            // nb::keep_alive<1, 6>(),
             nb::arg("data"),
             nb::arg("shape"),
             nb::arg("data_type"),
@@ -874,7 +772,7 @@ void pytensor_module(nb::module_& mod) {
                     std::nullopt,
                     pad_value));
             },
-            nb::keep_alive<1, 7>(),
+            // nb::keep_alive<1, 7>(),
             nb::arg("data"),
             nb::arg("shape"),
             nb::arg("data_type"),
@@ -1038,7 +936,8 @@ void pytensor_module(nb::module_& mod) {
             "extract_shard",
             [](const Tensor& self, CoreCoord core) { return self.extract_shard(core); },
             nb::arg("core").noconvert(),
-            nb::keep_alive<0, 2>(),
+            // nb::keep_alive<0, 2>(),
+            nb::keep_alive<0, 1>(),
             R"doc(
             Move TT Tensor from host device to TT accelerator device.
 
@@ -1061,7 +960,8 @@ void pytensor_module(nb::module_& mod) {
             "extract_shard",
             [](const Tensor& self, const uint32_t& core_id) { return self.extract_shard(core_id); },
             nb::arg("core_id").noconvert(),
-            nb::keep_alive<0, 2>(),
+            // nb::keep_alive<0, 2>(),
+            nb::keep_alive<0, 1>(),
             R"doc(
             Move TT Tensor from host device to TT accelerator device.
 
@@ -1087,6 +987,7 @@ void pytensor_module(nb::module_& mod) {
             },
             nb::arg("blocking") = true,
             nb::arg("cq_id") = nb::none(),
+            nb::keep_alive<0, 1>(),
             R"doc(
             Move TT Tensor from TT accelerator device to host device.
 
@@ -1111,6 +1012,7 @@ void pytensor_module(nb::module_& mod) {
                 }
                 TT_THROW("Unreachable");
             },
+            nb::keep_alive<0, 1>(),
             R"doc(
                  Extract the scalar value from a tensor containing exactly one element.
 
@@ -1491,7 +1393,7 @@ void pytensor_module(nb::module_& mod) {
                 using namespace CMAKE_UNIQUE_NAMESPACE;
 
                 auto buffer = convert_to_row_major_host_buffer(self, /*padded_output=*/true);
-                return convert_tt_tensor_to_torch_tensor(buffer);
+                return convert_tt_tensor_to_framework_tensor<nb::pytorch>(buffer);
             },
             nb::rv_policy::copy,
             R"doc(
@@ -1512,7 +1414,7 @@ void pytensor_module(nb::module_& mod) {
 
                 auto buffer = mesh_composer ? convert_to_row_major_host_buffer(self, *mesh_composer)
                                             : convert_to_row_major_host_buffer(self, /*padded_output=*/false);
-                return convert_tt_tensor_to_torch_tensor(buffer);
+                return convert_tt_tensor_to_framework_tensor<nb::pytorch>(buffer);
             },
             nb::rv_policy::copy,
             nb::arg("mesh_composer") = nullptr,
@@ -1533,7 +1435,7 @@ void pytensor_module(nb::module_& mod) {
 
                 auto buffer = mesh_composer ? convert_to_row_major_host_buffer(self, *mesh_composer)
                                             : convert_to_row_major_host_buffer(self, /*padded_output=*/false);
-                return convert_tt_tensor_to_numpy_tensor(buffer);
+                return convert_tt_tensor_to_framework_tensor<nb::numpy>(buffer);
             },
             nb::rv_policy::copy,
             nb::arg("mesh_composer") = nullptr,
@@ -1553,6 +1455,7 @@ void pytensor_module(nb::module_& mod) {
                 TT_FATAL(self.storage_type() == StorageType::HOST, "Tensor must be on host to access host_buffer");
                 return self.host_storage().buffer();
             },
+            nb::rv_policy::reference_internal,
             R"doc(
             Get the underlying host buffer.
 
@@ -1648,6 +1551,7 @@ void pytensor_module(nb::module_& mod) {
             [](Tensor& self, int N, int C, int H, int W) {
                 return ttnn::reshape(self, infer_dims_for_reshape(self, ttnn::SmallVector<int>{N, C, H, W}));
             },
+            nb::rv_policy::reference_internal,
             R"doc(
                 Reshapes TT tensor
 
@@ -1658,6 +1562,7 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "reshape",
             [](Tensor& self, const ttnn::Shape& shape) -> Tensor { return ttnn::reshape(self, shape); },
+            nb::rv_policy::reference_internal,
             R"doc(
                 Reshapes TT tensor
 
@@ -1670,6 +1575,7 @@ void pytensor_module(nb::module_& mod) {
             [](Tensor& self, const ttnn::SmallVector<int32_t>& shape) -> Tensor {
                 return ttnn::reshape(self, infer_dims_for_reshape(self, shape));
             },
+            nb::rv_policy::reference_internal,
             R"doc(
                 Reshapes TT tensor
 
@@ -1679,24 +1585,37 @@ void pytensor_module(nb::module_& mod) {
             )doc")
         .def(
             "to_list",
-            [](Tensor& self) {  // TODO_NANOBIND
+            [](Tensor& self) -> nb::object {  // TODO_NANOBIND
                 using namespace tt::tt_metal::tensor_impl;
-                return dispatch(self.dtype(), [&]<typename T>() -> nb::list {
+                return dispatch(self.dtype(), [&]<typename T>() -> nb::object {
                     const auto& logical_shape = self.logical_shape();
-                    std::vector<uint32_t> shape{logical_shape.cbegin(), logical_shape.cend()};
+                    auto shape_vec = CMAKE_UNIQUE_NAMESPACE::ttnn_shape_to_ndarray(logical_shape);
 
-                    // since to_vector will pull the data back from device->host implicitly, the extra copy here
-                    // is the more streamlined way of marshalling the data.
+                    // TODO: move to
+                    auto data_vec = [&self]() {
+                        if constexpr (
+                            std::is_same_v<T, bfloat8_b> || std::is_same_v<T, bfloat4_b> ||
+                            std::is_same_v<T, bfloat16>) {
+                            return self.to_vector<float>();
+                        } else {
+                            return self.to_vector<T>();
+                        }
+                    }();
 
-                    if constexpr (
-                        std::is_same_v<T, bfloat8_b> || std::is_same_v<T, bfloat4_b> || std::is_same_v<T, bfloat16>) {
-                        return nb::cast(self.to_vector<float>()).attr("reshape")(nb::cast(shape)).attr("tolist");
+                    auto builtin = nb::module_::import_("builtins");
+                    auto mview = nb::ndarray<nb::memview>(
+                        data_vec.data(),
+                        shape_vec.size(),
+                        shape_vec.data(),
+                        nb::find(&self),
+                        nullptr,
+                        get_dtype_from_ttnn_datatype(self.dtype()),
+                        nb::device::cpu::value,
+                        0,
+                        nb::c_contig::value);
 
-                        // return nb::ndarray(shape, self.to_vector<float>().data()).attr("tolist")();
-                    } else {
-                        return nb::cast(self.to_vector<T>()).attr("reshape")(nb::cast(shape)).attr("tolist");
-                        // return nb::ndarray(self.to_vector<T>().data(), shape).attr("tolist")();
-                    }
+                    // builtin memoryview has a tolist, so just call that.
+                    return builtin.attr("memoryview")(mview.cast()).attr("tolist")();
                 });
             },
             R"doc(
@@ -1709,6 +1628,7 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "tensor_topology",
             [](const Tensor& self) { return self.tensor_topology(); },
+            nb::rv_policy::reference_internal,
             R"doc(
                 Get the topology of the tensor.
 

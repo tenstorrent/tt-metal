@@ -43,6 +43,9 @@ public:
     Container::const_iterator cbegin() const;
     Container::const_iterator cend() const;
 
+    Container::const_iterator begin() const;
+    Container::const_iterator end() const;
+
     tt::stl::Span<const uint32_t> view() const;
 
     bool empty() const;
