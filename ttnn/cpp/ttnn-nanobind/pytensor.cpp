@@ -474,7 +474,7 @@ template <typename Framework>
 nb::ndarray<Framework> convert_tt_tensor_to_framework_tensor(
     RowMajorHostBuffer& row_major_host_buffer, nb::rv_policy policy = nb::rv_policy::copy) {
     GraphTracker::instance().track_function_start(
-        "tt::tt_metal::detail::convert_tt_tensor_to_torch_tensor", row_major_host_buffer);
+        "tt::tt_metal::detail::convert_tt_tensor_to_framework_tensor", row_major_host_buffer);
 
     auto shape_vec = ttnn_shape_to_ndarray(row_major_host_buffer.shape);
 
@@ -625,7 +625,7 @@ void pytensor_module(nb::module_& mod) {
                     return output;
                 }));
         },
-        nb::rv_policy::move,
+        // nb::rv_policy::move,
         nb::arg("function").noconvert(),
         nb::arg("function_name").noconvert() = nb::none(),
         R"doc(
@@ -1012,7 +1012,7 @@ void pytensor_module(nb::module_& mod) {
                 }
                 TT_THROW("Unreachable");
             },
-            nb::rv_policy::copy,
+            // nb::rv_policy::copy,
             R"doc(
                  Extract the scalar value from a tensor containing exactly one element.
 
@@ -1551,7 +1551,7 @@ void pytensor_module(nb::module_& mod) {
             [](Tensor& self, int N, int C, int H, int W) {
                 return ttnn::reshape(self, infer_dims_for_reshape(self, ttnn::SmallVector<int>{N, C, H, W}));
             },
-            nb::rv_policy::reference_internal,
+            // nb::rv_policy::reference_internal,
             R"doc(
                 Reshapes TT tensor
 
@@ -1562,7 +1562,7 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "reshape",
             [](Tensor& self, const ttnn::Shape& shape) -> Tensor { return ttnn::reshape(self, shape); },
-            nb::rv_policy::reference_internal,
+            // nb::rv_policy::reference_internal,
             R"doc(
                 Reshapes TT tensor
 
@@ -1575,7 +1575,7 @@ void pytensor_module(nb::module_& mod) {
             [](Tensor& self, const ttnn::SmallVector<int32_t>& shape) -> Tensor {
                 return ttnn::reshape(self, infer_dims_for_reshape(self, shape));
             },
-            nb::rv_policy::reference_internal,
+            // nb::rv_policy::reference_internal,
             R"doc(
                 Reshapes TT tensor
 
@@ -1585,7 +1585,7 @@ void pytensor_module(nb::module_& mod) {
             )doc")
         .def(
             "to_list",
-            [](Tensor& self) -> nb::object {  // TODO_NANOBIND
+            [](Tensor& self) -> nb::object {
                 using namespace tt::tt_metal::tensor_impl;
                 return dispatch(self.dtype(), [&]<typename T>() -> nb::object {
                     const auto& logical_shape = self.logical_shape();
@@ -1603,7 +1603,7 @@ void pytensor_module(nb::module_& mod) {
                     }();
 
                     auto builtin = nb::module_::import_("builtins");
-                    auto mview = nb::ndarray<nb::memview>(
+                    auto arr = nb::ndarray<nb::array_api>(
                         data_vec.data(),
                         shape_vec.size(),
                         shape_vec.data(),
@@ -1615,7 +1615,7 @@ void pytensor_module(nb::module_& mod) {
                         nb::c_contig::value);
 
                     // builtin memoryview has a tolist, so just call that.
-                    return builtin.attr("memoryview")(mview.cast()).attr("tolist")();
+                    return builtin.attr("memoryview")(arr.cast()).attr("tolist")();
                 });
             },
             R"doc(
@@ -1628,7 +1628,8 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "tensor_topology",
             [](const Tensor& self) { return self.tensor_topology(); },
-            nb::rv_policy::reference_internal,
+            // nb::rv_policy::reference_internal,
+            nb::keep_alive<1, 0>(),
             R"doc(
                 Get the topology of the tensor.
 
