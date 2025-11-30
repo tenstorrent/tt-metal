@@ -407,6 +407,20 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     writer_rt.push_back((uint32_t)n_hops);
     writer_rt.push_back((uint32_t)s_hops);
 
+    // assuming same mesh mcast
+    auto e_neighbor = cp.get_chip_neighbors(src_fn, RoutingDirection::E);
+    auto w_neighbor = cp.get_chip_neighbors(src_fn, RoutingDirection::W);
+    auto n_neighbor = cp.get_chip_neighbors(src_fn, RoutingDirection::N);
+    auto s_neighbor = cp.get_chip_neighbors(src_fn, RoutingDirection::S);
+    writer_rt.push_back(e_neighbor.empty() ? 255u : (uint32_t)e_neighbor[src_fn.mesh_id][0]);
+    writer_rt.push_back(e_neighbor.empty() ? 255u : (uint32_t)*src_fn.mesh_id);
+    writer_rt.push_back(w_neighbor.empty() ? 255u : (uint32_t)w_neighbor[src_fn.mesh_id][0]);
+    writer_rt.push_back(w_neighbor.empty() ? 255u : (uint32_t)*src_fn.mesh_id);
+    writer_rt.push_back(n_neighbor.empty() ? 255u : (uint32_t)n_neighbor[src_fn.mesh_id][0]);
+    writer_rt.push_back(n_neighbor.empty() ? 255u : (uint32_t)*src_fn.mesh_id);
+    writer_rt.push_back(s_neighbor.empty() ? 255u : (uint32_t)s_neighbor[src_fn.mesh_id][0]);
+    writer_rt.push_back(s_neighbor.empty() ? 255u : (uint32_t)*src_fn.mesh_id);
+
     tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
 
     // Build workloads

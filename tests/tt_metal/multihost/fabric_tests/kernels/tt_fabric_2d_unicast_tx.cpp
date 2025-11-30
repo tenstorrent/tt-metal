@@ -49,27 +49,6 @@ inline void send_packet(
     connection.send_payload_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
-void set_mcast_header(
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header, const eth_chan_directions& direction, uint32_t num_hops) {
-    uint16_t e_num_hops = 0;
-    uint16_t w_num_hops = 0;
-    uint16_t n_num_hops = 0;
-    uint16_t s_num_hops = 0;
-
-    if (direction == eth_chan_directions::EAST) {
-        e_num_hops = num_hops;
-    } else if (direction == eth_chan_directions::WEST) {
-        w_num_hops = num_hops;
-    } else if (direction == eth_chan_directions::NORTH) {
-        n_num_hops = num_hops;
-    } else if (direction == eth_chan_directions::SOUTH) {
-        s_num_hops = num_hops;
-    }
-
-    fabric_set_mcast_route(
-        (HybridMeshPacketHeader*)packet_header, 0, 0, e_num_hops, w_num_hops, n_num_hops, s_num_hops);
-}
-
 inline void teardown_connection(tt::tt_fabric::WorkerToFabricEdmSender& connection) { connection.close(); }
 
 void kernel_main() {

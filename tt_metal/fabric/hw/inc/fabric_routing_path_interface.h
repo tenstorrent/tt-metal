@@ -11,13 +11,14 @@ namespace tt::tt_fabric {
 
 // Device-side compressed decoder function for 2D routing
 template <>
-inline bool intra_mesh_routing_path_t<2, true>::decode_route_to_buffer(
-    uint16_t dst_chip_id, volatile uint8_t* out_route_buffer, bool prepend_one_hop) const {
+template <bool prepend_one_hop = false>
+inline int intra_mesh_routing_path_t<2, true>::decode_route_to_buffer(
+    uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) const {
     if (dst_chip_id >= MAX_CHIPS_LOWLAT) {
         // invalid chip
         out_route_buffer[0] = 0;
         ASSERT(false);  // catched only watcher enabled. Otherwise make behavior consistent as returning false.
-        return false;
+        return 0;
     }
 
     // Get compressed route data
@@ -29,9 +30,9 @@ inline bool intra_mesh_routing_path_t<2, true>::decode_route_to_buffer(
 
     if (ns_hops == 0 && ew_hops == 0) {
         // Noop to self
-        out_route_buffer[0] = 0;
-        out_route_buffer[1] = 0;
-        return false;
+        out_route_buffer[0] = NOOP;
+        out_route_buffer[1] = NOOP;
+        return 1;
     }
 
     // Reconstruct 2D routing commands (1 command per byte)
@@ -74,23 +75,26 @@ inline bool intra_mesh_routing_path_t<2, true>::decode_route_to_buffer(
         out_route_buffer[byte_index++] = ew_write_cmd_opposite;
     }
 
-    out_route_buffer[byte_index] = NOOP;
     ASSERT(byte_index < HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE);
+    if (byte_index < HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE) {
+        out_route_buffer[byte_index] = NOOP;
+    }
 
-    return true;
+    return byte_index;
 }
 
 // Device-side decoder function for 1D routing (packed paths)
 template <>
-inline bool intra_mesh_routing_path_t<1, false>::decode_route_to_buffer(
-    uint16_t dst_chip_id, volatile uint8_t* out_route_buffer, bool prepend_one_hop) const {
+template <bool prepend_one_hop = false>
+inline int intra_mesh_routing_path_t<1, false>::decode_route_to_buffer(
+    uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) const {
     if (dst_chip_id >= MAX_CHIPS_LOWLAT) {
         // Out of bounds - fill buffer with NOOPs/zeros
         for (uint16_t i = 0; i < SINGLE_ROUTE_SIZE; ++i) {
             out_route_buffer[i] = 0;
         }
         ASSERT(false);  // catched only watcher enabled. Otherwise make behavior consistent as returning false.
-        return false;
+        return 0;
     }
 
     const uint8_t* packed_route = &this->paths[dst_chip_id * SINGLE_ROUTE_SIZE];
@@ -98,24 +102,25 @@ inline bool intra_mesh_routing_path_t<1, false>::decode_route_to_buffer(
     for (uint16_t i = 0; i < SINGLE_ROUTE_SIZE; ++i) {
         out_route_buffer[i] = packed_route[i];
     }
-    return true;
+    return SINGLE_ROUTE_SIZE;
 }
 
 // Device-side compressed decoder function for 1D routing
 template <>
-inline bool intra_mesh_routing_path_t<1, true>::decode_route_to_buffer(
-    uint16_t hops, volatile uint8_t* out_route_buffer, bool prepend_one_hop) const {
-    return true;
+template <bool prepend_one_hop = false>
+inline int intra_mesh_routing_path_t<1, true>::decode_route_to_buffer(
+    uint16_t hops, volatile uint8_t* out_route_buffer) const {
+    return SINGLE_ROUTE_SIZE_1D;
 }
 
-inline bool decode_route_to_buffer_by_hops(uint16_t hops, volatile uint8_t* out_route_buffer) {
+inline int decode_route_to_buffer_by_hops(uint16_t hops, volatile uint8_t* out_route_buffer) {
     auto route_ptr = reinterpret_cast<volatile uint32_t*>(out_route_buffer);
 
     if (hops >= intra_mesh_routing_path_t<1, true>::MAX_CHIPS_LOWLAT || hops == 0) {
         // invalid chip or Noop to self
         *route_ptr = 0;
         ASSERT(false);  // catched only watcher enabled. Otherwise make behavior consistent as returning false.
-        return false;
+        return 0;
     }
 
     // Forward for (hops - 1) steps, then write on the final hop
@@ -124,11 +129,11 @@ inline bool decode_route_to_buffer_by_hops(uint16_t hops, volatile uint8_t* out_
                                    (intra_mesh_routing_path_t<1, true>::WRITE_ONLY
                                     << (hops - 1) * intra_mesh_routing_path_t<1, true>::FIELD_WIDTH);
     *route_ptr = routing_field_value;
-    return true;
+    return SINGLE_ROUTE_SIZE_1D;
 }
 
 // Device-side compressed decoder function for 1D routing
-inline bool decode_route_to_buffer_by_dev(uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) {
+inline int decode_route_to_buffer_by_dev(uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) {
     tt_l1_ptr routing_l1_info_t* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
     uint16_t my_device_id = routing_table->my_device_id;
     uint16_t hops = my_device_id > dst_chip_id ? my_device_id - dst_chip_id : dst_chip_id - my_device_id;
