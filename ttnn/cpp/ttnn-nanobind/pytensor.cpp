@@ -716,7 +716,7 @@ void pytensor_module(nb::module_& mod) {
                     std::nullopt,
                     pad_value));
             },
-            // nb::keep_alive<1, 6>(),
+            nb::keep_alive<1, 6>(),
             nb::arg("data"),
             nb::arg("shape"),
             nb::arg("data_type"),
@@ -772,7 +772,7 @@ void pytensor_module(nb::module_& mod) {
                     std::nullopt,
                     pad_value));
             },
-            // nb::keep_alive<1, 7>(),
+            nb::keep_alive<1, 7>(),
             nb::arg("data"),
             nb::arg("shape"),
             nb::arg("data_type"),
@@ -936,8 +936,8 @@ void pytensor_module(nb::module_& mod) {
             "extract_shard",
             [](const Tensor& self, CoreCoord core) { return self.extract_shard(core); },
             nb::arg("core").noconvert(),
-            // nb::keep_alive<0, 2>(),
-            nb::keep_alive<0, 1>(),
+            nb::keep_alive<0, 2>(),  // orig
+            // nb::keep_alive<0, 1>(), // does this work?
             R"doc(
             Move TT Tensor from host device to TT accelerator device.
 
@@ -960,8 +960,8 @@ void pytensor_module(nb::module_& mod) {
             "extract_shard",
             [](const Tensor& self, const uint32_t& core_id) { return self.extract_shard(core_id); },
             nb::arg("core_id").noconvert(),
-            // nb::keep_alive<0, 2>(),
-            nb::keep_alive<0, 1>(),
+            nb::keep_alive<0, 2>(),  // orig
+            // nb::keep_alive<0, 1>(),
             R"doc(
             Move TT Tensor from host device to TT accelerator device.
 
