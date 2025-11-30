@@ -839,7 +839,6 @@ TEST_P(Conv2dOpIfTest, Conv2d) {
             device,
             input_spec,
             weight_spec,
-            device,
             in_channels,
             out_channels,
             batch_size,
