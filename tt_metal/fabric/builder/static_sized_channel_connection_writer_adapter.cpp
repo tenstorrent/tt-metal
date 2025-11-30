@@ -18,45 +18,34 @@ StaticSizedChannelConnectionWriterAdapter::StaticSizedChannelConnectionWriterAda
     my_direction(my_direction) {}
 
 void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
-    SenderWorkerAdapterSpec const& adapter_spec,
+    const SenderWorkerAdapterSpec& adapter_spec,
     uint32_t inbound_vc_idx,
     eth_chan_directions downstream_direction,
     CoreCoord downstream_noc_xy,
     bool is_2D_routing,
-    bool is_vc1) {
+    bool /*is_vc1*/) {
     downstream_edms_connected_by_vc.at(inbound_vc_idx).push_back(
         {downstream_direction, CoreCoord(downstream_noc_xy.x, downstream_noc_xy.y)});
 
     if (is_2D_routing) {
-        if (!is_vc1) {
-            // Calculate compact index based on downstream_direction relative to my_direction
-            // The compact index excludes the router's own direction
-            // For EAST router (my_direction=0): WEST(1)→0, NORTH(2)→1, SOUTH(3)→2
-            // For WEST router (my_direction=1): EAST(0)→0, NORTH(2)→1, SOUTH(3)→2
-            // For NORTH router (my_direction=2): EAST(0)→0, WEST(1)→1, SOUTH(3)→2
-            // For SOUTH router (my_direction=3): EAST(0)→0, WEST(1)→1, NORTH(2)→2
-            size_t compact_index = get_receiver_channel_compact_index(my_direction, downstream_direction);
-            this->downstream_edms_connected |= (1 << compact_index);
+        // Calculate compact index based on downstream_direction relative to my_direction
+        // The compact index excludes the router's own direction
+        // For EAST router (my_direction=0): WEST(1)→0, NORTH(2)→1, SOUTH(3)→2
+        // For WEST router (my_direction=1): EAST(0)→0, NORTH(2)→1, SOUTH(3)→2
+        // For NORTH router (my_direction=2): EAST(0)→0, WEST(1)→1, SOUTH(3)→2
+        // For SOUTH router (my_direction=3): EAST(0)→0, WEST(1)→1, NORTH(2)→2
+        size_t compact_index = get_receiver_channel_compact_index(my_direction, downstream_direction);
+        this->downstream_edms_connected |= (1 << compact_index);
 
-            // Store addresses indexed by [vc_idx][compact_index]
-            this->downstream_edm_buffer_base_addresses.at(inbound_vc_idx).at(compact_index) =
-                adapter_spec.edm_buffer_base_addr;
-            this->downstream_edm_worker_registration_addresses.at(inbound_vc_idx).at(compact_index) =
-                adapter_spec.edm_connection_handshake_addr;
-            this->downstream_edm_worker_location_info_addresses.at(inbound_vc_idx).at(compact_index) =
-                adapter_spec.edm_worker_location_info_addr;
-            this->downstream_edm_buffer_index_semaphore_addresses.at(inbound_vc_idx).at(compact_index) =
-                adapter_spec.buffer_index_semaphore_id;
-
-        } else {
-            this->downstream_edm_buffer_base_addresses.at(inbound_vc_idx).at(0) = adapter_spec.edm_buffer_base_addr;
-            this->downstream_edm_worker_registration_addresses.at(inbound_vc_idx).at(0) =
-                adapter_spec.edm_connection_handshake_addr;
-            this->downstream_edm_worker_location_info_addresses.at(inbound_vc_idx).at(0) =
-                adapter_spec.edm_worker_location_info_addr;
-            this->downstream_edm_buffer_index_semaphore_addresses.at(inbound_vc_idx).at(0) =
-                adapter_spec.buffer_index_semaphore_id;
-        }
+        // Store addresses indexed by [vc_idx][compact_index]
+        this->downstream_edm_buffer_base_addresses.at(inbound_vc_idx).at(compact_index) =
+            adapter_spec.edm_buffer_base_addr;
+        this->downstream_edm_worker_registration_addresses.at(inbound_vc_idx).at(compact_index) =
+            adapter_spec.edm_connection_handshake_addr;
+        this->downstream_edm_worker_location_info_addresses.at(inbound_vc_idx).at(compact_index) =
+            adapter_spec.edm_worker_location_info_addr;
+        this->downstream_edm_buffer_index_semaphore_addresses.at(inbound_vc_idx).at(compact_index) =
+            adapter_spec.buffer_index_semaphore_id;
     } else {
         this->downstream_edms_connected = 1;
 
@@ -124,8 +113,7 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(uin
         }
     } else {
         // For VC1 or 1D: single downstream connection (backward compatible)
-        bool has_connection = vc_idx == 0 ? (this->downstream_edms_connected != 0)
-                                          : this->downstream_edm_buffer_base_addresses[vc_idx][0].has_value();
+        bool has_connection = vc_idx == 0 ? (this->downstream_edms_connected != 0) : false;
 
         uint32_t buffer_addr = this->downstream_edm_buffer_base_addresses[vc_idx][0].value_or(0);
 
@@ -194,7 +182,10 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::encode_noc_ord_for_2d(
     const std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_receiver_channels>& downstream_edms_connected_by_vc,
     uint32_t vc_idx,
     const std::function<uint32_t(CoreCoord)>& get_noc_ord) const {
-    if (vc_idx == 1 || !is_2D_routing) {
+    if (vc_idx == 1) {
+        return 0;
+    }
+    if (!is_2D_routing) {
         if (downstream_edms_connected_by_vc[vc_idx].empty()) {
             return 0; // no connection here
         }

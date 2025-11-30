@@ -29,7 +29,6 @@ std::unique_ptr<FabricRouterBuilder> FabricRouterBuilder::build(
     FabricNodeId fabric_node_id,
     FabricNodeId remote_fabric_node_id,
     const tt::tt_fabric::FabricEriscDatamoverConfig& edm_config,
-    tt::tt_fabric::FabricEriscDatamoverType fabric_edm_type,
     tt::tt_fabric::eth_chan_directions eth_direction,
     bool dispatch_link,
     tt::tt_fabric::chan_id_t eth_chan,
@@ -55,7 +54,6 @@ std::unique_ptr<FabricRouterBuilder> FabricRouterBuilder::build(
             remote_fabric_node_id,
             edm_config,
             false, /* build_in_worker_connection_mode */
-            fabric_edm_type,
             eth_direction,
             downstream_is_tensix_extension));
 
@@ -145,35 +143,9 @@ void FabricRouterBuilder::connect_to_downstream_router_over_noc(
             "Tried to connect router to downstream in worker connection mode");
 
         // Helper to get the downstream builder for a specific VC based on channel mapping
-
         uint32_t sender_channel_idx = get_downstream_sender_channel(is_2D_routing, other.get_direction());
         // Connect VC0
         connect_vc(0, get_downstream_builder_for_vc(0, sender_channel_idx), sender_channel_idx);
-    } else if (vc == 1) {
-
-        // Check if we should connect VC1 for deadlock avoidance
-        if (!fabric_context.need_deadlock_avoidance_support(this->get_direction())) {
-            return;
-        }
-
-        // For 2D routing we can only connect VC1 if the downstream is on the same axis
-        bool connect_vc1 = true;
-        if (is_2D_routing) {
-            auto ds_dir = other.get_direction();
-
-            connect_vc1 =
-                (this->get_direction() == eth_chan_directions::EAST && ds_dir == eth_chan_directions::WEST) ||
-                (this->get_direction() == eth_chan_directions::WEST && ds_dir == eth_chan_directions::EAST) ||
-                (this->get_direction() == eth_chan_directions::NORTH && ds_dir == eth_chan_directions::SOUTH) ||
-                (this->get_direction() == eth_chan_directions::SOUTH && ds_dir == eth_chan_directions::NORTH);
-        }
-
-        if (connect_vc1) {
-            // Get the downstream builder for VC1 based on channel mapping
-            // Note: VC1 only ever has one sender channel, so we index with offset 0 into VC1
-            constexpr uint32_t sender_channel_index_into_vc1 = 0;
-            connect_vc(1, get_downstream_builder_for_vc(1, sender_channel_index_into_vc1), sender_channel_index_into_vc1);
-        }
     }
 }
 
