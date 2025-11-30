@@ -296,8 +296,6 @@ MetalContext& MetalContext::instance() {
 void MetalContext::teardown_base_objects() {
     // Teardown in backward order of dependencies to avoid dereferencing uninitialized objects
     distributed_context_.reset();
-    // Destroy inspector before cluster to prevent RPC handlers from accessing destroyed cluster
-    inspector_data_.reset();
     cluster_.reset();
     hal_.reset();
 }

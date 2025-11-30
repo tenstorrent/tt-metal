@@ -12,7 +12,6 @@
 #include "jit_build/build_env_manager.hpp"
 #include <tt-metalium/device_pool.hpp>
 #include <tt_stl/reflection.hpp>
-#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal::inspector {
 
@@ -37,8 +36,6 @@ Data::Data()
             get_rpc_server().setGetAllBuildEnvsCallback([this](auto result) { this->rpc_get_all_build_envs(result); });
             get_rpc_server().setGetAllDispatchCoreInfosCallback(
                 [this](auto result) { this->rpc_get_all_dispatch_core_infos(result); });
-            get_rpc_server().setGetMetalDeviceIdMappingsCallback(
-                [this](auto result) { this->rpc_get_metal_device_id_mappings(result); });
         } catch (const std::exception& e) {
             TT_INSPECTOR_THROW("Failed to start Inspector RPC server: {}", e.what());
         }
@@ -77,7 +74,7 @@ void Data::rpc_get_programs(rpc::Inspector::GetProgramsResults::Builder& results
         uint32_t j = 0;
         for (const auto& [device_id, status] : program_data.binary_status_per_device) {
             auto device_status = binary_status_list[j++];
-            device_status.setMetalDeviceId(static_cast<uint64_t>(device_id));
+            device_status.setDeviceId(static_cast<uint64_t>(device_id));
             device_status.setStatus(convert_binary_status(status));
         }
 
@@ -162,7 +159,7 @@ void Data::rpc_get_devices_in_use(rpc::Inspector::GetDevicesInUseResults::Builde
     auto device_ids = DevicePool::instance().get_all_active_device_ids();
 
     // Write result
-    auto result_device_ids = results.initMetalDeviceIds(device_ids.size());
+    auto result_device_ids = results.initDeviceIds(device_ids.size());
     size_t i = 0;
     for (const auto& device_id : device_ids) {
         result_device_ids.set(i++, device_id);
@@ -210,7 +207,7 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
     size_t i = 0;
     for (const auto& build_env : build_envs_info) {
         auto item = result_build_envs[i++];
-        item.setMetalDeviceId(build_env.device_id);
+        item.setDeviceId(build_env.device_id);
         // Populate RPC response with build environment info
         auto build_info = item.initBuildInfo();
         build_info.setBuildKey(build_env.build_key);
@@ -264,21 +261,6 @@ void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInf
     }
 }
 
-void Data::rpc_get_metal_device_id_mappings(rpc::Inspector::GetMetalDeviceIdMappingsResults::Builder results) {
-    // Get cluster descriptor from MetalContext
-    auto& cluster = MetalContext::instance().get_cluster();
-    const auto& chip_id_to_unique_id = cluster.get_cluster_desc()->get_chip_unique_ids();
-
-    // Populate RPC response
-    auto result_mappings = results.initMappings(chip_id_to_unique_id.size());
-    size_t i = 0;
-    for (const auto& [chip_id, unique_id] : chip_id_to_unique_id) {
-        auto entry = result_mappings[i++];
-        entry.setMetalDeviceId(static_cast<uint64_t>(chip_id));
-        entry.setUniqueId(unique_id);
-    }
-}
-
 // Helper function to convert internal enum to Cap'n Proto enum
 rpc::BinaryStatus Data::convert_binary_status(ProgramBinaryStatus status) {
     switch (status) {
@@ -295,8 +277,8 @@ rpc::BinaryStatus Data::convert_binary_status(ProgramBinaryStatus status) {
 
 // Helper function to populate the core info
 void Data::populate_core_info(rpc::CoreInfo::Builder& out, const CoreInfo& info, uint32_t event_id) {
-    out.setMetalDeviceId(info.device_id);
-    out.setServicingMetalDeviceId(info.servicing_device_id);
+    out.setDeviceId(info.device_id);
+    out.setServicingDeviceId(info.servicing_device_id);
     // Convert enum to string
     std::string worker_type_str(enchantum::to_string(info.worker_type));
     out.setWorkType(worker_type_str);
