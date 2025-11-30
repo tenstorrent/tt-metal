@@ -422,7 +422,6 @@ def test_with_prepare_weights(
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
         out_channels=output_channels,
-        device=device,
         kernel_size=kernel_size,
         stride=stride,
         padding=padding,
