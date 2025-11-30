@@ -30,9 +30,9 @@ inline void calculate_rdiv(const uint value) {
         }
         sfpi::dst_reg[0] = recip * val;
         if constexpr (rounding_mode == RoundingMode::Trunc) {
-            sfpi::dst_reg[0] = _trunc_body_<APPROXIMATION_MODE, is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
+            sfpi::dst_reg[0] = _trunc_body_<APPROX_MODE, is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
         } else if constexpr (rounding_mode == RoundingMode::Floor) {
-            sfpi::dst_reg[0] = _floor_body_<APPROXIMATION_MODE, is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
+            sfpi::dst_reg[0] = _floor_body_<APPROX_MODE, is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
         }
         sfpi::dst_reg++;
     }
@@ -40,7 +40,7 @@ inline void calculate_rdiv(const uint value) {
 
 template <ApproximationMode APPROX_MODE>
 void rdiv_init() {
-    _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
+    _init_sfpu_reciprocal_<APPROX_MODE>();
 }
 
 }  // namespace sfpu
