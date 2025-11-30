@@ -58,8 +58,6 @@ def check_arc_block(arc: NocBlock, postcode: int) -> ArcCheckData:
         heartbeat_1 > heartbeat_offset
     ), f"ARC heartbeat lower than default value: {RED}{heartbeat_1}{RST}. Expected at least {BLUE}{heartbeat_offset}{RST}"
     uptime_seconds = (heartbeat_1 - heartbeat_offset) / heartbeats_per_second
-    if uptime_seconds < 0:
-        uptime_seconds = None
 
     # Heartbeat must be between 10 and 50
     log_check_device(
@@ -76,7 +74,7 @@ def check_arc_block(arc: NocBlock, postcode: int) -> ArcCheckData:
     return ArcCheckData(
         location=arc.location,
         postcode=postcode,
-        uptime=timedelta(seconds=uptime_seconds) if uptime_seconds is not None else None,
+        uptime=timedelta(seconds=uptime_seconds) if uptime_seconds > 0 else None,
         clock_mhz=arcclk_mhz,
         heartbeats_per_second=heartbeats_per_second,
     )
