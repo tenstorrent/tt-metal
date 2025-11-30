@@ -49,13 +49,13 @@ sfpi_inline void calculate_div_int32_body(
 
     // Initial approximation q = a * 1/b.
     // We add a special mantissa alignment factor 2.0f**(23+10), which shifts
-    // the mantissa so that we extract the top 23 bits of the result.
+    // the mantissa so that we extract the top 22 bits of the result.
     sfpi::vFloat q_f = a_f * inv_b_f + vConstFloatPrgm0;
     sfpi::vUInt q = sfpi::exman9(q_f);
 
     // Compute qb = q * b.  This tells us how close our approximation `q` is to
     // the target `a`.  We split into 23-bit chunks.
-    // Since inv_b is only accurate to ~23 bits, we only care about the upper
+    // Since inv_b is only accurate to ~22 bits, we only care about the upper
     // 22 bits, so we can compute qb = (q1<<10 + 0) * (b1<<22 + b0)
     //                               = (q1<<10) * b0
 
