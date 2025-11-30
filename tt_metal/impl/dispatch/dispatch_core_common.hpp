@@ -1,0 +1,69 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+
+#include <tt-metalium/dispatch_core_common.hpp>
+
+namespace tt::tt_metal {
+
+enum DispatchWorkerType : uint32_t {
+    PREFETCH = 0,
+    PREFETCH_HD = 1,
+    PREFETCH_H = 2,
+    PREFETCH_D = 3,
+    DISPATCH = 4,
+    DISPATCH_HD = 5,
+    DISPATCH_H = 6,
+    DISPATCH_D = 7,
+    DISPATCH_S = 8,
+    FABRIC_MUX = 17,         // Downstream from MMIO to remote mux. Tunnel index is required.
+    RETURN_FABRIC_MUX = 18,  // Upstream from remote to MMIO mux. Tunnel index will be determined from the device id.
+    COUNT,
+};
+
+// Helper functions to get the dispatch core config/type
+DispatchCoreConfig get_dispatch_core_config();
+
+class DispatchCoreConfigImpl {
+private:
+    DispatchCoreType type_;
+    std::optional<DispatchCoreAxis> axis_;
+
+    static DispatchCoreAxis get_default_axis();
+
+public:
+    DispatchCoreConfigImpl() : type_(DispatchCoreType::WORKER) {}
+
+    DispatchCoreConfigImpl(DispatchCoreType type) : type_(type) {}
+
+    DispatchCoreConfigImpl(DispatchCoreType type, DispatchCoreAxis axis) : type_(type), axis_(axis) {}
+
+    static constexpr auto attribute_names = std::forward_as_tuple("type", "axis");
+    auto attribute_values() const { return std::forward_as_tuple(this->type_, this->axis_); }
+
+    bool operator==(const DispatchCoreConfigImpl& other) const {
+        return (type_ == other.type_) && (axis_ == other.axis_);
+    }
+
+    CoreType get_core_type() const {
+        switch (type_) {
+            case DispatchCoreType::WORKER: return CoreType::WORKER;
+            case DispatchCoreType::ETH: return CoreType::ETH;
+            default: TT_THROW("invalid dispatch core type");
+        }
+    }
+
+    DispatchCoreType get_dispatch_core_type() const { return type_; }
+
+    void set_dispatch_core_type(DispatchCoreType new_type) { type_ = new_type; }
+
+    DispatchCoreAxis get_dispatch_core_axis() const { return axis_.value_or(get_default_axis()); }
+
+    void set_dispatch_core_axis(DispatchCoreAxis new_axis) { axis_ = new_axis; }
+};
+
+}  // namespace tt::tt_metal

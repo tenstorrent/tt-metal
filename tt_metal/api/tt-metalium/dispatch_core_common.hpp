@@ -13,21 +13,6 @@
 
 namespace tt::tt_metal {
 
-enum DispatchWorkerType : uint32_t {
-    PREFETCH = 0,
-    PREFETCH_HD = 1,
-    PREFETCH_H = 2,
-    PREFETCH_D = 3,
-    DISPATCH = 4,
-    DISPATCH_HD = 5,
-    DISPATCH_H = 6,
-    DISPATCH_D = 7,
-    DISPATCH_S = 8,
-    FABRIC_MUX = 17,         // Downstream from MMIO to remote mux. Tunnel index is required.
-    RETURN_FABRIC_MUX = 18,  // Upstream from remote to MMIO mux. Tunnel index will be determined from the device id.
-    COUNT,
-};
-
 enum class DispatchCoreType : uint32_t { WORKER, ETH, COUNT };
 
 enum class DispatchCoreAxis { ROW, COL, COUNT };
@@ -46,8 +31,8 @@ public:
 
     DispatchCoreConfig(DispatchCoreType type, DispatchCoreAxis axis) : type_(type), axis_(axis) {}
 
-    static constexpr auto attribute_names = std::forward_as_tuple("type", "axis");
-    auto attribute_values() const { return std::forward_as_tuple(this->type_, this->axis_); }
+    // static constexpr auto attribute_names = std::forward_as_tuple("type", "axis");
+    // auto attribute_values() const { return std::forward_as_tuple(this->type_, this->axis_); }
 
     CoreType get_core_type() const {
         switch (type_) {
@@ -68,9 +53,6 @@ public:
     bool operator==(const DispatchCoreConfig& other) const { return (type_ == other.type_) && (axis_ == other.axis_); }
 };
 
-// Helper functions to get the dispatch core config/type
-DispatchCoreConfig get_dispatch_core_config();
-
 }  // namespace tt::tt_metal
 
 namespace std {
@@ -78,7 +60,9 @@ namespace std {
 template <>
 struct hash<tt::tt_metal::DispatchCoreConfig> {
     std::size_t operator()(const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) const {
-        return tt::stl::hash::hash_objects_with_default_seed(dispatch_core_config.attribute_values());
+        // return tt::stl::hash::hash_objects_with_default_seed(dispatch_core_config.attribute_values());
+        (void)dispatch_core_config;
+        return 0;
     }
 };
 
