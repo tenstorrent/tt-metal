@@ -60,22 +60,6 @@ FORCE_INLINE int32_t get_next_chunk_tile(
     }
 }
 
-/**
-keep track of:
-current subchunk offset, start by computing subchunk row first, and set that
-keep track of current subchunk row, start at 0
-
-compute new chunk col (chunkcol = chunkcol + num workers)
-if new chunk col > chunk w {
-   chunk col = chunkcol - chunk w
-   row++
-   if(row > subchunk height)
-      row = row - subchunk_height
-      subchunk offset += subchunk_height_stride
-}
-
-**/
-
 FORCE_INLINE void advance_subchunk(
     uint32_t& tensor_row, uint32_t& subchunk_start_row, uint32_t& subchunk_end_row, uint32_t subchunk_height_stride) {
     uint32_t new_subchunk_rows = tensor_row - subchunk_end_row;
@@ -93,6 +77,7 @@ FORCE_INLINE int32_t get_chunk_tile(
     uint32_t subchunk_height_stride,
     uint32_t chunk_start_col,
     uint32_t chunk_end_col,
+    uint32_t chunk_width,
     uint32_t tensor_Wt,
     uint32_t tensor_Ht) {
     // Compute the returned tile index
@@ -104,8 +89,10 @@ FORCE_INLINE int32_t get_chunk_tile(
     // Update the next tensor row and col
     tensor_col = tensor_col + num_workers;
     if (tensor_col > chunk_end_col) {
-        tensor_col = chunk_start_col + (tensor_col - chunk_end_col - 1);
-        tensor_row = tensor_row + 1;
+        uint32_t tensor_col_chunk_space = tensor_col - chunk_start_col;
+        uint32_t tensor_row_delta = tensor_col_chunk_space / chunk_width;
+        tensor_row = tensor_row + tensor_row_delta;
+        tensor_col = chunk_start_col + tensor_col_chunk_space - (tensor_row_delta * chunk_width);
         if (tensor_row > subchunk_end_row) {
             advance_subchunk(tensor_row, subchunk_start_row, subchunk_end_row, subchunk_height_stride);
         }
@@ -162,16 +149,24 @@ FORCE_INLINE uint32_t read_chunk(
     uint32_t num_tiles_per_packet = std::min(max_tiles_per_packet, worker_tiles_in_curr_chunk);
     uint32_t packets_in_curr_chunk = div_up(worker_tiles_in_curr_chunk, num_tiles_per_packet);
     uint32_t chunk_tile_iter = 0;
-    uint32_t worker_chunk_start_tile = chunk_start_tile + worker_tile_offset;
+
+    // Chunk values (chunk spans all mm cores)
+    // convert chunk start from linear index into row and col coord, still in input tensor space
     uint32_t chunk_start_row = chunk_start_tile / input_tensor_Wt;
     uint32_t chunk_start_col = chunk_start_tile % input_tensor_Wt;
-    uint32_t subchunk_start_row = chunk_start_row;
+
+    // Subchunk values (subchunk spans just 1 mm core)
+    uint32_t subchunk_start_row = chunk_start_row;  // initialize the subchunk tracker (start and end)
     uint32_t subchunk_end_row = chunk_start_row + subchunk_height - 1;
-    uint32_t worker_chunk_row = worker_chunk_start_tile / input_tensor_Wt;
+
+    // Worker chunk values
+    uint32_t worker_chunk_start_row_chunk_space = worker_tile_offset / chunk_width;
+    uint32_t worker_chunk_start_col_chunk_space = worker_tile_offset % chunk_width;
+    uint32_t worker_chunk_row = chunk_start_row + worker_chunk_start_row_chunk_space;
+    uint32_t worker_chunk_col = chunk_start_col + worker_chunk_start_col_chunk_space;
     if (worker_chunk_row > subchunk_end_row) {
         advance_subchunk(worker_chunk_row, subchunk_start_row, subchunk_end_row, subchunk_height_stride);
     }
-    uint32_t worker_chunk_col = worker_chunk_start_tile % input_tensor_Wt;
     if (read_output) {
         worker_chunk_col = worker_chunk_col + actual_sender_chip_id * input_tensor_Wt;
         chunk_start_col = chunk_start_col + actual_sender_chip_id * input_tensor_Wt;
@@ -193,6 +188,7 @@ FORCE_INLINE uint32_t read_chunk(
                 subchunk_height_stride,
                 chunk_start_col,
                 chunk_end_col,
+                chunk_width,
                 read_output ? output_tensor_Wt : input_tensor_Wt,
                 input_tensor_Ht);
             if (tile_id >= 0) {
