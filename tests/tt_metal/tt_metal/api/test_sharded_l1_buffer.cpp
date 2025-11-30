@@ -95,7 +95,7 @@ std::pair<std::shared_ptr<Buffer>, std::vector<uint32_t>> l1_buffer_write_wait(
                                             .buffer_type = test_config.buffer_type,
                                             .buffer_layout = test_config.buffer_layout,
                                             .shard_parameters = test_config.shard_spec()})
-                                      : CreateBuffer(tt::tt_metal::BufferConfig{
+                                      : CreateBuffer(tt::tt_metal::InterleavedBufferConfig{
                                             .device = device,
                                             .size = test_config.size_bytes,
                                             .page_size = test_config.page_size_bytes,
