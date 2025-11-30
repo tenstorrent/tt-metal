@@ -13,18 +13,14 @@ import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 from models.demos.gemma3.tt.load_checkpoints import convert_vision_hf_to_meta, convert_vision_meta_to_hf
 from models.tt_transformers.tt.common import (
-    calculate_hidden_dim,
     calculate_prefill_warmup_seq_lens,
-    get_base_model_name,
     get_out_subblock_w,
-    nearest_multiple,
     num_to_core_range_set,
-    rope_scaling_model_factory,
 )
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_meta_to_hf, standardize_hf_keys
 from models.tt_transformers.tt.model_config import DecodersPrecision, HfAttentionWrapper, HfModelWrapper
 from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
-from models.tt_transformers.tt.model_config import determine_device_name, num_to_coregrid, num_to_corerange
+from models.tt_transformers.tt.model_config import determine_device_name, num_to_corerange
 
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
@@ -56,15 +52,6 @@ class ModelArgs(TTModelArgs):
         "DECODE_RESIDUAL",
         "OUTPUT_MM",
     )
-
-    LOCAL_LLAMA_PARAMS = {
-        "LLAMA3_2_1B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-1B-Instruct",
-        "LLAMA3_2_3B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-3B-Instruct",
-        "LLAMA3_1_8B_PARAMS": "models/tt_transformers/model_params/Llama-3.1-8B-Instruct",
-        "LLAMA3_2_11B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-11B-Vision-Instruct",
-        "LLAMA3_1_70B_PARAMS": "models/tt_transformers/model_params/Llama-3.1-70B-Instruct",
-        "LLAMA3_2_90B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
-    }
 
     LOCAL_HF_PARAMS = {
         "Mistral-7B-Instruct-v0.3": "models/tt_transformers/model_params/Mistral-7B-Instruct-v0.3",
@@ -948,129 +935,6 @@ class ModelArgs(TTModelArgs):
             self.rms_norm_add_unit_offset = True
             self.embed_scale = self.dim**0.5
 
-    def _set_params_from_dict(self, config):
-        eos_token_id = config.get("eos_token_id", None)
-        self.image_token_index = config.get("image_token_index", 262144)
-
-        # Try to get text_config, if it doesn't exist everything is text config
-        text_config = config.get("text_config", config)
-        self.eos_token_id = None if isinstance(eos_token_id, int) else eos_token_id
-        layer_types = text_config["layer_types"] if "layer_types" in text_config else None
-
-        # Common params with different names between Meta and HF
-        self.dim = text_config.get("dim", text_config.get("hidden_size"))
-        self.n_heads = text_config.get("n_heads", text_config.get("num_attention_heads"))
-        self.n_kv_heads = text_config.get("n_kv_heads", text_config.get("num_key_value_heads"))
-        self.n_layers = text_config.get("n_layers", text_config.get("num_hidden_layers"))
-
-        self.sliding_window_pattern = (
-            [lt == "sliding_attention" for lt in layer_types] if layer_types is not None else [False] * self.n_layers
-        )
-
-        self.full_model_n_layers = self.n_layers
-        self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
-        self.vocab_size = text_config["vocab_size"]
-        self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
-        self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
-        self.rope_local_theta = text_config.get("rope_local_base_freq", None)
-        self.max_context_len = text_config.get("max_position_embeddings")
-
-        # Handle different MLP dimension specifications
-        if "intermediate_size" in text_config:
-            self.hidden_dim = text_config["intermediate_size"]
-            self.ffn_dim_multiplier = None
-            self.multiple_of = None
-        else:
-            self.ffn_dim_multiplier = text_config["ffn_dim_multiplier"]
-            self.multiple_of = text_config["multiple_of"]
-            self.hidden_dim = calculate_hidden_dim(self.dim, self.ffn_dim_multiplier, self.multiple_of)
-
-        if "_name_or_path" in config:
-            normalized_path = os.path.normpath(config["_name_or_path"])
-            # For HF paths, they might end with `<model_name>/snapshots/<snapshot_id>/`
-            if "snapshots" in normalized_path:
-                full_model_name = normalized_path.split(os.path.sep)[-3]
-                self.model_name = full_model_name.split("--")[-1]
-            else:
-                self.model_name = os.path.basename(normalized_path)
-            logger.info(f"Model name from config: {self.model_name}")
-
-        self.unpadded_hidden_dim = self.hidden_dim
-        # Don't need to pad for CPU runs
-        if self.num_devices:
-            # Default padding for Gemma models
-            default_padded_cores = 0
-
-            # Override MLP padding cores from env var
-            mlp_padded_cores = int(os.environ.get("PAD_MLP_CORES", default_padded_cores))
-
-            # Only pad if MLP_PADDED_CORES is non-zero
-            if mlp_padded_cores > 0:
-                padded_hidden_dim = nearest_multiple(
-                    self.hidden_dim, mlp_padded_cores * self.tile_size * self.num_devices
-                )
-                if padded_hidden_dim != self.hidden_dim:
-                    logger.info(
-                        f"PAD_MLP_CORES={mlp_padded_cores}, padding hidden dim from {self.hidden_dim} to {padded_hidden_dim}"
-                    )
-                    self.hidden_dim = padded_hidden_dim
-
-        self.layer_types = text_config.get("layer_types", None)
-
-        # RoPE params
-        self.rope_theta = text_config.get("rope_theta")
-        self.rope_theta_local = text_config.get("rope_local_base_freq", None)
-
-        rope_scaling_params = text_config.get("rope_scaling", None)
-        self.rope_scaling = rope_scaling_model_factory(rope_scaling_params) if rope_scaling_params else None
-
-        self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
-
-        # Sliding window attention
-        self.sliding_window = text_config.get("sliding_window", None)
-
-        # Configurable MLP activation type
-        self.mlp_activation_type = self._get_hidden_activation_type(text_config)
-
-        # Vision params (Meta-specific)
-        self.vision_chunk_size = config.get("vision_chunk_size", -1)
-        self.vision_max_num_chunks = config.get("vision_max_num_chunks", 4)
-        self.vision_num_cross_attention_layers = config.get("vision_num_cross_attention_layers", -1)
-
-        # Vision constants
-        # self.vision_dim = 1280
-        # self.vision_mlp_ratio = 4
-        # self.vision_hidden_dim = int(self.vision_dim * self.vision_mlp_ratio)
-        # self.vision_act_layer = ttnn.UnaryOpType.GELU
-        # self.vision_dropout = 0.0
-        # self.vision_attn_n_heads = 16
-        # self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
-        # self.vision_n_layers = 32
-        # self.vision_n_global_layers = 8
-        # self.vision_max_num_tiles = 4
-        # self.vision_patch_size = 14
-        # self.vision_in_channels = 3
-
-        self.state_dict_text_prefix = self._get_text_prefix()
-        self.is_multimodal = "vision_config" in config
-
-        self._set_model_specific_params()
-
-    @property
-    def use_scaled_rope(self):
-        return self.rope_scaling is not None
-
-    @property
-    def base_model_name(self):
-        return get_base_model_name(self.model_name)
-
-    @property
-    def vision_chunk_ntok(self):
-        """
-        Returns the number of tokens per chunk, accounting for the extra class token
-        """
-        return (self.vision_chunk_size // self.vision_patch_size) ** 2 + 1
-
     @property
     def is_gemma(self):
         return any(x in self.base_model_name.lower() for x in ["gemma-3", "medgemma"])
@@ -1381,86 +1245,6 @@ class ModelArgs(TTModelArgs):
             rotary_emb = model.model.rotary_emb
         wrapper = HfAttentionWrapper(layer, self.head_dim, rotary_emb if use_position_embeddings else None)
         return wrapper
-
-    def set_tg_attention_config(self):
-        shard_spec_n_cores_grid = ttnn.CoreRangeSet({num_to_corerange(40)})
-
-        self.model_config["CREATE_HEAD_INPUT_MEMCFG"] = (
-            None
-            if self.dim < 4096
-            else ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    shard_spec_n_cores_grid,
-                    [
-                        32,
-                        32,
-                    ],
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            )
-        )
-
-        if self.is_galaxy:
-            num_cores = 40 if self.dim == 8192 else (24 if self.dim == 4096 else (20 if self.dim == 3072 else 12))
-
-            self.model_config["QKV_OUT_GATHERED_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
-                shape=(32 * mesh_cols, 32),  # mesh_cols = 4
-                core_grid=num_to_coregrid(num_cores),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-
-            self.model_config["SELF_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
-                shape=(32 * mesh_rows, self.dim // 4 // min(32, self.dim // 4 // 32)),
-                core_grid=num_to_coregrid(min(32, self.dim // 4 // 32)),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            self.model_config["GATHER_USERS_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
-                shape=(32 * mesh_cols, 32),  # mesh_cols = 4
-                core_grid=num_to_coregrid(min(32, self.dim // 8 // 32)),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-        else:
-            qkv_core_grid = self.dram_shard_core_grid_for_k(self.dim)
-            self.model_config["QKV_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
-                (
-                    self.tile_size * mesh_rows,
-                    self.dim // qkv_core_grid.num_cores,
-                ),  # Shard shape: [32, 128] -> 1 shard per core
-                core_grid=qkv_core_grid,
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            gather_core_grid = self.dram_shard_core_grid_for_k(self.dim // 4)
-            self.model_config["SELF_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
-                (
-                    self.tile_size * mesh_rows,
-                    self.dim // 4 // gather_core_grid.num_cores,
-                ),
-                core_grid=gather_core_grid,
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            users_core_grid = self.dram_shard_core_grid_for_k(self.dim // 8)
-            self.model_config["GATHER_USERS_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
-                (
-                    self.tile_size * mesh_cols,
-                    self.dim // 8 // users_core_grid.num_cores,
-                ),
-                core_grid=users_core_grid,
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
 
 
 class HfGemmaDecoderWrapper:
