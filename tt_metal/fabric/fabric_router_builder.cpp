@@ -369,9 +369,7 @@ std::vector<std::optional<size_t>> FabricRouterBuilder::get_variant_to_router_ch
         const auto& mapping = all_mappings.at(router_ch_id);
         if (mapping.builder_type == builder_type) {
             // Only set for externally-facing channels
-            // if (mapping.is_externally_facing) {
             variant_to_router_channel_map.at(mapping.internal_sender_channel_id) = router_ch_id;
-            // }
         }
     }
 

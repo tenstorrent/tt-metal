@@ -112,7 +112,8 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(uin
             args_out.push_back(this->downstream_edm_buffer_index_semaphore_addresses[vc_idx][compact_idx].value_or(0));
         }
     } else {
-        // For VC1 or 1D: single downstream connection (backward compatible)
+        // 1D: single downstream connection (backward compatible)
+        // DELETEME (non-vc0 code) Issue #33360
         bool has_connection = vc_idx == 0 ? (this->downstream_edms_connected != 0) : false;
 
         uint32_t buffer_addr = this->downstream_edm_buffer_base_addresses[vc_idx][0].value_or(0);
@@ -183,6 +184,7 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::encode_noc_ord_for_2d(
     uint32_t vc_idx,
     const std::function<uint32_t(CoreCoord)>& get_noc_ord) const {
     if (vc_idx == 1) {
+        // DELETEME (non-vc0 code) Issue #33360
         return 0;
     }
     if (!is_2D_routing) {

@@ -45,7 +45,6 @@ tt::tt_fabric::FabricEriscDatamoverAxis get_fabric_edm_type(
 
     const auto eth_chan_direction = control_plane.routing_direction_to_eth_direction(direction);
     if (mesh_id0 != mesh_id1 || !fabric_context.need_deadlock_avoidance_support(eth_chan_direction)) {
-        // return {fabric_edm_type, fabric_edm_axis};
         return fabric_edm_axis;
     }
 

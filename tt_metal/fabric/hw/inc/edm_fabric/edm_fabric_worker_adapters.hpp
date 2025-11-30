@@ -264,6 +264,7 @@ struct WorkerToFabricEdmSenderImpl {
             noc_sem_addr, packed_val, 0xF, this->sync_noc_cmd_buf, EDM_TO_DOWNSTREAM_NOC, EDM_TO_DOWNSTREAM_NOC_VC);
     }
 
+    // templatized num_slots to let callers implement bubble flow control without runtime overheads.
     template <size_t num_slots = 1>
     FORCE_INLINE bool edm_has_space_for_packet() const {
         invalidate_l1_cache();

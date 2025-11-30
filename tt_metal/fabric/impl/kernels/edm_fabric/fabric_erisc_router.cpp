@@ -1655,8 +1655,8 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
 #if defined(FABRIC_2D)
             // need this ifdef since the packet header for 1D does not have router_buffer field in it.
             hop_cmd = get_cmd_with_mesh_boundary_adjustment(packet_header, cached_routing_fields, routing_table);
-            can_send_to_all_local_chip_receivers = can_forward_packet_completely(//receiver_channel>(
-                hop_cmd, downstream_edm_interfaces_vc0, local_relay_interface);
+            can_send_to_all_local_chip_receivers =
+                can_forward_packet_completely(hop_cmd, downstream_edm_interfaces_vc0, local_relay_interface);
 #endif
         } else {
 #ifndef FABRIC_2D
@@ -2400,7 +2400,11 @@ void kernel_main() {
 
     // Hack for mux mode until all remaining VC1 logic is removed from fabric
     // Needed so `downstream_edm_noc_interfaces_vc0` can be initialized properly below
-    std::array<uint32_t, NUM_SENDER_CHANNELS == 1 ? 2 : NUM_SENDER_CHANNELS> local_sender_channel_free_slots_stream_ids;
+    // Issue #33360 TODO: Create a new array for downstream receiver stream IDs
+    // so we can remove this hack.
+    std::array<uint32_t, NUM_SENDER_CHANNELS> local_sender_channel_free_slots_stream_ids;
+    // std::array<uint32_t, NUM_SENDER_CHANNELS == 1 ? 2 : NUM_SENDER_CHANNELS>
+    // local_sender_channel_free_slots_stream_ids;
 
     const auto& local_sem_for_teardown_from_downstream_edm =
         take_first_n_elements<NUM_DOWNSTREAM_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
@@ -2409,7 +2413,7 @@ void kernel_main() {
                 my_sem_for_teardown_from_edm_1,
                 my_sem_for_teardown_from_edm_2,
                 my_sem_for_teardown_from_edm_3,
-                0  // my_sem_for_teardown_from_edm_4});
+                0  // DELETEME Issue #33360 my_sem_for_teardown_from_edm_4});
             });
 
     // create the remote receiver channel buffers using multi-pool system
@@ -2440,7 +2444,7 @@ void kernel_main() {
                 local_sender_channel_1_connection_semaphore_addr,
                 local_sender_channel_2_connection_semaphore_addr,
                 local_sender_channel_3_connection_semaphore_addr,
-                local_sender_channel_4_connection_semaphore_addr});
+                local_sender_channel_4_connection_semaphore_addr});  // DELETEME Issue #33360
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_connection_info_addresses =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
             std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
@@ -2448,7 +2452,7 @@ void kernel_main() {
                 local_sender_channel_1_connection_info_addr,
                 local_sender_channel_2_connection_info_addr,
                 local_sender_channel_3_connection_info_addr,
-                local_sender_channel_4_connection_info_addr});
+                local_sender_channel_4_connection_info_addr});  // DELETEME Issue #33360
 
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
         auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
@@ -2525,8 +2529,9 @@ void kernel_main() {
 #if defined(FABRIC_2D)
                         get_vc0_downstream_sender_channel_free_slots_stream_id(compact_index),
 #else
-                        // sender_channel_1_free_slots_stream_id,//
-                        local_sender_channel_free_slots_stream_ids[1],
+                        // Issue #33360 TODO: Create a new array for explicitly holding downstream receiver stream IDs
+                        // so we can remove this hack.
+                        sender_channel_1_free_slots_stream_id,
 #endif
                         // This is our local stream register for the copy of the downstream router's
                         // free slots

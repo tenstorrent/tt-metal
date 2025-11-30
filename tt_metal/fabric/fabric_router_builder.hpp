@@ -148,7 +148,8 @@ private:
         const std::vector<std::optional<size_t>>& variant_to_router_channel_map);
 
     /**
-     * Build a reverse mapping from a builder variant's internal channels to router semantic channel IDs.
+     * Build a reverse mapping from a builder variant's internal channels to router's external facing channel IDs.
+     * For kernel internal channels that aren't externally facing, the mapping will be nullopt.
      * Iterates through the channel mapping to find which logical channels are handled by the given builder type,
      * then maps their internal channel IDs to router channel IDs.
      *

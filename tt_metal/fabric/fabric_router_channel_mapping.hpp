@@ -9,6 +9,8 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
 
+#include <vector>
+
 namespace tt::tt_fabric {
 
 enum class BuilderType : uint8_t {

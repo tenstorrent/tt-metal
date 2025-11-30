@@ -560,6 +560,11 @@ public:
     uint32_t local_tensix_relay_num_buffers = 0;  // Number of buffers in the local relay channel
 
 private:
+    // first level acks are acknowledgement credits sent from receiver to sender channels on receipt of packets
+    // and can be used to know when the sender is able to recover a buffer slot in the channel, for new data from
+    // its producer(s).
+    // First level acks are required for any topologies that are using bubble flow control (e.g. ring/torus topologies)
+    // it is optional for other topologies and usually hurts performance in those other cases due to added CPU overheads
     bool enable_first_level_ack = false;
 
     // Shared helper for setting up VC connections
