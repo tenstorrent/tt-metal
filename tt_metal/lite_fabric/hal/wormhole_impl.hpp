@@ -16,7 +16,7 @@ public:
 
     void set_pc(tt_cxy_pair virtual_core, uint32_t pc_val) override;
 
-    tt::umd::tt_version get_binary_version() override;
+    tt::umd::semver_t get_binary_version() override;
 
     void launch(const std::filesystem::path& bin_path) override;
 
