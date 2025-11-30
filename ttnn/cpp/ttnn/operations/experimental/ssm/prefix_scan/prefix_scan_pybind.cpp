@@ -17,7 +17,7 @@ namespace py = pybind11;
 void bind_prefix_scan(py::module& module) {
     using OperationType = decltype(ttnn::experimental::prefix_scan);
 
-    const auto doc =
+    const auto* const doc =
         R"doc(Performs a prefix scan to produce the SSM hidden states across an entire sequence. All input and output tensors are expected to be shape [1, 1, L, 2EN]. Values of 2EN and L can be any multiple of 32.)doc";
 
     ttnn::bind_registered_operation(

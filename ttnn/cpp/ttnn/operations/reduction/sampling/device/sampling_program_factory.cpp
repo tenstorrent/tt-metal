@@ -45,14 +45,14 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
     uint32_t input_values_tile_size = tile_size(input_values_cb_data_format);
     uint32_t index_tile_size = tile_size(index_cb_data_format);
 
-    auto input_values_buffer = input_values_tensor.buffer();
-    auto input_indices_buffer = input_indices_tensor.buffer();
-    auto k_buffer = k.buffer();
-    auto p_buffer = p.buffer();
-    auto temp_buffer = temp.buffer();
-    auto output_buffer = output_tensor.buffer();
+    auto* input_values_buffer = input_values_tensor.buffer();
+    auto* input_indices_buffer = input_indices_tensor.buffer();
+    auto* k_buffer = k.buffer();
+    auto* p_buffer = p.buffer();
+    auto* temp_buffer = temp.buffer();
+    auto* output_buffer = output_tensor.buffer();
 
-    auto device = input_values_tensor.device();
+    auto* device = input_values_tensor.device();
 
     auto input_shape = input_values_tensor.logical_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
@@ -331,12 +331,12 @@ void SamplingProgramFactory::override_runtime_arguments(
     auto& writer_kernel_ids = shared_vars.writer_kernel_ids;
     auto& cores = shared_vars.cores;
 
-    auto input_values_buffer = tensor_args.input_values.buffer();
-    auto input_indices_buffer = tensor_args.input_indices.buffer();
-    auto k_buffer = tensor_args.k.buffer();
-    auto p_buffer = tensor_args.p.buffer();
-    auto temp_buffer = tensor_args.temp.buffer();
-    auto output_buffer = tensor_return_value.buffer();
+    auto* input_values_buffer = tensor_args.input_values.buffer();
+    auto* input_indices_buffer = tensor_args.input_indices.buffer();
+    auto* k_buffer = tensor_args.k.buffer();
+    auto* p_buffer = tensor_args.p.buffer();
+    auto* temp_buffer = tensor_args.temp.buffer();
+    auto* output_buffer = tensor_return_value.buffer();
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];

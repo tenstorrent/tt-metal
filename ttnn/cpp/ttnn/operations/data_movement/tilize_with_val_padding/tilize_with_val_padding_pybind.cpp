@@ -14,7 +14,7 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_tilize_with_val_padding(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Changes data layout of input tensor to TILE. Pads to specified shape with a user-provided value.
 
@@ -64,7 +64,7 @@ void bind_tilize_with_val_padding(py::module& module) {
 }
 
 void bind_tilize_with_zero_padding(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Changes data layout of input tensor to TILE. Pads to the nearest multiple of TILE width/height with zero value.
 

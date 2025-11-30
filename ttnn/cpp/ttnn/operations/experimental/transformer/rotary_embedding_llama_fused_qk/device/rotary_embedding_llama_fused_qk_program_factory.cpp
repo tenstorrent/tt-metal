@@ -76,13 +76,13 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
     uint32_t num_cos_sin_tiles = head_dim_t * num_sin_cos_rows_per_core;
 
     // Set up the CBs
-    auto q_src_buffer = q_input.buffer();
-    auto k_src_buffer = k_input.buffer();
-    auto cos_buffer = cos.buffer();
-    auto sin_buffer = sin.buffer();
-    auto trans_mat_buffer = trans_mat.buffer();
-    auto q_dst_buffer = q_output.buffer();
-    auto k_dst_buffer = k_output.buffer();
+    auto* q_src_buffer = q_input.buffer();
+    auto* k_src_buffer = k_input.buffer();
+    auto* cos_buffer = cos.buffer();
+    auto* sin_buffer = sin.buffer();
+    auto* trans_mat_buffer = trans_mat.buffer();
+    auto* q_dst_buffer = q_output.buffer();
+    auto* k_dst_buffer = k_output.buffer();
 
     uint32_t q_input_cb_index = CBIndex::c_0;
     tt_metal::CircularBufferConfig cb_q_input_config =
@@ -208,13 +208,13 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>&,
             const std::vector<Tensor>& output_tensors) {
-            auto q_src_buffer = input_tensors.at(0).buffer();
-            auto k_src_buffer = input_tensors.at(1).buffer();
-            auto cos_buffer = input_tensors.at(2).buffer();
-            auto sin_buffer = input_tensors.at(3).buffer();
-            auto trans_mat_buffer = input_tensors.at(4).buffer();
-            auto q_dst_buffer = output_tensors.at(0).buffer();
-            auto k_dst_buffer = output_tensors.at(1).buffer();
+            auto* q_src_buffer = input_tensors.at(0).buffer();
+            auto* k_src_buffer = input_tensors.at(1).buffer();
+            auto* cos_buffer = input_tensors.at(2).buffer();
+            auto* sin_buffer = input_tensors.at(3).buffer();
+            auto* trans_mat_buffer = input_tensors.at(4).buffer();
+            auto* q_dst_buffer = output_tensors.at(0).buffer();
+            auto* k_dst_buffer = output_tensors.at(1).buffer();
 
             // Update the CB globally allocated addresses here
             UpdateDynamicCircularBufferAddress(program, cb_q_input, *q_src_buffer);

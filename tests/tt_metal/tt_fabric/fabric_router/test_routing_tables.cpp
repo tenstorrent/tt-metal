@@ -1017,7 +1017,7 @@ TEST(MeshGraphValidation, TestFabricConfigOverrideTorusToMesh) {
         const auto& connectivity = mesh_graph_no_override.get_intra_mesh_connectivity();
 
         // In torus, NW corner (chip 0) should have wrap-around connections
-        auto& nw_connections = connectivity[0][nw_fabric_id];
+        const auto& nw_connections = connectivity[0][nw_fabric_id];
         // Should have all 4 directions due to wrap-around
         EXPECT_GT(nw_connections.size(), 2);  // More than just E and S
         // Check wrap-around exists (W and N)
@@ -1030,7 +1030,7 @@ TEST(MeshGraphValidation, TestFabricConfigOverrideTorusToMesh) {
         const auto& connectivity = mesh_graph_override.get_intra_mesh_connectivity();
 
         // In mesh mode, NW corner should only have E and S connections (ignore wrap-around)
-        auto& nw_connections = connectivity[0][nw_fabric_id];
+        const auto& nw_connections = connectivity[0][nw_fabric_id];
         EXPECT_EQ(nw_connections.size(), 2);    // Only E and S
         EXPECT_EQ(nw_connections.count(3), 0);  // No W connection (wrap-around ignored)
     }

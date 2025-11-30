@@ -51,8 +51,8 @@ void MorehLayerNormOperation::validate_inputs(
         TT_FATAL(input.device() == beta.value().device(), "input and beta should be on the same device");
     }
 
-    auto& mean = tensor_args.mean;
-    auto& rstd = tensor_args.rstd;
+    const auto& mean = tensor_args.mean;
+    const auto& rstd = tensor_args.rstd;
 
     if (mean.has_value()) {
         check_tensor(mean.value(), "moreh_layer_norm");

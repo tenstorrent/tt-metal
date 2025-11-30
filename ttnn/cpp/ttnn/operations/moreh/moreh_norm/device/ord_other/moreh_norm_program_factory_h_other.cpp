@@ -18,7 +18,7 @@ MorehNormOperation::ProgramFactoryHOther::cached_program_t MorehNormOperation::P
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto device = input.device();
+    auto* device = input.device();
     auto program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -87,10 +87,10 @@ MorehNormOperation::ProgramFactoryHOther::cached_program_t MorehNormOperation::P
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto reader_kernel_file =
+    const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_h/kernels/"
         "reader_moreh_norm_h.cpp";
-    const auto writer_kernel_file =
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_h/kernels/"
         "writer_moreh_norm_h.cpp";
 
@@ -116,7 +116,7 @@ MorehNormOperation::ProgramFactoryHOther::cached_program_t MorehNormOperation::P
         }
     }
 
-    const auto compute_kernel_file =
+    const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_h/kernels/"
         "moreh_norm_h_kernel.cpp";
 

@@ -18,7 +18,7 @@
 namespace ttnn::operations::ccl {
 
 void py_bind_all_to_all_dispatch(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
         All to all dispatch operation for dispatching the input tokens to devices with the selected experts, based on the expert indices and expert mapping tensors. If cluster axis is specified then we dispatch the tokens to the experts only on that axis. This operation sends tokens to their selected experts, with empty rows for tokens that did not select any experts on that device.
         B = local batch size/batch size per device

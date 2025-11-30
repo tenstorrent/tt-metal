@@ -60,7 +60,7 @@ protected:
     void compute_memory_layout() {
         TT_ASSERT(!devices_.empty() && !devices_[0]->get_devices().empty(), "No devices available for testing");
 
-        auto single_device = devices_[0]->get_devices()[0];
+        auto* single_device = devices_[0]->get_devices()[0];
         unreserved_base_ = single_device->allocator()->get_base_allocator_addr(HalMemType::L1);
         auto l1_base = hal_.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
         auto l1_size = hal_.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
@@ -266,7 +266,7 @@ TEST_F(KernelSizeTestBigBuffer, BigKernelExecutionCorrectness) {
     distributed::Finish(device->mesh_command_queue());
 
     // Read the result back directly from L1 using device API
-    auto single_device = device->get_devices()[0];
+    auto* single_device = device->get_devices()[0];
     std::vector<uint32_t> result;
     tt::tt_metal::detail::ReadFromDeviceL1(
         single_device,

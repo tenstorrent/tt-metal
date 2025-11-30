@@ -20,7 +20,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     using namespace tt;
     using namespace tt::tt_metal;
 
-    auto& output_grad = tensor_args.output_grad;
+    const auto& output_grad = tensor_args.output_grad;
 
     const auto& output_grad_shape_wo_padding = output_grad.logical_shape();
 
@@ -85,10 +85,10 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     std::vector<uint32_t> writer_compile_time_args{};
     TensorAccessorArgs(bias_grad.buffer()).append_to(writer_compile_time_args);
 
-    const auto reader_kernel_file =
+    const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/reader_moreh_bias_backward_hw.cpp";
 
-    const auto writer_kernel_file =
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/writer_moreh_bias_backward.cpp";
 
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
@@ -105,7 +105,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto compute_kernel_file =
+    const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/moreh_bias_backward_single_core_hw.cpp";
 
     const auto compute_kernel_id = CreateComputeKernel(
@@ -140,8 +140,8 @@ void MorehBiasAddBackwardOperation::SingleCoreProgramFactory::override_runtime_a
     auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
 
-    auto output_grad_buffer = tensor_args.output_grad.buffer();
-    auto bias_grad_buffer = tensor_return_value.buffer();
+    auto* output_grad_buffer = tensor_args.output_grad.buffer();
+    auto* bias_grad_buffer = tensor_return_value.buffer();
     CoreCoord core = {0, 0};
     {
         auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);

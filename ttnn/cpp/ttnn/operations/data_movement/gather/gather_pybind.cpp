@@ -12,7 +12,7 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_gather_operation(py::module& module) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
         The `gather` operation extracts values from the input tensor based on indices provided in the index tensor along a specified dimension.
 
         The input tensor and the index tensor must have the same number of dimensions.

@@ -121,13 +121,13 @@ const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
 
 uint16_t get_bus_id(tt::umd::Cluster& cluster, ChipId chip_id) {
     // Prefer cached value from cluster descriptor (available for silicon and our simulator/mock descriptors)
-    auto cluster_desc = cluster.get_cluster_description();
+    auto* cluster_desc = cluster.get_cluster_description();
     uint16_t bus_id = cluster_desc->get_bus_id(chip_id);
     return bus_id;
 }
 
 UbbId get_ubb_id(tt::umd::Cluster& cluster, ChipId chip_id) {
-    auto cluster_desc = cluster.get_cluster_description();
+    auto* cluster_desc = cluster.get_cluster_description();
     const auto& tray_bus_ids = ubb_bus_ids.at(cluster_desc->get_arch());
     const auto bus_id = get_bus_id(cluster, chip_id);
     auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
@@ -1767,7 +1767,7 @@ void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabri
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
     auto active_ethernet_cores = this->get_active_ethernet_cores(physical_chip_id);
 
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto& factory = hal.get_fabric_telemetry_factory(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
 
     auto telemetry = factory.create<::tt::tt_fabric::fabric_telemetry::FabricTelemetryStaticOnly>();
@@ -2093,8 +2093,8 @@ void fill_connection_info_fields(
     const FabricEriscDatamoverConfig& config,
     uint32_t sender_channel,
     uint16_t worker_free_slots_stream_id) {
-    auto channel_allocator = config.channel_allocator.get();
-    const auto static_channel_allocator =
+    auto* channel_allocator = config.channel_allocator.get();
+    auto* const static_channel_allocator =
         dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
     TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
     connection_info.edm_noc_x = static_cast<uint8_t>(virtual_core.x);
@@ -2838,7 +2838,7 @@ std::string ControlPlane::get_galaxy_cabling_descriptor_path(tt::tt_fabric::Fabr
          {FabricType::TORUS_Y, Y_TORUS_PATH},
          {FabricType::TORUS_XY, XY_TORUS_PATH}}};
 
-    auto it = std::find_if(
+    const auto* it = std::find_if(
         cabling_map.begin(), cabling_map.end(), [fabric_type](const auto& pair) { return pair.first == fabric_type; });
     TT_FATAL(it != cabling_map.end(), "Unknown torus configuration: {}", enchantum::to_string(fabric_config));
 

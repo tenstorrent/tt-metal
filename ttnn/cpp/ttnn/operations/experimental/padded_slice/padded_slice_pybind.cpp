@@ -11,7 +11,7 @@ namespace ttnn::operations::experimental::padded_slice {
 namespace py = pybind11;
 
 void bind_padded_slice(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Returns a padded_sliced tensor. If the input tensor is on host, the padded_slice will be performed on host, and if its on device it will be performed on device.
 

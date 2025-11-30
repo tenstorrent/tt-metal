@@ -886,7 +886,7 @@ void dumpJsonNocTraces(
         return;
     }
 
-    for (auto& [runtime_id, events] : noc_trace_data) {
+    for (const auto& [runtime_id, events] : noc_trace_data) {
         // dump events to a json file inside directory output_dir named after the op_name
         std::filesystem::path rpt_path = output_dir;
         const std::string op_name = events.front().value("op_name", "UnknownOP");

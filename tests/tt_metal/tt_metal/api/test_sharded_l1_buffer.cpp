@@ -87,7 +87,7 @@ namespace local_test_functions {
 template <typename T>
 std::pair<std::shared_ptr<Buffer>, std::vector<uint32_t>> l1_buffer_write_wait(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const L1Config<T>& test_config) {
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     auto buffer = test_config.sharded ? CreateBuffer(tt::tt_metal::ShardedBufferConfig{
                                             .device = device,
                                             .size = test_config.size_bytes,
@@ -227,7 +227,7 @@ TEST_F(MeshDeviceFixture, TestUnorderedHeightShardReadWrite) {
         for (const auto& core : cores) {
             physical_cores.push_back(mesh_device->worker_core_from_logical_core(core));
         }
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         uint32_t page_size = tt::constants::TILE_HW * sizeof(uint32_t);
         uint32_t total_size = cores.size() * page_size;
         auto buffer = CreateBuffer(tt::tt_metal::ShardedBufferConfig{

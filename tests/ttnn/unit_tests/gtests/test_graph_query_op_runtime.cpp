@@ -79,7 +79,7 @@ TEST_P(BinaryOpTraceRuntime, Add) {
     const auto& [input_spec_a, input_spec_b] = GetParam();
 
     {
-        auto device = device_;
+        auto* device = device_;
         auto query = ttnn::graph::query_op_runtime(ttnn::add, device, input_spec_a, input_spec_b);
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
@@ -92,7 +92,7 @@ TEST_P(BinaryOpTraceRuntime, AddChain) {
 
     {
         auto add_chain = [](const auto& i0, const auto& i1) { return ttnn::add(i0, ttnn::add(i0, i1)); };
-        auto device = device_;
+        auto* device = device_;
         auto query = ttnn::graph::query_op_runtime(add_chain, device, input_spec_a, input_spec_b);
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);

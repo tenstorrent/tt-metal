@@ -30,7 +30,7 @@ void SDMeshCommandQueue::write_shard_to_device(
     const void* src,
     const std::optional<BufferRegion>& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    auto device_buffer = buffer.get_device_buffer(device_coord);
+    auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto region_value = region.value_or(BufferRegion(0, device_buffer->size()));
     auto shard_view = device_buffer->view(region_value);
 
@@ -51,7 +51,7 @@ void SDMeshCommandQueue::read_shard_from_device(
     const std::optional<BufferRegion>& region,
     std::unordered_map<IDevice*, uint32_t>&,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    auto device_buffer = buffer.get_device_buffer(device_coord);
+    auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
 
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
@@ -77,7 +77,7 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
         for (const auto& coord : coord_range) {
             if (mesh_device_->is_local(coord)) {
-                auto device = mesh_device_->get_device(coord);
+                auto* device = mesh_device_->get_device(coord);
                 tt_metal::detail::LaunchProgram(device, program, false);
             }
         }
@@ -85,7 +85,7 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
         for (const auto& coord : coord_range) {
             if (mesh_device_->is_local(coord)) {
-                auto device = mesh_device_->get_device(coord);
+                auto* device = mesh_device_->get_device(coord);
                 tt_metal::detail::WaitProgramDone(device, program);
             }
         }

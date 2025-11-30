@@ -62,7 +62,7 @@ void RunTest(
     Program program = Program();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     CreateKernel(
         program_,

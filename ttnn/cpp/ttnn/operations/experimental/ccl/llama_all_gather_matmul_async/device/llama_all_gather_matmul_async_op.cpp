@@ -119,7 +119,7 @@ tt::tt_metal::operation::ProgramWithCallbacks LlamaAllGatherMatmulAsync::create_
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto mesh_device = input_tensors[0].device();
+    auto* mesh_device = input_tensors[0].device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : input_tensors[0].device();
     std::vector<IDevice*> devices_to_use = {};
     if (this->all_gather_params.cluster_axis.has_value()) {

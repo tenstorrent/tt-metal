@@ -46,7 +46,7 @@ namespace {
 using MultiCommandQueueSingleDeviceFixture = ::ttnn::MultiCommandQueueSingleDeviceFixture;
 
 TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
-    auto device = this->device_;
+    auto* device = this->device_;
     MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 
     uint32_t input_buf_size_datums = 1024 * 1024;

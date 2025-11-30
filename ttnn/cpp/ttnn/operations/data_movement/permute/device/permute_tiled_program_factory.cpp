@@ -95,8 +95,8 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
 
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = output_tensor.buffer();
 
     tt::tt_metal::Program program{};
 
@@ -239,8 +239,8 @@ void PermuteDeviceOperation::MultiCoreTileInvariant::override_runtime_arguments(
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
 
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = output_tensor.buffer();
     auto& all_cores = cached_program.shared_variables.core_range;
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
@@ -289,8 +289,8 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
         std::swap(face_shape[0], face_shape[1]);
     }
 
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = output_tensor.buffer();
 
     tt::tt_metal::Program program{};
 
@@ -519,8 +519,8 @@ void PermuteDeviceOperation::MultiCoreTileRowInvariant::override_runtime_argumen
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
 
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = output_tensor.buffer();
     auto& all_cores = cached_program.shared_variables.core_range;
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
@@ -564,12 +564,12 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     const auto& dims = operation_attributes.dims;
     uint32_t rank = dims.size();
     auto& output_tensor = tensor_return_value;
-    auto& output_shape = output_tensor.logical_shape();
+    const auto& output_shape = output_tensor.logical_shape();
     const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     const auto& face_shape = input_tensor.tensor_spec().tile().get_face_shape();
 
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = output_tensor.buffer();
 
     tt::tt_metal::Program program{};
     uint32_t logical_volume = input_shape.volume();
@@ -880,8 +880,8 @@ void PermuteDeviceOperation::MultiCoreTiledGeneric::override_runtime_arguments(
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
 
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = output_tensor.buffer();
     auto& all_cores = cached_program.shared_variables.core_range;
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);

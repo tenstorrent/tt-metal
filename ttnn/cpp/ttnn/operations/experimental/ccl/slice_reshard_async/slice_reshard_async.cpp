@@ -26,7 +26,7 @@ ttnn::Tensor ExecuteSliceReshardAsync::invoke(
     std::optional<ttnn::ccl::Topology> topology) {
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
     uint32_t num_devices;
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
     // Use the mesh dimensions to determine the ring size
     num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();

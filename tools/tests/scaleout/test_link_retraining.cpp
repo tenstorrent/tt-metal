@@ -53,7 +53,7 @@ protected:
         distributed_context_ = context_->get_distributed_context_ptr();
 
         // Check if running on T3K (8 WH devices)
-        const auto cluster_desc = (*driver_)->get_cluster_description();
+        auto* const cluster_desc = (*driver_)->get_cluster_description();
         const size_t num_devices = cluster_->get_unique_chip_ids().size();
         const auto board_type = cluster_desc->get_board_type(0);
 
@@ -121,7 +121,7 @@ void process_ethernet_connections(
     const tt::Cluster& cluster,
     const std::unique_ptr<tt::umd::Cluster>& driver,
     Operation&& operation) {
-    const auto cluster_desc = driver->get_cluster_description();
+    auto* const cluster_desc = driver->get_cluster_description();
     const auto& asic_topology = physical_system_descriptor.get_asic_topology(physical_system_descriptor.my_host_name());
     auto&& callable = std::forward<Operation>(operation);
     for (const auto& [asic_id, asic_connections] : asic_topology) {
@@ -221,7 +221,7 @@ TEST_F(DirectedRetrainingFixture, DISABLED_TestExitNodeRetraining) {
     const DirectedRetrainingFixture& fixture, const tt::tt_metal::AsicTopology& asic_topology) {
     constexpr size_t MAX_LINKS_TO_RESET = 4;
 
-    const auto cluster_desc = fixture.get_driver()->get_cluster_description();
+    auto* const cluster_desc = fixture.get_driver()->get_cluster_description();
     const auto& asic_descriptors = fixture.get_physical_system_descriptor().get_asic_descriptors();
 
     std::vector<LinkDescriptors> local_links;

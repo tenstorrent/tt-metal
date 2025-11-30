@@ -17,7 +17,7 @@ namespace ttnn::operations::reduction::detail {
 namespace py = pybind11;
 
 void bind_reduction_moe_operation(py::module& module) {
-    const auto doc =
+    const auto* const doc =
         R"doc(
             Returns the weight of the zero-th MoE expert.
 
