@@ -157,7 +157,7 @@ template <
     bool SKIP_POSITIVE_CHECK = false,
     bool is_fp32_dest_acc_en = false>
 void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
-    if constexpr (APPROX_MODE) {
+    if constexpr (APPROX_MODE == ApproximationMode::Fast) {
         _calculate_exponential_<(APPROX_MODE), SCALE_EN, ITERATIONS, FAST_APPROX, SKIP_POSITIVE_CHECK>(
             exp_base_scale_factor);
     } else {
