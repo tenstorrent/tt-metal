@@ -33,7 +33,7 @@ protected:
     void SetUp() override {
         // Create temporary directory
         auto temp_template = (std::filesystem::temp_directory_path() / "jit_build_test_XXXXXX").string();
-        auto temp_dir = mkdtemp(temp_template.data());
+        auto* temp_dir = mkdtemp(temp_template.data());
         ASSERT_NE(temp_dir, nullptr);
         out_dir_ = std::filesystem::path(temp_dir);
     }

@@ -22,8 +22,6 @@
     ] },
     { "job-name-component": "t3000-demo-tests / t3k_mixtral_tests", "owner": { "id": "U03PUAKE719", "name": "Harry Zhou" } },
     { "job-name-component": "t3k_mixtral_tests", "owner": { "id": "U03PUAKE719", "name": "Harry Zhou" } },
-    { "job-name-component": "t3000-demo-tests / t3k llama3_load_checkpoints tests", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } },
-    { "job-name-component": "t3k llama3_load_checkpoints tests", "owner": { "id": "U07RY6B5FLJ", "name": "Gongyu Wang" } },
     { "job-name-component": "t3000-demo-tests / t3k_falcon40b_tests", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
     { "job-name-component": "t3k_falcon40b_tests", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
     { "job-name-component": "t3000-demo-tests / t3k_llama3_tests", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },

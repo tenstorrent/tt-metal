@@ -11,7 +11,7 @@
 #include <set>
 #include <unordered_set>
 
-#include <tt-metalium/mesh_graph_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 
 using namespace tt::tt_fabric;
 
@@ -120,7 +120,7 @@ void check_connections(
 
         auto dst_nodes = std::vector<GlobalNodeId>(global_nodes.begin() + 1, global_nodes.end());
         for (const auto& node : dst_nodes) {
-            auto & instance = desc.get_instance(node);
+            const auto& instance = desc.get_instance(node);
             EXPECT_TRUE(expected_nodes.contains(instance.local_id))
                 << "Connection " << connection_id << " should have node " << instance.local_id;
             EXPECT_TRUE(expected_node_names.contains(instance.name))

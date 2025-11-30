@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <optional>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <random>
 
