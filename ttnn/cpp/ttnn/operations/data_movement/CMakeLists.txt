@@ -52,6 +52,10 @@ target_sources(
             concat/concat.hpp
             copy/copy.hpp
             copy/device/copy_device_operation.hpp
+            fill_pad/fill_pad.hpp
+            fill_pad/device/fill_pad_device_operation.hpp
+            fill_rm/fill_rm.hpp
+            fill_rm/device/fill_rm_device_operation.hpp
             pad/pad.hpp
             permute/permute.hpp
             repeat/repeat.hpp
@@ -62,7 +66,6 @@ target_sources(
             sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.hpp
             slice/slice.hpp
             tilize_with_val_padding/tilize_with_val_padding.hpp
-            tilize_with_val_padding/tilize_with_val_padding_common.hpp
             tilize_with_val_padding/device/tilize_with_val_padding_op.hpp
             transpose/transpose.hpp
             untilize/untilize.hpp
@@ -109,10 +112,11 @@ target_sources(
         copy/device/copy_device_operation.cpp
         copy/device/copy_program_factory.cpp
         expand/expand.cpp
-        fill_pad/device/fill_pad_op.cpp
+        fill_pad/device/fill_pad_device_operation.cpp
         fill_pad/device/fill_pad_program_factory.cpp
         fill_pad/fill_pad.cpp
-        fill_rm/device/fill_rm_op.cpp
+        fill_rm/device/fill_rm_device_operation.cpp
+        fill_rm/device/fill_rm_program_factory.cpp
         fill_rm/fill_rm.cpp
         fold/device/fold_device_op.cpp
         fold/device/fold_multi_core_dram_program_factory.cpp
@@ -146,7 +150,8 @@ target_sources(
         repeat/repeat.cpp
         repeat_interleave/repeat_interleave.cpp
         reshape_on_device/device/reshape_op.cpp
-        reshape_on_device/device/reshape_program_factory.cpp
+        reshape_on_device/device/reshape_tile_program_factory.cpp
+        reshape_on_device/device/reshape_rm_program_factory.cpp
         reshape_on_device/reshape.cpp
         reshape_view/device/host/reshape_rm_program_factory.cpp
         reshape_view/device/host/reshape_tiled_program_factory.cpp
@@ -172,11 +177,14 @@ target_sources(
         sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial.cpp
         sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.cpp
         sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial.cpp
-        slice/device/slice_op.cpp
-        slice/device/slice_program_factory.cpp
-        slice/device/slice_program_factory_stride.cpp
+        slice/device/slice_device_operation.cpp
+        slice/device/slice_program_factory_rm.cpp
+        slice/device/slice_program_factory_rm_sharded.cpp
+        slice/device/slice_program_factory_rm_stride.cpp
+        slice/device/slice_program_factory_tile.cpp
+        slice/device/slice_program_factory_tile_tensor_args.cpp
         slice/slice.cpp
-        split/device/split_op.cpp
+        split/device/split_device_operation.cpp
         split/device/split_program_factory.cpp
         split/split.cpp
         squeeze/squeeze.cpp

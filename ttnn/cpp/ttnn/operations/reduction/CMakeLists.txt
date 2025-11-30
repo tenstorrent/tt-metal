@@ -45,10 +45,10 @@ target_sources(
         accumulation/ema/ema_multicore.cpp
         accumulation/device/accumulation_device_operation.cpp
         accumulation/device/accumulation_program_factory.cpp
-        sampling/device/sampling_op.cpp
+        sampling/device/sampling_device_operation.cpp
         sampling/device/sampling_program_factory.cpp
         sampling/sampling.cpp
-        moe/device/moe_op.cpp
+        moe/device/moe_device_operation.cpp
         moe/device/moe_program_factory.cpp
         moe/moe.cpp
         prod/device/prod_all_program_factory.cpp

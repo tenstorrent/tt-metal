@@ -17,6 +17,9 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper.hpp>
+#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 
 namespace {
 
@@ -43,6 +46,38 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(
 }
 
 constexpr auto kFabricConfig1D = tt::tt_fabric::FabricConfig::FABRIC_1D_RING;
+
+// Helper struct to keep dependencies alive for RoutingTableGenerator tests
+struct RoutingTableGeneratorTestHelper {
+    std::unique_ptr<tt::tt_fabric::MeshGraph> mesh_graph;
+    std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor;
+    std::unique_ptr<tt::tt_fabric::TopologyMapper> topology_mapper;
+    std::unique_ptr<tt::tt_fabric::RoutingTableGenerator> routing_table_generator;
+
+    RoutingTableGeneratorTestHelper(const std::string& mesh_graph_desc_file) {
+        mesh_graph = std::make_unique<tt::tt_fabric::MeshGraph>(mesh_graph_desc_file);
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& driver = cluster.get_driver();
+        const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+        const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        physical_system_descriptor = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
+            driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
+
+        tt::tt_fabric::LocalMeshBinding local_mesh_binding;
+        local_mesh_binding.mesh_ids = {tt::tt_fabric::MeshId{0}};
+        local_mesh_binding.host_rank = tt::tt_fabric::MeshHostRankId{0};
+
+        topology_mapper = std::make_unique<tt::tt_fabric::TopologyMapper>(
+            *mesh_graph, *physical_system_descriptor, local_mesh_binding);
+
+        routing_table_generator = std::make_unique<tt::tt_fabric::RoutingTableGenerator>(*topology_mapper);
+    }
+};
+
+// Helper function to create RoutingTableGenerator for tests
+std::unique_ptr<RoutingTableGeneratorTestHelper> make_routing_table_generator(const std::string& mesh_graph_desc_file) {
+    return std::make_unique<RoutingTableGeneratorTestHelper>(mesh_graph_desc_file);
+}
 
 std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane_1d(const std::filesystem::path& graph_desc) {
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(graph_desc.string());
@@ -274,7 +309,65 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     const std::filesystem::path single_galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto";
-    [[maybe_unused]] auto control_plane = make_control_plane(single_galaxy_mesh_graph_desc_path.string());
+    auto control_plane = make_control_plane(single_galaxy_mesh_graph_desc_path.string());
+
+    // Create physical system descriptor to access ASIC information
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& driver = cluster.get_driver();
+    const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    auto physical_system_descriptor = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
+        driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
+
+    // Test that fabric node id 0 maps to a valid ASIC location and tray id
+    FabricNodeId fabric_node_id_0(MeshId{0}, 0);
+    auto physical_chip_id_0 = control_plane->get_physical_chip_id_from_fabric_node_id(fabric_node_id_0);
+    const auto& chip_unique_ids = cluster.get_unique_chip_ids();
+    uint64_t asic_id_0 = 0;
+    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
+        if (chip_id == physical_chip_id_0) {
+            asic_id_0 = unique_id;
+            break;
+        }
+    }
+    EXPECT_GT(asic_id_0, 0) << "ASIC ID should be greater than 0 for fabric node id 0";
+    auto tray_id_0 = physical_system_descriptor->get_tray_id(tt::tt_metal::AsicID{asic_id_0});
+    auto asic_location_0 = physical_system_descriptor->get_asic_location(tt::tt_metal::AsicID{asic_id_0});
+    EXPECT_GT(*tray_id_0, 0) << "Tray ID should be greater than 0 for fabric node id 0";
+    EXPECT_GE(*asic_location_0, 0) << "ASIC location should be non-negative for fabric node id 0";
+
+    // Test that fabric node id 1 maps to tray 1, ASIC location 5 (per pinnings)
+    FabricNodeId fabric_node_id_1(MeshId{0}, 1);
+    auto physical_chip_id_1 = control_plane->get_physical_chip_id_from_fabric_node_id(fabric_node_id_1);
+    uint64_t asic_id_1 = 0;
+    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
+        if (chip_id == physical_chip_id_1) {
+            asic_id_1 = unique_id;
+            break;
+        }
+    }
+    EXPECT_GT(asic_id_1, 0) << "ASIC ID should be greater than 0 for fabric node id 1";
+    auto tray_id_1 = physical_system_descriptor->get_tray_id(tt::tt_metal::AsicID{asic_id_1});
+    auto asic_location_1 = physical_system_descriptor->get_asic_location(tt::tt_metal::AsicID{asic_id_1});
+    EXPECT_EQ(*tray_id_1, 1) << "Fabric node id 1 should map to tray ID 1";
+    EXPECT_EQ(*asic_location_1, 5) << "Fabric node id 1 should map to ASIC location 5";
+
+    // Test that fabric node id y_size (4) maps to tray 1, ASIC location 2 (per pinnings)
+    int y_size = control_plane->get_physical_mesh_shape(MeshId{0})[1];
+    FabricNodeId fabric_node_id_y_size(MeshId{0}, y_size);
+    auto physical_chip_id_y_size = control_plane->get_physical_chip_id_from_fabric_node_id(fabric_node_id_y_size);
+    uint64_t asic_id_y_size = 0;
+    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
+        if (chip_id == physical_chip_id_y_size) {
+            asic_id_y_size = unique_id;
+            break;
+        }
+    }
+    EXPECT_GT(asic_id_y_size, 0) << "ASIC ID should be greater than 0 for fabric node id " << y_size;
+    auto tray_id_y_size = physical_system_descriptor->get_tray_id(tt::tt_metal::AsicID{asic_id_y_size});
+    auto asic_location_y_size = physical_system_descriptor->get_asic_location(tt::tt_metal::AsicID{asic_id_y_size});
+    EXPECT_EQ(*tray_id_y_size, 1) << "Fabric node id " << y_size << " should map to tray ID 1";
+    EXPECT_EQ(*asic_location_y_size, 2) << "Fabric node id " << y_size << " should map to ASIC location 2";
 }
 
 TEST_F(ControlPlaneFixture, TestSingleGalaxyMeshAPIs) {
@@ -526,8 +619,8 @@ TEST(RoutingTableValidation, TestSingleGalaxyMesh) {
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto";
-    RoutingTableGenerator routing_table_generator(mesh_graph_desc_path.string());
-    const auto& intra_mesh_routing_table = routing_table_generator.get_intra_mesh_table();
+    auto helper = make_routing_table_generator(mesh_graph_desc_path.string());
+    const auto& intra_mesh_routing_table = helper->routing_table_generator->get_intra_mesh_table();
 
     EXPECT_EQ(intra_mesh_routing_table[0][nw_fabric_id][nw_fabric_id], RoutingDirection::C);
     EXPECT_EQ(intra_mesh_routing_table[0][nw_fabric_id][ne_fabric_id], RoutingDirection::E);
@@ -600,8 +693,8 @@ TEST(RoutingTableValidation, TestSingleGalaxyTorusXY) {
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.textproto";
-    RoutingTableGenerator routing_table_generator(mesh_graph_desc_path.string());
-    const auto& intra_mesh_routing_table = routing_table_generator.get_intra_mesh_table();
+    auto helper = make_routing_table_generator(mesh_graph_desc_path.string());
+    const auto& intra_mesh_routing_table = helper->routing_table_generator->get_intra_mesh_table();
 
     EXPECT_EQ(intra_mesh_routing_table[0][nw_fabric_id][nw_fabric_id], RoutingDirection::C);
     EXPECT_EQ(intra_mesh_routing_table[0][nw_fabric_id][ne_fabric_id], RoutingDirection::W);
@@ -686,8 +779,8 @@ TEST(RoutingTableValidation, TestSingleGalaxyTorusX) {
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_x_graph_descriptor.textproto";
-    RoutingTableGenerator routing_table_generator(mesh_graph_desc_path.string());
-    const auto& intra_mesh_routing_table = routing_table_generator.get_intra_mesh_table();
+    auto helper = make_routing_table_generator(mesh_graph_desc_path.string());
+    const auto& intra_mesh_routing_table = helper->routing_table_generator->get_intra_mesh_table();
 
     EXPECT_EQ(intra_mesh_routing_table[0][nw_fabric_id][nw_fabric_id], RoutingDirection::C);
     EXPECT_EQ(intra_mesh_routing_table[0][nw_fabric_id][ne_fabric_id], RoutingDirection::W);
@@ -773,8 +866,8 @@ TEST(RoutingTableValidation, TestSingleGalaxyTorusY) {
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_y_graph_descriptor.textproto";
-    RoutingTableGenerator routing_table_generator(mesh_graph_desc_path.string());
-    const auto& intra_mesh_routing_table = routing_table_generator.get_intra_mesh_table();
+    auto helper = make_routing_table_generator(mesh_graph_desc_path.string());
+    const auto& intra_mesh_routing_table = helper->routing_table_generator->get_intra_mesh_table();
 
     EXPECT_EQ(intra_mesh_routing_table[0][nw_fabric_id][nw_fabric_id], RoutingDirection::C);
     EXPECT_EQ(intra_mesh_routing_table[0][nw_fabric_id][ne_fabric_id], RoutingDirection::E);
