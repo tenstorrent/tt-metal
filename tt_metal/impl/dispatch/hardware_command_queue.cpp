@@ -54,14 +54,6 @@ enum NOC : uint8_t;
 namespace tt::tt_metal {
 namespace {
 
-Buffer& get_buffer_object(const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer) {
-    return std::visit(
-        tt::stl::overloaded{
-            [](const std::shared_ptr<Buffer>& b) -> Buffer& { return *b; },
-            [](const std::reference_wrapper<Buffer>& b) -> Buffer& { return b.get(); }},
-        buffer);
-}
-
 // Binds a device worker/reader thread to a CPU core, determined using round-robin.
 void set_device_thread_affinity(std::thread& thread_, int cpu_core_for_worker) {
     cpu_set_t cpuset;
@@ -244,6 +236,7 @@ void HWCommandQueue::enqueue_command(T& command, bool blocking, tt::stl::Span<co
     }
 }
 
+<<<<<<< HEAD
 void HWCommandQueue::enqueue_write_buffer(
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     HostDataType src,
@@ -274,6 +267,8 @@ void HWCommandQueue::enqueue_write_buffer(
     }
 }
 
+=======
+>>>>>>> 884227823c (Remove enqueue_wrtie_buffer)
 CoreType HWCommandQueue::get_dispatch_core_type() {
     return MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
 }

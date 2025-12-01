@@ -84,13 +84,6 @@ public:
         const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     void enqueue_wait_for_event(const std::shared_ptr<Event>& sync_event) override;
 
-    void enqueue_write_buffer(
-        const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-        HostDataType src,
-        const BufferRegion& region,
-        bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
-
     void enqueue_read_from_core(
         const CoreCoord& virtual_core,
         void* dst,
