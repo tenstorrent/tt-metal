@@ -8,14 +8,11 @@
 
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::experimental::plusone::program {
-
-using namespace tt::constants;
 
 PlusOneProgramFactory::cached_program_t PlusOneProgramFactory::create(
     const operation_attributes_t& operation_attributes,
@@ -46,7 +43,7 @@ PlusOneProgramFactory::cached_program_t PlusOneProgramFactory::create(
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_units = W;
     uint32_t aligned_input_page_size = round_up_to_mul32(num_input_units * input_unit_size);
-    auto src_buffer = input.buffer();
+    auto* src_buffer = input.buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     tt::tt_metal::CircularBufferConfig cb_src0_config =
@@ -86,7 +83,7 @@ void PlusOneProgramFactory::override_runtime_arguments(
     const operation_attributes_t&,
     const tensor_args_t& tensor_args,
     tensor_return_value_t&) {
-    auto src_buffer = tensor_args.input.buffer();
+    auto* src_buffer = tensor_args.input.buffer();
 
     auto& program = cached_program.program;
     const auto& cores = cached_program.shared_variables.cores;

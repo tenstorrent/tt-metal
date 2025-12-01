@@ -7,7 +7,7 @@
 #include "fabric_channel_allocator.hpp"
 
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
-#include "tt_metal/api/tt-metalium/fabric_edm_types.hpp"
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
 
 #include <vector>
@@ -95,8 +95,6 @@ private:
     // Tensix configuration channel counts
     static constexpr size_t num_sender_channels_with_tensix_config =
         builder_config::num_sender_channels_with_tensix_config;
-    static constexpr size_t num_sender_channels_with_tensix_config_deadlock_avoidance =
-        builder_config::num_sender_channels_with_tensix_config_deadlock_avoidance;
 
     // Dateline channel skip indices - from FabricEriscDatamoverConfig
     static constexpr size_t dateline_sender_channel_skip_idx = 2;

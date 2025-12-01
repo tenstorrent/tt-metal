@@ -19,6 +19,7 @@ on:
           - sentence_bert
           - sd35
           - flux1
+          - motif
           - gpt-oss
           - wan22
           - mochi

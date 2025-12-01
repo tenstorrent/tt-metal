@@ -4,13 +4,13 @@
 
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
-#include <limits>
 #include <optional>
 #include <string>
 
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/run_operation.hpp"
 
 using namespace tt::constants;
@@ -104,13 +104,15 @@ operation::ProgramWithCallbacks Reduce::create_program(
 
     switch (parallelization_strategy) {
         case ReduceOpParallelizationStrategy::MULTI_CORE_H:
-            return reduce_multi_core_h(input_tensor, output_tensor, this->math_op, compute_kernel_config, this->scaler);
+            return reduce_multi_core_h(
+                input_tensor, output_tensor, this->math_op, compute_kernel_config, this->scaler, this->sub_core_grids);
         case ReduceOpParallelizationStrategy::MULTI_CORE_W:
-            return reduce_multi_core_w(input_tensor, output_tensor, this->math_op, compute_kernel_config, this->scaler);
+            return reduce_multi_core_w(
+                input_tensor, output_tensor, this->math_op, compute_kernel_config, this->scaler, this->sub_core_grids);
         case ReduceOpParallelizationStrategy::MULTI_CORE_HW:
         case ReduceOpParallelizationStrategy::SINGLE_CORE_HW:
             return reduce_single_core_hw(
-                input_tensor, output_tensor, this->math_op, compute_kernel_config, this->scaler);
+                input_tensor, output_tensor, this->math_op, compute_kernel_config, this->scaler, this->sub_core_grids);
         default: TT_THROW("Unsupported parallelization strategy");
     }
 }
@@ -160,7 +162,8 @@ Tensor reduce(
     float scaler,
     const MemoryConfig& output_mem_config,
     const std::optional<DataType>& output_dtype,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     if (reduce_math == ReduceOpMath::MIN) {
         return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config);
     }
@@ -170,6 +173,7 @@ Tensor reduce(
     auto is_multicore_hw = parallelization_strategy == ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     float pad_value = reduce_math == ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : 0;
 
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Expected input tensor to be on device");
     TT_FATAL(
         input_tensor.device() != nullptr,
         "input_tensor.device() == nullptr, No device found, move input_tensor to device");
@@ -181,23 +185,11 @@ Tensor reduce(
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true));
 
+    // Reduce only works with tile layout, so we need to tilize the input tensor if neccessary
+    auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
+    auto tilized_input =
+        ttnn::tilize_with_val_padding(input_tensor, padded_shape, pad_value, input_tensor.memory_config());
     if (is_multicore_hw) {
-        distributed::MeshDevice* device;
-        // Get the device
-        if (input_tensor.storage_type() != StorageType::DEVICE) {
-            device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();
-            TT_FATAL(device != nullptr, "Default device must be set if no inputs to op are on device");
-        } else {
-            device = input_tensor.device();
-        }
-        auto input_tensor_pad_shape =
-            ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.padded_shape());
-        auto formatted_input_tensor = input_tensor;
-        if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(
-                input_tensor, input_tensor_pad_shape)) {
-            formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
-                input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
-        }
         const Tensor output_tensor = operation::run(
                                          Reduce{
                                              reduce_math,
@@ -205,8 +197,9 @@ Tensor reduce(
                                              1.0,
                                              output_mem_config,
                                              output_dtype.value_or(input_tensor.dtype()),
-                                             config},
-                                         {formatted_input_tensor})
+                                             config,
+                                             sub_core_grids},
+                                         {tilized_input})
                                          .at(0);
         return operation::run(
                    Reduce{
@@ -215,22 +208,21 @@ Tensor reduce(
                        scaler,
                        output_mem_config,
                        output_dtype.value_or(input_tensor.dtype()),
-                       config},
+                       config,
+                       sub_core_grids},
                    {output_tensor})
             .at(0);
     } else {
-        return operation::run_with_autoformat(
+        return operation::run(
                    Reduce{
                        reduce_math,
                        reduce_dim,
                        scaler,
                        output_mem_config,
                        output_dtype.value_or(input_tensor.dtype()),
-                       config},
-                   {input_tensor},
-                   {},
-                   {},
-                   pad_value)
+                       config,
+                       sub_core_grids},
+                   {tilized_input})
             .at(0);
     }
 }

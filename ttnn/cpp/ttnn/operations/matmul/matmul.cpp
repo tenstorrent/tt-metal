@@ -149,6 +149,14 @@ ttnn::Tensor bound_matmul(
             input_tensor_b.logical_shape());
     }
 
+    if (input_tensor_a.is_sharded() || input_tensor_b.is_sharded()) {
+        TT_FATAL(
+            !parameters.user_fused_activation.has_value(),
+            "Sharded matmul run with {} activation: this should be placed in the program config's fused_activation "
+            "field",
+            parameters.user_fused_activation.value().op_type);
+    }
+
     // Check for zero volume tensors
     if (input_tensor_a.logical_volume() == 0 || input_tensor_b.logical_volume() == 0) [[unlikely]] {
         return detail::handle_zero_volume_matmul(

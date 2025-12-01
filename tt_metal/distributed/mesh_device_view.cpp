@@ -27,7 +27,7 @@ std::vector<IDevice*> get_devices_from_coordinates(
     const MeshDeviceView& mesh, const std::vector<MeshCoordinate>& coords) {
     std::vector<IDevice*> devices;
     for (const auto& coord : coords) {
-        if (auto device = mesh.get_device(coord)) {
+        if (auto* device = mesh.get_device(coord)) {
             devices.push_back(device);
         }
     }
@@ -157,7 +157,7 @@ IDevice* MeshDeviceView::get_device(const MeshCoordinate& coord) const {
     if (!contains(coord)) {
         return nullptr;
     }
-    auto& maybe_device = devices_.at(coord);
+    const auto& maybe_device = devices_.at(coord);
     TT_FATAL(maybe_device.is_local(), "Cannot get device for remote device at coordinate {}", coord);
     return *maybe_device;
 }

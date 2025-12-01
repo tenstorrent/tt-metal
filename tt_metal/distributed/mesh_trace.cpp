@@ -49,8 +49,8 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
     // across all regions
     std::unordered_map<MeshCoordinateRange, uint32_t> trace_sizes;
 
-    for (auto& trace_md : mesh_trace_md) {
-        auto& sysmem_mgr_coord = trace_md.sysmem_manager_coord;
+    for (const auto& trace_md : mesh_trace_md) {
+        const auto& sysmem_mgr_coord = trace_md.sysmem_manager_coord;
         auto& sysmem_manager = mesh_device->get_device(sysmem_mgr_coord)->sysmem_manager();
         auto trace_data_word_offset = trace_md.offset / sizeof(uint32_t);
         auto trace_data_size_words = trace_md.size / sizeof(uint32_t);
