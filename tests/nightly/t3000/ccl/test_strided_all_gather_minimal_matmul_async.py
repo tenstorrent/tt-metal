@@ -4,6 +4,7 @@
 
 import torch
 import pytest
+import copy
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
@@ -60,7 +61,7 @@ def run_strided_all_gather_minimal_matmul_impl(
 
     tile = (32, 32)
 
-    ag_output_shape = (1, 1, M, K)
+    ag_output_shape = [1, 1, M, K]
 
     # Skip unsupported cases
     (is_known_failure, message) = is_unsupported_case(
@@ -160,9 +161,11 @@ def run_strided_all_gather_minimal_matmul_impl(
 
     ### Create persistent output buffers
     logger.info("Creating persistent buffers")
+    persistent_buffer_shape = copy.deepcopy(ag_output_shape)
+    persistent_buffer_shape[other_dim] = persistent_buffer_shape[other_dim] // mesh_device.shape[0]
     persistent_output_buffers = [
         ttnn.from_torch(
-            torch.zeros(ag_output_shape),
+            torch.zeros(persistent_buffer_shape),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ag_input_dtype,
@@ -290,7 +293,7 @@ def run_strided_all_gather_minimal_matmul_impl(
                 ),
             )
 
-            for d in range(num_devices):
+            for d in range(mesh_device.shape[1]):
                 tt_ag_out_slice = tt_ag_out[d : d + 1, :, :, :]
                 eq, output = comp_pcc(tt_ag_out_slice, torch_ag_out_tensor, allowed_pcc)
 
@@ -308,7 +311,7 @@ def run_strided_all_gather_minimal_matmul_impl(
                 ),
             )
             if not shard_weights:
-                for d in range(num_devices):
+                for d in range(mesh_device.shape[1]):
                     tt_mm_out_slice = tt_mm_out[d : d + 1, :, :, :]
                     eq, output = comp_pcc(tt_mm_out_slice, torch_mm_out_tensor)
             else:
