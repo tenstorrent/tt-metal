@@ -98,6 +98,7 @@ struct KernelDescriptor {
     // TODO: investigate using SmallVector here, using std::vector for now to abide size constraint
     // in tt_stl/tt_stl/reflection.hpp:185:23
     using CompileTimeArgs = std::vector<uint32_t>;
+    using NamedCompileTimeArgs = std::vector<std::pair<std::string, uint32_t>>;
     using Defines = std::vector<std::pair<std::string, std::string>>;
     using CoreRuntimeArgs = std::vector<uint32_t>;
     using RuntimeArgs = std::vector<std::vector<CoreRuntimeArgs>>;
@@ -115,6 +116,7 @@ struct KernelDescriptor {
 
     CoreRangeSet core_ranges;
     CompileTimeArgs compile_time_args;
+    NamedCompileTimeArgs named_compile_time_args;
     Defines defines;
 
     // triple-nested vectors, where runtime_args[i][j] is a vector of rt args for core(i, j)

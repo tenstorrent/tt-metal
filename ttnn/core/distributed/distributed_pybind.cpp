@@ -419,7 +419,26 @@ void py_module(py::module& module) {
         .def(
             "sfpu_inf",
             [](MeshDevice* device) { return tt::tt_metal::hal::get_inf(); },
-            R"doc(Returns Infinity value for current architecture.)doc");
+            R"doc(Returns Infinity value for current architecture.)doc")
+        .def(
+            "worker_core_from_logical_core",
+            &MeshDevice::worker_core_from_logical_core,
+            py::arg("logical_core"),
+            R"doc(
+                Convert a logical coordinate to a virtual coordinate for a worker core.
+
+                Args:
+                    logical_core (CoreCoord): The logical coordinate to convert.
+
+                Returns:
+                    CoreCoord: The virtual coordinate of the worker core.
+
+                Example:
+                    >>> device = ttnn.open_device(device_id=0)
+                    >>> logical_core = ttnn.CoreCoord(0, 0)
+                    >>> worker_core = device.worker_core_from_logical_core(logical_core)
+                    >>> print(f"Worker core: x={worker_core.x}, y={worker_core.y}")
+            )doc");
 
     auto py_mesh_device_view = static_cast<py::class_<MeshDeviceView>>(module.attr("MeshDeviceView"));
     py_mesh_device_view.def("shape", &MeshDeviceView::shape, py::return_value_policy::reference_internal)

@@ -200,6 +200,32 @@ void py_module_types(py::module& module) {
         Default constructor for WriterConfigDescriptor.
     )pbdoc");
 
+    py::class_<tt::tt_metal::DataMovementConfigDescriptor>(module, "DataMovementConfigDescriptor", R"pbdoc(
+        Configuration descriptor for data movement operations.
+
+        Controls processor selection, NOC routing, and NOC mode for data movement kernels.
+    )pbdoc")
+        .def(py::init<>(), R"pbdoc(
+            Default constructor for DataMovementConfigDescriptor.
+        )pbdoc")
+        .def(
+            py::init<tt::tt_metal::DataMovementProcessor, tt::tt_metal::NOC, tt::tt_metal::NOC_MODE>(),
+            py::arg("processor") = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            py::arg("noc") = tt::tt_metal::NOC::RISCV_0_default,
+            py::arg("noc_mode") = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
+            R"pbdoc(
+                Constructor for DataMovementConfigDescriptor with parameters.
+
+                Args:
+                    processor: Data movement processor to use (default: RISCV_0)
+                    noc: Network-on-chip to use (default: RISCV_0_default)
+                    noc_mode: NOC mode for data movement (default: DM_DEDICATED_NOC)
+            )pbdoc")
+        .def_readwrite(
+            "processor", &tt::tt_metal::DataMovementConfigDescriptor::processor, "Data movement processor to use")
+        .def_readwrite("noc", &tt::tt_metal::DataMovementConfigDescriptor::noc, "Network-on-chip to use")
+        .def_readwrite("noc_mode", &tt::tt_metal::DataMovementConfigDescriptor::noc_mode, "NOC mode for data movement");
+
     export_enum<UnpackToDestMode>(module, "UnpackToDestMode");
     py::bind_vector<std::vector<UnpackToDestMode>>(module, "VectorUnpackToDestMode");
 
@@ -291,6 +317,7 @@ void py_module_types(py::module& module) {
                 tt::tt_metal::KernelDescriptor::SourceType,
                 CoreRangeSet,
                 tt::tt_metal::KernelDescriptor::CompileTimeArgs,
+                tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs,
                 tt::tt_metal::KernelDescriptor::Defines,
                 tt::tt_metal::KernelDescriptor::RuntimeArgs,
                 tt::tt_metal::KernelDescriptor::CommonRuntimeArgs,
@@ -299,9 +326,10 @@ void py_module_types(py::module& module) {
             py::arg("kernel_source"),
             py::arg("source_type") = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH,
             py::arg("core_ranges"),
-            py::arg("compile_time_args"),
+            py::arg("compile_time_args") = tt::tt_metal::KernelDescriptor::CompileTimeArgs(),
+            py::arg("named_compile_time_args") = tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs(),
             py::arg("defines") = tt::tt_metal::KernelDescriptor::Defines(),
-            py::arg("runtime_args"),
+            py::arg("runtime_args") = tt::tt_metal::KernelDescriptor::RuntimeArgs(),
             py::arg("common_runtime_args") = tt::tt_metal::KernelDescriptor::CommonRuntimeArgs(),
             py::arg("opt_level") = std::nullopt,
             py::arg("config"),
@@ -313,6 +341,7 @@ void py_module_types(py::module& module) {
                     source_type: Type of source (FILE_PATH or INLINE)
                     core_ranges: Set of core ranges where the kernel will execute
                     compile_time_args: Arguments provided at compile time
+                    named_compile_time_args: Named arguments provided at compile time
                     defines: Preprocessor definitions for kernel compilation
                     runtime_args: Arguments provided at runtime
                     common_runtime_args: Common runtime arguments shared across kernels
@@ -333,6 +362,10 @@ void py_module_types(py::module& module) {
             "compile_time_args",
             &tt::tt_metal::KernelDescriptor::compile_time_args,
             "Arguments provided at compile time")
+        .def_readwrite(
+            "named_compile_time_args",
+            &tt::tt_metal::KernelDescriptor::named_compile_time_args,
+            "Named arguments provided at compile time")
         .def_readwrite(
             "defines", &tt::tt_metal::KernelDescriptor::defines, "Preprocessor definitions for kernel compilation")
         .def_readwrite("runtime_args", &tt::tt_metal::KernelDescriptor::runtime_args, "Arguments provided at runtime")

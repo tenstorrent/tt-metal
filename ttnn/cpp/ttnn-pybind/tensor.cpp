@@ -426,7 +426,17 @@ void tensor_mem_config_module(py::module& m_tensor) {
             "Returns a CoreRange i.e. bounding box covering all the core ranges in the CoreRangeSet")
         .def("num_cores", &CoreRangeSet::num_cores, "Returns total number of cores in the CoreRangeSet")
         .def("subtract", &CoreRangeSet::subtract, "Subtract common CoreRanges from current i.e. it returns A - (AnB)")
-        .def("ranges", &CoreRangeSet::ranges, "Returns the core ranges in the CoreRangeSet");
+        .def("ranges", &CoreRangeSet::ranges, "Returns the core ranges in the CoreRangeSet")
+        .def(
+            "contains",
+            py::overload_cast<const CoreCoord&>(&CoreRangeSet::contains, py::const_),
+            py::arg("core"),
+            "Check if a core coordinate is contained in this CoreRangeSet")
+        .def(
+            "merge",
+            &CoreRangeSet::merge<CoreRangeSet>,
+            py::arg("other"),
+            "Merge this CoreRangeSet with another CoreRangeSet and return the result");
 
     auto pyShardSpec = static_cast<py::class_<ShardSpec>>(m_tensor.attr("ShardSpec"));
     pyShardSpec

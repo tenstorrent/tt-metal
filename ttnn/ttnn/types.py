@@ -90,11 +90,16 @@ BinaryOpType = ttnn._ttnn.operations.binary.BinaryOpType
 BcastOpMath = ttnn._ttnn.types.BcastOpMath
 BcastOpDim = ttnn._ttnn.types.BcastOpDim
 
+DataMovementProcessor = ttnn._ttnn.types.DataMovementProcessor
+NOC = ttnn._ttnn.types.NOC
+NOC_MODE = ttnn._ttnn.types.NOC_MODE
+
 TileDescriptor = ttnn._ttnn.program_descriptor.TileDescriptor
 CBFormatDescriptor = ttnn._ttnn.program_descriptor.CBFormatDescriptor
 CBDescriptor = ttnn._ttnn.program_descriptor.CBDescriptor
 ReaderConfigDescriptor = ttnn._ttnn.program_descriptor.ReaderConfigDescriptor
 WriterConfigDescriptor = ttnn._ttnn.program_descriptor.WriterConfigDescriptor
+DataMovementConfigDescriptor = ttnn._ttnn.program_descriptor.DataMovementConfigDescriptor
 ComputeConfigDescriptor = ttnn._ttnn.program_descriptor.ComputeConfigDescriptor
 KernelDescriptor = ttnn._ttnn.program_descriptor.KernelDescriptor
 SemaphoreDescriptor = ttnn._ttnn.program_descriptor.SemaphoreDescriptor
