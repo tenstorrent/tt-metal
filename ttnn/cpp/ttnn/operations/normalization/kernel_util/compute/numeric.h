@@ -55,6 +55,7 @@ inline void accumulate_compute_loop(
     uint32_t cb_in,
     uint32_t cb_scalar,
     uint32_t cb_out,
+    uint32_t start_tile,
     uint32_t num_tiles,
     uint32_t block_size,
     AdditionalCBs... cb_additional) {
@@ -63,7 +64,7 @@ inline void accumulate_compute_loop(
 
     constexpr bool pop_input = pop_input_policy == policies::PopInputPolicy::POP;
 
-    auto accumulate_cb = [cb_scalar, block_size, cb_out, num_tiles](uint32_t cb) {
+    auto accumulate_cb = [cb_scalar, block_size, cb_out, num_tiles, start_tile](uint32_t cb) {
         for (uint32_t t = 0; t < num_tiles; t += block_size) {
             const uint32_t num_previous_tiles = pop_input ? 0 : t;
             if constexpr (wait_for_input_policy == policies::WaitForInputPolicy::WAIT) {
@@ -71,7 +72,7 @@ inline void accumulate_compute_loop(
             }
             for (uint32_t j = 0; j < block_size; j++) {
                 reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
-                    cb, cb_scalar, num_previous_tiles + j, detail::scaler_tile_idx, detail::dst0);
+                    cb, cb_scalar, start_tile + num_previous_tiles + j, detail::scaler_tile_idx, detail::dst0);
             }
             if constexpr (pop_input) {
                 cb_pop_front(cb, block_size);
@@ -123,6 +124,7 @@ inline void row_wise_accumulate_with_epilogue(
     uint32_t num_tile_rows,
     uint32_t num_tiles_per_tile_row,
     uint32_t block_size,
+    uint32_t next_tile_row_tile_stride = 0,
     Epilogue epilogue = detail::no_op,
     AdditionalCBs... additional_cbs) {
     constexpr bool pop_input = pop_input_policy == policies::PopInputPolicy::POP;
@@ -135,10 +137,10 @@ inline void row_wise_accumulate_with_epilogue(
     reconfig_data_format(cb_in, cb_scalar);
     reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in, cb_scalar, cb_out);
     tile_regs_acquire();
-
+    uint32_t start_tile = 0;
     for (uint32_t i = 0; i < num_tile_rows; i++) {
         detail::accumulate_compute_loop<FLOAT32_REDUCTION, wait_for_input_policy, pop_input_policy>(
-            cb_in, cb_scalar, cb_out, num_tiles_per_tile_row, block_size, additional_cbs...);
+            cb_in, cb_scalar, cb_out, start_tile, num_tiles_per_tile_row, block_size, additional_cbs...);
 
         epilogue();
 
@@ -147,6 +149,8 @@ inline void row_wise_accumulate_with_epilogue(
 
         pack_tile(detail::dst0, cb_out);
         tile_regs_release();
+
+        start_tile += next_tile_row_tile_stride;
     }
     reduce_uninit<FLOAT32_REDUCTION>();
     cb_push_back(cb_out, num_tile_rows);
@@ -194,11 +198,17 @@ inline void row_wise_mean(
     uint32_t one_over_N,
     uint32_t num_tile_rows,
     uint32_t num_tiles_per_tile_row,
-    uint32_t block_size) {
+    uint32_t block_size,
+    uint32_t next_tile_row_tile_stride = 0) {
     row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION, wait_for_input_policy, pop_input_policy, wait_at_end_policy>(
-        cb_in, cb_scalar, cb_out, num_tile_rows, num_tiles_per_tile_row, block_size, [&one_over_N]() {
-            detail::scale_dest(detail::dst0, one_over_N);
-        });
+        cb_in,
+        cb_scalar,
+        cb_out,
+        num_tile_rows,
+        num_tiles_per_tile_row,
+        block_size,
+        next_tile_row_tile_stride,
+        [&one_over_N]() { detail::scale_dest(detail::dst0, one_over_N); });
 }
 
 /**
@@ -246,7 +256,8 @@ inline void row_wise_mean_with_pre_add(
     uint32_t one_over_N,
     uint32_t num_tile_rows,
     uint32_t num_tiles_per_tile_row,
-    uint32_t block_size) {
+    uint32_t block_size,
+    uint32_t next_tile_row_tile_stride = 0) {
     row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION, wait_for_input_policy, pop_input_policy, wait_at_end_policy>(
         cb_in0,
         cb_scalar,
@@ -254,6 +265,7 @@ inline void row_wise_mean_with_pre_add(
         num_tile_rows,
         num_tiles_per_tile_row,
         block_size,
+        next_tile_row_tile_stride,
         [&one_over_N]() { detail::scale_dest(detail::dst0, one_over_N); },
         cb_in1);
 }

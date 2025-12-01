@@ -13,10 +13,15 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 
 // SPLIT REDUCE across Cores
 namespace NAMESPACE {
 void MAIN {
+    namespace kutil = norm::kernel_util;
+    namespace numeric = kutil::compute::numeric;
+    namespace policies = kutil::compute::policies;
+
     constexpr uint32_t is_top_row = get_compile_time_arg_val(0);
     constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
     constexpr uint32_t do_beta = get_compile_time_arg_val(2);
@@ -33,6 +38,7 @@ void MAIN {
     constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(11) == 1;
     constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(12) == 1;
     constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
+    constexpr uint32_t one_over_W = get_compile_time_arg_val(14);
 
     const uint32_t num_reduce_tiles_per_block_h =
         get_arg_val<uint32_t>(0);  // This value is the same for all cores, except ones that have padding tiles in it.
@@ -143,52 +149,96 @@ void MAIN {
 
 #ifndef RMSNORM
     // E[x],
-    index_h_offset = 0;
-    reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in, cb_scaler, cb_ex_partial);
-    cb_wait_front(cb_scaler, 1);
-    cb_reserve_back(cb_ex_partial, block_h);
-    for (uint32_t i = 0; i < block_h; i++) {
-        tile_regs_acquire();
-        for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in, cb_scaler, w + index_h_offset, scaler0, dst0);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(dst0, cb_ex_partial);
-        tile_regs_release();
-        index_h_offset += block_w;
-    }
-    reduce_uninit();
-    cb_push_back(cb_ex_partial, block_h);
+    // index_h_offset = 0;
+    // reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in, cb_scaler, cb_ex_partial);
+    // cb_wait_front(cb_scaler, 1);
+    // cb_reserve_back(cb_ex_partial, block_h);
+    // for (uint32_t i = 0; i < block_h; i++) {
+    //     tile_regs_acquire();
+    //     for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
+    //         reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in, cb_scaler, w + index_h_offset, scaler0,
+    //         dst0);
+    //     }
+    //     tile_regs_commit();
+    //     tile_regs_wait();
+    //     pack_tile(dst0, cb_ex_partial);
+    //     tile_regs_release();
+    //     index_h_offset += block_w;
+    // }
+    // reduce_uninit();
+    // cb_push_back(cb_ex_partial, block_h);
+
+    numeric::row_wise_accumulate_with_epilogue<
+        FLOAT32_REDUCTION,
+        policies::WaitForInputPolicy::NO_WAIT,
+        policies::PopInputPolicy::NO_POP,
+        policies::WaitAtEndPolicy::NO_WAIT>(
+        cb_in, cb_scaler, cb_ex_partial, block_h, num_reduce_tiles_per_block_h, 1, block_w);
 
     reconfig_data_format_srca(cb_in, cb_ex_external);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr (is_allgather_worker) {
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_ex_external, cb_scaler_global, cb_ex);
-        cb_reserve_back(cb_ex, num_tiles_per_allgather_worker);
+        // reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_ex_external, cb_scaler_global, cb_ex);
+        // cb_reserve_back(cb_ex, num_tiles_per_allgather_worker);
 
-        for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
-            cb_wait_front(cb_scaler_global, 1);
-            tile_regs_acquire();
-            for (uint32_t w = 0; w < num_blocks_reduce; w++) {
-                cb_wait_front(cb_ex_external, 1);
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
-                    cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
-                cb_pop_front(cb_ex_external, 1);
-            }
-            if (use_two_stage_reduce && !is_second_stage_reader) {
+        // for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
+        //     cb_wait_front(cb_scaler_global, 1);
+        //     tile_regs_acquire();
+        //     for (uint32_t w = 0; w < num_blocks_reduce; w++) {
+        //         cb_wait_front(cb_ex_external, 1);
+        //         reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
+        //             cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
+        //         cb_pop_front(cb_ex_external, 1);
+        //     }
+        //     if (use_two_stage_reduce && !is_second_stage_reader) {
+        //         cb_wait_front(cb_ex_external, num_blocks_second_stage - 1);
+        //         cb_pop_front(cb_ex_external, num_blocks_second_stage - 1);
+        //     }
+        //     if (!use_two_stage_reduce || (use_two_stage_reduce && is_second_stage_reader)) {
+        //         // Divide the accumulated sum by W
+        //         cb_wait_front(cb_ex_external, num_blocks_reduce - 1);
+        //         cb_pop_front(cb_ex_external, num_blocks_reduce - 1);
+        //     }
+        //     tile_regs_commit();
+        //     tile_regs_wait();
+        //     pack_tile(dst0, cb_ex);
+        //     tile_regs_release();
+        // }
+        // reduce_uninit();
+        // cb_push_back(cb_ex, num_tiles_per_allgather_worker);
+        // cb_wait_front(cb_ex, num_tiles_per_allgather_worker);
+
+        if (use_two_stage_reduce && !is_second_stage_reader) {
+            // This is just needed to stay in sync with readers
+            auto keep_in_sync_fn = [cb_ex_external, num_blocks_second_stage]() {
                 cb_wait_front(cb_ex_external, num_blocks_second_stage - 1);
                 cb_pop_front(cb_ex_external, num_blocks_second_stage - 1);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex);
-            tile_regs_release();
+            };
+
+            // We're in a two-stage reduce but not the second stage reader,
+            // so we just accumulate the sum
+            numeric::row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION>(
+                cb_ex_external,
+                cb_scaler_global,
+                cb_ex,
+                num_tiles_per_allgather_worker,
+                num_blocks_reduce,
+                1,
+                0,
+                keep_in_sync_fn);
+        } else {
+            // We're either a single-stage reduce or a second stage reader,
+            // so we compute the final mean
+            constexpr uint32_t numeric::row_wise_mean<FLOAT32_REDUCTION, >(
+                cb_ex_external,
+                cb_scaler_global,
+                cb_ex,
+                one_over_W,
+                num_tiles_per_allgather_worker,
+                num_blocks_reduce,
+                1);
         }
-        reduce_uninit();
-        cb_push_back(cb_ex, num_tiles_per_allgather_worker);
-        cb_wait_front(cb_ex, num_tiles_per_allgather_worker);
     }
 
     // x - E[x]
@@ -258,57 +308,104 @@ void MAIN {
     }
 #endif
 
-    cb_wait_front(cb_xmm2, num_tiles_per_block);
+    // cb_wait_front(cb_xmm2, num_tiles_per_block);
 
 // Var(x)
 #ifdef RMSNORM
     cb_wait_front(cb_scaler, 1);
 #endif
-    cb_reserve_back(cb_ex_partial2, block_h);
-    reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, cb_ex_partial2);
-    index_h_offset = 0;
-    for (uint32_t i = 0; i < block_h; i++) {
-        tile_regs_acquire();
-        for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
-                cb_xmm2, cb_scaler, w + index_h_offset, scaler0, dst0);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(dst0, cb_ex_partial2);
-        tile_regs_release();
-        index_h_offset += block_w;
-    }
-    reduce_uninit();
-    cb_pop_front(cb_xmm2, num_tiles_per_block);
-    cb_push_back(cb_ex_partial2, block_h);
+    // cb_reserve_back(cb_ex_partial2, block_h);
+    // reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, cb_ex_partial2);
+    // index_h_offset = 0;
+    // for (uint32_t i = 0; i < block_h; i++) {
+    //     tile_regs_acquire();
+    //     for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
+    //         reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
+    //             cb_xmm2, cb_scaler, w + index_h_offset, scaler0, dst0);
+    //     }
+    //     tile_regs_commit();
+    //     tile_regs_wait();
+    //     pack_tile(dst0, cb_ex_partial2);
+    //     tile_regs_release();
+    //     index_h_offset += block_w;
+    // }
+    // reduce_uninit();
+    // cb_pop_front(cb_xmm2, num_tiles_per_block);
+    // cb_push_back(cb_ex_partial2, block_h);
+    numeric::row_wise_accumulate_with_epilogue<
+        FLOAT32_REDUCTION,
+        policies::WaitForInputPolicy::WAIT,
+        policies::PopInputPolicy::POP,
+        policies::WaitAtEndPolicy::NO_WAIT>(
+        cb_xmm2, cb_scaler, cb_ex_partial2, block_h, num_reduce_tiles_per_block_h, 1, block_w);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr (is_allgather_worker) {
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_ex_external2, cb_scaler_global, cb_ex2);
-        cb_reserve_back(cb_ex2, num_tiles_per_allgather_worker);
+        // reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_ex_external2, cb_scaler_global, cb_ex2);
+        // cb_reserve_back(cb_ex2, num_tiles_per_allgather_worker);
 
-        for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
-            cb_wait_front(cb_scaler_global, 1);
+        // for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
+        //     cb_wait_front(cb_scaler_global, 1);
 
-            tile_regs_acquire();
-            for (uint32_t w = 0; w < num_blocks_reduce; w++) {
-                cb_wait_front(cb_ex_external2, 1);
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
-                    cb_ex_external2, cb_scaler_global, 0, scaler0, dst0);
-                cb_pop_front(cb_ex_external2, 1);
-            }
-            if (use_two_stage_reduce && !is_second_stage_reader) {
-                cb_wait_front(cb_ex_external2, num_blocks_second_stage - 1);
-                cb_pop_front(cb_ex_external2, num_blocks_second_stage - 1);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex2);
-            tile_regs_release();
+        //     tile_regs_acquire();
+        //     for (uint32_t w = 0; w < num_blocks_reduce; w++) {
+        //         cb_wait_front(cb_ex_external2, 1);
+        //         reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
+        //             cb_ex_external2, cb_scaler_global, 0, scaler0, dst0);
+        //         cb_pop_front(cb_ex_external2, 1);
+        //     }
+        //     if (use_two_stage_reduce && !is_second_stage_reader) {
+        //         cb_wait_front(cb_ex_external2, num_blocks_second_stage - 1);
+        //         cb_pop_front(cb_ex_external2, num_blocks_second_stage - 1);
+        //     }
+        //     tile_regs_commit();
+        //     tile_regs_wait();
+        //     pack_tile(dst0, cb_ex2);
+        //     tile_regs_release();
+        // }
+        // reduce_uninit();
+        // cb_push_back(cb_ex2, num_tiles_per_allgather_worker);
+
+        if (use_two_stage_reduce && !is_second_stage_reader) {
+            // This is just needed to stay in sync with readers
+            auto keep_in_sync_fn = [cb_ex_external2, num_blocks_second_stage]() {
+                cb_wait_front(cb_ex_global2, num_blocks_second_stage - 1);
+                cb_pop_front(cb_ex_global2, num_blocks_second_stage - 1);
+            };
+
+            // We're in a two-stage reduce but not the second stage reader,
+            // so we just accumulate the sum
+            numeric::row_wise_accumulate_with_epilogue<
+                FLOAT32_REDUCTION,
+                policies::WaitForInputPolicy::WAIT,
+                policies::PopInputPolicy::POP,
+                policies::WaitAtEndPolicy::NO_WAIT>(
+                cb_ex_external2,
+                cb_scaler_global,
+                cb_ex2,
+                num_tiles_per_allgather_worker,
+                num_blocks_reduce,
+                1,
+                0,
+                keep_in_sync_fn);
+        } else {
+            // We're either a single-stage reduce or a second stage reader,
+            // so we compute the final variance by computing the mean
+            // of the accumulated sum of squared (x - E[x])^2
+            numeric::row_wise_mean<
+                FLOAT32_REDUCTION,
+                policies::WaitForInputPolicy::WAIT,
+                policies::PopInputPolicy::POP,
+                policies::WaitAtEndPolicy::NO_WAIT>(
+                cb_ex_external2,
+                cb_scaler_global,
+                cb_ex2,
+                one_over_W,
+                num_tiles_per_allgather_worker,
+                num_blocks_reduce,
+                1,
+                0);
         }
-        reduce_uninit();
-        cb_push_back(cb_ex2, num_tiles_per_allgather_worker);
 
         if (enable_sqrt) {
             for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
