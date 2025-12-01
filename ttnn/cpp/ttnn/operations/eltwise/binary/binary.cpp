@@ -357,7 +357,23 @@ inline auto invoke_binary_ng(
     }
 
     const auto a_dtype = lhs.dtype();
+    const DataType b_dtype = [&] {
+        if constexpr (requires { rhs.dtype(); }) {
+            return rhs.dtype();
+        } else {
+            return a_dtype;
+        }
+    }();
     const auto output_preallocated = output.has_value();
+    const auto is_integer_division =
+        (binary_op_type == BinaryOpType::DIV) && (a_dtype == DataType::INT32) && (b_dtype == DataType::INT32);
+    if (is_integer_division) {
+        // For integer division, output dtype should be float32
+        if (dtype.has_value() || output_preallocated) {
+            auto temp_dtype = output_preallocated ? output->dtype() : *dtype;
+            TT_FATAL(temp_dtype == DataType::FLOAT32, "For integer division, supported output dtype is FLOAT32");
+        }
+    }
     const auto out_dtype = output_preallocated ? output->dtype() : dtype.value_or(a_dtype);
 
     const auto mem_config = output_preallocated ? output->memory_config() : memory_config.value_or(lhs.memory_config());
