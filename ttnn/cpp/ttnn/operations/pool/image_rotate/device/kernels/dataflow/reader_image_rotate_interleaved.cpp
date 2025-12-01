@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cmath>
 #include <stdint.h>
 #include "dataflow_api.h"
 
@@ -10,6 +9,8 @@
 #include "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_reader_common.hpp"
 // Include grid_sample helper functions for bilinear interpolation
 #include "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/grid_sample_reader_common.hpp"
+// Include Q16.16 fixed-point arithmetic helpers
+#include "ttnn/cpp/ttnn/operations/pool/image_rotate/device/fixed_point_q16.hpp"
 
 #define ALWI inline __attribute__((always_inline))
 
@@ -32,21 +33,11 @@ void kernel_main() {
     constexpr uint32_t input_height = get_compile_time_arg_val(4);
     constexpr uint32_t input_width = get_compile_time_arg_val(5);
 
-    // Reinterpret rotation parameter bits as float
-    union {
-        uint32_t u;
-        float f;
-    } cos_conv, sin_conv, cx_conv, cy_conv;
-
-    cos_conv.u = cos_angle_bits;
-    sin_conv.u = sin_angle_bits;
-    cx_conv.u = center_x_bits;
-    cy_conv.u = center_y_bits;
-
-    const float cos_angle = cos_conv.f;
-    const float sin_angle = sin_conv.f;
-    const float center_x = cx_conv.f;
-    const float center_y = cy_conv.f;
+    // Rotation parameters are passed as Q16.16 fixed-point (pre-converted on host)
+    const int32_t cos_angle_q16 = static_cast<int32_t>(cos_angle_bits);
+    const int32_t sin_angle_q16 = static_cast<int32_t>(sin_angle_bits);
+    const int32_t center_x_q16 = static_cast<int32_t>(center_x_bits);
+    const int32_t center_y_q16 = static_cast<int32_t>(center_y_bits);
 
     // Tensor accessor for input tensor (starts at compile-time arg index 6)
     constexpr auto src_args = TensorAccessorArgs<6>();
@@ -74,28 +65,41 @@ void kernel_main() {
 
         // Compute rotation: find source coordinates (x_in, y_in) for this output pixel
         // Using inverse rotation to find where each output pixel samples from
-        const float x_centered = static_cast<float>(x_out) - center_x;
-        const float y_centered = static_cast<float>(y_out) - center_y;
+        // Convert output coordinates to Q16.16 fixed-point
+        const int32_t x_out_q16 = int_to_q16(static_cast<int32_t>(x_out));
+        const int32_t y_out_q16 = int_to_q16(static_cast<int32_t>(y_out));
 
-        // Inverse rotation transformation
-        const float x_in = x_centered * cos_angle - y_centered * sin_angle + center_x;
-        const float y_in = x_centered * sin_angle + y_centered * cos_angle + center_y;
+        // Center the coordinates
+        const int32_t x_centered_q16 = q16_sub(x_out_q16, center_x_q16);
+        const int32_t y_centered_q16 = q16_sub(y_out_q16, center_y_q16);
+
+        // Inverse rotation transformation using Q16.16 arithmetic
+        // x_in = x_centered * cos_angle - y_centered * sin_angle + center_x
+        const int32_t term1 = q16_mul(x_centered_q16, cos_angle_q16);
+        const int32_t term2 = q16_mul(y_centered_q16, sin_angle_q16);
+        const int32_t x_in_q16 = q16_add(q16_sub(term1, term2), center_x_q16);
+
+        // y_in = x_centered * sin_angle + y_centered * cos_angle + center_y
+        const int32_t term3 = q16_mul(x_centered_q16, sin_angle_q16);
+        const int32_t term4 = q16_mul(y_centered_q16, cos_angle_q16);
+        const int32_t y_in_q16 = q16_add(q16_add(term3, term4), center_y_q16);
 
         // Compute corner coordinates for bilinear interpolation
         // COORDINATE FIX: Use y_in for height, x_in for width (matching grid_sample convention)
-        const int32_t h0 = static_cast<int32_t>(floor(y_in));
+        // Convert Q16.16 to plain int32 coordinates (floor operation)
+        const int32_t h0 = q16_to_int(y_in_q16);
         const int32_t h1 = h0 + 1;
-        const int32_t w0 = static_cast<int32_t>(floor(x_in));
+        const int32_t w0 = q16_to_int(x_in_q16);
         const int32_t w1 = w0 + 1;
 
-        // Calculate bilinear interpolation weights
-        const float h0_f = static_cast<float>(h0);
-        const float w0_f = static_cast<float>(w0);
+        // Calculate bilinear interpolation weights using Q16.16 arithmetic
+        // Extract fractional parts (already in Q16.16 format, range [0, 1))
+        const int32_t h_frac_q16 = q16_frac(y_in_q16);
+        const int32_t w_frac_q16 = q16_frac(x_in_q16);
 
-        const float h_frac = y_in - h0_f;
-        const float w_frac = x_in - w0_f;
-        const float h_frac_inv = 1.0f - h_frac;
-        const float w_frac_inv = 1.0f - w_frac;
+        // Compute (1 - frac) for inverse fractions
+        const int32_t h_frac_inv_q16 = q16_one_minus(h_frac_q16);
+        const int32_t w_frac_inv_q16 = q16_one_minus(w_frac_q16);
 
         // Boundary checks
         const bool h0_valid = is_coordinate_valid(h0, input_height);
@@ -103,17 +107,17 @@ void kernel_main() {
         const bool w0_valid = is_coordinate_valid(w0, input_width);
         const bool w1_valid = is_coordinate_valid(w1, input_width);
 
-        // Compute weights, zeroing out invalid corners
-        const float weight_nw = (h0_valid && w0_valid) ? (h_frac_inv * w_frac_inv) : 0.0f;
-        const float weight_ne = (h0_valid && w1_valid) ? (h_frac_inv * w_frac) : 0.0f;
-        const float weight_sw = (h1_valid && w0_valid) ? (h_frac * w_frac_inv) : 0.0f;
-        const float weight_se = (h1_valid && w1_valid) ? (h_frac * w_frac) : 0.0f;
+        // Compute bilinear interpolation weights in Q16.16
+        const int32_t weight_nw_q16 = (h0_valid && w0_valid) ? q16_mul(h_frac_inv_q16, w_frac_inv_q16) : 0;
+        const int32_t weight_ne_q16 = (h0_valid && w1_valid) ? q16_mul(h_frac_inv_q16, w_frac_q16) : 0;
+        const int32_t weight_sw_q16 = (h1_valid && w0_valid) ? q16_mul(h_frac_q16, w_frac_inv_q16) : 0;
+        const int32_t weight_se_q16 = (h1_valid && w1_valid) ? q16_mul(h_frac_q16, w_frac_q16) : 0;
 
-        // Convert weights to bfloat16
-        const uint16_t weight_nw_bf = float_to_bfloat16(weight_nw);
-        const uint16_t weight_ne_bf = float_to_bfloat16(weight_ne);
-        const uint16_t weight_sw_bf = float_to_bfloat16(weight_sw);
-        const uint16_t weight_se_bf = float_to_bfloat16(weight_se);
+        // Convert Q16.16 weights to float, then to bfloat16
+        const uint16_t weight_nw_bf = float_to_bfloat16(q16_to_float(weight_nw_q16));
+        const uint16_t weight_ne_bf = float_to_bfloat16(q16_to_float(weight_ne_q16));
+        const uint16_t weight_sw_bf = float_to_bfloat16(q16_to_float(weight_sw_q16));
+        const uint16_t weight_se_bf = float_to_bfloat16(q16_to_float(weight_se_q16));
 
         // Reserve CB space for 4 corner input sticks
         cb_reserve_back(input_cb_index, 1);
