@@ -121,6 +121,7 @@ while true; do
     echo -e "${GREEN}Valid runs accumulated: ${VALID_RUNS_FETCHED}${NC}"
 
     while IFS= read -r RUN_DATA; do
+        FOUND_JOB=false
         RUN_ID=$(echo "$RUN_DATA" | jq -r '.id')
         RUN_COMMIT=$(echo "$RUN_DATA" | jq -r '.head_sha')
         RUN_COMPLETED_AT=$(echo "$RUN_DATA" | jq -r '.updated_at // .run_started_at // "unknown"')
