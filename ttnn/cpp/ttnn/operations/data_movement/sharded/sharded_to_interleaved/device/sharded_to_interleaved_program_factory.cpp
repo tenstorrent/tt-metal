@@ -105,7 +105,7 @@ ShardedToInterleavedProgramFactory::cached_program_t ShardedToInterleavedProgram
         tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
     }
 
-    auto dst_buffer = output.buffer();
+    auto* dst_buffer = output.buffer();
 
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index};
 
@@ -280,8 +280,8 @@ void ShardedToInterleavedProgramFactory::override_runtime_arguments(
     const uint32_t num_slices = cached_program.shared_variables.num_slices;
     const uint32_t num_cores_unpadded = cached_program.shared_variables.num_cores_unpadded;
 
-    auto src_buffer = tensor_args.input_tensor.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = tensor_args.input_tensor.buffer();
+    auto* dst_buffer = output.buffer();
 
     // Calculate starting_idx_h if partial operation
     uint32_t starting_idx_h = detail::calculate_starting_idx_h(output, num_slices, operation_attributes.slice_index);
