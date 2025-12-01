@@ -10,7 +10,7 @@ on:
         type: choice
         options:
           - all
-#          - llama70b
+          - llama70b
 #          - llama_unit_tests
 #          - llama70b_prefill
           - cnn
