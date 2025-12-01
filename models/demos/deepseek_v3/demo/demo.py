@@ -236,6 +236,7 @@ def run_demo(
     early_print_first_user: bool = True,
     generator: str = "bp",
     enable_trace: bool = False,
+    override_num_layers: int | None = None,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -305,7 +306,9 @@ def run_demo(
                 tokenizer=tokenizer,
                 random_weights=bool(random_weights),
                 dense_layers=(1 if random_weights and single_layer else None),
-                override_num_layers=(1 if random_weights else None),
+                override_num_layers=(
+                    override_num_layers if override_num_layers is not None else (1 if random_weights else None)
+                ),
                 single_layer=(single_layer if random_weights else None),
                 enable_trace=enable_trace,
             )
@@ -319,7 +322,9 @@ def run_demo(
                 tokenizer=tokenizer,
                 random_weights=bool(random_weights),
                 dense_layers=(1 if random_weights and single_layer else None),
-                override_num_layers=(1 if random_weights else None),
+                override_num_layers=(
+                    override_num_layers if override_num_layers is not None else (1 if random_weights else None)
+                ),
                 single_layer=(single_layer if random_weights else None),
             )
         # Build the prompt list
