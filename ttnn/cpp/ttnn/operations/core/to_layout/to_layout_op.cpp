@@ -114,7 +114,13 @@ Tensor to_layout_impl(
                             "TILE_SIZE!");
                     }
                 }
-                return ttnn::tilize(tensor, output_memory_config, dtype, use_multicore_tilize, false, sub_core_grids);
+                return ttnn::tilize(
+                    tensor,
+                    output_memory_config,
+                    dtype,
+                    use_multicore_tilize,
+                    false /* low perf mode */,
+                    sub_core_grids);
             } else {
                 throw std::runtime_error("ttnn::to_layout: Unsupported layout!");
             }
@@ -169,15 +175,20 @@ Tensor to_layout_impl(
             }
             if (original_rank == 1) {
                 return ttnn::reshape(
-                    tensor, original_shape, std::nullopt, std::nullopt, TileReshapeMapMode::CACHE, sub_core_grids);
+                    tensor,
+                    original_shape,
+                    std::nullopt /*Memory Config*/,
+                    std::nullopt /*pad value*/,
+                    TileReshapeMapMode::CACHE,
+                    sub_core_grids);
             }
 
             return ttnn::reshape(
                 tensor,
                 output_shape,
                 padded_output_shape,
-                std::nullopt,
-                std::nullopt,
+                std::nullopt, /*Memory Config*/
+                std::nullopt, /*Pad Value*/
                 TileReshapeMapMode::CACHE,
                 sub_core_grids);
         } else {
@@ -193,8 +204,8 @@ Tensor to_layout_impl(
             return ttnn::reshape(
                 tensor,
                 ttnn::Shape{output_shape},
-                std::nullopt,
-                std::nullopt,
+                std::nullopt, /*Memory Config*/
+                std::nullopt, /*Pad Value*/
                 TileReshapeMapMode::CACHE,
                 sub_core_grids);
         } else if (layout == ttnn::TILE_LAYOUT) {

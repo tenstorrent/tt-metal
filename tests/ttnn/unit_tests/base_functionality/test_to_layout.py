@@ -447,7 +447,9 @@ def test_to_layout_wh1(shape, input_layout, output_layout, device):
 )
 def test_to_layout_low_perf(shape, device, sub_core_grids, dtype):
     torch.manual_seed(0)
-    if dtype in [ttnn.int32, ttnn.uint16]:
+    if dtype == ttnn.int32:
+        input_a = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+    elif dtype == ttnn.uint16:
         input_a = torch.randint(0, 1000, shape, dtype=torch.int32)
     else:
         input_a = torch.randn(shape, dtype=torch.bfloat16)
