@@ -19,7 +19,7 @@ import ttnn
 
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
 
-SDXL_L1_SMALL_SIZE = 23000
+SDXL_L1_SMALL_SIZE = 30000
 SDXL_TRACE_REGION_SIZE = 34000000
 SDXL_CI_WEIGHTS_PATH = "/mnt/MLPerf/tt_dnn-models/hf_home"
 SDXL_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_1D
@@ -501,7 +501,7 @@ def run_tt_image_gen(
     tt_prompt_embeds,
     tt_time_ids,
     tt_text_embeds,
-    tt_timesteps,
+    num_steps,
     tt_extra_step_kwargs,
     guidance_scale,
     scaling_factor,
@@ -516,12 +516,14 @@ def run_tt_image_gen(
     tid_vae=None,
     capture_trace=False,
     use_cfg_parallel=False,
+    guidance_rescale=0.0,
+    one_minus_guidance_rescale=1.0,
 ):
-    assert not (capture_trace and len(tt_timesteps) != 1), "Trace should capture only 1 iteration"
+    assert not (capture_trace and num_steps != 1), "Trace should capture only 1 iteration"
     profiler.start("image_gen")
     profiler.start("denoising_loop")
 
-    for i, _ in tqdm(enumerate(tt_timesteps), total=len(tt_timesteps)):
+    for i in tqdm(range(num_steps), total=num_steps):
         unet_outputs = []
         if tid is None or capture_trace:
             tid = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if capture_trace else None
@@ -569,28 +571,64 @@ def run_tt_image_gen(
             else:
                 noise_pred_uncond, noise_pred_text = unet_outputs
 
+            # Move noise_pred_text to L1 for clone operation
+            noise_pred_text_new = ttnn.to_memory_config(noise_pred_text, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(noise_pred_text)
+            noise_pred_text = noise_pred_text_new
+            noise_pred_text_orig = ttnn.clone(noise_pred_text)
+
             # perform guidance
             noise_pred_text = ttnn.sub_(noise_pred_text, noise_pred_uncond)
             noise_pred_text = ttnn.mul_(noise_pred_text, guidance_scale)
-            noise_pred = ttnn.add_(noise_pred_uncond, noise_pred_text)
-
-            tt_latents = tt_scheduler.step(noise_pred, None, tt_latents, **tt_extra_step_kwargs, return_dict=False)[0]
+            noise_pred = ttnn.add(noise_pred_uncond, noise_pred_text)  # NOT add_
 
             ttnn.deallocate(noise_pred_uncond)
             ttnn.deallocate(noise_pred_text)
+
+            # Move noise_pred to L1 for std operations
+            noise_pred_new = ttnn.to_memory_config(noise_pred, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(noise_pred)
+            noise_pred = noise_pred_new
+
+            # perform guidance rescale
+            std_text = ttnn.std(noise_pred_text_orig, dim=[1, 2, 3], keepdim=True)
+            std_cfg = ttnn.std(noise_pred, dim=[1, 2, 3], keepdim=True)
+
+            std_ratio = ttnn.div(std_text, std_cfg)
+
+            noise_pred_rescaled = ttnn.mul(noise_pred, std_ratio)
+
+            rescaled_term = ttnn.mul(noise_pred_rescaled, guidance_rescale)
+            original_term = ttnn.mul(noise_pred, one_minus_guidance_rescale)
+            ttnn.deallocate(noise_pred)
+            noise_pred = ttnn.add(rescaled_term, original_term)
+
+            # Cleanup temporary tensors
+            ttnn.deallocate(std_text)
+            ttnn.deallocate(std_cfg)
+            ttnn.deallocate(std_ratio)
+            ttnn.deallocate(noise_pred_rescaled)
+            ttnn.deallocate(rescaled_term)
+            ttnn.deallocate(original_term)
+            ttnn.deallocate(noise_pred_text_orig)
+
+            # Move back to DRAM
+            noise_pred = ttnn.move(noise_pred)
+
+            tt_latents = tt_scheduler.step(noise_pred, None, tt_latents, **tt_extra_step_kwargs, return_dict=False)[0]
 
             if capture_trace:
                 ttnn.end_trace_capture(ttnn_device, tid, cq_id=0)
         else:
             ttnn.execute_trace(ttnn_device, tid, cq_id=0, blocking=False)
 
-        if i < (len(tt_timesteps) - 1):
+        if i < (num_steps - 1):
             tt_scheduler.inc_step_index()
 
     ttnn.synchronize_device(ttnn_device)
 
-    # reset scheduler
-    tt_scheduler.set_step_index(0)
+    # reset scheduler - use set_begin_index to reset both begin_index and step_index
+    tt_scheduler.set_begin_index(0)
 
     profiler.end("denoising_loop")
 

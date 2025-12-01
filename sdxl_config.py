@@ -32,7 +32,7 @@ class SDXLConfig:
     # Pipeline settings
     num_inference_steps: int = 50
     guidance_scale: float = 5.0
-    capture_trace: bool = False  # Keep disabled - trace causes output corruption
+    capture_trace: bool = True  # Re-enabled with in-place embedding updates
     vae_on_device: bool = True
     encoders_on_device: bool = True
     use_cfg_parallel: bool = False

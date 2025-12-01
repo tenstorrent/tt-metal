@@ -35,6 +35,8 @@ class TtSDXLPipelineConfig:
     vae_on_device: bool = True
     encoders_on_device: bool = True
     use_cfg_parallel: bool = False
+    crop_coords_top_left: tuple = (0, 0)
+    guidance_rescale: float = 0.0
 
 
 class TtSDXLPipeline(LightweightModule):
@@ -98,6 +100,24 @@ class TtSDXLPipeline(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device),
         )
 
+        self.guidance_rescale = ttnn.from_torch(
+            torch.Tensor([self.pipeline_config.guidance_rescale]),
+            dtype=ttnn.bfloat16,
+            device=self.ttnn_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device),
+        )
+
+        self.one_minus_guidance_rescale = ttnn.from_torch(
+            torch.Tensor([1.0 - self.pipeline_config.guidance_rescale]),
+            dtype=ttnn.bfloat16,
+            device=self.ttnn_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device),
+        )
+
         compute_grid_size = self.ttnn_device.compute_with_storage_grid_size()
         ccl_sub_device_crs = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
@@ -134,6 +154,26 @@ class TtSDXLPipeline(LightweightModule):
         )
         ttnn.copy_host_to_device_tensor(host_guidance_scale, self.guidance_scale)
 
+    def set_guidance_rescale(self, guidance_rescale: float):
+        self.pipeline_config.guidance_rescale = guidance_rescale
+        host_guidance_rescale = ttnn.from_torch(
+            torch.Tensor([self.pipeline_config.guidance_rescale]),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device),
+        )
+        host_one_minus_guidance_rescale = ttnn.from_torch(
+            torch.Tensor([1.0 - self.pipeline_config.guidance_rescale]),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device),
+        )
+        ttnn.copy_host_to_device_tensor(host_guidance_rescale, self.guidance_rescale)
+        ttnn.copy_host_to_device_tensor(host_one_minus_guidance_rescale, self.one_minus_guidance_rescale)
+
+    def set_crop_coords_top_left(self, crop_coords_top_left: tuple):
+        self.pipeline_config.crop_coords_top_left = crop_coords_top_left
+
     def compile_text_encoding(self):
         # Compilation of text encoders on the device.
         if not self.encoders_compiled:
@@ -167,7 +207,7 @@ class TtSDXLPipeline(LightweightModule):
                 self.tt_prompt_embeds_device,
                 self.tt_time_ids_device,
                 self.tt_text_embeds_device,
-                [self.ttnn_timesteps[0]],
+                1,  # Single warmup step
                 self.extra_step_kwargs,
                 self.guidance_scale,
                 self.scaling_factor,
@@ -459,7 +499,7 @@ class TtSDXLPipeline(LightweightModule):
             self.tt_prompt_embeds_device,
             self.tt_time_ids_device,
             self.tt_text_embeds_device,
-            self.ttnn_timesteps,
+            self.pipeline_config.num_inference_steps,  # Use numeric instead of list
             self.extra_step_kwargs,
             self.guidance_scale,
             self.scaling_factor,
@@ -473,6 +513,8 @@ class TtSDXLPipeline(LightweightModule):
             output_shape=self.output_shape,
             tid_vae=self.tid_vae if hasattr(self, "tid_vae") else None,
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
+            guidance_rescale=self.guidance_rescale,
+            one_minus_guidance_rescale=self.one_minus_guidance_rescale,
         )
         return imgs
 
@@ -536,50 +578,75 @@ class TtSDXLPipeline(LightweightModule):
         self, tt_latents, tt_prompt_embeds, tt_text_embeds, tt_time_ids, all_prompt_embeds_torch, torch_add_text_embeds
     ):
         # Allocation of device tensors for the input data.
-        # Always allocate fresh tensors - no caching (trace capture disabled)
+        # First call: allocate device tensors
+        # Subsequent calls: copy data to existing tensors (in-place update for trace compatibility)
         profiler.start("allocate_input_tensors")
 
-        self.tt_latents_device = ttnn.allocate_tensor_on_device(
-            tt_latents.shape,
-            tt_latents.dtype,
-            tt_latents.layout,
-            self.ttnn_device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if not self.allocated_device_tensors:
+            # First allocation - create device tensors
+            self.tt_latents_device = ttnn.allocate_tensor_on_device(
+                tt_latents.shape,
+                tt_latents.dtype,
+                tt_latents.layout,
+                self.ttnn_device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
 
-        # Create device tensor with mesh mapper
-        self.tt_prompt_embeds_device = ttnn.from_torch(
-            all_prompt_embeds_torch,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            device=self.ttnn_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(1, 0)),
-        )
+            # Create device tensor with mesh mapper
+            self.tt_prompt_embeds_device = ttnn.from_torch(
+                all_prompt_embeds_torch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                device=self.ttnn_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(1, 0)),
+            )
 
-        # Create device tensor with mesh mapper
-        self.tt_text_embeds_device = ttnn.from_torch(
-            torch_add_text_embeds,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            device=self.ttnn_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(1, 0)),
-        )
+            # Create device tensor with mesh mapper
+            self.tt_text_embeds_device = ttnn.from_torch(
+                torch_add_text_embeds,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                device=self.ttnn_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(1, 0)),
+            )
 
-        self.tt_time_ids_device = ttnn.from_torch(
-            tt_time_ids,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            device=self.ttnn_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(0, None)),
-        )
-        self.tt_time_ids_device = ttnn.squeeze(self.tt_time_ids_device, dim=0)
+            self.tt_time_ids_device = ttnn.from_torch(
+                tt_time_ids,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                device=self.ttnn_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(0, None)),
+            )
+            self.tt_time_ids_device = ttnn.squeeze(self.tt_time_ids_device, dim=0)
+
+            self.allocated_device_tensors = True
+            logger.info("Allocated device tensors (first call)")
+        else:
+            # Subsequent calls - copy data to existing device tensors (in-place update)
+            # Create host tensors with mesh_mapper (no device placement)
+            logger.info("Updating device tensors in-place (subsequent call)")
+            tt_prompt_embeds_host = ttnn.from_torch(
+                all_prompt_embeds_torch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(1, 0)),
+            )
+            tt_text_embeds_host = ttnn.from_torch(
+                torch_add_text_embeds,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.ttnn_device, list(self.ttnn_device.shape), dims=(1, 0)),
+            )
+
+            # Copy to existing device tensors (no new allocation)
+            ttnn.copy_host_to_device_tensor(tt_prompt_embeds_host, self.tt_prompt_embeds_device)
+            ttnn.copy_host_to_device_tensor(tt_text_embeds_host, self.tt_text_embeds_device)
+
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("allocate_input_tensors")
-
-        self.allocated_device_tensors = True
 
     def __create_user_tensors(self, latents, all_prompt_embeds_torch, torch_add_text_embeds):
         # Instantiation of user host input tensors for the TT model.
@@ -642,7 +709,7 @@ class TtSDXLPipeline(LightweightModule):
             self.tt_prompt_embeds_device,
             self.tt_time_ids_device,
             self.tt_text_embeds_device,
-            [self.ttnn_timesteps[0]],
+            1,  # Single step for trace capture
             self.extra_step_kwargs,
             self.guidance_scale,
             self.scaling_factor,

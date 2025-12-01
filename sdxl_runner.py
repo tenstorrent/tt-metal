@@ -146,6 +146,14 @@ class SDXLRunner:
         if requests[0].get("num_inference_steps"):
             self.tt_sdxl.set_num_inference_steps(requests[0]["num_inference_steps"])
 
+        # Update guidance_scale if specified in request
+        if requests[0].get("guidance_scale"):
+            self.tt_sdxl.set_guidance_scale(requests[0]["guidance_scale"])
+
+        # Update guidance_rescale if specified in request
+        if requests[0].get("guidance_rescale"):
+            self.tt_sdxl.set_guidance_rescale(requests[0]["guidance_rescale"])
+
         # Encode prompts
         prompt_embeds, text_embeds = self.tt_sdxl.encode_prompts(prompts, negative_prompts)
 

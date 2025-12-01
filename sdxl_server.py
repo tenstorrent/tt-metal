@@ -42,6 +42,7 @@ class ImageRequest(BaseModel):
     negative_prompt: Optional[str] = ""
     num_inference_steps: Optional[int] = Field(default=50, ge=12, le=100)
     guidance_scale: Optional[float] = Field(default=5.0, ge=1.0, le=20.0)
+    guidance_rescale: Optional[float] = Field(default=0.0, ge=0.0, le=1.0)
     seed: Optional[int] = None
 
 

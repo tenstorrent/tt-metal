@@ -88,6 +88,15 @@ class TtEulerDiscreteScheduler(LightweightModule):
         self.update_device_timestep()
         self.update_device_norm_factor()
 
+    def set_begin_index(self, begin_index: int):
+        """
+        Reset the scheduler state for a new inference run.
+        This resets both begin_index and step_index, ensuring proper state for trace replay.
+        """
+        self.begin_index = begin_index
+        if self.begin_index < len(self.sigmas) - 1:
+            self.set_step_index(self.begin_index)
+
     def create_ttnn_sigmas(self, tensor_name):
         array = getattr(self, tensor_name)
         setattr(self, "tt_" + tensor_name, [])
