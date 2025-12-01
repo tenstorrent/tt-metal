@@ -790,6 +790,22 @@ async function enrichStayedFailing(stayedFailingDetails, filteredGrouped, errorS
   }
 }
 
+function buildWorkflowBadge(workflowPath, timeSinceSuccess) {
+  const workflowFileName = workflowPath
+    ? workflowPath
+      .replace(/^\.github\/workflows\//, '')
+      .replace(/\.ya?ml$/i, '')
+    : '';
+  const badgeParts = [];
+  if (timeSinceSuccess !== EMPTY_VALUE) {
+    badgeParts.push(`Last success: ${timeSinceSuccess}`);
+  }
+  if (workflowFileName) {
+    badgeParts.push(`workflow file: ${workflowFileName}`);
+  }
+  return badgeParts.length ? ` <em>(${badgeParts.join(', ')})</em>` : '';
+}
+
 /**
  * Builds the regressions section of the report
  * @param {Array} regressedDetails - Array of enriched regression detail objects
@@ -804,19 +820,7 @@ function buildRegressionsSection(regressedDetails, context) {
   const lines = regressedDetails.map(it => {
     const workflowName = it.workflow_url ? `<a href="${it.workflow_url}">${it.name}</a>` : it.name;
     const timeSinceSuccess = getTimeSinceLastSuccess(it.name);
-    const workflowFileName = it.workflow_path
-      ? it.workflow_path
-        .replace(/^\.github\/workflows\//, '')
-        .replace(/\.ya?ml$/i, '')
-      : '';
-    const badgeParts = [];
-    if (timeSinceSuccess !== EMPTY_VALUE) {
-      badgeParts.push(`Last success: ${timeSinceSuccess}`);
-    }
-    if (workflowFileName) {
-      badgeParts.push(`workflow file: ${workflowFileName}`);
-    }
-    const timeBadge = badgeParts.length ? ` <em>(${badgeParts.join(', ')})</em>` : '';
+    const timeBadge = buildWorkflowBadge(it.workflow_path, timeSinceSuccess);
 
     if (it.first_failed_run_url) {
       const sha = it.first_failed_head_short || (it.first_failed_head_sha ? it.first_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
@@ -878,19 +882,7 @@ function buildStayedFailingSection(stayedFailingDetails, context) {
   const lines = stayedFailingDetails.map(it => {
     const workflowName = it.workflow_url ? `<a href="${it.workflow_url}">${it.name}</a>` : it.name;
     const timeSinceSuccess = getTimeSinceLastSuccess(it.name);
-    const workflowFileName = it.workflow_path
-      ? it.workflow_path
-        .replace(/^\.github\/workflows\//, '')
-        .replace(/\.ya?ml$/i, '')
-      : '';
-    const badgeParts = [];
-    if (timeSinceSuccess !== EMPTY_VALUE) {
-      badgeParts.push(`Last success: ${timeSinceSuccess}`);
-    }
-    if (workflowFileName) {
-      badgeParts.push(`workflow file: ${workflowFileName}`);
-    }
-    const timeBadge = badgeParts.length ? ` <em>(${badgeParts.join(', ')})</em>` : '';
+    const timeBadge = buildWorkflowBadge(it.workflow_path, timeSinceSuccess);
 
     if (it.first_failed_run_url) {
       const sha = it.first_failed_head_short || (it.first_failed_head_sha ? it.first_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
