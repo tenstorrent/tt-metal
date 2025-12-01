@@ -134,7 +134,7 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         t0 = perf_counter()
         logger.debug(f"Opening safetensors file '{filepath}' to load key '{full_key}'")
         with safe_open(filepath, framework="pt", device="cpu") as f:
-            tensor = f.get_tensor(full_key)
+            tensor = f.get_tensor(full_key).clone()
         load_ms = (perf_counter() - t0) * 1e3
         try:
             logger.debug(
