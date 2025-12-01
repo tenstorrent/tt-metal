@@ -359,6 +359,14 @@ std::string get_platform_architecture_name() {
     return tt::get_string_lowercase(tt::tt_metal::get_platform_architecture({}));
 }
 
+IDevice* GetActiveDevice(ChipId device_id) {
+    IDevice* device = nullptr;
+    if (tt::DevicePool::instance().is_device_active(device_id)) {
+        device = tt::DevicePool::instance().get_active_device(device_id);
+    }
+    return device;
+}
+
 std::map<ChipId, IDevice*> CreateDevices(
     const std::vector<ChipId>& device_ids,
     const uint8_t num_hw_cqs,
