@@ -730,37 +730,36 @@ void py_module(nb::module_& mod) {
             Returns:
                 Tensor: The aggregated tensor.
             )doc");
-    mod.def(
-           "from_host_shards",
-           [](nb::list tensors, const MeshShape& mesh_shape) -> Tensor {
-               std::vector<Tensor> vec;
-               vec.reserve(tensors.size());
+    mod  //.def(
+         //    "from_host_shards",
+         //    [](nb::list tensors, const MeshShape& mesh_shape) -> Tensor {
+         //        std::vector<Tensor> vec;
+         //        vec.reserve(tensors.size());
 
-               for (nb::handle h : tensors) {
-                   vec.emplace_back(nb::cast<Tensor>(h));
-               }
+        //        for (nb::handle h : tensors) {
+        //            vec.emplace_back(nb::cast<Tensor>(h));
+        //        }
 
-               return from_host_shards(vec, mesh_shape);
-           },
-           nb::kw_only(),
-           nb::arg("tensors"),
-           nb::arg("mesh_shape"),
-           R"doc(
-            Creates a multi-device host tensor from a set of individual host shards.
+        //        return from_host_shards(vec, mesh_shape);
+        //    },
+        //    nb::kw_only(),
+        //    nb::arg("tensors"),
+        //    nb::arg("mesh_shape"),
+        //    R"doc(
+        //     Creates a multi-device host tensor from a set of individual host shards.
 
-            Args:
-                tensors (List[Tensor]): The tensor shards to aggregate.
-                mesh_shape (MeshShape): The shape of the mesh to aggregate the shards over.
+        //     Args:
+        //         tensors (List[Tensor]): The tensor shards to aggregate.
+        //         mesh_shape (MeshShape): The shape of the mesh to aggregate the shards over.
 
-            Returns:
-                Tensor: The multi-device host tensor.
-            )doc")
+        //     Returns:
+        //         Tensor: The multi-device host tensor.
+        //     )doc")
         .def(
-            "from_host_shards",  // TODO_NANOBIND: python list not casting properly here?
+            "from_host_shards",
             [](const std::vector<Tensor>& tensors, const MeshShape& mesh_shape) -> Tensor {
                 return from_host_shards(tensors, mesh_shape);
             },
-            nb::kw_only(),
             nb::arg("tensors"),
             nb::arg("mesh_shape"),
             R"doc(
