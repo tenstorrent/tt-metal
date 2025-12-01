@@ -66,9 +66,18 @@ def calculate_key_values(config, key_value_states, *, parameters):
     bsz, tgt_len, hidden_size = key_value_states.shape
     head_size = hidden_size // config.encoder_attention_heads
 
-    fused_kv = key_value_states @ parameters.key_value.weight + parameters.key_value.bias
+    core_grid = ttnn.CoreGrid(y=8, x=8)
+    key_value_states = ttnn.to_memory_config(key_value_states, ttnn.L1_MEMORY_CONFIG)
+    fused_kv = ttnn.linear(
+        key_value_states,
+        parameters.key_value.weight,
+        bias=parameters.key_value.bias,
+        core_grid=core_grid,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    ttnn.deallocate(key_value_states)
+    fused_kv = ttnn.to_memory_config(fused_kv, WHISPER_MEMORY_CONFIG)
     fused_kv = ttnn.unsqueeze_to_4D(fused_kv)  # 1, 1, S, 2xHxd
-
     key_states = fused_kv[:, :, :, :hidden_size]
     value_states = fused_kv[:, :, :, hidden_size:]
 
@@ -134,19 +143,104 @@ def get_decode_sdpa_configs(config, device):
     return sdpa_batch_sharded_memcfg, sdpa_decode_progcfg, sdpa_decode_compute_kernel_config
 
 
-def functional_sdpa(query_states, key_states, value_states, scaling, attention_mask):
-    query_states *= scaling
+def functional_sdpa(query_states, key_states, value_states, scaling, attention_mask, is_cross_attention=False):
+    if is_cross_attention and query_states.shape[1] == 20:
+        # num_heads must be 20 to be sharded
+        core_grid = ttnn.CoreGrid(y=4, x=5)
+        height_sharded_config_query_states = ttnn.create_sharded_memory_config(
+            query_states.padded_shape,
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        query_states = ttnn.to_memory_config(query_states, height_sharded_config_query_states)
 
-    attn_weights = query_states @ key_states
+        height_sharded_config_key_states = ttnn.create_sharded_memory_config(
+            key_states.padded_shape,
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        key_states = ttnn.to_memory_config(key_states, height_sharded_config_key_states)
+
+        height_sharded_config_value_states = ttnn.create_sharded_memory_config(
+            value_states.padded_shape,
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        value_states = ttnn.to_memory_config(value_states, height_sharded_config_value_states)
+
+        query_states *= scaling
+
+        attn_weights = ttnn.matmul(query_states, key_states, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG)
+        ttnn.deallocate(query_states)
+        ttnn.deallocate(key_states)
+
+        attn_weights = ttnn.softmax_in_place(attn_weights, dim=-1)
+
+        attn_probs = dropout(attn_weights, p=0, training=False)
+
+        attn_output = ttnn.matmul(
+            attn_probs,
+            value_states,
+            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(attn_probs)
+        ttnn.deallocate(value_states)
+        attn_output = ttnn.to_memory_config(attn_output, WHISPER_MEMORY_CONFIG)
+
+    else:
+        ## Encoder-self-attention or no-KV-cache-decoder-attention
+        query_states *= scaling
+
+        attn_weights = query_states @ key_states
+
+        if attention_mask is not None:
+            attn_weights = attn_weights + attention_mask
+
+        attn_weights = ttnn.softmax(attn_weights, dim=-1, memory_config=WHISPER_MEMORY_CONFIG)
+
+        attn_probs = dropout(attn_weights, p=0, training=False)
+
+        attn_output = attn_probs @ value_states
+
+    return attn_output
+    """
+    q_chunk_size = 32
+    k_chunk_size = 32
+    core_grid_8x8 = ttnn.CoreGrid(y=8, x=8)
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=True,  # NOTE: False is more correct
+    )
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
 
     if attention_mask is not None:
-        attn_weights = attn_weights + attention_mask
+        # Mask num_heads must be 1 to be broadcasted across all heads
+        attention_mask = attention_mask[:,:1,:,:]
 
-    attn_weights = ttnn.softmax(attn_weights, dim=-1, memory_config=WHISPER_MEMORY_CONFIG)
-
-    attn_probs = dropout(attn_weights, p=0, training=False)
-    attn_output = attn_probs @ value_states
+    attn_output = ttnn.transformer.scaled_dot_product_attention(
+        query_states,
+        key_states,
+        value_states,
+        scale=scaling,
+        attn_mask=attention_mask,
+        is_causal=False,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
     return attn_output
+    """
 
 
 def whisper_attention(
@@ -174,7 +268,9 @@ def whisper_attention(
         query_states = ttnn.reshape(query_states, (bsz, tgt_len, config.encoder_attention_heads, head_size))
         query_states = ttnn.transpose(query_states, 1, 2)  # 1, H, 32, d
         key_states, value_states = calculate_key_values(config, encoder_hidden_states, parameters=parameters)
-        attn_output = functional_sdpa(query_states, key_states, value_states, scaling, attention_mask)
+        attn_output = functional_sdpa(
+            query_states, key_states, value_states, scaling, attention_mask, is_cross_attention=is_cross_attention
+        )
     else:
         fused_qkv = hidden_states @ parameters.query_key_value.weight + parameters.query_key_value.bias  # 1, S, 3xHxd
         fused_qkv = ttnn.unsqueeze_to_4D(fused_qkv)
@@ -235,6 +331,7 @@ def whisper_attention(
 
             attn_output = ttnn.transpose(attn_output, 1, 2)
         else:
+            # Encoder-attention or no-KV-cache-decoder-attention
             attn_output = functional_sdpa(query_states, key_states, value_states, scaling, attention_mask)
 
     attn_output = ttnn.experimental.nlp_concat_heads(attn_output)
