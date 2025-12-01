@@ -176,7 +176,7 @@ def run_demo_inference(
             if is_ci_env:
                 logger.info(f"Image {len(images)}/{len(prompts)} generated successfully")
             else:
-                output_path = f"output/output{len(images) - 1 + start_from}.png"
+                output_path = f"output/output{len(images) - 1 + start_from}_{use_cfg_parallel}_{capture_trace}.png"
                 pil_img.save(output_path)
                 logger.info(f"Image saved to {output_path}")
 
