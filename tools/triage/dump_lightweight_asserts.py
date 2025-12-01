@@ -11,10 +11,8 @@ Description:
     Dumps information about lightweight asserts that have occurred on the device.
 """
 
-from dataclasses import dataclass
 
 from triage import ScriptConfig, log_check_risc, run_script
-from ttexalens import util
 from callstack_provider import run as get_callstack_provider, CallstackProvider, CallstacksData
 from run_checks import run as get_run_checks
 from ttexalens.coordinate import OnChipCoordinate
