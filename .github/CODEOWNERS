@@ -361,7 +361,17 @@ docs/source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/ @abhullar-tt @r
 dockerfile/upstream_test_images/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 
 # tt-train
-tt-train/** @dmakoviichuk-tt @rfurko-tt @ayerofieiev-tt @tenstorrent/codeowner-bypass
+# Primary owners: @dmakoviichuk-tt @ayerofieiev-tt
+tt-train/** @dmakoviichuk-tt @ayerofieiev-tt @tenstorrent/codeowner-bypass
+
+# Kernel development
+tt-train/sources/ttml/metal/** @mdragulaTT @vmelnykovTT @dyurshevichTT @zbaczewskiTT @tenstorrent/codeowner-bypass
+# Ops
+tt-train/sources/ttml/ops/** @mdragulaTT @vmelnykovTT @dyurshevichTT @tenstorrent/codeowner-bypass
+tt-train/tests/ops/** @mdragulaTT @vmelnykovTT @dyurshevichTT @tenstorrent/codeowner-bypass
+# Optimizers
+tt-train/sources/ttml/optimizers/** @zbaczewskiTT @tenstorrent/codeowner-bypass
+tt-train/tests/optimizers/** @zbaczewskiTT @tenstorrent/codeowner-bypass
 
 # tt-telemetry
 tt_telemetry/** @btrzynadlowski-tt @tt-asaigal @kluongTT @cfjchu @tt-aho @SeanNijjar @aliuTT @Riddy21 @agupta-tt @tenstorrent/codeowner-bypass
