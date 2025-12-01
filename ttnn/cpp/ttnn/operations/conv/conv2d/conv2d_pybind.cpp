@@ -21,7 +21,6 @@
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn::operations::conv::conv2d {
@@ -186,78 +185,6 @@ void py_bind_conv2d(py::module& module) {
         py::arg("compute_config") = std::nullopt,
         py::arg("slice_config") = std::nullopt);
 
-    module.def(
-        "convert_conv_weight_tensor_to_tiled_layout",
-        &convert_conv_weight_tensor_to_tiled_layout,
-        py::arg("conv_weight_tensor").noconvert(),
-        py::arg("in1_block_h"),
-        py::arg("in1_block_w"),
-        py::arg("output_dtype").noconvert() = std::nullopt);
-
-    module.def(
-        "convert_conv_weight_tensor_to_special_padding_tiled_layout",
-        &convert_conv_weight_tensor_to_special_padding_tiled_layout,
-        py::arg("conv_weight_tensor").noconvert(),
-        py::arg("in1_block_h"),
-        py::arg("in1_block_w"),
-        py::arg("enable_activation_reuse") = false,
-        py::arg("output_dtype").noconvert() = std::nullopt);
-
-    module.def(
-        "convert_conv_weight_tensor_to_grouped_layout",
-        &convert_conv_weight_tensor_to_grouped_layout,
-        py::arg("conv_weight_tensor").noconvert(),
-        py::arg("num_groups"),
-        py::arg("output_dtype").noconvert() = std::nullopt);
-
-    module.def(
-        "determine_parallel_config",
-        [](const ttnn::TensorMemoryLayout& shard_layout,
-           uint32_t batch_size,
-           uint32_t input_channels,
-           uint32_t output_height,
-           uint32_t output_width,
-           uint32_t output_channels,
-           uint32_t input_channels_alignment,
-           const CoreCoord& compute_grid_size,
-           tt::tt_metal::ShardOrientation block_shard_orientation,
-           bool enable_channels_padding,
-           bool is_shard_height_tile_multiple,
-           bool is_shard_width_tile_multiple) -> ttnn::operations::sliding_window::ParallelConfig {
-            return determine_parallel_config(
-                shard_layout,
-                batch_size,
-                input_channels,
-                output_height,
-                output_width,
-                output_channels,
-                input_channels_alignment,
-                compute_grid_size,
-                block_shard_orientation,
-                enable_channels_padding,
-                is_shard_height_tile_multiple,
-                is_shard_width_tile_multiple);
-        },
-        py::arg("shard_layout"),
-        py::arg("batch_size"),
-        py::arg("input_channels"),
-        py::arg("output_height"),
-        py::arg("output_width"),
-        py::arg("output_channels"),
-        py::arg("input_channels_alignment"),
-        py::arg("compute_grid_size"),
-        py::arg("block_shard_orientation"),
-        py::arg("enable_channels_padding"),
-        py::arg("is_shard_height_tile_multiple") = true,
-        py::arg("is_shard_width_tile_multiple") = true);
-
-    module.def(
-        "create_sharded_memory_config_from_parallel_config",
-        &create_sharded_memory_config_from_parallel_config,
-        py::arg("tensor_shape"),
-        py::arg("parallel_config"),
-        py::arg("tile_size"));
-
     auto py_conv_slice_config = py::class_<Conv2dSliceConfig>(
         module,
         "Conv2dSliceConfig",
@@ -320,10 +247,10 @@ void py_bind_conv2d(py::module& module) {
             bool,
             bool,
             bool,
-            bool,
             std::optional<bool>,
             bool,
-            std::optional<bool>>(),
+            std::optional<bool>,
+            bool>(),
         py::kw_only(),
         py::arg("weights_dtype") = std::nullopt,
         py::arg("activation") = std::nullopt,
@@ -341,10 +268,10 @@ void py_bind_conv2d(py::module& module) {
         py::arg("enable_act_double_buffer") = false,
         py::arg("enable_weights_double_buffer") = false,
         py::arg("full_inner_dim") = false,
-        py::arg("in_place") = false,
         py::arg("enable_kernel_stride_folding") = std::nullopt,
         py::arg("enable_activation_reuse") = false,
-        py::arg("force_split_reader") = std::nullopt);
+        py::arg("force_split_reader") = std::nullopt,
+        py::arg("override_output_sharding_config") = false);
     py_conv_config.def_readwrite("weights_dtype", &Conv2dConfig::weights_dtype, R"doc(
         Optional argument which specifies the data type of the preprocessed weights & bias tensor if the Conv2D op is responsible for preparing the weights.
         Supports ttnn.bfloat16 and ttnn.bfloat8_b.
@@ -364,6 +291,7 @@ void py_bind_conv2d(py::module& module) {
         Boolean that indicates whether the activation tensor should be deallocated after the conv op is done.
         If true, the activation tensor will be deallocated after the halo micro-op is done.
         Should not be used if the input to the conv op is used by another op.
+        Has no effect if input tensor is in DRAM.
         )doc");
     py_conv_config.def_readwrite("reallocate_halo_output", &Conv2dConfig::reallocate_halo_output, R"doc(
         reallocate_halo_output is a boolean that indicates whether the halo output tensor should be moved to reduce memory fragmentation, before the conv micro-op is called.
@@ -407,7 +335,7 @@ void py_bind_conv2d(py::module& module) {
         )doc");
     py_conv_config.def_readwrite("core_grid", &Conv2dConfig::core_grid, R"doc(
         Core Grid to be used for sharding the input tensor.
-        This flag is only used when override_sharding_config is set to true. )doc");
+        This flag is only used when override_sharding_config or override_output_sharding_config is set to true. )doc");
 
     py_conv_config.def_readwrite("transpose_shards", &Conv2dConfig::transpose_shards, R"doc(
         Determines if the Shard Orientation should be Row Major or Column Major.
@@ -433,11 +361,6 @@ void py_bind_conv2d(py::module& module) {
             By default inner dim of activation matrix will be sliced by kernel_h.
             If L1 constraints allowed it we can use full inner dim.
             This will increase perf, but it will take more L1 space.
-        )doc");
-    py_conv_config.def_readwrite("in_place", &Conv2dConfig::in_place, R"doc(
-            Enables support for in_place halo.
-            This re-uses the input tensor as the output for halo, overwriting the input tensor.
-            This can be used if the input tensor is not used by any other op after the conv op.
         )doc");
 
     py_conv_config.def_readwrite("enable_kernel_stride_folding", &Conv2dConfig::enable_kernel_stride_folding, R"doc(
@@ -509,6 +432,18 @@ void py_bind_conv2d(py::module& module) {
         This is useful when the input tensor is large, and the activation reader is a bottleneck.
         This is only supported for Height Sharded Conv2D.
         Setting this overrides the split reader heuristic.
+
+        ===============================================================
+    )doc");
+
+    py_conv_config.def_readwrite(
+        "override_output_sharding_config", &Conv2dConfig::override_output_sharding_config, R"doc(
+        ===================== EXPERIMENTAL FEATURE ======================
+
+        override_output_sharding_config enables the user to specify the memory config of the output tensor
+        This impacts the core grid that executes matmul part of conv2d
+        Feature is currently supported only for BLOCK_SHARDED layout, without DRAM slicing
+        Additionally, NHW number of cores must match between input and output tensors
 
         ===============================================================
     )doc");

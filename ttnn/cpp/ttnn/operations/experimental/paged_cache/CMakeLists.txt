@@ -25,10 +25,13 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/paged_cache_operation.cpp
-        device/paged_fill_cache_program_factory.cpp
-        device/paged_fused_update_cache_program_factory.cpp
-        device/paged_update_cache_program_factory.cpp
+        device/update_cache/paged_update_cache_device_operation.cpp
+        device/update_cache/paged_update_cache_program_factory.cpp
+        device/fused_update_cache/paged_fused_update_cache_device_operation.cpp
+        device/fused_update_cache/paged_tiled_fused_update_cache_program_factory.cpp
+        device/fused_update_cache/paged_row_major_fused_update_cache_program_factory.cpp
+        device/fill_cache/paged_fill_cache_device_operation.cpp
+        device/fill_cache/paged_fill_cache_program_factory.cpp
         paged_cache.cpp
 )
 

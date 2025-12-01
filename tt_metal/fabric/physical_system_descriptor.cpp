@@ -5,10 +5,11 @@
 #include <yaml-cpp/yaml.h>
 #include <algorithm>
 #include <set>
+#include <fstream>
 
 #include <umd/device/cluster.hpp>
 #include <umd/device/soc_descriptor.hpp>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/distributed_context.hpp>
 
 #include "tt_metal/llrt/tunnels_from_mmio_device.hpp"
@@ -46,10 +47,7 @@ std::string get_mobo_name() {
 }
 
 TrayID get_tray_id_for_chip(
-    tt::umd::Cluster& cluster,
-    ChipId chip_id,
-    const std::string& mobo_name,
-    bool using_mock_cluster_desc) {
+    tt::umd::Cluster& cluster, ChipId chip_id, const std::string& mobo_name, bool using_mock_cluster_desc) {
     static const std::unordered_map<std::string, std::vector<uint16_t>> mobo_to_bus_ids = {
         {"SIENAD8-2L2T", {0xc1, 0x01, 0x41, 0x42}},
         {"X12DPG-QT6", {0xb1, 0xca, 0x31, 0x4b}},
@@ -68,7 +66,7 @@ TrayID get_tray_id_for_chip(
 
 std::pair<TrayID, ASICLocation> get_asic_position(
     tt::umd::Cluster& cluster, ChipId chip_id, bool using_mock_cluster_desc) {
-    auto cluster_desc = cluster.get_cluster_description();
+    auto* cluster_desc = cluster.get_cluster_description();
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB_WORMHOLE ||
         cluster_desc->get_board_type(chip_id) == BoardType::UBB_BLACKHOLE) {
         constexpr std::string_view ubb_mobo_name = "S7T-MB";
@@ -212,6 +210,10 @@ void PhysicalSystemDescriptor::resolve_hostname_uniqueness() {
 }
 
 void PhysicalSystemDescriptor::run_discovery(bool run_global_discovery, bool run_live_discovery) {
+    // Barrier to ensure all MPI ranks are synchronized and ready to communicate.
+    // This is especially important when using rankfiles with hostnames that may require DNS resolution,
+    // as MPI connections may not be fully established when discovery starts.
+    distributed_context_->barrier();
     this->resolve_hostname_uniqueness();
     this->run_local_discovery(run_live_discovery);
     if (run_global_discovery) {
@@ -233,7 +235,10 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
     this->clear();
 
     if (!run_live_discovery || target_device_type_ != TargetDevice::Silicon) {
-        TT_FATAL(cluster_ != nullptr, "PhysicalSystemDescriptor must be initialized with a valid UMD cluster reference in order to run live discovery");
+        TT_FATAL(
+            cluster_ != nullptr,
+            "PhysicalSystemDescriptor must be initialized with a valid UMD cluster reference in order to run live "
+            "discovery");
         tt::umd::Cluster& cluster = *cluster_;
         cluster_desc_ = std::make_unique<tt::umd::ClusterDescriptor>(*cluster.get_cluster_description());
     } else {
@@ -255,7 +260,10 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
     auto& exit_nodes = exit_node_connection_table_[hostname];
 
     auto add_local_asic_descriptor = [&](AsicID src_unique_id, ChipId src_chip_id) {
-        TT_FATAL(cluster_ != nullptr, "PhysicalSystemDescriptor must be initialized with a valid UMD cluster reference in order to run live discovery");
+        TT_FATAL(
+            cluster_ != nullptr,
+            "PhysicalSystemDescriptor must be initialized with a valid UMD cluster reference in order to run live "
+            "discovery");
         tt::umd::Cluster& cluster = *cluster_;
         auto [tray_id, asic_location] =
             get_asic_position(cluster, src_chip_id, target_device_type_ != TargetDevice::Silicon);
@@ -273,7 +281,7 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
         add_local_asic_descriptor(src_unique_id, src);
         std::unordered_map<ChipId, size_t> visited_dst;
         // Populate ASIC Graph for Current Host
-        for (auto& [chan, dst] : conn) {
+        for (const auto& [chan, dst] : conn) {
             auto dst_chip = std::get<0>(dst);
             auto dst_chan = std::get<1>(dst);
             if (visited_dst.find(dst_chip) == visited_dst.end()) {
@@ -482,7 +490,7 @@ void PhysicalSystemDescriptor::generate_cross_host_connections() {
     }
 }
 
-void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& path_to_yaml) {
+YAML::Node PhysicalSystemDescriptor::generate_yaml_node() const {
     YAML::Node root;
     YAML::Node compute_nodes;
     YAML::Node local_eth_connections(YAML::NodeType::Sequence);
@@ -496,7 +504,7 @@ void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& pa
 
         std::map<TrayID, std::vector<ASICDescriptor>> grouped_asics;
 
-        for (const auto& asic : system_graph_.asic_connectivity_graph[host_name]) {
+        for (const auto& asic : system_graph_.asic_connectivity_graph.at(host_name)) {
             AsicID asic_id = asic.first;
             TrayID tray_id = asic_descriptors_.at(asic_id).tray_id;
             grouped_asics[tray_id].push_back(asic_descriptors_.at(asic_id));
@@ -524,7 +532,7 @@ void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& pa
         host_node["asic_info"] = tray_groups;
         compute_nodes[host_name] = host_node;
 
-        for (const auto& asic : system_graph_.asic_connectivity_graph[host_name]) {
+        for (const auto& asic : system_graph_.asic_connectivity_graph.at(host_name)) {
             auto src_asic_id = asic.first;
             const auto& src_asic_desc = asic_descriptors_.at(src_asic_id);
             for (const auto& edge : asic.second) {
@@ -570,9 +578,21 @@ void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& pa
     root["local_eth_connections"] = local_eth_connections;
     root["global_eth_connections"] = global_eth_connections;
 
+    return root;
+}
+
+void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& path_to_yaml) const {
+    YAML::Node root = generate_yaml_node();
+
     if (path_to_yaml.has_value()) {
         std::ofstream fout(path_to_yaml.value());
+        if (!fout.is_open()) {
+            TT_THROW("Failed to open file for writing: {}", path_to_yaml.value());
+        }
         fout << root;
+        if (fout.fail()) {
+            TT_THROW("Failed to write YAML content to file: {}", path_to_yaml.value());
+        }
     } else {
         std::cout << root << std::endl;
     }
@@ -809,7 +829,10 @@ AsicID PhysicalSystemDescriptor::get_asic_id(
 }
 
 LocalEthernetMetrics PhysicalSystemDescriptor::query_local_ethernet_metrics() const {
-    TT_FATAL(cluster_ != nullptr, "PhysicalSystemDescriptor must be initialized with a valid UMD cluster reference in order to query Ethernet metrics");
+    TT_FATAL(
+        cluster_ != nullptr,
+        "PhysicalSystemDescriptor must be initialized with a valid UMD cluster reference in order to query Ethernet "
+        "metrics");
     tt::umd::Cluster& cluster = *cluster_;
 
     const auto& local_asics = get_asics_connected_to_host(my_host_name());
@@ -840,8 +863,7 @@ LocalEthernetMetrics PhysicalSystemDescriptor::query_local_ethernet_metrics() co
 
                 cluster.read_from_device(
                     &retrain_count_val, src_chip_id, translated_eth_core, retrain_count_addr, sizeof(uint32_t));
-                cluster.read_from_device(
-                    &crc_error_val, src_chip_id, translated_eth_core, crc_addr, sizeof(uint32_t));
+                cluster.read_from_device(&crc_error_val, src_chip_id, translated_eth_core, crc_addr, sizeof(uint32_t));
                 cluster.read_from_device(&corr_val_hi, src_chip_id, translated_eth_core, corr_addr, sizeof(uint32_t));
                 cluster.read_from_device(
                     &corr_val_lo, src_chip_id, translated_eth_core, corr_addr + 4, sizeof(uint32_t));

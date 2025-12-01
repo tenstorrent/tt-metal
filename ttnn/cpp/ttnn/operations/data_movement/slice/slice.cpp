@@ -2,15 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device/slice_op.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/experimental/reshape/view.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
-#include "ttnn/operations/experimental/reshape/view.hpp"
-#include "slice.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -22,7 +20,8 @@ ttnn::Tensor SliceOperation::invoke(
     tt::stl::Span<const T> step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value) {
+    const std::optional<float>& pad_value,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     // Ensure start and end vectors have matching sizes and correct tensor rank
 
     const auto& input_shape = input_tensor.logical_shape();
@@ -154,17 +153,19 @@ ttnn::Tensor SliceOperation::invoke(
             input_tensor.device(),
             memory_config_arg.value_or(input_tensor.memory_config()));
     }
-    auto res = tt::tt_metal::operation::run(
-                   SliceDeviceOperation{
-                       ttnn::Shape(modified_begins),
-                       ttnn::Shape(padded_ends),
-                       ttnn::Shape(modified_step),
-                       memory_config,
-                       false},
-                   {input},
-                   {},
-                   {optional_output_tensor})
-                   .at(0);
+    auto res = ttnn::prim::slice(
+        input,
+        ttnn::Shape(modified_begins),
+        ttnn::Shape(padded_ends),
+        ttnn::Shape(modified_step),
+        memory_config,
+        /*use_tensor_args*/ false,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        sub_core_grids,
+        optional_output_tensor);
     res = ttnn::experimental::view(res, actual_shape, final_padded_shape);
 
     auto dim_needs_fill = [&input_shape, &actual_shape, &final_padded_shape](int i) {
@@ -186,12 +187,13 @@ ttnn::Tensor SliceOperation::invoke(
     const std::array<T, N>& step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value) {
+    const std::optional<float>& pad_value,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::stl::Span<const T> start(output_tensor_start.begin(), output_tensor_start.end());
     tt::stl::Span<const T> end(output_tensor_end.begin(), output_tensor_end.end());
     tt::stl::Span<const T> step_vec(step.begin(), step.end());
     return SliceOperation::invoke<T>(
-        input_tensor, start, end, step_vec, memory_config_arg, optional_output_tensor, pad_value);
+        input_tensor, start, end, step_vec, memory_config_arg, optional_output_tensor, pad_value, sub_core_grids);
 }
 
 template <typename T>
@@ -204,7 +206,8 @@ ttnn::Tensor SliceOperation::invoke(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value,
     const std::optional<uint32_t>& slice_dim,
-    const std::optional<uint32_t>& num_devices) {
+    const std::optional<uint32_t>& num_devices,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     TT_FATAL(
         output_tensor_start.logical_shape().rank() == 1,
         "The start tensor for slicing must be in 1D shape, but got {}D",
@@ -260,14 +263,23 @@ ttnn::Tensor SliceOperation::invoke(
         ttnn::Shape dummy_end(dummy_shape);
         ttnn::Shape dummy_step(dummy_step_shape);
 
-        // Use SliceDeviceOperation with tensor args flag
-        auto res =
-            tt::tt_metal::operation::run(
-                SliceDeviceOperation{dummy_start, dummy_end, dummy_step, memory_config, true, slice_dim, num_devices},
-                {input_tensor, output_tensor_start, output_tensor_end},
-                {},
-                {optional_output_tensor})
-                .at(0);
+        // Use slice device operation with tensor args flag
+        std::optional<Tensor> start_opt = output_tensor_start;
+        std::optional<Tensor> end_opt = output_tensor_end;
+
+        auto res = ttnn::prim::slice(
+            input_tensor,
+            dummy_start,
+            dummy_end,
+            dummy_step,
+            memory_config,
+            /*use_tensor_args*/ true,
+            start_opt,
+            end_opt,
+            slice_dim,
+            num_devices,
+            sub_core_grids,
+            optional_output_tensor);
         return res;
     } else {
         // convert the Tensor to Vector
@@ -289,7 +301,8 @@ ttnn::Tensor SliceOperation::invoke(
             tt::stl::Span<const T>(step_value),
             memory_config_arg,
             optional_output_tensor,
-            pad_value);
+            pad_value,
+            sub_core_grids);
     }
 }
 
@@ -301,7 +314,8 @@ template ttnn::Tensor SliceOperation::invoke<int32_t>(
     tt::stl::Span<const int32_t> step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value);
+    const std::optional<float>& pad_value,
+    const std::optional<CoreRangeSet>& sub_core_grids);
 
 template ttnn::Tensor SliceOperation::invoke<uint32_t>(
     const ttnn::Tensor& input_tensor,
@@ -310,7 +324,8 @@ template ttnn::Tensor SliceOperation::invoke<uint32_t>(
     tt::stl::Span<const uint32_t> step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value);
+    const std::optional<float>& pad_value,
+    const std::optional<CoreRangeSet>& sub_core_grids);
 
 // Template instantiations for std::array version
 template ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
@@ -320,7 +335,8 @@ template ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
     const std::array<uint32_t, 4>& step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value);
+    const std::optional<float>& pad_value,
+    const std::optional<CoreRangeSet>& sub_core_grids);
 
 // Template instantiations for Tensor version
 template ttnn::Tensor SliceOperation::invoke<uint32_t>(
@@ -332,6 +348,7 @@ template ttnn::Tensor SliceOperation::invoke<uint32_t>(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value,
     const std::optional<uint32_t>& slice_dim,
-    const std::optional<uint32_t>& num_devices);
+    const std::optional<uint32_t>& num_devices,
+    const std::optional<CoreRangeSet>& sub_core_grids);
 
 }  // namespace ttnn::operations::data_movement

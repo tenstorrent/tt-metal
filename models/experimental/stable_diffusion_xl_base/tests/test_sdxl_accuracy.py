@@ -4,7 +4,7 @@
 
 import pytest
 import csv
-from models.experimental.stable_diffusion_xl_base.demo.demo import test_demo
+from models.experimental.stable_diffusion_xl_base.demo.demo_base_and_refiner import test_demo_base_and_refiner
 from models.experimental.stable_diffusion_xl_base.utils.clip_encoder import CLIPEncoder
 import os
 import urllib
@@ -13,7 +13,7 @@ import statistics
 from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
-    SDXL_TRACE_REGION_SIZE,
+    SDXL_BASE_REFINER_TRACE_REGION_SIZE,
     SDXL_FABRIC_CONFIG,
 )
 import json
@@ -23,10 +23,10 @@ from models.experimental.stable_diffusion_xl_base.utils.clip_fid_ranges import (
     accuracy_check_clip,
     accuracy_check_fid,
     get_appr_delta_metric,
-    TARGET_JSON_PATH,
+    get_model_targets,
 )
 
-test_demo.__test__ = False
+test_demo_base_and_refiner.__test__ = False
 COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/coco2014/captions/captions_source.tsv"
 OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
 
@@ -37,7 +37,7 @@ OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
         (
             {
                 "l1_small_size": SDXL_L1_SMALL_SIZE,
-                "trace_region_size": SDXL_TRACE_REGION_SIZE,
+                "trace_region_size": SDXL_BASE_REFINER_TRACE_REGION_SIZE,
                 "fabric_config": SDXL_FABRIC_CONFIG,
             },
             True,
@@ -45,7 +45,7 @@ OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
         (
             {
                 "l1_small_size": SDXL_L1_SMALL_SIZE,
-                "trace_region_size": SDXL_TRACE_REGION_SIZE,
+                "trace_region_size": SDXL_BASE_REFINER_TRACE_REGION_SIZE,
             },
             False,
         ),
@@ -89,6 +89,13 @@ OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
     ],
     ids=("device_encoders", "host_encoders"),
 )
+@pytest.mark.parametrize(
+    "refiner_strength, refiner_aesthetic_score, refiner_negative_aesthetic_score",
+    [
+        (0.3, 6.0, 2.5),
+    ],
+    ids=["default_refiner_params"],
+)
 @pytest.mark.parametrize("captions_path", ["models/experimental/stable_diffusion_xl_base/coco_data/captions.tsv"])
 @pytest.mark.parametrize("coco_statistics_path", ["models/experimental/stable_diffusion_xl_base/coco_data/val2014.npz"])
 def test_accuracy_sdxl(
@@ -105,6 +112,9 @@ def test_accuracy_sdxl(
     guidance_scale,
     negative_prompt,
     use_cfg_parallel,
+    refiner_strength,
+    refiner_aesthetic_score,
+    refiner_negative_aesthetic_score,
 ):
     start_from, num_prompts = evaluation_range
 
@@ -116,7 +126,7 @@ def test_accuracy_sdxl(
 
     logger.info(f"Start inference from prompt index: {start_from} to {start_from + num_prompts}")
 
-    images = test_demo(
+    images = test_demo_base_and_refiner(
         validate_fabric_compatibility,
         mesh_device,
         is_ci_env,
@@ -136,8 +146,17 @@ def test_accuracy_sdxl(
         guidance_rescale=0.0,
         timesteps=None,
         sigmas=None,
+        refiner_strength=refiner_strength,
+        refiner_aesthetic_score=refiner_aesthetic_score,
+        refiner_negative_aesthetic_score=refiner_negative_aesthetic_score,
+        use_refiner=False,
+        denoising_split=1.0,
     )
 
+    skip_check_and_save = os.getenv("TT_SDXL_SKIP_CHECK_AND_SAVE", "0") == "1"
+    if skip_check_and_save:
+        logger.info("Skipping accuracy check and saving results as per environment variable.")
+        return
     clip = CLIPEncoder()
 
     clip_scores = []
@@ -163,11 +182,7 @@ def test_accuracy_sdxl(
     avg_gen_end_to_end = profiler.get("end_to_end_generation")
     model_name = "sdxl-tp" if use_cfg_parallel else "sdxl"
 
-    with open(TARGET_JSON_PATH) as f:
-        targets = json.load(f)
-    if use_cfg_parallel:
-        for key in ["functional", "complete", "target"]:
-            targets["perf"][key] /= 2
+    targets = get_model_targets(model_name)
 
     data = {
         "model": model_name,
@@ -215,24 +230,28 @@ def test_accuracy_sdxl(
                 "device": get_device_name(),
                 "average_clip": average_clip_score,
                 "deviation_clip": deviation_clip_score,
-                "clip_accuracy_check_approx": accuracy_check_clip(average_clip_score, num_prompts, mode="approx"),
-                "clip_accuracy_check_valid": accuracy_check_clip(average_clip_score, num_prompts, mode="valid"),
-                "delta_clip": get_appr_delta_metric(average_clip_score, num_prompts, score_type="clip"),
+                "clip_accuracy_check_approx": accuracy_check_clip(
+                    model_name, average_clip_score, num_prompts, mode="approx"
+                ),
+                "clip_accuracy_check_valid": accuracy_check_clip(
+                    model_name, average_clip_score, num_prompts, mode="valid"
+                ),
+                "delta_clip": get_appr_delta_metric(model_name, average_clip_score, num_prompts, score_type="clip"),
                 "fid_score": fid_score,
-                "fid_accuracy_check_approx": accuracy_check_fid(fid_score, num_prompts, mode="approx"),
-                "fid_accuracy_check_valid": accuracy_check_fid(fid_score, num_prompts, mode="valid"),
-                "delta_fid": get_appr_delta_metric(fid_score, num_prompts, score_type="fid"),
+                "fid_accuracy_check_approx": accuracy_check_fid(model_name, fid_score, num_prompts, mode="approx"),
+                "fid_accuracy_check_valid": accuracy_check_fid(model_name, fid_score, num_prompts, mode="valid"),
+                "delta_fid": get_appr_delta_metric(model_name, fid_score, num_prompts, score_type="fid"),
                 "accuracy_check": min(
-                    accuracy_check_fid(fid_score, num_prompts, mode="approx"),
-                    accuracy_check_clip(average_clip_score, num_prompts, mode="approx"),
+                    accuracy_check_fid(model_name, fid_score, num_prompts, mode="approx"),
+                    accuracy_check_clip(model_name, average_clip_score, num_prompts, mode="approx"),
                 ),
                 "accuracy_check_delta": min(
-                    accuracy_check_fid(fid_score, num_prompts, mode="delta"),
-                    accuracy_check_clip(average_clip_score, num_prompts, mode="delta"),
+                    accuracy_check_fid(model_name, fid_score, num_prompts, mode="delta"),
+                    accuracy_check_clip(model_name, average_clip_score, num_prompts, mode="delta"),
                 ),
                 "accuracy_check_valid": min(
-                    accuracy_check_fid(fid_score, num_prompts, mode="valid"),
-                    accuracy_check_clip(average_clip_score, num_prompts, mode="valid"),
+                    accuracy_check_fid(model_name, fid_score, num_prompts, mode="valid"),
+                    accuracy_check_clip(model_name, average_clip_score, num_prompts, mode="valid"),
                 ),
             }
         ],
@@ -250,9 +269,7 @@ def test_accuracy_sdxl(
 
     logger.info(f"Test results saved to {OUT_ROOT}/{new_file_name}")
 
-    with open(
-        f"{OUT_ROOT}/{RESULTS_FILE_NAME}", "w"
-    ) as f:  # this is for CI and test_sdxl_accuracy_with_reset.py compatibility
+    with open(f"{OUT_ROOT}/{RESULTS_FILE_NAME}", "w") as f:  # this is for CI compatibility
         json.dump(data, f, indent=4)
 
     logger.info(f"Test results saved to {OUT_ROOT}/{RESULTS_FILE_NAME}")

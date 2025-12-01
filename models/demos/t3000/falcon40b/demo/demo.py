@@ -15,7 +15,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 import ttnn
-from models.common.utility_functions import enable_persistent_kernel_cache, nearest_32
+from models.common.utility_functions import nearest_32
 from models.common.utils import top_k_top_p_filtering
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconConfig, FalconForCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
@@ -262,8 +262,6 @@ def run_falcon_demo_kv(
 
     kv_cache_singlelayer = tt_FalconCausalLM_singlelayer.initialize_kv_cache()  # only used for compile
 
-    enable_persistent_kernel_cache()
-
     ### First prefill run with compile ###
     use_cache = True
     profiler.start("compile_prefill")
@@ -368,7 +366,6 @@ def run_falcon_demo_kv(
     profiler.end("initializing_KV_cache")
 
     ### Second prefill run without compile ###
-    enable_persistent_kernel_cache()
 
     post_processor = partial(post_process)
     output_ids = torch.zeros(num_users, 1, dtype=torch.int64)
@@ -634,8 +631,6 @@ def test_demo(
     get_tt_cache_path,
     t3k_mesh_device,
 ):
-    # disable_persistent_kernel_cache()
-
     return run_falcon_demo_kv(
         user_input=user_input,
         model_version=model_config_entries["_name_or_path"],

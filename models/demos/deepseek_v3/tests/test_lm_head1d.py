@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.lm_head1d import LMHead1D
-from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import _check_weights_exist_and_convert, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import assert_hidden_dim_pcc, get_model_config, run_module_forward
 
@@ -62,7 +63,16 @@ def test_forward_pass(
     reference_output = reference_model(torch_input)
 
     # Setup: Convert weights and get weight_config
-    weight_config = LMHead1D.convert_weights(hf_config, (state_dict,), cache_path, mesh_device)
+    weight_cache_path = (
+        cache_path
+        / "tests_cache"
+        / os.environ.get("PYTEST_CURRENT_TEST")
+        / f"{hf_config.num_hidden_layers}_layers"
+        / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
+    )
+
+    weight_config = LMHead1D.convert_weights(hf_config, (state_dict,), weight_cache_path, mesh_device)
+    _check_weights_exist_and_convert(weight_cache_path, weight_config)
     model_config = get_model_config(LMHead1D, mode, mesh_device)
     model_state = LMHead1D.create_state(mesh_device, ccl)
     run_config = create_run_config(model_config, weight_config, model_state)

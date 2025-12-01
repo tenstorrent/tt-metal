@@ -20,7 +20,7 @@ void RotaryEmbeddingLlamaFusedQK::validate(const std::vector<Tensor>& input_tens
     const auto& sin = input_tensors.at(3);
     const auto& trans_mat = input_tensors.at(4);
 
-    auto ref_device = q_input_tensor.device();
+    auto* ref_device = q_input_tensor.device();
     for (const auto& input : input_tensors) {
         TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
         TT_FATAL(input.buffer() != nullptr, "Operands to rotary embedding need to be allocated in buffers on device!");

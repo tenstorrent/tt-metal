@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device.hpp>

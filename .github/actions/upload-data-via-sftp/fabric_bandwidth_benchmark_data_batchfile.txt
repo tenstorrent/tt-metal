@@ -1,0 +1,2 @@
+put -r generated/fabric/bandwidth_summary_results_*_upload.csv
+ls -hal

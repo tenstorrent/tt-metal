@@ -7,7 +7,6 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -249,7 +248,7 @@ Tensor compute_reshape_mapping_host_tensor(
     std::vector<uint32_t> flat_mapping_vector(SegmentMapData::size * num_output_pages * max_input_segments, 0);
     auto it = flat_mapping_vector.begin();
     for (const auto& v : mapping_vector) {
-        auto map_ptr = reinterpret_cast<SegmentMapData*>(&(*it));
+        auto* map_ptr = reinterpret_cast<SegmentMapData*>(&(*it));
         std::copy(v.begin(), v.end(), map_ptr);
 
         it += max_input_segments * SegmentMapData::size;
@@ -287,7 +286,7 @@ Tensor compute_reshape_mapping_host_tensor(
 // the scratch page is copied to its output destination.
 
 tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
-    const Tensor& input_tensor, const Tensor& output_tensor) {
+    const Tensor& input_tensor, const Tensor& output_tensor, std::optional<CoreRangeSet> sub_core_grid) {
     const auto& input_shape = input_tensor.logical_shape();
     const auto& output_shape = output_tensor.logical_shape();
 
@@ -360,7 +359,8 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
 
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(grid, num_output_pages);
+            sub_core_grid.has_value() ? tt::tt_metal::split_work_to_cores(sub_core_grid.value(), num_output_pages)
+                                      : tt::tt_metal::split_work_to_cores(grid, num_output_pages);
 
     TT_ASSERT(num_cores <= num_output_pages);
 

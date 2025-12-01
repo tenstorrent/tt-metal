@@ -206,10 +206,10 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
 
     const uint16_t bfloat16_scalar = std::bit_cast<uint16_t>(bfloat16(-1.0f));
 
-    auto src_buffer = input.buffer();
-    auto cos_buffer = cos.buffer();
-    auto sin_buffer = sin.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* cos_buffer = cos.buffer();
+    auto* sin_buffer = sin.buffer();
+    auto* dst_buffer = output.buffer();
 
     std::vector<uint32_t> reader_compile_time_args;
     if (in_sharded) {
@@ -391,11 +391,11 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
                                                    const std::vector<Tensor>& output_tensors) {
         const auto token_idx = static_cast<const RotaryEmbedding*>(operation)->token_idx;
 
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto cos_buffer = input_tensors.at(1).buffer();
-        auto sin_buffer = input_tensors.at(2).buffer();
+        auto* src_buffer = input_tensors.at(0).buffer();
+        auto* cos_buffer = input_tensors.at(1).buffer();
+        auto* sin_buffer = input_tensors.at(2).buffer();
 
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
 
         bool in_sharded = input_tensors.at(0).is_sharded();
         bool out_sharded = output_tensors.at(0).is_sharded();
