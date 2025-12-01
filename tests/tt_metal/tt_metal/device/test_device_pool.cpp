@@ -80,11 +80,7 @@ TEST(DevicePool, DevicePoolReconfigDevices) {
         device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config, {}, worker_l1_size);
     devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {
-<<<<<<< HEAD
-        const auto& config = dev->allocator()->get_config();
-=======
-        auto& config = dev->allocator_impl()->get_config();
->>>>>>> 75ef9591755 (split Allocator from impl)
+        const auto& config = dev->allocator_impl()->get_config();
         ASSERT_TRUE((int)(config.l1_small_size) == l1_small_size);
         EXPECT_EQ(config.worker_l1_size - config.l1_unreserved_base, worker_l1_size);
         ASSERT_TRUE(dev->is_initialized());
