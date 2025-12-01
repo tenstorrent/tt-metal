@@ -318,11 +318,16 @@ void topk(
     int end_phase = (K <= 64) ? logk - 1 : 5;
 
     cb_wait_front(winning_group_scores_cb_index, tiles);
-    UNPACK(print_tile(winning_group_scores_cb_index, 0, true, 0, 1));
+    for (uint32_t i = 0; i < tiles; i++) {
+        UNPACK(print_tile(winning_group_scores_cb_index, i, true, 0, 1));
+    }
     cb_wait_front(winning_group_indices_cb_index, tiles);
-    UNPACK(print_tile(winning_group_indices_cb_index, 0, true, 0, 1));
+    for (uint32_t i = 0; i < tiles; i++) {
+        UNPACK(print_tile(winning_group_indices_cb_index, i, true, 0, 1));
+    }
 
     topk_tile_init();
+    UNPACK(DPRINT << "Processing and sorting tiles" << ENDL());
     blocks::process_and_sort_tiles(
         winning_group_scores_cb_index,
         winning_group_indices_cb_index,
@@ -332,6 +337,7 @@ void topk(
         switch_dir,
         ascending,
         end_phase);
+    PACK(DPRINT << "Processed and sorted tiles" << ENDL());
     cb_pop_front(winning_group_indices_cb_index, tiles);
 
     uint32_t num_k_sequences = (Wt * 32) / K;

@@ -163,14 +163,14 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         program,
         all_cores,
         scores.buffer()->page_size(),
-        2 * operation_attributes.topk_groups,
+        operation_attributes.topk_groups,
         scores_data_format);
     tt::tt_metal::create_cb(
         intermediate_local_sort_indices_cb_index,
         program,
         all_cores,
         output_indices.buffer()->page_size(),
-        2 * operation_attributes.topk_groups,
+        operation_attributes.topk_groups,
         tt::DataFormat::UInt16);
 
     // Pre-normalized scores in the winning groups
