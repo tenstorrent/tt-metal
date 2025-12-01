@@ -6,7 +6,7 @@
 
 #include "device/layernorm_post_all_gather_op.hpp"
 
-#include "ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
+#include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/device.hpp"
 namespace ttnn::operations::normalization {
 
@@ -26,18 +26,19 @@ ttnn::Tensor ExecuteLayerNormPostAllGather::invoke(
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
     if (input_tensor.is_sharded()) {
-        return tt::tt_metal::operation::run(
-                   LayerNorm{
-                       .norm_type = LayerNormType::LAYERNORM,
-                       .distributed_norm_stage = DistributedLayerNormStage::POST_ALL_GATHER,
-                       .eps = epsilon,
-                       .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
-                       .program_config = program_config.value_or(LayerNormDefaultProgramConfig{}),
-                       .compute_kernel_config = kernel_config_val,
-                       .dtype = dtype},
-                   {input_tensor},
-                   {std::nullopt, weight, bias, stats})
-            .at(0);
+        return ttnn::prim::layer_norm(
+            input_tensor,
+            epsilon,
+            weight,
+            bias,
+            std::nullopt,  // residual_input_tensor
+            memory_config.value_or(input_tensor.memory_config()),
+            program_config.value_or(LayerNormDefaultProgramConfig{}),
+            kernel_config_val,
+            dtype,
+            LayerNormType::LAYERNORM,
+            DistributedLayerNormStage::POST_ALL_GATHER,
+            stats);
     } else {
         return tt::tt_metal::operation::run(
                    LayerNormPostAllGather{
