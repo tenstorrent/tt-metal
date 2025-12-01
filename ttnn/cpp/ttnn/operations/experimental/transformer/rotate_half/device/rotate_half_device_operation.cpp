@@ -18,12 +18,22 @@ RotateHalfDeviceOperation::program_factory_t RotateHalfDeviceOperation::select_p
 
 void RotateHalfDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // TODO #33475: Implement
+    validate_on_program_cache_miss(operation_attributes, tensor_args);
 }
 
 void RotateHalfDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // TODO #33475: Implement
+    const Tensor& input_tensor = tensor_args.input;
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to rotate half need to be on device!");
+    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to rotate half need to be allocated in buffers on device!");
+    TT_FATAL((input_tensor.layout() == Layout::TILE), "Inputs to rotate half must be tilized");
+    TT_FATAL(input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
+    TT_FATAL(
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "RotateHalf does not currently support sharding");
+    TT_FATAL(
+        operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "RotateHalf does not currently support sharding");
 }
 
 spec_return_value_t RotateHalfDeviceOperation::compute_output_specs(
