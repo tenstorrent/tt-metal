@@ -215,6 +215,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         if envs.VLLM_USE_V1:
             if (
                 "pixel_values" in kwargs
+                and len(kwargs["pixel_values"]) > 0
                 and kwargs["pixel_values"][0] is not None
                 # kwargs["pixel_values"] is a list,
                 # each element is a list of images for one user
