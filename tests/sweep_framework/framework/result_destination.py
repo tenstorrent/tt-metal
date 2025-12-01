@@ -106,6 +106,7 @@ def _collect_all_metrics(raw: dict[str, Any]) -> Optional[set[PerfMetric]]:
     # Collect e2e and device metrics via helpers
     _add_e2e_metrics(metrics, raw)
     _add_device_metrics(metrics, raw)
+    _add_memory_metrics(metrics, raw)
 
     return metrics if metrics else None
 
@@ -179,6 +180,24 @@ def _add_device_metrics(metrics: set, raw: dict[str, Any]) -> None:
     device_perf_cached = raw.get("device_perf_cached")
     if isinstance(device_perf_cached, dict):
         _add_device_perf_from_dict(metrics, device_perf_cached, suffix="_cached")
+
+
+def _add_memory_metrics(metrics: set, raw: dict[str, Any]) -> None:
+    """Extract memory metrics from result dict and add to metrics set"""
+    peak_memory = raw.get("peak_l1_memory")
+
+    if peak_memory is not None:
+        if isinstance(peak_memory, dict):
+            # Cache comparison mode - two separate metrics
+            _add_metric(metrics, "peak_l1_memory_uncached_bytes", peak_memory.get("uncached"))
+            _add_metric(metrics, "peak_l1_memory_cached_bytes", peak_memory.get("cached"))
+        else:
+            # Single run mode - one metric
+            _add_metric(metrics, "peak_l1_memory_bytes", peak_memory)
+
+    # Also capture explicit fields when present (back/forward compat)
+    _add_metric(metrics, "peak_l1_memory_uncached_bytes", raw.get("peak_l1_memory_uncached"))
+    _add_metric(metrics, "peak_l1_memory_cached_bytes", raw.get("peak_l1_memory_cached"))
 
 
 class ResultDestination(ABC):
