@@ -12,7 +12,7 @@ namespace ttnn::operations::data_movement {
 struct sharded_to_interleaved_partial_operation_attributes_t {
     uint32_t num_slices{};
     uint32_t slice_index{};
-    tt::tt_metal::MemoryConfig output_mem_config{};
+    tt::tt_metal::MemoryConfig output_mem_config;
     tt::tt_metal::DataType output_dtype{};
 };
 
