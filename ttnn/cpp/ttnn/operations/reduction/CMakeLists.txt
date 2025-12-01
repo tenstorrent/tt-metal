@@ -64,7 +64,8 @@ target_sources(
         topk/device/topk_device_operation.cpp
         topk/device/topk_utils.cpp
         topk/topk.cpp
-        topk/device/topk_program_factory.cpp
+        topk/device/topk_single_core_program_factory.cpp
+        topk/device/topk_multi_core_program_factory.cpp
         reduction_common/reduction_common.cpp
         manual_seed/manual_seed.cpp
         manual_seed/device/manual_seed_operation.cpp

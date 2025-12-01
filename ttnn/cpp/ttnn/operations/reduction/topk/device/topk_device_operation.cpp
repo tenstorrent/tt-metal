@@ -10,7 +10,8 @@
 #include <tt_stl/assert.hpp>
 #include "tt-metalium/allocator.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_device_operation_types.hpp"
-#include "ttnn/operations/reduction/topk/device/topk_program_factory.hpp"
+#include "ttnn/operations/reduction/topk/device/topk_single_core_program_factory.hpp"
+#include "ttnn/operations/reduction/topk/device/topk_multi_core_program_factory.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_constants.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 
