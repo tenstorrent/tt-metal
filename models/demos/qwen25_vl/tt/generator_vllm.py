@@ -235,7 +235,12 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
                 # text-only users
                 image_embeds = torch.tensor([], dtype=torch.bfloat16)
         else:
-            if "images" in kwargs and kwargs["images"][0] is not None and "pixel_values" in kwargs["images"][0]:
+            if (
+                "images" in kwargs
+                and len(kwargs["images"]) > 0
+                and kwargs["images"][0] is not None
+                and "pixel_values" in kwargs["images"][0]
+            ):
                 # we currently do not support mixed inputs of text-only users and text-image users; hence checking images[0] is enough
                 inputs.pixel_values = torch.concat([im.pixel_values for im in kwargs["images"]], dim=0)
                 inputs.image_grid_thw = torch.concat([im.image_grid_thw for im in kwargs["images"]], dim=0)
