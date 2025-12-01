@@ -117,15 +117,36 @@ NLPConcatHeadsDecodeProgramFactory::cached_program_t NLPConcatHeadsDecodeProgram
         tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, reader_runtime_args);
     }
 
-    return cached_program_t{
-        std::move(program),
-        {/* reader_kernel_id     = */ reader_kernel_id,
-         /* writer_kernel_id     = */ writer_kernel_id,
-         /* cores                = */ cores,
-         /* element_size         = */ element_size,
-         /* sub_tile_line_bytes  = */ sub_tile_line_bytes,
-         /* num_cores            = */ num_cores,
-         /* cb_q_output          = */ cb_q_output}};
+    auto override_runtime_arguments_callback =
+        [reader_kernel_id, writer_kernel_id, num_cores, cb_q_output, cores, element_size, sub_tile_line_bytes](
+            const void* operation,
+            tt::tt_metal::Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<Tensor>& output_tensors) {
+            auto* dst_buffer_query = output_tensors.at(0).buffer();
+
+            UpdateDynamicCircularBufferAddress(program, cb_q_output, *dst_buffer_query);
+
+            uint32_t q_base_addr = input_tensors[0].buffer()->address();
+
+            uint32_t q_start_addr = q_base_addr;
+
+            for (uint32_t i = 0; i < num_cores; ++i) {
+                uint32_t in_tile_offset_by_batch =
+                    i < 16 ? i * sub_tile_line_bytes : ((i - 16) * sub_tile_line_bytes) + (512 * element_size);
+                const auto& core = cores[i];
+                auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                runtime_args[0] = in_tile_offset_by_batch;
+                runtime_args[1] = q_start_addr;
+
+                auto& runtime_args_writer = GetRuntimeArgs(program, writer_kernel_id, core);
+                runtime_args_writer[0] = in_tile_offset_by_batch;
+                runtime_args_writer[1] = q_start_addr;
+            }
+        };
+
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 void NLPConcatHeadsDecodeProgramFactory::override_runtime_arguments(
@@ -156,6 +177,46 @@ void NLPConcatHeadsDecodeProgramFactory::override_runtime_arguments(
         runtime_args_writer[0] = in_tile_offset_by_batch;
         runtime_args_writer[1] = q_start_addr;
     }
+
+    auto override_runtime_arguments_callback =
+        [reader_kernel_id,
+         writer_kernel_id,
+         num_cores,
+         cb_q_output,
+         cores,
+         element_size,
+         sub_tile_line_bytes,
+         face_h,
+         tile_w](
+            const void* operation,
+            tt::tt_metal::Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<Tensor>& output_tensors) {
+            auto* dst_buffer_query = output_tensors.at(0).buffer();
+
+            UpdateDynamicCircularBufferAddress(program, cb_q_output, *dst_buffer_query);
+
+            uint32_t q_start_addr = input_tensors[0].buffer()->address();
+
+            auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+            auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+
+            for (uint32_t i = 0; i < num_cores; ++i) {
+                uint32_t in_tile_offset_by_batch =
+                    i < face_h ? i * sub_tile_line_bytes : (i + face_h) * sub_tile_line_bytes;
+                const auto& core = cores[i];
+                auto& runtime_args_reader = reader_args_by_core[core.x][core.y];
+                runtime_args_reader[0] = in_tile_offset_by_batch;
+                runtime_args_reader[1] = q_start_addr;
+
+                auto& runtime_args_writer = writer_args_by_core[core.x][core.y];
+                runtime_args_writer[0] = in_tile_offset_by_batch;
+                runtime_args_writer[1] = q_start_addr;
+            }
+        };
+
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 }  // namespace ttnn::operations::experimental::nlp_concat_heads_decode::program

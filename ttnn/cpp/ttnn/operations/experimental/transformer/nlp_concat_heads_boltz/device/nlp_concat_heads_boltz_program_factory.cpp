@@ -211,8 +211,8 @@ void NLPConcatHeadsBoltzProgramFactory::override_runtime_arguments(
     auto& shared_variables = cached_program.shared_variables;
 
     const auto& input = tensor_args.input;
-    const auto src_buffer = input.buffer();
-    const auto dst_buffer = output.buffer();
+    auto* const src_buffer = input.buffer();
+    auto* const dst_buffer = output.buffer();
     const bool in_sharded = input.is_sharded();
     const bool out_sharded = output.is_sharded();
 
