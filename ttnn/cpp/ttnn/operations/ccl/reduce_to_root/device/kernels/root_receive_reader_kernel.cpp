@@ -101,7 +101,7 @@ inline void read_from_int(
     uint32_t l1_write_addr = get_write_ptr(compute_cb_l);
     tt_memmove<false, false, false, 0>(l1_write_addr, l1_read_addr, input_num_tiles * page_bytes);
     DPRINT << "printing moved l from compute cb l\n";
-    print_full_tile(compute_cb_l, 1, false);
+    // print_full_tile(compute_cb_l, 1, false);
     cb_push_back(compute_cb_l, input_num_tiles);
     cb_pop_front(cb_int_l, input_num_tiles);
 
@@ -113,7 +113,7 @@ inline void read_from_int(
     l1_write_addr = get_write_ptr(compute_cb_s);
     tt_memmove<false, false, false, 0>(l1_write_addr, l1_read_addr, onetile * page_bytes);
     DPRINT << "printing moved s from compute cb s\n";
-    print_full_tile(compute_cb_s, 1, false);
+    // print_full_tile(compute_cb_s, 1, false);
     cb_push_back(compute_cb_s, onetile);
     cb_pop_front(cb_int_s, onetile);
 
@@ -125,7 +125,7 @@ inline void read_from_int(
     l1_write_addr = get_write_ptr(compute_cb_m);
     tt_memmove<false, false, false, 0>(l1_write_addr, l1_read_addr, onetile * page_bytes);
     DPRINT << "printing moved m from compute cb m\n";
-    print_full_tile(compute_cb_m, 1, false);
+    // print_full_tile(compute_cb_m, 1, false);
     cb_push_back(compute_cb_m, onetile);
     cb_pop_front(cb_int_m, onetile);
 }
@@ -178,7 +178,7 @@ void kernel_main() {
     size_t arg_idx = 23;
     uint32_t num_tiles_l = page_idx_end;
 
-    uint32_t chunk_size = 4;  // to be modified with tiny tiles HERE
+    uint32_t chunk_size = 16;  // to be modified with tiny tiles HERE
 
     const uint32_t new_packet_size_bytes = packet_size_bytes + 2 * align(page_size_bytes, alignment);
 
@@ -287,6 +287,8 @@ void kernel_main() {
     noc_async_read_barrier();
 
     tt_memmove<false, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
+    DPRINT << "printing received L from packet l1\n";
+    print_full_tile(receiver_cb_id_l, 14, false);
     cb_push_back(receiver_cb_id_l, chunk_size);
 
     // now receiving s and m
@@ -296,11 +298,15 @@ void kernel_main() {
     uint32_t dest_page_base_addr_s = get_write_ptr(receiver_cb_id_s);
     tt_memmove<false, false, false, 0>(
         dest_page_base_addr_s, packet_l1_addr + packet_size_bytes, aligned_page_size_bytes);
+    DPRINT << "printing received S from packet l1\n";
+    print_full_tile(receiver_cb_id_s, 0, false);
     cb_push_back(receiver_cb_id_s, 1);
 
     uint32_t dest_page_base_addr_m = get_write_ptr(receiver_cb_id_m);
     tt_memmove<false, false, false, 0>(
         dest_page_base_addr_m, packet_l1_addr + packet_size_bytes + aligned_page_size_bytes, aligned_page_size_bytes);
+    DPRINT << "printing received M from packet l1\n";
+    print_full_tile(receiver_cb_id_m, 0, false);
     cb_push_back(receiver_cb_id_m, 1);
 
     cb_push_back(packet_cb_id, 1);

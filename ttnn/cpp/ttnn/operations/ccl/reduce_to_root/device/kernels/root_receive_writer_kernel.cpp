@@ -43,6 +43,7 @@ inline void write_intermediate_data(
     // for tensor l
     cb_wait_front(cb_int_l, input_num_tiles);
     DPRINT << "printing  l before moving it\n";
+    print_full_tile(cb_int_l, 1, false);
     uint32_t l1_read_addr = get_read_ptr(cb_int_l);
     cb_reserve_back(compute_cb_l, input_num_tiles);
     uint32_t l1_write_addr = get_write_ptr(compute_cb_l);
@@ -141,7 +142,7 @@ void kernel_main() {
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
-    uint32_t input_num_tiles = 4;  // to be modified with tiny tiles HERE
+    uint32_t input_num_tiles = 16;  // to be modified with tiny tiles HERE
 
     const uint32_t page_bytes = get_arg_val<uint32_t>(7);
     const uint32_t core_noc_x = get_arg_val<uint32_t>(8);
