@@ -256,6 +256,7 @@ void bind_normalization_softmax_inplace_operation(py::module& module) {
                       - Layouts
                     * - BFLOAT16, FLOAT32, BFLOAT8_B
                       - TILE
+
                 The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
 
             Limitations:

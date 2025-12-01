@@ -21,9 +21,8 @@ void bind_reduction_moe_operation(py::module& module) {
         R"doc(
             Returns the weight of the zero-th MoE expert.
 
-            Equivalent PyTorch code:
-
-            .. code-block:: python
+            Note:
+                This is equivalent to the following PyTorch code:
                 val, ind = torch.topk(input_tensor + expert_mask_tensor, k)
                 return torch.sum(torch.softmax(val+topk_mask_tensor, dim=-1)*(ind==0), dim=-1)
 

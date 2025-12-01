@@ -376,7 +376,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.scale_causal_mask_hw_dims_softmax_in_place": normalization.test_scale_causal_mask_hw_dims_softmax_in_place,
     # Normalization Program Configs
     "ttnn.SoftmaxDefaultProgramConfig": normalization.test_softmax_default_program_config,
-    "ttnn.SoftmaxShardedMultiCoreProgramConfig": normalization.test_softmax_sharded_multi_core_program_config,
+    "ttnn.SoftmaxShardedMultiCoreProgramConfig": normalization.test_scale_mask_softmax_in_place,
     # Moreh Operations
     # "ttnn.moreh_sum": moreh.test_moreh_sum, # Lack of example
     # Transformers
