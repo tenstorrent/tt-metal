@@ -227,17 +227,6 @@ void kernel_main() {
         zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(address), size);
     }
 
-    std::array<bool, NUM_WORKER_CHANNELS> worker_channel_injection_status = {};
-    std::array<bool, NUM_ROUTER_CHANNELS> router_channel_injection_status = {};
-    if constexpr (enable_bubble_flow_control) {
-        for (size_t i = 0; i < NUM_WORKER_CHANNELS; i++) {
-            worker_channel_injection_status[i] = get_arg_val<bool>(rt_args_idx++);
-        }
-        for (size_t i = 0; i < NUM_ROUTER_CHANNELS; i++) {
-            router_channel_injection_status[i] = get_arg_val<bool>(rt_args_idx++);
-        }
-    }
-
     auto fabric_connection = tt::tt_fabric::FabricMuxToEdmSender::build_from_args<CORE_TYPE>(rt_args_idx);
 
     // ========== Create channel arrays grouped by type ==========
@@ -269,8 +258,15 @@ void kernel_main() {
         IS_PERSISTENT_CHANNELS_START_IDX + NUM_WORKER_CHANNELS,
         NUM_ROUTER_CHANNELS>();
 
-    // Direction (last compile-time argument)
-    constexpr size_t direction = get_compile_time_arg_val(IS_PERSISTENT_CHANNELS_START_IDX + NUM_TOTAL_CHANNELS);
+    // ========== Injection status arrays (for bubble flow control in MUX mode) ==========
+    constexpr size_t INJECTION_STATUS_START_IDX = IS_PERSISTENT_CHANNELS_START_IDX + NUM_TOTAL_CHANNELS;
+    constexpr std::array<uint32_t, NUM_WORKER_CHANNELS> worker_channel_injection_status =
+        fill_array_with_next_n_args<uint32_t, INJECTION_STATUS_START_IDX, NUM_WORKER_CHANNELS>();
+    constexpr std::array<uint32_t, NUM_ROUTER_CHANNELS> router_channel_injection_status =
+        fill_array_with_next_n_args<uint32_t, INJECTION_STATUS_START_IDX + NUM_WORKER_CHANNELS, NUM_ROUTER_CHANNELS>();
+
+    // Direction (last compile-time argument, after injection status arrays)
+    constexpr size_t direction = get_compile_time_arg_val(INJECTION_STATUS_START_IDX + NUM_TOTAL_CHANNELS);
 
     // ========== Setup worker channels (WORKER_CHANNEL) ==========
     size_t worker_channel_base_address = channel_buffer_base_addrs[WORKER_CHANNEL_TYPE_IDX];

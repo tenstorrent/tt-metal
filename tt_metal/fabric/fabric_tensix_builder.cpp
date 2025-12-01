@@ -657,7 +657,9 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
         direction);
 
     // Set injection flags on the builder's configs
-    builder.set_sender_channel_injection_flags_from_vector(std::move(sender_channel_injection_flags));
+    if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX) {
+        builder.set_sender_channel_injection_flags_from_vector(std::move(sender_channel_injection_flags));
+    }
 
     return builder;
 }
@@ -706,34 +708,18 @@ void FabricTensixDatamoverBuilder::append_relay_router_noc_xy(uint32_t noc_x, ui
 }
 
 void FabricTensixDatamoverBuilder::set_sender_channel_injection_flags_from_vector(std::vector<bool>&& flags) {
+    TT_FATAL(mux_builder_ != nullptr, "Mux builder must not be null");
     // Validate that input vector size matches the number of channels
-    if (mux_builder_ != nullptr) {
-        uint8_t num_full_size = mux_builder_->config_->get_num_channels(FabricMuxChannelType::FULL_SIZE_CHANNEL);
-        uint8_t num_header_only = mux_builder_->config_->get_num_channels(FabricMuxChannelType::HEADER_ONLY_CHANNEL);
-        uint8_t total_num_channels = num_full_size + num_header_only;
+    uint8_t total_num_channels = mux_builder_->config_->get_total_num_channels();
 
-        TT_FATAL(
-            flags.size() == total_num_channels,
-            "Internal error: injection flags vector size {} does not match total number of mux channels {}",
-            flags.size(),
-            total_num_channels);
+    TT_FATAL(
+        flags.size() == total_num_channels,
+        "Internal error: injection flags vector size {} does not match total number of mux channels {}",
+        flags.size(),
+        total_num_channels);
 
-        // Move flags to mux config (transfers ownership via setter)
-        mux_builder_->set_sender_channel_injection_flags(std::move(flags));
-    } else if (relay_builder_ != nullptr) {
-        uint8_t num_full_size = relay_builder_->config_->get_num_channels(FabricMuxChannelType::FULL_SIZE_CHANNEL);
-        uint8_t num_header_only = relay_builder_->config_->get_num_channels(FabricMuxChannelType::HEADER_ONLY_CHANNEL);
-        uint8_t total_num_channels = num_full_size + num_header_only;
-
-        TT_FATAL(
-            flags.size() == total_num_channels,
-            "Internal error: injection flags vector size {} does not match total number of relay channels {}",
-            flags.size(),
-            total_num_channels);
-
-        // Move flags to relay config (transfers ownership via setter)
-        relay_builder_->set_sender_channel_injection_flags(std::move(flags));
-    }
+    // Move flags to mux config (transfers ownership via setter)
+    mux_builder_->set_sender_channel_injection_flags(std::move(flags));
 }
 
 }  // namespace tt::tt_fabric

@@ -326,8 +326,7 @@ std::vector<uint32_t> FabricTensixDatamoverBaseConfig::get_run_time_args(
     const FabricNodeId& dst_fabric_node_id,
     uint32_t link_idx,
     tt::tt_metal::Program& program,
-    const CoreCoord& logical_core,
-    const std::vector<bool>& sender_channel_is_traffic_injection_channel_array) const {
+    const CoreCoord& logical_core) const {
     std::vector<uint32_t> args;
 
     auto regions_to_clear = get_memory_regions_to_clear();
@@ -337,20 +336,6 @@ std::vector<uint32_t> FabricTensixDatamoverBaseConfig::get_run_time_args(
     for (const auto& [address, size] : regions_to_clear) {
         args.push_back(static_cast<uint32_t>(address));
         args.push_back(static_cast<uint32_t>(size));
-    }
-
-    // Get fabric router config to check bubble flow control status
-    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const auto& fabric_tensix_config_enum = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
-    const auto& fabric_router_config = fabric_context.get_fabric_router_config(fabric_tensix_config_enum);
-
-    if (tt::tt_fabric::FabricRouterBuilder::is_bubble_flow_control_enabled(fabric_router_config.topology)) {
-        for (uint8_t i = 0; i < num_full_size_channels_; i++) {
-            args.push_back(sender_channel_is_traffic_injection_channel_array[i]);
-        }
-        for (uint8_t i = 0; i < num_header_only_channels_; i++) {
-            args.push_back(sender_channel_is_traffic_injection_channel_array[i]);
-        }
     }
 
     tt::tt_fabric::append_fabric_connection_rt_args(
@@ -497,10 +482,7 @@ std::vector<uint32_t> FabricTensixDatamoverMuxConfig::get_compile_time_args(
     const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const {
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
-    const auto& fabric_router_config = fabric_context.get_fabric_router_config(
-        tt::tt_fabric::FabricEriscDatamoverType::Default,
-        tt::tt_fabric::FabricEriscDatamoverAxis::Short,
-        fabric_tensix_config);
+    const auto& fabric_router_config = fabric_context.get_fabric_router_config(fabric_tensix_config);
 
     auto channel_allocator = fabric_router_config.channel_allocator.get();
     const auto static_channel_allocator =
@@ -1072,12 +1054,12 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args() c
     // Call config's get_compile_time_args with fabric node, routing plane, and direction
     auto ct_args = config_->get_compile_time_args(local_fabric_node_id_, link_idx_, direction_);
 
-    // Add number of upstream routers and sync address
-    ct_args.push_back(static_cast<uint32_t>(upstream_routers_noc_x_.size()));
-    ct_args.push_back(fabric_router_config.edm_local_tensix_sync_address);
-
+    // Add bubble flow control flag, then upstream routers count and sync address
+    // Order must match kernel expectations: bubble_flow_control, num_upstream_routers, sync_address
     ct_args.push_back(
         tt::tt_fabric::FabricRouterBuilder::is_bubble_flow_control_enabled(fabric_router_config.topology));
+    ct_args.push_back(static_cast<uint32_t>(upstream_routers_noc_x_.size()));
+    ct_args.push_back(fabric_router_config.edm_local_tensix_sync_address);
 
     // Append stream IDs and persistent flags grouped by channel type
     // For each channel type: [stream_ids...], [persistent_flags...]
@@ -1097,6 +1079,11 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args() c
         auto relay_config = tensix_config.get_config(FabricTensixCoreType::RELAY);
         auto relay_config_typed = std::dynamic_pointer_cast<const FabricTensixDatamoverRelayConfig>(relay_config);
         ct_args.push_back(relay_config_typed->get_relay_termination_signal_address());
+    } else if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX) {
+        // Add sender_channel_is_traffic_injection_channel_array to ct args for MUX mode
+        for (size_t i = 0; i < sender_channel_is_traffic_injection_channel_array.size(); i++) {
+            ct_args.push_back(sender_channel_is_traffic_injection_channel_array[i] ? 1 : 0);
+        }
     }
 
     // Add direction as the last argument
@@ -1116,13 +1103,8 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_runtime_args(tt::tt_m
     runtime_args.insert(runtime_args.end(), upstream_routers_noc_x_.begin(), upstream_routers_noc_x_.end());
     runtime_args.insert(runtime_args.end(), upstream_routers_noc_y_.begin(), upstream_routers_noc_y_.end());
 
-    auto config_runtime_args = config_->get_run_time_args(
-        local_fabric_node_id_,
-        remote_fabric_node_id_,
-        link_idx_,
-        program,
-        my_core_logical_,
-        sender_channel_is_traffic_injection_channel_array);
+    auto config_runtime_args =
+        config_->get_run_time_args(local_fabric_node_id_, remote_fabric_node_id_, link_idx_, program, my_core_logical_);
 
     runtime_args.insert(runtime_args.end(), config_runtime_args.begin(), config_runtime_args.end());
     return runtime_args;

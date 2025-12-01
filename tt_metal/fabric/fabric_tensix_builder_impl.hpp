@@ -169,8 +169,7 @@ public:
         const FabricNodeId& dst_fabric_node_id,
         uint32_t link_idx,
         tt::tt_metal::Program& program,
-        const CoreCoord& logical_core,
-        const std::vector<bool>& sender_channel_is_traffic_injection_channel_array) const;
+        const CoreCoord& logical_core) const;
 
 protected:
     static constexpr size_t default_num_buffers = 8;

@@ -63,17 +63,10 @@ constexpr std::array<size_t, NUM_CHANNEL_TYPES> flow_control_base_addrs =
 constexpr std::array<size_t, NUM_CHANNEL_TYPES> channel_buffer_base_addrs =
     fill_array_with_next_n_args<size_t, CHANNEL_BUFFER_BASE_ADDR_ARRAY_START_IDX, NUM_CHANNEL_TYPES>();
 
-// A channel is a "traffic injection channel" if it is a sender channel that is adding *new*
-// traffic to this dimension/ring. Examples include channels service worker traffic and
-// sender channels that receive traffic from a "turn" (e.g. an EAST channel receiving traffic from NORTH)
-// This attribute is necessary to support bubble flow control.
-constexpr uint32_t BUBBLE_FLOW_CONTROL_START_IDX = CHANNEL_BUFFER_BASE_ADDR_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
-constexpr bool enable_bubble_flow_control = get_compile_time_arg_val(BUBBLE_FLOW_CONTROL_START_IDX) != 0;
-constexpr size_t BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS = 2;
-
 // ========== Downstream mux connection arrays (11 arrays from MuxConfig) ==========
 // These come right after the per-channel-type arrays in MuxConfig::get_compile_time_args
-constexpr uint32_t DOWNSTREAM_MUX_ACTIVE_START_IDX = BUBBLE_FLOW_CONTROL_START_IDX + 1;
+constexpr uint32_t DOWNSTREAM_MUX_ARRAYS_START_IDX = CHANNEL_BUFFER_BASE_ADDR_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
+constexpr uint32_t DOWNSTREAM_MUX_ACTIVE_START_IDX = DOWNSTREAM_MUX_ARRAYS_START_IDX;
 constexpr uint32_t DOWNSTREAM_MUX_NOC_X_START_IDX = DOWNSTREAM_MUX_ACTIVE_START_IDX + NUM_DOWNSTREAM_MUX_CONNECTIONS;
 constexpr uint32_t DOWNSTREAM_MUX_NOC_Y_START_IDX = DOWNSTREAM_MUX_NOC_X_START_IDX + NUM_DOWNSTREAM_MUX_CONNECTIONS;
 constexpr uint32_t DOWNSTREAM_MUX_BUFFER_BASE_ADDR_START_IDX =
@@ -135,9 +128,18 @@ constexpr std::array<size_t, NUM_DOWNSTREAM_MUX_CONNECTIONS> downstream_mux_free
         DOWNSTREAM_MUX_FREE_SLOTS_STREAM_ID_START_IDX,
         NUM_DOWNSTREAM_MUX_CONNECTIONS>();
 
-// Upstream routers and sync address (computed incrementally from last downstream mux array)
-constexpr size_t NUM_UPSTREAM_ROUTERS_IDX =
+// A channel is a "traffic injection channel" if it is a sender channel that is adding *new*
+// traffic to this dimension/ring. Examples include channels service worker traffic and
+// sender channels that receive traffic from a "turn" (e.g. an EAST channel receiving traffic from NORTH)
+// This attribute is necessary to support bubble flow control.
+// Bubble flow control flag comes after downstream mux arrays, before upstream routers
+constexpr uint32_t BUBBLE_FLOW_CONTROL_START_IDX =
     DOWNSTREAM_MUX_FREE_SLOTS_STREAM_ID_START_IDX + NUM_DOWNSTREAM_MUX_CONNECTIONS;
+constexpr bool enable_bubble_flow_control = get_compile_time_arg_val(BUBBLE_FLOW_CONTROL_START_IDX) != 0;
+constexpr size_t BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS = 2;
+
+// Upstream routers and sync address (computed incrementally from bubble flow control)
+constexpr size_t NUM_UPSTREAM_ROUTERS_IDX = BUBBLE_FLOW_CONTROL_START_IDX + 1;
 constexpr size_t num_upstream_routers = get_compile_time_arg_val(NUM_UPSTREAM_ROUTERS_IDX);
 constexpr size_t fabric_router_sync_address = get_compile_time_arg_val(NUM_UPSTREAM_ROUTERS_IDX + 1);
 
@@ -290,21 +292,6 @@ void kernel_main() {
     }
 
     auto fabric_connection = tt::tt_fabric::FabricMuxToEdmSender::build_from_args<CORE_TYPE>(rt_args_idx);
-
-    std::array<bool, NUM_WORKER_CHANNELS> worker_channel_injection_status = {};
-    std::array<bool, NUM_RELAY_TO_MUX_CHANNELS> relay_to_mux_channel_injection_status = {};
-    std::array<bool, NUM_MUX_TO_MUX_CHANNELS> mux_to_mux_channel_injection_status = {};
-    if constexpr (enable_bubble_flow_control) {
-        for (size_t i = 0; i < NUM_WORKER_CHANNELS; i++) {
-            worker_channel_injection_status[i] = get_arg_val<bool>(rt_args_idx++);
-        }
-        for (size_t i = 0; i < NUM_RELAY_TO_MUX_CHANNELS; i++) {
-            relay_to_mux_channel_injection_status[i] = get_arg_val<bool>(rt_args_idx++);
-        }
-        for (size_t i = 0; i < NUM_MUX_TO_MUX_CHANNELS; i++) {
-            mux_to_mux_channel_injection_status[i] = get_arg_val<bool>(rt_args_idx++);
-        }
-    }
 
     // ========== Create channel arrays grouped by type ==========
     // Worker channels (WORKER_CHANNEL)
@@ -513,6 +500,7 @@ void kernel_main() {
         for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
             // Process worker channels (WORKER_CHANNEL)
             for (uint32_t channel_id = 0; channel_id < NUM_WORKER_CHANNELS; channel_id++) {
+                constexpr bool is_injection_channel = true;
                 forward_data<NUM_BUFFERS_WORKER, direction>(
                     worker_channels[channel_id],
                     worker_channel_interfaces[channel_id],
@@ -521,11 +509,12 @@ void kernel_main() {
                     worker_channel_connection_established[channel_id],
                     StreamId{worker_stream_ids[channel_id]},
                     worker_is_persistent[channel_id] == 1,
-                    enable_bubble_flow_control ? worker_channel_injection_status[channel_id] : false);
+                    is_injection_channel);
             }
 
             // Process relay-to-mux channels (RELAY_TO_MUX_CHANNEL)
             for (uint32_t channel_id = 0; channel_id < NUM_RELAY_TO_MUX_CHANNELS; channel_id++) {
+                constexpr bool is_injection_channel = true;
                 forward_data<NUM_BUFFERS_RELAY_TO_MUX, direction>(
                     relay_to_mux_channels[channel_id],
                     relay_to_mux_channel_interfaces[channel_id],
@@ -534,11 +523,12 @@ void kernel_main() {
                     relay_to_mux_channel_connection_established[channel_id],
                     StreamId{relay_to_mux_stream_ids[channel_id]},
                     relay_to_mux_is_persistent[channel_id] == 1,
-                    enable_bubble_flow_control ? relay_to_mux_channel_injection_status[channel_id] : false);
+                    is_injection_channel);
             }
 
             // Process mux-to-mux channels (MUX_TO_MUX_CHANNEL)
             for (uint32_t channel_id = 0; channel_id < NUM_MUX_TO_MUX_CHANNELS; channel_id++) {
+                constexpr bool is_injection_channel = true;
                 forward_data<NUM_BUFFERS_MUX_TO_MUX, direction>(
                     mux_to_mux_channels[channel_id],
                     mux_to_mux_channel_interfaces[channel_id],
@@ -547,7 +537,7 @@ void kernel_main() {
                     mux_to_mux_channel_connection_established[channel_id],
                     StreamId{mux_to_mux_stream_ids[channel_id]},
                     mux_to_mux_is_persistent[channel_id] == 1,
-                    enable_bubble_flow_control ? mux_to_mux_channel_injection_status[channel_id] : false);
+                    is_injection_channel);
             }
         }
     }
