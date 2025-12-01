@@ -35,7 +35,7 @@ jobs:
             { model: llama3.1-8b, owner_id: U03PUAKE719, cmd: HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-stress-1 }, # Miguel Tairum
           ]
     name: Nightly ${{ inputs.runner-label }} ${{ matrix.test-group.model }}
-    runs-on: ["cloud-virtual-machine", "in-service", "${{ inputs.runner-label }}", "pipeline-functional"]
+    runs-on: ["cloud-virtual-machine", "issue-miw-740", "${{ inputs.runner-label }}", "pipeline-functional"]
     container:
       image: ${{ inputs.docker-image }}
       env:

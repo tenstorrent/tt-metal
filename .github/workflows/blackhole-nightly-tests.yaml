@@ -51,7 +51,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        card_type: ["P100", "P150"]  # Cannot use P150b yet because CIv2 is using LFC and not MLPerf
+        card_type: ["P150"]  # Cannot use P150b yet because CIv2 is using LFC and not MLPerf
     secrets: inherit
     with:
       runner-label: ${{ matrix.card_type }}
@@ -87,7 +87,7 @@ jobs:
             num_devices: 4
           - name: DeskBox Demo tests
             runner-label: BH-DeskBox
-            extra-tag: pipeline-functional
+            extra-tag: issue-miw-740
             num_devices: 2
           - name: LoudBox Demo tests
             runner-label: BH-LoudBox

@@ -77,8 +77,8 @@ jobs:
           #   cmd: "source tests/scripts/t3000/run_t3000_unit_tests.sh && run_t3000_ttfabric_tests"
     name: ${{ inputs.arch }} ${{ matrix.runner-group.runner-label }} ${{ matrix.test-group.name }}
     runs-on:
-      - in-service
       - arch-blackhole
+      - issue-miw-740
       - ${{ matrix.runner-group.runner-label }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved' }}
