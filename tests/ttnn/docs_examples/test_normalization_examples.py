@@ -244,6 +244,14 @@ def test_softmax(device):
     logger.info(f"Softmax result: {output_tensor}")
 
 
+def test_softmax_default_program_config(device):
+    # Create input tensor
+    tensor = ttnn.rand((1, 1, 32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Explicitly specify a default config
+    ttnn.softmax_in_place(tensor, dim=-1, program_config=ttnn.SoftmaxDefaultProgramConfig())
+
+
 def test_scale_mask_softmax(device):
     # Setup input tensor and mask
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -270,8 +278,9 @@ def test_softmax_in_place(device):
     input_tensor = ttnn.rand(shape, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
 
     # Apply in-place softmax
-    output_tensor = ttnn.softmax_in_place(input_tensor)
-    logger.info(f"Softmax In Place result: {output_tensor}")
+    logger.info(f"Input tensor before softmax in place: {input_tensor}")
+    ttnn.softmax_in_place(input_tensor)
+    logger.info(f"Input tensor after softmax in place: {input_tensor}")
 
 
 def test_scale_mask_softmax_in_place(device):
