@@ -149,14 +149,14 @@ void StridedAllGatherAsyncProgramFactory::override_runtime_arguments_per_program
     const operation_attributes_t& attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
-    auto& reader_kernel_ids = shared_variables.reader_kernel_ids;
-    auto& writer_kernel_ids = shared_variables.writer_kernel_ids;
-    auto& all_cores = shared_variables.all_cores;
-    auto& num_links = shared_variables.num_links;
-    auto& num_directions_per_link = shared_variables.num_directions_per_link;
-    auto& num_workers_per_direction = shared_variables.num_workers_per_direction;
-    auto& num_mux_cores_per_direction_per_link = shared_variables.num_mux_cores_per_direction_per_link;
-    auto& num_cores_per_link = shared_variables.num_cores_per_link;
+    const auto& reader_kernel_ids = shared_variables.reader_kernel_ids;
+    const auto& writer_kernel_ids = shared_variables.writer_kernel_ids;
+    const auto& all_cores = shared_variables.all_cores;
+    const auto& num_links = shared_variables.num_links;
+    const auto& num_directions_per_link = shared_variables.num_directions_per_link;
+    const auto& num_workers_per_direction = shared_variables.num_workers_per_direction;
+    const auto& num_mux_cores_per_direction_per_link = shared_variables.num_mux_cores_per_direction_per_link;
+    const auto& num_cores_per_link = shared_variables.num_cores_per_link;
 
     const auto& input = tensor_args.input_tensor;
     const auto& output = output_tensor;
@@ -269,7 +269,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto& output_tensor_shape = output_tensor.padded_shape();
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device not found");
 
     // op hyperparams
@@ -405,7 +405,7 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     uint32_t device_max_chunks = 0;
     for (uint32_t k_block_iter = 0; k_block_iter < K_blocks; k_block_iter++) {
         uint32_t curr_k_block_start = k_block_iter * mm_block_wt_val;
-        uint32_t curr_k_block_end = (k_block_iter + 1) * mm_block_wt_val - 1;
+        uint32_t curr_k_block_end = ((k_block_iter + 1) * mm_block_wt_val) - 1;
         if (curr_k_block_end < curr_device_end) {
             device_k_block_counts[curr_device]++;
             device_chunk_widths[curr_device].push_back(curr_k_block_end - curr_k_block_start + 1);
