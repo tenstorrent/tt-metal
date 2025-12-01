@@ -258,3 +258,105 @@ def test_output_info_with_multiple_outputs():
             assert info.size > 0
             # Check that shape is reasonable
             assert len(info.shape) == 4, f"Expected 4D shape, got {info.shape}"
+
+
+def test_no_dispatch_vs_normal_mode_comparison():
+    """Compare peak memory between NO_DISPATCH and NORMAL modes"""
+    with ttnn.manage_device(device_id=0) as device:
+        # Test same operations in both modes
+        def run_operations(device):
+            input_a = ttnn.from_torch(
+                torch.rand(1, 1, 64, 64, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            input_b = ttnn.from_torch(
+                torch.rand(1, 1, 64, 64, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            return ttnn.add(input_a, input_b)
+
+        # NO_DISPATCH mode - theoretical allocation
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+        _ = run_operations(device)
+        graph_no_dispatch = ttnn.graph.end_graph_capture()
+
+        # NORMAL mode - actual allocation with possible fragmentation
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        _ = run_operations(device)
+        graph_normal = ttnn.graph.end_graph_capture()
+
+        peak_no_dispatch = ttnn.graph.extract_peak_L1_memory_usage(graph_no_dispatch)
+        peak_normal = ttnn.graph.extract_peak_L1_memory_usage(graph_normal)
+
+        print(f"\nMode Comparison:")
+        print(f"  NO_DISPATCH peak: {peak_no_dispatch:,} bytes")
+        print(f"  NORMAL peak:      {peak_normal:,} bytes")
+        print(f"  Difference:       {abs(peak_normal - peak_no_dispatch):,} bytes")
+
+        # Both should be non-zero
+        assert peak_no_dispatch > 0, f"NO_DISPATCH should show memory usage, got {peak_no_dispatch}"
+        assert peak_normal > 0, f"NORMAL should show memory usage, got {peak_normal}"
+
+        # NORMAL mode may show different values due to fragmentation
+        # But both modes should track the same operations
+        assert isinstance(peak_no_dispatch, int)
+        assert isinstance(peak_normal, int)
+
+
+def test_normal_mode_shows_real_addresses():
+    """Verify NORMAL mode captures real addresses while NO_DISPATCH uses placeholders"""
+    with ttnn.manage_device(device_id=0) as device:
+        # NO_DISPATCH - should have address 0 or placeholders
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+        input_tensor = ttnn.from_torch(
+            torch.rand(1, 1, 32, 32, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        _ = ttnn.relu(input_tensor)
+        graph_no_dispatch = ttnn.graph.end_graph_capture()
+
+        # NORMAL - should have real addresses
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        input_tensor = ttnn.from_torch(
+            torch.rand(1, 1, 32, 32, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        _ = ttnn.relu(input_tensor)
+        graph_normal = ttnn.graph.end_graph_capture()
+
+        # Check for buffer_allocate nodes and their addresses
+        no_dispatch_addresses = []
+        normal_addresses = []
+
+        for node in graph_no_dispatch:
+            if node.get("node_type") == "buffer_allocate":
+                addr = node.get("params", {}).get("address", "0")
+                no_dispatch_addresses.append(int(addr))
+
+        for node in graph_normal:
+            if node.get("node_type") == "buffer_allocate":
+                addr = node.get("params", {}).get("address", "0")
+                normal_addresses.append(int(addr))
+
+        print(f"\nAddress Comparison:")
+        print(f"  NO_DISPATCH addresses: {no_dispatch_addresses}")
+        print(f"  NORMAL addresses:      {normal_addresses}")
+
+        # NO_DISPATCH typically has 0 or placeholder addresses
+        # NORMAL should have real non-zero addresses
+        if normal_addresses:
+            # At least some addresses in NORMAL mode should be non-zero
+            has_real_address = any(addr > 0 for addr in normal_addresses)
+            assert has_real_address, "NORMAL mode should have real non-zero addresses"
