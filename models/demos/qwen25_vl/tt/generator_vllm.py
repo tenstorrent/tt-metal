@@ -196,9 +196,10 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             for i, plen in enumerate(prompt_lens):
                 inputs.attention_mask[i, :plen] = 1
         else:
-            inputs.input_ids = (
-                tokens.to(kwargs["images"][0].attention_mask.dtype) if kwargs["images"][0] is not None else tokens
-            )
+            if "images" in kwargs and isinstance(kwargs["images"], list) and len(kwargs["images"]) > 0 and kwargs["images"][0] is not None:
+                inputs.input_ids = tokens.to(kwargs["images"][0].attention_mask.dtype)
+            else:
+                inputs.input_ids = tokens
             inputs.attention_mask = torch.concat(
                 [
                     torch.nn.functional.pad(
