@@ -120,28 +120,6 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             [dest_device](const CoreCoord& core) { return dest_device->is_active_ethernet_core(core, true); });
 
         TT_ASSERT(local_link_cores.size() == remote_link_cores.size());
-        // set edm types based on topology and device ids.
-        [[maybe_unused]] bool dateline = false;
-        auto src_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default;
-        auto dest_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default;
-        if (topology == Topology::Ring) {
-            if (src_device->id() == device_sequence.back()->id() &&
-                dest_device->id() == device_sequence.front()->id()) {
-                src_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Dateline;
-                dest_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Dateline;
-                dateline = true;
-            } else if (
-                src_device->id() == device_sequence.front()->id() &&
-                dest_device->id() != device_sequence.back()->id()) {
-                src_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream;
-                dest_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
-            } else if (
-                src_device->id() != device_sequence.front()->id() &&
-                dest_device->id() == device_sequence.back()->id()) {
-                src_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
-                dest_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream;
-            }
-        }
 
         auto edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short;
         // change to long axis variantion, and using more buffer slots.
@@ -151,12 +129,10 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         }
         // if ring topology set extra buffer on dateline edms.
         auto src_edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
-            .edm_type = src_device_edm_type,
             .edm_axis = edm_axis,
             .edm_buffer_config = edm_buffer_config,
         };
         auto dest_edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
-            .edm_type = dest_device_edm_type,
             .edm_axis = edm_axis,
             .edm_buffer_config = edm_buffer_config,
         };
@@ -185,12 +161,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 "Building forward direction EDM on chip {} on link {}",
                 src_device->id(),
                 edm_builders_forward_direction[src_device->id()].size());
-            log_debug(
-                tt::LogFabric,
-                "src_device {}, dest_device {}, is_dateline {}",
-                src_device->id(),
-                dest_device->id(),
-                dateline);
+            log_debug(tt::LogFabric, "src_device {}, dest_device {}", src_device->id(), dest_device->id());
             edm_builders_forward_direction[src_device->id()].push_back(
                 tt::tt_fabric::FabricEriscDatamoverBuilder::build(
                     src_device,
@@ -199,8 +170,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                     src_device->id(),
                     dest_device->id(),
                     src_curr_edm_config,
-                    build_in_worker_connection_mode,
-                    src_device_edm_type));
+                    std::vector<bool>(),  // Empty injection flags for legacy helper - not used
+                    build_in_worker_connection_mode));
 
             log_trace(
                 tt::LogFabric,
@@ -215,8 +186,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                     dest_device->id(),
                     src_device->id(),
                     dest_curr_edm_config,
-                    build_in_worker_connection_mode,
-                    dest_device_edm_type));
+                    std::vector<bool>(),  // Empty injection flags for legacy helper - not used
+                    build_in_worker_connection_mode));
         }
     };
 
@@ -386,6 +357,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 device_pairs[i].first->id(),
                 device_pairs[i].second.value()->id(),
                 config,
+                std::vector<bool>(),  // Empty injection flags for legacy helper - not used
                 build_in_worker_connection_mode));
         }
         if (!counted_num_links.has_value()) {
