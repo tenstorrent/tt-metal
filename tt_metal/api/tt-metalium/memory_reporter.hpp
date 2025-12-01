@@ -95,7 +95,7 @@ struct MemoryView {
     size_t total_bytes_allocated_per_bank = 0;
     size_t total_bytes_free_per_bank = 0;
     size_t largest_contiguous_bytes_free_per_bank = 0;
-    MemoryBlockTable block_table;
+    MemoryBlockTable block_table{};
 };
 
 class MemoryReporter {
