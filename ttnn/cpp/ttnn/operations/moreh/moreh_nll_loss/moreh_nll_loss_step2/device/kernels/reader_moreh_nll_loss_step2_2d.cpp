@@ -57,13 +57,13 @@ void kernel_main() {
     read_tile(cb_divisor, addrg_divisor, 0);
 #endif
 
-    uint32_t Ct = (C + TILE_HEIGHT - 1) / TILE_HEIGHT;
+    uint32_t Ct = (C + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
 
     uint32_t end_id = start_id + num_tiles_per_core;
     for (uint32_t i = start_id; i < end_id; ++i) {
         // loop from n_start to n_end
-        uint32_t n_start = i * TILE_HEIGHT;
-        uint32_t n_end = std::min(i * TILE_HEIGHT + TILE_HEIGHT, N);
+        uint32_t n_start = i * tt::constants::TILE_HEIGHT;
+        uint32_t n_end = std::min(i * tt::constants::TILE_HEIGHT + tt::constants::TILE_HEIGHT, N);
         uint32_t nt = i;
 
         // target: (1, N)
@@ -90,7 +90,7 @@ void kernel_main() {
             if (target_val != ignore_index && (0 <= target_val && target_val < static_cast<int32_t>(C))) {
                 // input: (N, C)
                 // noc_id: nt * Ct + ct
-                uint32_t noc_id = (nt * Ct) + (target_val / TILE_WIDTH);
+                uint32_t noc_id = (nt * Ct) + (target_val / tt::constants::TILE_WIDTH);
                 uint32_t input_tilized_idx = get_tilized_idx(n, target_val);
                 read_value(cb_input, addrg_input, noc_id, input_tilized_idx);
 
@@ -107,7 +107,7 @@ void kernel_main() {
             // read weight
             // weight: (1, C)
             // noc_id: target_val / TILE_WIDTH
-            uint32_t noc_id = target_val / TILE_WIDTH;
+            uint32_t noc_id = target_val / tt::constants::TILE_WIDTH;
             uint32_t weight_tilized_idx = get_tilized_idx(0, target_val);
             read_value(cb_weight, addrg_weight, noc_id, weight_tilized_idx);
 

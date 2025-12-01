@@ -22,6 +22,8 @@ void kernel_main() {
 
     constexpr uint32_t cb_input_grad = tt::CBIndex::c_16;
 
+    constexpr uint32_t cb_weight_scratch = tt::CBIndex::c_7;
+
     // ublocks size defined in tiles
     const uint32_t target_tile_bytes = get_tile_size(cb_target);
 
@@ -42,7 +44,7 @@ void kernel_main() {
     const auto addrg_weight = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
 
     // weight: (1, C)
-    read_line(cb_weight, addrg_weight, Ct);
+    read_line(cb_weight, cb_weight_scratch, addrg_weight, Ct);
 
     cb_wait_front(cb_weight, Ct);
     auto weight_l1_ptr = get_read_ptr<uint16_t>(cb_weight);
@@ -57,7 +59,7 @@ void kernel_main() {
         uint32_t wt = i % Wt;
         uint32_t nct = i / Wt;
         uint32_t n = nct / Ct;
-        uint32_t nt = n / TILE_HEIGHT;
+        uint32_t nt = n / tt::constants::TILE_HEIGHT;
         uint32_t ct = nct % Ct;
 
         // target: (N, W)
@@ -76,12 +78,12 @@ void kernel_main() {
         auto target_l1_ptr = get_read_ptr<int32_t>(cb_target);
         auto output_grad_l1_ptr = get_read_ptr<uint16_t>(cb_output_grad);
 
-        for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
-            for (uint32_t w = 0; w < TILE_WIDTH; w++) {
-                uint32_t nw_tilized_idx = get_tilized_idx(n % TILE_HEIGHT, w);  // target(n, w)
+        for (uint32_t h = 0; h < tt::constants::TILE_HEIGHT; h++) {
+            for (uint32_t w = 0; w < tt::constants::TILE_WIDTH; w++) {
+                uint32_t nw_tilized_idx = get_tilized_idx(n % tt::constants::TILE_HEIGHT, w);  // target(n, w)
                 int32_t target_val = target_l1_ptr[nw_tilized_idx];
 
-                uint32_t c = ct * TILE_HEIGHT + h;
+                uint32_t c = ct * tt::constants::TILE_HEIGHT + h;
                 uint32_t input_grad_idx = get_tilized_idx(h, w);  // input_grad(c, w)
 
                 uint16_t input_grad_val;

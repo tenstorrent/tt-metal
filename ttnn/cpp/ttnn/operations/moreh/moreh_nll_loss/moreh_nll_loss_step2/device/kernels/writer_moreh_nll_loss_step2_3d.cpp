@@ -4,6 +4,7 @@
 
 #include "dataflow_api.h"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "noc/noc_parameters.h"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -21,8 +22,8 @@ void kernel_main() {
 
     const auto output_addrg = TensorAccessor(output_args, output_addr, output_tile_bytes);
 
-    uint32_t Wf = (W + FACE_WIDTH - 1) / FACE_WIDTH;
-    uint32_t Wt = (W + TILE_WIDTH - 1) / TILE_WIDTH;
+    uint32_t Wf = (W + tt::constants::FACE_WIDTH - 1) / tt::constants::FACE_WIDTH;
+    uint32_t Wt = (W + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
 
     constexpr uint32_t onetile = 1;
     uint32_t end_id = start_id + num_tiles_per_core;
@@ -31,9 +32,9 @@ void kernel_main() {
         // noc_id = nt * Wt + wt
         cb_wait_front(cb_output, onetile);
         uint32_t n = i / Wf;
-        uint32_t w = (i % Wf) * FACE_WIDTH;
-        uint32_t nt = n / TILE_HEIGHT;
-        uint32_t wt = w / TILE_WIDTH;
+        uint32_t w = (i % Wf) * tt::constants::FACE_WIDTH;
+        uint32_t nt = n / tt::constants::TILE_HEIGHT;
+        uint32_t wt = w / tt::constants::TILE_WIDTH;
 
         uint32_t output_l1_write_addr = get_read_ptr(cb_output);
 
@@ -42,7 +43,7 @@ void kernel_main() {
         get_noc_offset(n, w, element_size, noc_offset);
 
         uint64_t dst_noc_addr = get_noc_addr(noc_id, output_addrg, noc_offset);
-        noc_async_write(output_l1_write_addr, dst_noc_addr, NOC_MINIMUM_READ_SIZE);
+        noc_async_write(output_l1_write_addr, dst_noc_addr, NOC_DRAM_READ_ALIGNMENT_BYTES);
         noc_async_write_barrier();
 
         cb_pop_front(cb_output, onetile);

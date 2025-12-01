@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "noc/noc_parameters.h"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -60,17 +61,17 @@ void kernel_main() {
     read_tile(cb_divisor, addrg_divisor, 0);
 #endif
 
-    uint32_t Wf = (W + FACE_WIDTH - 1) / FACE_WIDTH;
-    uint32_t Wt = (W + TILE_WIDTH - 1) / TILE_WIDTH;
-    uint32_t Ct = (C + TILE_HEIGHT - 1) / TILE_HEIGHT;
+    uint32_t Wf = (W + tt::constants::FACE_WIDTH - 1) / tt::constants::FACE_WIDTH;
+    uint32_t Wt = (W + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
+    uint32_t Ct = (C + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
 
     // iterate from start_id to end_id
     uint32_t end_id = start_id + num_tiles_per_core;
     for (uint32_t i = start_id; i < end_id; ++i) {
         uint32_t n = i / Wf;
-        uint32_t w = i % Wf * FACE_WIDTH;
-        auto nt = n / TILE_HEIGHT;
-        auto wt = w / TILE_WIDTH;
+        uint32_t w = i % Wf * tt::constants::FACE_WIDTH;
+        auto nt = n / tt::constants::TILE_HEIGHT;
+        auto wt = w / tt::constants::TILE_WIDTH;
 
         // taret shape (N, d1)
         // noc_id = nt * Wt + wt
@@ -81,7 +82,7 @@ void kernel_main() {
             cb_target,
             addrg_target,
             traget_noc_id,
-            NOC_MINIMUM_READ_SIZE / element_size * target_element_size,
+            NOC_DRAM_READ_ALIGNMENT_BYTES / element_size * target_element_size,
             target_offset);
 
 #if defined(WEIGHT)
@@ -96,7 +97,7 @@ void kernel_main() {
         auto tmp_input_l1_ptr = get_write_ptr<FP32_DEST_ACC_FTYPE>(cb_tmp_input);
         auto target_l1_ptr = get_read_ptr<int32_t>(cb_target);
 
-        uint32_t idx_max = std::min(w + FACE_WIDTH, W);
+        uint32_t idx_max = std::min(w + tt::constants::FACE_WIDTH, W);
         for (uint32_t idx = 0; idx < idx_max; idx++) {
             int32_t target_val = target_l1_ptr[idx];
 
@@ -105,7 +106,8 @@ void kernel_main() {
                 // input: (N, C, d1)
                 // noc_id: n * Ct * Wt + c * Wt + d1
                 //         n * Ct * Wt + target_val / TILE_HEIGHT * Wt + w / TILE_WIDTH
-                uint32_t noc_id = (n * Ct * Wt) + (target_val / TILE_HEIGHT) * Wt + (w / TILE_WIDTH);
+                uint32_t noc_id =
+                    (n * Ct * Wt) + (target_val / tt::constants::TILE_HEIGHT) * Wt + (w / tt::constants::TILE_WIDTH);
                 uint32_t tilized_idx = get_tilized_idx(target_val, w + idx);
                 read_value(cb_input, addrg_input, noc_id, tilized_idx);
 
@@ -120,7 +122,7 @@ void kernel_main() {
                 // weight: (1, C)
                 // noc_id: target_val / TILE_WIDTH
                 {
-                    uint32_t noc_id = target_val / TILE_WIDTH;
+                    uint32_t noc_id = target_val / tt::constants::TILE_WIDTH;
                     uint32_t tilized_idx = get_tilized_idx(0, target_val);
                     read_value(cb_weight, addrg_weight, noc_id, tilized_idx);
 
