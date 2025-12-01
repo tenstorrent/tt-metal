@@ -114,11 +114,11 @@ jobs:
       skip-tt-train: false
 
   build-tsan:
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.any-code-changed == 'true' ||
-            needs.find-changes.outputs.build-workflows-changed == 'true'
-        }}
+    # if: ${{ github.ref_name == 'main' ||
+    #         needs.find-changes.outputs.cmake-changed == 'true' ||
+    #         needs.find-changes.outputs.any-code-changed == 'true' ||
+    #         needs.find-changes.outputs.build-workflows-changed == 'true'
+    #     }}
     needs: find-changes
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -294,6 +294,26 @@ jobs:
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+
+  fabric-unit-tests:
+    needs: [build, find-changes]
+    # if: ${{ github.ref_name == 'main' ||
+    #         needs.find-changes.outputs.cmake-changed == 'true' ||
+    #         needs.find-changes.outputs.tt-metalium-changed == 'true'
+    #     }}
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
+    uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
 
   ttsim-unit-tests:
     if: ${{ github.ref_name == 'main' ||

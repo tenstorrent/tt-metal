@@ -19,9 +19,6 @@ on:
       docker-image:
         required: true
         type: string
-      wheel-artifact-name:
-        required: true
-        type: string
       enable-watcher:
         required: false
         type: boolean
@@ -66,7 +63,6 @@ jobs:
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
