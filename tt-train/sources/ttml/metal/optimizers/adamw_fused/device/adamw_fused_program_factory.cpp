@@ -326,8 +326,11 @@ AdamWFusedProgramFactory::cached_program_t AdamWFusedProgramFactory::create(
     auto* max_exp_avg_sq_buffer = max_exp_avg_sq_opt.has_value() ? max_exp_avg_sq_opt.value().buffer() : nullptr;
     auto* output_buffer = output.buffer();
 
+    const auto& stochastic_rounding = operation_attributes.stochastic_rounding;
+
     std::map<std::string, std::string> defines;
     defines["AMSGRAD"] = amsgrad ? "1" : "0";
+    defines["STOCH_ROUND"] = stochastic_rounding ? "1" : "0";
 
     AdamWFusedKernels kernels{};
 
