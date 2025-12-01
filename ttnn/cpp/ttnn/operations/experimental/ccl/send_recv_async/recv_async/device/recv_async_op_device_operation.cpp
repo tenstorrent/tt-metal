@@ -14,7 +14,7 @@ namespace ttnn::operations::experimental::ccl::recv_async {
 
 RecvAsyncDeviceOperation::program_factory_t RecvAsyncDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return program::RecvAsyncMeshWorkloadFactory{};
+    return RecvAsyncMeshWorkloadFactory{};
 }
 
 void RecvAsyncDeviceOperation::validate_on_program_cache_hit(

@@ -17,7 +17,7 @@ struct RecvAsyncDeviceOperation {
     using tensor_args_t = recv_async::tensor_args_t;
     using spec_return_value_t = recv_async::spec_return_value_t;
     using tensor_return_value_t = recv_async::tensor_return_value_t;
-    using program_factory_t = std::variant<program::RecvAsyncMeshWorkloadFactory>;
+    using program_factory_t = std::variant<RecvAsyncMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

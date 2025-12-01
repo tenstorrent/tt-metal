@@ -7,7 +7,7 @@
 #include "recv_async_op_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::ccl::recv_async::program {
+namespace ttnn::operations::experimental::ccl::recv_async {
 
 struct RecvAsyncSharedVariables {
     std::vector<tt::tt_metal::CoreCoord> receiver_core_coords;
@@ -39,4 +39,4 @@ struct RecvAsyncMeshWorkloadFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::recv_async::program
+}  // namespace ttnn::operations::experimental::ccl::recv_async

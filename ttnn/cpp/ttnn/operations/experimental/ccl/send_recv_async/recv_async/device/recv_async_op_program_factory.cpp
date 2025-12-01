@@ -20,7 +20,7 @@
 
 using namespace tt::constants;
 
-namespace ttnn::operations::experimental::ccl::recv_async::program {
+namespace ttnn::operations::experimental::ccl::recv_async {
 
 RecvAsyncMeshWorkloadFactory::cached_mesh_workload_t RecvAsyncMeshWorkloadFactory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
@@ -372,4 +372,4 @@ void RecvAsyncMeshWorkloadFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::ccl::recv_async::program
+}  // namespace ttnn::operations::experimental::ccl::recv_async
