@@ -56,42 +56,26 @@ def check_noc_status(
     # DM_DEDICATED_NOC is 0 as defined in dev firmware headers (see dev_msgs.h).
     DM_DEDICATED_NOC = 0
     if risc_name == "brisc":
-        try:
-            prev_noc_mode = fw_elf.get_global("prev_noc_mode", loc_mem_access).read_value()
-        except Exception:
-            prev_noc_mode = DM_DEDICATED_NOC  # Default to dedicated if symbol is not readable
+        prev_noc_mode = fw_elf.get_global("prev_noc_mode", loc_mem_access).read_value()
         if prev_noc_mode != DM_DEDICATED_NOC:
             message += "    Skipping NOC status check: prev_noc_mode != DM_DEDICATED_NOC\n"
             log_check(True, message)
             return
 
         # Also validate that BRISC's runtime-selected NOC matches the NOC being checked.
-        try:
-            active_noc_index = fw_elf.get_global("noc_index", loc_mem_access).read_value()
-        except Exception:
-            message += "    Skipping NOC status check: could not read noc_index from BRISC firmware\n"
-            log_check(False, message)
-            return
+        active_noc_index = fw_elf.get_global("noc_index", loc_mem_access).read_value()
         if active_noc_index != noc_id:
             return
-    else:
-        if kernel_elf is not None:
-            try:
-                noc_mode = kernel_elf.get_global("noc_mode", loc_mem_access).read_value()
-            except Exception:
-                noc_mode = DM_DEDICATED_NOC  # Default to dedicated if symbol is not readable
-            if noc_mode != DM_DEDICATED_NOC:
-                message += "    Skipping NOC status check: noc_mode != DM_DEDICATED_NOC\n"
-                log_check(True, message)
-                return
-            try:
-                noc_index = kernel_elf.get_global("noc_index", loc_mem_access).read_value()
-            except Exception:
-                message += "    Skipping NOC status check: could not read noc_index from kernel ELF\n"
-                log_check(False, message)
-                return
-            if noc_index != noc_id:
-                return
+    elif kernel_elf is not None:
+        # On erisc, the firmware doesn't necessarily select a NOC, so we need to check the kernel ELF.
+        noc_mode = kernel_elf.get_global("noc_mode", loc_mem_access).read_value()
+        if noc_mode != DM_DEDICATED_NOC:
+            message += "    Skipping NOC status check: noc_mode != DM_DEDICATED_NOC\n"
+            log_check(True, message)
+            return
+        noc_index = kernel_elf.get_global("noc_index", loc_mem_access).read_value()
+        if noc_index != noc_id:
+            return
 
     # Check if variables match with corresponding register
     for var in var_to_reg_map:
