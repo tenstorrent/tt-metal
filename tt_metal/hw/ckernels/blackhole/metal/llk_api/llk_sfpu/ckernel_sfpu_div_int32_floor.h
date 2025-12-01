@@ -19,14 +19,14 @@ sfpi_inline void calculate_div_int32_body(
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr uint dst_tile_size_sfpi = 32;
 
-    sfpi::vInt b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+    sfpi::vInt b_orig = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
     // When converting to float, the integers are treated as sign-magnitude.
     // Convert inputs to positive values to avoid conversion problems, as the
     // original inputs are two's complement integers.  Note that
     // sfpi::abs(-2**31) will return -2**31, which will give -0.0 when
     // converted to float via sfpi::int32_to_float.
-    b = sfpi::abs(b);
+    sfpi::vInt b = sfpi::abs(b_orig);
 
     // Convert to floats, but check for the edge case mentioned above.
     sfpi::vFloat b_f = sfpi::int32_to_float(b, 0);
@@ -39,9 +39,9 @@ sfpi_inline void calculate_div_int32_body(
     // We interleave SFPMAD with the loading and conversion of `a`.
     sfpi::vFloat inv_b_f = sfpi::approx_recip(b_f);
     sfpi::vFloat e = -inv_b_f * b_f + sfpi::vConst1;
-    sfpi::vInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+    sfpi::vInt a_orig = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
     e = e * e + e;
-    a = sfpi::abs(a);
+    sfpi::vInt a = sfpi::abs(a_orig);
     inv_b_f = e * inv_b_f + inv_b_f;
     sfpi::vFloat a_f = sfpi::int32_to_float(a, 0);
     v_if(a_f < 0.0f) { a_f = 2147483648.0f; }
@@ -51,6 +51,7 @@ sfpi_inline void calculate_div_int32_body(
     // We add a special mantissa alignment factor 2.0f**(23+10), which shifts
     // the mantissa so that we extract the top 22 bits of the result.
     sfpi::vFloat q_f = a_f * inv_b_f + vConstFloatPrgm0;
+    sfpi::vInt sign = a_orig ^ b_orig;
     sfpi::vUInt q = sfpi::exman9(q_f);
 
     // Compute qb = q * b.  This tells us how close our approximation `q` is to
@@ -114,10 +115,6 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vInt result = q;
 
     // If a ^ b >= 0, then the result will be positive, otherwise negative.
-    // Reload signed values here due to register pressure.
-    a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-    b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-    sfpi::vInt sign = a ^ b;
     // Finally, if we expect a negative result, negate the value (two's complement).
     v_if(sign < 0) {
         result = -result;
@@ -155,13 +152,13 @@ inline void calculate_div_int32_trunc(const uint dst_index_in0, const uint dst_i
 }
 
 template <bool APPROXIMATION_MODE>
-inline void div_floor_init() {
+inline void div_trunc_init() {
     sfpi::vConstFloatPrgm0 = 8589934592.0f;
 }
 
 template <bool APPROXIMATION_MODE>
-inline void div_trunc_init() {
-    sfpi::vConstFloatPrgm0 = 8589934592.0f;
+inline void div_floor_init() {
+    div_trunc_init<APPROXIMATION_MODE>();
 }
 
 }  // namespace ckernel::sfpu
