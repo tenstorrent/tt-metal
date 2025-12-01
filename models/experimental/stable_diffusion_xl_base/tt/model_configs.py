@@ -827,7 +827,7 @@ class ModelOptimisations:
         self.matmul_configs = (
             self.matmul_versions["40_cores"] if not force_full_grid else self.matmul_versions["full_grid"]
         )
-        self.core_grid_y = 5 if not force_full_grid else 8
+        self.core_grid_x = 5 if not force_full_grid else 8
 
         self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
