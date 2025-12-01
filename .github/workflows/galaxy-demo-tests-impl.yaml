@@ -49,7 +49,7 @@ jobs:
           # Samuel Adesoye - flux1, motif
           # Stuti Raizada - gpt-oss
           # Stephen Osborne - mochi
-          
+
           matrix='[
             { "name": "Galaxy Llama3 demo tests", "arch": "wormhole_b0", "model": "llama3", "timeout": 30, "owner_id": "U053W15B6JF" },
             { "name": "Galaxy Llama3 long context demo tests", "arch": "wormhole_b0", "model": "llama3_long_context", "timeout": 60, "owner_id": "U03PUAKE719" },
