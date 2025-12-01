@@ -312,13 +312,13 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     bool use_mla = true;
     uint32_t q_heads_parallel_factor = 1;
-    uint32_t head_dim_v = 64;
-    // auto q_shape = {1, 1, 8, 64} ; //{1, B, PNH, DH};  //PNH being number of heads = 8
-    // auto k_shape = {1, 8, 256, 64}; //{B, NKV, S, DH};  //NKV being number of experts. also assuming S = 256
+    uint32_t head_dim_v = 512;
+    // auto q_shape = {1, 1, 8, 512} ; //{1, B, PNH, DH};  //PNH being number of heads = 8
+    // auto k_shape = {1, 8, 256, 512}; //{B, NKV, S, DH};  //NKV being number of experts. also assuming S = 256
     uint32_t B = 1;    // q_shape[1];
     uint32_t PNH = 8;  // q_shape[2],
     uint32_t S = 256;  // k_shape[2],
-    uint32_t DH = 64;  // k_shape[3];
+    uint32_t DH = 512;  // k_shape[3];
     printf("B: %u, PNH: %u, S: %u, DH: %u\n", B, PNH, S, DH);
     uint32_t Bkv = 1;  // k_shape[0];
     uint32_t St = S / tile_height;
@@ -326,7 +326,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     uint32_t vDHt = use_mla ? head_dim_v / tile_width : DHt;
     uint32_t PNHt = PNH / q_heads_parallel_factor / tile_height;
 
-    const uint32_t Sq_chunk_t = 1;  // PNHt;
+    const uint32_t Sq_chunk_t = PNHt;
 
     printf("Bkv: %u, St: %u, DHt: %u, vDHt: %u, PNHt: %u, Sq_chunk_t: %u\n", Bkv, St, DHt, vDHt, PNHt, Sq_chunk_t);
 
@@ -370,12 +370,10 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     // CreateCircularBuffer(program, all_cores, cb_sender_m_config);
 
     constexpr auto compute_cb_l = tt::CBIndex::c_3;
-    constexpr auto cb_compute_num_pages = 2 * input_num_tiles;
-    // Double buffer size for all devices to ensure enough buffering
-    const auto cb_compute_pages_for_device = 2 * cb_compute_num_pages;
+    constexpr auto cb_compute_num_pages = 2 * input_num_tiles;  // Double-buffer for in-place operations
     tt::tt_metal::CircularBufferConfig cb_compute_l_config =
         tt::tt_metal::CircularBufferConfig(
-            cb_compute_pages_for_device * aligned_input_page_size_bytes, {{compute_cb_l, input_dataformat}})
+            cb_compute_num_pages * aligned_input_page_size_bytes, {{compute_cb_l, input_dataformat}})
             .set_page_size(compute_cb_l, aligned_input_page_size_bytes)
             .set_tile_dims(compute_cb_l, stats_tile);
     // CreateCircularBuffer(program, all_cores, cb_compute_l_config);
@@ -397,7 +395,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     constexpr auto compute_cb_2_l = tt::CBIndex::c_6;
     tt::tt_metal::CircularBufferConfig cb_compute_2_l_config =
         tt::tt_metal::CircularBufferConfig(
-            cb_compute_num_pages * aligned_input_page_size_bytes, {{compute_cb_2_l, input_dataformat}})
+            2 * input_num_tiles * aligned_input_page_size_bytes, {{compute_cb_2_l, input_dataformat}})
             .set_page_size(compute_cb_2_l, aligned_input_page_size_bytes)
             .set_tile_dims(compute_cb_2_l, stats_tile);
     // CreateCircularBuffer(program, all_cores, cb_compute_2_l_config);
@@ -467,7 +465,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     constexpr auto compute_out_cb_l = tt::CBIndex::c_14;
     tt::tt_metal::CircularBufferConfig cb_compute_out_l_config =
         tt::tt_metal::CircularBufferConfig(
-            cb_compute_num_pages * aligned_input_page_size_bytes, {{compute_out_cb_l, input_dataformat}})
+            input_num_tiles * aligned_input_page_size_bytes, {{compute_out_cb_l, input_dataformat}})
             .set_page_size(compute_out_cb_l, aligned_input_page_size_bytes)
             .set_tile_dims(compute_out_cb_l, stats_tile);
     // CreateCircularBuffer(program, all_cores, cb_compute_out_l_config);
@@ -556,18 +554,16 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     constexpr auto cb_l1_temp = tt::CBIndex::c_25;
     tt::tt_metal::CircularBufferConfig cb_l1_temp_config =
         tt::tt_metal::CircularBufferConfig(
-            cb_compute_num_pages * aligned_input_page_size_bytes, {{cb_l1_temp, input_dataformat}})
+            input_num_tiles * aligned_input_page_size_bytes, {{cb_l1_temp, input_dataformat}})
             .set_page_size(cb_l1_temp, aligned_input_page_size_bytes)
             .set_tile_dims(cb_l1_temp, stats_tile);
-    // CreateCircularBuffer(program, all_cores, cb_l1_temp_config);
 
     constexpr auto cb_l2_temp = tt::CBIndex::c_26;
     tt::tt_metal::CircularBufferConfig cb_l2_temp_config =
         tt::tt_metal::CircularBufferConfig(
-            cb_compute_num_pages * aligned_input_page_size_bytes, {{cb_l2_temp, input_dataformat}})
+            input_num_tiles * aligned_input_page_size_bytes, {{cb_l2_temp, input_dataformat}})
             .set_page_size(cb_l2_temp, aligned_input_page_size_bytes)
             .set_tile_dims(cb_l2_temp, stats_tile);
-    // CreateCircularBuffer(program, all_cores, cb_l2_temp_config);
 
     constexpr auto cb_m1_temp = tt::CBIndex::c_27;
     tt::tt_metal::CircularBufferConfig cb_m1_temp_config =

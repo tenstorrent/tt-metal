@@ -61,7 +61,7 @@ constexpr uint32_t cb_m1_temp = get_compile_time_arg_val(17);             // tem
 constexpr uint32_t cb_m2_temp = get_compile_time_arg_val(18);             // temp for m2
 constexpr uint32_t scale_fp32 = get_compile_time_arg_val(19);
 constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(20);
-constexpr uint32_t vDHt = 16;  // get_compile_time_arg_val(21);
+constexpr uint32_t vDHt = get_compile_time_arg_val(21);
 constexpr uint32_t loop_size = get_compile_time_arg_val(22);
 
 void MAIN {
@@ -71,14 +71,14 @@ void MAIN {
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     for (uint32_t loop_idx = 0; loop_idx < loop_size; ++loop_idx) {
         DPRINT << "starting loop idx: " << loop_idx << "\n";
-        /*
+
         // Wait for all inputs to be available
         cb_wait_front(cb_m_in, Sq_chunk_t);
         cb_wait_front(cb_prev_max, Sq_chunk_t);
         cb_wait_front(cb_prev_sum, Sq_chunk_t);
         cb_wait_front(cb_prev_sum_2, Sq_chunk_t);
-        cb_wait_front(cb_out_accumulate_im, out_chunk_tiles);
-        cb_wait_front(cb_out_accumulate_im_2, out_chunk_tiles);
+        // cb_wait_front(cb_out_accumulate_im, out_chunk_tiles);
+        // cb_wait_front(cb_out_accumulate_im_2, out_chunk_tiles);
         DPRINT << "all inputs available\n";
 
         // Compute max(m1, m2) directly from source CBs
@@ -134,7 +134,7 @@ void MAIN {
         // Manually pop cb_prev_max since sub_exp_block doesn't auto-pop
         cb_pop_front(cb_prev_max, Sq_chunk_t);
         DPRINT << "end of loop\n";
-        */
+        /*
 
         DPRINT << "moving first inputs as well to temps\n";
         DPRINT << "waiting for inputs and pushing outputs\n";
@@ -160,6 +160,7 @@ void MAIN {
         cb_push_back(cb_out_o, out_chunk_tiles);
         cb_push_back(cb_cur_sum, Sq_chunk_t);
         cb_push_back(cb_cur_max, Sq_chunk_t);
+        */
     }
 }
 
