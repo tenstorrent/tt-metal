@@ -669,8 +669,8 @@ void CablingGenerator::generate_connections_from_resolved_graph(const std::uniqu
                 TrayId board_b_id = board_b.first;
                 PortId port_b_id = board_b.second;
 
-                auto& board_a_ref = node.boards.at(board_a_id);
-                auto& board_b_ref = node.boards.at(board_b_id);
+                const auto& board_a_ref = node.boards.at(board_a_id);
+                const auto& board_b_ref = node.boards.at(board_b_id);
                 add_port_connection(
                     port_type,
                     board_a_ref,

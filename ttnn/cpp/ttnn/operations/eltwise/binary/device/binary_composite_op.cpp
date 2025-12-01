@@ -661,7 +661,7 @@ Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<
     a_slim = ttnn::to_layout(a_slim, ttnn::TILE_LAYOUT);
     b_slim = ttnn::to_layout(b_slim, ttnn::TILE_LAYOUT);
 
-    auto device = ttnn::GetDefaultDevice();
+    auto* device = ttnn::GetDefaultDevice();
     if (device != nullptr) {
         if (a_slim.storage_type() != tt::tt_metal::StorageType::DEVICE) {
             a_slim = a_slim.to_device(device);

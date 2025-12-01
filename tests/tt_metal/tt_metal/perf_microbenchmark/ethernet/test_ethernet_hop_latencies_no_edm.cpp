@@ -51,7 +51,7 @@ using tt::tt_metal::distributed::MeshShape;
 class T3000TestDevice {
 public:
     T3000TestDevice() : device_open(false) {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             TT_THROW("This suite can only be run without TT_METAL_SLOW_DISPATCH_MODE set");
         }

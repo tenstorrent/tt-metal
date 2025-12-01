@@ -32,7 +32,7 @@ constexpr std::array<std::array<std::array<uint32_t, 2>, 2>, 12> TILE_FACE_HW_CH
      {{{1, 16}, {1, 16}}}}};
 
 Tile::Tile(std::array<uint32_t, 2> tile_shape, bool transpose_tile) : tile_shape(tile_shape) {
-    auto it = std::find_if(TILE_FACE_HW_CHOICES.begin(), TILE_FACE_HW_CHOICES.end(), [this](const auto& pair) {
+    const auto* it = std::find_if(TILE_FACE_HW_CHOICES.begin(), TILE_FACE_HW_CHOICES.end(), [this](const auto& pair) {
         if (pair[0] == this->tile_shape) {
             this->face_shape = pair[1];
             return true;
