@@ -76,6 +76,7 @@ protected:
 
 TEST_F(TensorFileTest, SerializeDeserializeTensor) {
     ttml::serialization::FlatBufferFile serializer;
+    // Set output directory before writing tensors
     auto* device = &ttml::autograd::ctx().get_device();
     auto shape = ttnn::Shape({1, 2, 32, 321});
     auto tensor_zeros = ttml::core::zeros(shape, device);
@@ -106,6 +107,7 @@ bool compare_tensors(const tt::tt_metal::Tensor& tensor1, const tt::tt_metal::Te
 
 TEST_F(TensorFileTest, SerializeDeserializeNamedParameters) {
     ttml::serialization::FlatBufferFile serializer;
+    // Set output directory before writing tensors
     auto model_params = ttml::modules::MultiLayerPerceptronParameters{
         .input_features = 128, .hidden_features = {256}, .output_features = 10};
     ttml::modules::MultiLayerPerceptron mlp_to_write(model_params);

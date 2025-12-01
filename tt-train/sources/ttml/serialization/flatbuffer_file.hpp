@@ -4,7 +4,10 @@
 
 #pragma once
 
+#include <fmt/format.h>
+
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <span>
 #include <string>
@@ -36,8 +39,8 @@ using ValueType = std::variant<
 
 class FlatBufferFile {
 public:
-    // Constructor with optional tarballing and compression (defaults to true for backward compatibility)
-    explicit FlatBufferFile(bool use_tarball = true, bool compress = false);
+    explicit FlatBufferFile() = default;
+
     ~FlatBufferFile();
 
     // Copy constructor
@@ -52,18 +55,6 @@ public:
     // Move assignment operator
     FlatBufferFile& operator=(FlatBufferFile&& other) = delete;
 
-    // Set whether to use tarball format (can be changed at runtime)
-    void set_use_tarball(bool use_tarball);
-
-    // Get whether tarball format is enabled
-    [[nodiscard]] bool get_use_tarball() const;
-
-    // Set whether to use compression (only applies when tarball is enabled)
-    void set_compress(bool compress);
-
-    // Get whether compression is enabled
-    [[nodiscard]] bool get_compress() const;
-
     // Methods to put different types
     void put(std::string_view key, bool value);
     void put(std::string_view key, char value);
@@ -74,8 +65,6 @@ public:
     void put(std::string_view key, size_t value);
     void put(std::string_view key, bfloat16 value);
     void put(std::string_view key, std::string_view value);
-
-    // added it to prevent implicit casts from const char* to bool
     void put(std::string_view key, const char* value);
 
     // Overloads for std::span
@@ -89,15 +78,6 @@ public:
     void put(std::string_view key, std::span<const std::string> value);
 
     void put(std::string_view key, const ValueType& value);
-
-    // Add tensor file data to be included in tarball during serialization
-    void add_tensor_file(std::string_view filename, std::vector<uint8_t>&& data);
-
-    // Get tensor file data (for reading from tarball)
-    std::vector<uint8_t> get_tensor_file(std::string_view filename) const;
-
-    // Check if tensor file exists
-    bool has_tensor_file(std::string_view filename) const;
 
     // Serialization method
     void serialize(std::string_view filename);
@@ -121,9 +101,32 @@ public:
 
     [[nodiscard]] ValueType get_value_type(std::string_view key) const;
 
+    [[nodiscard]] const std::filesystem::path& get_base_dir() const;
+
 private:
-    class Impl;
-    std::unique_ptr<Impl> m_impl;
+    std::vector<uint8_t> build_flatbuffer(const std::unordered_map<std::string, ValueType>& data_subset) const;
+    std::string get_prefix(std::string_view key) const;
+    std::vector<std::pair<std::string, std::vector<uint8_t>>> build_flatbuffer_files() const;
+    void do_serialize(
+        std::string_view dirname, const std::vector<std::pair<std::string, std::vector<uint8_t>>>& flatbuffer_files);
+    void deserialize_flatbuffer(const std::vector<uint8_t>& buffer, std::string_view prefix);
+    void do_deserialize(std::string_view filename);
+    // Helper function to get value from m_data
+    template <typename T>
+    T get_value(std::string_view key) const {
+        auto it = m_data.find(std::string(key));
+        if (it != m_data.end()) {
+            if (const auto* pval = std::get_if<T>(&(it->second))) {
+                return *pval;
+            } else {
+                throw std::runtime_error(fmt::format("Type mismatch for key: {}", key));
+            }
+        } else {
+            throw std::runtime_error(fmt::format("Key not found: {}", key));
+        }
+    }
+
+    std::unordered_map<std::string, ValueType> m_data;
 };
 
 }  // namespace ttml::serialization

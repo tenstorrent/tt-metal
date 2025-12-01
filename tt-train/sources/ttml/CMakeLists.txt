@@ -165,10 +165,6 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/step_scheduler.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/flatbuffer_file.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/flatbuffer_file.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/tar_reader.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/tar_reader.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/tar_writer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/tar_writer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/safetensors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/safetensors.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serializable.hpp

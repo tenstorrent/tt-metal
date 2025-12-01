@@ -74,7 +74,6 @@ void get_enum(FlatBufferFile& file, std::string_view name, T& value) {
 
 void write_ttnn_tensor(FlatBufferFile& file, std::string_view name, const tt::tt_metal::Tensor& tensor) {
     // Use tt-metal's flatbuffer serialization methods directly
-    // Generate a unique filename for this tensor (relative path for tarball)
     std::string tensor_filename = std::string(name) + ".tensorbin";
 
     // Store metadata before any conversion
@@ -97,40 +96,17 @@ void write_ttnn_tensor(FlatBufferFile& file, std::string_view name, const tt::tt
             "tensor.to_layout(Layout::TILE) or tensor.cpu()");
     }
 
-    // Write tensor to a temporary file, then read it back into memory
-    // This allows us to include it in the tarball via tar_writer
-    std::filesystem::path temp_tensor_path = std::filesystem::temp_directory_path() / tensor_filename;
-    std::filesystem::path temp_parent = temp_tensor_path.parent_path();
-    if (!temp_parent.empty()) {
-        std::filesystem::create_directories(temp_parent);
+    // Write tensor file directly to the output directory
+    std::filesystem::path tensor_path = tensor_filename;
+    std::filesystem::path tensor_parent = tensor_path.parent_path();
+    if (!tensor_parent.empty()) {
+        std::filesystem::create_directories(tensor_parent);
     }
 
-    std::string temp_tensor_file = temp_tensor_path.string();
-    tt::tt_metal::dump_tensor_flatbuffer(temp_tensor_file, tensor_to_dump);
+    std::string tensor_file_path = tensor_path.string();
+    tt::tt_metal::dump_tensor_flatbuffer(tensor_file_path, tensor_to_dump);
 
-    // Read the tensor file back into memory
-    std::ifstream tensor_file(temp_tensor_file, std::ios::binary | std::ios::ate);
-    if (!tensor_file.is_open()) {
-        std::filesystem::remove(temp_tensor_file);  // Clean up temp file
-        throw std::runtime_error(fmt::format("Failed to read tensor file: {}", temp_tensor_file));
-    }
-
-    size_t file_size = tensor_file.tellg();
-    tensor_file.seekg(0, std::ios::beg);
-
-    std::vector<uint8_t> tensor_data(file_size);
-    tensor_file.read(reinterpret_cast<char*>(tensor_data.data()), file_size);
-    tensor_file.close();
-    std::filesystem::remove(temp_tensor_file);  // Clean up temp file
-
-    if (!tensor_file.good() && file_size > 0) {
-        throw std::runtime_error(fmt::format("Failed to read tensor file data: {}", temp_tensor_file));
-    }
-
-    // Add tensor file to FlatBufferFile for inclusion in tarball
-    file.add_tensor_file(tensor_filename, std::move(tensor_data));
-
-    // Store the filename in FlatBufferFile (relative path for tarball extraction)
+    // Store the relative path in metadata
     file.put(std::string(name) + "/tensor_file", std::string_view(tensor_filename));
 
     // Store metadata needed to restore tensor properties (layout, shape, storage_type) on deserialization
@@ -144,34 +120,17 @@ void read_ttnn_tensor(FlatBufferFile& file, std::string_view name, tt::tt_metal:
     // Use tt-metal's flatbuffer deserialization methods directly
     std::string tensor_filename = file.get_string(std::string(name) + "/tensor_file");
 
-    // If using tarball mode, extract tensor file from tarball to temp location
-    std::string actual_tensor_path = tensor_filename;
-    if (file.get_use_tarball() && file.has_tensor_file(tensor_filename)) {
-        // Extract tensor file from tarball to temp location
-        std::vector<uint8_t> tensor_data = file.get_tensor_file(tensor_filename);
-        std::filesystem::path temp_tensor_path = std::filesystem::temp_directory_path() / tensor_filename;
-        std::filesystem::path temp_parent = temp_tensor_path.parent_path();
-        if (!temp_parent.empty()) {
-            std::filesystem::create_directories(temp_parent);
-        }
+    // Resolve tensor file path relative to the flatbuffer file directory
+    std::filesystem::path tensor_path = tensor_filename;
+    std::string tensor_file_path = tensor_path.string();
 
-        std::ofstream temp_file(temp_tensor_path, std::ios::binary);
-        if (!temp_file.is_open()) {
-            throw std::runtime_error(fmt::format("Failed to create temp tensor file: {}", temp_tensor_path.string()));
-        }
-        temp_file.write(reinterpret_cast<const char*>(tensor_data.data()), tensor_data.size());
-        temp_file.close();
-
-        actual_tensor_path = temp_tensor_path.string();
+    // Check if tensor file exists on disk
+    if (!std::filesystem::exists(tensor_path)) {
+        throw std::runtime_error(fmt::format("Tensor file not found: {}", tensor_file_path));
     }
 
     // Use tt-metal's load_tensor_flatbuffer to read tensor from file
-    tensor = tt::tt_metal::load_tensor_flatbuffer(actual_tensor_path, &ttml::autograd::ctx().get_device());
-
-    // Clean up temp file if we created one
-    if (file.get_use_tarball() && file.has_tensor_file(tensor_filename)) {
-        std::filesystem::remove(actual_tensor_path);
-    }
+    tensor = tt::tt_metal::load_tensor_flatbuffer(tensor_file_path, &ttml::autograd::ctx().get_device());
 
     // Restore original layout and shape if needed
     tt::tt_metal::Layout original_layout{};

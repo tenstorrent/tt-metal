@@ -23,8 +23,6 @@
 #include "core/tt_tensor_utils.hpp"
 #include "core/ttnn_all_includes.hpp"
 #include "serialization/serialization.hpp"
-#include "serialization/tar_reader.hpp"
-#include "serialization/tar_writer.hpp"
 
 namespace {
 // Concept for trivially copyable types
@@ -200,18 +198,6 @@ TEST_F(FlatBufferFileTest, InvalidDataDeserialization) {
     EXPECT_ANY_THROW(deserializer.deserialize(test_filename));
 }
 
-TEST_F(FlatBufferFileTest, InvalidTarballMissingFlatbufferFiles) {
-    // Create a tarball without any .flatbuffer files using TarWriter
-    ttml::serialization::TarWriter tar_writer;
-    std::vector<uint8_t> test_data{'t', 'e', 's', 't'};
-    tar_writer.add_file("other_file.txt", std::move(test_data));
-    tar_writer.write_to_file(test_filename);
-
-    // Try to deserialize - should throw because no .flatbuffer files found
-    ttml::serialization::FlatBufferFile deserializer;
-    EXPECT_THROW(deserializer.deserialize(test_filename), std::runtime_error);
-}
-
 TEST_F(FlatBufferFileTest, MultipleDataTypesSerialization) {
     ttml::serialization::FlatBufferFile serializer;
 
@@ -306,211 +292,6 @@ TEST_F(FlatBufferFileTest, CharVector) {
     serializer.serialize(test_filename);
 }
 
-TEST_F(FlatBufferFileTest, TarballStructure) {
-    ttml::serialization::FlatBufferFile serializer;
-
-    serializer.put("test_key", 42);
-    serializer.put("string_key", "test value");
-
-    // Serialize to tarball
-    serializer.serialize(test_filename);
-
-    // Verify tarball structure using TarReader
-    ttml::serialization::TarReader tar_reader;
-    ASSERT_NO_THROW(tar_reader.read_from_file(test_filename));
-
-    // Verify tarball contains data.flatbuffer (default prefix for keys without '/')
-    EXPECT_TRUE(tar_reader.has_file("data.flatbuffer"));
-
-    // Verify file list
-    auto files = tar_reader.list_files();
-    EXPECT_EQ(files.size(), 1);
-    EXPECT_EQ(files[0], "data.flatbuffer");
-
-    // Verify we can extract the flatbuffer data
-    auto flatbuffer_data = tar_reader.get_file("data.flatbuffer");
-    EXPECT_FALSE(flatbuffer_data.empty());
-    EXPECT_GT(flatbuffer_data.size(), 0);
-}
-
-TEST_F(FlatBufferFileTest, MultipleFilesInTarball) {
-    ttml::serialization::FlatBufferFile serializer;
-
-    // Add data with different prefixes
-    serializer.put("model/weight1", 1.0F);
-    serializer.put("model/weight2", 2.0F);
-    serializer.put("optimizer/lr", 0.001);
-    serializer.put("optimizer/momentum", 0.9);
-    serializer.put("scheduler/step", 100);
-
-    // Serialize to tarball
-    serializer.serialize(test_filename);
-
-    // Verify tarball structure using TarReader
-    ttml::serialization::TarReader tar_reader;
-    tar_reader.read_from_file(test_filename);
-
-    // Verify tarball contains multiple files
-    EXPECT_TRUE(tar_reader.has_file("model.flatbuffer"));
-    EXPECT_TRUE(tar_reader.has_file("optimizer.flatbuffer"));
-    EXPECT_TRUE(tar_reader.has_file("scheduler.flatbuffer"));
-
-    // Verify file list
-    auto files = tar_reader.list_files();
-    EXPECT_EQ(files.size(), 3);
-
-    // Verify we can extract each flatbuffer data
-    auto model_data = tar_reader.get_file("model.flatbuffer");
-    EXPECT_FALSE(model_data.empty());
-    EXPECT_GT(model_data.size(), 0);
-
-    auto optimizer_data = tar_reader.get_file("optimizer.flatbuffer");
-    EXPECT_FALSE(optimizer_data.empty());
-    EXPECT_GT(optimizer_data.size(), 0);
-
-    auto scheduler_data = tar_reader.get_file("scheduler.flatbuffer");
-    EXPECT_FALSE(scheduler_data.empty());
-    EXPECT_GT(scheduler_data.size(), 0);
-
-    // Verify deserialization works correctly
-    ttml::serialization::FlatBufferFile deserializer;
-    deserializer.deserialize(test_filename);
-
-    float weight1 = 0.F;
-    EXPECT_NO_THROW(weight1 = deserializer.get_float("model/weight1"));
-    EXPECT_FLOAT_EQ(weight1, 1.0F);
-
-    float weight2 = 0.F;
-    EXPECT_NO_THROW(weight2 = deserializer.get_float("model/weight2"));
-    EXPECT_FLOAT_EQ(weight2, 2.0F);
-
-    double lr = 0.0;
-    EXPECT_NO_THROW(lr = deserializer.get_double("optimizer/lr"));
-    EXPECT_DOUBLE_EQ(lr, 0.001);
-
-    double momentum = 0.0;
-    EXPECT_NO_THROW(momentum = deserializer.get_double("optimizer/momentum"));
-    EXPECT_DOUBLE_EQ(momentum, 0.9);
-
-    int step = 0;
-    EXPECT_NO_THROW(step = deserializer.get_int("scheduler/step"));
-    EXPECT_EQ(step, 100);
-}
-
-TEST_F(FlatBufferFileTest, TarballRoundTrip) {
-    ttml::serialization::FlatBufferFile serializer;
-
-    serializer.put("int_key", 123);
-    serializer.put("float_key", 3.14F);
-    std::vector<int> vec = {1, 2, 3};
-    serializer.put("vec_key", std::span<const int>(vec));
-
-    // Serialize to tarball
-    serializer.serialize(test_filename);
-
-    // Read tarball and verify structure
-    ttml::serialization::TarReader tar_reader;
-    tar_reader.read_from_file(test_filename);
-
-    EXPECT_TRUE(tar_reader.has_file("data.flatbuffer"));
-    auto flatbuffer_data = tar_reader.get_file("data.flatbuffer");
-
-    // Deserialize using FlatBufferFile (which internally uses TarReader)
-    ttml::serialization::FlatBufferFile deserializer;
-    deserializer.deserialize(test_filename);
-
-    // Verify data integrity
-    int int_value = 0;
-    EXPECT_NO_THROW(int_value = deserializer.get_int("int_key"));
-    EXPECT_EQ(int_value, 123);
-
-    float float_value = 0.F;
-    EXPECT_NO_THROW(float_value = deserializer.get_float("float_key"));
-    EXPECT_FLOAT_EQ(float_value, 3.14F);
-}
-
-TEST_F(FlatBufferFileTest, CompressedTarballWithScopedTempDir) {
-    // Create serializer with tarball and compression enabled
-    ttml::serialization::FlatBufferFile serializer(true);
-    EXPECT_TRUE(serializer.get_use_tarball());
-
-    serializer.set_compress(true);
-    EXPECT_TRUE(serializer.get_compress());
-
-    // Add various data types
-    serializer.put("int_key", 42);
-    serializer.put("float_key", 3.14159F);
-    serializer.put("double_key", 2.71828);
-    serializer.put("string_key", "Hello, Compressed World!");
-    serializer.put("bool_key", true);
-    serializer.put("char_key", 'Z');
-    serializer.put("uint_key", static_cast<uint32_t>(987654321));
-    serializer.put("size_key", static_cast<size_t>(123456789));
-
-    std::vector<int> int_vec = {10, 20, 30, 40, 50};
-    std::vector<float> float_vec = {1.1F, 2.2F, 3.3F, 4.4F};
-    std::vector<std::string> string_vec = {"compressed", "tarball", "test"};
-    serializer.put("int_vector", std::span<const int>(int_vec));
-    serializer.put("float_vector", std::span<const float>(float_vec));
-    serializer.put("string_vector", std::span<const std::string>(string_vec));
-
-    // Serialize to compressed tarball
-    std::filesystem::path output_file = temp_dir / "compressed_data.tar.zst";
-    ASSERT_NO_THROW(serializer.serialize(output_file.string()));
-
-    // Verify file exists and is compressed (check for zstd magic number)
-    ASSERT_TRUE(std::filesystem::exists(output_file));
-    std::ifstream file_check(output_file, std::ios::binary);
-    ASSERT_TRUE(file_check.is_open());
-    uint32_t magic = 0;
-    file_check.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-    file_check.close();
-    constexpr uint32_t ZSTD_MAGIC = 0xFD2FB528;
-    EXPECT_EQ(magic, ZSTD_MAGIC) << "File should be zstd compressed";
-
-    // Deserialize from compressed tarball
-    ttml::serialization::FlatBufferFile deserializer;
-    ASSERT_NO_THROW(deserializer.deserialize(output_file.string()));
-
-    // Verify all data matches
-    int int_value = 0;
-    EXPECT_NO_THROW(int_value = deserializer.get_int("int_key"));
-    EXPECT_EQ(int_value, 42);
-
-    float float_value = 0.F;
-    EXPECT_NO_THROW(float_value = deserializer.get_float("float_key"));
-    EXPECT_FLOAT_EQ(float_value, 3.14159F);
-
-    double double_value = 0.0;
-    EXPECT_NO_THROW(double_value = deserializer.get_double("double_key"));
-    EXPECT_DOUBLE_EQ(double_value, 2.71828);
-
-    std::string string_value;
-    EXPECT_NO_THROW(string_value = deserializer.get_string("string_key"));
-    EXPECT_EQ(string_value, "Hello, Compressed World!");
-
-    bool bool_value = false;
-    EXPECT_NO_THROW(bool_value = deserializer.get_bool("bool_key"));
-    EXPECT_EQ(bool_value, true);
-
-    char char_value = '\0';
-    EXPECT_NO_THROW(char_value = deserializer.get_char("char_key"));
-    EXPECT_EQ(char_value, 'Z');
-
-    uint32_t uint_value = 0;
-    EXPECT_NO_THROW(uint_value = deserializer.get_uint32("uint_key"));
-    EXPECT_EQ(uint_value, 987654321U);
-
-    size_t size_value = 0;
-    EXPECT_NO_THROW(size_value = deserializer.get_size_t("size_key"));
-    EXPECT_EQ(size_value, 123456789ULL);
-
-    // Verify tarball structure using TarReader
-    ttml::serialization::TarReader tar_reader;
-    ASSERT_NO_THROW(tar_reader.read_from_file(output_file.string()));
-    EXPECT_TRUE(tar_reader.has_file("data.flatbuffer"));
-}
-
 TEST_F(FlatBufferFileTest, BFloat16ScalarSerialization) {
     ttml::serialization::FlatBufferFile serializer;
 
@@ -555,24 +336,6 @@ TEST_F(FlatBufferFileTest, BFloat16BitExactPreservation) {
         EXPECT_EQ(std::bit_cast<uint16_t>(result), std::bit_cast<uint16_t>(test_values[i]))
             << "Bit-exact preservation failed for value " << i;
     }
-}
-
-TEST_F(FlatBufferFileTest, BFloat16CompressedTarball) {
-    ttml::serialization::FlatBufferFile serializer(true);
-    serializer.set_compress(true);
-
-    bfloat16 bf16_value(42.5F);
-
-    serializer.put("bf16_scalar", bf16_value);
-
-    std::filesystem::path output_file = temp_dir / "bf16_data.tar.zst";
-    serializer.serialize(output_file.string());
-
-    ttml::serialization::FlatBufferFile deserializer;
-    deserializer.deserialize(output_file.string());
-
-    bfloat16 result_scalar = deserializer.get_bfloat16("bf16_scalar");
-    EXPECT_EQ(std::bit_cast<uint16_t>(result_scalar), std::bit_cast<uint16_t>(bf16_value));
 }
 
 TEST_F(FlatBufferFileTest, BFloat16TypeMismatchThrows) {
@@ -683,24 +446,7 @@ struct TensorTestCase {
     std::string name;
 };
 
-struct SerializationConfig {
-    bool use_tarball;
-    bool compress;
-    std::string description;
-    std::string expected_extension;
-    bool expect_compression;
-};
-
-using TestParam = std::tuple<SerializationConfig, TensorTestCase>;
-
-// Pretty printer for SerializationConfig - returns string
-std::string to_string(const SerializationConfig& config) {
-    std::string result = config.description;
-    if (config.use_tarball) {
-        result += config.compress ? " (compressed)" : " (uncompressed)";
-    }
-    return result;
-}
+using TestParam = TensorTestCase;
 
 // Pretty printer for TensorTestCase - returns string
 std::string to_string(const TensorTestCase& test_case) {
@@ -730,18 +476,7 @@ std::string to_string(const TensorTestCase& test_case) {
     return result;
 }
 
-// Pretty printer for TestParam tuple - returns string
-std::string to_string(const TestParam& param) {
-    const auto& config = std::get<0>(param);
-    const auto& tensor_case = std::get<1>(param);
-    return to_string(config) + "_" + to_string(tensor_case);
-}
-
 // Ostream operators for Google Test parameter printing
-std::ostream& operator<<(std::ostream& os, const SerializationConfig& config) {
-    return os << to_string(config);
-}
-
 std::ostream& operator<<(std::ostream& os, const TensorTestCase& test_case) {
     return os << to_string(test_case);
 }
@@ -755,23 +490,17 @@ TEST_P(FlatBufferFileSerializationTest, ScopedTempDirWriteReadRoundTrip) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     const TestParam& param = GetParam();
-    const SerializationConfig& config = std::get<0>(param);
-    const TensorTestCase& test_case = std::get<1>(param);
+    const TensorTestCase& test_case = param;
 
     // Skip FLOAT32 ROW_MAJOR tests (both DEVICE and HOST) - they fail with typecast errors
-    if (test_case.dtype == tt::tt_metal::DataType::FLOAT32 &&
-        static_cast<int>(test_case.layout) == static_cast<int>(tt::tt_metal::Layout::ROW_MAJOR)) {
+    if (test_case.dtype == tt::tt_metal::DataType::FLOAT32 && test_case.layout == tt::tt_metal::Layout::ROW_MAJOR) {
         GTEST_SKIP() << "Skipping FLOAT32 ROW_MAJOR tensor serialization (API limitation: dump_tensor_flatbuffer "
                         "requires TILE layout for FLOAT32)";
     }
 
     const ttnn::Shape test_shape({1, 1, 32, 64});
 
-    ttml::serialization::FlatBufferFile serializer(config.use_tarball, config.compress);
-    EXPECT_EQ(serializer.get_use_tarball(), config.use_tarball);
-    if (config.use_tarball) {
-        EXPECT_EQ(serializer.get_compress(), config.compress);
-    }
+    ttml::serialization::FlatBufferFile serializer;
 
     serializer.put("int_key", 42);
     serializer.put("float_key", 3.14159F);
@@ -808,47 +537,18 @@ TEST_P(FlatBufferFileSerializationTest, ScopedTempDirWriteReadRoundTrip) {
     serializer.put(test_case.name + "/layout", static_cast<int>(tensor.layout()));
     serializer.put(test_case.name + "/storage_type", static_cast<int>(tensor.storage_type()));
 
-    std::filesystem::path output_file = temp_dir / ("test_data" + config.expected_extension);
+    std::filesystem::path output_file = temp_dir / "test_data";
     ASSERT_NO_THROW(serializer.serialize(output_file.string()));
 
-    // For non-tarball mode, files are created with _data suffix, so check for that
-    if (!config.use_tarball) {
-        std::filesystem::path base_file = temp_dir / "test_data_data.flatbuffer";
-        ASSERT_TRUE(std::filesystem::exists(base_file)) << "Individual flatbuffer file should exist: " << base_file;
-        EXPECT_GT(std::filesystem::file_size(base_file), 0);
-    } else {
-        ASSERT_TRUE(std::filesystem::exists(output_file)) << "Output file should exist: " << output_file;
-        EXPECT_GT(std::filesystem::file_size(output_file), 0);
-    }
+    std::filesystem::path base_file = temp_dir / "test_data_data.flatbuffer";
+    ASSERT_TRUE(std::filesystem::exists(base_file)) << "Individual flatbuffer file should exist: " << base_file;
+    EXPECT_GT(std::filesystem::file_size(base_file), 0);
 
-    if (config.expect_compression) {
-        std::ifstream file_check(output_file, std::ios::binary);
-        ASSERT_TRUE(file_check.is_open());
-        uint32_t magic = 0;
-        file_check.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-        file_check.close();
-        constexpr uint32_t ZSTD_MAGIC = 0xFD2FB528;
-        EXPECT_EQ(magic, ZSTD_MAGIC) << "File should be zstd compressed";
-    } else if (config.use_tarball) {
-        std::ifstream file_check(output_file, std::ios::binary);
-        ASSERT_TRUE(file_check.is_open());
-        uint32_t magic = 0;
-        file_check.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-        file_check.close();
-        constexpr uint32_t ZSTD_MAGIC = 0xFD2FB528;
-        EXPECT_NE(magic, ZSTD_MAGIC) << "File should NOT be zstd compressed";
-        ttml::serialization::TarReader tar_reader;
-        ASSERT_NO_THROW(tar_reader.read_from_file(output_file.string()));
-    } else {
-        std::filesystem::path base_file = temp_dir / "test_data_data.flatbuffer";
-        EXPECT_TRUE(std::filesystem::exists(base_file)) << "Individual flatbuffer file should exist";
-    }
-
-    ttml::serialization::FlatBufferFile deserializer(config.use_tarball, config.compress);
+    ttml::serialization::FlatBufferFile deserializer;
     // For non-tarball mode, deserialize expects the base filename (without extension)
     // The actual files are created with _data suffix (e.g., test_data_data.flatbuffer)
     // but deserialize_non_tarball looks for files matching the pattern base_filename_*.flatbuffer
-    std::string deserialize_filename = config.use_tarball ? output_file.string() : (temp_dir / "test_data").string();
+    std::string deserialize_filename = (temp_dir / "test_data").string();
     ASSERT_NO_THROW(deserializer.deserialize(deserialize_filename));
 
     int int_value = 0;
@@ -954,8 +654,8 @@ TEST_P(FlatBufferFileSerializationTest, ScopedTempDirWriteReadRoundTrip) {
         }
     }
 
-    ttml::serialization::FlatBufferFile deserializer2(config.use_tarball, config.compress);
-    std::string deserialize_filename2 = config.use_tarball ? output_file.string() : (temp_dir / "test_data").string();
+    ttml::serialization::FlatBufferFile deserializer2;
+    std::string deserialize_filename2 = (temp_dir / "test_data").string();
     ASSERT_NO_THROW(deserializer2.deserialize(deserialize_filename2));
     int int_value2 = 0;
     EXPECT_NO_THROW(int_value2 = deserializer2.get_int("int_key"));
@@ -967,103 +667,71 @@ TEST_P(FlatBufferFileSerializationTest, ScopedTempDirWriteReadRoundTrip) {
 INSTANTIATE_TEST_SUITE_P(
     SerializationConfigs,
     FlatBufferFileSerializationTest,
-    ::testing::Combine(
-        ::testing::Values(
-            SerializationConfig{true, true, "Compressed_Tarball", ".tar.zst", true},
-            SerializationConfig{true, false, "Uncompressed_Tarball", ".tar", false},
-            SerializationConfig{false, false, "Non_Tarball_Mode", "", false}),
-        ::testing::Values(
-            TensorTestCase{
-                tt::tt_metal::DataType::BFLOAT16,
-                ttnn::Layout::ROW_MAJOR,
-                tt::tt_metal::StorageType::DEVICE,
-                "bf16_row_device"},
-            TensorTestCase{
-                tt::tt_metal::DataType::BFLOAT16,
-                ttnn::Layout::TILE,
-                tt::tt_metal::StorageType::DEVICE,
-                "bf16_tile_device"},
-            TensorTestCase{
-                tt::tt_metal::DataType::BFLOAT16,
-                ttnn::Layout::ROW_MAJOR,
-                tt::tt_metal::StorageType::HOST,
-                "bf16_row_host"},
-            TensorTestCase{
-                tt::tt_metal::DataType::BFLOAT16,
-                ttnn::Layout::TILE,
-                tt::tt_metal::StorageType::HOST,
-                "bf16_tile_host"},
-            TensorTestCase{
-                tt::tt_metal::DataType::FLOAT32,
-                ttnn::Layout::ROW_MAJOR,
-                tt::tt_metal::StorageType::DEVICE,
-                "f32_row_device"},
-            TensorTestCase{
-                tt::tt_metal::DataType::FLOAT32,
-                ttnn::Layout::TILE,
-                tt::tt_metal::StorageType::DEVICE,
-                "f32_tile_device"},
-            TensorTestCase{
-                tt::tt_metal::DataType::FLOAT32,
-                ttnn::Layout::ROW_MAJOR,
-                tt::tt_metal::StorageType::HOST,
-                "f32_row_host"},
-            TensorTestCase{
-                tt::tt_metal::DataType::FLOAT32, ttnn::Layout::TILE, tt::tt_metal::StorageType::HOST, "f32_tile_host"},
-            TensorTestCase{
-                tt::tt_metal::DataType::UINT32,
-                ttnn::Layout::ROW_MAJOR,
-                tt::tt_metal::StorageType::DEVICE,
-                "u32_row_device"},
-            TensorTestCase{
-                tt::tt_metal::DataType::UINT32,
-                ttnn::Layout::TILE,
-                tt::tt_metal::StorageType::DEVICE,
-                "u32_tile_device"},
-            TensorTestCase{
-                tt::tt_metal::DataType::UINT32,
-                ttnn::Layout::ROW_MAJOR,
-                tt::tt_metal::StorageType::HOST,
-                "u32_row_host"},
-            TensorTestCase{
-                tt::tt_metal::DataType::UINT32, ttnn::Layout::TILE, tt::tt_metal::StorageType::HOST, "u32_tile_host"},
-            TensorTestCase{
-                tt::tt_metal::DataType::INT32,
-                ttnn::Layout::ROW_MAJOR,
-                tt::tt_metal::StorageType::DEVICE,
-                "i32_row_device"},
-            TensorTestCase{
-                tt::tt_metal::DataType::INT32,
-                ttnn::Layout::TILE,
-                tt::tt_metal::StorageType::DEVICE,
-                "i32_tile_device"},
-            TensorTestCase{
-                tt::tt_metal::DataType::INT32,
-                ttnn::Layout::ROW_MAJOR,
-                tt::tt_metal::StorageType::HOST,
-                "i32_row_host"},
-            TensorTestCase{
-                tt::tt_metal::DataType::INT32, ttnn::Layout::TILE, tt::tt_metal::StorageType::HOST, "i32_tile_host"},
-            TensorTestCase{
-                tt::tt_metal::DataType::BFLOAT8_B,
-                ttnn::Layout::TILE,
-                tt::tt_metal::StorageType::DEVICE,
-                "bf8_tile_device"},
-            TensorTestCase{
-                tt::tt_metal::DataType::BFLOAT8_B,
-                ttnn::Layout::TILE,
-                tt::tt_metal::StorageType::HOST,
-                "bf8_tile_host"},
-            TensorTestCase{
-                tt::tt_metal::DataType::BFLOAT4_B,
-                ttnn::Layout::TILE,
-                tt::tt_metal::StorageType::DEVICE,
-                "bf4_tile_device"},
-            TensorTestCase{
-                tt::tt_metal::DataType::BFLOAT4_B,
-                ttnn::Layout::TILE,
-                tt::tt_metal::StorageType::HOST,
-                "bf4_tile_host"})),
+    ::testing::Values(
+        TensorTestCase{
+            tt::tt_metal::DataType::BFLOAT16,
+            ttnn::Layout::ROW_MAJOR,
+            tt::tt_metal::StorageType::DEVICE,
+            "bf16_row_device"},
+        TensorTestCase{
+            tt::tt_metal::DataType::BFLOAT16,
+            ttnn::Layout::TILE,
+            tt::tt_metal::StorageType::DEVICE,
+            "bf16_tile_device"},
+        TensorTestCase{
+            tt::tt_metal::DataType::BFLOAT16,
+            ttnn::Layout::ROW_MAJOR,
+            tt::tt_metal::StorageType::HOST,
+            "bf16_row_host"},
+        TensorTestCase{
+            tt::tt_metal::DataType::BFLOAT16, ttnn::Layout::TILE, tt::tt_metal::StorageType::HOST, "bf16_tile_host"},
+        TensorTestCase{
+            tt::tt_metal::DataType::FLOAT32,
+            ttnn::Layout::ROW_MAJOR,
+            tt::tt_metal::StorageType::DEVICE,
+            "f32_row_device"},
+        TensorTestCase{
+            tt::tt_metal::DataType::FLOAT32, ttnn::Layout::TILE, tt::tt_metal::StorageType::DEVICE, "f32_tile_device"},
+        TensorTestCase{
+            tt::tt_metal::DataType::FLOAT32, ttnn::Layout::ROW_MAJOR, tt::tt_metal::StorageType::HOST, "f32_row_host"},
+        TensorTestCase{
+            tt::tt_metal::DataType::FLOAT32, ttnn::Layout::TILE, tt::tt_metal::StorageType::HOST, "f32_tile_host"},
+        TensorTestCase{
+            tt::tt_metal::DataType::UINT32,
+            ttnn::Layout::ROW_MAJOR,
+            tt::tt_metal::StorageType::DEVICE,
+            "u32_row_device"},
+        TensorTestCase{
+            tt::tt_metal::DataType::UINT32, ttnn::Layout::TILE, tt::tt_metal::StorageType::DEVICE, "u32_tile_device"},
+        TensorTestCase{
+            tt::tt_metal::DataType::UINT32, ttnn::Layout::ROW_MAJOR, tt::tt_metal::StorageType::HOST, "u32_row_host"},
+        TensorTestCase{
+            tt::tt_metal::DataType::UINT32, ttnn::Layout::TILE, tt::tt_metal::StorageType::HOST, "u32_tile_host"},
+        TensorTestCase{
+            tt::tt_metal::DataType::INT32,
+            ttnn::Layout::ROW_MAJOR,
+            tt::tt_metal::StorageType::DEVICE,
+            "i32_row_device"},
+        TensorTestCase{
+            tt::tt_metal::DataType::INT32, ttnn::Layout::TILE, tt::tt_metal::StorageType::DEVICE, "i32_tile_device"},
+        TensorTestCase{
+            tt::tt_metal::DataType::INT32, ttnn::Layout::ROW_MAJOR, tt::tt_metal::StorageType::HOST, "i32_row_host"},
+        TensorTestCase{
+            tt::tt_metal::DataType::INT32, ttnn::Layout::TILE, tt::tt_metal::StorageType::HOST, "i32_tile_host"},
+        TensorTestCase{
+            tt::tt_metal::DataType::BFLOAT8_B,
+            ttnn::Layout::TILE,
+            tt::tt_metal::StorageType::DEVICE,
+            "bf8_tile_device"},
+        TensorTestCase{
+            tt::tt_metal::DataType::BFLOAT8_B, ttnn::Layout::TILE, tt::tt_metal::StorageType::HOST, "bf8_tile_host"},
+        TensorTestCase{
+            tt::tt_metal::DataType::BFLOAT4_B,
+            ttnn::Layout::TILE,
+            tt::tt_metal::StorageType::DEVICE,
+            "bf4_tile_device"},
+        TensorTestCase{
+            tt::tt_metal::DataType::BFLOAT4_B, ttnn::Layout::TILE, tt::tt_metal::StorageType::HOST, "bf4_tile_host"}),
     [](const ::testing::TestParamInfo<TestParam>& info) {
         // Use pretty printer to generate test name from all parameters
         std::string name = to_string(info.param);
