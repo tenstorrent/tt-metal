@@ -12,12 +12,7 @@ import sys
 import pytest
 import subprocess
 import time
-
-
-def is_watcher_enabled():
-    """Check if watcher is enabled via environment variable"""
-    return os.environ.get("TT_METAL_WATCHER") == "1"
-
+from models.common.utility_functions import is_watcher_enabled
 
 metal_home = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 triage_script = os.path.join(metal_home, "tools", "tt-triage.py")

@@ -7,8 +7,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import skip_with_watcher, is_watcher_enabled
-
 
 def test_with_ops(device):
     torch.manual_seed(0)
@@ -40,11 +38,7 @@ def test_with_ops(device):
     output = ttnn.matmul(a, b, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=8, x=8))
 
 
-@skip_with_watcher("Test is not passing with watcher enabled due to overflow of the code size")
 def test_mesh_device(
     mesh_device,
 ):
-    if is_watcher_enabled():
-        pytest.skip("Test is not passing with watcher enabled due to overflow of the code size")
-
     logger.debug("Testing All Devices")
