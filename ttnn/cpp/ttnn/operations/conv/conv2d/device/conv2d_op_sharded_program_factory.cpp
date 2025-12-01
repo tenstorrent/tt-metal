@@ -996,7 +996,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
 
     // Only use base_matmul_stagger_cycles if conditions are met
     const uint32_t effective_stagger_cycles = should_apply_stagger ? base_matmul_stagger_cycles : 0;
-    log_info(tt::LogOp, "Effective stagger cycles: {}", effective_stagger_cycles);
+    log_debug(tt::LogOp, "Effective stagger cycles: {}", effective_stagger_cycles);
     std::vector<uint32_t> compute_kernel_args = {
         act_block_w_ntiles,
         act_num_subblocks,
