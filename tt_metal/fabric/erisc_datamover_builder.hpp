@@ -230,9 +230,8 @@ struct FabricEriscDatamoverConfig {
 
     static constexpr std::size_t num_downstream_edms_vc0 = 1;
     static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;
-    static constexpr std::size_t num_downstream_edms_vc1 = 1;
-    static constexpr std::size_t num_downstream_edms = num_downstream_edms_vc0 + num_downstream_edms_vc1;
-    static constexpr std::size_t num_downstream_edms_2d = num_downstream_edms_2d_vc0 + num_downstream_edms_vc1;
+    static constexpr std::size_t num_downstream_edms = num_downstream_edms_vc0;
+    static constexpr std::size_t num_downstream_edms_2d = num_downstream_edms_2d_vc0;
     static constexpr std::size_t max_downstream_edms = std::max(num_downstream_edms, num_downstream_edms_2d);
     static constexpr uint32_t num_virtual_channels = 2;
 
@@ -325,11 +324,6 @@ struct FabricEriscDatamoverConfig {
     std::array<std::size_t, builder_config::num_sender_channels> sender_channel_ack_noc_ids = {};
     std::array<std::size_t, builder_config::num_sender_channels> sender_channel_ack_cmd_buf_ids = {};
 
-    // // Dateline Upstream EDM skip connection flag
-    bool skip_sender_channel_1_connection = false;
-    bool skip_receiver_channel_1_connection = false;
-    bool skip_sender_vc1_channel_connection = false;
-
     // emd vcs
     std::size_t edm_noc_vc = 0;
 
@@ -350,8 +344,6 @@ struct FabricEriscDatamoverConfig {
     std::shared_ptr<FabricRemoteChannelsAllocator> remote_channels_allocator;
 
 private:
-    void configure_skip_connection_flags(Topology topology, FabricEriscDatamoverOptions const& options);
-
     FabricEriscDatamoverConfig(Topology topology = Topology::Linear);
 };
 
@@ -453,8 +445,8 @@ public:
 
         const FabricEriscDatamoverConfig& config,
         eth_chan_directions direction,
+        std::vector<bool>&& sender_channel_injection_flags,
         bool build_in_worker_connection_mode = false,
-        FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default,
         bool has_tensix_extension = false);
 
     static FabricEriscDatamoverBuilder build(
@@ -464,8 +456,8 @@ public:
         const FabricNodeId& local_fabric_node_id,
         const FabricNodeId& peer_fabric_node_id,
         const FabricEriscDatamoverConfig& config,
+        std::vector<bool>&& sender_channel_injection_flags,
         bool build_in_worker_connection_mode = false,
-        FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default,
         eth_chan_directions direction = eth_chan_directions::EAST,
         bool has_tensix_extension = false);
 
@@ -476,8 +468,8 @@ public:
         ChipId local_physical_chip_id,
         ChipId peer_physical_chip_id,
         const FabricEriscDatamoverConfig& config,
+        std::vector<bool>&& sender_channel_injection_flags,
         bool build_in_worker_connection_mode = false,
-        FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default,
         eth_chan_directions direction = eth_chan_directions::EAST,
         bool has_tensix_extension = false);
 
@@ -509,6 +501,8 @@ public:
     void set_firmware_context_switch_interval(size_t interval);
     void set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType type);
     void set_wait_for_host_signal(bool wait_for_host_signal);
+
+    bool is_first_level_ack_enabled() const { return this->enable_first_level_ack; }
 
     //    protected:
     friend class EdmLineFabricOpInterface;
@@ -553,12 +547,12 @@ public:
 
     mutable std::array<bool, builder_config::num_sender_channels> sender_channel_connection_liveness_check_disable_array = {};
 
+    mutable std::vector<bool> sender_channel_is_traffic_injection_channel_array;
+
     bool build_in_worker_connection_mode = false;
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
     FabricEriscDatamoverContextSwitchType firmware_context_switch_type = default_firmware_context_switch_type;
     bool fuse_receiver_flush_and_completion_ptr = true;
-    FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default;
-    bool dateline_connection = false;
     bool wait_for_host_signal = false;
     bool has_tensix_extension = false;
     uint32_t num_downstream_tensix_connections = 0;
@@ -566,6 +560,13 @@ public:
     uint32_t local_tensix_relay_num_buffers = 0;  // Number of buffers in the local relay channel
 
 private:
+    // first level acks are acknowledgement credits sent from receiver to sender channels on receipt of packets
+    // and can be used to know when the sender is able to recover a buffer slot in the channel, for new data from
+    // its producer(s).
+    // First level acks are required for any topologies that are using bubble flow control (e.g. ring/torus topologies)
+    // it is optional for other topologies and usually hurts performance in those other cases due to added CPU overheads
+    bool enable_first_level_ack = false;
+
     // Shared helper for setting up VC connections
     void setup_downstream_vc_connection(
         FabricDatamoverBuilderBase* downstream_builder, uint32_t vc_idx, uint32_t channel_id, bool is_vc1);
