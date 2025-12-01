@@ -271,7 +271,7 @@ jobs:
       merge-gate-call: true
 
   cpp-merge-gate-tests:
-    needs: [build, find-changes]
+    needs: [build-asan, find-changes]
     # if: ${{ github.ref_name == 'main' ||
     #         needs.find-changes.outputs.cmake-changed == 'true' ||
     #         needs.find-changes.outputs.tt-metalium-changed == 'true' ||
@@ -287,9 +287,8 @@ jobs:
     uses: ./.github/workflows/cpp-post-commit.yaml
     secrets: inherit
     with:
-      docker-image: ${{ needs.build.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-asan.outputs.build-artifact-name }}
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       gtest_filter: "*-*NIGHTLY_*"
