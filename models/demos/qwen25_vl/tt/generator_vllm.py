@@ -211,7 +211,6 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
                 dim=0,
             )
 
-        print(f"kwargs: {kwargs}")
         if envs.VLLM_USE_V1:
             if (
                 "pixel_values" in kwargs
@@ -228,7 +227,6 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
                 inputs.image_grid_thw = torch.concat(
                     [im for user_image_grid_thw in kwargs["image_grid_thw"] for im in user_image_grid_thw], dim=0
                 )
-                print(f"inputs.pixel_values: {inputs.pixel_values}")
                 # Vision prefill
                 image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
             else:
