@@ -723,6 +723,9 @@ def test_demo_for_conditional_generation(
         stream=stream,
     )
 
+    logger.info(f"TTFT: {ttft}")
+    logger.info(f"Decode throughput: {decode_throughput}")
+
     # Skip test in CI when using generate_kwargs
     if is_ci_env and model_repo == "openai/whisper-large-v3" and compression_ratio_threshold is not None:
         pytest.skip("Skipping test in CI since it provides redundant testing")
@@ -735,7 +738,7 @@ def test_demo_for_conditional_generation(
     ):
         metrics_dictionary = {
             1: {"prefill_time_to_token": 0.24, "decode_t/s/u": 53.2},
-            2: {"prefill_time_to_token": 0.27, "decode_t/s/u": 48.09},
+            2: {"prefill_time_to_token": 0.16, "decode_t/s/u": 96.67},
             8: {"prefill_time_to_token": 0.28, "decode_t/s/u": 42.1},
             32: {"prefill_time_to_token": 0.35, "decode_t/s/u": 43.1},
         }
