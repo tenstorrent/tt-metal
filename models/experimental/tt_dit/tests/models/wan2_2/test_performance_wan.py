@@ -293,7 +293,7 @@ def test_pipeline_performance(
         device_name_map = {
             (1, 4): "bh_qb",
             (2, 4): "wh_t3k",
-            (4, 8): "wh_glx",
+            (4, 8): "bh_glx" if is_blackhole() else "wh_glx",
         }
         # In CI, dump a performance report
         profiler_model_name = f"wan_{device_name_map[tuple(mesh_device.shape)]}_sp{sp_factor}_tp{tp_factor}"
