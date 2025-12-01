@@ -1,11 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rotate_half.hpp"
 
 #include "device/rotate_half_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 
@@ -29,9 +28,7 @@ Tensor RotateHalfOperation::invoke(const Tensor& input_tensor, const std::option
     auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
     Tensor formatted_input =
         ttnn::tilize_with_val_padding(input_tensor, padded_shape, PadValue(0.0f), input_tensor.memory_config());
-    return tt::tt_metal::operation::run(
-               RotateHalf{memory_config.value_or(input_tensor.memory_config())}, {formatted_input})
-        .at(0);
+    return ttnn::prim::rotate_half(formatted_input, memory_config.value_or(input_tensor.memory_config()));
 }
 
 }  // namespace ttnn::operations::experimental::transformer
