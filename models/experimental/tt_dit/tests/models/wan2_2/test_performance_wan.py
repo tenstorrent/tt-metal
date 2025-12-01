@@ -14,7 +14,6 @@ from models.experimental.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from diffusers.utils import export_to_video
 from ....parallel.config import DiTParallelConfig, VaeHWParallelConfig, ParallelFactor
 from ....utils.test import line_params, ring_params
-from models.common.utility_functions import is_blackhole
 
 
 @pytest.mark.parametrize(
