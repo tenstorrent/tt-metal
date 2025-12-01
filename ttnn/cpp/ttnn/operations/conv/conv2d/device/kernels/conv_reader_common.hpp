@@ -472,3 +472,116 @@ FORCE_INLINE void wait_write_done(volatile tt_l1_ptr uint32_t* semaphore_addr_pt
     noc_semaphore_wait(semaphore_addr_ptr, VALID);
     noc_semaphore_set(semaphore_addr_ptr, INVALID);
 }
+
+// Multicast activation data helper functions with offset support
+// Multicasts activation data from the local circular buffer to multiple destinations depending on the core role.
+template <uint32_t act_mcast_num_cores>
+FORCE_INLINE void multicast_data(
+    bool is_receiver_core,        // Whether this core is also a receiver of its own multicast (for loopback).
+    uint32_t src_l1_addr,         // SRC address in L1
+    uint32_t dst_l1_addr,         // DST address in L1
+    uint64_t multicast_noc_addr,  // Multicast NOC address
+    uint32_t total_bytes,         // Total bytes to send
+    uint32_t cb_offset = 0)       // Offset for both read and write in CB (default 0 for compatibility)
+{
+    src_l1_addr += cb_offset;
+    dst_l1_addr += cb_offset;
+    uint64_t multicast_write_addr = multicast_noc_addr | dst_l1_addr;
+
+    if (is_receiver_core) {
+        if constexpr (act_mcast_num_cores) {
+            // num_dests will source, since we are copying to a different local CB as well
+            noc_async_write_multicast_loopback_src(
+                src_l1_addr, multicast_write_addr, total_bytes, act_mcast_num_cores + 1, true);
+        } else {
+            // In this case sender core is the only receiver in the grid,
+            // we can't use the multicast_loopback_src (hang)
+            noc_async_write(get_noc_addr(src_l1_addr), get_noc_addr(dst_l1_addr), total_bytes);
+        }
+    } else {
+        // If sender core is not the receiver core as well we can't use the loopback mcast. (hang)
+        noc_async_write_multicast(src_l1_addr, multicast_write_addr, total_bytes, act_mcast_num_cores + 1, true);
+    }
+}
+
+// Multicast activation data from the local circular buffer to multiple destinations (dst_cb in receiver cores).
+// This function sends a block of data (the activation block) using NOC multicast commands, it avoids waiting for the
+// whole block to be available in the source CB before starting the multicast, instead waits for enough tiles to do one
+// multicast of NOC_MAX_BURST_SIZE size. This is because under the hood, the multicast splits the data into chunks of
+// NOC_MAX_BURST_SIZE size.
+// It calls the multicast_data function for each chunk of maximum size NOC_MAX_BURST_SIZE bytes.
+// The function does mcast loopback when the sender core is also a receiver core (it is both in output and input grids)
+// or mcast when the sender core is not a receiver core (it is only present in the input grid, mcast loopback will hang
+// if the core isn't one of receivers) or just local write when it is in both input and output grids but is the only
+// receiver core (will hang if mcast loopback is used).
+template <
+    uint32_t act_mcast_num_dest_cores,
+    uint32_t mcast_noc_burst_size,
+    uint32_t block_tile_count,
+    uint32_t tile_size>
+FORCE_INLINE void mcast_block_chunked(
+    bool is_receiver_core,
+    uint32_t src_cb,
+    uint32_t dst_cb,
+    uint64_t multicast_noc_addr,
+    uint32_t cb_offset = 0,         // Offset for both read and write in CB
+    uint32_t tile_wait_offset = 0)  // Offset for tile wait (starts waiting from this tile number)
+{
+    // number of full bursts
+    constexpr uint32_t mcast_full_burst_cnt = block_tile_count * tile_size / mcast_noc_burst_size;
+    // size of the leftover burst, if 0 means we have no leftover burst
+    constexpr uint32_t mcast_leftover_burst_size = block_tile_count * tile_size % mcast_noc_burst_size;
+    // number of tiles that we need to wait for to cover the full burst size
+    constexpr uint32_t wait_tile_full_cnt = (mcast_noc_burst_size + tile_size - 1) / tile_size;
+
+    // In full burst iterations we wait for a bit more than the full burst size in case where the
+    // tile size does not divide the burst size evenly.
+    // we need to ensure that we don't wait for more tiles than we have in the block
+    constexpr uint32_t wait_tile_full_done = std::min(mcast_full_burst_cnt * wait_tile_full_cnt, block_tile_count);
+
+    // optimization to avoid unnecessary branching in the loop
+    constexpr bool no_need_partial_wait_tile = mcast_full_burst_cnt * wait_tile_full_cnt <= block_tile_count;
+
+    // number of times we need to increase the wait_tile_curr for the full burst iterations
+    constexpr uint32_t wait_tile_full_iter_cnt = (wait_tile_full_done / wait_tile_full_cnt) - 1;
+
+    uint32_t src_l1_addr = get_read_ptr(src_cb);
+    uint32_t dst_l1_addr = get_write_ptr(dst_cb);
+
+    constexpr uint32_t wait_tile_start_cnt = std::min(block_tile_count, wait_tile_full_cnt);
+    uint32_t wait_tile_curr = wait_tile_start_cnt + tile_wait_offset;  // Apply tile wait offset
+
+    for (uint32_t i = 0; i < mcast_full_burst_cnt; i++) {
+        DPRINT << "cb: " << src_cb << " wait for tiles: " << wait_tile_curr << ENDL();
+        cb_wait_front(src_cb, wait_tile_curr);
+        multicast_data<act_mcast_num_dest_cores>(
+            is_receiver_core, src_l1_addr, dst_l1_addr, multicast_noc_addr, mcast_noc_burst_size, cb_offset);
+        src_l1_addr += mcast_noc_burst_size;
+        dst_l1_addr += mcast_noc_burst_size;
+
+        if constexpr (no_need_partial_wait_tile) {
+            wait_tile_curr += wait_tile_full_cnt;
+        } else {
+            // we shouldn't wait for more than the number of tiles in the block
+            if (i < wait_tile_full_iter_cnt) {
+                wait_tile_curr += wait_tile_full_cnt;
+            } else {
+                wait_tile_curr = block_tile_count + tile_wait_offset;  // Include offset in final wait
+            }
+        }
+    }
+
+    if constexpr (mcast_leftover_burst_size > 0) {
+        DPRINT << "cb: " << src_cb << " wait for tiles: " << (block_tile_count + tile_wait_offset) << ENDL();
+        cb_wait_front(src_cb, block_tile_count + tile_wait_offset);
+        multicast_data<act_mcast_num_dest_cores>(
+            is_receiver_core, src_l1_addr, dst_l1_addr, multicast_noc_addr, mcast_leftover_burst_size, cb_offset);
+    }
+
+    // In case we only do local l1 writes, we need to wait for the barrier to complete
+    if constexpr (act_mcast_num_dest_cores == 0) {
+        if (is_receiver_core) {
+            noc_async_write_barrier();
+        }
+    }
+}

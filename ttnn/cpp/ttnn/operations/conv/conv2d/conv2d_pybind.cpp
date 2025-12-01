@@ -250,7 +250,8 @@ void py_bind_conv2d(py::module& module) {
             std::optional<bool>,
             bool,
             std::optional<bool>,
-            bool>(),
+            bool,
+            std::optional<bool>>(),
         py::kw_only(),
         py::arg("weights_dtype") = std::nullopt,
         py::arg("activation") = std::nullopt,
@@ -271,7 +272,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("enable_kernel_stride_folding") = std::nullopt,
         py::arg("enable_activation_reuse") = false,
         py::arg("force_split_reader") = std::nullopt,
-        py::arg("override_output_sharding_config") = false);
+        py::arg("override_output_sharding_config") = false,
+        py::arg("force_act_mcast_split") = std::nullopt);
     py_conv_config.def_readwrite("weights_dtype", &Conv2dConfig::weights_dtype, R"doc(
         Optional argument which specifies the data type of the preprocessed weights & bias tensor if the Conv2D op is responsible for preparing the weights.
         Supports ttnn.bfloat16 and ttnn.bfloat8_b.
@@ -444,6 +446,26 @@ void py_bind_conv2d(py::module& module) {
         This impacts the core grid that executes matmul part of conv2d
         Feature is currently supported only for BLOCK_SHARDED layout, without DRAM slicing
         Additionally, NHW number of cores must match between input and output tensors
+
+        ===============================================================
+    )doc");
+
+    py_conv_config.def_readwrite("force_act_mcast_split", &Conv2dConfig::force_act_mcast_split, R"doc(
+        ===================== EXPERIMENTAL FEATURE ======================
+
+        Forces activation multicast splitting for block sharded convolutions when split reader is enabled.
+
+        When enabled, the activation multicast operation is split between the main reader and second reader:
+        - The main reader multicasts the first portion of activation tiles
+        - The second reader (writer kernel) multicasts the remaining tiles
+
+        This optimization is only applicable for block sharded convolutions with split reader enabled.
+
+        Args:
+            force_act_mcast_split (Optional[bool]):
+                - None (default): Uses internal heuristics to decide
+                - True: Force enable activation multicast splitting
+                - False: Disable activation multicast splitting
 
         ===============================================================
     )doc");
