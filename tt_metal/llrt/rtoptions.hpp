@@ -23,7 +23,7 @@
 #include "tt_target_device.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 namespace tt {
 
@@ -137,6 +137,7 @@ class RunTimeOptions {
     bool profiler_cpp_post_process = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
+    uint32_t profiler_perf_counter_mode = 0;
     std::string profiler_noc_events_report_path;
 
     bool null_kernels = false;
@@ -215,6 +216,9 @@ class RunTimeOptions {
     bool log_kernels_compilation_commands = false;
 
     // Enable fabric performance telemetry
+    bool enable_fabric_bw_telemetry = false;
+
+    // Enable fabric telemetry
     bool enable_fabric_telemetry = false;
 
     // Mock cluster initialization using a provided cluster descriptor
@@ -233,6 +237,16 @@ class RunTimeOptions {
 
     // Force JIT compile even if dependencies are up to date
     bool force_jit_compile = false;
+
+    // To be used for NUMA node based thread binding
+    bool numa_based_affinity = false;
+
+    // Fabric router sync timeout configuration (in milliseconds)
+    // If not set, fabric code will use its own default
+    std::optional<uint32_t> fabric_router_sync_timeout_ms = std::nullopt;
+
+    // Disable XIP dump
+    bool disable_xip_dump = false;
 
 public:
     RunTimeOptions();
@@ -434,6 +448,7 @@ public:
     bool get_profiler_cpp_post_process() const { return profiler_cpp_post_process; }
     bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
+    uint32_t get_profiler_perf_counter_mode() const { return profiler_perf_counter_mode; }
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
 
     void set_kernels_nullified(bool v) { null_kernels = v; }
@@ -525,6 +540,9 @@ public:
     // This BW telemetry is coarse grain and records the total time that the reouter has unsent and inflight packets.
     //
     // NOTE: Enabling this option will lead to a 0-2% performance degradation for fabric traffic.
+    bool get_enable_fabric_bw_telemetry() const { return enable_fabric_bw_telemetry; }
+    void set_enable_fabric_bw_telemetry(bool enable) { enable_fabric_bw_telemetry = enable; }
+
     bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
     void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
 
@@ -551,6 +569,12 @@ public:
     bool get_force_jit_compile() const { return force_jit_compile; }
     void set_force_jit_compile(bool enable) { force_jit_compile = enable; }
 
+    bool get_numa_based_affinity() const { return numa_based_affinity; }
+
+    std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
+
+    bool get_disable_xip_dump() const { return disable_xip_dump; }
+
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)
     void ParseAllFeatureEnv(const tt_metal::Hal& hal) {
@@ -570,7 +594,7 @@ private:
     void ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feature, const std::string& env_var);
     void HandleEnvVar(
         EnvVarID id, const char* value);  // Handle single env var (value usually non-null, see cpp for details)
-    void InitializeFromEnvVars();                       // Initialize all environment variables from table
+    void InitializeFromEnvVars();         // Initialize all environment variables from table
     // Helper function to parse watcher-specific environment variables.
     void ParseWatcherEnv();
 

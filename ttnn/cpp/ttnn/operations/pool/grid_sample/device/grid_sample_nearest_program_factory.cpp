@@ -11,7 +11,6 @@
 #include "ttnn/operations/pool/pool_utils.hpp"
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_nearest_program_factory.hpp"

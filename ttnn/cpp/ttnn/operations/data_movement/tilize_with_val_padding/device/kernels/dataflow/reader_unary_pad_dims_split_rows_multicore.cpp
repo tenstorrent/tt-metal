@@ -37,7 +37,6 @@ FORCE_INLINE void fill_with_val(uint32_t start_addr, uint32_t n_bytes, uint32_t 
 
     // For data-types smaller than 4Bytes, handle unaligned address
     if constexpr (val_size < 4) {
-        // if (start_addr != start_addr_4B || end_addr != end_addr_4B) {
         auto* start_ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(start_addr);
         auto* end_ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(end_addr);
         auto* start_ptr_4B = reinterpret_cast<volatile tt_l1_ptr IntType*>(start_addr_4B);
@@ -53,7 +52,6 @@ FORCE_INLINE void fill_with_val(uint32_t start_addr, uint32_t n_bytes, uint32_t 
         for (auto* ptr = end_ptr_4B; ptr < end_ptr; ++ptr) {
             *ptr = val_;
         }
-        // }
     }
 }
 

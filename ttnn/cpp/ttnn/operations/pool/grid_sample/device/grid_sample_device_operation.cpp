@@ -88,7 +88,9 @@ void GridSampleOperation::validate_on_program_cache_miss(
     }
 
     // Data type validation
-    TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16, "Input tensor must be BFLOAT16");
+    TT_FATAL(
+        input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::FLOAT32,
+        "Input tensor must be BFLOAT16 or FLOAT32");
     if (operation_attributes.use_precomputed_grid) {
         TT_FATAL(grid_tensor.dtype() == DataType::BFLOAT16, "Precomputed grid tensor must be BFLOAT16");
     } else {

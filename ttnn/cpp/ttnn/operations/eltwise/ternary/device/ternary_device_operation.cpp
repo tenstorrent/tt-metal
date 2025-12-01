@@ -8,6 +8,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 
+using namespace tt::tt_metal;
 namespace ttnn::operations::ternary {
 
 static ttnn::Shape compute_broadcasted_output_ternary(
@@ -70,6 +71,43 @@ static ttnn::Shape compute_broadcasted_output_ternary(
     return ttnn::Shape(output_shape);
 }
 
+CoreRangeSet get_worker_grid(
+    const Tensor& input_tensor_a,
+    const Tensor* input_tensor_b,
+    const Tensor* input_tensor_c,
+    const std::optional<Tensor>& output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    // If sub_core_grids is provided, use it directly
+    if (sub_core_grids.has_value()) {
+        return sub_core_grids.value();
+    }
+
+    auto get_tensor_grid = [](const Tensor& tensor) -> CoreRangeSet {
+        const auto& grid = tensor.shard_spec()->grid;
+        auto* device = tensor.device();
+        for (const auto& sub_device_id : device->get_sub_device_ids()) {
+            const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+            if (sub_device_workers.intersects(grid)) {
+                return sub_device_workers;
+            }
+        }
+        __builtin_unreachable();
+    };
+
+    if (input_tensor_a.is_sharded()) {
+        return get_tensor_grid(input_tensor_a);
+    } else if (input_tensor_b && input_tensor_b->is_sharded()) {
+        return get_tensor_grid(*input_tensor_b);
+    } else if (input_tensor_c && input_tensor_c->is_sharded()) {
+        return get_tensor_grid(*input_tensor_c);
+    } else if (output_tensor.has_value() && output_tensor->is_sharded()) {
+        return get_tensor_grid(*output_tensor);
+    }
+
+    auto* device = input_tensor_a.device();
+    return device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
+}
+
 static ttnn::Shape compute_broadcasted_output_binary(const ttnn::Shape& a_shape, const ttnn::Shape& b_shape) {
     const int rank_a = a_shape.rank();
     const int rank_b = b_shape.rank();
@@ -108,13 +146,18 @@ DataType TernaryDeviceOperation::operation_attributes_t::get_dtype() const { ret
 
 TernaryDeviceOperation::program_factory_t TernaryDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    TT_FATAL(!tensor_args.input_tensor_a.is_sharded(), "TernaryDeviceOperation is not implemented for sharded tensors");
     return TernaryProgramFactory{};
 }
 
 tt::stl::hash::hash_t TernaryDeviceOperation::operation_attributes_t::to_hash() const {
     return tt::stl::hash::hash_objects_with_default_seed(
-        ternary_op_type, ternary_variant, broadcast_type, memory_config, get_dtype(), compute_kernel_config);
+        ternary_op_type,
+        ternary_variant,
+        broadcast_type,
+        memory_config,
+        get_dtype(),
+        compute_kernel_config,
+        sub_core_grids);
 }
 
 void TernaryDeviceOperation::validate_on_program_cache_hit(
@@ -145,15 +188,40 @@ void TernaryDeviceOperation::validate_on_program_cache_miss(
         input_a.buffer() != nullptr,
         "Operands to eltwise ternary operation need to be allocated in buffers on the device. Buffer is null.");
 
-    TT_FATAL(
-        input_a.memory_config().memory_layout() == out_memory_config.memory_layout(),
-        "Ternary operation requires Input and Output memory layout to match. Input layout: {}, Output layout: {}",
-        static_cast<int>(input_a.memory_config().memory_layout()),
-        static_cast<int>(out_memory_config.memory_layout()));
+    // Validate each tensor individually
+    bool input_a_sharded = input_a.memory_config().is_sharded();
+    if (not input_a_sharded) {
+        TT_FATAL(
+            input_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Input A must be either sharded or interleaved");
+    }
+
+    bool output_sharded = out_memory_config.is_sharded();
+    if (not output_sharded) {
+        TT_FATAL(
+            out_memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Output must be either sharded or interleaved");
+    }
 
     // Validate tensor shapes based on variant
     if (args.ternary_variant == TernaryVariant::TTT) {
         TT_FATAL(input_b.has_value() && input_c.has_value(), "TTT variant requires both input_b and input_c tensors");
+
+        // Validate input_b (true tensor)
+        bool input_b_sharded = input_b->memory_config().is_sharded();
+        if (not input_b_sharded) {
+            TT_FATAL(
+                input_b->memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                "Input B must be either sharded or interleaved");
+        }
+
+        // Validate input_c (false tensor)
+        bool input_c_sharded = input_c->memory_config().is_sharded();
+        if (not input_c_sharded) {
+            TT_FATAL(
+                input_c->memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                "Input C must be either sharded or interleaved");
+        }
 
         TT_FATAL(
             ((broadcast_type != TernaryBroadcastType::SCALAR_A_BCAST) &&
@@ -321,7 +389,8 @@ TernaryDeviceOperation::invoke(
     const Tensor& input_c,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     // Detect broadcast type for TTT variant
     TernaryBroadcastType broadcast_type =
         get_broadcast_type(input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
@@ -332,8 +401,10 @@ TernaryDeviceOperation::invoke(
         .broadcast_type = broadcast_type,
         .memory_config = memory_config.value_or(input_b.memory_config()),
         .input_dtype = input_a.dtype(),
+        .worker_grid = get_worker_grid(input_a, &input_b, &input_c, optional_output_tensor, sub_core_grids),
         .dtype = output_dtype.value_or(input_b.dtype()),
         .compute_kernel_config = std::nullopt,
+        .sub_core_grids = sub_core_grids,
         .scalar_input_a = std::nullopt,
         .scalar_input_b = std::nullopt,
     };
@@ -356,7 +427,8 @@ TernaryDeviceOperation::invoke(
     float scalar,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     // This invoke variant is only for operations that need a scalar parameter with TTT variant
     TT_FATAL(
         op_type == TernaryOpType::ADDCMUL,
@@ -372,8 +444,10 @@ TernaryDeviceOperation::invoke(
         .broadcast_type = broadcast_type,
         .memory_config = memory_config.value_or(input_b.memory_config()),
         .input_dtype = input_a.dtype(),
+        .worker_grid = get_worker_grid(input_a, &input_b, &input_c, optional_output_tensor, sub_core_grids),
         .dtype = output_dtype.value_or(input_b.dtype()),
         .compute_kernel_config = std::nullopt,
+        .sub_core_grids = sub_core_grids,
         .scalar_input_a = scalar,  // Reuse scalar_input_a for ADDCMUL scalar value
         .scalar_input_b = std::nullopt,
     };
@@ -395,7 +469,8 @@ TernaryDeviceOperation::invoke(
     float scalar_c,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     // Detect broadcast type for TTS variant
     TernaryBroadcastType broadcast_type = get_broadcast_type(input_a.logical_shape(), input_b.logical_shape());
 
@@ -405,8 +480,10 @@ TernaryDeviceOperation::invoke(
         .broadcast_type = broadcast_type,
         .memory_config = memory_config.value_or(input_b.memory_config()),
         .input_dtype = input_a.dtype(),
+        .worker_grid = get_worker_grid(input_a, &input_b, nullptr, optional_output_tensor, sub_core_grids),
         .dtype = output_dtype.value_or(input_b.dtype()),
         .compute_kernel_config = std::nullopt,
+        .sub_core_grids = sub_core_grids,
         .scalar_input_b = scalar_c,
     };
 
@@ -427,7 +504,8 @@ TernaryDeviceOperation::invoke(
     const Tensor& input_c,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     TernaryBroadcastType broadcast_type = get_broadcast_type(input_a.logical_shape(), input_c.logical_shape());
 
     operation_attributes_t attributes{
@@ -436,8 +514,10 @@ TernaryDeviceOperation::invoke(
         .broadcast_type = broadcast_type,
         .memory_config = memory_config.value_or(input_c.memory_config()),
         .input_dtype = input_a.dtype(),
+        .worker_grid = get_worker_grid(input_a, nullptr, &input_c, optional_output_tensor, sub_core_grids),
         .dtype = output_dtype.value_or(input_c.dtype()),
         .compute_kernel_config = std::nullopt,
+        .sub_core_grids = sub_core_grids,
         .scalar_input_a = scalar_b,
     };
 

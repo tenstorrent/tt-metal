@@ -7,4 +7,5 @@
 #include "llk_math_eltwise_binary_sfpu_init.h"
 #include "llk_math_eltwise_binary_sfpu_add_top_row.h"
 #include "llk_math_eltwise_binary_sfpu_binop.h"
+#include "llk_math_eltwise_binary_sfpu_binary_pow.h"
 #include "llk_math_eltwise_binary_sfpu_max_pool_indices.h"

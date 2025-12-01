@@ -777,7 +777,7 @@ jobs:
               [ -z "$team_entry" ] && continue
               team=$(echo "$team_entry" | cut -d':' -f1)
               [ -z "$team" ] && continue
-              [ "$team" = "@tenstorrent/metalium-codeowners-large-changes" ] && continue
+              [ "$team" = "@tenstorrent/codeowner-bypass" ] && continue
               team_files=$(echo "$team_entry" | cut -d':' -f2-)
               clean_team=$(echo "$team" | sed 's/^@//')
               sorted_files=$(echo "$team_files" | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//')
@@ -1229,7 +1229,7 @@ jobs:
               "@tenstorrent/metalium-developers-infra")
                 echo "S0985AN7TC5"
                 ;;
-              "@tenstorrent/metalium-developers-ttnn-core")
+              "@tenstorrent/metalium-ttnn-core-team")
                 echo "S0988UJEW8K"
                 ;;
               "@tenstorrent/metalium-developers-convolutions")
@@ -1714,7 +1714,7 @@ jobs:
               "@tenstorrent/metalium-developers-infra")
                 echo "S0985AN7TC5"
                 ;;
-              "@tenstorrent/metalium-developers-ttnn-core")
+              "@tenstorrent/metalium-ttnn-core-team")
                 echo "S0988UJEW8K"
                 ;;
               "@tenstorrent/metalium-developers-convolutions")
@@ -1736,8 +1736,8 @@ jobs:
               "@tenstorrent/metalium-developers-infra")
                 echo "metalium-developers-infra"
                 ;;
-              "@tenstorrent/metalium-developers-ttnn-core")
-                echo "metalium-developers-ttnn-core"
+              "@tenstorrent/metalium-ttnn-core-team")
+                echo "metalium-ttnn-core-team"
                 ;;
               "@tenstorrent/metalium-developers-convolutions")
                 echo "metalium-developers-convolutions"
@@ -1767,7 +1767,7 @@ jobs:
               team=$(echo "$team_entry" | cut -d':' -f1)
               [ -z "$team" ] && continue
 
-              if [ "$team" = "@tenstorrent/metalium-codeowners-large-changes" ]; then
+              if [ "$team" = "@tenstorrent/codeowner-bypass" ]; then
                 continue
               fi
 
@@ -1871,8 +1871,8 @@ jobs:
               echo "DEBUG: Extracted team='$team'"
               [ -z "$team" ] && continue
 
-              if [ "$team" = "@tenstorrent/metalium-codeowners-large-changes" ]; then
-                echo "DEBUG: Skipping large-changes team"
+              if [ "$team" = "@tenstorrent/codeowner-bypass" ]; then
+                echo "DEBUG: Skipping codeowner-bypass team"
                 continue
               fi
 
@@ -2186,7 +2186,7 @@ jobs:
               "@tenstorrent/metalium-developers-infra")
                 echo "S0985AN7TC5"
                 ;;
-              "@tenstorrent/metalium-developers-ttnn-core")
+              "@tenstorrent/metalium-ttnn-core-team")
                 echo "S0988UJEW8K"
                 ;;
               "@tenstorrent/metalium-developers-convolutions")

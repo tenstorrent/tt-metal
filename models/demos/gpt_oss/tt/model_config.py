@@ -7,14 +7,12 @@ GPT-OSS ModelArgs class that's compatible with tt_transformers interface
 """
 
 import os
-from glob import glob
 from pathlib import Path
 
 import torch
 from loguru import logger
-from safetensors.torch import load_file
 from tqdm import tqdm
-from transformers import AutoConfig, AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
@@ -39,15 +37,16 @@ class ModelArgs:
         self.dummy_weights = dummy_weights
         self.max_batch_size = max_batch_size
         self.max_seq_len = max_seq_len
-        self.optimizations = optimizations
+        if optimizations is not None:
+            logger.warning("GPT-OSS doesn't support any performance optimizations - ignoring optimizations argument")
+        self.optimizations = None
         self.cache_hf = cache_hf
-        self.can_enable_trace = lambda seqlen: False
 
         # GPT-OSS specific paths - use HF_MODEL environment variable (tt_transformers standard)
         # Default paths are internal CI paths for automated testing
         default_models = [
-            "/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-20B",  # Internal CI path
-            "/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-120B",  # Internal CI path
+            "/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b",  # Internal CI path
+            "/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b",  # Internal CI path
         ]
 
         # Use first available model as default, or HF_MODEL environment variable override
@@ -83,7 +82,7 @@ class ModelArgs:
 
         # Add missing attributes that Generator expects
         self.max_prefill_chunk_size = 128 * 1024
-        self.model_name = "GPT-OSS-120B" if "GPT-OSS-120B" in self.model_path else "GPT-OSS-20B"  # Model identifier
+        self.model_name = "gpt-oss-120b" if "gpt-oss-120b" in self.model_path else "gpt-oss-20b"  # Model identifier
         self.max_context_len = max_seq_len  # Context length for tt_transformers compatibility
 
         if self.dummy_weights:
@@ -97,13 +96,25 @@ class ModelArgs:
 
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
+    def can_enable_trace(self, prefill_seq_len):
+        """
+        This function is used to determine if trace should be enabled for the prefill.
+        Tracing is used only for certain sequence lengths, because for bigger sequence lengths, op2op gaps are already small, so we don't need tracing.
+        # TODO: Support chunked prefill with tracing - https://github.com/tenstorrent/tt-metal/issues/32056
+        """
+
+        allowed_seq_lens = self.trace_prefill_supported_seq_lens
+
+        return (
+            prefill_seq_len in allowed_seq_lens
+            and prefill_seq_len <= self.max_prefill_chunk_size
+            and prefill_seq_len <= self.max_seq_len
+        )
+
     def get_trace_prefill_supported_seq_lens(self):
-        default_supported_seq_lens = {
-            "N150": [128, 256, 512],
-            "N300": [128, 256, 512, 1024],
-            "T3K": [128, 256, 512, 1024],
-            "TG": [128, 256, 512, 1024],
-        }
+        # No supported sequence lengths for GPT-OSS model, see issue below
+        # TODO: https://github.com/tenstorrent/tt-metal/issues/32818
+        default_supported_seq_lens = {}
 
         # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
         model_specific_supported_seq_lens = {
@@ -155,38 +166,34 @@ class ModelArgs:
         else:
             # Load actual GPT-OSS weights directly from safetensors files
             # Check if we have a cached torch_state_dict.pt file
-            torch_state_dict_path = os.path.join(self.weights_path, "torch_state_dict.pt")
-
-            if os.path.exists(torch_state_dict_path):
-                # Load from cached file
-                weights_dict = torch.load(torch_state_dict_path)
-            else:
-                # Load from safetensors files
-                safetensors_filepaths = sorted(glob(f"{self.weights_path}/*.safetensors"))
-                weights_dict = {}
-                for filepath in tqdm(safetensors_filepaths, desc="Loading weights"):
-                    weights_dict.update(load_file(filepath))
-
-                # Cache for future use
-                torch.save(weights_dict, torch_state_dict_path)
-
-            # Convert to bfloat16 if needed
-            if torch.bfloat16 != torch.float32:
-                weights_dict = {
-                    k: v.to(torch.bfloat16) if v.dtype == torch.float32 else v
-                    for k, v in tqdm(weights_dict.items(), desc="Converting to bfloat16")
-                }
-
+            model = AutoModelForCausalLM.from_pretrained(
+                self.weights_path,
+                torch_dtype="auto"
+                # Note that the default setting is torch.dtype.float32, but model weights are
+                # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
+                # unnecessary cast.
+            )
+            state_dict = model.state_dict()
             # Convert HF QKV weights to Meta format for RoPE compatibility (if requested)
             if convert_to_meta_format:
                 logger.info("Converting QKV weights from HuggingFace to Meta format for RoPE")
-                weights_dict = convert_hf_qkv_to_meta_format(weights_dict, self.hf_config.head_dim)
-
-            return weights_dict
+                state_dict = convert_hf_qkv_to_meta_format(state_dict, self.hf_config.head_dim)
+            if state_dict["model.norm.weight"].dtype != torch.bfloat16:
+                # Convert to bfloat16 if needed
+                state_dict = {
+                    k: v.to(torch.bfloat16) if v.dtype == torch.float32 else v
+                    for k, v in tqdm(state_dict.items(), desc="Converting to bfloat16")
+                }
+            return state_dict
 
     def weight_cache_path(self, dtype):
         """Return weight cache path for the model"""
-        cache_dir = Path(self.model_path)  # Use same directory as model
+        cache_dir = os.getenv("TT_CACHE_PATH")
+        if cache_dir:
+            cache_dir = Path(cache_dir)  # If we specify a TT_CACHE_PATH, use that for the cache
+        else:
+            cache_dir = Path(self.model_path)  # Use same directory as model
+        logger.info(f"Cache directory: {cache_dir}")
         dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
 
         if self.instruct:

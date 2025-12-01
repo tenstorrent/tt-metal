@@ -6,7 +6,6 @@
 #include <common/TracyTTDeviceData.hpp>
 #include <device.hpp>
 #include <distributed.hpp>
-#include "device_pool.hpp"
 #include "llrt/hal.hpp"
 #include "thread_pool.hpp"
 #include "tools/profiler/event_metadata.hpp"
@@ -47,6 +46,7 @@
 #include <umd/device/arch/wormhole_implementation.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include "tt_cluster.hpp"
+#include "tools/profiler/perf_counters.hpp"
 
 #if !defined(TRACY_ENABLE) && defined(__clang__)
 #pragma clang diagnostic push
@@ -886,7 +886,7 @@ void dumpJsonNocTraces(
         return;
     }
 
-    for (auto& [runtime_id, events] : noc_trace_data) {
+    for (const auto& [runtime_id, events] : noc_trace_data) {
         // dump events to a json file inside directory output_dir named after the op_name
         std::filesystem::path rpt_path = output_dir;
         const std::string op_name = events.front().value("op_name", "UnknownOP");
@@ -905,9 +905,11 @@ void dumpJsonNocTraces(
     }
 }
 
-void writeCSVHeader(std::ofstream& log_file_ofs, tt::ARCH device_architecture, int device_core_frequency) {
+void writeCSVHeader(
+    std::ofstream& log_file_ofs, tt::ARCH device_architecture, int device_core_frequency, uint32_t max_compute_cores) {
     log_file_ofs << "ARCH: " << get_string_lowercase(device_architecture)
-                 << ", CHIP_FREQ[MHz]: " << device_core_frequency << std::endl;
+                 << ", CHIP_FREQ[MHz]: " << device_core_frequency << ", Max Compute Cores: " << max_compute_cores
+                 << std::endl;
     log_file_ofs << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, run "
                     "host ID, trace id, trace id counter, zone name, type, source line, source file, meta data"
                  << std::endl;
@@ -918,6 +920,7 @@ void dumpDeviceResultsToCSV(
         device_markers_per_core_risc_map,
     tt::ARCH device_arch,
     int device_core_frequency,
+    uint32_t max_compute_cores,
     const std::filesystem::path& log_path) {
     TT_ASSERT(std::filesystem::exists(log_path.parent_path()));
     TT_ASSERT(log_path.extension() == ".csv");
@@ -930,7 +933,7 @@ void dumpDeviceResultsToCSV(
         log_file_ofs.open(log_path, std::ios_base::app);
     } else {
         log_file_ofs.open(log_path);
-        writeCSVHeader(log_file_ofs, device_arch, device_core_frequency);
+        writeCSVHeader(log_file_ofs, device_arch, device_core_frequency, max_compute_cores);
     }
 
     if (!log_file_ofs) {
@@ -1629,19 +1632,17 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
             } else if (marker.marker_type == tracy::TTDeviceMarkerType::ZONE_END) {
                 TT_FATAL(
                     !start_marker_stack.empty(),
-                    "End marker {} found without a corresponding start marker",
-                    marker.marker_id);
+                    "End marker found without a corresponding start marker.\nEnd marker: {}",
+                    marker.to_string());
 
                 const auto& start_marker_it = start_marker_stack.top();
 
                 if (!tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only()) {
                     TT_FATAL(
                         start_marker_it->marker_id == marker.marker_id,
-                        "Start {} and end {} markers do not match. The Profiler DRAM buffers may be full, in which "
-                        "case "
-                        "either decrease the number of ops being profiled or run read device profiler more often.",
-                        start_marker_it->marker_id,
-                        marker.marker_id);
+                        "Start and end marker IDs do not match.\nStart marker: {}\nEnd marker: {}",
+                        start_marker_it->to_string(),
+                        marker.to_string());
 
                     if (start_marker_it->marker_name != marker.marker_name) {
                         marker.marker_name = start_marker_it->marker_name;
@@ -1652,9 +1653,9 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                 } else {
                     TT_FATAL(
                         start_marker_it->marker_name == marker.marker_name,
-                        "Start {} and end {} marker names do not match",
-                        start_marker_it->marker_name,
-                        marker.marker_name);
+                        "Start and end marker names do not match.\nStart marker: {}\nEnd marker: {}",
+                        start_marker_it->to_string(),
+                        marker.to_string());
                 }
                 start_marker_stack.pop();
             }
@@ -1723,6 +1724,17 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                     start_marker_stack.pop();
                     start_marker_stack.push(curr_zone_start_marker_it);
                 }
+
+                // If this is a performance counter, extract fields from data and store in marker meta_data
+                if (marker.marker_id == PERF_COUNTER_PROFILER_ID) {
+                    marker.meta_data["counter type"] = enchantum::to_string(PerfCounter(marker.data).counter_type);
+                    marker.meta_data["ref cnt"] = PerfCounter(marker.data).ref_cnt;
+                    marker.meta_data["value"] = PerfCounter(marker.data).counter_value;
+
+                    const auto& marker_ret = updateDeviceMarker(marker, device_marker_it);
+                    device_marker_it = marker_ret.first;
+                    next_device_marker_it = marker_ret.second;
+                }
             }
         }
 
@@ -1731,8 +1743,9 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
 
     TT_FATAL(
         start_marker_stack.empty(),
-        "{} start markers detected without corresponding end markers",
-        start_marker_stack.size());
+        "{} start markers detected without corresponding end markers. Marker at top of stack: {}",
+        start_marker_stack.size(),
+        start_marker_stack.top()->to_string());
 }
 
 void DeviceProfiler::setLastFDReadAsNotDone() { this->is_last_fd_read_done = false; }
@@ -1744,7 +1757,8 @@ bool DeviceProfiler::isLastFDReadDone() const { return this->is_last_fd_read_don
 DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs [[maybe_unused]]) :
     device_arch(device->arch()),
     device_id(device->id()),
-    device_core_frequency(tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(this->device_id)) {
+    device_core_frequency(tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(this->device_id)),
+    max_compute_cores(device->logical_grid_size().x * device->logical_grid_size().y) {
 #if defined(TRACY_ENABLE)
     ZoneScopedC(tracy::Color::Green);
     if (!getDeviceProfilerState()) {
@@ -1981,7 +1995,8 @@ void DeviceProfiler::writeDeviceResultsToFiles() const {
     std::scoped_lock lock(tt::tt_metal::MetalContext::instance().profiler_state_manager()->log_file_write_mutex);
 
     const std::filesystem::path log_path = device_logs_output_dir / DEVICE_SIDE_LOG;
-    dumpDeviceResultsToCSV(device_markers_per_core_risc_map, device_arch, device_core_frequency, log_path);
+    dumpDeviceResultsToCSV(
+        device_markers_per_core_risc_map, device_arch, device_core_frequency, max_compute_cores, log_path);
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
         log_warning(

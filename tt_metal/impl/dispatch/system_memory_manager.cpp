@@ -27,6 +27,10 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <tracy/Tracy.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <impl/dispatch/dispatch_core_manager.hpp>
+#include <impl/debug/inspector/inspector.hpp>
+#include <llrt/tt_cluster.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace tt::tt_metal {
 
@@ -396,7 +400,6 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
 
     uint32_t read_ptr_and_toggle = cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
-
     this->completion_q_writers[cq_id].write(this->completion_byte_addrs[cq_id], read_ptr_and_toggle);
 
     // Also store this data in hugepages in case we hang and can't get it from the device.
@@ -444,6 +447,10 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
         // Handler for timeout
         auto fetch_on_timeout = [&]() {
+            // Serialize Inspector RPC data before throwing
+            log_info(LogAlways, "Timeout detected - serializing Inspector RPC data");
+            Inspector::serialize_rpc();
+
             TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
         };
 
@@ -495,6 +502,11 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
     // Handler for the timeout
     auto on_timeout = [&exit_condition]() {
         exit_condition.store(true);
+
+        // Serialize Inspector RPC data before throwing
+        log_info(LogAlways, "Timeout detected - serializing Inspector RPC data");
+        Inspector::serialize_rpc();
+
         TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
     };
 

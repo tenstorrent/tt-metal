@@ -220,7 +220,7 @@ jobs:
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
-    if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run }}
+    if: ${{ always() && needs.create-tag.result == 'success' && needs.create-release-notes.result == 'success' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -279,14 +279,14 @@ jobs:
           echo ""
           echo "=== All files that would be uploaded to release ==="
           ls -lh "${required_files[@]}" debian-packages/*.deb 2>/dev/null || echo "Some files are missing!"
-      - name: Release (skipped for dry run)
-        if: ${{ !inputs.dry-run }}
+      - name: Create draft release with assets (skipped for dry run)
+        if: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) && !inputs.dry-run }}
         uses: softprops/action-gh-release@4634c16e79c963813287e889244c50009e7f0981
         with:
           tag_name: ${{ needs.create-tag.outputs.version }}
           name: ${{ needs.create-tag.outputs.version }}
-          draft: false
-          prerelease: true
+          draft: true
+          prerelease: false
           body_path: RELEASE_NOTES.txt
           files: |
             VERSION
@@ -297,6 +297,35 @@ jobs:
             tt-metalium.tar.gz
             debian-packages/*.deb
           fail_on_unmatched_files: true
+
+  convert-draft-to-prerelease:
+    needs: [create-and-upload-draft-release, create-tag]
+    concurrency: create_upload_draft_release
+    runs-on: ubuntu-latest
+    if: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) && !inputs.dry-run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Convert draft to prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Verify the draft release exists before attempting to edit it
+          echo "Checking if release ${{ needs.create-tag.outputs.version }} exists..."
+          if ! gh release view "${{ needs.create-tag.outputs.version }}" >/dev/null 2>&1; then
+            echo "ERROR: Release ${{ needs.create-tag.outputs.version }} not found"
+            echo "This could indicate a timing issue or failure in the create-and-upload-draft-release job"
+            exit 1
+          fi
+
+          # Use GitHub CLI to edit the existing release and convert it from draft to prerelease
+          # This preserves all existing assets and metadata while only changing the release status
+          echo "Converting draft release to prerelease..."
+          gh release edit "${{ needs.create-tag.outputs.version }}" \
+            --draft=false \
+            --prerelease
+
+          echo "Successfully converted release ${{ needs.create-tag.outputs.version }} to prerelease"
 
   check-stable-for-new-commits:
     runs-on: ubuntu-latest

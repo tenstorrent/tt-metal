@@ -7,7 +7,6 @@
 
 #include "tt-metalium/base_types.hpp"
 #include "tt-metalium/circular_buffer_config.hpp"
-#include "tt-metalium/constants.hpp"
 #include "tt-metalium/host_api.hpp"
 #include "tt-metalium/kernel_types.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -84,8 +83,8 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
 
     Program program{};
 
-    auto src_buffer{input_tensor.buffer()};
-    auto dst_buffer{output_tensor.buffer()};
+    auto* src_buffer{input_tensor.buffer()};
+    auto* dst_buffer{output_tensor.buffer()};
 
     const auto dst_cb_data_format{datatype_to_dataformat_converter(input_tensor.dtype())};
     const bool fp32_dest_acc_en{
@@ -94,18 +93,20 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
 
     const auto tile_spec = input_tensor.tensor_spec().tile();
 
-    constexpr uint32_t TILES_NUM = 48;
+    // if input dtype is 16bit, use 48 tiles per cb to preload tiles
+    // if 32bit, there's enough space for as may as 32 tiles per cb that the kernels expect as the minimum
+    const uint32_t tiles_num_per_cb = (dst_cb_data_format == DataFormat::Float32) ? 32 : 48;
     const auto core_range_set = CoreRangeSet{{{0, 0}, {CORES_X - 1, CORES_Y - 1}}};
-    create_cb(program, input_tensor.dtype(), IntImgCB::START, core_range_set, TILES_NUM);
-    create_cb(program, input_tensor.dtype(), IntImgCB::INPUT, core_range_set, TILES_NUM);
-    create_cb(program, input_tensor.dtype(), IntImgCB::ACC, core_range_set, TILES_NUM);
-    create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_0, core_range_set, TILES_NUM);
-    create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_1, core_range_set, TILES_NUM);
-    create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_2, core_range_set, TILES_NUM);
-    create_cb(program, input_tensor.dtype(), IntImgCB::OUTPUT, core_range_set, TILES_NUM);
-    create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_2_BUFFER, core_range_set, TILES_NUM);
-    create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER_0, core_range_set, TILES_NUM);
-    create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER_1, core_range_set, TILES_NUM);
+    create_cb(program, input_tensor.dtype(), IntImgCB::START, core_range_set, tiles_num_per_cb);
+    create_cb(program, input_tensor.dtype(), IntImgCB::INPUT, core_range_set, tiles_num_per_cb);
+    create_cb(program, input_tensor.dtype(), IntImgCB::ACC, core_range_set, tiles_num_per_cb);
+    create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_0, core_range_set, tiles_num_per_cb);
+    create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_1, core_range_set, tiles_num_per_cb);
+    create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_2, core_range_set, tiles_num_per_cb);
+    create_cb(program, input_tensor.dtype(), IntImgCB::OUTPUT, core_range_set, tiles_num_per_cb);
+    create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_2_BUFFER, core_range_set, tiles_num_per_cb);
+    create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER_0, core_range_set, tiles_num_per_cb);
+    create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER_1, core_range_set, tiles_num_per_cb);
 
     std::vector<uint32_t> compute_compile_time_args{
         static_cast<uint32_t>(IntImgCB::START),

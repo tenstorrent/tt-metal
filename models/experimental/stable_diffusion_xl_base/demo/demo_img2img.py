@@ -9,14 +9,14 @@ import torch
 from diffusers import StableDiffusionXLImg2ImgPipeline
 from PIL import Image
 from loguru import logger
-from transformers import CLIPTextModelWithProjection, CLIPTextModel
+from transformers import CLIPTextModelWithProjection
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
     SDXL_TRACE_REGION_SIZE,
     SDXL_FABRIC_CONFIG,
     MAX_SEQUENCE_LENGTH,
     TEXT_ENCODER_2_PROJECTION_DIM,
-    CONCATENATED_TEXT_EMBEDINGS_SIZE,
+    CONCATENATED_TEXT_EMBEDINGS_SIZE_REFINER,
 )
 import os
 from models.common.utility_functions import profiler
@@ -78,14 +78,13 @@ def run_demo_inference(
     # 1. Load components
     profiler.start("diffusion_pipeline_from_pretrained")
     pipeline = StableDiffusionXLImg2ImgPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        "stabilityai/stable-diffusion-xl-refiner-1.0",
         torch_dtype=torch.float32,
         use_safetensors=True,
         local_files_only=is_ci_env,
     ).to("cpu")
     profiler.end("diffusion_pipeline_from_pretrained")
 
-    assert isinstance(pipeline.text_encoder, CLIPTextModel), "pipeline.text_encoder is not a CLIPTextModel"
     assert isinstance(
         pipeline.text_encoder_2, CLIPTextModelWithProjection
     ), "pipeline.text_encoder_2 is not a CLIPTextModelWithProjection"
@@ -122,7 +121,9 @@ def run_demo_inference(
 
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
         torch_image=torch.randn(batch_size, 3, 1024, 1024),
-        all_prompt_embeds_torch=torch.randn(batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE),
+        all_prompt_embeds_torch=torch.randn(
+            batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE_REFINER
+        ),
         torch_add_text_embeds=torch.randn(batch_size, 2, TEXT_ENCODER_2_PROJECTION_DIM),
         timesteps=timesteps,
         sigmas=sigmas,
@@ -262,11 +263,11 @@ def prepare_device(mesh_device, use_cfg_parallel):
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
-    ((30),),
+    ((50),),
 )
 @pytest.mark.parametrize(
     "guidance_scale",
-    ((7.5),),
+    ((5.0),),
 )
 @pytest.mark.parametrize(
     "vae_on_device",
@@ -294,7 +295,7 @@ def prepare_device(mesh_device, use_cfg_parallel):
 )
 @pytest.mark.parametrize(
     "strength",
-    ((0.6),),
+    ((0.3),),
 )
 @pytest.mark.parametrize(
     "prompt_2, negative_prompt_2, crop_coords_top_left, guidance_rescale, timesteps, sigmas",

@@ -23,7 +23,10 @@ void IntImgDeviceOperation::validate_on_program_cache_miss(
         input_shape.rank());
     TT_FATAL(input_shape[0] == 1, "intimg supports only one batch, found {} instead", input_shape[0]);
     TT_FATAL(input_layout == Layout::TILE, "only tile layout is supported, {} was provided instead", input_layout);
-    TT_FATAL(input_dtype == DataType::BFLOAT16, "only bf16 dtype is supported, {} was provided instead", input_dtype);
+    TT_FATAL(
+        input_dtype == DataType::BFLOAT16 || input_dtype == DataType::FLOAT32,
+        "only bf16 and fp32 dtypes are supported, {} was provided instead",
+        input_dtype);
 }
 
 void IntImgDeviceOperation::validate_on_program_cache_hit(
