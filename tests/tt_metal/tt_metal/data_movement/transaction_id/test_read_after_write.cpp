@@ -189,7 +189,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWrite) 
     uint32_t test_id = 600;
 
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
@@ -236,7 +236,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWriteOn
     uint32_t test_id = 601;
 
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
@@ -283,7 +283,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWriteOn
     uint32_t test_id = 602;
 
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =

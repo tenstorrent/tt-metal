@@ -37,7 +37,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     tensor_return_value_t& tensor_return_value) {
     // Setup device information
     ttnn::MeshDevice* mesh_device = tensor_args.input.device();
-    const auto target_device = mesh_device->get_device(mesh_coord);
+    auto* const target_device = mesh_device->get_device(mesh_coord);
     const auto mesh_view = mesh_device->get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
@@ -1254,11 +1254,11 @@ void RMSAllGatherMeshWorkloadFactory::override_runtime_arguments(
     for (auto& [range, shared_vars] : cached_workload.shared_variables) {
         auto& program = cached_workload.workload.get_programs().at(range);
 
-        const auto src_buffer_a = tensor_args.input.buffer();
+        auto* const src_buffer_a = tensor_args.input.buffer();
         const auto& b_tensor = tensor_args.residual_input_tensor;
         const auto& gamma_tensor = tensor_args.weight;
         const auto& stats_tensor = tensor_args.stats;
-        const auto dst_buffer = tensor_return_value.buffer();
+        auto* const dst_buffer = tensor_return_value.buffer();
         bool skip_write_back = tensor_return_value.shard_spec().value() == tensor_args.input.shard_spec().value();
 
         auto& writer_sender_args_by_core = GetRuntimeArgs(program, shared_vars.writer_mcast_sender_kernels_id);
@@ -1300,7 +1300,7 @@ void RMSAllGatherMeshWorkloadFactory::override_runtime_arguments(
         } else {
             UpdateDynamicCircularBufferAddress(program, shared_vars.cb_output, *dst_buffer);
         }
-        const auto stats_buffer = stats_tensor.value().buffer();
+        auto* const stats_buffer = stats_tensor.value().buffer();
         UpdateDynamicCircularBufferAddress(program, shared_vars.cb_stats, *stats_buffer);
     }
 }
