@@ -50,7 +50,7 @@ jobs:
           # Stuti Raizada - gpt-oss
           # Stephen Osborne - mochi
 
-          matrix='[
+          all_tests='[
             { "name": "Galaxy Llama3 demo tests", "arch": "wormhole_b0", "model": "llama3", "timeout": 30, "owner_id": "U053W15B6JF" },
             { "name": "Galaxy Llama3 long context demo tests", "arch": "wormhole_b0", "model": "llama3_long_context", "timeout": 60, "owner_id": "U03PUAKE719" },
             { "name": "Galaxy Llama3 evals tests", "arch": "wormhole_b0", "model": "llama3_evals", "timeout": 45, "owner_id": "U03PUAKE719" },
@@ -65,6 +65,14 @@ jobs:
             { "name": "Galaxy Wan2.2 demo tests", "arch": "wormhole_b0", "model": "wan22", "timeout": 25, "owner_id": "U03FJB5TM5Y" },
             { "name": "Galaxy Mochi demo tests", "arch": "wormhole_b0", "model": "mochi", "timeout": 30, "owner_id": "U09ELB03XRU" }
           ]'
+
+          # Filter matrix based on model selection
+          if [ "${{ inputs.model }}" = "all" ]; then
+            matrix="$all_tests"
+          else
+            matrix=$(echo "$all_tests" | jq -c "[.[] | select(.model == \"${{ inputs.model }}\")]")
+          fi
+
           echo "matrix=$(echo "$matrix" | jq -c .)" >> $GITHUB_OUTPUT
 
   galaxy-demo-tests:
@@ -104,7 +112,7 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Run mochi demo tests (direct pytest)
-        if: ${{ matrix.test-group.model == 'mochi' && (inputs.model == 'all' || inputs.model == 'mochi') }}
+        if: ${{ matrix.test-group.model == 'mochi' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           TT_DIT_CACHE_DIR: /tmp/TT_DIT_CACHE
@@ -115,7 +123,7 @@ jobs:
             -k "4x8sp1tp0" \
             --timeout=1500
       - name: Run GPT-OSS demo tests (direct pytest)
-        if: ${{ matrix.test-group.model == 'gpt-oss' && (inputs.model == 'all' || inputs.model == 'gpt-oss') }}
+        if: ${{ matrix.test-group.model == 'gpt-oss' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
@@ -133,7 +141,7 @@ jobs:
             pytest models/demos/gpt_oss/demo/text_demo.py \
             --timeout 1000
       - name: Run Llama3 demo tests (direct pytest)
-        if: ${{ matrix.test-group.model == 'llama3' && (inputs.model == 'all' || inputs.model == 'llama3') }}
+        if: ${{ matrix.test-group.model == 'llama3' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
@@ -144,7 +152,7 @@ jobs:
           pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat" --timeout 1000
           pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "pcc-80L" --timeout 1000
       - name: Run Llama3 long context demo tests (direct pytest)
-        if: ${{ matrix.test-group.model == 'llama3_long_context' && (inputs.model == 'all' || inputs.model == 'llama3_long_context') }}
+        if: ${{ matrix.test-group.model == 'llama3_long_context' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
@@ -158,7 +166,7 @@ jobs:
           pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-64k-b1" --timeout 1000
           pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-128k-b1" --timeout 1000
       - name: Run Llama3 evals tests (direct pytest)
-        if: ${{ matrix.test-group.model == 'llama3_evals' && (inputs.model == 'all' || inputs.model == 'llama3_evals') }}
+        if: ${{ matrix.test-group.model == 'llama3_evals' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
@@ -169,7 +177,7 @@ jobs:
           pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-32" --timeout 1000
           pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-long-prompts" --timeout 1000
       - name: Run Llama3 8B data-parallel demo tests (direct pytest)
-        if: ${{ matrix.test-group.model == 'llama3_8b_dp' && (inputs.model == 'all' || inputs.model == 'llama3_8b_dp') }}
+        if: ${{ matrix.test-group.model == 'llama3_8b_dp' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
@@ -179,7 +187,7 @@ jobs:
         run: |
           pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1000
       - name: Run Llama3 70B data-parallel demo tests (direct pytest)
-        if: ${{ matrix.test-group.model == 'llama3_70b_dp' && (inputs.model == 'all' || inputs.model == 'llama3_70b_dp') }}
+        if: ${{ matrix.test-group.model == 'llama3_70b_dp' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
@@ -189,7 +197,7 @@ jobs:
         run: |
           pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1000
       - name: Run Falcon7b demo tests (direct pytest)
-        if: ${{ matrix.test-group.model == 'falcon7b' && (inputs.model == 'all' || inputs.model == 'falcon7b') }}
+        if: ${{ matrix.test-group.model == 'falcon7b' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           pytest -n auto --disable-warnings -q -s \
@@ -198,12 +206,12 @@ jobs:
             models/demos/tg/falcon7b/demo_tg.py \
             --timeout=1500
       - name: Run SentenceBert demo tests (direct pytest)
-        if: ${{ matrix.test-group.model == 'sentence_bert' && (inputs.model == 'all' || inputs.model == 'sentence_bert') }}
+        if: ${{ matrix.test-group.model == 'sentence_bert' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           pytest models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py --timeout=1500
       - name: Run Stable Diffusion 3.5 demo tests (direct pytest)
-        if: ${{ matrix.test-group.model == 'sd35' && (inputs.model == 'all' || inputs.model == 'sd35') }}
+        if: ${{ matrix.test-group.model == 'sd35' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
@@ -214,7 +222,7 @@ jobs:
             -k "4x8cfg1sp0tp1" \
             --timeout 1200
       - name: Run Flux.1-dev demo tests (direct pytest)
-        if: ${{ matrix.test-group.model == 'flux1' && (inputs.model == 'all' || inputs.model == 'flux1') }}
+        if: ${{ matrix.test-group.model == 'flux1' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
@@ -225,14 +233,14 @@ jobs:
             -k "4x8sp0tp1-dev" \
             --timeout 1200
       - name: Run Motif-Image-6B-Preview demo tests (direct pytest)
-        if: ${{ matrix.test-group.model == 'motif' && (inputs.model == 'all' || inputs.model == 'motif') }}
+        if: ${{ matrix.test-group.model == 'motif' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
         run: |
           pytest -n auto models/experimental/tt_dit/tests/models/motif/test_pipeline_motif.py -k "4x8cfg1sp0tp1" --timeout 1200
       - name: Run Wan2.2 demo tests (direct pytest)
-        if: ${{ matrix.test-group.model == 'wan22' && (inputs.model == 'all' || inputs.model == 'wan22') }}
+        if: ${{ matrix.test-group.model == 'wan22' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           TT_DIT_CACHE_DIR: /tmp/TT_DIT_CACHE
