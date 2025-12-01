@@ -8,7 +8,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include "mesh_dispatch_fixture.hpp"
 
 namespace tt::tt_metal {

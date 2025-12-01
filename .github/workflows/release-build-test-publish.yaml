@@ -47,6 +47,29 @@ jobs:
         fetch-depth: 0
         skip-tt-train: false
 
+  single-card-demo-tests:
+    needs: build-artifact
+    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
+    secrets: inherit
+    uses: ./.github/workflows/single-card-demo-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      arch: wormhole_b0
+      mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
+
+  t3000-demo-tests:
+    needs: build-artifact
+    if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
+    secrets: inherit
+    uses: ./.github/workflows/t3000-demo-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
+
   galaxy-demos:
     needs: build-artifact
     if: ${{ github.ref == 'refs/heads/main' || (github.ref == 'refs/heads/stable' && inputs.is-release-candidate == 'true' ) }}
@@ -57,6 +80,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       topology: topology-6u
+      mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
 
 
   create-docker-release-image:
@@ -79,7 +103,6 @@ jobs:
     with:
       version: ${{ inputs.tag-version }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       dry-run: ${{ inputs.dry-run }}
     secrets: inherit
@@ -114,7 +137,7 @@ jobs:
           path: ./wheels
 
       - name: Publish wheels to internal PyPI
-        if: ${{ !inputs.dry-run }}
+        if: ${{ github.ref == 'refs/heads/main' && !inputs.dry-run }}
         run: |
           found_wheel_files=$(find ./wheels -type f -name "*.whl" -exec realpath {} \;)
           for wheel in $found_wheel_files; do

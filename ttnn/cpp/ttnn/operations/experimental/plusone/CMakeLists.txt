@@ -7,7 +7,7 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_plusone)
 target_sources(
     ttnn_op_experimental_plusone
     PRIVATE
-        device/plusone_op.cpp
+        device/plusone_device_operation.cpp
         device/plusone_program_factory.cpp
         plusone.cpp
 )

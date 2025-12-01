@@ -4,8 +4,6 @@
 
 #include "tanh_accurate_device_operation.hpp"
 
-#include <tt-metalium/constants.hpp>
-
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::unary {

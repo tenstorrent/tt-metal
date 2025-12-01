@@ -58,6 +58,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::ATANH: return "SFPU_OP_TRIG_FAMILY_INCLUDE";
         case UnaryOpType::NEG: return "SFPU_OP_NEG_INCLUDE";
         case UnaryOpType::SOFTPLUS: return "SFPU_OP_SOFTPLUS_INCLUDE";
+        case UnaryOpType::LOGSIGMOID: return "SFPU_OP_LOGSIGMOID_INCLUDE";
         case UnaryOpType::SELU: return "SFPU_OP_SELU_INCLUDE";
         case UnaryOpType::PRELU_SFPU: return "SFPU_OP_PRELU_INCLUDE";
         case UnaryOpType::TYPECAST: return "SFPU_OP_TYPECAST_INCLUDE";
@@ -189,6 +190,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("log1p_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("log1p_tile<{1}u>({0});", idst, (uint32_t)param0)};
             break;
+        case UnaryOpType::TANH:
+            op_init_and_name = {
+                fmt::format("tanh_tile_init<{}u>();", (uint32_t)param0),
+                fmt::format("tanh_tile<{1}u>({0});", idst, (uint32_t)param0)};
+            break;
         case UnaryOpType::HEAVISIDE:
             op_init_and_name = {
                 "heaviside_tile_init();",
@@ -263,7 +269,19 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("erfc_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("erfc_tile<{1}u>({0});", idst, (uint32_t)param0)};
             break;
-        case UnaryOpType::RDIV: op_init_and_name = {}; break;
+        case UnaryOpType::RDIV: {
+            uint32_t round_mode_value = params[1];
+            static constexpr const char* round_mode_strs[] = {
+                "ckernel::RoundingMode::None", "ckernel::RoundingMode::Trunc", "ckernel::RoundingMode::Floor"};
+            op_init_and_name = {
+                "rdiv_tile_init();",
+                fmt::format(
+                    "rdiv_tile<{}>({}, {:#x}u);",
+                    round_mode_strs[round_mode_value],
+                    idst,
+                    std::bit_cast<uint32_t>(param0))};
+            break;
+        }
         case UnaryOpType::RSUB:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
@@ -659,6 +677,8 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype.value() == DataType::INT32) {
                 op_init_and_name = {"mul_int32_tile_init();", fmt::format("mul_int32_tile({0}, {0}, {0});", idst)};
+            } else if (input_dtype.value() == DataType::UINT32) {
+                op_init_and_name = {"mul_int32_tile_init();", fmt::format("mul_uint32_tile({0}, {0}, {0});", idst)};
             } else if (input_dtype.value() == DataType::UINT16) {
                 op_init_and_name = {"mul_int_tile_init();", fmt::format("mul_uint16_tile({0}, {0}, {0});", idst)};
             } else {
@@ -808,6 +828,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::HARDMISH:
             op_init_and_name = {"hardmish_tile_init();", fmt::format("hardmish_tile({});", idst)};
             break;
+        case UnaryOpType::LOGSIGMOID: op_init_and_name = {}; break;
         default: TT_THROW("Undefined non-parametrized op type {}", op_type);
     }
     return op_init_and_name;
@@ -865,7 +886,7 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     } else if (name == "log1p") {
         return UnaryWithParam(UnaryOpType::LOG1P, static_cast<float>(true));
     } else if (name == "tanh") {
-        return UnaryWithParam(UnaryOpType::TANH);
+        return UnaryWithParam(UnaryOpType::TANH, static_cast<float>(false));
     } else if (name == "log2") {
         return UnaryWithParam(UnaryOpType::LOG2, static_cast<float>(true));
     } else if (name == "log10") {
@@ -898,48 +919,6 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::MISH);
     }
     TT_THROW("Unknown unary op: {}", name);
-}
-
-std::string unary_with_param_to_string(const UnaryWithParam& unary_op) {
-    switch (unary_op.op_type) {
-        case UnaryOpType::RELU: return "relu";
-        case UnaryOpType::RELU6: return "relu6";
-        case UnaryOpType::GELU:
-            if (!unary_op.params.empty() && unary_op.params[0] == static_cast<float>(true)) {
-                return "gelu_approx";
-            }
-            return "gelu";
-        case UnaryOpType::SILU: return "silu";
-        case UnaryOpType::SIGMOID:
-            if (unary_op.params.size() >= 2 && unary_op.params[1] == static_cast<float>(true)) {
-                return "sigmoid_approx";
-            }
-            return "sigmoid";
-        case UnaryOpType::HARDSIGMOID: return "hardsigmoid";
-        case UnaryOpType::SQRT: return "sqrt";
-        case UnaryOpType::RSQRT: return "rsqrt";
-        case UnaryOpType::EXP: return "exp";
-        case UnaryOpType::RECIP: return "recip";
-        case UnaryOpType::LOG: return "log";
-        case UnaryOpType::LOG1P: return "log1p";
-        case UnaryOpType::TANH: return "tanh";
-        case UnaryOpType::LOG2: return "log2";
-        case UnaryOpType::LOG10: return "log10";
-        case UnaryOpType::SIN: return "sin";
-        case UnaryOpType::COS: return "cos";
-        case UnaryOpType::COSH: return "cosh";
-        case UnaryOpType::SINH: return "sinh";
-        case UnaryOpType::ABS: return "abs";
-        case UnaryOpType::ABS_INT32: return "abs_int32";
-        case UnaryOpType::SIGN: return "sign";
-        case UnaryOpType::SQUARE: return "square";
-        case UnaryOpType::SOFTPLUS: return "softplus";
-        case UnaryOpType::SELU: return "selu";
-        case UnaryOpType::ALT_COMPLEX_ROTATE90: return "alt_complex_rotate90";
-        case UnaryOpType::MISH: return "mish";
-        case UnaryOpType::HARDMISH: return "hardmish";
-        default: TT_THROW("Unsupported unary op type: {}", static_cast<int>(unary_op.op_type));
-    }
 }
 
 template <typename T>
@@ -1048,15 +1027,13 @@ std::string get_compute_kernel_path(
                 return fmt::format("{}/{}", compute_root, "hardswish_kernel.cpp");
             }
         case UnaryOpType::CBRT: return fmt::format("{}/{}", compute_root, "cbrt_kernel.cpp");
+        case UnaryOpType::LOGSIGMOID: return fmt::format("{}/{}", compute_root, "logsigmoid_kernel.cpp");
         default: return fmt::format("{}/{}", compute_root, "eltwise_sfpu.cpp");
     }
 }
 
 template <typename T>
 uint32_t pack_scalar_runtime_arg_impl(const T& param, DataType dtype) {
-    // if ((dtype == DataType::UINT32 || dtype == DataType::INT32) && std::same_as<T, float>) {
-    //     return std::bit_cast<uint32_t>(static_cast<int32_t>(param));
-    // }
     if constexpr (std::same_as<T, uint32_t>) {
         return param;
     } else {

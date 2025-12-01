@@ -14,8 +14,6 @@ namespace ttnn::operations::unary::utils {
 
 UnaryWithParam string_to_unary_with_param(const std::string& name);
 
-std::string unary_with_param_to_string(const UnaryWithParam& unary_op);
-
 bool get_op_approx_mode(UnaryOpType op_type);
 using DataType = tt::tt_metal::DataType;
 
@@ -88,6 +86,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::LOG10:
         case UnaryOpType::LOG2:
         case UnaryOpType::LOG1P:
+        case UnaryOpType::TANH:
         case UnaryOpType::SOFTSHRINK:
         case UnaryOpType::HARDSHRINK:
         case UnaryOpType::WHERE_TSS:

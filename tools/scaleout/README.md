@@ -50,6 +50,62 @@ Example:
 
 A `.textproto` file that will enumerate all the expected hosts, boards, and connected channels in a scaleout system.
 
+### Cluster Descriptor
+
+The Cluster Descriptor is a `.yaml` file (or set of files for multi-host systems) that describes the chip topology, connections, and configuration for the TT-Metal runtime. This is generated from the FSD using the `generate_cluster_descriptor` tool.
+
+For single-host systems, a single YAML file is generated with the cluster configuration. For multi-host systems, one YAML file is generated per host (with suffix `_rank_N.yaml`) plus a mapping file (with suffix `_mapping.yaml`) that maps each rank to its corresponding cluster descriptor file.
+
+## Tools
+
+### run_cabling_generator
+
+Generates a Factory System Descriptor (FSD) and Cabling Guide from Cabling and Deployment descriptors.
+
+**Usage:**
+```bash
+./build/tools/scaleout/run_cabling_generator --cabling <cabling_descriptor.textproto> --deployment <deployment_descriptor.textproto> [--output <suffix>] [--simple]
+```
+
+**Options:**
+- `--cabling, -c`: Path to the cabling descriptor file (.textproto)
+- `--deployment, -d`: Path to the deployment descriptor file (.textproto)
+- `--output, -o`: Optional name suffix for output files
+- `--simple, -s`: Generate simple CSV output (hostname-based) instead of detailed location information
+
+**Outputs:**
+- `out/scaleout/factory_system_descriptor_<suffix>.textproto` - Factory System Descriptor
+- `out/scaleout/cabling_guide_<suffix>.csv` - Cabling guide
+
+### generate_cluster_descriptor
+
+Generates cluster descriptor YAML file(s) from a Factory System Descriptor (FSD). Automatically handles both single-host and multi-host systems.
+
+**Usage:**
+```bash
+./build/tools/scaleout/generate_cluster_descriptor --fsd <fsd_file.textproto> [--output-dir <dir>] [--base-filename <name>]
+```
+
+**Options:**
+- `--fsd, -f`: Path to the Factory System Descriptor file (.textproto)
+- `--output-dir, -o`: Directory where cluster descriptor files will be written (default: `out/scaleout`)
+- `--base-filename, -b`: Base name for generated files (default: `cluster_desc`)
+
+**Outputs:**
+- **Single-host:** `<output_dir>/<base_filename>.yaml`
+- **Multi-host:**
+  - `<output_dir>/<base_filename>_rank_0.yaml`, `_rank_1.yaml`, etc. (one per host)
+  - `<output_dir>/<base_filename>_mapping.yaml` (rank-to-file mapping)
+
+**Example:**
+```bash
+# Generate from an FSD file
+./build/tools/scaleout/generate_cluster_descriptor --fsd factory_system_descriptor.textproto
+
+# Custom output location and naming
+./build/tools/scaleout/generate_cluster_descriptor --fsd my_system.textproto --output-dir /tmp/cluster --base-filename my_cluster
+```
+
 ## Notes/Warnings
 
 - Usage examples can be found in the tests directory at [Examples](../tests/scaleout/test_factory_system_descriptor.cpp)

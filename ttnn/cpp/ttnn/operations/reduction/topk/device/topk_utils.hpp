@@ -9,7 +9,6 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/decorators.hpp"
 
