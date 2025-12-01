@@ -51,10 +51,10 @@ def check_noc_status(
     passed = True
 
     loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
-    DM_DEDICATED_NOC = 0
 
-    # Skip check for BRISC when operating in dynamic NOC mode.
+    # Skip check when operating in dynamic NOC mode.
     # DM_DEDICATED_NOC is 0 as defined in dev firmware headers (see dev_msgs.h).
+    DM_DEDICATED_NOC = 0
     if risc_name == "brisc":
         try:
             prev_noc_mode = fw_elf.get_global("prev_noc_mode", loc_mem_access).read_value()
@@ -88,7 +88,7 @@ def check_noc_status(
                 noc_index = kernel_elf.get_global("noc_index", loc_mem_access).read_value()
             except Exception:
                 message += "    Skipping NOC status check: could not read noc_index from kernel ELF\n"
-                log_check(True, message)
+                log_check(False, message)
                 return
             if noc_index != noc_id:
                 return
