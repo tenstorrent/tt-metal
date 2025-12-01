@@ -20,4 +20,3 @@ ttnn::Tensor adamw_fused(
     const float weight_decay,
     const uint32_t step);
 }  // namespace ttml::metal
-
