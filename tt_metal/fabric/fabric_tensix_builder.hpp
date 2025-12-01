@@ -251,7 +251,7 @@ private:
      * For each active device and its ethernet channels, this function records the tensix NOC
      * coordinates in the map, keyed by fabric node ID, routing plane ID, and direction.
      */
-    void build_fabric_router_noc_coords_map(const std::vector<tt_metal::IDevice*>& all_active_devices);
+    void build_fabric_tensix_noc_coords_map(const std::vector<tt_metal::IDevice*>& all_active_devices);
 
     bool initialize_channel_mappings();
     void calculate_buffer_allocations();

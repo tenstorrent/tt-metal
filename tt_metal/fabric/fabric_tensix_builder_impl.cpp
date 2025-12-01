@@ -844,10 +844,7 @@ FabricTensixDatamoverMuxBuilder::FabricTensixDatamoverMuxBuilder(
     ethernet_channel_id_(ethernet_channel_id),
     link_idx_(link_idx),
     core_id_(core_id),
-    noc_x_(noc_x),
-    noc_y_(noc_y),
     config_(std::move(config)),
-    direction_(direction),
     has_fabric_router_(has_fabric_router) {
     channel_connection_liveness_check_disable_array_.fill(false);
     TT_FATAL(config_ != nullptr, "Config cannot be null");
@@ -988,7 +985,8 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_persistent_channels_f
             TT_FATAL(num_channels == 3, "RELAY_TO_MUX_CHANNEL should have exactly 3 channels (got {})", num_channels);
 
             // Channel 0: Local relay (not persistent for non-active tensix core)
-            auto noc_coords = tensix_config.get_active_tensix_noc_coords(local_fabric_node_id_, link_idx_, direction_);
+            const auto* noc_coords =
+                tensix_config.get_active_tensix_noc_coords(local_fabric_node_id_, link_idx_, direction_);
             if (noc_coords) {
                 is_persistent_channels[static_cast<uint32_t>(UdmMuxRelayToMuxChannelId::LOCAL_RELAY_CHANNEL)] = 1;
             }

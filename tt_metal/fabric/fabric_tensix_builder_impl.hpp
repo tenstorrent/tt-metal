@@ -457,9 +457,6 @@ private:
 
     std::shared_ptr<FabricTensixDatamoverMuxConfig> config_;
 
-    // Direction for routing
-    eth_chan_directions direction_;
-
     // Whether this mux has a fabric router to connect to
     // False for missing directions in UDM mode (inter-mux forwarding only)
     bool has_fabric_router_;

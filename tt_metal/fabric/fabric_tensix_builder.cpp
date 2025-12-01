@@ -112,6 +112,7 @@ void FabricTensixDatamoverConfig::find_min_max_eth_channels(const std::vector<tt
 void FabricTensixDatamoverConfig::build_per_device_channel_mappings(
     const std::vector<tt_metal::IDevice*>& all_active_devices) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
 
     // Create per-device channel mappings using real ethernet channel IDs
     for (const auto& device : all_active_devices) {
@@ -436,7 +437,7 @@ std::map<ChannelTypes, uint32_t> FabricTensixDatamoverConfig::calculate_mux_chan
         // UDM has WORKER_CHANNEL, RELAY_TO_MUX_CHANNEL, MUX_TO_MUX_CHANNEL (NO ROUTER_CHANNEL)
 
         // Calculate num_worker_channels using first device (all devices have same configuration)
-        auto first_device = all_active_devices.front();
+        auto* first_device = all_active_devices.front();
         auto workers_by_column = build_workers_by_column(first_device);
         auto tensix_cores_for_workers = get_tensix_cores_for_workers(first_device);
 
@@ -453,7 +454,7 @@ std::map<ChannelTypes, uint32_t> FabricTensixDatamoverConfig::calculate_mux_chan
 
         // Build per-device worker-to-tensix maps
         // fabric_tensix_noc_coords_map_ is indexed by fabric_node_id, so process each device
-        for (auto device : all_active_devices) {
+        for (auto* device : all_active_devices) {
             auto device_workers = build_workers_by_column(device);
             auto device_tensix_cores = get_tensix_cores_for_workers(device);
 
