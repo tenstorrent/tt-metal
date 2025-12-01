@@ -655,7 +655,6 @@ class GptOssForCausalLM(Generator):
             # Use the existing create_tt_model function
             model_args_i, model_i, _, state_dict = create_tt_model(
                 mesh_device=submesh,
-                instruct=True,
                 max_batch_size=max_batch_size // tt_data_parallel,
                 max_seq_len=max_seq_len,
                 paged_attention_config=None,
