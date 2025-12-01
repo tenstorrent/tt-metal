@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/buffer_distribution_spec.hpp>
 #include "impl/buffers/buffer_distribution_spec.hpp"
 #include <tt_stl/assert.hpp>
 
