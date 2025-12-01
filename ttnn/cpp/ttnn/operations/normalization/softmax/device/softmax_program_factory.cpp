@@ -799,7 +799,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
     uint32_t cb_length = in0_t;
     bool use_large_kernel = false;
     // Noisy CB estimator, if the cbs used take up 90% of L1 switch to large kernel implementation
-    constexpr uint32_t single_tile_cb_count = 5;
+    constexpr uint32_t single_tile_cb_count = 5;  // approximate
     uint32_t cb_size_sum_bytes = (in0_t * in0_tile_size) + (im0_t * im_tile_size) + (out0_t * out0_tile_size) +
                                  (single_tile_cb_count * im_tile_size);
     if (attributes.numeric_stable) {
