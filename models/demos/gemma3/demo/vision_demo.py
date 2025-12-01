@@ -189,7 +189,7 @@ def prepare_generator_args(
     "data_parallel",
     [
         1,
-        # 4,
+        4,
     ],
 )
 @pytest.mark.parametrize(
