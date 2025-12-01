@@ -183,7 +183,7 @@ void build_and_run_program_ethernet(
     log_info(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
 
-    auto device_0 = device->get_devices()[0];
+    auto* device_0 = device->get_devices()[0];
 
     // Query the number of ethernet ERISCs
     const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
