@@ -10,7 +10,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
-// Intentional header leakage for convience
+// Intentional header leakage for convenience
 #include <tt-metalium/circular_buffer_constants.h>
 
 namespace tt::tt_metal {
