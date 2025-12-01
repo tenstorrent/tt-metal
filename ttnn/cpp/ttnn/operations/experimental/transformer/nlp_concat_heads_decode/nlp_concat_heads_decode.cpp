@@ -15,16 +15,18 @@ ttnn::Tensor NLPConcatHeadsDecodeOperation::invoke(
     const Tensor& input_tensor,
     const uint32_t num_heads,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
+    std::optional<Tensor> optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     bool on_subcoregrids = false;
     if (input_tensor.is_sharded()) {
         const auto& input_core_ranges = input_tensor.shard_spec().value().grid.ranges();
-        if (input_core_ranges.size() > 1 || !(input_core_ranges[0].start_coord == CoreCoord{0, 0})) {
+        if (input_core_ranges.size() > 1 || !(input_core_ranges[0].start_coord == CoreCoord{0, 0}) ||
+            sub_core_grids.has_value()) {
             on_subcoregrids = true;
         }
     }
     return tt::tt_metal::operation::run(
-               NLPConcatHeadsDecodeDeviceOperation{num_heads, on_subcoregrids},
+               NLPConcatHeadsDecodeDeviceOperation{num_heads, on_subcoregrids, sub_core_grids},
                {input_tensor},
                {},
                {std::move(optional_output_tensor)})
