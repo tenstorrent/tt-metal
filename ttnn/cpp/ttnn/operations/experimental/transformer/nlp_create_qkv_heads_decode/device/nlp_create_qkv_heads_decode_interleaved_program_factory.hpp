@@ -16,12 +16,12 @@ struct NLPCreateQKVHeadsDecodeInterleavedProgramFactory {
     using tensor_return_value_t = nlp_create_qkv_heads_decode::tensor_return_value_t;
 
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle reader_kernel_id;
-        tt::tt_metal::KernelHandle writer_kernel_id;
+        tt::tt_metal::KernelHandle reader_kernel_id{};
+        tt::tt_metal::KernelHandle writer_kernel_id{};
         uint32_t num_cores;
-        tt::tt_metal::CBHandle cb_q_output;
-        tt::tt_metal::CBHandle cb_k_output;
-        tt::tt_metal::CBHandle cb_v_output;
+        tt::tt_metal::CBHandle cb_q_output{};
+        tt::tt_metal::CBHandle cb_k_output{};
+        tt::tt_metal::CBHandle cb_v_output{};
         std::vector<CoreCoord> cores;
         uint32_t element_size;
         uint32_t sub_tile_line_bytes;

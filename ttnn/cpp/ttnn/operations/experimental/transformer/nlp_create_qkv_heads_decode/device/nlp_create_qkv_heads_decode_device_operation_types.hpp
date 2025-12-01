@@ -19,8 +19,8 @@ struct operation_attributes_t {
 };
 
 struct tensor_args_t {
-    const Tensor& input_tensor;
-    std::optional<const Tensor> batch_offset;
+    Tensor input_tensor;
+    std::optional<Tensor> batch_offset;
 };
 
 using tensor_return_value_t = std::vector<Tensor>;

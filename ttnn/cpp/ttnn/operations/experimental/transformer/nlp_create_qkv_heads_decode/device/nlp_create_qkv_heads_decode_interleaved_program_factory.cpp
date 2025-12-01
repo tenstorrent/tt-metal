@@ -121,9 +121,9 @@ NLPCreateQKVHeadsDecodeInterleavedProgramFactory::create(
         SetRuntimeArgs(program, writer_kernel_id, core, reader_runtime_args);
     }
 
-    return {
-        .program = std::move(program),
-        .shared_variables = shared_variables_t{
+    return cached_program_t{
+        std::move(program),
+        shared_variables_t{
             .reader_kernel_id = reader_kernel_id,
             .writer_kernel_id = writer_kernel_id,
             .num_cores = num_cores,

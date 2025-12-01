@@ -182,6 +182,17 @@ std::vector<ttnn::TensorSpec> NLPCreateQKVHeadsDecodeDeviceOperation::compute_ou
                 input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), v_mem_config))};
 }
 
+std::vector<Tensor> NLPCreateQKVHeadsDecodeDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    auto output_specs = compute_output_specs(operation_attributes, tensor_args);
+
+    return {
+        create_device_tensor(output_specs[0], input_tensor.device()),
+        create_device_tensor(output_specs[1], input_tensor.device()),
+        create_device_tensor(output_specs[2], input_tensor.device())};
+}
+
 std::tuple<
     NLPCreateQKVHeadsDecodeDeviceOperation::operation_attributes_t,
     NLPCreateQKVHeadsDecodeDeviceOperation::tensor_args_t>

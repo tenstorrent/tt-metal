@@ -26,7 +26,6 @@ NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory::create(
     const auto& num_kv_heads = operation_attributes.num_kv_heads;
     const auto& head_dim = operation_attributes.head_dim;
     const auto& overlap_qk_coregrid = operation_attributes.overlap_qk_coregrid;
-    const auto& slice_size = operation_attributes.slice_size;
 
     Program program = CreateProgram();
 
@@ -230,9 +229,9 @@ NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory::create(
         }
     }
 
-    return {
-        .program = std::move(program),
-        .shared_variables = shared_variables_t{
+    return cached_program_t{
+        std::move(program),
+        shared_variables_t{
             .q_reader_kernel_id = q_reader_kernel_id,
             .q_writer_kernel_id = q_writer_kernel_id,
             .k_reader_kernel_id = k_reader_kernel_id,
