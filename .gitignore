@@ -141,3 +141,7 @@ Testing
 .auto_triage/logs
 .auto_triage/data
 .auto_triage/output
+
+# Claude Code configuration
+.claude/
+CLAUDE.md
