@@ -114,7 +114,8 @@ public:
         const FabricNodeId& dst_fabric_node_id,
         uint32_t link_idx,
         tt::tt_metal::Program& program,
-        const CoreCoord& logical_core) const;
+        const CoreCoord& logical_core,
+        const std::vector<bool>& sender_channel_is_traffic_injection_channel_array) const;
 
 protected:
     static constexpr uint8_t default_num_buffers = 8;
@@ -300,7 +301,9 @@ private:
  * FabricTensixDatamoverMuxBuilder
  * - Builds mux kernels on BRISC for worker → mux → fabric router routing
  */
-class FabricTensixDatamoverMuxBuilder {
+class FabricTensixDatamoverMuxBuilder : public FabricDatamoverBuilderBase {
+    friend class FabricTensixDatamoverBuilder;
+
 public:
     FabricTensixDatamoverMuxBuilder(
         const CoreCoord& my_core_logical,
@@ -317,7 +320,7 @@ public:
     void create_and_compile(tt::tt_metal::Program& program);
 
     // Build connection to fabric channel - returns connection specs for EDMs to connect
-    tt::tt_fabric::SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t channel_id) const;
+    tt::tt_fabric::SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t channel_id) const override;
 
     // Getters
     const CoreCoord& get_logical_core() const { return my_core_logical_; }
@@ -325,9 +328,6 @@ public:
     tt::tt_fabric::FabricNodeId get_remote_fabric_node_id() const { return remote_fabric_node_id_; }
     uint32_t get_ethernet_channel_id() const { return ethernet_channel_id_; }
     FabricTensixCoreType get_core_id() const { return core_id_; }
-    uint32_t get_noc_x() const { return noc_x_; }
-    uint32_t get_noc_y() const { return noc_y_; }
-    eth_chan_directions get_direction() const { return direction_; }
 
     void append_upstream_routers_noc_xy(uint32_t noc_x, uint32_t noc_y);
 
@@ -349,13 +349,8 @@ private:
 
     // RISC and NOC configuration
     FabricTensixCoreType core_id_;
-    uint32_t noc_x_;
-    uint32_t noc_y_;
 
     std::shared_ptr<FabricTensixDatamoverMuxConfig> config_;
-
-    // Direction for routing
-    eth_chan_directions direction_;
 
     // Channel connection liveness check disable array
     mutable std::array<bool, builder_config::num_sender_channels> channel_connection_liveness_check_disable_array_{};
@@ -369,7 +364,9 @@ private:
  * FabricTensixDatamoverRelayBuilder
  * - Builds relay kernels on NCRISC for upstream fabric router → relay → downstream fabric router routing
  */
-class FabricTensixDatamoverRelayBuilder {
+class FabricTensixDatamoverRelayBuilder : public FabricDatamoverBuilderBase {
+    friend class FabricTensixDatamoverBuilder;
+
 public:
     FabricTensixDatamoverRelayBuilder(
         const CoreCoord& my_core_logical,
@@ -386,7 +383,7 @@ public:
     void create_and_compile(tt::tt_metal::Program& program);
 
     // Build connection to fabric channel - returns connection specs for EDMs to connect
-    tt::tt_fabric::SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t channel_id) const;
+    tt::tt_fabric::SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t channel_id) const override;
 
     // Getters
     const CoreCoord& get_logical_core() const { return my_core_logical_; }
@@ -394,9 +391,6 @@ public:
     tt::tt_fabric::FabricNodeId get_remote_fabric_node_id() const { return remote_fabric_node_id_; }
     uint32_t get_ethernet_channel_id() const { return ethernet_channel_id_; }
     FabricTensixCoreType get_core_id() const { return core_id_; }
-    uint32_t get_noc_x() const { return noc_x_; }
-    uint32_t get_noc_y() const { return noc_y_; }
-    eth_chan_directions get_direction() const { return direction_; }
 
     void append_router_noc_xy(uint32_t noc_x, uint32_t noc_y);
 
@@ -414,14 +408,9 @@ private:
 
     // RISC and NOC configuration
     FabricTensixCoreType core_id_;
-    uint32_t noc_x_;
-    uint32_t noc_y_;
 
     // Config
     std::shared_ptr<FabricTensixDatamoverRelayConfig> config_;
-
-    // Direction for routing
-    eth_chan_directions direction_;
 
     // Channel connection liveness check disable array
     mutable std::array<bool, builder_config::num_sender_channels> channel_connection_liveness_check_disable_array_{};
