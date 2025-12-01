@@ -121,13 +121,13 @@ const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
 
 uint16_t get_bus_id(tt::umd::Cluster& cluster, ChipId chip_id) {
     // Prefer cached value from cluster descriptor (available for silicon and our simulator/mock descriptors)
-    auto cluster_desc = cluster.get_cluster_description();
+    auto* cluster_desc = cluster.get_cluster_description();
     uint16_t bus_id = cluster_desc->get_bus_id(chip_id);
     return bus_id;
 }
 
 UbbId get_ubb_id(tt::umd::Cluster& cluster, ChipId chip_id) {
-    auto cluster_desc = cluster.get_cluster_description();
+    auto* cluster_desc = cluster.get_cluster_description();
     const auto& tray_bus_ids = ubb_bus_ids.at(cluster_desc->get_arch());
     const auto bus_id = get_bus_id(cluster, chip_id);
     auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
@@ -467,8 +467,40 @@ void ControlPlane::init_control_plane(
             logical_mesh_chip_id_to_physical_chip_id_mapping->get());
         this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
     } else {
+        std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
+
+        // Pin the start of the mesh to match the Galaxy Topology, ensuring that external QSFP links align with the
+        // corner node IDs of the fabric mesh. This is a performance optimization to ensure that MGD mapping does not
+        // bisect a device.
+
+        // * * o o < Pinned corners marked with *
+        // * o o o
+        // o o o o
+        // o o o o
+        // o o o o
+        // o o o o
+        // o o o o
+        // o o o o
+        const bool is_1d = this->mesh_graph_->get_mesh_shape(MeshId{0})[0] == 1 ||
+                           this->mesh_graph_->get_mesh_shape(MeshId{0})[1] == 1;
+        const size_t board_size = cluster.get_unique_chip_ids().size();
+        const size_t distributed_size = *distributed_context->size();
+
+        // Limiting this for single-host galaxy systems only because the dateline could be placed differently,
+        // multi-host machines should be limited via rank bindings so should be ok
+        if (cluster.is_ubb_galaxy() && !is_1d && board_size == 32 &&
+            distributed_size == 1) {  // Using full board size for UBB Galaxy
+            int y_size = this->mesh_graph_->get_mesh_shape(MeshId{0})[1];
+            fixed_asic_position_pinnings.push_back({AsicPosition{1, 1}, FabricNodeId(MeshId{0}, 0)});
+            fixed_asic_position_pinnings.push_back({AsicPosition{1, 5}, FabricNodeId(MeshId{0}, 1)});
+            fixed_asic_position_pinnings.push_back({AsicPosition{1, 2}, FabricNodeId(MeshId{0}, y_size)});
+        }
+
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
-            *this->mesh_graph_, *this->physical_system_descriptor_, this->local_mesh_binding_);
+            *this->mesh_graph_,
+            *this->physical_system_descriptor_,
+            this->local_mesh_binding_,
+            fixed_asic_position_pinnings);
         this->load_physical_chip_mapping(
             topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
     }
@@ -1736,7 +1768,7 @@ void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabri
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
     auto active_ethernet_cores = this->get_active_ethernet_cores(physical_chip_id);
 
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto& factory = hal.get_fabric_telemetry_factory(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
 
     auto telemetry = factory.create<::tt::tt_fabric::fabric_telemetry::FabricTelemetryStaticOnly>();
@@ -2062,8 +2094,8 @@ void fill_connection_info_fields(
     const FabricEriscDatamoverConfig& config,
     uint32_t sender_channel,
     uint16_t worker_free_slots_stream_id) {
-    auto channel_allocator = config.channel_allocator.get();
-    const auto static_channel_allocator =
+    auto* channel_allocator = config.channel_allocator.get();
+    auto* const static_channel_allocator =
         dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
     TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
     connection_info.edm_noc_x = static_cast<uint8_t>(virtual_core.x);
@@ -2114,11 +2146,8 @@ void ControlPlane::populate_fabric_connection_info(
 
     const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     // Always populate fabric router config for normal workers
-    const auto& edm_config = fabric_context.get_fabric_router_config(
-        tt::tt_fabric::FabricEriscDatamoverType::Default,
-        tt::tt_fabric::FabricEriscDatamoverAxis::Short,
-        fabric_tensix_config,
-        static_cast<eth_chan_directions>(sender_channel));
+    const auto& edm_config =
+        fabric_context.get_fabric_router_config(fabric_tensix_config, static_cast<eth_chan_directions>(sender_channel));
     CoreCoord fabric_router_virtual_core = cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_channel_id);
 
     fill_connection_info_fields(
@@ -2807,7 +2836,7 @@ std::string ControlPlane::get_galaxy_cabling_descriptor_path(tt::tt_fabric::Fabr
          {FabricType::TORUS_Y, Y_TORUS_PATH},
          {FabricType::TORUS_XY, XY_TORUS_PATH}}};
 
-    auto it = std::find_if(
+    const auto* it = std::find_if(
         cabling_map.begin(), cabling_map.end(), [fabric_type](const auto& pair) { return pair.first == fabric_type; });
     TT_FATAL(it != cabling_map.end(), "Unknown torus configuration: {}", enchantum::to_string(fabric_config));
 

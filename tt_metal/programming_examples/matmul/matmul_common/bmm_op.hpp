@@ -159,7 +159,7 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_param
             return {0, 0, 0, 0};
         }
 
-        for (auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
+        for (const auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
             auto subblock_h = std::get<0>(subblock_hw);
             auto subblock_w = std::get<1>(subblock_hw);
             if (Mpc % subblock_h == 0 and Npc % subblock_w == 0) {
@@ -183,7 +183,7 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_param
             return {0, 0, 0, 0};
         }
 
-        for (auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
+        for (const auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
             auto subblock_h = std::get<0>(subblock_hw);
             auto subblock_w = std::get<1>(subblock_hw);
             if (Mpc % subblock_h == 0 and Npc % subblock_w == 0) {
@@ -207,7 +207,7 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_param
                 continue;
             }
 
-            for (auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
+            for (const auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
                 auto subblock_h = std::get<0>(subblock_hw);
                 auto subblock_w = std::get<1>(subblock_hw);
                 if (Mpc % subblock_h == 0 and Npc % subblock_w == 0) {

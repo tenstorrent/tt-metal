@@ -103,7 +103,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     const std::vector<Tensor>& inputs, std::vector<Tensor>& outputs) const {
     const auto& input_tensor = inputs.at(0);
     auto& output_tensor = outputs.at(0);
-    auto device = input_tensor.device();
+    auto* device = input_tensor.device();
 
     bool is_in_tiled = input_tensor.layout() == Layout::TILE;
     bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
