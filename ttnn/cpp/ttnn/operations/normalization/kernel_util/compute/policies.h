@@ -12,8 +12,14 @@
 namespace norm::kernel_util::compute::policies {
 
 /**
- * @brief Control whether to cb_wait_front at the end
- * of a function
+ * @brief Control whether to cb_wait_front() for input
+ * before processing it in a function
+ */
+enum class WaitForInputPolicy { WAIT, NO_WAIT };
+
+/**
+ * @brief Control whether to cb_wait_front() for output
+ * at the end of a function
  */
 enum class WaitAtEndPolicy { WAIT, NO_WAIT };
 

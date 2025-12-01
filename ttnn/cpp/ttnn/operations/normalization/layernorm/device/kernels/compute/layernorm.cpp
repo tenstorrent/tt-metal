@@ -118,7 +118,7 @@ void MAIN {
 
 #ifndef RMSNORM
         // E[x]
-        numeric::row_wise_mean<FLOAT32_REDUCTION>(cb_x, cb_scaler, cb_ex, one_over_W, Wt, blk);
+        numeric::row_wise_mean<FLOAT32_REDUCTION>(cb_x, cb_scaler, cb_ex, one_over_W, 1, Wt, blk);
 
         // x - E[x]
         reconfig_data_format(cb_x, cb_ex);
@@ -162,8 +162,8 @@ void MAIN {
 #endif
 
         // Var[x]
-        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::PopInputPolicy::POP>(
-            cb_xmm2, cb_scaler, cb_ex2, one_over_W, Wt, blk);
+        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::WaitForInputPolicy::WAIT, policies::PopInputPolicy::POP>(
+            cb_xmm2, cb_scaler, cb_ex2, one_over_W, 1, Wt, blk);
 
         // Var[x] + eps
         reconfig_data_format(cb_ex2, cb_eps);

@@ -70,7 +70,6 @@ void MAIN {
 #else
     binary_op_init_common(cb_in, cb_scaler, cb_ex);
 #endif
-    cb_wait_front(cb_scaler, 1);  // comes from the reader
     cb_wait_front(cb_eps, 1);     // comes from the reader
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
@@ -83,11 +82,13 @@ void MAIN {
         //      --------
         //         n
 #ifdef FUSE_PRE_ADD
-        numeric::row_wise_mean_with_pre_add<FLOAT32_REDUCTION, policies::PopInputPolicy::POP>(
-            cb_in, cb_inb, cb_scaler, cb_ex, one_over_W, Wt, blk);
+        numeric::row_wise_mean_with_pre_add<
+            FLOAT32_REDUCTION,
+            policies::WaitForInputPolicy::WAIT,
+            policies::PopInputPolicy::POP>(cb_in, cb_inb, cb_scaler, cb_ex, one_over_W, 1, Wt, blk);
 #else
-        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::PopInputPolicy::POP>(
-            cb_in, cb_scaler, cb_ex, one_over_W, Wt, blk);
+        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::WaitForInputPolicy::WAIT, policies::PopInputPolicy::POP>(
+            cb_in, cb_scaler, cb_ex, one_over_W, 1, Wt, blk);
 #endif
 #endif  // !RMS ifdef end
         // Start of

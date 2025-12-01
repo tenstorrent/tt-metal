@@ -43,10 +43,14 @@ inline void scale_dest(uint32_t dst, uint32_t scalar) {
 }
 
 /**
- * @brief The compute logic for accumulating a CB. Does
- * no src configuring or packing
+ * @brief The compute logic for accumulating a single tile row CB. Does
+ * no src configuring, init, or packing
  */
-template <bool FLOAT32_REDUCTION, policies::PopInputPolicy pop_input_policy, typename... AdditionalCBs>
+template <
+    bool FLOAT32_REDUCTION,
+    policies::WaitForInputPolicy wait_for_input_policy,
+    policies::PopInputPolicy pop_input_policy,
+    typename... AdditionalCBs>
 inline void accumulate_compute_loop(
     uint32_t cb_in,
     uint32_t cb_scalar,
@@ -60,10 +64,11 @@ inline void accumulate_compute_loop(
     constexpr bool pop_input = pop_input_policy == policies::PopInputPolicy::POP;
 
     auto accumulate_cb = [cb_scalar, block_size, cb_out, num_tiles](uint32_t cb) {
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb, cb_scalar, cb_out);
         for (uint32_t t = 0; t < num_tiles; t += block_size) {
             const uint32_t num_previous_tiles = pop_input ? 0 : t;
-            cb_wait_front(cb, num_previous_tiles + block_size);
+            if constexpr (wait_for_input_policy == policies::WaitForInputPolicy::WAIT) {
+                cb_wait_front(cb, num_previous_tiles + block_size);
+            }
             for (uint32_t j = 0; j < block_size; j++) {
                 reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
                     cb, cb_scalar, num_previous_tiles + j, detail::scaler_tile_idx, detail::dst0);
@@ -84,8 +89,6 @@ inline void accumulate_compute_loop(
             accumulate_cb(additional_cbs_array[i]);
         }
     }
-
-    reduce_uninit<FLOAT32_REDUCTION>();
 }
 
 }  // namespace detail
@@ -108,40 +111,48 @@ inline void accumulate_compute_loop(
  */
 template <
     bool FLOAT32_REDUCTION,
+    policies::WaitForInputPolicy wait_for_input_policy = policies::WaitForInputPolicy::WAIT,
     policies::PopInputPolicy pop_input_policy = policies::PopInputPolicy::NO_POP,
     policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT,
     typename Epilogue = decltype(detail::no_op),
     typename... AdditionalCBs>
-inline void accumulate_cbs_with_epilogue(
+inline void row_wise_accumulate_with_epilogue(
     uint32_t cb_in,
     uint32_t cb_scalar,
     uint32_t cb_out,
-    uint32_t num_tiles,
+    uint32_t num_tile_rows,
+    uint32_t num_tiles_per_tile_row,
     uint32_t block_size,
     Epilogue epilogue = detail::no_op,
     AdditionalCBs... additional_cbs) {
     constexpr bool pop_input = pop_input_policy == policies::PopInputPolicy::POP;
     constexpr bool wait_at_end = wait_at_end_policy == policies::WaitAtEndPolicy::WAIT;
 
+    cb_wait_front(cb_scalar, 1);
+
+    cb_reserve_back(cb_out, num_tile_rows);
+    pack_reconfig_data_format(cb_out);
     reconfig_data_format(cb_in, cb_scalar);
+    reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in, cb_scalar, cb_out);
     tile_regs_acquire();
 
-    detail::accumulate_compute_loop<FLOAT32_REDUCTION, pop_input_policy>(
-        cb_in, cb_scalar, cb_out, num_tiles, block_size, additional_cbs...);
+    for (uint32_t i = 0; i < num_tile_rows; i++) {
+        detail::accumulate_compute_loop<FLOAT32_REDUCTION, wait_for_input_policy, pop_input_policy>(
+            cb_in, cb_scalar, cb_out, num_tiles_per_tile_row, block_size, additional_cbs...);
 
-    epilogue();
+        epilogue();
 
-    tile_regs_commit();
-    tile_regs_wait();
+        tile_regs_commit();
+        tile_regs_wait();
 
-    cb_reserve_back(cb_out, 1);
-    pack_reconfig_data_format(cb_out);
-    pack_tile(detail::dst0, cb_out);
-    tile_regs_release();
-    cb_push_back(cb_out, 1);
+        pack_tile(detail::dst0, cb_out);
+        tile_regs_release();
+    }
+    reduce_uninit<FLOAT32_REDUCTION>();
+    cb_push_back(cb_out, num_tile_rows);
 
     if constexpr (wait_at_end) {
-        cb_wait_front(cb_out, 1);
+        cb_wait_front(cb_out, num_tile_rows);
     }
 }
 
@@ -173,12 +184,19 @@ inline void accumulate_cbs_with_epilogue(
  */
 template <
     bool FLOAT32_REDUCTION,
+    policies::WaitForInputPolicy wait_for_input_policy = policies::WaitForInputPolicy::WAIT,
     policies::PopInputPolicy pop_input_policy = policies::PopInputPolicy::NO_POP,
     policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT>
 inline void row_wise_mean(
-    uint32_t cb_in, uint32_t cb_scalar, uint32_t cb_out, uint32_t one_over_N, uint32_t num_tiles, uint32_t block_size) {
-    accumulate_cbs_with_epilogue<FLOAT32_REDUCTION, pop_input_policy, wait_at_end_policy>(
-        cb_in, cb_scalar, cb_out, num_tiles, block_size, [&one_over_N]() {
+    uint32_t cb_in,
+    uint32_t cb_scalar,
+    uint32_t cb_out,
+    uint32_t one_over_N,
+    uint32_t num_tile_rows,
+    uint32_t num_tiles_per_tile_row,
+    uint32_t block_size) {
+    row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION, wait_for_input_policy, pop_input_policy, wait_at_end_policy>(
+        cb_in, cb_scalar, cb_out, num_tile_rows, num_tiles_per_tile_row, block_size, [&one_over_N]() {
             detail::scale_dest(detail::dst0, one_over_N);
         });
 }
@@ -217,6 +235,7 @@ inline void row_wise_mean(
  */
 template <
     bool FLOAT32_REDUCTION,
+    policies::WaitForInputPolicy wait_for_input_policy = policies::WaitForInputPolicy::WAIT,
     policies::PopInputPolicy pop_input_policy = policies::PopInputPolicy::NO_POP,
     policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT>
 inline void row_wise_mean_with_pre_add(
@@ -225,13 +244,15 @@ inline void row_wise_mean_with_pre_add(
     uint32_t cb_scalar,
     uint32_t cb_out,
     uint32_t one_over_N,
-    uint32_t num_tiles,
+    uint32_t num_tile_rows,
+    uint32_t num_tiles_per_tile_row,
     uint32_t block_size) {
-    accumulate_cbs_with_epilogue<FLOAT32_REDUCTION, pop_input_policy, wait_at_end_policy>(
+    row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION, wait_for_input_policy, pop_input_policy, wait_at_end_policy>(
         cb_in0,
         cb_scalar,
         cb_out,
-        num_tiles,
+        num_tile_rows,
+        num_tiles_per_tile_row,
         block_size,
         [&one_over_N]() { detail::scale_dest(detail::dst0, one_over_N); },
         cb_in1);
