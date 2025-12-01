@@ -9,7 +9,7 @@ import pytest
 from loguru import logger
 import torch.nn as nn
 
-from models.experimental.tt_dit.models.transformers.timestep_embed_sd35_medium import TimestepEmbedder
+from models.experimental.tt_dit.models.transformers.sd35_med.timestep_embed_sd35_medium import TimestepEmbedder
 
 
 # Reference PyTorch implementation

@@ -4,7 +4,7 @@ import pytest
 import ttnn
 from loguru import logger
 
-from models.experimental.tt_dit.models.transformers.vector_embed_sd35_medium import VectorEmbedder
+from models.experimental.tt_dit.models.transformers.sd35_med.vector_embed_sd35_medium import VectorEmbedder
 
 
 # PyTorch Reference Implementation

@@ -7,7 +7,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.experimental.tt_dit.models.transformers.patch_embed_sd35_medium import PatchEmbed
+from models.experimental.tt_dit.models.transformers.sd35_med.patch_embed_sd35_medium import PatchEmbed
 from models.common.utility_functions import comp_pcc, comp_allclose
 from typing import Optional
 

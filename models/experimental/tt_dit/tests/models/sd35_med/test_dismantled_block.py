@@ -8,7 +8,9 @@ from typing import Optional
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
-from models.experimental.tt_dit.models.transformers.dismantled_block_sd35_medium import SD35MediumDismantledBlock
+from models.experimental.tt_dit.models.transformers.sd35_med.dismantled_block_sd35_medium import (
+    SD35MediumDismantledBlock,
+)
 from models.experimental.tt_dit.tests.models.sd35_med.test_attention_sd35_medium import SelfAttention, RMSNorm
 from models.experimental.tt_dit.tests.models.sd35_med.test_mlp import Mlp
 from models.experimental.tt_dit.tests.models.sd35_med.test_swiglu import SwiGLUFeedForward

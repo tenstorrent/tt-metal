@@ -6,7 +6,7 @@ import torch
 from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.experimental.tt_dit.models.transformers.attention_sd35_medium import SD35MediumSelfAttention
+from models.experimental.tt_dit.models.transformers.sd35_med.attention_sd35_medium import SD35MediumSelfAttention
 
 
 class RMSNorm(torch.nn.Module):

@@ -13,7 +13,7 @@ import torch
 import ttnn
 import torch.nn as nn
 
-from ...layers.linear import Linear
+from models.experimental.tt_dit.layers.linear import Linear
 
 
 class TimestepEmbedder(nn.Module):
@@ -21,7 +21,7 @@ class TimestepEmbedder(nn.Module):
     TTNN implementation of timestep embedding
     """
 
-    def __init__(self, hidden_size, frequency_embedding_size=256, mesh_device=None):
+    def __init__(self, hidden_size, dtype=torch.bfloat16, frequency_embedding_size=256, mesh_device=None):
         super().__init__()
 
         self.hidden_size = hidden_size

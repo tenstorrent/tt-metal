@@ -10,8 +10,8 @@ from __future__ import annotations
 import torch
 import ttnn
 
-from ...layers.conv2d import Conv2d
-from ...layers.module import Module
+from models.experimental.tt_dit.layers.conv2d import Conv2d
+from models.experimental.tt_dit.layers.module import Module
 
 
 class PatchEmbed(Module):
@@ -92,3 +92,7 @@ class PatchEmbed(Module):
             x = ttnn.reshape(x, (B, H * W, C))
 
         return x
+
+
+# Alias for consistency with other SD3.5 Medium components
+SD35MediumPatchEmbed = PatchEmbed

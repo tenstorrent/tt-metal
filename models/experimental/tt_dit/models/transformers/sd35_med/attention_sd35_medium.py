@@ -7,9 +7,9 @@ Single-input self-attention matching MM-DiT reference.
 """
 
 import ttnn
-from ...layers.linear import Linear
-from ...layers.normalization import RMSNorm
-from ...utils.substate import substate
+from models.experimental.tt_dit.layers.linear import Linear
+from models.experimental.tt_dit.layers.normalization import RMSNorm
+from models.experimental.tt_dit.utils.substate import substate
 
 
 class SD35MediumSelfAttention:

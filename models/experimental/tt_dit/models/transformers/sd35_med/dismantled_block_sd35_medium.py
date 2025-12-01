@@ -7,11 +7,11 @@ Modified to support both standard and joint block operations.
 """
 
 import ttnn
-from ...layers.linear import Linear
-from ...layers.normalization import RMSNorm
-from models.experimental.tt_dit.models.transformers.mlp_sd35_medium import SD35MediumMlp as TTNNMlp
-from models.experimental.tt_dit.models.transformers.swiglu_sd35_medium import SD35MediumSwiGLU
-from ...utils.substate import substate
+from models.experimental.tt_dit.layers.linear import Linear
+from models.experimental.tt_dit.layers.normalization import RMSNorm
+from models.experimental.tt_dit.models.transformers.sd35_med.mlp_sd35_medium import SD35MediumMlp as TTNNMlp
+from models.experimental.tt_dit.models.transformers.sd35_med.swiglu_sd35_medium import SD35MediumSwiGLU
+from models.experimental.tt_dit.utils.substate import substate
 
 
 class SD35MediumDismantledBlock:

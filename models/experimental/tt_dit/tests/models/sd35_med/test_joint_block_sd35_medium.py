@@ -11,7 +11,7 @@ from models.experimental.tt_dit.tests.models.sd35_med.test_dismantled_block impo
     DismantledBlock,
     attention,
 )
-from models.experimental.tt_dit.models.transformers.joint_block_sd35_medium import SD35MediumJointBlock
+from models.experimental.tt_dit.models.transformers.sd35_med.joint_block_sd35_medium import SD35MediumJointBlock
 
 
 def block_mixing(context, x, context_block, x_block, c):

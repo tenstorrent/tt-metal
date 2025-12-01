@@ -10,8 +10,8 @@ for SD3.5 Medium, matching the reference implementation.
 """
 
 import ttnn
-from ...layers.linear import Linear
-from ...layers.module import Module
+from models.experimental.tt_dit.layers.linear import Linear
+from models.experimental.tt_dit.layers.module import Module
 
 
 class SD35MediumSwiGLU(Module):

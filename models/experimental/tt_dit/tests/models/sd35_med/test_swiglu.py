@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc, comp_allclose
-from models.experimental.tt_dit.models.transformers.swiglu_sd35_medium import SD35MediumSwiGLU
+from models.experimental.tt_dit.models.transformers.sd35_med.swiglu_sd35_medium import SD35MediumSwiGLU
 
 
 class SwiGLUFeedForward(torch.nn.Module):

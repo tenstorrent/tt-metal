@@ -3,13 +3,14 @@
 
 import ttnn
 import torch.nn as nn
-from ...layers.linear import Linear
+import torch
+from models.experimental.tt_dit.layers.linear import Linear
 
 
 class VectorEmbedder(nn.Module):
     """TTNN implementation of VectorEmbedder"""
 
-    def __init__(self, input_dim: int, hidden_size: int, mesh_device=None):
+    def __init__(self, input_dim: int, hidden_size: int, mesh_device=None, dtype=torch.bfloat16):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_size = hidden_size

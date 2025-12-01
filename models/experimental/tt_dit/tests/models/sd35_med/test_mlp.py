@@ -8,7 +8,7 @@ import torch.nn as nn
 from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc, comp_allclose
-from models.experimental.tt_dit.models.transformers.mlp_sd35_medium import SD35MediumMlp
+from models.experimental.tt_dit.models.transformers.sd35_med.mlp_sd35_medium import SD35MediumMlp
 
 
 class Mlp(torch.nn.Module):
@@ -23,7 +23,7 @@ class Mlp(torch.nn.Module):
 
         # Add dtype=torch.bfloat16 to match input dtype
         self.fc1 = torch.nn.Linear(in_features, hidden_features, bias=bias, dtype=torch.bfloat16)
-        self.act = act_layer
+        self.act = act_layer()
         self.fc2 = torch.nn.Linear(hidden_features, out_features, bias=bias, dtype=torch.bfloat16)
 
     def forward(self, x):
