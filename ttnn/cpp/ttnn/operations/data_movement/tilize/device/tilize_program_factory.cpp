@@ -170,7 +170,6 @@ operation::ProgramWithCallbacks tilize_multi_core_block(
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
-    printf("Using multi core block\n");
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32;
 
     IDevice* device = a.device();
@@ -567,7 +566,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(
     uint32_t row_start_id = 0;
     const auto cores = corerange_to_cores(available_grid);
     for (uint32_t i = 0; i < ncores_full; ++i) {
-        const CoreCoord& core = cores[i];
+        const CoreCoord core = cores[i];
 
         // reader runtime args
         const std::array reader_rt_args = {
@@ -596,7 +595,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(
     }
     if (has_cliff) {
         // the last core is a cliff core with nblocks_per_core_cliff blocks
-        const CoreCoord& core = cores.back();
+        const CoreCoord& core = cores[ncores_full];
 
         // reader runtime args
         const std::array reader_rt_args = {
