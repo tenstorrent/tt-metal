@@ -67,8 +67,12 @@ void MAIN {
     uint32_t one_minus_beta1 = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t one_minus_beta2 = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t decay_factor = get_arg_val<uint32_t>(runtime_args_counter++);
+    [[maybe_unused]] uint32_t seed = get_arg_val<uint32_t>(runtime_args_counter++);
 
     init_sfpu(cb_param_idx, cb_output_idx);
+#if STOCH_ROUND
+    init_prng_seed(seed);
+#endif
 
     for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_core; tile_idx += block_size) {
         // momentum_t calculation
