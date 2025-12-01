@@ -52,7 +52,7 @@ def check_noc_status(
     if risc_name == "brisc":
         DM_DEDICATED_NOC = 0
         try:
-            prev_noc_mode = mem_access(fw_elf, "prev_noc_mode", loc_mem_reader)[0][0]
+            prev_noc_mode = fw_elf.get_global("prev_noc_mode", loc_mem_access).read_value()
         except Exception:
             prev_noc_mode = DM_DEDICATED_NOC  # Default to dedicated if symbol is not readable
         if prev_noc_mode != DM_DEDICATED_NOC:
@@ -62,7 +62,7 @@ def check_noc_status(
 
         # Also validate that BRISC's runtime-selected NOC matches the NOC being checked.
         try:
-            active_noc_index = mem_access(fw_elf, "noc_index", loc_mem_reader)[0][0]
+            active_noc_index = fw_elf.get_global("noc_index", loc_mem_access).read_value()
         except Exception:
             message += "    Skipping NOC status check: could not read noc_index from BRISC firmware\n"
             log_check(False, message)
