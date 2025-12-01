@@ -1,6 +1,6 @@
 {
   "decoder": {
-    "RMSAllGather_0": {
+    "RMSAllGatherDeviceOperation_0": {
       "op_name": "RMS_0",
       "kernel_duration": 16719.618287037036,
       "op_to_op": 770.5111111111111,
@@ -11,7 +11,7 @@
       "first_to_last_start_relative_margin": 0.2,
       "dispatch_duration_relative_margin": 0.2
     },
-    "RMSAllGather_1": {
+    "RMSAllGatherDeviceOperation_1": {
       "op_name": "RMS_1",
       "kernel_duration": 16346.488888888889,
       "op_to_op": 740.4962962962964,
@@ -206,7 +206,7 @@
       "op_to_op_duration_relative_margin": 0.2,
       "dispatch_duration_relative_margin": 0.5
     },
-    "RMSAllGather_0": {
+    "RMSAllGatherDeviceOperation_0": {
       "op_name": "RMSAllGather_0",
       "kernel_duration": 14480.010416666666,
       "op_to_op": 694.8666666666667,
@@ -341,7 +341,7 @@
       "op_to_op_duration_relative_margin": 0.4,
       "dispatch_duration_relative_margin": 0.5
     },
-    "Sampling_0": {
+    "SamplingDeviceOperation_0": {
       "op_name": "Sampling_0",
       "kernel_duration": 67650.89791666667,
       "op_to_op": 54836.46666666667,
