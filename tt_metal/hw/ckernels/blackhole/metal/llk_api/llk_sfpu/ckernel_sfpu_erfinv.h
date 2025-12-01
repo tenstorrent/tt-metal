@@ -64,7 +64,7 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat in) {
     // result = sqrt(calculated_value)
     sfpi::vFloat result = calculate_sqrt_custom<false>(calculated_value);
 
-    return log_value;
+    return result;
 }
 
 template <bool APPROXIMATION_MODE>
