@@ -97,21 +97,21 @@ StridedAllGatherAsync::invoke(
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
     return {
-        operation_attributes_t{
-            ttnn::ccl::get_active_physical_devices(input_tensor),
-            dim,
-            num_links,
-            num_devices,
-            memory_config.value_or(input_tensor.memory_config()),
-            ccl_topology,
-            multi_device_global_semaphore,
-            cluster_axis,
-            tiles_per_chunk,
-            num_workers_per_link,
-            num_buffers_per_channel,
-            mm_cores_y,
-            mm_block_ht,
-            mm_block_wt},
+        operation_attributes_t{     // ttnn::ccl::get_active_physical_devices(input_tensor),
+                               {},  // TODO(p1-0tr): Unused?
+                               dim,
+                               num_links,
+                               num_devices,
+                               memory_config.value_or(input_tensor.memory_config()),
+                               ccl_topology,
+                               multi_device_global_semaphore,
+                               cluster_axis,
+                               tiles_per_chunk,
+                               num_workers_per_link,
+                               num_buffers_per_channel,
+                               mm_cores_y,
+                               mm_block_ht,
+                               mm_block_wt},
         tensor_args_t{input_tensor, persistent_output_buffer}};
 }
 }  // namespace ttnn::operations::experimental::ccl::strided_all_gather_async
