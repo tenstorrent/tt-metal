@@ -359,7 +359,7 @@ void GridSampleBilinearProgramFactory::override_runtime_arguments(
     tensor_return_value_t& output_tensor) {
     auto& prog = cached_program.program;
     const auto& input_tensor = tensor_args.input_tensor;
-    auto& grid_tensor = tensor_args.grid;
+    const auto& grid_tensor = tensor_args.grid;
     const auto& is_sharded = cached_program.shared_variables.is_sharded;
     const auto& grid_cb_handle = cached_program.shared_variables.grid_cb_handle;
     const auto& output_cb_handle = cached_program.shared_variables.output_cb_handle;
