@@ -344,7 +344,7 @@ void py_module(py::module& module) {
         Args:
             grid_size (ttnn.CoreCoord): The size of the core grid (x, y dimensions).
             units_to_divide (int): The total number of work units to distribute.
-            row_wise (bool, optional): Whether to distribute row-wise. Defaults to False.
+            row_wise (bool, optional): Whether to distribute work by iterating row-wise. Defaults to False.
 
         Returns:
             tuple: A tuple containing:
@@ -378,7 +378,7 @@ void py_module(py::module& module) {
         Args:
             core_grid (ttnn.CoreRangeSet): The set of core ranges to distribute work across.
             units_to_divide (int): The total number of work units to distribute.
-            row_wise (bool, optional): Whether to distribute row-wise. Defaults to False.
+            row_wise (bool, optional): Whether to distribute work by iterating row-wise. Defaults to False.
 
         Returns:
             tuple: A tuple containing:
