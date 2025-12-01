@@ -18,6 +18,7 @@ namespace tt::tt_metal {
 using CBHandle = uintptr_t;
 
 class CircularBufferImpl;
+// Note: this class shares the lifetime of it's associated program.
 class CircularBuffer {
 public:
     explicit CircularBuffer(const CircularBufferImpl* impl);
