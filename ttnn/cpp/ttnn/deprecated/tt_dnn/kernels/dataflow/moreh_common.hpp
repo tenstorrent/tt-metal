@@ -658,6 +658,7 @@ uint32_t get_tilized_idx(uint32_t h, uint32_t w) {
         h -= FACE_WIDTH;
         idx += FACE_HEIGHT * TILE_WIDTH;
     }
+
     idx += h * FACE_WIDTH + w;
     return idx;
 }
@@ -808,6 +809,7 @@ void read_line(
             noc_offset += (FACE_HEIGHT * FACE_WIDTH) * element_bytes;
         }
         auto src_noc_addr = get_noc_addr(noc_id, addrgen, noc_offset);
+
         if (noc_read_size_bytes == valid_elements_bytes) {
             // DRAM and L1 read sizes are aligned, so we can read directly into the destination CB.
             noc_async_read(src_noc_addr, l1_write_addr, noc_read_size_bytes);
