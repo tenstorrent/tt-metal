@@ -45,6 +45,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt {
 namespace tt_metal {

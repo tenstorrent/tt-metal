@@ -1,22 +1,28 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+
+#include "ttnn/operations/reduction/moe/device/moe_program_factory.hpp"
+
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
-#include "ttnn/operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::reduction::detail {
+namespace ttnn::operations::reduction::moe::program {
 
-operation::ProgramWithCallbacks moe_single_core_interleaved(
-    const Tensor& input_tensor,
-    const Tensor& expert_mask_tensor,
-    const Tensor& topk_mask_tensor,
-    const uint16_t k,
-    Tensor& out_tensor) {
+MoeProgramFactory::cached_program_t MoeProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    const auto& input_tensor = tensor_args.input;
+    const auto& expert_mask_tensor = tensor_args.expert_mask;
+    const auto& topk_mask_tensor = tensor_args.topk_mask;
+
+    const auto k = operation_attributes.k;
+
     tt::tt_metal::Program program{};
 
     CoreRange core({0, 0}, {0, 0});
@@ -25,7 +31,7 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(
     tt::DataFormat topk_mask_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(topk_mask_tensor.dtype());
     tt::DataFormat expert_mask_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(expert_mask_tensor.dtype());
-    tt::DataFormat out_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(out_tensor.dtype());
+    tt::DataFormat out_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;
     tt::DataFormat value_cb_data_format = tt::DataFormat::Float16_b;
@@ -38,12 +44,12 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(
     uint32_t index_tile_size = tile_size(index_cb_data_format);
     uint32_t value_tile_size = tile_size(value_cb_data_format);
 
-    auto input_buffer = input_tensor.buffer();
-    auto topk_mask_buffer = topk_mask_tensor.buffer();
-    auto expert_mask_buffer = expert_mask_tensor.buffer();
-    auto out_buffer = out_tensor.buffer();
+    auto* input_buffer = input_tensor.buffer();
+    auto* topk_mask_buffer = topk_mask_tensor.buffer();
+    auto* expert_mask_buffer = expert_mask_tensor.buffer();
+    auto* out_buffer = output_tensor.buffer();
 
-    uint32_t num_out_tiles = out_tensor.physical_volume() / tt::constants::TILE_HW;
+    uint32_t num_out_tiles = output_tensor.physical_volume() / tt::constants::TILE_HW;
     uint32_t scale_tiles = 1;
 
     auto input_shape = input_tensor.padded_shape();
@@ -204,28 +210,36 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(
         core,
         tt::tt_metal::ComputeConfig{.compile_args = compute_args});
 
-    auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-                                              const void* operation,
-                                              const Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto input_buffer = input_tensors.at(0).buffer();
-        auto topk_mask_buffer = input_tensors.at(2).buffer();
-        auto expert_mask_buffer = input_tensors.at(1).buffer();
-        auto output_buffer = output_tensors.at(0).buffer();
-
-        CoreCoord core = {0, 0};
-
-        auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-        reader_runtime_args[0] = input_buffer->address();
-        reader_runtime_args[1] = topk_mask_buffer->address();
-        reader_runtime_args[2] = expert_mask_buffer->address();
-
-        auto& writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-        writer_runtime_args[0] = output_buffer->address();
-    };
-
-    return {std::move(program), override_runtime_args_callback};
+    return cached_program_t{
+        std::move(program),
+        {unary_reader_kernel_id, unary_writer_kernel_id}};
 }
-}  // namespace ttnn::operations::reduction::detail
+
+void MoeProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto& program = cached_program.program;
+    auto& shared_vars = cached_program.shared_variables;
+    auto& unary_reader_kernel_id = shared_vars.unary_reader_kernel_id;
+    auto& unary_writer_kernel_id = shared_vars.unary_writer_kernel_id;
+
+    auto* input_buffer = tensor_args.input.buffer();
+    auto* topk_mask_buffer = tensor_args.topk_mask.buffer();
+    auto* expert_mask_buffer = tensor_args.expert_mask.buffer();
+
+    auto* output_buffer = tensor_return_value.buffer();
+
+    CoreCoord core = {0, 0};
+
+    auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+    reader_runtime_args[0] = input_buffer->address();
+    reader_runtime_args[1] = topk_mask_buffer->address();
+    reader_runtime_args[2] = expert_mask_buffer->address();
+
+    auto& writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+    writer_runtime_args[0] = output_buffer->address();
+}
+
+}  // namespace ttnn::operations::reduction::moe::program

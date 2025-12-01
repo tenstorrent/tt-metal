@@ -54,8 +54,8 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
     CoreCoord end_core = (*shard_spec.grid.ranges().rbegin()).end_coord;
 
     bool convert_df = input_cb_data_format != output_cb_data_format;
-    auto src_buffer = input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);

@@ -13,12 +13,12 @@
 #include "ttnn-pybind/decorators.hpp"
 #include "all_to_all_combine.hpp"
 #include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn::operations::ccl {
 
 void py_bind_all_to_all_combine(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
         All to all combine operation for combining the output tokens from the experts, based on the expert metadata and expert mapping tensors. If cluster axis is specified then we combine the tokens only on that axis. This operation is the inverse of the all-to-all dispatch operation, used for returning the results of the experts back to the input tokens' originating devices.
         B = batch size

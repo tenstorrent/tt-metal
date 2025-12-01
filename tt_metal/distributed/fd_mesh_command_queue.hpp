@@ -207,7 +207,7 @@ protected:
     void finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     MeshEvent enqueue_record_event_to_host_nolock(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-        const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
+        const std::optional<MeshCoordinateRange>& device_range = std::nullopt) override;
 
 public:
     FDMeshCommandQueue(
@@ -274,6 +274,7 @@ public:
 
     void wait_for_completion(bool reset_launch_msg_state) override;
     void finish_and_reset_in_use() override;
+    bool in_use() override { return in_use_.load(); }
 };
 
 }  // namespace tt::tt_metal::distributed

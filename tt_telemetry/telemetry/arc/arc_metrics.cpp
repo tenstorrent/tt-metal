@@ -125,8 +125,6 @@ void create_arc_metrics(
                         MetricUnit::CELSIUS));
 
                     // Create String metrics for firmware version information
-                    // Note: Additional firmware versions (ARC, M3, Flash) are not yet exposed
-                    // and require UMD support. See related UMD issue for details.
                     string_metrics.push_back(std::make_unique<ARCStringMetric>(
                         asic_descriptor.value(),
                         firmware_provider,
@@ -144,6 +142,54 @@ void create_arc_metrics(
                             // Decode using tt_version constructor which handles the bit packing
                             tt::umd::tt_version eth_ver(firmware_provider->get_eth_fw_version());
                             return eth_ver.str();
+                        },
+                        MetricUnit::UNITLESS));
+
+                    string_metrics.push_back(std::make_unique<ARCStringMetric>(
+                        asic_descriptor.value(),
+                        firmware_provider,
+                        "CMFirmwareVersion",
+                        [firmware_provider]() -> std::optional<std::string> {
+                            if (auto version_opt = firmware_provider->get_cm_fw_version()) {
+                                return version_opt->to_string();
+                            }
+                            return std::nullopt;
+                        },
+                        MetricUnit::UNITLESS));
+
+                    string_metrics.push_back(std::make_unique<ARCStringMetric>(
+                        asic_descriptor.value(),
+                        firmware_provider,
+                        "DMAppFirmwareVersion",
+                        [firmware_provider]() -> std::optional<std::string> {
+                            if (auto version_opt = firmware_provider->get_dm_app_fw_version()) {
+                                return version_opt->to_string();
+                            }
+                            return std::nullopt;
+                        },
+                        MetricUnit::UNITLESS));
+
+                    string_metrics.push_back(std::make_unique<ARCStringMetric>(
+                        asic_descriptor.value(),
+                        firmware_provider,
+                        "DMBootloaderFirmwareVersion",
+                        [firmware_provider]() -> std::optional<std::string> {
+                            if (auto version_opt = firmware_provider->get_dm_bl_fw_version()) {
+                                return version_opt->to_string();
+                            }
+                            return std::nullopt;
+                        },
+                        MetricUnit::UNITLESS));
+
+                    string_metrics.push_back(std::make_unique<ARCStringMetric>(
+                        asic_descriptor.value(),
+                        firmware_provider,
+                        "TTFlashVersion",
+                        [firmware_provider]() -> std::optional<std::string> {
+                            if (auto version_opt = firmware_provider->get_tt_flash_version()) {
+                                return version_opt->to_string();
+                            }
+                            return std::nullopt;
                         },
                         MetricUnit::UNITLESS));
                 } else {

@@ -215,7 +215,7 @@ void py_module(py::module& module) {
         .def(
             "get_device_id",
             [](MeshDevice& self, const MeshCoordinate& coord) {
-                auto device = self.get_device(coord);
+                auto* device = self.get_device(coord);
                 TT_FATAL(device, "Device ID requested for MeshCoord {} not found.", coord);
                 return device->id();
             })
