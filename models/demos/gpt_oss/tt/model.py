@@ -70,15 +70,7 @@ class Model:
             mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0], sp=1)
         )
         self.num_rows = self.mesh_config.mesh_shape[0]
-        shard_chunk_size = self.num_rows * ttnn.TILE_SIZE
-        if hf_config.hidden_size % shard_chunk_size != 0:
-            self.padded_hidden_size = (
-                (hf_config.hidden_size + shard_chunk_size - 1) // shard_chunk_size
-            ) * shard_chunk_size
-        else:
-            self.padded_hidden_size = hf_config.hidden_size
-        self.local_padded_hidden = self.padded_hidden_size // self.num_rows
-        print("mesh rows", self.num_rows, "padded_hidden", self.padded_hidden_size, "local", self.local_padded_hidden)
+        print("mesh rows", self.num_rows, "hidden_size", hf_config.hidden_size)
 
         # Setup RoPE using tt-transformers RotarySetup (handles cos/sin matrices and transformation matrices)
         # Force datatype to bfloat16 since rotary_embedding_llama requires bfloat16
@@ -99,9 +91,6 @@ class Model:
         self.transformation_mats = self.rope_setup.get_both_trans_mats()
 
         embedding_weight = substate(state_dict, "model.embed_tokens")["weight"]
-        if embedding_weight.shape[-1] < self.padded_hidden_size:
-            pad_width = self.padded_hidden_size - embedding_weight.shape[-1]
-            embedding_weight = torch.nn.functional.pad(embedding_weight, (0, pad_width))
         embedding_weight = embedding_weight.unsqueeze(0).unsqueeze(0)
         print("embedding_weight", embedding_weight.shape)
         self.embedding_weight = ttnn.as_tensor(
@@ -113,6 +102,7 @@ class Model:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(-1, None)),
         )
+        # self.n_layers = 1
         self.layers = [
             DecoderLayer(
                 mesh_device,
@@ -138,9 +128,6 @@ class Model:
             mesh_config=self.mesh_config,
         )
         lm_head = substate(state_dict, "lm_head")["weight"].transpose(0, 1)
-        if lm_head.shape[0] < self.padded_hidden_size:
-            pad_rows = self.padded_hidden_size - lm_head.shape[0]
-            lm_head = torch.nn.functional.pad(lm_head, (0, 0, 0, pad_rows))
 
         self.lm_head_weight = ttnn.as_tensor(
             lm_head,
@@ -238,7 +225,6 @@ class Model:
 
         # Final norm and lm_head
         hidden_states = self.norm(hidden_states)
-        hidden_states = hidden_states[:, :, : self.local_padded_hidden]
         logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
         hidden_states.deallocate(True)
 
