@@ -74,7 +74,7 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
     const bool remote_read = operation_attributes.remote_read;
     const bool transpose_mcast = operation_attributes.transpose_mcast;
 
-    auto device = input_tensor.device();
+    auto *device = input_tensor.device();
 
     bool is_in_tiled = input_tensor.layout() == Layout::TILE;
     bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
