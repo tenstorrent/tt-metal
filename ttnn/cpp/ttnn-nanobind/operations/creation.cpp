@@ -61,10 +61,17 @@ auto create_nanobind_full_like_overload() {
            const fill_value_t fill_value,
            const std::optional<DataType>& dtype,
            const std::optional<Layout>& layout,
-           const std::optional<std::reference_wrapper<MeshDevice>> device,
+           const std::optional<MeshDevice*> device,
            const std::optional<MemoryConfig>& memory_config,
            std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
-            return self(tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
+            return self(
+                tensor,
+                fill_value,
+                dtype,
+                layout,
+                device.has_value() ? std::make_optional(std::ref(*device.value())) : std::nullopt,
+                memory_config,
+                optional_output_tensor);
         },
         nb::arg("tensor"),
         nb::arg("fill_value"),
@@ -318,10 +325,16 @@ void bind_full_like_operation_with_hard_coded_value(
                const ttnn::Tensor& tensor,
                const std::optional<DataType>& dtype,
                const std::optional<Layout>& layout,
-               const std::optional<std::reference_wrapper<MeshDevice>> device,
+               const std::optional<MeshDevice*> device,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
-                return self(tensor, dtype, layout, device, memory_config, optional_output_tensor);
+                return self(
+                    tensor,
+                    dtype,
+                    layout,
+                    device.has_value() ? std::make_optional(std::ref(*device.value())) : std::nullopt,
+                    memory_config,
+                    optional_output_tensor);
             },
             nb::arg("tensor"),
             nb::arg("dtype") = nb::none(),
@@ -507,9 +520,14 @@ void bind_empty_like_operation(nb::module_& mod, const creation_operation_t& ope
                const ttnn::Tensor& reference,
                const std::optional<DataType>& dtype,
                const std::optional<Layout>& layout,
-               const std::optional<std::reference_wrapper<MeshDevice>> device,
+               const std::optional<MeshDevice*> device,
                const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(reference, dtype, layout, device, memory_config);
+                return self(
+                    reference,
+                    dtype,
+                    layout,
+                    device.has_value() ? std::make_optional(std::ref(*device.value())) : std::nullopt,
+                    memory_config);
             },
             nb::arg("tensor"),
             nb::kw_only(),
