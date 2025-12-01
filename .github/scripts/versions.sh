@@ -7,12 +7,12 @@
 # This file should be sourced by installation scripts
 
 # tt-exalens configuration
-export EXALENS_VERSION="0.1.251118+dev.0bb2d30-cp310-cp310-linux_x86_64"
+export EXALENS_VERSION="0.1.251201+dev.a71ca0e-cp310-cp310-linux_x86_64"
 export EXALENS_TAG="${EXALENS_VERSION%%+*}"
 export EXALENS_WHEEL="ttexalens-${EXALENS_VERSION}.whl"
 export EXALENS_URL="https://github.com/tenstorrent/tt-exalens/releases/download/${EXALENS_TAG}/${EXALENS_WHEEL}"
 
 # tt-smi configuration
-export TT_SMI_VERSION="3.0.34"
+export TT_SMI_VERSION="3.0.38"
 export TT_SMI_WHEEL="tt_smi-${TT_SMI_VERSION}-py3-none-any.whl"
 export TT_SMI_URL="https://github.com/tenstorrent/tt-smi/releases/download/v${TT_SMI_VERSION}/${TT_SMI_WHEEL}"

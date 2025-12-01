@@ -187,8 +187,7 @@ def _send_arc_message(message_type: str, device_id: int):
         device_id=device_id,
         msg_code=ARC_COMMON_PREFIX | message_codes[message_type],
         wait_for_done=True,
-        arg0=0,
-        arg1=0,
+        args=[0, 0],
         timeout=datetime.timedelta(seconds=10),
     )
 
