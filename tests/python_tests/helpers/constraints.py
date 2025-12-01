@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from helpers.format_config import DataFormat
-from helpers.llk_params import DestAccumulation, MathFidelity, MathOperation
+from helpers.llk_params import DestAccumulation, DestSync, MathFidelity, MathOperation
 
 
 def get_valid_dest_accumulation_modes(formats):
@@ -63,3 +63,43 @@ def get_valid_math_fidelities(format, operation, PERF_RUN: bool = False):
         MathFidelity.HiFi3,
         MathFidelity.HiFi4,
     ]
+
+
+def get_valid_dest_indices(
+    dest_sync: DestSync,
+    dest_acc: DestAccumulation,
+    tile_count: int,
+    all_indices: bool = False,
+):
+    """
+    Base constraint for valid destination register indices.
+
+    Capacity of the destination register is 16 tiles with 16bit datums.
+
+    - When using DestSync.Half, the capacity is halved due to software double buffering.
+    - When using DestAccumulation.Yes, the capacity is halved due to using tiles with 32bit datums.
+
+    By default the function only returns the lowest and highest possible indices.
+    This is to limit the number of tests. Use all_indices=True force the function to return all possible indices.
+    """
+
+    capacity_tiles = 16
+
+    if dest_sync == DestSync.Half:
+        capacity_tiles = capacity_tiles // 2
+
+    if dest_acc == DestAccumulation.Yes:
+        capacity_tiles = capacity_tiles // 2
+
+    if tile_count > capacity_tiles:
+        raise ValueError(
+            f"Tried to fit {tile_count} tiles when Dest capacity is {capacity_tiles}"
+        )
+
+    start_index = 0
+    end_index = capacity_tiles - tile_count
+
+    if all_indices:
+        return list(range(start_index, end_index + 1))
+
+    return [start_index] if start_index == end_index else [start_index, end_index]
