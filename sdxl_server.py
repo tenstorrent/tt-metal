@@ -39,7 +39,9 @@ class ImageRequest(BaseModel):
     """Image generation request model"""
 
     prompt: str
+    prompt_2: Optional[str] = None
     negative_prompt: Optional[str] = ""
+    negative_prompt_2: Optional[str] = None
     num_inference_steps: Optional[int] = Field(default=50, ge=12, le=100)
     guidance_scale: Optional[float] = Field(default=5.0, ge=1.0, le=20.0)
     guidance_rescale: Optional[float] = Field(default=0.0, ge=0.0, le=1.0)

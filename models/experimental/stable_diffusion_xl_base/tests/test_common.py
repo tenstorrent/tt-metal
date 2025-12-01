@@ -188,7 +188,6 @@ def batch_encode_prompt_on_device(
         prompt = prompt + [""] * (num_devices - len(prompt))
 
     assert len(prompt) == num_devices, "Prompt length must be equal to number of devices"
-    assert prompt_2 is None, "Prompt 2 is not supported currently"
     assert lora_scale is None, "Lora scale is not supported currently with on device text encoders"
     assert clip_skip is None, "Clip skip is not supported currently with on device text encoders"
     assert prompt_embeds is None, "Prompt embeds is not supported currently with on device text encoders"
@@ -211,8 +210,15 @@ def batch_encode_prompt_on_device(
     text_encoders = [tt_text_encoder, tt_text_encoder_2] if tt_text_encoder is not None else [tt_text_encoder_2]
 
     if prompt_embeds is None:
-        prompt_2 = prompt_2 or prompt
-        prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
+        # Handle prompt_2: convert None or lists with None values to prompt
+        if prompt_2 is None:
+            prompt_2 = prompt
+        elif isinstance(prompt_2, list):
+            # Replace None values with corresponding prompt values
+            prompt_2 = [p if p is not None else prompt[i] for i, p in enumerate(prompt_2)]
+        else:
+            # prompt_2 is a string, convert to list
+            prompt_2 = [prompt_2] if len(prompt) == 1 else batch_size * [prompt_2]
 
         # textual inversion: process multi-vector tokens if necessary
         prompt_embeds_list = []
@@ -291,13 +297,24 @@ def batch_encode_prompt_on_device(
         negative_pooled_prompt_embeds = torch.zeros_like(pooled_prompt_embeds)
     elif do_classifier_free_guidance and negative_prompt_embeds is None:
         negative_prompt = negative_prompt or ""
-        negative_prompt_2 = negative_prompt_2 or negative_prompt
+
+        # Handle negative_prompt_2: convert None or lists with None values to negative_prompt
+        if negative_prompt_2 is None:
+            negative_prompt_2 = negative_prompt
+        elif isinstance(negative_prompt_2, list):
+            # Replace None values with corresponding negative_prompt values
+            negative_prompt_list = (
+                batch_size * [negative_prompt] if isinstance(negative_prompt, str) else negative_prompt
+            )
+            negative_prompt_2 = [
+                p if p is not None else negative_prompt_list[i] for i, p in enumerate(negative_prompt_2)
+            ]
+        else:
+            # negative_prompt_2 is a string, convert to list
+            negative_prompt_2 = batch_size * [negative_prompt_2]
 
         # normalize str to list
         negative_prompt = batch_size * [negative_prompt] if isinstance(negative_prompt, str) else negative_prompt
-        negative_prompt_2 = (
-            batch_size * [negative_prompt_2] if isinstance(negative_prompt_2, str) else negative_prompt_2
-        )
 
         uncond_tokens: List[str]
         if prompt is not None and type(prompt) is not type(negative_prompt):
@@ -621,6 +638,10 @@ def run_tt_image_gen(
                 ttnn.end_trace_capture(ttnn_device, tid, cq_id=0)
         else:
             ttnn.execute_trace(ttnn_device, tid, cq_id=0, blocking=False)
+            # Synchronize to ensure trace completes before updating scheduler state
+            # Without this, the loop runs ahead and overwrites device tensors
+            # before the trace can read them (causing the "jump to step 26" issue)
+            ttnn.synchronize_device(ttnn_device)
 
         if i < (num_steps - 1):
             tt_scheduler.inc_step_index()

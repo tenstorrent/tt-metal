@@ -140,7 +140,9 @@ class SDXLRunner:
             List of PIL Images
         """
         prompts = [req["prompt"] for req in requests]
+        prompts_2 = [req.get("prompt_2") for req in requests]
         negative_prompts = [req.get("negative_prompt", "") for req in requests]
+        negative_prompts_2 = [req.get("negative_prompt_2") for req in requests]
 
         # Update num_inference_steps if specified in request
         if requests[0].get("num_inference_steps"):
@@ -154,8 +156,13 @@ class SDXLRunner:
         if requests[0].get("guidance_rescale"):
             self.tt_sdxl.set_guidance_rescale(requests[0]["guidance_rescale"])
 
-        # Encode prompts
-        prompt_embeds, text_embeds = self.tt_sdxl.encode_prompts(prompts, negative_prompts)
+        # Reset scheduler state for new inference run (fixes progress bar and ensures correct timesteps)
+        self.tt_sdxl.tt_scheduler.set_begin_index(0)
+
+        # Encode prompts (including prompt_2 for SDXL's dual text encoder)
+        prompt_embeds, text_embeds = self.tt_sdxl.encode_prompts(
+            prompts, negative_prompts, prompt_2=prompts_2, negative_prompt_2=negative_prompts_2
+        )
 
         # Extract seed from request for reproducibility
         seed = requests[0].get("seed")
