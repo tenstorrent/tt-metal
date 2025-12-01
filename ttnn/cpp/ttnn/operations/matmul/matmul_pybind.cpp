@@ -734,7 +734,9 @@ void py_module(py::module& module) {
         module,
         ::ttnn::matmul_batched_weights,
         R"doc(
-        performs matrix multiplication for a single input tensor a with multiple tensors b, return a vector of output tensors.
+        DEPRECATED: This is for experimental internal use and is not supported.
+
+        Performs matrix multiplication for a single input tensor a with multiple tensors b, and returns a vector of output tensors.
 
         Args:
             input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.

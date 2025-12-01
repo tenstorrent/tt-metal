@@ -82,7 +82,6 @@ Matrix Multiplication
 
    ttnn.matmul
    ttnn.linear
-   ttnn.matmul_batched_weights
    ttnn.addmm
    ttnn.sparse_matmul
 
