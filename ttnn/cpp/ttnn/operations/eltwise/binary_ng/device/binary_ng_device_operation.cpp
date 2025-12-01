@@ -73,7 +73,7 @@ CoreRangeSet get_worker_grid(
 
     auto get_tensor_grid = [](const Tensor& tensor) -> CoreRangeSet {
         const auto& grid = tensor.shard_spec()->grid;
-        auto device = tensor.device();
+        auto* device = tensor.device();
         for (const auto& sub_device_id : device->get_sub_device_ids()) {
             const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
             if (sub_device_workers.intersects(grid)) {
@@ -91,7 +91,7 @@ CoreRangeSet get_worker_grid(
         return get_tensor_grid(*output_tensor);
     }
 
-    auto device = input_tensor_a.device();
+    auto* device = input_tensor_a.device();
     return device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
 }
 
@@ -272,6 +272,14 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
     const int rank_a = input_shape_a.rank();
     const int rank_b = input_shape_b.rank();
     const int larger_rank = std::max(rank_a, rank_b);
+    auto output_dtype = attributes.get_dtype();
+
+    // Integer division results in FP32 outputs.
+    if (attributes.binary_op_type == BinaryOpType::DIV && input_tensor_a.dtype() == DataType::INT32) {
+        if (!tensor_b.has_value() || tensor_b->dtype() == DataType::INT32) {
+            output_dtype = DataType::FLOAT32;
+        }
+    }
 
     // Broadcasting Rules Overview:
     // - If the two tensors have different ranks, we virtually pad the smaller-rank tensor's shape
@@ -358,14 +366,11 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
         return TensorSpec(
             output_shape,
             TensorLayout(
-                attributes.get_dtype(),
-                PageConfig(Layout::TILE),
-                MemoryConfig(memory_layout, buffer_type, output_shard_spec)));
+                output_dtype, PageConfig(Layout::TILE), MemoryConfig(memory_layout, buffer_type, output_shard_spec)));
     }
 
     // If not sharded, use the memory config from input a that is interleaved
-    return TensorSpec(
-        output_shape, TensorLayout(attributes.get_dtype(), PageConfig(Layout::TILE), attributes.memory_config));
+    return TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), attributes.memory_config));
 }
 
 BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(

@@ -23,7 +23,8 @@ struct ExecuteAllGatherAsync {
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
         bool use_optimal_ccl_for_llama = false,
         const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
-        bool reverse_order = false);
+        bool reverse_order = false,
+        const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
@@ -40,7 +41,8 @@ struct ExecuteAllGatherAsync {
         std::optional<uint32_t> chunks_per_sync = std::nullopt,
         std::optional<uint32_t> num_workers_per_link = std::nullopt,
         std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
-        bool reverse_order = false);
+        bool reverse_order = false,
+        const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
     // same as above but for vector of mesh
     static std::vector<ttnn::Tensor> invoke(
@@ -57,7 +59,8 @@ struct ExecuteAllGatherAsync {
         const std::optional<std::vector<GlobalSemaphore>>& barrier_semaphore = std::nullopt,
         std::optional<uint32_t> chunks_per_sync = std::nullopt,
         std::optional<uint32_t> num_workers_per_link = std::nullopt,
-        std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
+        std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
@@ -72,7 +75,8 @@ struct ExecuteAllGatherAsync {
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
         bool use_optimal_ccl_for_llama = false,
         const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
-        bool reverse_order = false);
+        bool reverse_order = false,
+        const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 };
 
 struct ExecuteAllGatherAsyncReversed {
@@ -86,7 +90,8 @@ struct ExecuteAllGatherAsyncReversed {
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
         bool use_optimal_ccl_for_llama = false,
         const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
-        bool reverse_order = false);
+        bool reverse_order = false,
+        const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
@@ -103,7 +108,8 @@ struct ExecuteAllGatherAsyncReversed {
         std::optional<uint32_t> chunks_per_sync = std::nullopt,
         std::optional<uint32_t> num_workers_per_link = std::nullopt,
         std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
-        bool reverse_order = false);
+        bool reverse_order = false,
+        const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
@@ -118,7 +124,8 @@ struct ExecuteAllGatherAsyncReversed {
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
         bool use_optimal_ccl_for_llama = false,
         const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
-        bool reverse_order = false);
+        bool reverse_order = false,
+        const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
 };
 
 }  // namespace operations::experimental::ccl

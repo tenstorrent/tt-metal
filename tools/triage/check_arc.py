@@ -22,7 +22,7 @@ from ttexalens.device import Device
 from ttexalens.hardware.noc_block import NocBlock
 from ttexalens.tt_exalens_lib import read_arc_telemetry_entry
 import utils
-from utils import RED, BLUE, GREEN, ORANGE, RST
+from utils import RED, BLUE, RST
 
 script_config = ScriptConfig(
     depends=["run_checks"],
@@ -38,56 +38,26 @@ class ArcCheckData:
     heartbeats_per_second: float = triage_field("Heartbeats/s")
 
 
-def check_wormhole_arc(arc: NocBlock, postcode: int) -> ArcCheckData:
+def check_arc_block(arc: NocBlock, postcode: int) -> ArcCheckData:
     device = arc.location.device
-    device_id = device.device_id
+    device_id = arc.location.device_id
     # Heartbeat must be increasing
-    heartbeat_0 = read_arc_telemetry_entry(device_id, "TAG_ARC0_HEALTH")
-    delay_seconds = 0.1
-    time.sleep(delay_seconds)
-    heartbeat_1 = read_arc_telemetry_entry(device_id, "TAG_ARC0_HEALTH")
-    log_check_device(device, heartbeat_1 > heartbeat_0, f"ARC heartbeat not increasing: {RED}{heartbeat_1}{RST}.")
-
-    # Compute uptime
-    arcclk_mhz = read_arc_telemetry_entry(device_id, "TAG_ARCCLK")
-    heartbeats_per_second = (heartbeat_1 - heartbeat_0) / delay_seconds
-    uptime_seconds = heartbeat_1 / heartbeats_per_second
-
-    # Heartbeat must be between 500 and 20000 hb/s
-    log_check_device(
-        device,
-        heartbeats_per_second >= 500,
-        f"ARC heartbeat is too low: {RED}{heartbeats_per_second}{RST}hb/s. Expected at least {BLUE}500{RST}hb/s",
-    )
-    log_check_device(
-        device,
-        heartbeats_per_second <= 20000,
-        f"ARC heartbeat is too high: {RED}{heartbeats_per_second}{RST}hb/s. Expected at most {BLUE}20000{RST}hb/s",
-    )
-
-    return ArcCheckData(
-        location=arc.location,
-        postcode=postcode,
-        uptime=timedelta(seconds=uptime_seconds),
-        clock_mhz=arcclk_mhz,
-        heartbeats_per_second=heartbeats_per_second,
-    )
-
-
-def check_blackhole_arc(arc: NocBlock, postcode: int) -> ArcCheckData:
-    device = arc.location.device
-    device_id = device.device_id
-    # Heartbeat must be increasing
-    heartbeat_0 = read_arc_telemetry_entry(device_id, "TAG_TIMER_HEARTBEAT")
+    heartbeat_0 = read_arc_telemetry_entry(device_id, "TIMER_HEARTBEAT")
     delay_seconds = 0.2
     time.sleep(delay_seconds)
-    heartbeat_1 = read_arc_telemetry_entry(device_id, "TAG_TIMER_HEARTBEAT")
+    heartbeat_1 = read_arc_telemetry_entry(device_id, "TIMER_HEARTBEAT")
     log_check_device(device, heartbeat_1 > heartbeat_0, f"ARC heartbeat not increasing: {RED}{heartbeat_1}{RST}.")
 
-    # Compute uptime
-    arcclk_mhz = read_arc_telemetry_entry(device_id, "TAG_ARCCLK")
+    arcclk_mhz = read_arc_telemetry_entry(device_id, "ARCCLK")
     heartbeats_per_second = (heartbeat_1 - heartbeat_0) / delay_seconds
-    uptime_seconds = heartbeat_1 / heartbeats_per_second
+
+    # On Wormhole, heartbeat is resetting to 0xA5A5A5A5 instead of 0
+    # This should be fixed by firmware team, but for now we need to subtract this offset
+    heartbeat_offset = 0xA5A5A5A5 if device.is_wormhole() else 0
+    assert (
+        heartbeat_1 > heartbeat_offset
+    ), f"ARC heartbeat lower than default value: {RED}{heartbeat_1}{RST}. Expected at least {BLUE}{heartbeat_offset}{RST}"
+    uptime_seconds = (heartbeat_1 - heartbeat_offset) / heartbeats_per_second
 
     # Heartbeat must be between 10 and 50
     log_check_device(
@@ -104,7 +74,7 @@ def check_blackhole_arc(arc: NocBlock, postcode: int) -> ArcCheckData:
     return ArcCheckData(
         location=arc.location,
         postcode=postcode,
-        uptime=timedelta(seconds=uptime_seconds),
+        uptime=timedelta(seconds=uptime_seconds) if uptime_seconds > 0 else None,
         clock_mhz=arcclk_mhz,
         heartbeats_per_second=heartbeats_per_second,
     )
@@ -118,10 +88,8 @@ def check_arc(device: Device):
         (postcode & 0xFFFF0000) == 0xC0DE0000,
         f"ARC postcode: {RED}0x{postcode:08x}{RST}. Expected {BLUE}0xc0de____{RST}",
     )
-    if device.is_wormhole():
-        return check_wormhole_arc(arc, postcode)
-    elif device.is_blackhole():
-        return check_blackhole_arc(arc, postcode)
+    if device.is_wormhole() or device.is_blackhole():
+        return check_arc_block(arc, postcode)
     else:
         utils.DEBUG(f"Unsupported architecture for check_arc: {device._arch}")
 
