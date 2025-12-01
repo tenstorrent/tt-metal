@@ -18,7 +18,15 @@ Description:
 
 from dataclasses import dataclass
 
-from triage import ScriptConfig, TTTriageError, recurse_field, triage_field, hex_serializer, run_script, triage_singleton
+from triage import (
+    ScriptConfig,
+    TTTriageError,
+    recurse_field,
+    triage_field,
+    hex_serializer,
+    run_script,
+    triage_singleton,
+)
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from ttexalens.coordinate import OnChipCoordinate
@@ -171,7 +179,15 @@ class CallstacksData:
 
 
 class CallstackProvider:
-    def __init__(self, dispatcher_data: DispatcherData, elfs_cache: ElfsCache, full_callstack: bool, gdb_callstack: bool, gdb_server: GdbServer | None, force_active_eth: bool = False):
+    def __init__(
+        self,
+        dispatcher_data: DispatcherData,
+        elfs_cache: ElfsCache,
+        full_callstack: bool,
+        gdb_callstack: bool,
+        gdb_server: GdbServer | None,
+        force_active_eth: bool = False,
+    ):
         self.dispatcher_data = dispatcher_data
         self.elfs_cache = elfs_cache
         self.full_callstack = full_callstack
@@ -200,7 +216,12 @@ class CallstackProvider:
             )
         if location in location._device.active_eth_block_locations and not self.force_active_eth:
             callstack_with_message = get_callstack(
-                location, risc_name, dispatcher_core_data, self.elfs_cache, full_callstack=False, rewind_pc_for_ebreak=rewind_pc_for_ebreak
+                location,
+                risc_name,
+                dispatcher_core_data,
+                self.elfs_cache,
+                full_callstack=False,
+                rewind_pc_for_ebreak=rewind_pc_for_ebreak,
             )
         else:
             if self.gdb_callstack:
@@ -211,7 +232,12 @@ class CallstackProvider:
                     )
                     # Default to top callstack
                     callstack_with_message = get_callstack(
-                        location, risc_name, dispatcher_core_data, self.elfs_cache, full_callstack=False, rewind_pc_for_ebreak=rewind_pc_for_ebreak
+                        location,
+                        risc_name,
+                        dispatcher_core_data,
+                        self.elfs_cache,
+                        full_callstack=False,
+                        rewind_pc_for_ebreak=rewind_pc_for_ebreak,
                     )
                     # If top callstack failed too, print both error messages
                     callstack_with_message.message = (
@@ -232,7 +258,12 @@ class CallstackProvider:
                     if len(gdb_callstack) == 0:
                         error_message = "Failed to get callstack from GDB. Look for error message above the table."
                         callstack_with_message = get_callstack(
-                            location, risc_name, dispatcher_core_data, self.elfs_cache, full_callstack=False, rewind_pc_for_ebreak=rewind_pc_for_ebreak
+                            location,
+                            risc_name,
+                            dispatcher_core_data,
+                            self.elfs_cache,
+                            full_callstack=False,
+                            rewind_pc_for_ebreak=rewind_pc_for_ebreak,
                         )
                         # If top callstack failed too, print both error messages
                         callstack_with_message.message = (
@@ -251,7 +282,12 @@ class CallstackProvider:
                         pass
             else:
                 callstack_with_message = get_callstack(
-                    location, risc_name, dispatcher_core_data, self.elfs_cache, self.full_callstack, rewind_pc_for_ebreak=rewind_pc_for_ebreak
+                    location,
+                    risc_name,
+                    dispatcher_core_data,
+                    self.elfs_cache,
+                    self.full_callstack,
+                    rewind_pc_for_ebreak=rewind_pc_for_ebreak,
                 )
 
         # Create result with dispatcher core data (verbose levels handled in serialization)
