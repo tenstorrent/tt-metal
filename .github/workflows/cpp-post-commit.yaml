@@ -84,7 +84,7 @@ jobs:
 
           # Filter for merge-gate-call: only keep CCL and tools tests
           if [[ "${{ inputs.merge-gate-call }}" == "true" ]]; then
-            requested_cpp_tests=$(jq '[.[] | select(.name == "CCL" or .name == "tools")]' <<< "$requested_cpp_tests")
+            requested_cpp_tests=$(jq '[.[] | select(.name == "CCL" or .name == "tools" or .name == "eth, misc, and user kernel path" or .name == "distributed")]' <<< "$requested_cpp_tests")
             echo "[info] after filtering for merge-gate-call (CCL and tools only): $requested_cpp_tests"
           fi
 
