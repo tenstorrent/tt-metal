@@ -293,7 +293,7 @@ jobs:
             done
 
             # Check if at least one .deb package exists
-            if echo "$assets" | grep -q "\.deb"; then
+            if echo "$assets" | grep -q '\.deb$'; then
               echo "Found .deb package(s)"
             else
               echo "Missing .deb packages"
