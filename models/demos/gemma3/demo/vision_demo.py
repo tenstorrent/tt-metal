@@ -189,7 +189,7 @@ def prepare_generator_args(
     "data_parallel",
     [
         1,
-        # 4,
+        4,
     ],
 )
 @pytest.mark.parametrize(
@@ -331,7 +331,7 @@ def test_multimodal_demo_text(
             # image understanding + text-only prompts
             [UserMessage(content=["Write a haiku."])],
             [UserMessage(content=["What is for dinner?"])],
-            [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
+            gi[UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
             [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
         ]
 
@@ -353,7 +353,8 @@ def test_multimodal_demo_text(
 
     for iter_num in range(warmup_iters + 1):
         logger.info(f"Iteration {iter_num}")
-        current_dialogs = trace_dialogs + dialogs
+        # current_dialogs = trace_dialogs + dialogs
+        current_dialogs = dialogs
         for batch_idx in range(num_batches):
             batch_dialogs = current_dialogs[batch_idx * max_batch_size : (batch_idx + 1) * max_batch_size]
             for dialog in batch_dialogs:
