@@ -113,7 +113,14 @@ def test_forward_pass(
     else:
         assert weight_type == "real"
         state_dict = create_combined_state_dict(module_path, model_path, state_dict)
-        reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
+        dequantized_state_dict = dequantize_state_dict(state_dict, hf_config)
+        # Use assign=True to avoid copying tensors when loading (PyTorch 2.0+)
+        try:
+            reference_model.load_state_dict(dequantized_state_dict, assign=True)
+        except TypeError:
+            reference_model.load_state_dict(dequantized_state_dict)
+        # Delete dequantized dict after loading to free memory (assign=True means model owns the tensors)
+        del dequantized_state_dict
     reference_output = reference_model(torch_input)
 
     # Generate module configs and state

@@ -55,7 +55,14 @@ def generate_reference_io(
         reference_model = reference_model.to_empty(device=torch.device("cpu"))
 
         logger.info(f"Loading state dict into reference model")
-        reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
+        dequantized_state_dict = dequantize_state_dict(state_dict, hf_config)
+        # Use assign=True to avoid copying tensors when loading (PyTorch 2.0+)
+        try:
+            reference_model.load_state_dict(dequantized_state_dict, assign=True)
+        except TypeError:
+            reference_model.load_state_dict(dequantized_state_dict)
+        # Delete dequantized dict after loading to free memory (assign=True means model owns the tensors)
+        del dequantized_state_dict
         reference_model = reference_model.to(torch.bfloat16)
     else:
         logger.info("Creating reference model with random weights")

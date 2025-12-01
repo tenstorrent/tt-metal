@@ -69,7 +69,15 @@ def generate_reference_io(
         reference_model = DeepseekV3Attention(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
         state_dict = sub_state_dict(state_dict, module_path + ".")
         dequantized_state_dict = dequantize_state_dict(state_dict, hf_config)
-        reference_model.load_state_dict(dequantized_state_dict)
+        # Use assign=True to avoid copying tensors when loading (PyTorch 2.0+)
+        # Falls back to regular load_state_dict if assign is not available
+        try:
+            reference_model.load_state_dict(dequantized_state_dict, assign=True)
+        except TypeError:
+            # assign=True not supported in older PyTorch versions
+            reference_model.load_state_dict(dequantized_state_dict)
+        # Delete dequantized dict after loading to free memory (assign=True means model owns the tensors)
+        del dequantized_state_dict
 
     torch_input = torch.randn(batch_size, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)
     position_ids = None

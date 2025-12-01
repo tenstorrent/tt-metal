@@ -47,7 +47,14 @@ def generate_reference_io(
     reference_model = DeepseekV3DecoderLayer(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
     if module_path is not None:
         state_dict = sub_state_dict(state_dict, module_path + ".")
-        reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
+        dequantized_state_dict = dequantize_state_dict(state_dict, hf_config)
+        # Use assign=True to avoid copying tensors when loading (PyTorch 2.0+)
+        try:
+            reference_model.load_state_dict(dequantized_state_dict, assign=True)
+        except TypeError:
+            reference_model.load_state_dict(dequantized_state_dict)
+        # Delete dequantized dict after loading to free memory (assign=True means model owns the tensors)
+        del dequantized_state_dict
     else:
         # This needs to be disabled as deterministic way to quantize weights is not supported
         torch.use_deterministic_algorithms(False)
