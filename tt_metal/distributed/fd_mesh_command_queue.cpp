@@ -1002,7 +1002,7 @@ void FDMeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
     const program_dispatch::ProgramDispatchMetadata& dispatch_md) {
     MeshCoordinateRange full_grid(mesh_device_->get_view().get_local_mesh_coord_range());
     MeshCoordinateRangeSet unused_grids_set(full_grid);
-    
+
     // Subtract each active grid from the unused grids set to handle non-convex grids
     for (const auto& active_grid : active_grids_set.ranges()) {
         MeshCoordinateRangeSet new_unused_set;
@@ -1014,7 +1014,7 @@ void FDMeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
         }
         unused_grids_set = new_unused_set;
     }
-    
+
     for (const auto& unused_grid : unused_grids_set.ranges()) {
         if (!mesh_device_->is_local(unused_grid.start_coord())) {
             continue;
