@@ -13,6 +13,8 @@
 #include "dataflow_api.h"
 #include "noc/noc_parameters.h"
 
+constexpr std::uint32_t NOC_MINIMUM_READ_SIZE = 32;  // 32 Bytes
+
 static inline float bfloat16_to_float(uint16_t bfloat_val) {
     uint32_t uint32_data = ((uint32_t)bfloat_val) << 16;
     float f;
@@ -687,7 +689,7 @@ void get_noc_offset(uint32_t h, uint32_t w, uint32_t element_size, uint32_t& noc
     // !!!!!!!!
     // Do I need to make below conditional on reading from DRAM, or is it already assumed that we are reading from DRAM?
     // !!!!!!!!
-    const uint32_t noc_offset_align = (noc_offset / NOC_DRAM_READ_ALIGNMENT_BYTES) * NOC_DRAM_READ_ALIGNMENT_BYTES;
+    const uint32_t noc_offset_align = (noc_offset / NOC_MINIMUM_READ_SIZE) * NOC_MINIMUM_READ_SIZE;
 
     noc_offset = noc_offset_align;
 }
