@@ -35,13 +35,28 @@ constexpr size_t fabric_router_status_address = get_compile_time_arg_val(12);
 constexpr uint8_t NUM_EDM_BUFFERS = get_compile_time_arg_val(13);
 constexpr size_t NUM_FULL_SIZE_CHANNELS_ITERS = get_compile_time_arg_val(14);
 constexpr size_t NUM_ITERS_BETWEEN_TEARDOWN_CHECKS = get_compile_time_arg_val(15);
+static_assert(NUM_EDM_BUFFERS < 256, "NUM_EDM_BUFFERS too big, maybe CT args are misconfigured");
+static_assert(
+    NUM_FULL_SIZE_CHANNELS_ITERS < 256, "NUM_FULL_SIZE_CHANNELS_ITERS too big, maybe CT args are misconfigured");
+static_assert(
+    NUM_ITERS_BETWEEN_TEARDOWN_CHECKS < 256,
+    "NUM_ITERS_BETWEEN_TEARDOWN_CHECKS too big, maybe CT args are misconfigured");
 
 constexpr ProgrammableCoreType CORE_TYPE = static_cast<ProgrammableCoreType>(get_compile_time_arg_val(16));
 constexpr bool wait_for_fabric_endpoint = get_compile_time_arg_val(17) == 1;
 constexpr size_t num_upstream_routers = get_compile_time_arg_val(18);
 constexpr size_t fabric_router_sync_address = get_compile_time_arg_val(19);
 
-constexpr size_t CHANNEL_STREAM_IDS_START_IDX = 20;
+// A channel is a "traffic injection channel" if it is a sender channel that is adding *new*
+// traffic to this dimension/ring. Examples include channels service worker traffic and
+// sender channels that receive traffic from a "turn" (e.g. an EAST channel receiving traffic from NORTH)
+// This attribute is necessary to support bubble flow control.
+constexpr bool enable_bubble_flow_control = get_compile_time_arg_val(20) != 0;
+constexpr size_t BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS = 2;
+constexpr size_t FULL_SIZE_CHANNEL_INJECTION_STATUS_ARRAY_SIZE = NUM_FULL_SIZE_CHANNELS;
+constexpr size_t HEADER_ONLY_CHANNEL_INJECTION_STATUS_ARRAY_SIZE = NUM_HEADER_ONLY_CHANNELS;
+
+constexpr size_t CHANNEL_STREAM_IDS_START_IDX = 21;
 
 constexpr size_t NOC_ALIGN_PADDING_BYTES = 12;
 
@@ -100,9 +115,17 @@ void forward_data(
     tt::tt_fabric::FabricMuxToEdmSender& fabric_connection,
     bool& channel_connection_established,
     StreamId my_channel_free_slots_stream_id,
-    bool is_persistent_channel) {
+    bool is_persistent_channel,
+    bool is_injection_channel) {
     bool has_unsent_payload = get_ptr_val(my_channel_free_slots_stream_id.get()) != NUM_BUFFERS;
-    if (has_unsent_payload) {
+    bool send_packet = has_unsent_payload;
+    if constexpr (enable_bubble_flow_control) {
+        if (send_packet && is_injection_channel) {
+            send_packet = fabric_connection
+                              .edm_has_space_for_packet<BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS>();
+        }
+    }
+    if (send_packet) {
         size_t buffer_address = channel.get_buffer_address(worker_interface.local_write_counter.get_buffer_index());
         invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
@@ -156,6 +179,17 @@ void kernel_main() {
         auto address = get_arg_val<uint32_t>(rt_args_idx++);
         auto size = get_arg_val<uint32_t>(rt_args_idx++);
         zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(address), size);
+    }
+
+    std::array<bool, FULL_SIZE_CHANNEL_INJECTION_STATUS_ARRAY_SIZE> full_size_channel_injection_status = {};
+    std::array<bool, HEADER_ONLY_CHANNEL_INJECTION_STATUS_ARRAY_SIZE> header_only_channel_injection_status = {};
+    if constexpr (enable_bubble_flow_control) {
+        for (size_t i = 0; i < FULL_SIZE_CHANNEL_INJECTION_STATUS_ARRAY_SIZE; i++) {
+            full_size_channel_injection_status[i] = get_arg_val<uint32_t>(rt_args_idx++);
+        }
+        for (size_t i = 0; i < HEADER_ONLY_CHANNEL_INJECTION_STATUS_ARRAY_SIZE; i++) {
+            header_only_channel_injection_status[i] = get_arg_val<uint32_t>(rt_args_idx++);
+        }
     }
 
     auto fabric_connection = tt::tt_fabric::FabricMuxToEdmSender::build_from_args<CORE_TYPE>(rt_args_idx);
@@ -288,7 +322,8 @@ void kernel_main() {
                         fabric_connection,
                         full_size_channel_connection_established[channel_id],
                         StreamId{channel_stream_ids[channel_id]},
-                        is_persistent_channels[channel_id]);
+                        is_persistent_channels[channel_id],
+                        full_size_channel_injection_status[channel_id]);
                 }
             }
 
@@ -299,7 +334,8 @@ void kernel_main() {
                     fabric_connection,
                     header_only_channel_connection_established[channel_id],
                     StreamId{channel_stream_ids[channel_id + NUM_FULL_SIZE_CHANNELS]},
-                    is_persistent_channels[channel_id + NUM_FULL_SIZE_CHANNELS]);
+                    is_persistent_channels[channel_id + NUM_FULL_SIZE_CHANNELS],
+                    header_only_channel_injection_status[channel_id]);
             }
         }
 #if defined(COMPILE_FOR_IDLE_ERISC)
