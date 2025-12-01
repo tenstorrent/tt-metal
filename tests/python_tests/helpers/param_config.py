@@ -3,7 +3,7 @@
 
 import inspect
 from itertools import product
-from typing import List, Tuple
+from typing import Iterator, List, Tuple
 
 import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
@@ -266,32 +266,21 @@ def _params_solve_dependencies(**kwargs: any) -> List[Tuple]:
 
         return [argument]
 
-    def _solve_recursive(resolved: list[any], resolution_index: int) -> List[Tuple]:
-        """Recursively build combinations starting from parameter at idx."""
+    def _solve_recursive(resolved: list[any], resolution_index: int) -> Iterator[Tuple]:
         if resolution_index >= len(resolution_order):
-            # Base case: return the parameters tuple wrapped in a list
-            return [tuple(resolved)]
+            yield tuple(resolved)
+            return
 
-        # Get current parameter and its possible values
         parameter = resolution_order[resolution_index]
         arguments = _resolve_param_values(resolved, parameter)
 
-        if not arguments:
-            return []
-
-        # For each possible value, recurse with next parameter
-        combinations = []
         for argument in arguments:
-            # Create new resolved list with updated value
-            resolved_next = resolved.copy()
-            resolved_next[parameter] = argument
-            combinations.extend(_solve_recursive(resolved_next, resolution_index + 1))
-
-        return combinations
+            resolved[parameter] = argument
+            yield from _solve_recursive(resolved, resolution_index + 1)
 
     # Initialize resolved list with None values
     resolved = [None] * len(parameters)
-    return _solve_recursive(resolved, 0)
+    return list(_solve_recursive(resolved, 0))
 
 
 def parametrize(**kwargs: any):
