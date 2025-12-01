@@ -59,7 +59,7 @@ void FabricRouterChannelMapping::initialize_vc0_mappings() {
 void FabricRouterChannelMapping::initialize_vc1_mappings() {
     const bool is_2d = is_2d_topology();
     if (!is_2d) {
-        // VC2 (intermesh) only exists for 2D topologies
+        // VC1 (intermesh) only exists for 2D topologies
         return;
     }
 
