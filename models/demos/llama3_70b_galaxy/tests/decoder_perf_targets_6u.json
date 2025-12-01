@@ -143,7 +143,7 @@
       "first_to_last_start_relative_margin": 0.5,
       "dispatch_duration_relative_margin": 0.35
     },
-    "PagedUpdateCacheDeviceOperation_0": {
+    "PagedFusedUpdateCacheDeviceOperation_0": {
       "op_name": "PagedUpdateCache",
       "kernel_duration": 4451.882870370371,
       "op_to_op": 737.1037037037038,
