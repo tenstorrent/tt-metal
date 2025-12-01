@@ -231,43 +231,10 @@ template <typename T>
 void HWCommandQueue::enqueue_command(T& command, bool blocking, tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) {
     command.process();
     if (blocking) {
-        //this->finish(sub_device_ids);
+        // this->finish(sub_device_ids);
     }
 }
 
-<<<<<<< HEAD
-void HWCommandQueue::enqueue_write_buffer(
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    HostDataType src,
-    const BufferRegion& region,
-    bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScopedN("HWCommandQueue_write_buffer");
-    TT_FATAL(!this->manager_.get_bypass_mode(), "Enqueue Write Buffer cannot be used with tracing");
-    // Top level API to accept different variants for buffer and src
-    // For shared pointer variants, object lifetime is guaranteed at least till the end of this function
-    const auto* data = std::visit(
-        tt::stl::overloaded{
-            [](const void* raw_data) -> const void* { return raw_data; },
-            [](const auto& data) -> const void* { return data->data(); }},
-        src);
-    auto buffer_obj = get_buffer_object(buffer).view(region);
-
-    // This is to make sure we block on the same sub_device_ids at the end
-    // TODO: enqueue_write_to_core will call select_sub_device_ids every loop which will have minor overhead
-    sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
-
-    auto dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-    buffer_dispatch::write_to_device_buffer(
-        data, *buffer_obj, this->id_, this->expected_num_workers_completed_, dispatch_core_type, sub_device_ids);
-
-    if (blocking) {
-        this->finish(sub_device_ids);
-    }
-}
-
-=======
->>>>>>> 884227823c (Remove enqueue_wrtie_buffer)
 CoreType HWCommandQueue::get_dispatch_core_type() {
     return MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
 }
@@ -305,7 +272,7 @@ void HWCommandQueue::enqueue_read_from_core(
     }
 
     if (blocking) {
-        //this->finish(sub_device_ids);
+        // this->finish(sub_device_ids);
     }
 }
 
@@ -333,7 +300,7 @@ void HWCommandQueue::enqueue_write_to_core(
         sub_device_ids);
 
     if (blocking) {
-        //this->finish(sub_device_ids);
+        // this->finish(sub_device_ids);
     }
 }
 
@@ -468,8 +435,8 @@ void HWCommandQueue::allocate_trace_programs() {
         node.dispatch_metadata.stall_first = dispatch_metadata.stall_first;
         node.dispatch_metadata.stall_before_program = dispatch_metadata.stall_before_program;
 
-        // Allocate non-binaries before binaries for tensix. Non-tensix doesn't use a ringbuffer for binaries, so its
-        // addresses don't need adjustment.
+        // Allocate non-binaries before binaries for tensix. Non-tensix doesn't use a ringbuffer for binaries, so
+        // its addresses don't need adjustment.
         node.dispatch_metadata.binary_kernel_config_addrs[index].addr += program_config.kernel_text_offset;
 
         expected_workers_completed = updated_worker_counts.current;
@@ -591,8 +558,8 @@ void HWCommandQueue::record_end() {
     this->trace_ctx_ = nullptr;
 
     // Reset the expected workers, launch msg buffer state, and config buffer mgr to their original value,
-    // so device can run programs after a trace was captured. This is needed since trace capture modifies the state on
-    // host, even though device doesn't run any programs.
+    // so device can run programs after a trace was captured. This is needed since trace capture modifies the state
+    // on host, even though device doesn't run any programs.
     trace_dispatch::load_host_dispatch_state(
         device_->num_sub_devices(),
         this->cq_shared_state_->worker_launch_message_buffer_state,
@@ -603,8 +570,8 @@ void HWCommandQueue::record_end() {
         this->config_buffer_mgr_reset_);
     this->manager_.set_bypass_mode(false, true);  // stop trace capture
 
-    // Trace has modified the prefetcher cache manager so reset it first and then swap to restore the state as before
-    // the recording
+    // Trace has modified the prefetcher cache manager so reset it first and then swap to restore the state as
+    // before the recording
     this->reset_prefetcher_cache_manager();
     swap(this->dummy_prefetcher_cache_manager_, this->prefetcher_cache_manager_);
 }
