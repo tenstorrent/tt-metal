@@ -18,6 +18,7 @@ struct operation_attributes_t {
     float epsilon{};
     float weight_decay{};
     bool amsgrad{false};
+    bool stochastic_rounding{false};
     uint32_t step{};
 };
 

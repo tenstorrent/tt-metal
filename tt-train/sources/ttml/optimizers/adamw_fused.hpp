@@ -16,6 +16,7 @@ struct AdamWFusedConfig {
     float epsilon{1e-8F};
     float weight_decay{0.0F};
     bool amsgrad{false};
+    bool stochastic_rounding{false};
 };
 
 class AdamWFused : public OptimizerBase {
@@ -49,6 +50,9 @@ public:
 
     [[nodiscard]] bool get_amsgrad() const;
     void set_amsgrad(bool amsgrad);
+
+    [[nodiscard]] bool get_stochastic_rounding() const;
+    void set_stochastic_rounding(bool stochastic_rounding);
 
 private:
     void init_max_exp_avg_sq();

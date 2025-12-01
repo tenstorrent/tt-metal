@@ -22,6 +22,7 @@ struct AdamWFusedOptimizer {
         const float beta2_pow,
         const float epsilon,
         const float weight_decay,
+        const bool stochastic_rounding,
         const uint32_t step);
 };
 }  // namespace ttml::metal::optimizers::adamw_fused

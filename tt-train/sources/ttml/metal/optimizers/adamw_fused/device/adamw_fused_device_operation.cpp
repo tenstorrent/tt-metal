@@ -96,9 +96,15 @@ ttsl::hash::hash_t AdamWFusedDeviceOperation::compute_program_hash(
     const auto& param_logical_shape = param_tensor.logical_shape();
     auto program_factory = select_program_factory(args, tensor_args);
     auto amsgrad = args.amsgrad;
+    auto stochastic_rounding = args.stochastic_rounding;
     auto max_exp_avg_sq_initialized = tensor_args.max_exp_avg_sq.has_value();
     auto hash = tt::tt_metal::operation::hash_operation<AdamWFusedDeviceOperation>(
-        amsgrad, max_exp_avg_sq_initialized, program_factory.index(), param_tensor.dtype(), param_logical_shape);
+        amsgrad,
+        stochastic_rounding,
+        max_exp_avg_sq_initialized,
+        program_factory.index(),
+        param_tensor.dtype(),
+        param_logical_shape);
 
     return hash;
 }
@@ -117,6 +123,7 @@ std::tuple<operation_attributes_t, tensor_args_t> AdamWFusedDeviceOperation::inv
     float epsilon,
     float weight_decay,
     bool amsgrad,
+    bool stochastic_rounding,
     uint32_t step) {
     return {
         operation_attributes_t{
@@ -128,6 +135,7 @@ std::tuple<operation_attributes_t, tensor_args_t> AdamWFusedDeviceOperation::inv
             .epsilon = epsilon,
             .weight_decay = weight_decay,
             .amsgrad = amsgrad,
+            .stochastic_rounding = stochastic_rounding,
             .step = step,
         },
         tensor_args_t{
