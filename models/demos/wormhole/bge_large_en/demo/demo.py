@@ -34,6 +34,9 @@ inputs = [
 def run_bge_demo_inference(device, inputs, model_name, sequence_length, model_location_generator):
     inputs = inputs * device.get_num_devices()
     config = transformers.BertConfig.from_pretrained(model_name)
+    # Set attention implementation for reference model
+    if not hasattr(config, "_attn_implementation") or config._attn_implementation is None:
+        config._attn_implementation = "eager"
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
     encoded_input = tokenizer(
         inputs, padding="max_length", max_length=sequence_length, truncation=True, return_tensors="pt"

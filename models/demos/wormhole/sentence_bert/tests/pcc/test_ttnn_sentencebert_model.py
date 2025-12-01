@@ -15,9 +15,54 @@ from models.demos.wormhole.sentence_bert.ttnn.common import custom_preprocessor,
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+def custom_preprocessor2(torch_model, name):
+    """
+    Custom preprocessor for BGE model to combine Q, K, V weights.
+    BGE-large has 16 attention heads, so we reshape with 8 (16//2).
+    """
+    parameters = {}
+    if hasattr(torch_model, "query") and hasattr(torch_model, "key") and hasattr(torch_model, "value"):
+        qw = torch_model.query.weight
+        kw = torch_model.key.weight
+        vw = torch_model.value.weight
+        qb = torch_model.query.bias
+        kb = torch_model.key.bias
+        vb = torch_model.value.bias
+
+        qw = torch.transpose(qw, -1, -2)
+        kw = torch.transpose(kw, -1, -2)
+        vw = torch.transpose(vw, -1, -2)
+
+        const_w_dims = qw.shape[:-1]
+        # BGE-large has 16 attention heads, so we use 8 (num_attention_heads // 2)
+        qw = qw.reshape([*const_w_dims, 8, -1])
+        kw = kw.reshape(qw.shape)
+        vw = vw.reshape(qw.shape)
+        qkv_weight_torch = torch.cat((qw, kw, vw), -1).reshape([*const_w_dims, -1])
+
+        const_b_dims = qb.shape[:-1]
+        qb = qb.reshape([*const_b_dims, 8, -1])
+        kb = kb.reshape(qb.shape)
+        vb = vb.reshape(qb.shape)
+        qkv_bias_torch = torch.cat((qb, kb, vb), -1).reshape([*const_b_dims, -1])
+
+        parameters = {"query_key_value": {}}
+        parameters["query_key_value"]["weight"] = ttnn.from_torch(
+            qkv_weight_torch, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+        )
+        parameters["query_key_value"]["bias"] = ttnn.from_torch(
+            qkv_bias_torch, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+        )
+
+    return parameters
+
+
 @pytest.mark.parametrize(
     "inputs",
-    [["emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", [8, 384], [8, 1, 1, 384]]],
+    [
+        ["emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", [8, 384], [8, 1, 1, 384]],
+        ["BAAI/bge-large-en-v1.5", [8, 384], [8, 1, 1, 384]],
+    ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_ttnn_sentence_bert_model(device, inputs, model_location_generator):
@@ -38,11 +83,18 @@ def test_ttnn_sentence_bert_model(device, inputs, model_location_generator):
         position_ids=position_ids,
         attention_mask=attention_mask,
     )
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: reference_module,
-        custom_preprocessor=custom_preprocessor,
-        device=device,
-    )
+    if inputs[0] == "BAAI/bge-large-en-v1.5":
+        parameters = preprocess_model_parameters(
+            initialize_model=lambda: reference_module,
+            custom_preprocessor=custom_preprocessor2,
+            device=device,
+        )
+    else:
+        parameters = preprocess_model_parameters(
+            initialize_model=lambda: reference_module,
+            custom_preprocessor=custom_preprocessor,
+            device=device,
+        )
     ttnn_module = TtnnSentenceBertModel(parameters=parameters, config=config)
     (
         ttnn_input_ids,

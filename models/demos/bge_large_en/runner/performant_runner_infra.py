@@ -56,6 +56,9 @@ class BGEPerformanceRunnerInfra:
         self.weight_dtype = weight_dtype
         self.sequence_length = sequence_length
         config = transformers.BertConfig.from_pretrained("BAAI/bge-large-en-v1.5")
+        # Set attention implementation for reference model
+        if not hasattr(config, "_attn_implementation") or config._attn_implementation is None:
+            config._attn_implementation = "eager"
         self.torch_model = BertModel(config).to(torch.bfloat16)
         self.torch_model = load_torch_model(
             self.torch_model, target_prefix="", model_location_generator=model_location_generator

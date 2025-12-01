@@ -52,38 +52,45 @@ embeddings = bge_model.forward(input_ids=input_ids)
 
 To serve the model via vLLM's OpenAI-compatible API:
 
-#### Step 1: Register the Model
+#### Step 1: Add to Supported Models List
 
-In vLLM's model loader (typically `vllm/model_executor/model_loader/tt_loader.py`), add:
+**CRITICAL**: Add `"BAAI/bge-large-en-v1.5"` to the supported models list in `vllm/platforms/tt.py`:
+
+In the `check_tt_model_supported` function, add to the `supported_models` list:
 
 ```python
-from models.demos.wormhole.bge_large_en.demo.generator_vllm import BGEForEmbedding, register_model
-
-# Register the model
-register_model()
+def check_tt_model_supported(model):
+    supported_models = [
+        "meta-llama/Llama-3.1-70B",
+        # ... other models ...
+        "openai/gpt-oss-20b",
+        "openai/gpt-oss-120b",
+        "deepseek-ai/DeepSeek-R1-0528",
+        "BAAI/bge-large-en-v1.5",  # Add this line
+    ]
+    assert model in supported_models, (
+        f"{model} is not in list of supported TT models")
 ```
 
-Or register manually:
+#### Step 2: Register the Model
+
+In `vllm/platforms/tt.py`, in the `register_tt_models()` function, add:
 
 ```python
-from vllm.model_executor.model_loader import ModelRegistry
-
+# BGE Embedding Model
 ModelRegistry.register_model(
-    "BAAI/bge-large-en-v1.5",
-    BGEForEmbedding,
-    architecture="BertModel",
+    "BGEForEmbedding",
+    "models.demos.wormhole.bge_large_en.demo.generator_vllm:BGEForEmbedding",
 )
 ```
 
-#### Step 2: Add to Supported Models List
-
-In vLLM's `examples/offline_inference_tt.py`, add BGE to the supported models list:
+Or alternatively, you can call the `register_model()` function from the generator_vllm module:
 
 ```python
-SUPPORTED_MODELS = [
-    # ... other models ...
-    "BAAI/bge-large-en-v1.5",
-]
+from models.demos.wormhole.bge_large_en.demo.generator_vllm import register_model
+
+# In register_tt_models() function:
+register_model()
 ```
 
 #### Step 3: Start vLLM Server
