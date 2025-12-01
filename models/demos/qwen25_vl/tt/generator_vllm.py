@@ -196,7 +196,13 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             for i, plen in enumerate(prompt_lens):
                 inputs.attention_mask[i, :plen] = 1
         else:
-            if "images" in kwargs and isinstance(kwargs["images"], list) and len(kwargs["images"]) > 0 and kwargs["images"][0] is not None:
+            if (
+                "images" in kwargs
+                and isinstance(kwargs["images"], list)
+                and len(kwargs["images"]) > 0
+                and kwargs["images"][0] is not None
+                and "attention_mask" in kwargs["images"][0]
+            ):
                 inputs.input_ids = tokens.to(kwargs["images"][0].attention_mask.dtype)
             else:
                 inputs.input_ids = tokens
@@ -211,6 +217,9 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
                 ],
                 dim=0,
             )
+
+        # Prepare text + vision inputs for decoder model
+        text_embeds = self.reference_model.model.language_model.embed_tokens(inputs.input_ids)
 
         if envs.VLLM_USE_V1:
             if (
@@ -233,7 +242,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
                 image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
             else:
                 # text-only users
-                image_embeds = torch.tensor([], dtype=torch.bfloat16)
+                image_embeds = torch.tensor([], dtype=torch.bfloat16, device=text_embeds.device)
         else:
             if (
                 "images" in kwargs
@@ -248,10 +257,8 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
                 image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
             else:
                 # text-only users
-                image_embeds = torch.tensor([], dtype=torch.bfloat16)
+                image_embeds = torch.tensor([], dtype=torch.bfloat16, device=text_embeds.device)
 
-        # Prepare text + vision inputs for decoder model
-        text_embeds = self.reference_model.model.language_model.embed_tokens(inputs.input_ids)
         input_embeds = merge_vision_tokens(inputs.input_ids, text_embeds, image_embeds, self.reference_model.config)
         (
             input_prefill_pt,
