@@ -25,10 +25,6 @@ on:
         required: true
         type: string
         default: "in-service"
-      build-with-tracy:
-        required: false
-        type: boolean
-        default: false
       single-card-demo:
         description: "Demo tests. Input 'all', 'disabled', or a list of requested models as JSON array, for example: [\"resnet\", \"sdxl\"]"
         default: disabled
@@ -38,7 +34,6 @@ on:
         type: boolean
         default: false
       single-card-perf-device-models:
-        description: "perf-device (requires tracy build)"
         required: false
         type: boolean
         default: false
