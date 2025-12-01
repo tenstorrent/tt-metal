@@ -1194,7 +1194,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
     TT_ASSERT(num_commands_expected == slices.size());
 
     // If we are on device zero, we send n-1 chunks in ascending order
-    auto& input_tensor = this->op_config.get_input_tensor(0);
+    const auto& input_tensor = this->op_config.get_input_tensor(0);
     TT_ASSERT(input_tensor.padded_shape().size() == 4, "Only 4D tensors are supported for ccl");
 
     std::vector<uint32_t> args = {

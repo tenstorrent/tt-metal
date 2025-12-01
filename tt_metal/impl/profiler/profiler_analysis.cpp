@@ -14,6 +14,8 @@
 #include "impl/context/metal_context.hpp"
 #include "profiler_analysis.hpp"
 #include "profiler_state_manager.hpp"
+#include <impl/dispatch/dispatch_core_manager.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace std {
 std::size_t hash<tt::tt_metal::experimental::ProgramExecutionUID>::operator()(

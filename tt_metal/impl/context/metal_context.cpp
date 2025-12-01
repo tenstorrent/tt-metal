@@ -34,6 +34,11 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "tt_metal/impl/dispatch/data_collector.hpp"
 
+#include <impl/dispatch/dispatch_query_manager.hpp>
+#include <impl/dispatch/dispatch_core_manager.hpp>
+#include <llrt/tt_cluster.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
+
 namespace tt::tt_metal {
 
 namespace {
@@ -291,6 +296,8 @@ MetalContext& MetalContext::instance() {
 void MetalContext::teardown_base_objects() {
     // Teardown in backward order of dependencies to avoid dereferencing uninitialized objects
     distributed_context_.reset();
+    // Destroy inspector before cluster to prevent RPC handlers from accessing destroyed cluster
+    inspector_data_.reset();
     cluster_.reset();
     hal_.reset();
 }
@@ -375,7 +382,7 @@ const DispatchMemMap& MetalContext::dispatch_mem_map() const {
 }
 
 const DispatchMemMap& MetalContext::dispatch_mem_map(const CoreType& core_type) const {
-    auto& mem_map = dispatch_mem_map_[enchantum::to_underlying(core_type)];
+    const auto& mem_map = dispatch_mem_map_[enchantum::to_underlying(core_type)];
     TT_FATAL(mem_map, "Tried to get dispatch_mem_map for {} before initializing it.", core_type);
     return *mem_map;
 }

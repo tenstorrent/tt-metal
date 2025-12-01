@@ -177,11 +177,11 @@ inline tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>&,
             const std::vector<Tensor>& output_tensors) {
-            auto src_dram_buffer = input_tensors.at(0).buffer();
+            auto* src_dram_buffer = input_tensors.at(0).buffer();
 
-            auto dst_dram_buffer_query = output_tensors.at(0).buffer();
-            auto dst_dram_buffer_key = output_tensors.at(1).buffer();
-            auto dst_dram_buffer_value = output_tensors.at(2).buffer();
+            auto* dst_dram_buffer_query = output_tensors.at(0).buffer();
+            auto* dst_dram_buffer_key = output_tensors.at(1).buffer();
+            auto* dst_dram_buffer_value = output_tensors.at(2).buffer();
 
             for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
                 for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
@@ -335,10 +335,10 @@ inline tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                                               const std::vector<Tensor>& output_tensors) {
-        auto in0_buffer = input_tensors.at(0).buffer();
-        auto out0_buffer = output_tensors.at(0).buffer();
-        auto out1_buffer = output_tensors.at(1).buffer();
-        auto out2_buffer = output_tensors.at(2).buffer();
+        auto* in0_buffer = input_tensors.at(0).buffer();
+        auto* out0_buffer = output_tensors.at(0).buffer();
+        auto* out1_buffer = output_tensors.at(1).buffer();
+        auto* out2_buffer = output_tensors.at(2).buffer();
 
         UpdateDynamicCircularBufferAddress(program, cb_in0_id, *in0_buffer);
         UpdateDynamicCircularBufferAddress(program, cb_out0_id, *out0_buffer);
