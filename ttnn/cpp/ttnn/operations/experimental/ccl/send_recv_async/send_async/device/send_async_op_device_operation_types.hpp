@@ -19,8 +19,7 @@ struct operation_attributes_t {
     auto attributes() const {
         using tt::stl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
-        // TODO #25011: Adding mesh_socket requires reflection support including json serialization
-        // attrs.emplace_back("mesh_socket", mesh_socket);
+        attrs.emplace_back("mesh_socket", mesh_socket);
         return attrs;
     }
 };
