@@ -18,22 +18,21 @@ using ttml::autograd::TensorPtr;
 
 // Configuration for inference
 struct InferenceConfig {
-    uint32_t max_new_tokens = 50;      // Number of new tokens to generate
-    uint32_t seed = 5489;              // Random seed for reproducibility
-    std::string prompt = "1,2,3,4,5";  // Comma-separated token IDs
-    std::string model_path;            // Path to pretrained model weights (.msgpack)
-    bool use_kv_cache = true;          // Whether to use KV cache
+    uint32_t max_new_tokens = 50;
+    uint32_t seed = 5489;
+    std::string prompt = "1,2,3,4,5";
+    std::string model_path;
+    bool use_kv_cache = true;
 };
 
 constexpr uint32_t TILE_SIZE = 32;
 
 // Create a causal attention mask for autoregressive generation
 TensorPtr create_causal_mask(ttnn::distributed::MeshDevice* device, uint32_t query_seq_len, uint32_t prompt_len = 0) {
-    // Pad seq_len to tile boundary for query dimension
     uint32_t padded_query_seq_len = ((query_seq_len + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
     uint32_t padded_whole_seq_len = ((prompt_len + query_seq_len + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
 
-    // Mask shape: [padded_seq_len, max_seq_len] - query_len x key_len
+    // Mask shape: [padded_seq_len, padded_whole_seq_len] - query_len x key_len
     std::vector<float> mask_data(padded_query_seq_len * padded_whole_seq_len, 0.0f);
 
     for (uint32_t i = 0; i < query_seq_len; ++i) {
@@ -42,7 +41,6 @@ TensorPtr create_causal_mask(ttnn::distributed::MeshDevice* device, uint32_t que
         }
     }
 
-    // Mask shape: [1, 1, seq_len, max_seq_len] - query_len x key_len
     auto shape = ttnn::Shape({1, 1, padded_query_seq_len, padded_whole_seq_len});
     auto mask_tensor = ttml::core::from_vector(mask_data, shape, device);
 
@@ -74,11 +72,9 @@ uint32_t sample_token(const TensorPtr& logits, int position) {
 }
 
 // Create tensor from token IDs (no padding to max_seq_len)
-TensorPtr tokens_to_tensor(
-    const std::vector<uint32_t>& tokens, uint32_t max_seq_len, ttnn::distributed::MeshDevice* device) {
-    // Use actual token length, no padding
-    uint32_t actual_len = std::min(static_cast<uint32_t>(tokens.size()), max_seq_len);
-    // Pad to nearest tile boundary (32, 64, 96, ...) instead of max_seq_len
+TensorPtr tokens_to_tensor(const std::vector<uint32_t>& tokens, ttnn::distributed::MeshDevice* device) {
+    uint32_t actual_len = tokens.size();
+    // Pad to actual length to nearest tile boundary (32, 64, 96, ...)
     uint32_t padded_len = ((actual_len + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
 
     std::vector<uint32_t> padded_tokens(padded_len, 0);
@@ -100,9 +96,7 @@ void run_inference_with_kv_cache(
     uint32_t vocab_size,
     uint32_t max_seq_len,
     ttnn::distributed::MeshDevice* device) {
-    fmt::print("\n{}\n", std::string(80, '='));
     fmt::print("Running Inference with KV Cache\n");
-    fmt::print("{}\n\n", std::string(80, '='));
 
     // Reset KV cache for new sequence
     model->reset_cache();
@@ -124,9 +118,8 @@ void run_inference_with_kv_cache(
     auto start_timer = std::chrono::high_resolution_clock::now();
 
     // Generate tokens one by one
-    // First iteration: prefill with entire prompt (cache_position == 0)
-    // Subsequent iterations: decode single tokens (cache_position > 0)
-    for (uint32_t step = 0; step < inference_config.max_new_tokens; ++step) {
+    for (uint32_t step = 0; step < std::min(uint32_t(inference_config.max_new_tokens), max_seq_len - prompt_len);
+         ++step) {
         // For first step (prefill): use all prompt tokens
         // For subsequent steps (decode): use only the last generated token
         std::vector<uint32_t> input_tokens;
@@ -140,14 +133,12 @@ void run_inference_with_kv_cache(
             input_tokens = {generated_tokens.back()};
         }
 
-        auto token_tensor = tokens_to_tensor(input_tokens, max_seq_len, device);
+        auto token_tensor = tokens_to_tensor(input_tokens, device);
 
         // Create causal mask
         // For prefill: query_len = prompt_len, key_len = prompt_len
         // For decode: query_len = 1, key_len = cache_position + 1
         auto mask = create_causal_mask(device, input_tokens.size(), cache_pos);
-
-        // Forward pass (cache position updated automatically inside model)
         auto logits = (*model)(token_tensor, mask);
 
         // Sample next token from the last position
@@ -156,11 +147,6 @@ void run_inference_with_kv_cache(
 
         if (step % 10 == 0) {
             fmt::print("Step {}: token={}, cache_pos={}\n", step, next_token, model->get_cache_position());
-        }
-
-        if (generated_tokens.size() >= max_seq_len) {
-            fmt::print("\nReached max sequence length\n");
-            break;
         }
     }
 
@@ -220,14 +206,13 @@ void run_inference_no_cache(
     auto start_timer = std::chrono::high_resolution_clock::now();
 
     // Generate tokens one by one, running full forward pass each time
-    for (uint32_t step = 0; step < inference_config.max_new_tokens; ++step) {
+    for (uint32_t step = 0; step < std::min(uint32_t(inference_config.max_new_tokens), max_seq_len - prompt_len);
+         ++step) {
         // Create tensor with ALL tokens generated so far (grows each iteration)
-        auto current_seq = tokens_to_tensor(generated_tokens, max_seq_len, device);
+        auto current_seq = tokens_to_tensor(generated_tokens, device);
 
         // Create causal mask for current sequence length
         auto mask = create_causal_mask(device, generated_tokens.size(), 0);
-
-        // Full forward pass through entire sequence
         auto logits = (*model)(current_seq, mask);
 
         // Sample next token from the last actual token position
@@ -236,11 +221,6 @@ void run_inference_no_cache(
 
         if (step % 10 == 0) {
             fmt::print("Step {}: token={}, seq_len={}\n", step, next_token, generated_tokens.size());
-        }
-
-        if (generated_tokens.size() >= max_seq_len) {
-            fmt::print("\nReached max sequence length\n");
-            break;
         }
     }
 
@@ -355,11 +335,8 @@ int main(int argc, char** argv) {
         fmt::print("   Using randomly initialized weights (no model path provided)\n");
     }
 
-    // Set model to eval mode
+    // Set model to eval mode and disable gradient computation for inference
     model->eval();
-    fmt::print("   Model set to eval mode\n");
-
-    // Disable gradient computation for inference (critical for memory!)
     ttml::autograd::ctx().set_gradient_mode(ttml::autograd::GradMode::DISABLED);
     fmt::print("   Gradient mode disabled for inference\n\n");
 

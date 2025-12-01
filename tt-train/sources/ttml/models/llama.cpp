@@ -190,7 +190,7 @@ Llama::Llama(const LlamaConfig& config) : m_config(config) {
     }
 }
 
-void Llama::initialize_kv_cache(uint32_t batch_size) {
+void Llama::initialize_kv_cache(const uint32_t batch_size) {
     if (!m_config.inference) {
         fmt::print("Warning: Attempting to initialize KV cache but inference mode is disabled\n");
         return;
@@ -243,18 +243,21 @@ ttml::autograd::TensorPtr Llama::operator()(const ttml::autograd::TensorPtr& x, 
     auto out = tok_emb_out;  // llama does positional embedding in the attention blocks
 
     if (m_config.inference && !m_kv_cache.empty()) {
+        if (m_cache_position == 0) {
+            const uint32_t batch_size = x->get_value().logical_shape()[0];
+            const uint32_t kv_cache_batch_size = m_kv_cache[0].first->get_value().logical_shape()[0];
+            // If batch size mismatch, reinitialize KV cache
+            if (batch_size != kv_cache_batch_size) {
+                initialize_kv_cache(batch_size);
+            }
+        }
         // Inference mode with KV cache
         for (size_t block_idx = 0; block_idx < blocks.size(); ++block_idx) {
             auto& block = blocks[block_idx];
             auto& [k_cache, v_cache] = m_kv_cache[block_idx];
-
             // Cast block to LlamaBlock to access the cache-aware operator
             auto llama_block = std::dynamic_pointer_cast<ttml::modules::LlamaBlock>(block);
-            if (llama_block) {
-                out = (*llama_block)(out, mask, k_cache, v_cache, m_cache_position);
-            } else {
-                throw std::runtime_error("Block is not a LlamaBlock");
-            }
+            out = (*llama_block)(out, mask, k_cache, v_cache, m_cache_position);
         }
 
         // Update cache position based on mask

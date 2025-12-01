@@ -72,17 +72,14 @@ ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
 
     // Apply rotary positional embedding with position information
     // Pass cache_position so RoPE applies the correct rotational encoding based on token position
-    // Note: is_decode_mode=false works with INTERLEAVED memory layout (for training)
-    //       is_decode_mode=true requires HEIGHT_SHARDED layout (for optimized inference) (TODO: make this work)
-    bool is_decode_mode = false;
     std::optional<uint32_t> token_position =
         cache_position > 0 ? std::optional<uint32_t>(cache_position) : std::nullopt;
 
     if (m_embedding) {
         auto* rope_embedding = dynamic_cast<ttml::modules::RotaryEmbedding*>(m_embedding.get());
         if (rope_embedding) {
-            query_with_heads = rope_embedding->operator()(query_with_heads, is_decode_mode, token_position);
-            key_with_heads = rope_embedding->operator()(key_with_heads, is_decode_mode, token_position);
+            query_with_heads = rope_embedding->operator()(query_with_heads, token_position);
+            key_with_heads = rope_embedding->operator()(key_with_heads, token_position);
         } else {
             query_with_heads = (*m_embedding)(query_with_heads);
             key_with_heads = (*m_embedding)(key_with_heads);
