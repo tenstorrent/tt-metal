@@ -136,11 +136,14 @@ class Generator:
                 warmup_empty_slots = list(range(1))
 
                 logger.info(f"Warming up prefill for sequence length: {supported_length}")
-                # The page table will get padded properly in the prefill_forward method later
-                page_table = torch.zeros(1, 1, dtype=torch.int32)
+
+                block_size = get_block_size(kv_cache[model_id])
+                num_blocks = num_blocks_in_seq(supported_length, block_size)
+                page_table_warmup = torch.zeros(1, num_blocks, dtype=torch.int32)
+
                 self.prefill_forward_text(
                     warmup_tokens,
-                    page_table,
+                    page_table_warmup,
                     kv_cache,
                     warmup_prompt_lens,
                     warmup_empty_slots,
