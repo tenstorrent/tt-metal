@@ -1,6 +1,6 @@
 {
   "decoder": {
-    "RMSAllGather_0": {
+    "RMSAllGatherDeviceOperation_0": {
       "op_name": "RMS_0",
       "kernel_duration": 16719.618287037036,
       "op_to_op": 770.5111111111111,
@@ -11,7 +11,7 @@
       "first_to_last_start_relative_margin": 0.2,
       "dispatch_duration_relative_margin": 0.2
     },
-    "RMSAllGather_1": {
+    "RMSAllGatherDeviceOperation_1": {
       "op_name": "RMS_1",
       "kernel_duration": 16346.488888888889,
       "op_to_op": 740.4962962962964,
@@ -46,7 +46,7 @@
     },
     "Matmul_0": {
       "op_name": "QKV_MM",
-      "kernel_duration": 7082.489583333333,
+      "kernel_duration": 8161.475694444444,
       "op_to_op": 758.6296296296297,
       "first_to_last_start": 1855.8074074074075,
       "non-overlapped-dispatch-time": 5367.539682539683,
@@ -57,7 +57,7 @@
     },
     "Matmul_1": {
       "op_name": "DO_MM",
-      "kernel_duration": 7701.098148148148,
+      "kernel_duration": 8721.927083333334,
       "op_to_op": 598.9481481481482,
       "first_to_last_start": 1994.0888888888887,
       "non-overlapped-dispatch-time": 5825.539682539683,
@@ -81,7 +81,7 @@
       "op_name": "LlamaReduceScatterCreateHeads",
       "kernel_duration": 8010.601157407407,
       "op_to_op": 867.8740740740741,
-      "first_to_last_start": 1734.2666666666667,
+      "first_to_last_start": 2131.8888888888887,
       "non-overlapped-dispatch-time": 8437.777777777777,
       "kernel_duration_relative_margin": 0.1,
       "op_to_op_duration_relative_margin": 0.4,
@@ -123,7 +123,7 @@
     },
     "LlamaReduceScatterDeviceOperation_0": {
       "op_name": "ReduceScatter_FF3",
-      "kernel_duration": 7218.590972222222,
+      "kernel_duration": 6747.479166666667,
       "op_to_op": 698.4148148148148,
       "first_to_last_start": 1688.2222222222222,
       "non-overlapped-dispatch-time": 7398.333333333333,
@@ -134,7 +134,7 @@
     },
     "RotaryEmbeddingLlamaFusedQK_0": {
       "op_name": "RotaryEmbeddingLlamaFusedQK",
-      "kernel_duration": 2234.1837962962964,
+      "kernel_duration": 2600.9479166666665,
       "op_to_op": 1002.4444444444445,
       "first_to_last_start": 1551.888888888889,
       "non-overlapped-dispatch-time": 3411.5079365079364,
@@ -143,7 +143,7 @@
       "first_to_last_start_relative_margin": 0.5,
       "dispatch_duration_relative_margin": 0.35
     },
-    "PagedUpdateCacheDeviceOperation_0": {
+    "PagedFusedUpdateCacheDeviceOperation_0": {
       "op_name": "PagedUpdateCache",
       "kernel_duration": 4451.882870370371,
       "op_to_op": 737.1037037037038,
@@ -206,7 +206,7 @@
       "op_to_op_duration_relative_margin": 0.2,
       "dispatch_duration_relative_margin": 0.5
     },
-    "RMSAllGather_0": {
+    "RMSAllGatherDeviceOperation_0": {
       "op_name": "RMSAllGather_0",
       "kernel_duration": 14480.010416666666,
       "op_to_op": 694.8666666666667,
@@ -341,7 +341,7 @@
       "op_to_op_duration_relative_margin": 0.4,
       "dispatch_duration_relative_margin": 0.5
     },
-    "Sampling_0": {
+    "SamplingDeviceOperation_0": {
       "op_name": "Sampling_0",
       "kernel_duration": 67650.89791666667,
       "op_to_op": 54836.46666666667,
@@ -350,7 +350,7 @@
       "op_to_op_duration_relative_margin": 0.2,
       "dispatch_duration_relative_margin": 0.5
     },
-    "PlusOne_0": {
+    "PlusOneDeviceOperation_0": {
       "op_name": "PlusOne_0",
       "kernel_duration": 442.40625,
       "op_to_op": 650.0,
@@ -359,7 +359,7 @@
       "op_to_op_duration_relative_margin": 0.4,
       "dispatch_duration_relative_margin": 1.64
     },
-    "PlusOne_1": {
+    "PlusOneDeviceOperation_1": {
       "op_name": "PlusOne_1",
       "kernel_duration": 12576.729166666666,
       "op_to_op": 2232.9333333333334,

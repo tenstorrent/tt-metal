@@ -26,6 +26,8 @@ def calculate_bytes(shape, dtype):
     return shape[0] * shape[1] / TILE_HW * dtype_bytes
 
 
+@pytest.mark.no_ensure_devices_tg
+@pytest.mark.no_reset_default_device
 @pytest.mark.parametrize(
     "bw_target",
     [
