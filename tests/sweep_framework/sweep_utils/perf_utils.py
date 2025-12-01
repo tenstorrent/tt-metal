@@ -147,7 +147,7 @@ def simplify_device_perf(perf: Optional[dict]) -> dict:
 
 def run_with_cache_comparison(
     test_module, test_vector: dict, device, config: Any
-) -> Tuple[bool, Any, Dict[str, Optional[float]], Optional[Dict[str, dict]]]:
+) -> Tuple[bool, Any, Dict[str, Optional[float]], Optional[Dict[str, dict]], Optional[Dict[str, int]]]:
     # Prepare program cache state
     prepare_program_cache_for_comparison(device)
 
@@ -171,6 +171,13 @@ def run_with_cache_comparison(
     device_perf_cached = None
     if getattr(config, "measure_device_perf", False):
         device_perf_cached = gather_single_test_perf(device, status_cached)
+
+    # Capture peak memory if enabled (after both runs complete)
+    peak_memory_dict = None
+    if getattr(config, "measure_memory", False):
+        from sweep_utils.memory_utils import capture_peak_memory_with_cache_comparison
+
+        peak_memory_dict = capture_peak_memory_with_cache_comparison(test_module, test_vector, device)
 
     # Determine combined status and message
     if not status_uncached:
@@ -210,20 +217,27 @@ def run_with_cache_comparison(
             simplified_perf["uncached"] = simplify_device_perf(device_perf_uncached)
         if device_perf_cached:
             simplified_perf["cached"] = simplify_device_perf(device_perf_cached)
-        return status, message, e2e_perf, simplified_perf
+        return status, message, e2e_perf, simplified_perf, peak_memory_dict
     else:
-        return status, message, e2e_perf, None
+        return status, message, e2e_perf, None, peak_memory_dict
 
 
 def run_single(
     test_module, test_vector: dict, device, config: Any
-) -> Tuple[bool, Any, Optional[float], Optional[dict]]:
+) -> Tuple[bool, Any, Optional[float], Optional[dict], Optional[int]]:
     status, message, e2e_ms = execute_test(test_module, test_vector, device)
+
+    # Capture peak memory if enabled
+    peak_memory = None
+    if getattr(config, "measure_memory", False):
+        from sweep_utils.memory_utils import capture_peak_memory
+
+        peak_memory = capture_peak_memory(test_module, test_vector, device, use_no_dispatch=True)
 
     if getattr(config, "measure_device_perf", False):
         perf_result = gather_single_test_perf(device, status)
         message = get_updated_message(message, perf_result)
         simplified_perf = simplify_device_perf(perf_result)
-        return status, message, e2e_ms, simplified_perf
+        return status, message, e2e_ms, simplified_perf, peak_memory
     else:
-        return status, message, e2e_ms, None
+        return status, message, e2e_ms, None, peak_memory
