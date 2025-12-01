@@ -78,7 +78,7 @@ on:
           - wan22
           - mochi
       t3000-model-perf:
-        description: "Model perf tests (needs tracy): Select 'all', specific model or 'disabled'"
+        description: "Model perf tests: Select 'all', specific model or 'disabled'"
         type: choice
         default: disabled
         options:

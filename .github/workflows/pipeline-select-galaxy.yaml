@@ -85,7 +85,7 @@ on:
           - motif
         default: 'disabled'
       galaxy-model-perf:
-        description: 'Model perf tests (needs tracy): Select all, specific model, or disabled'
+        description: 'Model perf tests: Select all, specific model, or disabled'
         required: false
         type: choice
         options:
