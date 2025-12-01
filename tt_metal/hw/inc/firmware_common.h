@@ -91,9 +91,9 @@ inline void noc_worker_logical_to_virtual_map_init(uint64_t worker_logical_to_vi
 FORCE_INLINE
 uint32_t firmware_config_init(
     tt_l1_ptr mailboxes_t* const mailboxes, uint32_t core_type_index, uint32_t processor_index) {
-    extern uint32_t tt_l1_ptr* rta_l1_base;
-    extern uint32_t tt_l1_ptr* crta_l1_base;
-    extern uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT];
+    extern thread_local uint32_t tt_l1_ptr* rta_l1_base;
+    extern thread_local uint32_t tt_l1_ptr* crta_l1_base;
+    extern thread_local uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT];
 
     // TODO: check the asm for this loop to be sure loads are scheduled ok
     uintptr_t kernel_config_base[ProgrammableCoreType::COUNT];

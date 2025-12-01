@@ -196,12 +196,20 @@ struct subordinate_sync_msg_t {
         volatile uint32_t all;
         struct {
             volatile uint8_t dm1;  // ncrisc must come first, see ncrisc-halt.S
+            volatile uint8_t dm2;
+            volatile uint8_t dm3;
+            volatile uint8_t dm4;
+            volatile uint8_t dm5;
+            volatile uint8_t dm6;
+            volatile uint8_t dm7;
             volatile uint8_t trisc0;
             volatile uint8_t trisc1;
             volatile uint8_t trisc2;
+            uint8_t pad[8];
         };
-    };
-};
+        volatile uint64_t allQsr;
+    } __attribute__((packed));
+} __attribute__((packed));
 
 constexpr int num_waypoint_bytes_per_riscv = 4;
 struct debug_waypoint_msg_t {
