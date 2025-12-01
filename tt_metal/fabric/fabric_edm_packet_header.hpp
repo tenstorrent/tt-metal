@@ -474,7 +474,7 @@ struct PacketHeader : public PacketHeaderBase<PacketHeader> {
     // Future changes will remove this padding and require the worker kernel to be aware of this bug
     // and pad their own CBs conditionally when reading from DRAM. It'll be up to the users to
     // manage this complexity.
-    uint8_t padding0[34];
+    uint8_t padding0[18];
 
     static uint32_t calculate_chip_unicast_routing_fields_value(uint8_t distance_in_hops) {
         return RoutingFields::LAST_CHIP_IN_MCAST_VAL | distance_in_hops;
@@ -528,7 +528,7 @@ struct LowLatencyRoutingFields {
 
 struct LowLatencyPacketHeader : public PacketHeaderBase<LowLatencyPacketHeader> {
     LowLatencyRoutingFields routing_fields;
-    uint8_t padding0[20];
+    uint8_t padding0[4];
 
 private:
     static uint64_t calculate_chip_unicast_routing_fields_value(uint8_t distance_in_hops) {
@@ -665,7 +665,7 @@ struct UDMHybridMeshPacketHeader : public HybridMeshPacketHeader {
 static_assert(sizeof(UDMHybridMeshPacketHeader) == 96, "sizeof(UDMHybridMeshPacketHeader) is not equal to 80B");
 
 // TODO: When we remove the 32B padding requirement, reduce to 16B size check
-static_assert(sizeof(PacketHeader) == 64, "sizeof(PacketHeader) is not equal to 64B");
+static_assert(sizeof(PacketHeader) == 48, "sizeof(PacketHeader) is not equal to 48B");
 static_assert(
     sizeof(LowLatencyPacketHeader) == sizeof(PacketHeader),
     "sizeof(LowLatencyPacketHeader) is expected to be 64B after expanding routing fields storage");
