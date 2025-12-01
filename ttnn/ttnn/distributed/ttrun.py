@@ -60,24 +60,8 @@ class TTRunConfig(BaseModel):
 
     @field_validator("mesh_graph_desc_path")
     def validate_mesh_graph_exists(cls, path: str) -> str:
-        """Ensure mesh graph descriptor file exists
-
-        If path is relative, resolve it relative to TT_METAL_HOME (if set) or current working directory.
-        If path is absolute, use it as-is.
-        """
-        mesh_path = Path(path).expanduser()
-
-        # If path is relative, resolve it relative to TT_METAL_HOME if available
-        if not mesh_path.is_absolute():
-            tt_metal_home = os.environ.get("TT_METAL_HOME")
-            if tt_metal_home:
-                mesh_path = Path(tt_metal_home) / mesh_path
-            else:
-                # Fall back to resolving relative to current working directory
-                mesh_path = mesh_path.resolve()
-        else:
-            mesh_path = mesh_path.resolve()
-
+        """Ensure mesh graph descriptor file exists"""
+        mesh_path = Path(path).expanduser().resolve()
         if not mesh_path.is_file():
             raise ValueError(f"Mesh graph descriptor not found: {mesh_path}")
         return str(mesh_path)
