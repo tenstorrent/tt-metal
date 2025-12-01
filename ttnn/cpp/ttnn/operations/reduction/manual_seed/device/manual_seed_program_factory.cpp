@@ -144,7 +144,7 @@ ManualSeedSingleSeedSetCoresProgramFactory::cached_program_t ManualSeedSingleSee
 
     // Tensor config info
     const auto& user_ids_tensor = tensor_args.user_ids.value();
-    const auto user_ids_tensor_buffer = user_ids_tensor.buffer();
+    auto* const user_ids_tensor_buffer = user_ids_tensor.buffer();
     const auto number_of_ids = static_cast<uint32_t>(user_ids_tensor.logical_volume());
 
     // Create circular buffer for user_ids
@@ -225,11 +225,11 @@ ManualSeedSetSeedsSetCoresProgramFactory::cached_program_t ManualSeedSetSeedsSet
 
     // Tensor config info
     const auto& user_ids_tensor = tensor_args.user_ids.value();
-    const auto user_ids_tensor_buffer = user_ids_tensor.buffer();
+    auto* const user_ids_tensor_buffer = user_ids_tensor.buffer();
     const auto number_of_ids = static_cast<uint32_t>(user_ids_tensor.logical_volume());
 
     const auto& seeds_tensor = tensor_args.seeds.value();
-    const auto seeds_tensor_buffer = seeds_tensor.buffer();
+    auto* const seeds_tensor_buffer = seeds_tensor.buffer();
 
     // Create circular buffers
     constexpr uint32_t user_ids_cb_index = tt::CBIndex::c_0;

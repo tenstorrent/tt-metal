@@ -195,7 +195,7 @@ const JitBuildState& BuildEnvManager::get_kernel_build_state(
 JitBuildStateSubset BuildEnvManager::get_kernel_build_states(
     ChipId device_id, uint32_t programmable_core, uint32_t processor_class) {
     auto [b_id, count] = get_build_index_and_state_count(programmable_core, processor_class);
-    auto& kernel_build_states = get_device_build_env(device_id).kernel_build_states;
+    const auto& kernel_build_states = get_device_build_env(device_id).kernel_build_states;
     return {kernel_build_states.begin() + b_id, count};
 }
 

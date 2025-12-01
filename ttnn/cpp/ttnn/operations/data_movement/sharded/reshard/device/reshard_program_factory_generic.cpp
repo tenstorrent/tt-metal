@@ -59,7 +59,7 @@ std::unordered_map<CoreCoord, std::vector<detail::PageStride>> create_map_for_re
     auto output_cores = output_buffer->get_buffer_page_mapping()->all_cores;
     ret_map.reserve(output_cores.size());
 
-    auto device = input_buffer->device();
+    auto* device = input_buffer->device();
     auto full_grid = device->compute_with_storage_grid_size();
     uint32_t output_core_id = 0;
     for (auto output_core : output_cores) {
@@ -643,7 +643,7 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
     const auto& input = tensor_args.input;
     auto& output = tensor_return_value;
 
-    auto device = input.device();
+    auto* device = input.device();
 
     tt::tt_metal::Program program{};
 

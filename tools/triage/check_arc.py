@@ -14,6 +14,7 @@ Description:
 from dataclasses import dataclass
 from triage import ScriptConfig, triage_field, hex_serializer, log_check_device, run_script
 from run_checks import run as get_run_checks
+from datetime import timedelta
 import time
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
@@ -32,21 +33,31 @@ script_config = ScriptConfig(
 class ArcCheckData:
     location: OnChipCoordinate = triage_field("Loc")
     postcode: int = triage_field("Postcode", hex_serializer)
+    uptime: timedelta = triage_field("Up time")
     clock_mhz: int = triage_field("Clock MHz")
     heartbeats_per_second: float = triage_field("Heartbeats/s")
 
 
 def check_arc_block(arc: NocBlock, postcode: int) -> ArcCheckData:
-    device_id = arc.location._device._id
+    device = arc.location.device
+    device_id = arc.location.device_id
     # Heartbeat must be increasing
     heartbeat_0 = read_arc_telemetry_entry(device_id, "TIMER_HEARTBEAT")
     delay_seconds = 0.2
     time.sleep(delay_seconds)
     heartbeat_1 = read_arc_telemetry_entry(device_id, "TIMER_HEARTBEAT")
-    log_check(heartbeat_1 > heartbeat_0, f"ARC heartbeat not increasing: {RED}{heartbeat_1}{RST}.")
+    log_check_device(device, heartbeat_1 > heartbeat_0, f"ARC heartbeat not increasing: {RED}{heartbeat_1}{RST}.")
 
     arcclk_mhz = read_arc_telemetry_entry(device_id, "ARCCLK")
     heartbeats_per_second = (heartbeat_1 - heartbeat_0) / delay_seconds
+
+    # On Wormhole, heartbeat is resetting to 0xA5A5A5A5 instead of 0
+    # This should be fixed by firmware team, but for now we need to subtract this offset
+    heartbeat_offset = 0xA5A5A5A5 if device.is_wormhole() else 0
+    assert (
+        heartbeat_1 > heartbeat_offset
+    ), f"ARC heartbeat lower than default value: {RED}{heartbeat_1}{RST}. Expected at least {BLUE}{heartbeat_offset}{RST}"
+    uptime_seconds = (heartbeat_1 - heartbeat_offset) / heartbeats_per_second
 
     # Heartbeat must be between 10 and 50
     log_check_device(
@@ -63,6 +74,7 @@ def check_arc_block(arc: NocBlock, postcode: int) -> ArcCheckData:
     return ArcCheckData(
         location=arc.location,
         postcode=postcode,
+        uptime=timedelta(seconds=uptime_seconds) if uptime_seconds > 0 else None,
         clock_mhz=arcclk_mhz,
         heartbeats_per_second=heartbeats_per_second,
     )

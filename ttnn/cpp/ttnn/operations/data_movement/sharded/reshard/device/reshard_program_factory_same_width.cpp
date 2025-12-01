@@ -24,7 +24,7 @@ ReshardSameWidthFactory<local_is_output>::cached_program_t ReshardSameWidthFacto
     const auto& local_tensor = local_is_output ? output : input;
     const auto& remote_tensor = local_is_output ? input : output;
 
-    auto device = input.device();
+    auto* device = input.device();
     tt::tt_metal::Program program{};
 
     const auto local_shard_spec = local_tensor.shard_spec().value();

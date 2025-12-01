@@ -19,14 +19,14 @@ NdReshardCopyLocalShardFactory<local_is_input>::cached_program_t NdReshardCopyLo
     const auto& input = tensor_args.input;
     auto& output = tensor_return_value;
 
-    auto input_buffer = input.buffer();
-    auto output_buffer = output.buffer();
+    auto* input_buffer = input.buffer();
+    auto* output_buffer = output.buffer();
 
     const auto input_accessor_args = TensorAccessorArgs(*input_buffer);
     const auto output_accessor_args = TensorAccessorArgs(*output_buffer);
 
     // Choose buffer and aligned page size based on is_reader flag
-    auto local_buffer = local_is_input ? input_buffer : output_buffer;
+    auto* local_buffer = local_is_input ? input_buffer : output_buffer;
     auto aligned_page_size = local_buffer->aligned_page_size();
     auto other_aligned_page_size =
         local_is_input ? output_buffer->aligned_page_size() : input_buffer->aligned_page_size();
@@ -129,7 +129,7 @@ NdReshardCopyLocalShardFactory<local_is_input>::cached_program_t NdReshardCopyLo
     {
         const auto& input = tensor_args.input;
         const auto& output = tensor_return_value;
-        auto local_buffer = local_is_input ? input.buffer() : output.buffer();
+        auto* local_buffer = local_is_input ? input.buffer() : output.buffer();
         auto num_shards = local_buffer->buffer_distribution_spec()->num_shards();
         auto shard_id_stride = local_buffer->buffer_distribution_spec()->num_cores_with_data() * 2;
 
@@ -171,7 +171,7 @@ void NdReshardCopyLocalShardFactory<is_reader>::override_runtime_arguments(
     const auto& cores = cached_program.shared_variables.cores;
 
     // Choose buffer for distribution spec based on is_reader flag
-    auto local_buffer = is_reader ? input.buffer() : output.buffer();
+    auto* local_buffer = is_reader ? input.buffer() : output.buffer();
     auto num_shards = local_buffer->buffer_distribution_spec()->num_shards();
     auto shard_id_stride = local_buffer->buffer_distribution_spec()->num_cores_with_data() * 2;
 

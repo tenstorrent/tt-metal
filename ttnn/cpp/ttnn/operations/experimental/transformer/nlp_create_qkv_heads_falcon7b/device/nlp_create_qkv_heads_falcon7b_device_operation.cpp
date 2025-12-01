@@ -65,7 +65,7 @@ NlpCreateHeadsFalcon7BDeviceOperation::tensor_return_value_t
 NlpCreateHeadsFalcon7BDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_specs = compute_output_specs(operation_attributes, tensor_args);
-    auto device = tensor_args.input.device();
+    auto* device = tensor_args.input.device();
 
     return {
         .q = create_device_tensor(output_specs.q, device),

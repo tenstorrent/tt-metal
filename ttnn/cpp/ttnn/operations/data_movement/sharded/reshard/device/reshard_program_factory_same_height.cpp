@@ -26,7 +26,7 @@ ReshardSameHeightFactory<local_is_output>::cached_program_t ReshardSameHeightFac
     const auto remote_shard_spec = remote_tensor.shard_spec().value();
     const auto& all_cores = local_shard_spec.grid;
 
-    auto device = input.device();
+    auto* device = input.device();
     tt::tt_metal::Program program{};
 
     const auto remote_core_type = remote_tensor.buffer()->core_type();

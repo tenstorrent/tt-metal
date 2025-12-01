@@ -18,8 +18,8 @@ NdReshardCopyPagesFactory::cached_program_t NdReshardCopyPagesFactory::create(
     const auto& input = tensor_args.input;
     auto& output = tensor_return_value;
 
-    auto input_buffer = input.buffer();
-    auto output_buffer = output.buffer();
+    auto* input_buffer = input.buffer();
+    auto* output_buffer = output.buffer();
 
     auto input_nd_shard_spec = input.memory_config().nd_shard_spec().value();
 
