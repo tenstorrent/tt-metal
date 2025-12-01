@@ -446,6 +446,28 @@ def test_untilize_with_unpad_int32(shape, dtype, device):
     assert_with_pcc(input_a, output_tensor)
 
 
+@pytest.mark.parametrize("shape", [[32, 128 * 1024]])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint16])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+        }
+    ],
+    indirect=True,
+)
+def test_to_layout_dtypes(shape, device, dtype):
+    torch.manual_seed(0)
+    input_a = torch.randn(shape)
+
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype)
+    output_tensor = ttnn.tilize(input_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(input_a, output_tensor)
+
+
 @pytest.mark.parametrize("shape", [[3072, 1024], [2, 2048, 512]])
 @pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.int32])
 def test_untilize_int32_t(shape, dtype, device):
