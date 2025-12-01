@@ -117,9 +117,6 @@ constexpr bool is_handshake_sender = get_compile_time_arg_val(MAIN_CT_ARGS_START
 constexpr size_t handshake_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 6);
 
 static_assert(fuse_receiver_flush_and_completion_ptr == 1, "fuse_receiver_flush_and_completion_ptr must be 0");
-static_assert(
-    !enable_deadlock_avoidance || NUM_RECEIVER_CHANNELS > 1,
-    "Deadlock avoidance requires at least 2 receiver channels");
 
 constexpr size_t VC0_RECEIVER_CHANNEL = dateline_connection ? 1 : 0;
 // On a dateline connection, we would never forward through the dateline on VC1
@@ -142,7 +139,9 @@ constexpr bool vc1_has_different_downstream_dest = get_compile_time_arg_val(MAIN
 constexpr bool fabric_tensix_extension_mux_mode = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
 constexpr bool skip_src_ch_id_update = fabric_tensix_extension_mux_mode;
 
-constexpr size_t REMOTE_CHANNEL_INFO_START_IDX = MAIN_CT_ARGS_START_IDX + 10;
+constexpr bool ENABLE_FIRST_LEVEL_ACK = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 10);
+
+constexpr size_t REMOTE_CHANNEL_INFO_START_IDX = MAIN_CT_ARGS_START_IDX + 11;
 constexpr uint32_t remote_vc1_sender_channel =
     conditional_get_compile_time_arg<skip_src_ch_id_update, REMOTE_CHANNEL_INFO_START_IDX>();
 constexpr size_t remote_worker_sender_channel =
@@ -239,7 +238,6 @@ constexpr std::array<size_t, NUM_DOWNSTREAM_CHANNELS> DOWNSTREAM_SENDER_NUM_BUFF
     fill_array_with_next_n_args<size_t, DOWNSTREAM_SENDER_NUM_BUFFERS_IDX, NUM_DOWNSTREAM_CHANNELS>();
 // TODO: remove DOWNSTREAM_SENDER_NUM_BUFFERS and use TMP on downstream sender channels.
 constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[0];
-constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[NUM_RECEIVER_CHANNELS - 1];
 
 constexpr size_t ANOTHER_SPECIAL_TAG_2 = 0xabaddad9;
 constexpr size_t ANOTHER_SPECIAL_TAG_2_IDX = DOWNSTREAM_SENDER_NUM_BUFFERS_IDX + NUM_DOWNSTREAM_CHANNELS;
@@ -279,35 +277,7 @@ static_assert(
     "Notify worker marker not found. This implies some arguments were misaligned between host and device. Double "
     "check the CT args.");
 
-// Per-channel counters
-constexpr size_t MAIN_CT_ARGS_IDX_3 = MAIN_CT_ARGS_IDX_2 + 6;
-constexpr bool enable_fabric_counters = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 0) != 0;
-constexpr size_t receiver_channel_0_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 1);
-constexpr size_t receiver_channel_1_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 2);
-constexpr size_t sender_channel_0_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 3);
-constexpr size_t sender_channel_1_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 4);
-constexpr size_t sender_channel_2_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 5);
-constexpr size_t sender_channel_3_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 6);
-constexpr size_t sender_channel_4_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 7);
-
-constexpr size_t MAIN_CT_ARGS_IDX_4 = MAIN_CT_ARGS_IDX_3 + 8;
-constexpr bool enable_packet_header_recording = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 0) != 0;
-constexpr size_t receiver_0_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 1);
-constexpr size_t receiver_0_completed_packet_header_cb_size_headers = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 2);
-constexpr size_t receiver_1_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 3);
-constexpr size_t receiver_1_completed_packet_header_cb_size_headers = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 4);
-constexpr size_t sender_0_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 5);
-constexpr size_t sender_0_completed_packet_header_cb_size_headers = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 6);
-constexpr size_t sender_1_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 7);
-constexpr size_t sender_1_completed_packet_header_cb_size_headers = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 8);
-constexpr size_t sender_2_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 9);
-constexpr size_t sender_2_completed_packet_header_cb_size_headers = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 10);
-constexpr size_t sender_3_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 11);
-constexpr size_t sender_3_completed_packet_header_cb_size_headers = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 12);
-constexpr size_t sender_4_completed_packet_header_cb_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 13);
-constexpr size_t sender_4_completed_packet_header_cb_size_headers = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_4 + 14);
-
-constexpr size_t sender_channel_serviced_args_idx = MAIN_CT_ARGS_IDX_4 + 15;
+constexpr size_t sender_channel_serviced_args_idx = MAIN_CT_ARGS_IDX_2 + 6;
 constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_serviced =
     fill_array_with_next_n_args<bool, sender_channel_serviced_args_idx, MAX_NUM_SENDER_CHANNELS>();
 constexpr size_t receiver_channel_serviced_args_idx =
@@ -371,7 +341,17 @@ constexpr size_t SKIP_LIVENESS_CHECK_ARG_IDX = SPECIAL_MARKER_0_IDX + SPECIAL_MA
 constexpr std::array<bool, NUM_SENDER_CHANNELS> sender_ch_live_check_skip =
     fill_array_with_next_n_args<bool, SKIP_LIVENESS_CHECK_ARG_IDX, NUM_SENDER_CHANNELS>();
 
-constexpr size_t SENDER_CHANNEL_ACK_NOC_IDS_START_IDX = SKIP_LIVENESS_CHECK_ARG_IDX + NUM_SENDER_CHANNELS;
+// A channel is a "traffic injection channel" if it is a sender channel that is adding *new*
+// traffic to this dimension/ring. Examples include channels service worker traffic and
+// sender channels that receive traffic from a "turn" (e.g. an EAST channel receiving traffic from NORTH)
+// This attribute is necessary to support bubble flow control.
+constexpr size_t SENDER_CHANNEL_IS_INJECTION_CHANNEL_START_IDX = SKIP_LIVENESS_CHECK_ARG_IDX + NUM_SENDER_CHANNELS;
+constexpr std::array<bool, NUM_SENDER_CHANNELS> sender_channel_is_traffic_injection_channel =
+    fill_array_with_next_n_args<bool, SENDER_CHANNEL_IS_INJECTION_CHANNEL_START_IDX, NUM_SENDER_CHANNELS>();
+constexpr size_t BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS = 2;
+
+constexpr size_t SENDER_CHANNEL_ACK_NOC_IDS_START_IDX =
+    SENDER_CHANNEL_IS_INJECTION_CHANNEL_START_IDX + NUM_SENDER_CHANNELS;
 constexpr size_t SENDER_CHANNEL_ACK_CMD_BUF_IDS_START_IDX = SENDER_CHANNEL_ACK_NOC_IDS_START_IDX + NUM_SENDER_CHANNELS;
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> sender_channel_ack_noc_ids =
     fill_array_with_next_n_args<size_t, SENDER_CHANNEL_ACK_NOC_IDS_START_IDX, NUM_SENDER_CHANNELS>();
@@ -407,10 +387,13 @@ static_assert(
 ///////////////////////////////////////////////
 // Telemetry
 constexpr size_t PERF_TELEMETRY_MODE_IDX = SPECIAL_MARKER_1_IDX + SPECIAL_MARKER_CHECK_ENABLED;
-constexpr PerfTelemetryRecorderType perf_telemetry_mode =
-    static_cast<PerfTelemetryRecorderType>(get_compile_time_arg_val(PERF_TELEMETRY_MODE_IDX));
 
-constexpr size_t PERF_TELEMETRY_BUFFER_ADDR_IDX = PERF_TELEMETRY_MODE_IDX + 1;
+constexpr bool ENABLE_FABRIC_TELEMETRY = static_cast<bool>(get_compile_time_arg_val(PERF_TELEMETRY_MODE_IDX));
+
+constexpr PerfTelemetryRecorderType perf_telemetry_mode =
+    static_cast<PerfTelemetryRecorderType>(get_compile_time_arg_val(PERF_TELEMETRY_MODE_IDX + 1));
+
+constexpr size_t PERF_TELEMETRY_BUFFER_ADDR_IDX = PERF_TELEMETRY_MODE_IDX + 2;
 constexpr size_t perf_telemetry_buffer_addr = get_compile_time_arg_val(PERF_TELEMETRY_BUFFER_ADDR_IDX);
 
 

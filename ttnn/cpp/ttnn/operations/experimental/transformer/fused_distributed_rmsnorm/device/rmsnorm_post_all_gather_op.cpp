@@ -19,8 +19,8 @@ void FusedRMSNormPostAllGather::validate(
     using namespace tt::constants;
 
     TT_FATAL(input_tensors.size() == 2, "Must have 2 input tensors");
-    auto& a = input_tensors.at(0);
-    auto& stats = input_tensors.at(1);
+    const auto& a = input_tensors.at(0);
+    const auto& stats = input_tensors.at(1);
 
     // Helper lambda to assert tensor properties: tilized, bfloat16, on device, allocated
     auto check_tile_bf16_device_alloc = [](const Tensor& tensor, const std::string& name) {
@@ -73,7 +73,7 @@ void FusedRMSNormPostAllGather::validate(
     TT_FATAL(optional_input_tensors.size() == 4, "Must have 4 optional input tensors");
     if (optional_input_tensors.at(0).has_value()) {
         // Gamma is given
-        auto& weight = optional_input_tensors.at(0).value();
+        const auto& weight = optional_input_tensors.at(0).value();
         check_tile_bf16_device_alloc(weight, "Weight");
 
         TT_FATAL(
@@ -96,9 +96,9 @@ void FusedRMSNormPostAllGather::validate(
         TT_FATAL(optional_input_tensors.at(2).has_value(), "Rope cos tensor is required when ROPE fusion is enabled");
         TT_FATAL(optional_input_tensors.at(3).has_value(), "Rope sin tensor is required when ROPE fusion is enabled");
 
-        auto& transformation_mat = optional_input_tensors.at(1).value();
-        auto& rope_cos = optional_input_tensors.at(2).value();
-        auto& rope_sin = optional_input_tensors.at(3).value();
+        const auto& transformation_mat = optional_input_tensors.at(1).value();
+        const auto& rope_cos = optional_input_tensors.at(2).value();
+        const auto& rope_sin = optional_input_tensors.at(3).value();
 
         check_tile_bf16_device_alloc(transformation_mat, "Transformation_mat");
         check_tile_bf16_device_alloc(rope_cos, "Rope cos");
@@ -142,7 +142,7 @@ void FusedRMSNormPostAllGather::validate(
 
 std::vector<TensorSpec> FusedRMSNormPostAllGather::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
-    auto& input_tensor = input_tensors.at(0);
+    const auto& input_tensor = input_tensors.at(0);
     auto output_shape = input_tensor.logical_shape();
     output_shape[1] = this->num_heads;
     output_shape[3] /= this->num_heads;

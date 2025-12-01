@@ -77,7 +77,7 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
     auto device = input_tensor.device();
 
     bool is_in_tiled = input_tensor.layout() == Layout::TILE;
-    const bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+    bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
     auto pad_metadata = sliding_window::generate_pad_metadata(operation_attributes.config);
     auto op_trace_metadata = sliding_window::generate_op_trace_metadata(operation_attributes.config);
@@ -257,7 +257,7 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
     TT_ASSERT(gather_config_device_tensor1.dtype() == DataType::UINT16);
 
     const auto& padding_config_storage0 = pad_config_device_tensor0.device_storage();
-    auto padding_config_buffer0 = padding_config_storage0.get_buffer();
+    auto* padding_config_buffer0 = padding_config_storage0.get_buffer();
     cb_indices.padding_config0 = cb_indices.get_next_cb_id();
     auto padding_config_cb0 = create_circular_buffer(
         program,
@@ -269,7 +269,7 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
         config_tensors_in_dram ? nullptr : padding_config_buffer0);
 
     const auto& padding_config_storage1 = pad_config_device_tensor1.device_storage();
-    auto padding_config_buffer1 = padding_config_storage1.get_buffer();
+    auto* padding_config_buffer1 = padding_config_storage1.get_buffer();
     cb_indices.padding_config1 = cb_indices.get_next_cb_id();
     auto padding_config_cb1 = create_circular_buffer(
         program,
@@ -281,7 +281,7 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
         config_tensors_in_dram ? nullptr : padding_config_buffer1);
 
     const auto& gather_config_storage0 = gather_config_device_tensor0.device_storage();
-    auto gather_config_buffer0 = gather_config_storage0.get_buffer();
+    auto* gather_config_buffer0 = gather_config_storage0.get_buffer();
     cb_indices.gather_config0 = cb_indices.get_next_cb_id();
     auto gather_config_cb0 = create_circular_buffer(
         program,
@@ -293,7 +293,7 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
         config_tensors_in_dram ? nullptr : gather_config_buffer0);
 
     const auto& gather_config_storage1 = gather_config_device_tensor1.device_storage();
-    auto gather_config_buffer1 = gather_config_storage1.get_buffer();
+    auto* gather_config_buffer1 = gather_config_storage1.get_buffer();
     cb_indices.gather_config1 = cb_indices.get_next_cb_id();
     auto gather_config_cb1 = create_circular_buffer(
         program,
