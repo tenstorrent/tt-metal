@@ -2,5 +2,6 @@ set(CMAKE_C_CLANG_TIDY "")
 set(CMAKE_CXX_CLANG_TIDY "")
 set(CMAKE_VERIFY_INTERFACE_HEADER_SETS FALSE)
 set(TT_UMD_ENABLE_CLANG_TIDY OFF CACHE BOOL "Disable clang-tidy checks for UMD" FORCE)
+set(TT_UMD_USE_BOOST ON CACHE BOOL "Force UMD to use boost asio instead of standalone" FORCE)
 
 add_subdirectory(umd)
