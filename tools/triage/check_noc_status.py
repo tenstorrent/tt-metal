@@ -39,18 +39,23 @@ def check_noc_status(
     and stores them in dictionary creating summary of checking process
     """
 
-    fw_elf_path = dispatcher_data.get_core_data(location, risc_name).firmware_path
+    dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
+
+    fw_elf_path = dispatcher_core_data.firmware_path
     fw_elf = elfs_cache[fw_elf_path]
+    kernel_elf = None
+    if dispatcher_core_data.kernel_path is not None:
+        kernel_elf = elfs_cache[dispatcher_core_data.kernel_path]
 
     message = f"{risc_name} NOC{noc_id}: "
     passed = True
 
     loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
+    DM_DEDICATED_NOC = 0
 
     # Skip check for BRISC when operating in dynamic NOC mode.
     # DM_DEDICATED_NOC is 0 as defined in dev firmware headers (see dev_msgs.h).
     if risc_name == "brisc":
-        DM_DEDICATED_NOC = 0
         try:
             prev_noc_mode = fw_elf.get_global("prev_noc_mode", loc_mem_access).read_value()
         except Exception:
@@ -69,6 +74,24 @@ def check_noc_status(
             return
         if active_noc_index != noc_id:
             return
+    else:
+        if kernel_elf is not None:
+            try:
+                noc_mode = kernel_elf.get_global("noc_mode", loc_mem_access).read_value()
+            except Exception:
+                noc_mode = DM_DEDICATED_NOC  # Default to dedicated if symbol is not readable
+            if noc_mode != DM_DEDICATED_NOC:
+                message += "    Skipping NOC status check: noc_mode != DM_DEDICATED_NOC\n"
+                log_check(True, message)
+                return
+            try:
+                noc_index = kernel_elf.get_global("noc_index", loc_mem_access).read_value()
+            except Exception:
+                message += "    Skipping NOC status check: could not read noc_index from kernel ELF\n"
+                log_check(True, message)
+                return
+            if noc_index != noc_id:
+                return
 
     # Check if variables match with corresponding register
     for var in var_to_reg_map:
