@@ -145,9 +145,15 @@ ALWI void cb_push_back(uint32_t cbid, uint32_t ntiles) { PACK((llk_push_tiles<fa
 ALWI uint32_t get_tile_address(uint32_t cb_id, uint32_t tile_index) {
     uint32_t address = 0;
 
-    UNPACK((llk_unpack_get_tile<false, false>(cb_id, tile_index, &address)));
-    UNPACK((mailbox_write(ckernel::ThreadId::MathThreadId, address)));
-    UNPACK((mailbox_write(ckernel::ThreadId::PackThreadId, address)));
+    UNPACK({
+        uint32_t operand_id = get_operand_id(cb_id);
+        uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
+        uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
+        address = (base_address + offset_address) << 4;  // Convert to byte address
+
+        mailbox_write(ckernel::ThreadId::MathThreadId, address);
+        mailbox_write(ckernel::ThreadId::PackThreadId, address);
+    })
 
     MATH(address = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
     PACK(address = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
@@ -174,31 +180,23 @@ ALWI uint32_t get_tile_address(uint32_t cb_id, uint32_t tile_index) {
 // clang-format on
 ALWI uint32_t read_tile_value(uint32_t cb_id, uint32_t tile_index, uint32_t element_offset) {
     uint32_t value = 0;
-    uint32_t address = 0;
 
-    UNPACK((llk_unpack_get_tile<false, false>(cb_id, tile_index, &address)));
-    UNPACK(value = reinterpret_cast<volatile uint32_t*>(address)[element_offset];)
-    UNPACK((mailbox_write(ckernel::ThreadId::MathThreadId, value)));
-    UNPACK((mailbox_write(ckernel::ThreadId::PackThreadId, value)));
+    UNPACK({
+        uint32_t operand_id = get_operand_id(cb_id);
+        uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
+        uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
+        uint32_t byte_address = (base_address + offset_address) << 4;  // Convert to byte address
+
+        value = reinterpret_cast<volatile uint32_t*>(byte_address)[element_offset];
+
+        mailbox_write(ckernel::ThreadId::MathThreadId, value);
+        mailbox_write(ckernel::ThreadId::PackThreadId, value);
+    })
 
     MATH(value = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
     PACK(value = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
 
     return value;
 }
-
-// clang-format off
-/**
- * Releases a tile that was acquired via get_tile_address or read_tile_value.
- * This should be called after you're done accessing the tile data.
- *
- * Note: This only needs to be called by the UNPACK thread.
- *
- * | Argument | Description                          | Type     | Valid Range | Required |
- * |----------|--------------------------------------|----------|-------------|----------|
- * | cb_id    | The index of the circular buffer (CB)| uint32_t | 0 to 31     | True     |
- */
-// clang-format on
-ALWI void release_tile(uint32_t cb_id) { UNPACK((llk_unpack_release_tile<false, false>(cb_id))); }
 
 }  // namespace ckernel

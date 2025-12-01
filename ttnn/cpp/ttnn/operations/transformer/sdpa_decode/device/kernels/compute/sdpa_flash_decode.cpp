@@ -133,7 +133,6 @@ void MAIN {
 
             cb_wait_front(cb_index_id, 1);
             cur_pos = read_tile_value(cb_index_id, 0, cb_data_offset + (cur_batch / q_heads_parallel_factor));
-            release_tile(cb_index_id);
             cb_pop_front(cb_index_id, 1);
         }
         if (cur_pos == UINT32_MAX) {

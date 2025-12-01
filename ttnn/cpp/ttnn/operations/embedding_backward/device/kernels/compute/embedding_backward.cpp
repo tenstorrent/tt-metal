@@ -29,7 +29,6 @@ void MAIN {
 
         // Get chunk_count from CB using mailbox-based synchronization (issue #27979)
         uint32_t chunk_count = read_tile_value(cb_chunk_count_scratch, 0, cb_data_offset);
-        release_tile(cb_chunk_count_scratch);
 
         for (uint32_t chunk = 0; chunk < chunk_count; ++chunk) {
             cb_wait_front(cb_mask, 1);
@@ -66,7 +65,6 @@ void MAIN {
             cb_push_back(cb_out, max_tiles_per_core);
             cb_pop_front(cb_out_intermed, max_tiles_per_core);
 
-            release_tile(cb_mask);
             cb_pop_front(cb_mask, 1);
         }
 
