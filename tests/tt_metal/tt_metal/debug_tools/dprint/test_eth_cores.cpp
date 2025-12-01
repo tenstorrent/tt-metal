@@ -56,7 +56,7 @@ void RunTest(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     bool active,
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0) {
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     // Try printing on all ethernet cores on this device
     std::unordered_set<CoreCoord> test_cores;
     tt_metal::EthernetConfig config = {.noc = static_cast<tt_metal::NOC>(processor), .processor = processor};
@@ -102,7 +102,7 @@ void RunTest(
 
 TEST_F(DPrintMeshFixture, ActiveEthTestPrint) {
     for (auto& mesh_device : this->devices_) {
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         // Skip if no ethernet cores on this device
         if (device->get_active_ethernet_cores(true).empty()) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
@@ -128,7 +128,7 @@ TEST_F(DPrintMeshFixture, IdleEthTestPrint) {
         GTEST_SKIP();
     }
     for (auto& mesh_device : this->devices_) {
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         // Skip if no ethernet cores on this device
         if (device->get_inactive_ethernet_cores().empty()) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());

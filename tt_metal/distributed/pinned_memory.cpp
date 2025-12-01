@@ -168,7 +168,7 @@ const void* PinnedMemoryImpl::get_host_ptr() const {
         throw std::runtime_error("No buffers available in PinnedMemory");
     }
     // Return the original (unaligned) host pointer by adjusting from aligned base
-    auto* base = static_cast<const std::uint8_t*>(device_buffers_.begin()->second->get_buffer_va());
+    const auto* base = static_cast<const std::uint8_t*>(device_buffers_.begin()->second->get_buffer_va());
     return static_cast<const void*>(base + host_offset_);
 }
 
@@ -239,7 +239,7 @@ void PinnedMemoryImpl::add_barrier_event(const distributed::MeshEvent& event) {
         }
         bool all_devices_completed = true;
         for (const auto& coord : event.device_range()) {
-            auto physical_device = event.device()->get_device(coord);
+            auto* physical_device = event.device()->get_device(coord);
             if (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id()) {
                 all_devices_completed = false;
                 break;
@@ -340,7 +340,7 @@ experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::Me
         return experimental::MemoryPinningParameters{0u, 0u, false};
     }
 
-    auto& hal = MetalContext::instance().hal();
+    const auto& hal = MetalContext::instance().hal();
     experimental::MemoryPinningParameters params{};
     params.max_pins = hal.get_max_pinned_memory_count();
     params.max_total_pin_size = hal.get_total_pinned_memory_size();
