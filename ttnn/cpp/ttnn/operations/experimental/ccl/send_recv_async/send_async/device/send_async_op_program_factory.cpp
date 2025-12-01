@@ -19,7 +19,7 @@
 
 using namespace tt::constants;
 
-namespace ttnn::operations::experimental::ccl::send_async::program {
+namespace ttnn::operations::experimental::ccl::send_async {
 
 SendAsyncMeshWorkloadFactory::cached_mesh_workload_t SendAsyncMeshWorkloadFactory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
@@ -281,4 +281,4 @@ void SendAsyncMeshWorkloadFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::ccl::send_async::program
+}  // namespace ttnn::operations::experimental::ccl::send_async

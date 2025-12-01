@@ -17,7 +17,7 @@ struct SendAsyncDeviceOperation {
     using tensor_args_t = send_async::tensor_args_t;
     using spec_return_value_t = send_async::spec_return_value_t;
     using tensor_return_value_t = send_async::tensor_return_value_t;
-    using program_factory_t = std::variant<program::SendAsyncMeshWorkloadFactory>;
+    using program_factory_t = std::variant<SendAsyncMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

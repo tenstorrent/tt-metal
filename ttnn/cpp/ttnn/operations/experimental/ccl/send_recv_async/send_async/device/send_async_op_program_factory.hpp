@@ -7,7 +7,7 @@
 #include "send_async_op_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::ccl::send_async::program {
+namespace ttnn::operations::experimental::ccl::send_async {
 
 struct SendAsyncSharedVariables {
     std::vector<tt::tt_metal::CoreCoord> sender_core_coords;
@@ -38,4 +38,4 @@ struct SendAsyncMeshWorkloadFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::send_async::program
+}  // namespace ttnn::operations::experimental::ccl::send_async

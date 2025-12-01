@@ -14,7 +14,7 @@ namespace ttnn::operations::experimental::ccl::send_async {
 
 SendAsyncDeviceOperation::program_factory_t SendAsyncDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return program::SendAsyncMeshWorkloadFactory{};
+    return SendAsyncMeshWorkloadFactory{};
 }
 
 void SendAsyncDeviceOperation::validate_on_program_cache_hit(
