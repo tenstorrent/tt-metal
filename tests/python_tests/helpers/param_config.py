@@ -6,16 +6,14 @@ from itertools import product
 from typing import Iterator, List, Tuple
 
 import pytest
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from typing_extensions import deprecated
 
 from .format_config import (
     DataFormat,
     FormatConfig,
     InputOutputFormat,
-    is_dest_acc_needed,
 )
-from .llk_params import DestAccumulation, DestSync, Tilize
+from .llk_params import DestAccumulation, DestSync
 
 checked_formats_and_dest_acc = {}
 
@@ -360,69 +358,6 @@ def generate_combination(formats: List[Tuple[DataFormat]]) -> List[FormatConfig]
         )
         for tuple in formats
     ]
-
-
-def generate_tilize_aware_datacopy_combinations(formats_list, result_tiles: int = 1):
-    """
-    Generate possible (format, num_faces, tilize, dest_sync, dest_index) combinations that respect chip_architecture and tilize constraints.
-
-    Key rules:
-    1. When chip_architecture=WH: tilize_en=Tilize.No
-        When testing on WH, tilize is always False because DataCopy does not have tilize argument for WH.
-    2. When tilize_en=Tilize.Yes: num_faces=4
-        Pack does not support less than 4 faces when tilize=True.
-    3. When tilize_en=Tilize.Yes: input_format!=Bfp8_b
-        Unpack tilize does not support input_format=Bfp8_b.
-
-    Args:
-        formats_list: List of InputOutputFormat combinations
-        result_tiles: Number of tiles in the result matrix
-
-    Returns:
-        List of tuples: (format, num_faces, tilize_en, dest_sync, dest_index)
-    """
-
-    combinations = []
-
-    # Determine tilize options based on chip architecture
-    chip_arch = get_chip_architecture()
-    tilize_list = (
-        [Tilize.No]
-        if chip_arch == ChipArchitecture.WORMHOLE
-        else [Tilize.No, Tilize.Yes]
-    )
-
-    for tilize_en in tilize_list:
-        num_faces_list = [4] if tilize_en == Tilize.Yes else [1, 2, 4]
-
-        for num_faces in num_faces_list:
-            for fmt in formats_list:
-                # Skip invalid combination: tilize with Bfp8_b format
-                if tilize_en == Tilize.Yes and fmt.input_format == DataFormat.Bfp8_b:
-                    continue
-
-                for dest_acc in [DestAccumulation.No, DestAccumulation.Yes]:
-                    # Calculate dest acc setting for edgecase indices calculation
-                    is_fp32_dest_acc_en = (
-                        dest_acc == DestAccumulation.Yes or is_dest_acc_needed(fmt)
-                    )
-
-                    dest_sync_list = [DestSync.Half]
-                    # Generate all dest sync and index combinations
-                    for _, dest_idx in calculate_edgecase_dest_indices(
-                        is_fp32_dest_acc_en, result_tiles, dest_sync_list
-                    ):
-                        combinations.append(
-                            (
-                                fmt,
-                                dest_acc,
-                                num_faces,
-                                tilize_en,
-                                dest_idx,
-                            )
-                        )
-
-    return combinations
 
 
 def calculate_edgecase_dest_indices(
