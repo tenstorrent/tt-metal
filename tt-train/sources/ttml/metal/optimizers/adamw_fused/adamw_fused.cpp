@@ -21,6 +21,7 @@ ttnn::Tensor adamw_fused(
     const float beta2_pow,
     const float epsilon,
     const float weight_decay,
+    const bool stochastic_rounding,
     const uint32_t step) {
     return ttnn::prim::ttml_adamw_fused(
         param_in,
@@ -36,6 +37,7 @@ ttnn::Tensor adamw_fused(
         epsilon,
         weight_decay,
         max_exp_avg_sq.has_value(),
+        stochastic_rounding,
         step);
 }
 
