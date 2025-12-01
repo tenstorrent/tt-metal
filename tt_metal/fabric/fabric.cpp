@@ -378,9 +378,11 @@ size_t get_number_of_available_routing_planes(
 
     size_t row_idx = cluster_axis == 0 ? 0 : row_or_col;
     size_t col_idx = cluster_axis == 0 ? row_or_col : 0;
-    auto* first_chip = mesh_device.get_device(row_idx, col_idx);
-    ChipId first_chip_id = first_chip->id();
-    auto fabric_node_in_row_or_col = control_plane.get_fabric_node_id_from_physical_chip_id(first_chip_id);
+    // auto* first_chip = mesh_device.get_device(row_idx, col_idx);
+    // ChipId first_chip_id = first_chip->id();
+    // auto fabric_node_in_row_or_col = control_plane.get_fabric_node_id_from_physical_chip_id(first_chip_id);
+    //  TODO(p1-0tr): wouldn't get_fabric_node_id do roughly the same thing?
+    auto fabric_node_in_row_or_col = mesh_device.get_fabric_node_id(MeshCoordinate(row_idx, col_idx));
 
     // Map cluster axis to routing directions
     constexpr std::array<std::array<RoutingDirection, 2>, 2> cluster_axis_directions_to_check = {

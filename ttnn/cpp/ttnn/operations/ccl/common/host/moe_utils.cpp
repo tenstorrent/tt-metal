@@ -144,8 +144,10 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
         // TODO: remove usage of get_device, need api to return correct routing planes accounting for fast dispatch
         // usage should only be active for T3K
         if (mesh_device.is_local(coord)) {
-            auto* device = mesh_device.get_device(coord);
-            bool is_mmio_capable = device->is_mmio_capable();
+            // TODO(p1-0tr): will need to reenable this for now
+            // auto* device = mesh_device.get_device(coord);
+            // bool is_mmio_capable = device->is_mmio_capable();
+            bool is_mmio_capable = false;
             is_mesh_mmio_capable &= is_mmio_capable;
             log_debug(tt::LogOp, "mesh_coordinate: {}, is_mmio_capable: {}", coord, is_mmio_capable);
         }

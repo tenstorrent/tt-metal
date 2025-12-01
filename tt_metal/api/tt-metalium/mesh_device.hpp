@@ -58,16 +58,38 @@ class SubDeviceManagerTracker;
 class ThreadPool;
 struct TraceDescriptor;
 
+namespace experimental {
+class PinnedMemoryImpl;
+}  // namespace experimental
+
 namespace distributed {
 
 class MeshCommandQueue;
 class MeshDeviceView;
 struct MeshTraceBuffer;
 class MeshCommandQueueBase;
+class FDMeshCommandQueue;
+class MeshTraceDescriptor;
+class SDMeshCommandQueue;
+class MeshEvent;
+class MeshBuffer;
+
+void EventSynchronize(const MeshEvent& event);
+bool EventQuery(const MeshEvent& event);
 
 using DeviceIds = std::vector<int>;
 
 class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevice> {
+    friend class experimental::PinnedMemoryImpl;
+    friend class FDMeshCommandQueue;
+    friend class MeshTraceDescriptor;
+    friend class SDMeshCommandQueue;
+    friend class MeshDeviceView;
+    friend class MeshBuffer;
+
+    friend void EventSynchronize(const MeshEvent& event);
+    friend bool EventQuery(const MeshEvent& event);
+
 private:
     // Resource management class / RAII wrapper for *physical devices* of the mesh
     class ScopedDevices {
@@ -141,6 +163,10 @@ private:
     std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
 
     std::lock_guard<std::mutex> lock_api() { return std::lock_guard<std::mutex>(api_mutex_); }
+
+    // TODO(p1-0tr): Rename to get_device once the deprecated functions are deleted.
+    IDevice* get_device_private(const MeshCoordinate& coord) const;
+    IDevice* get_device_private(ChipId physical_device_id) const;
 
 public:
     MeshDevice(
@@ -263,8 +289,9 @@ public:
 
     // Returns the devices in the mesh in row-major order.
     std::vector<IDevice*> get_devices() const;
-    IDevice* get_device(ChipId physical_device_id) const;
-    IDevice* get_device(const MeshCoordinate& coord) const;
+    // TODO(p1-0tr): Deprecate these functions, rather than delete them immediately.
+    // IDevice* get_device(ChipId physical_device_id) const;
+    // IDevice* get_device(const MeshCoordinate& coord) const;
     tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
 
     DeviceIds get_device_ids() const;
@@ -275,7 +302,8 @@ public:
     // TODO: #17477 - Remove the methods that assume 2D mesh.
     size_t num_rows() const;
     size_t num_cols() const;
-    IDevice* get_device(size_t row_idx, size_t col_idx) const;
+    // TODO(p1-0tr): Deprecate this function, rather than delete it immediately.
+    // IDevice* get_device(size_t row_idx, size_t col_idx) const;
 
     // Returns true if the coordinate is local to this mesh device.
     // Throws if the coordinate is out of bounds of this mesh device.

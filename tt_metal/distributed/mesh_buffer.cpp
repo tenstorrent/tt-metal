@@ -117,7 +117,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
 void MeshBuffer::initialize_device_buffers() {
     auto init_device_buffer_at_address = [this](const MeshCoordinate& coord) {
         std::shared_ptr<Buffer> buffer = Buffer::create(
-            device()->get_device(coord),
+            device()->get_device_private(coord),
             address_,
             device_local_size_,
             device_local_config_.page_size,

@@ -239,7 +239,7 @@ void PinnedMemoryImpl::add_barrier_event(const distributed::MeshEvent& event) {
         }
         bool all_devices_completed = true;
         for (const auto& coord : event.device_range()) {
-            auto* physical_device = event.device()->get_device(coord);
+            auto* physical_device = event.device()->get_device_private(coord);
             if (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id()) {
                 all_devices_completed = false;
                 break;
@@ -316,7 +316,7 @@ std::unique_ptr<PinnedMemory> PinnedMemory::Create(
     devices.reserve(coordinates.size());
     for (const auto& coord : coordinates) {
         if (view.contains(coord)) {
-            if (auto* device = view.get_device(coord)) {
+            if (auto* device = view.get_device_private(coord)) {
                 devices.push_back(device);
             }
         }

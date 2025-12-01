@@ -407,7 +407,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
     const MeshCoordinateRange submesh_range(offset_coord, end_coordinate);
     for (const auto& coord : submesh_range) {
         if (view_->is_local(coord)) {
-            submesh_devices.push_back(MaybeRemote<IDevice*>::local(view_->get_device(coord)));
+            submesh_devices.push_back(MaybeRemote<IDevice*>::local(view_->get_device_private(coord)));
         } else {
             submesh_devices.push_back(MaybeRemote<IDevice*>::remote());
         }
@@ -468,14 +468,15 @@ MeshDevice::~MeshDevice() {
     close();
 }
 
-IDevice* MeshDevice::get_device(ChipId physical_device_id) const {
+// TODO(p1-0tr): Deprecate this function, rather than delete it immediately.
+/*IDevice* MeshDevice::get_device(ChipId physical_device_id) const {
     for (auto* device : this->get_devices()) {
         if (device->id() == physical_device_id) {
             return device;
         }
     }
     TT_THROW("Physical Device ID: {} not found in assigned devices", physical_device_id);
-}
+}*/
 
 std::vector<IDevice*> MeshDevice::get_devices() const {
     auto devices = view_->get_devices();
@@ -483,12 +484,25 @@ std::vector<IDevice*> MeshDevice::get_devices() const {
     return devices;
 }
 
+// TODO(p1-0tr): Deprecate this function, rather than delete it immediately.
 // TODO: Remove this function once we have a proper view interface
-IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
+/*IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
     return get_device(MeshCoordinate{row_idx, col_idx});
-}
+}*/
 
-IDevice* MeshDevice::get_device(const MeshCoordinate& coord) const { return view_->get_device(coord); }
+// TODO(p1-0tr): Deprecate this function, rather than delete it immediately.
+// IDevice* MeshDevice::get_device(const MeshCoordinate& coord) const { return view_->get_device(coord); }
+
+IDevice* MeshDevice::get_device_private(const MeshCoordinate& coord) const { return view_->get_device_private(coord); }
+
+IDevice* MeshDevice::get_device_private(ChipId physical_device_id) const {
+    for (auto* device : this->get_devices()) {
+        if (device->id() == physical_device_id) {
+            return device;
+        }
+    }
+    TT_THROW("Physical Device ID: {} not found in assigned devices", physical_device_id);
+}
 
 tt_fabric::FabricNodeId MeshDevice::get_fabric_node_id(const MeshCoordinate& coord) const {
     return view_->get_fabric_node_id(coord);
@@ -563,7 +577,7 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
         auto line_coords = view_->get_line_coordinates();
         for (const auto& coord : line_coords) {
             new_device_order.push_back(
-                view_->is_local(coord) ? MaybeRemote<IDevice*>::local(this->get_device(coord))
+                view_->is_local(coord) ? MaybeRemote<IDevice*>::local(this->get_device_private(coord))
                                        : MaybeRemote<IDevice*>::remote());
             new_fabric_node_ids.push_back(view_->get_fabric_node_id(coord));
         }
@@ -581,7 +595,7 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
                 view_->shape());
             new_device_order.push_back(
                 new_mapped_devices.device_ids[i].is_local()
-                    ? MaybeRemote<IDevice*>::local(get_device(*new_mapped_devices.device_ids[i]))
+                    ? MaybeRemote<IDevice*>::local(get_device_private(*new_mapped_devices.device_ids[i]))
                     : MaybeRemote<IDevice*>::remote());
         }
         new_fabric_node_ids = std::move(new_mapped_devices.fabric_node_ids);

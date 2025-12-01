@@ -77,7 +77,7 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
         for (const auto& coord : coord_range) {
             if (mesh_device_->is_local(coord)) {
-                auto* device = mesh_device_->get_device(coord);
+                auto* device = mesh_device_->get_device_private(coord);
                 tt_metal::detail::LaunchProgram(device, program, false);
             }
         }
@@ -85,7 +85,7 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
         for (const auto& coord : coord_range) {
             if (mesh_device_->is_local(coord)) {
-                auto* device = mesh_device_->get_device(coord);
+                auto* device = mesh_device_->get_device_private(coord);
                 tt_metal::detail::WaitProgramDone(device, program);
             }
         }
