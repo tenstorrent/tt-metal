@@ -33,6 +33,7 @@ class TtTransformer(LightweightModule):
         mode="decode",
         allocate_prefill_buffers=True,
         decode_mode_only=False,
+        attention_class=None,
     ):
         super().__init__()
         self.args = args
@@ -92,6 +93,7 @@ class TtTransformer(LightweightModule):
                 use_paged_kv_cache=use_paged_kv_cache,
                 prefetcher_setup=self.prefetcher_setup,
                 tt_ccl=self.tt_ccl,
+                attention_class=attention_class,
             )
             for i in tqdm(range(self.n_layers))
         ]

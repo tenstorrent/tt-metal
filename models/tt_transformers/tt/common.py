@@ -683,6 +683,7 @@ def create_tt_model(
     num_layers=None,
     ModelArgsClass=None,
     TransformerClass=None,
+    attentionClass=None,
 ):
     from models.tt_transformers.tt.model import Transformer
 
@@ -715,6 +716,7 @@ def create_tt_model(
         state_dict=state_dict,
         weight_cache_path=tt_model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
+        attention_class=attentionClass,
     )
 
     tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None

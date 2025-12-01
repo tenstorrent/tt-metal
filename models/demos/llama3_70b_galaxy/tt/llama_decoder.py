@@ -24,6 +24,7 @@ class TtTransformerBlock(LightweightModule):
         use_paged_kv_cache=False,
         prefetcher_setup=None,
         tt_ccl=None,
+        attention_class=None,
     ):
         super().__init__()
 
@@ -48,7 +49,9 @@ class TtTransformerBlock(LightweightModule):
         self.prefetcher_setup = prefetcher_setup
         self.tt_ccl = tt_ccl
 
-        self.attention = TtLlamaAttention(
+        ActualAttentionClass = attention_class if attention_class is not None else TtLlamaAttention
+
+        self.attention = ActualAttentionClass(
             mesh_device=mesh_device,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
