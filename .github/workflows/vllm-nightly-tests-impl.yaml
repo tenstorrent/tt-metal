@@ -359,9 +359,9 @@ jobs:
           fi
 
           if [ -n "${{ matrix.test-group.additional-server-args }}" ]; then
-            ADDITIONAL_ARGS=(${{ matrix.test-group.additional-server-args }})
+            ADDITIONAL_SERVER_ARGS=(${{ matrix.test-group.additional-server-args }})
           else
-            ADDITIONAL_ARGS=()
+            ADDITIONAL_SERVER_ARGS=()
           fi
 
           export MESH_DEVICE=${{ matrix.test-group.mesh-device }}
@@ -384,7 +384,7 @@ jobs:
           # Build the VLLM server arguments array
           declare -a VLLM_SERVER_ARGS
           VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
-          VLLM_SERVER_ARGS+=("${ADDITIONAL_ARGS[@]}")
+          VLLM_SERVER_ARGS+=("${ADDITIONAL_SERVER_ARGS[@]}")
           VLLM_SERVER_ARGS+=("${OVERRIDE_TT_CONFIG[@]}")
           if [[ "${USE_V1}" == "true" ]]; then
             VLLM_SERVER_ARGS+=("--num_scheduler_steps" "1")
