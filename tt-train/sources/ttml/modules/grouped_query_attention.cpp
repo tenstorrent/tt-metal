@@ -87,13 +87,12 @@ ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
     }
 
     // Get underlying tensors
-    auto key_tensor = key_with_heads->get_value();
-    auto value_tensor = value_with_heads->get_value();
-    auto query_tensor = query_with_heads->get_value();
+    const tt::tt_metal::Tensor& key_tensor = key_with_heads->get_value();
+    const tt::tt_metal::Tensor& value_tensor = value_with_heads->get_value();
 
     // Get cache tensors (mutable references for in-place update)
-    auto k_cache_tensor = k_cache->get_value();
-    auto v_cache_tensor = v_cache->get_value();
+    tt::tt_metal::Tensor k_cache_tensor = k_cache->get_value();
+    tt::tt_metal::Tensor v_cache_tensor = v_cache->get_value();
     auto cache_shape = k_cache_tensor.logical_shape();
     auto kv_shape = key_tensor.logical_shape();
 
@@ -115,9 +114,6 @@ ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
         // Update autograd wrappers (tensors modified in-place)
         k_cache->set_value(k_cache_tensor);
         v_cache->set_value(v_cache_tensor);
-
-        ttnn::deallocate(key_tensor);
-        ttnn::deallocate(value_tensor);
     } else {
         // DECODE: Write single new token into cache at cache_position
         // Extract single token from K,V (at position 0 in padded input)
@@ -148,8 +144,8 @@ ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
     ttnn::SmallVector<uint32_t> token_start = {0, 0, 0, 0};
     ttnn::SmallVector<uint32_t> token_end = {kv_shape[0], kv_shape[1], padded_seq_len, kv_shape[3]};
 
-    tt::tt_metal::Tensor k_cache_slice = ttnn::slice(k_cache->get_value(), token_start, token_end, step);
-    tt::tt_metal::Tensor v_cache_slice = ttnn::slice(v_cache->get_value(), token_start, token_end, step);
+    const tt::tt_metal::Tensor& k_cache_slice = ttnn::slice(k_cache->get_value(), token_start, token_end, step);
+    const tt::tt_metal::Tensor& v_cache_slice = ttnn::slice(v_cache->get_value(), token_start, token_end, step);
 
     auto k_cache_to_process = ttml::autograd::create_tensor(k_cache_slice);
     auto v_cache_to_process = ttml::autograd::create_tensor(v_cache_slice);
@@ -158,9 +154,6 @@ ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
     auto attention =
         ttml::ops::scaled_dot_product_attention(query_with_heads, k_cache_to_process, v_cache_to_process, mask);
     attention = ops::heads_fusion(attention);
-
-    ttnn::deallocate(k_cache_slice);
-    ttnn::deallocate(v_cache_slice);
 
     auto out = (*m_out_linear)(attention);
     out = (*m_dropout)(out);
