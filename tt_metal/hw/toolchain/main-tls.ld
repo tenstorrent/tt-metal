@@ -89,7 +89,8 @@ firmware and TLS kernels globals have an LMA directly after TLS's LMA.
 #error "Neither TYPE_FIRMWARE nor TYPE_KERNEL defined"
 #endif
 
-#define LOAD_AFTER(THIS,PREV) AT(ALIGN(LOADADDR(PREV) + SIZEOF(PREV), ALIGNOF(THIS)))
+#define LOAD_AFTER_ABUT(THIS,PREV) AT(LOADADDR(PREV) + SIZEOF(PREV))
+#define LOAD_AFTER_ALIGN(THIS,PREV) AT(ALIGN(LOADADDR(PREV) + SIZEOF(PREV), ALIGNOF(THIS)))
 
 #if ARCH_QUASAR && defined(COMPILE_FOR_DM)
 OUTPUT_FORMAT("elf64-littleriscv", "elf64-littleriscv",
@@ -145,7 +146,7 @@ SECTIONS {
     *(.tdata.end)
   } :tdata :tls
   .tbss
-  : IF_KERNEL(LOAD_AFTER(.tbss, .tdata))
+  : IF_KERNEL(LOAD_AFTER_ALIGN(.tbss, .tdata))
   {
     *(.tbss.start) /* define __tbss_start as TLS symbol) */
     *(.tbss .tbss.* .gnu.linkonce.tb.* .tcommon)
@@ -165,7 +166,7 @@ SECTIONS {
   } :firmdata
 #endif
   .data IF_TLS(DATA_START)IF_NOT_TLS(ADDR(.tbss) + SIZEOF(.tbss))
-  : IF_KERNEL(LOAD_AFTER(.data, .tdata))
+  : IF_KERNEL(LOAD_AFTER_ABUT(.data, .tdata))
   {
     *_object.o(.data .bss)
     . = ALIGN(4);
@@ -186,13 +187,13 @@ SECTIONS {
     __ldm_data_end = .;
   } :data
   .empty.ctors.dtors
-  : LOAD_AFTER(.empty.ctors.dtors, .data)
+  : LOAD_AFTER_ALIGN(.empty.ctors.dtors, .data)
   {
     /* We don't use .ctors/.dtors either (this still isn't the '90s), make sure there aren't any.  */
     KEEP (*(.ctors .ctors.* .dtors .dtors.*))
   } :data
   .empty.init_array.fini_array
-  : LOAD_AFTER(.empty.init_array.fini_array, .empty.ctors.dtors)
+  : LOAD_AFTER_ALIGN(.empty.init_array.fini_array, .empty.ctors.dtors)
   {
     /* We don't support global static constructors or destructors. make sure there aren't any.  */
     KEEP (*(.preinit_array))
@@ -202,7 +203,7 @@ SECTIONS {
     KEEP (*(.fini_array))
   } :data
   .bss
-  : LOAD_AFTER(.bss, .empty.init_array.fini_array)
+  : LOAD_AFTER_ALIGN(.bss, .empty.init_array.fini_array)
   {
     __ldm_bss_start = .;
     *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*)
