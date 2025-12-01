@@ -666,6 +666,28 @@ class TtQwenModelArgs(TtModelArgs):
                 )
             )
 
+            def prefill_wo_minimal_matmul_config(seq_len):
+                if seq_len <= 128:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=1,
+                        subblock_w=8,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 7),
+                    )
+                else:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=4,
+                        subblock_w=2,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                    )
+
+            self.model_config["WO_PREFILL_MINIMAL_PROGCFG"] = prefill_wo_minimal_matmul_config
+
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = w1_w3_prg_config
 
             #  Only used when seq_len >= 4096
@@ -810,6 +832,38 @@ class TtQwenModelArgs(TtModelArgs):
                     )
                 )
             )
+
+            # Configs determined by manual sweep the optimal configs for the different seqlen ranges
+            def prefill_xqkv_minimal_matmul_config(seq_len):
+                if seq_len <= 128:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=4,
+                        subblock_w=2,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 7),
+                    )
+                elif seq_len <= 1024:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=4,
+                        subblock_w=2,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                    )
+                else:  # seqlen > 1024
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=1,
+                        subblock_w=8,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                    )
+
+            self.model_config["XQKV_PREFILL_MINIMAL_PROGCFG"] = prefill_xqkv_minimal_matmul_config
 
             assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
             self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
