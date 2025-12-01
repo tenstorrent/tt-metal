@@ -253,7 +253,7 @@ struct MinimalMatmulFusedOpSignaler {
     bool initialized_all_gather = false;
     bool initialized_fused_op = false;
 
-    MinimalMatmulFusedOpSignaler() {}
+    MinimalMatmulFusedOpSignaler() = default;
 
     void init_all_gather(
         uint32_t ring_size, uint32_t start_ring_index, uint32_t input_tensor_Wt, tt::tt_fabric::Topology topology);
