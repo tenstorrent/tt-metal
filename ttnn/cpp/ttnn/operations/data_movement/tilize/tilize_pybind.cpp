@@ -14,7 +14,7 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_tilize(py::module& module) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
         Changes data layout of input tensor to TILE.
 
         Input tensor must be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
