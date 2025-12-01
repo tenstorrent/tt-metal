@@ -271,10 +271,11 @@ ttml::autograd::TensorPtr Llama::operator()(const ttml::autograd::TensorPtr& x, 
             auto mask_host = mask_tensor.to_vector<float>();
             auto mask_shape = mask_tensor.logical_shape();
 
-            uint32_t padded_prompt_seq_len = mask_shape[-1];
+            const uint32_t padded_key_seq_len = mask_shape[-1];
+            const uint32_t padded_query_seq_len = mask_shape[-2];
 
             // Count rows with at least one non-zero value (valid positions)
-            while (mask_host[m_cache_position * padded_prompt_seq_len] > 0.0f) {
+            while (m_cache_position < padded_query_seq_len && mask_host[m_cache_position * padded_key_seq_len] > 0.0f) {
                 m_cache_position++;
             }
         } else {
