@@ -273,12 +273,12 @@ jobs:
           {
             name: "[WH-T3K][v1] Multi-process reduce scatter test model",
             model: "models/vllm_test_utils/t3000_multiproc_test",
-            server-timeout: 5,
-            benchmark-timeout: 5,
+            server-timeout: 4,
+            benchmark-timeout: 4,
             runner-label: config-t3000,
             arch: arch-wormhole_b0,
             mesh-device: "\"(2, 4)\"",
-            override-tt-config: "{\"rank_binding\": \"tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml\", \"mpi_args\": \"--allow-run-as-root --tag-output\", \"config_pkl_dir\": \"vllm\", \"register_test_models\": true}",
+            override-tt-config: '{"rank_binding": "tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml", "mpi_args": "--allow-run-as-root --tag-output", "config_pkl_dir": "vllm", "register_test_models": true}',
             additional-args: "--data_parallel_size 8 --tokenizer meta-llama/Llama-3.1-8B-Instruct",
             use-vllm-v1: true,
             multimodal: false,
@@ -350,11 +350,13 @@ jobs:
       - name: 🚀 Run server
         timeout-minutes: 1
         run: |
-          if [ -n "${{ matrix.test-group.override-tt-config }}" ]; then
-            OVERRIDE_TT_CONFIG=(--override-tt-config "$(printf "%s" '${{ matrix.test-group.override-tt-config }}')")
+          OVERRIDE_TT_CONFIG_RAW='${{ matrix.test-group.override-tt-config }}'
+          if [ -n "$OVERRIDE_TT_CONFIG_RAW" ]; then
+            OVERRIDE_TT_CONFIG=(--override-tt-config "$OVERRIDE_TT_CONFIG_RAW")
           else
             OVERRIDE_TT_CONFIG=()
           fi
+          echo "Override TT config: ${OVERRIDE_TT_CONFIG[@]}"
 
           if [ -n "${{ matrix.test-group.additional-args }}" ]; then
             ADDITIONAL_ARGS=(${{ matrix.test-group.additional-args }})
