@@ -22,6 +22,7 @@ from models.common.llama_models import (
 from models.common.sampling.generator import format_sampling_params
 from models.tt_transformers.tt.common import (
     copy_host_to_device,
+    get_all_padded_prefill_lengths,
     get_block_size,
     get_max_prefill_chunk_size,
     get_padded_prefill_len,
@@ -101,16 +102,17 @@ class Generator:
             if sampling_module is not None:
                 sampling_module.enable_internal_trace = enabled
 
-    def warmup_prefill(
+    def warmup_model_prefill(
         self,
         kv_cache,
         enable_trace,
+        sampling_params=None,
     ):
         if self.already_warmed_up_prefill:
             return
         self.already_warmed_up_prefill = True
 
-        sequence_lengths_to_warmup = [128, 256, 512, 1024, 2048, 4096, 8192]
+        sequence_lengths_to_warmup = get_all_padded_prefill_lengths(8192)
         for traced_seq_len in self.model_args[0].trace_prefill_supported_seq_lens:
             if traced_seq_len not in sequence_lengths_to_warmup:
                 sequence_lengths_to_warmup.append(traced_seq_len)
@@ -263,7 +265,7 @@ class Generator:
             enable_trace = False
 
         # we need this here becuase of tt-metal tests
-        self.warmup_prefill(kv_cache, enable_trace)
+        self.warmup_model_prefill(kv_cache, enable_trace)
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
@@ -1709,9 +1711,6 @@ class Generator:
                 padding = torch.ones(1, num_blocks - page_table.shape[1], dtype=torch.int32) * -1
                 page_table = torch.cat([page_table, padding], dim=1)
         return page_table[:, :num_blocks]
-
-    def warmup_model_prefill(self, **kwargs):
-        self.warmup_prefill(kwargs["kv_cache"], kwargs["enable_trace"])
 
     ## Destructor
 

@@ -720,12 +720,9 @@ class Generator:
             padded_page_table[user_id, :] = page_table[0, :]
         return padded_page_table
 
-    def warmup_model_prefill(self, **kwargs) -> None:
+    def warmup_model_prefill(self, kv_cache, enable_trace, sampling_params) -> None:
         # page_table gets padded properly in prefill_forward_text
         page_table = torch.zeros(1, 1, dtype=torch.int32)
-        kv_cache = kwargs["kv_cache"]
-        enable_trace = kwargs["enable_trace"]
-        sampling_params = kwargs["sampling_params"]
         self.warmup_prefill_traces(
             tokens=None,
             page_table=page_table,
