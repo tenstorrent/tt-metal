@@ -4,7 +4,6 @@
 
 #include <string>
 
-// #include "/proj_sw/user_dev/fplavec/git_workspace_2025_11_20/tt-metal/tt_metal/hw/inc/debug/dprint.h"
 #include "moreh_nll_loss_step1_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -98,32 +97,12 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     }
 
     if (weight_has_value) {
-        std::cout << "weight_has_value. Creating scratch CB for weight" << std::endl;
         // This CB will be used as scratch storage when reading data from DRAM into L1,
         // since the two have different alignment requirements on some architectures.
-        // Single tile in scratch CB, because content is read immediately after writing.
-        CreateCircularBuffer(program, all_cores, data_format, {tt::CBIndex::c_7, 1, data_format});
-        //        CreateScratchCB(program, all_cores, tt::CBIndex::c_7, data_format);
-    } else {
-        std::cout << "weight_has no value. Not creating scratch CB for weight" << std::endl;
+        // Need space for only a single tile in scratch CB, because content is read immediately after writing.
+        CreateCircularBuffer(program, all_cores, data_format, {tt::CBIndex::c_7, 1});
     }
 
-    /*
-        if (weight_has_value) {
-            std::cout << "weight_has_value. Creating scratch CB for weight" << std::endl;
-            // This CB will be used as scratch storage when reading data from DRAM into L1,
-            // since the two have different alignment requirements on some architectures.
-            constexpr uint32_t scratch_cb_index = CBIndex::c_7;
-            // 2 tiles in scratch CB so one can be written to while the other is being read from.
-            constexpr uint32_t scratch_cb_num_tiles = 2;
-            tt_metal::CircularBufferConfig cb_config =
-                tt_metal::CircularBufferConfig(scratch_cb_num_tiles * tt::tile_size(data_format), {{scratch_cb_index,
-       data_format}}) .set_page_size(scratch_cb_index, tt::tile_size(data_format));
-            tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
-        } else {
-            std::cout << "weight_has no value. Not creating scratch CB for weight" << std::endl;
-        }
-     */
     // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{static_cast<uint32_t>(weight_has_value)};
     TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);

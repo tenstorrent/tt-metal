@@ -5,7 +5,6 @@
 #include <optional>
 #include <string>
 
-// #include "/proj_sw/user_dev/fplavec/git_workspace_2025_11_20/tt-metal/tt_metal/hw/inc/debug/dprint.h"
 #include <tt-metalium/constants.hpp>
 #include "moreh_nll_loss_backward_device_operation.hpp"
 #include <tt-metalium/math.hpp>
@@ -69,17 +68,13 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
         });
 
     if (weight_has_value) {
-        std::cout << "weight_has_value. Creating scratch CB for weight" << std::endl;
         // This CB will be used as scratch storage when reading data from DRAM into L1,
         // since the two have different alignment requirements on some architectures.
-        // Single tile in scratch CB, because content is read immediately after writing.
-        CreateCircularBuffer(program, all_cores, data_format, {tt::CBIndex::c_7, 1, data_format});
-        //        CreateScratchCB(program, all_cores, tt::CBIndex::c_7, data_format);
-    } else {
-        std::cout << "weight_has no value. Not creating scratch CB for weight" << std::endl;
+        // Need space for only a single tile in scratch CB, because content is read immediately after writing.
+        CreateCircularBuffer(program, all_cores, data_format, {tt::CBIndex::c_7, 1});
     }
-    // another scratch CB for output_grad reading data from DRAM into L1.
-    CreateCircularBuffer(program, all_cores, data_format, {tt::CBIndex::c_8, 1, data_format});
+    // Need another scratch CB for output_grad reading data from DRAM into L1.
+    CreateCircularBuffer(program, all_cores, data_format, {tt::CBIndex::c_8, 1});
 
     // create read/wrtie kernel
     std::vector<uint32_t> reader_compile_time_args{};
@@ -253,10 +248,10 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
         });
 
     if (weight_has_value) {
-        std::cout << "weight_has_value. Creating scratch CB for weight" << std::endl;
-        CreateScratchCB(program, all_cores, tt::CBIndex::c_7, data_format);
-    } else {
-        std::cout << "weight_has no value. Not creating scratch CB for weight" << std::endl;
+        // This CB will be used as scratch storage when reading data from DRAM into L1,
+        // since the two have different alignment requirements on some architectures.
+        // Need space for only a single tile in scratch CB, because content is read immediately after writing.
+        CreateCircularBuffer(program, all_cores, data_format, {tt::CBIndex::c_7, 1});
     }
 
     // create read/write kernel
@@ -434,10 +429,10 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
         });
 
     if (weight_has_value) {
-        std::cout << "weight_has_value. Creating scratch CB for weight" << std::endl;
-        CreateScratchCB(program, all_cores, tt::CBIndex::c_7, data_format);
-    } else {
-        std::cout << "weight_has no value. Not creating scratch CB for weight" << std::endl;
+        // This CB will be used as scratch storage when reading data from DRAM into L1,
+        // since the two have different alignment requirements on some architectures.
+        // Need space for only a single tile in scratch CB, because content is read immediately after writing.
+        CreateCircularBuffer(program, all_cores, data_format, {tt::CBIndex::c_7, 1});
     }
 
     // create read/write kernel

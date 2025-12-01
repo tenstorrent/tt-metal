@@ -686,9 +686,6 @@ void get_noc_offset(uint32_t h, uint32_t w, uint32_t element_size, uint32_t& noc
                       (w - tt::constants::FACE_WIDTH) * element_size;  // face 3
     }
 
-    // !!!!!!!!
-    // Do I need to make below conditional on reading from DRAM, or is it already assumed that we are reading from DRAM?
-    // !!!!!!!!
     const uint32_t noc_offset_align = (noc_offset / NOC_MINIMUM_READ_SIZE) * NOC_MINIMUM_READ_SIZE;
 
     noc_offset = noc_offset_align;
@@ -791,8 +788,6 @@ void read_line(
     uint32_t num_tiles,
     bool do_reserve = true,
     bool do_push_back = true) {
-    DPRINT << "Starting read_line: cb_id: " << cb_id << ", cb_scratch_id: " << cb_scratch_id
-           << ", num_tiles: " << num_tiles << ENDL();
     if (do_reserve) {
         cb_reserve_back(cb_id, num_tiles);
     }
@@ -801,16 +796,11 @@ void read_line(
     auto element_bytes = tile_bytes / (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
     auto valid_elements_bytes = tt::constants::FACE_WIDTH * element_bytes;
 
-    // !!!!!!!!
-    // Do I need to make below conditional on reading from DRAM, or is it already assumed that we are reading from DRAM?
-    // !!!!!!!!
+    // We want to read all valid elements, but may need to read more from DRAM,
+    // because DRAM has larger read size than L1 on some architectures.
     auto noc_read_size_bytes = std::max(valid_elements_bytes, static_cast<uint32_t>(NOC_DRAM_READ_ALIGNMENT_BYTES));
 
-    DPRINT << "read_line: tile_bytes: " << tile_bytes << ", element_size: " << element_bytes
-           << ", noc_read_size: " << noc_read_size_bytes << ENDL();
-
     uint32_t l1_write_addr = get_write_ptr(cb_id);
-    DPRINT << "read_line: l1_write_addr: " << l1_write_addr << ENDL();
     for (uint32_t i = 0; i < num_tiles * 2; ++i) {
         uint32_t noc_id = i / 2;
         uint32_t noc_offset = 0;
@@ -818,21 +808,18 @@ void read_line(
             noc_offset += (tt::constants::FACE_HEIGHT * tt::constants::FACE_WIDTH) * element_bytes;
         }
         auto src_noc_addr = get_noc_addr(noc_id, addrgen, noc_offset);
-        DPRINT << "read_line: i: " << i << ", src_noc_addr: " << src_noc_addr << ENDL();
         if (noc_read_size_bytes == valid_elements_bytes) {
-            DPRINT << "Already aligned" << ENDL();
-            // No misalignment, so we can read directly into the destination CB.
+            // DRAM and L1 read sizes are aligned, so we can read directly into the destination CB.
             noc_async_read(src_noc_addr, l1_write_addr, noc_read_size_bytes);
             noc_async_read_barrier();
         } else {
-            DPRINT << "Not aligned" << ENDL();
+            // DRAM has larger read size than L1, so there will be some padding in data read from DRAM.
             // Need to use scratch CB to read from DRAM, then copy valid parts to the destination CB.
             auto scratch_l1_write_addr = get_write_ptr(cb_scratch_id);
-            DPRINT << "read_line: scratch_l1_write_addr: " << scratch_l1_write_addr << ENDL();
             noc_async_read(src_noc_addr, scratch_l1_write_addr, noc_read_size_bytes);
             noc_async_read_barrier();
             auto scratch_l1_noc_read_addr = get_noc_addr(scratch_l1_write_addr);
-            DPRINT << "read_line: scratch_l1_noc_read_addr: " << scratch_l1_noc_read_addr << ENDL();
+            // Now copy only the valid elements to the destination CB.
             noc_async_read(scratch_l1_noc_read_addr, l1_write_addr, valid_elements_bytes);
             noc_async_read_barrier();
         }
