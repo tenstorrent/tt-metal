@@ -241,8 +241,6 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t eth_word_l1_alignment = 16;
     static constexpr uint32_t default_iterations_between_ctx_switch_and_teardown_checks = 32;
     static_assert(((buffer_alignment - 1) & buffer_alignment) == 0);
-    static constexpr bool enable_fabric_counters = false;
-    static constexpr bool enable_fabric_pkt_header_recording = false;
 
     // Global
     static constexpr std::size_t eth_channel_sync_size = 16;
@@ -259,25 +257,6 @@ struct FabricEriscDatamoverConfig {
 
     // Code profiling buffer address (16B aligned)
     std::size_t code_profiling_buffer_address = 0;
-
-    // Debug and Counters
-    static constexpr std::size_t receiver_channel_counters_size_bytes =
-        (((tt::tt_fabric::receiver_channel_counters_l1_size - 1) / field_size) + 1) * field_size;
-    static constexpr std::size_t sender_channel_counters_size_bytes =
-        (((tt::tt_fabric::sender_channel_counters_l1_size - 1) / field_size) + 1) * field_size;
-
-    std::array<std::size_t, builder_config::num_receiver_channels> receiver_channels_counters_address = {};
-    std::array<std::size_t, builder_config::num_sender_channels> sender_channels_counters_address = {};
-
-    // Packet header history buffer(s)
-    static constexpr std::size_t receiver_completed_packet_header_cb_size_headers = 32;
-    static constexpr std::size_t receiver_completed_packet_header_cb_size_bytes =
-        sizeof(tt::tt_fabric::PacketHeader) * receiver_completed_packet_header_cb_size_headers;
-    static constexpr std::size_t sender_completed_packet_header_cb_size_headers = 32;
-    static constexpr std::size_t sender_completed_packet_header_cb_size_bytes =
-        sizeof(tt::tt_fabric::PacketHeader) * sender_completed_packet_header_cb_size_headers;
-    std::array<std::size_t, builder_config::num_receiver_channels> receivers_completed_packet_header_cb_address = {};
-    std::array<std::size_t, builder_config::num_sender_channels> senders_completed_packet_header_cb_address = {};
 
     std::vector<FabricRiscConfig> risc_configs;
     // ----------- Sender Channels

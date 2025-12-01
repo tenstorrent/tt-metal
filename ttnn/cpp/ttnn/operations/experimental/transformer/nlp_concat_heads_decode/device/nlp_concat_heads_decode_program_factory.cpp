@@ -120,7 +120,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            auto dst_buffer_query = output_tensors.at(0).buffer();
+            auto* dst_buffer_query = output_tensors.at(0).buffer();
 
             UpdateDynamicCircularBufferAddress(program, cb_q_output, *dst_buffer_query);
 
@@ -266,7 +266,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            auto dst_buffer_query = output_tensors.at(0).buffer();
+            auto* dst_buffer_query = output_tensors.at(0).buffer();
 
             UpdateDynamicCircularBufferAddress(program, cb_q_output, *dst_buffer_query);
 

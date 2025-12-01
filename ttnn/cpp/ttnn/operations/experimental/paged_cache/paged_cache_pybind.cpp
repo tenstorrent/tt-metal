@@ -12,7 +12,7 @@ namespace ttnn::operations::experimental::paged_cache::detail {
 namespace py = pybind11;
 
 void bind_experimental_paged_cache_operations(py::module& module) {
-    auto paged_update_cache_doc =
+    const auto* paged_update_cache_doc =
         R"doc(
          Paged update cache operation. This operation expects the following inputs: cache_tensor of shape [B, 1, kv_len, head_dim] and input_tensor of shape [1, B, 1[32], head_dim] where input_tensor is height sharded on B cores. update_idxs will specify for each batch element which token to update in the cache.
         )doc";
@@ -56,7 +56,7 @@ void bind_experimental_paged_cache_operations(py::module& module) {
             py::arg("mesh_coords").noconvert() = std::nullopt,
         });
 
-    auto paged_fused_update_cache_doc =
+    const auto* paged_fused_update_cache_doc =
         R"doc(
             Updates the cache tensors `cache_tensor1` and `cache_tensor2` in parallel with values derived from the corresponding input tensors. This function supports fine-grained updates using specified index lists or tensors.
 
@@ -124,7 +124,7 @@ void bind_experimental_paged_cache_operations(py::module& module) {
             py::arg("mesh_coords").noconvert() = std::nullopt,
         });
 
-    auto paged_fill_cache_doc =
+    const auto* paged_fill_cache_doc =
         R"doc(
         Paged fill cache operation. This operation expects the following inputs: cache_tensor, input_tensor, and page_table.
         It uses either batch_idx_tensor (if provided, kwarg batch_idx_tensor) or batch_idx (kwarg batch_idx) as a fallback to determine the batch index for updating the cache.

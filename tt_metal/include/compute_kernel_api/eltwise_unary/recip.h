@@ -16,7 +16,7 @@ namespace ckernel {
  */
 template <bool legacy_compat = true>
 ALWI void recip_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_reciprocal_init<APPROX, legacy_compat>()));
+    MATH((llk_math_eltwise_unary_sfpu_reciprocal_init<APPROX, DST_ACCUM_MODE, legacy_compat>()));
 }
 
 // clang-format off
