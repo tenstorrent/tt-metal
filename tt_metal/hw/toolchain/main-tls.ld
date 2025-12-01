@@ -89,8 +89,12 @@ firmware and TLS kernels globals have an LMA directly after TLS's LMA.
 #error "Neither TYPE_FIRMWARE nor TYPE_KERNEL defined"
 #endif
 
-#define LOAD_AFTER_ABUT(THIS,PREV) AT(LOADADDR(PREV) + SIZEOF(PREV))
-#define LOAD_AFTER_ALIGN(THIS,PREV) AT(ALIGN(LOADADDR(PREV) + SIZEOF(PREV), ALIGNOF(THIS)))
+/* Abut the previous section.  */
+#define LOAD_AFTER_ABUT(THIS,PREV) \
+  AT(LOADADDR(PREV) + SIZEOF(PREV))
+/* Preserve LMA/VMA delta.  */
+#define LOAD_AFTER_ALIGN(THIS,PREV) \
+  AT(LOADADDR(PREV) + (ADDR(THIS) - ADDR(PREV)))
 
 #if ARCH_QUASAR && defined(COMPILE_FOR_DM)
 OUTPUT_FORMAT("elf64-littleriscv", "elf64-littleriscv",
