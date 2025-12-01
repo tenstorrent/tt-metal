@@ -197,7 +197,7 @@ void DeviceManager::init_profiler() const {
         }
         auto tunnels_from_mmio =
             tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
-        detail::InitDeviceProfiler(dev);
+        detail::InitDeviceProfiler(nullptr, dev);
         log_info(tt::LogMetal, "Profiler started on device {}", mmio_device_id);
         if (not this->skip_remote_devices_) {
             for (const auto& tunnel : tunnels_from_mmio) {
@@ -205,7 +205,7 @@ void DeviceManager::init_profiler() const {
                 for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
                     uint32_t mmio_controlled_device_id = tunnel[ts];
                     auto* mmio_device = get_device(mmio_controlled_device_id);
-                    detail::InitDeviceProfiler(mmio_device);
+                    detail::InitDeviceProfiler(nullptr, mmio_device);
                     log_info(tt::LogMetal, "Profiler started on remote device {}", mmio_device->id());
                 }
             }
@@ -348,7 +348,7 @@ void DeviceManager::initialize_fabric_and_dispatch_fw() {
 }
 
 void DeviceManager::initialize_host(IDevice* dev) const {
-    detail::ClearProfilerControlBuffer(dev);
+    detail::ClearProfilerControlBuffer(nullptr, dev);
 
     // Create system memory writer for this device to have an associated interface to hardware command queue (i.e.
     // hugepage). Need to do this before FW init so we know what dispatch cores to reset.

@@ -23,7 +23,7 @@ namespace detail {
  * |---------------|--------------------------------------------------------------------|-----------------|---------------------------|----------|
  * | device        | Clear profiler control buffer before any core attempts to profler  | IDevice*        | | True     |
  * */
-void ClearProfilerControlBuffer(IDevice* device);
+void ClearProfilerControlBuffer(distributed::MeshDevice* mesh_device, IDevice* device);
 
 /**
  * Initialize device profiling data buffers
@@ -36,7 +36,7 @@ void ClearProfilerControlBuffer(IDevice* device);
  * | device        | The device holding the program being profiled.    | IDevice*        |                           |
  * True     |
  * */
-void InitDeviceProfiler(IDevice* device);
+void InitDeviceProfiler(distributed::MeshDevice* mesh_device, IDevice* device);
 
 /**
  * Sync TT devices with host
