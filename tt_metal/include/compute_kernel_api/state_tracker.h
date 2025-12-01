@@ -9,6 +9,27 @@
 
 namespace ckernel {
 
+/*
+ * State Tracking Overview:
+ *
+ * The state_configure functions are organized into three overloads based on operand count:
+ *
+ * 1) Single operand: state_configure(cb)
+ *    - Handles operations that only need one input buffer (UNARY, COPY, TRANSPOSE, PACK)
+ *    - Reconfigures either srcA or pack registers depending on operation type
+ *
+ * 2) Dual operand: state_configure(cb_a, cb_b)
+ *    - Handles operations with two buffers (BINARY, MATMUL, REDUCE inputs, or UNARY with output)
+ *    - Reconfigures srcA and srcB registers, or srcA and pack for UNARY with output
+ *
+ * 3) Three operand: state_configure(cb_a, cb_b, cb_out)
+ *    - Handles full pipeline operations (BINARY, MATMUL, REDUCE with explicit output buffer)
+ *    - Reconfigures all three registers: srcA, srcB, and pack
+ *
+ * Each operation type uses compile-time dispatch (if constexpr) to call the appropriate
+ * reconfiguration helper, minimizing runtime overhead while maintaining flexibility.
+ */
+
 // Forward declarations to avoid circular dependency with pack.h
 ALWI void pack_reconfig_data_format(uint32_t new_cb_id);
 ALWI void pack_reconfig_data_format(uint32_t old_cb_id, uint32_t new_cb_id);
@@ -49,15 +70,22 @@ static uint32_t g_state_srca_cb = INVALID_CB_INDEX;
 static uint32_t g_state_srcb_cb = INVALID_CB_INDEX;
 static uint32_t g_state_pack_cb = INVALID_CB_INDEX;
 
-// Helper reconfig functions
-ALWI void reconfigure_single_operand(uint32_t cb, bool is_srcA) {
+/*
+ *  *----------------------------------------------------------------------------------------------------*
+ *  | Reconfiguration util functions, called from state_configure and used for specific reconfigurations |
+ *  | based on global state                                                                              |
+ *  *----------------------------------------------------------------------------------------------------*
+ */
+
+ALWI void reconfigure_single_operand(uint32_t cb, bool is_srcA = true) {
     if (is_srcA) {
         reconfig_data_format_srca(g_state_srca_cb, cb);
         g_state_srca_cb = cb;
         return;
+    } else {
+        reconfig_data_format_srcb(g_state_srcb_cb, cb);
+        g_state_srcb_cb = cb;
     }
-    reconfig_data_format_srcb(g_state_srcb_cb, cb);
-    g_state_srcb_cb = cb;
 }
 
 ALWI void reconfigure_dual_operand(uint32_t cb_a, uint32_t cb_b) {
@@ -99,6 +127,12 @@ ALWI void reconfig_all_operands(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
     reconfigure_dual_operand(cb_a, cb_b);
     reconfigure_pack_operand(cb_out);
 }
+
+/*
+ *  *-------------------------------*
+ *  |  Operation-specific handlers  |
+ *  *-------------------------------*
+ */
 
 // --- UNARY Operation Handler ---
 template <bool to_from_int8>
@@ -204,93 +238,70 @@ ALWI void state_impl_reduce_with_output(uint32_t cb_input, uint32_t cb_scaler, u
     }
 }
 
+/*
+ *  *---------------------------------*
+ *  |  State tracking main interface  |
+ *  *---------------------------------*
+ */
+
 /**
- * UNARY, COPY, TRANSPOSE operations
+ * UNARY, COPY, TRANSPOSE, TILIZE operations
  * Dispatches to operation-specific implementation
  */
-template <Operation::Type op_type, bool to_from_int8>
+template <Operation::Type op_type, bool to_from_int8 = false>
 ALWI void state_configure(uint32_t cb) {
     static_assert(
         op_type == Operation::UNARY || op_type == Operation::COPY || op_type == Operation::TRANSPOSE ||
-            op_type == Operation::PACK,
+            op_type == Operation::PACK || op_type == Operation::TILIZE || op_type == Operation::UNTILIZE,
         "Invalid operation type for single-operand state_configure");
 
     if constexpr (op_type == Operation::UNARY) {
-        reconfigure_single_operand(cb, true);
-        // state_impl_unary<to_from_int8>(cb);
+        reconfigure_single_operand(cb);
     } else if constexpr (op_type == Operation::COPY) {
-        // state_impl_copy<to_from_int8>(cb);
-        reconfigure_single_operand(cb, true);
+        reconfigure_single_operand(cb);
     } else if constexpr (op_type == Operation::TRANSPOSE) {
-        // state_impl_transpose<to_from_int8>(cb);
-        reconfigure_single_operand(cb, true);
+        reconfigure_single_operand(cb);
     } else if constexpr (op_type == Operation::PACK) {
-        // state_impl_pack<to_from_int8>(cb);
         reconfigure_pack_operand(cb);
+    } else if constexpr (op_type == Operation::TILIZE) {
+        reconfigure_single_operand(cb);
+    } else if constexpr (op_type == Operation::UNTILIZE) {
+        reconfigure_single_operand(cb);
     }
 }
 
 /**
- * BINARY, MATMUL, REDUCE operations
+ * BINARY, MATMUL, REDUCE, UNARY, TILIZE operations
  * Dispatches to operation-specific implementation
  */
 template <Operation::Type op_type, bool to_from_int8 = false>
 ALWI void state_configure(uint32_t cb_a, uint32_t cb_b) {
     static_assert(
-        op_type == Operation::BINARY || op_type == Operation::MATMUL || op_type == Operation::REDUCE,
+        op_type == Operation::BINARY || op_type == Operation::MATMUL || op_type == Operation::REDUCE ||
+            op_type == Operation::UNARY || op_type == Operation::TILIZE || op_type == Operation::UNTILIZE ||
+            op_type == Operation::TRANSPOSE,
         "Invalid operation type for dual-operand state_configure");
 
     if constexpr (op_type == Operation::BINARY) {
-        // state_impl_binary<to_from_int8>(cb_a, cb_b);
         reconfigure_dual_operand(cb_a, cb_b);
     } else if constexpr (op_type == Operation::MATMUL) {
-        // state_impl_matmul<to_from_int8>(cb_a, cb_b);
+        reconfigure_dual_operand(cb_b, cb_a);  // SrcA and SrcB are swapped for matmul
     } else if constexpr (op_type == Operation::REDUCE) {
-        // state_impl_redce<to_from_int8>(cb_a, cb_b);
         reconfigure_dual_operand(cb_a, cb_b);
-    }
-}
-
-ALWI void set_g_states(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
-    g_state_srca_cb = cb_a;
-    g_state_srcb_cb = cb_b;
-    g_state_pack_cb = cb_out;
-}
-
-ALWI void set_g_srca_srcb(uint32_t cb_a, uint32_t cb_b) {
-    g_state_srca_cb = cb_a;
-    g_state_srcb_cb = cb_b;
-}
-
-ALWI void set_g_srca(uint32_t cb_a) { g_state_srca_cb = cb_a; }
-ALWI void set_g_srcb(uint32_t cb_b) { g_state_srcb_cb = cb_b; }
-ALWI void set_g_pack(uint32_t cb_out) { g_state_pack_cb = cb_out; }
-
-/**
- * UNARY, TRANSPOSE, TILIZE, UNTILIZE with output
- * Dispatches to operation-specific implementation
- */
-template <Operation::Type op_type, bool to_from_int8 = false>
-ALWI void state_configure_with_output(uint32_t cb_in, uint32_t cb_out) {
-    static_assert(
-        op_type == Operation::UNARY || op_type == Operation::TRANSPOSE || op_type == Operation::TILIZE ||
-            op_type == Operation::UNTILIZE,
-        "Invalid operation type for state_configure_with_output");
-
-    if constexpr (op_type == Operation::UNARY) {
-        // state_impl_unary_with_output<to_from_int8>(cb_in, cb_out);
-    } else if constexpr (op_type == Operation::TRANSPOSE) {
-        // state_impl_transpose_with_output<to_from_int8>(cb_in, cb_out);
+    } else if constexpr (op_type == Operation::UNARY) {
+        reconfigure_single_operand(cb_a);
+        reconfigure_pack_operand(cb_b);
     } else if constexpr (op_type == Operation::TILIZE) {
-        // state_impl_tilize<to_from_int8>(cb_in, cb_out);
+        reconfigure_single_operand(cb_a);
+        reconfigure_pack_operand(cb_b);
     } else if constexpr (op_type == Operation::UNTILIZE) {
-        // state_impl_untilize<to_from_int8>(cb_in, cb_out);
+        reconfigure_single_operand(cb_a);
+        reconfigure_pack_operand(cb_b);
+    } else if constexpr (op_type == Operation::TRANSPOSE) {
+        reconfigure_single_operand(cb_a);
+        reconfigure_pack_operand(cb_b);
     }
 }
-
-// -------------------------
-// Full pipeline operations (3 CBs: input + input + output)
-// -------------------------
 
 /**
  * BINARY, MATMUL, REDUCE with output
@@ -303,27 +314,51 @@ ALWI void state_configure(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
         "Invalid operation type for full pipeline state_configure");
 
     if constexpr (op_type == Operation::BINARY) {
-        // state_impl_binary_with_output<to_from_int8>(cb_a, cb_b, cb_out);
         reconfig_all_operands(cb_a, cb_b, cb_out);
     } else if constexpr (op_type == Operation::MATMUL) {
-        // state_impl_matmul_with_output<to_from_int8>(cb_a, cb_b, cb_out);
+        reconfig_all_operands(cb_b, cb_a, cb_out);  // SrcA and SrcB are swapped for matmul
     } else if constexpr (op_type == Operation::REDUCE) {
-        // state_impl_reduce_with_output<to_from_int8>(cb_a, cb_b, cb_out);
         reconfig_all_operands(cb_a, cb_b, cb_out);
     }
 }
 
-/**
- * @brief Reset all global state to invalid
- *
- * Call this at kernel boundaries or when external events may have
- * changed hardware state outside the API's knowledge.
+/*
+ *  *------------------------------------*
+ *  | State tracking getters and setters |
+ *  *------------------------------------*
  */
-ALWI void reset_state_tracker() {
-    g_state_srca_cb = INVALID_CB_INDEX;
-    g_state_srcb_cb = INVALID_CB_INDEX;
-    g_state_pack_cb = INVALID_CB_INDEX;
+
+/*
+ * @brief Set current global states for srcA, srcB, and pack. Used in common intialization functions.
+ */
+ALWI void set_g_states(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
+    g_state_srca_cb = cb_a;
+    g_state_srcb_cb = cb_b;
+    g_state_pack_cb = cb_out;
 }
+
+/**
+ * @brief Set current srcA and srcB state. Used in common intialization functions.
+ */
+ALWI void set_g_srca_srcb(uint32_t cb_a, uint32_t cb_b) {
+    g_state_srca_cb = cb_a;
+    g_state_srcb_cb = cb_b;
+}
+
+/**
+ * @brief Set current srcA state (for debugging)
+ */
+ALWI void set_g_srca(uint32_t cb_a) { g_state_srca_cb = cb_a; }
+
+/**
+ * @brief Set current srcB state (for debugging)
+ */
+ALWI void set_g_srcb(uint32_t cb_b) { g_state_srcb_cb = cb_b; }
+
+/**
+ * @brief Set current pack state (for debugging)
+ */
+ALWI void set_g_pack(uint32_t cb_out) { g_state_pack_cb = cb_out; }
 
 /**
  * @brief Get current srcA state (for debugging)
@@ -339,5 +374,17 @@ ALWI uint32_t get_state_srcb() { return g_state_srcb_cb; }
  * @brief Get current pack state (for debugging)
  */
 ALWI uint32_t get_state_pack() { return g_state_pack_cb; }
+
+/**
+ * @brief Reset all global state to invalid
+ *
+ * Call this at kernel boundaries or when external events may have
+ * changed hardware state outside the API's knowledge.
+ */
+ALWI void reset_state_tracker() {
+    g_state_srca_cb = INVALID_CB_INDEX;
+    g_state_srcb_cb = INVALID_CB_INDEX;
+    g_state_pack_cb = INVALID_CB_INDEX;
+}
 
 }  // namespace ckernel

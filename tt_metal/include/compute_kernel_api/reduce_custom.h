@@ -77,6 +77,7 @@ ALWI void reduce_block_max_row_init() {
 // clang-format on
 template <uint32_t block_ct_dim>
 ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_start_index, uint32_t idst) {
+    state_configure<Operation::REDUCE>(icb, icb_scaler);
     UNPACK((llk_unpack_AB_reduce_block_max_row<block_ct_dim>(icb, icb_scaler, row_start_index)));
     MATH((llk_math_reduce_block_max_row<block_ct_dim, DST_ACCUM_MODE>(idst)));
 }
