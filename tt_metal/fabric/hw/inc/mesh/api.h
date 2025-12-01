@@ -2099,7 +2099,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
         auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
 
         // Call basic route _with_state function
-        fabric_unicast_noc_unicast_write_with_state(
+        fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::All>(
             connection_manager,
             route_id,
             src_addr,
@@ -2118,7 +2118,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
     auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
 
     // Call basic route _with_state function (no barrier needed after last packet)
-    fabric_unicast_noc_unicast_write_with_state(
+    fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::All>(
         connection_manager, route_id, src_addr, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, remaining_size);
 }
 
