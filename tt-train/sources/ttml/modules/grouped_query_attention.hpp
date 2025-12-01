@@ -30,10 +30,6 @@ private:
     std::shared_ptr<ModuleBase> m_dropout;
     std::shared_ptr<ModuleBase> m_embedding;
 
-    // Helper to create sharded memory config for KV cache fills
-    ttnn::MemoryConfig create_sharded_memory_config(
-        const ttnn::Tensor& tensor, ttnn::distributed::MeshDevice* device) const;
-
 public:
     explicit GroupedQueryAttention(const GQAConfig& config);
 

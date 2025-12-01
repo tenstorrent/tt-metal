@@ -16,7 +16,7 @@ public:
     explicit RotaryEmbedding(const ops::RotaryEmbeddingParams &rope_params);
     [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr &input) override;
     [[nodiscard]] autograd::TensorPtr operator()(
-        const autograd::TensorPtr &input, bool is_decode_mode, std::optional<uint32_t> token_position = std::nullopt);
+        const autograd::TensorPtr &input, std::optional<uint32_t> token_position);
 };
 
 }  // namespace ttml::modules
