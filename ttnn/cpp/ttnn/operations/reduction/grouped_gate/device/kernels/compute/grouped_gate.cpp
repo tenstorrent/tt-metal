@@ -50,12 +50,12 @@ void add_bias_and_pack(
     uint32_t sigmoid_input_cb_index, uint32_t bias_cb_index, uint32_t add_bias_cb_index, uint32_t width_tiles) {
     // Perform add bias on sigmoid input – should I do full or partial init here?
     add_tiles_init(sigmoid_input_cb_index, bias_cb_index, false);
+    cb_wait_front(sigmoid_input_cb_index, width_tiles);
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
-        cb_wait_front(sigmoid_input_cb_index, 1);
         cb_wait_front(bias_cb_index, 1);
 
         tile_regs_acquire();
-        add_tiles(sigmoid_input_cb_index, bias_cb_index, 0, 0, 0);
+        add_tiles(sigmoid_input_cb_index, bias_cb_index, width_tile, 0, 0);
         tile_regs_commit();
 
         cb_reserve_back(add_bias_cb_index, 1);
@@ -64,7 +64,6 @@ void add_bias_and_pack(
         tile_regs_release();
         cb_push_back(add_bias_cb_index, 1);
 
-        cb_pop_front(sigmoid_input_cb_index, 1);  // need to actually re-use this for unbiased sigmoid scores
         cb_pop_front(bias_cb_index, 1);
     }
 }
@@ -319,7 +318,9 @@ void topk(
     int end_phase = (K <= 64) ? logk - 1 : 5;
 
     cb_wait_front(winning_group_scores_cb_index, tiles);
+    UNPACK(print_tile(winning_group_scores_cb_index, 0, true, 0, 1));
     cb_wait_front(winning_group_indices_cb_index, tiles);
+    UNPACK(print_tile(winning_group_indices_cb_index, 0, true, 0, 1));
 
     topk_tile_init();
     blocks::process_and_sort_tiles(
@@ -436,7 +437,7 @@ void topk(
         release_dst();
     }
     cb_wait_front(intermediate_local_sort_cb_index, Wt);
-    // UNPACK(print_tile(intermediate_local_sort_cb_index, 0, true, 0, k, 0, 1));
+    UNPACK(print_tile(intermediate_local_sort_cb_index, 0, true, 0, k, 0, 1));
     cb_pop_front(intermediate_local_sort_cb_index, Wt);
 
     // copy local chunk's topk index tiles into output buffer
@@ -444,7 +445,7 @@ void topk(
     copy_tile_to_dst_init_short_with_dt(intermediate_local_sort_cb_index, intermediate_local_sort_indices_cb_index);
     pack_reconfig_data_format(intermediate_local_sort_indices_cb_index);
     cb_wait_front(intermediate_local_sort_indices_cb_index, Kt);
-    // UNPACK(print_tile(intermediate_local_sort_indices_cb_index, 0, true, 0, k, 0, 1));
+    UNPACK(print_tile(intermediate_local_sort_indices_cb_index, 0, true, 0, k, 0, 1));
     for (uint32_t i = 0; i < Kt; ++i) {
         acquire_dst();
         cb_reserve_back(output_indices_cb_index, 1);
@@ -526,6 +527,9 @@ void MAIN {
             tile_regs_wait();
             pack_tile<true>(0, sigmoid_input_cb_index, 0);
             tile_regs_release();
+            // if (width_tile == 5 || width_tile == 0 || width_tile == 1 || width_tile == 3) {
+            //     PACK(print_tile(sigmoid_input_cb_index, 0, true, 0, 1));
+            // }
             cb_push_back(sigmoid_input_cb_index, 1);
         }
 

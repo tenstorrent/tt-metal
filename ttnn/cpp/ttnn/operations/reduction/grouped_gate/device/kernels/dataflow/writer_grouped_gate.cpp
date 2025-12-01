@@ -216,9 +216,9 @@ FORCE_INLINE void generate_winning_group_tiles(
     cb_wait_front(topk_index_creation_cb_index, width_tiles);
     cb_wait_front(sorted_group_indices_cb_index, num_group_tiles);
     // DPRINT << "Sorted group indices cb 0" << ENDL();
-    // print_tile(sorted_group_indices_cb_index, 0, true, 0, topk_groups, 0, 1);
+    print_tile(sorted_group_indices_cb_index, 0, true, 0, topk_groups, 0, 1);
 
-    uint32_t tile_idx = 5;
+    // uint32_t tile_idx = 5;
     // DPRINT << "Topk index creation cb " << tile_idx << ENDL();
     // print_tile(topk_index_creation_cb_index, tile_idx, true, 0, 1);
     // print_tile(scores_cb_index, tile_idx, true, 0, 1);
@@ -322,10 +322,10 @@ FORCE_INLINE void generate_winning_group_tiles(
 
     noc_async_read_barrier();
     // DPRINT << ENDL() << ENDL();
-    for (uint32_t i = 0; i < topk_groups; i++) {
-        DPRINT << "Winning group scores cb " << i << ENDL();
-        print_tile(winning_group_scores_cb_index, i, true, 0, 1);
-    }
+    // for (uint32_t i = 0; i < topk_groups; i++) {
+    //     DPRINT << "Winning group scores cb " << i << ENDL();
+    //     print_tile(winning_group_scores_cb_index, i, true, 0, 1);
+    // }
     cb_push_back(winning_group_scores_cb_index, topk_groups);
     cb_push_back(winning_group_indices_cb_index, topk_groups);
 
@@ -349,6 +349,7 @@ void kernel_main() {
     constexpr uint32_t winning_group_scores_cb_index = get_named_compile_time_arg_val("winning_group_scores_cb_index");
     constexpr uint32_t winning_group_indices_cb_index =
         get_named_compile_time_arg_val("winning_group_indices_cb_index");
+    constexpr uint32_t sigmoid_input_cb_index = get_named_compile_time_arg_val("sigmoid_input_cb_index");
 
     constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
     constexpr uint32_t width_tiles = get_named_compile_time_arg_val("width_tiles");
@@ -382,7 +383,7 @@ void kernel_main() {
             summed_experts_cb_index, topk_input_cb_index, width_tiles, summed_experts_per_group);
         generate_winning_group_tiles(
             sorted_group_indices_cb_index,
-            scores_cb_index,
+            sigmoid_input_cb_index,
             topk_index_creation_cb_index,
             winning_group_scores_cb_index,
             winning_group_indices_cb_index,

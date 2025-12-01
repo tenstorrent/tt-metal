@@ -279,6 +279,7 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         {"num_group_tiles", num_group_tiles},
         {"sorted_group_indices_cb_index", sorted_group_indices_cb_index},
         {"scores_cb_index", scores_cb_index},
+        {"sigmoid_input_cb_index", sigmoid_input_cb_index},
     };
 
     std::vector<uint32_t> writer_compile_time_args = {};
