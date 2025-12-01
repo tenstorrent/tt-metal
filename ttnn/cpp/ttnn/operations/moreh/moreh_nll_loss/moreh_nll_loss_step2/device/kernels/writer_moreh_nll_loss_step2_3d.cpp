@@ -6,6 +6,7 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
+    using namespace tt::constants;
     uint32_t i = 0;
     auto output_addr = get_arg_val<uint32_t>(i++);
     auto num_tiles_per_core = get_arg_val<uint32_t>(i++);
@@ -21,8 +22,8 @@ void kernel_main() {
 
     const auto output_addrg = TensorAccessor(output_args, output_addr, output_tile_bytes);
 
-    uint32_t Wf = (W + tt::constants::FACE_WIDTH - 1) / tt::constants::FACE_WIDTH;
-    uint32_t Wt = (W + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
+    uint32_t Wf = (W + FACE_WIDTH - 1) / FACE_WIDTH;
+    uint32_t Wt = (W + TILE_WIDTH - 1) / TILE_WIDTH;
 
     constexpr uint32_t onetile = 1;
     uint32_t end_id = start_id + num_tiles_per_core;
@@ -31,9 +32,9 @@ void kernel_main() {
         // noc_id = nt * Wt + wt
         cb_wait_front(cb_output, onetile);
         uint32_t n = i / Wf;
-        uint32_t w = (i % Wf) * tt::constants::FACE_WIDTH;
-        uint32_t nt = n / tt::constants::TILE_HEIGHT;
-        uint32_t wt = w / tt::constants::TILE_WIDTH;
+        uint32_t w = (i % Wf) * FACE_WIDTH;
+        uint32_t nt = n / TILE_HEIGHT;
+        uint32_t wt = w / TILE_WIDTH;
 
         uint32_t output_l1_write_addr = get_read_ptr(cb_output);
 
