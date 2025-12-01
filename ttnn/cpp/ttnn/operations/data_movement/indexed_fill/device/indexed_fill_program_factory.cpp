@@ -1,23 +1,25 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <math.h>
-
-#include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_op.hpp"
+#include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_program_factory.hpp"
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/math.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::data_movement::indexed_fill::program {
 
-operation::ProgramWithCallbacks indexed_fill_multi_core(
-    const Tensor& batch_ids, const Tensor& input_a, const Tensor& input_b, const Tensor& output) {
+IndexedFillProgramFactory::cached_program_t IndexedFillProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    const auto& batch_ids = tensor_args.batch_id;
+    const auto& input_a = tensor_args.input_tensor_a;
+    const auto& input_b = tensor_args.input_tensor_b;
+
     tt::tt_metal::Program program{};
     IDevice* device = input_a.device();
 
@@ -96,43 +98,55 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
             output.buffer()->address(), page_size, local_batch_size_in_sticks, i * local_batch_size_in_sticks};
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
     }
-    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, cores, page_size](
-                                              const void* operation,
-                                              const Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        const auto& output = output_tensors.at(0);
-        const auto& input_a = input_tensors.at(1);
-        const auto& input_b = input_tensors.at(2);
-        const auto& batch_ids = input_tensors.at(0);
-        uint32_t core_id = 0;
-        uint32_t B = input_a.padded_shape()[0];
-        uint32_t b = input_b.padded_shape()[0];
-        uint32_t batch_size_in_sticks = input_a.padded_shape()[1] * input_a.padded_shape()[2];
-        for (const auto& core : cores) {
-            uint32_t local_b = (core_id < B) ? b : 0;
-            uint32_t local_batch_size_in_sticks = (core_id < B) ? batch_size_in_sticks : 0;
-            const std::array reader_runtime_args = {
-                batch_ids.buffer()->address(),
-                local_b,
-                input_a.buffer()->address(),
-                input_b.buffer()->address(),
-                local_batch_size_in_sticks,
-                core_id};
-            tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
 
-            const std::array writer_runtime_args = {
-                output.buffer()->address(),
-                page_size,
-                local_batch_size_in_sticks,
-                core_id * local_batch_size_in_sticks};
-
-            tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
-            core_id++;
-        }
-    };
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return cached_program_t{
+        std::move(program),
+        IndexedFillSharedVariables{
+            .reader_kernel_id = reader_kernel_id,
+            .writer_kernel_id = writer_kernel_id,
+            .cores = std::move(cores),
+            .page_size = page_size,
+        }};
 }
 
-}  // namespace ttnn::operations::data_movement
+void IndexedFillProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    const auto& batch_ids = tensor_args.batch_id;
+    const auto& input_a = tensor_args.input_tensor_a;
+    const auto& input_b = tensor_args.input_tensor_b;
+
+    auto& program = cached_program.program;
+    const auto& cores = cached_program.shared_variables.cores;
+    const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
+    const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
+    const auto& page_size = cached_program.shared_variables.page_size;
+
+    uint32_t B = input_a.padded_shape()[0];
+    uint32_t b = input_b.padded_shape()[0];
+    uint32_t batch_size_in_sticks = input_a.padded_shape()[1] * input_a.padded_shape()[2];
+
+    uint32_t core_id = 0;
+    for (const auto& core : cores) {
+        uint32_t local_b = (core_id < B) ? b : 0;
+        uint32_t local_batch_size_in_sticks = (core_id < B) ? batch_size_in_sticks : 0;
+        const std::array reader_runtime_args = {
+            batch_ids.buffer()->address(),
+            local_b,
+            input_a.buffer()->address(),
+            input_b.buffer()->address(),
+            local_batch_size_in_sticks,
+            core_id};
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+
+        const std::array writer_runtime_args = {
+            output.buffer()->address(), page_size, local_batch_size_in_sticks, core_id * local_batch_size_in_sticks};
+
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+        core_id++;
+    }
+}
+
+}  // namespace ttnn::operations::data_movement::indexed_fill::program

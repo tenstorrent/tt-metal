@@ -123,8 +123,8 @@ target_sources(
         fold/device/fold_multi_core_program_factory.cpp
         fold/device/fold_single_core_program_factory.cpp
         fold/fold.cpp
-        indexed_fill/device/indexed_fill_op.cpp
-        indexed_fill/device/indexed_fill_op_multi_core_program_factory.cpp
+        indexed_fill/device/indexed_fill_device_operation.cpp
+        indexed_fill/device/indexed_fill_program_factory.cpp
         indexed_fill/indexed_fill.cpp
         moe_expert_token_remap/moe_expert_token_remap.cpp
         moe_expert_token_remap/device/moe_expert_token_remap_device_operation.cpp
