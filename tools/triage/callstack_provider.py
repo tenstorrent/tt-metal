@@ -5,45 +5,38 @@
 
 """
 Usage:
-    dump_callstacks [--all-cores]
+    callstack_provider [--full-callstack] [--gdb-callstack] [--active-eth]
 
 Options:
-    --all-cores        Show all cores including ones with Go Message = DONE. By default, DONE cores are filtered out.
+    --full-callstack   Dump full callstack with all frames. Defaults to dumping only the top frame.
+    --gdb-callstack    Dump callstack using GDB client instead of built-in methods.
+    --active-eth       Override default behaviour of not dumping callstack for active eth cores if full callstack or gdb callstack is used.
 
 Description:
-    Dumps callstacks for all devices in the system and for every supported risc processor.
-    By default, filters out cores with DONE status and shows essential fields.
-    Use --all-cores to see all cores, and -v/-vv to show more columns.
-
-    Color output is automatically enabled when stdout is a TTY (terminal) and can be overridden
-    with TT_TRIAGE_COLOR environment variable (0=disable, 1=enable).
+    Provides callstack extraction functionality for RISC cores on devices.
 """
 
 from dataclasses import dataclass
 
-from triage import ScriptConfig, TTTriageError, log_check_risc, recurse_field, triage_field, hex_serializer, run_script
-from ttexalens import util
-from ttexalens.hw.tensix.wormhole.wormhole import WormholeDevice
+from triage import ScriptConfig, TTTriageError, recurse_field, triage_field, hex_serializer, run_script, triage_singleton
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
 from elfs_cache import run as get_elfs_cache, ElfsCache
-from run_checks import run as get_run_checks
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.gdb.gdb_server import GdbServer, ServerSocket
 from ttexalens.gdb.gdb_client import get_gdb_callstack
 from ttexalens.hardware.risc_debug import CallstackEntry, ParsedElfFile
 from ttexalens.tt_exalens_lib import top_callstack, callstack
-from utils import BLUE, GREEN, ORANGE, RED, RST
+from utils import WARN, BLUE, GREEN, ORANGE, RED, RST
 
-import re
 import socket
-import subprocess
 import threading
 from contextlib import closing
 from pathlib import Path
 
 script_config = ScriptConfig(
-    depends=["run_checks", "dispatcher_data", "elfs_cache"],
+    data_provider=True,
+    depends=["dispatcher_data", "elfs_cache"],
 )
 
 
@@ -60,6 +53,7 @@ def get_callstack(
     dispatcher_core_data: DispatcherCoreData,
     elfs_cache: ElfsCache,
     full_callstack: bool,
+    rewind_pc_for_ebreak: bool,
 ) -> KernelCallstackWithMessage:
     context = location._device._context
     elfs: list[ParsedElfFile] = [elfs_cache[dispatcher_core_data.firmware_path]]
@@ -70,6 +64,8 @@ def get_callstack(
     try:
         if not full_callstack:
             pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
+            if rewind_pc_for_ebreak:
+                pc = pc - 4
             try:
                 cs = top_callstack(pc, elfs, offsets, context)
                 error_message = None
@@ -157,7 +153,7 @@ def format_callstack_with_message(callstack_with_message: KernelCallstackWithMes
 
 
 @dataclass
-class DumpCallstacksData:
+class CallstacksData:
     """Callstack data with verbosity levels.
 
     Level 0: Essential fields (Kernel ID:Name, Go Message, Subdevice, Preload, Waypoint, PC, Callstack)
@@ -174,39 +170,40 @@ class DumpCallstacksData:
     )
 
 
-def dump_callstacks(
-    location: OnChipCoordinate,
-    risc_name: str,
-    dispatcher_data: DispatcherData,
-    elfs_cache: ElfsCache,
-    full_callstack: bool,
-    gdb_callstack: bool,
-    gdb_server: GdbServer | None,
-    show_all_cores: bool = False,
-    force_active_eth: bool = False,
-) -> DumpCallstacksData | None:
-    result: DumpCallstacksData | None = None
+class CallstackProvider:
+    def __init__(self, dispatcher_data: DispatcherData, elfs_cache: ElfsCache, full_callstack: bool, gdb_callstack: bool, gdb_server: GdbServer | None, force_active_eth: bool = False):
+        self.dispatcher_data = dispatcher_data
+        self.elfs_cache = elfs_cache
+        self.full_callstack = full_callstack
+        self.gdb_callstack = gdb_callstack
+        self.gdb_server = gdb_server
+        self.force_active_eth = force_active_eth
 
-    try:
-        dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
+    def __del__(self):
+        # After all callstacks are dumped, stop GDB server if it was started
+        if self.gdb_server is not None:
+            self.gdb_server.stop()
 
-        # Skip DONE cores unless --all-cores is specified
-        if not show_all_cores and dispatcher_core_data.go_message == "DONE":
-            return result
-
-        risc_debug = location._device.get_block(location).get_risc_debug(risc_name)
+    def get_callstacks(
+        self,
+        location: OnChipCoordinate,
+        risc_name: str,
+        rewind_pc_for_ebreak: bool = False,
+    ) -> CallstacksData:
+        dispatcher_core_data = self.dispatcher_data.get_core_data(location, risc_name)
+        risc_debug = location.noc_block.get_risc_debug(risc_name)
         if risc_debug.is_in_reset():
-            return DumpCallstacksData(
+            return CallstacksData(
                 dispatcher_core_data=dispatcher_core_data,
                 pc=None,
                 kernel_callstack_with_message=KernelCallstackWithMessage(callstack=[], message="Core is in reset"),
             )
-        if location in location._device.active_eth_block_locations and not force_active_eth:
+        if location in location._device.active_eth_block_locations and not self.force_active_eth:
             callstack_with_message = get_callstack(
-                location, risc_name, dispatcher_core_data, elfs_cache, full_callstack=False
+                location, risc_name, dispatcher_core_data, self.elfs_cache, full_callstack=False, rewind_pc_for_ebreak=rewind_pc_for_ebreak
             )
         else:
-            if gdb_callstack:
+            if self.gdb_callstack:
                 if risc_name == "ncrisc":
                     # Cannot attach to NCRISC process due to lack of debug hardware so we are defaulting to top callstack
                     error_message = (
@@ -214,7 +211,7 @@ def dump_callstacks(
                     )
                     # Default to top callstack
                     callstack_with_message = get_callstack(
-                        location, risc_name, dispatcher_core_data, elfs_cache, full_callstack=False
+                        location, risc_name, dispatcher_core_data, self.elfs_cache, full_callstack=False, rewind_pc_for_ebreak=rewind_pc_for_ebreak
                     )
                     # If top callstack failed too, print both error messages
                     callstack_with_message.message = (
@@ -223,19 +220,19 @@ def dump_callstacks(
                         else "\n".join([error_message, callstack_with_message.message])
                     )
                 else:
-                    assert gdb_server is not None
+                    assert self.gdb_server is not None
                     elf_paths: list[str] = [dispatcher_core_data.firmware_path]
                     offsets: list[int | None] = [None]
                     if dispatcher_core_data.kernel_path is not None:
                         elf_paths.append(dispatcher_core_data.kernel_path)
                         offsets.append(dispatcher_core_data.kernel_offset)
-                    gdb_callstack = get_gdb_callstack(location, risc_name, elf_paths, offsets, gdb_server)
+                    gdb_callstack = get_gdb_callstack(location, risc_name, elf_paths, offsets, self.gdb_server)
                     callstack_with_message = KernelCallstackWithMessage(callstack=gdb_callstack, message=None)
                     # If GDB failed to get callstack, we default to top callstack
                     if len(gdb_callstack) == 0:
                         error_message = "Failed to get callstack from GDB. Look for error message above the table."
                         callstack_with_message = get_callstack(
-                            location, risc_name, dispatcher_core_data, elfs_cache, full_callstack=False
+                            location, risc_name, dispatcher_core_data, self.elfs_cache, full_callstack=False, rewind_pc_for_ebreak=rewind_pc_for_ebreak
                         )
                         # If top callstack failed too, print both error messages
                         callstack_with_message.message = (
@@ -254,28 +251,17 @@ def dump_callstacks(
                         pass
             else:
                 callstack_with_message = get_callstack(
-                    location, risc_name, dispatcher_core_data, elfs_cache, full_callstack
+                    location, risc_name, dispatcher_core_data, self.elfs_cache, self.full_callstack, rewind_pc_for_ebreak=rewind_pc_for_ebreak
                 )
 
         # Create result with dispatcher core data (verbose levels handled in serialization)
-        result = DumpCallstacksData(
+        return CallstacksData(
             dispatcher_core_data=dispatcher_core_data,
             pc=callstack_with_message.callstack[0].pc
             if len(callstack_with_message.callstack) > 0
-            else location._device.get_block(location).get_risc_debug(risc_name).get_pc(),
+            else risc_debug.get_pc(),
             kernel_callstack_with_message=callstack_with_message,
         )
-
-    except Exception as e:
-        log_check_risc(
-            risc_name,
-            location,
-            False,
-            f"{ORANGE}Failed to dump callstacks: {e}{RST}",
-        )
-        return result
-
-    return result
 
 
 # Global lock for thread-safe port finding
@@ -311,28 +297,18 @@ def start_gdb_server(port: int, context: Context) -> GdbServer:
     return gdb_server
 
 
+@triage_singleton
 def run(args, context: Context):
-    from triage import set_verbose_level
-
     full_callstack: bool = args["--full-callstack"]
     gdb_callstack: bool = args["--gdb-callstack"]
-    show_all_cores: bool = args["--all-cores"]
     active_eth: bool = args["--active-eth"]
-
-    # Set verbose level from -v count (controls which columns are displayed)
-    verbose_level = args["-v"]
-    set_verbose_level(verbose_level)
-
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
-    # We are skipping active eth cores if full callstack or gdb callstack is used by default, this can be overridden with --active-eth
     force_active_eth = (full_callstack or gdb_callstack) and active_eth
     if force_active_eth:
-        util.WARN(
+        WARN(
             "Getting full or gdb callstack may break active eth core. Use tt-smi reset to fix. See issue #661 in tt-exalens for more details."
         )
 
     elfs_cache = get_elfs_cache(args, context)
-    run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
 
     gdb_server: GdbServer | None = None
@@ -342,26 +318,7 @@ def run(args, context: Context):
             port = find_available_port()
             gdb_server = start_gdb_server(port, context)
 
-    callstacks_data = run_checks.run_per_core_check(
-        lambda location, risc_name: dump_callstacks(
-            location,
-            risc_name,
-            dispatcher_data,
-            elfs_cache,
-            full_callstack,
-            gdb_callstack,
-            gdb_server,
-            show_all_cores,
-            force_active_eth,
-        ),
-        block_filter=BLOCK_TYPES_TO_CHECK,
-    )
-
-    # After all callstacks are dumped, stop GDB server if it was started
-    if gdb_server is not None:
-        gdb_server.stop()
-
-    return callstacks_data
+    return CallstackProvider(dispatcher_data, elfs_cache, full_callstack, gdb_callstack, gdb_server, force_active_eth)
 
 
 if __name__ == "__main__":
