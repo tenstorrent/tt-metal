@@ -104,9 +104,11 @@ void bind_normalization_softmax_operation(py::module& module) {
                     :header-rows: 1
 
                     * - Dtypes
-                        - Layouts
+                      - Layouts
                     * - BFLOAT16, FLOAT32, BFLOAT8_B
-                        - TILE
+                      - TILE
+
+                The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
 
             Memory Support:
                 - Interleaved: DRAM and L1
@@ -187,6 +189,8 @@ void bind_normalization_softmax_scale_mask_operation(py::module& module) {
                     * - BFLOAT16, BFLOAT8_B
                       - TILE, ROW_MAJOR
 
+                The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
+
             Limitations:
                 * All tensors must be on-device.
                 * For ROW_MAJOR masks: intermediate dimensions (except last two) must be 1; last dimension must equal TILE_WIDTH; width must align to input tensor's tile width.
@@ -252,6 +256,7 @@ void bind_normalization_softmax_inplace_operation(py::module& module) {
                       - Layouts
                     * - BFLOAT16, FLOAT32, BFLOAT8_B
                       - TILE
+                The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
 
             Limitations:
                 * The input tensor is modified in-place to save memory. Must already be on the device.
@@ -330,6 +335,8 @@ void bind_normalization_softmax_scale_mask_inplace_operation(py::module& module)
                     * - BFLOAT16, BFLOAT8_B
                       - TILE, ROW_MAJOR
                       - 2, 3, 4
+
+                The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
 
             Limitations:
                 * All tensors must be on-device.
@@ -411,9 +418,11 @@ void bind_normalization_softmax_scale_casual_mask_HW_inplace_operation(py::modul
                     :header-rows: 1
 
                     * - Dtypes
-                        - Layouts
+                      - Layouts
                     * - BFLOAT16, BFLOAT8_B
-                        - TILE (interleaved)
+                      - TILE (interleaved)
+
+                The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
 
             Limitations:
                 * This is an experimental/specialized feature optimized for specific transformer attention patterns.
