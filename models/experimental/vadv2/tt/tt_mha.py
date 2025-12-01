@@ -3,7 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import math
+
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
 
 try:
     from tracy import signpost
@@ -29,12 +42,36 @@ class TtMultiheadAttention:
         self.num_heads = num_heads
         self.device = device
         self.batch_first = batch_first
+        self.head_dim = embed_dims // num_heads
+
         self.attn_in_proj__weight = params.in_proj.weight
         self.attn_in_proj__bias = params.in_proj.bias
-        self.attn_in_proj__weight_permute = ttnn.permute(self.attn_in_proj__weight, (1, 0))
+
+        # Pre-split Q, K, V weights in __init__ to avoid runtime slicing
+        # Note: preprocess_linear_weight already transposes, so shape is [embed_dims, 3*embed_dims]
+        # We slice along the second dimension (columns) to get Q, K, V
+        self.q_weight = self.attn_in_proj__weight[:, :embed_dims]
+        self.k_weight = self.attn_in_proj__weight[:, embed_dims : 2 * embed_dims]
+        self.v_weight = self.attn_in_proj__weight[:, 2 * embed_dims :]
+
         self.attn_in_proj__bias_squeeze = ttnn.squeeze(self.attn_in_proj__bias, 0)
         self.attn_out_proj_weight = params.out_proj.weight
         self.attn_out_proj_bias = params.out_proj.bias
+
+        # SDPA configuration for Wormhole
+        self.sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 4),  # 8x4 cores for Wormhole n300
+            q_chunk_size=32,  # Chunk size for query processing
+            k_chunk_size=32,  # Chunk size for key processing
+            exp_approx_mode=False,  # Use exact exp for softmax
+        )
+
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,  # Balance speed and accuracy
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
 
     def __call__(
         self,
@@ -82,74 +119,52 @@ class TtMultiheadAttention:
 
         in_proj_bias = self.attn_in_proj__bias_squeeze
 
-        in_proj_weight = self.attn_in_proj__weight_permute
-
         tgt_len, bsz, embed_dim = query.shape
         src_len, _, _ = key.shape
 
-        q_weight = in_proj_weight[: self.embed_dims, :]  # Query weights
-        k_weight = in_proj_weight[self.embed_dims : 2 * self.embed_dims, :]  # Key weights
-        v_weight = in_proj_weight[2 * self.embed_dims :, :]  # Value weights
+        # Split biases for Q, K, V projections
+        q_bias = in_proj_bias[: self.embed_dims]
+        k_bias = in_proj_bias[self.embed_dims : 2 * self.embed_dims]
+        v_bias = in_proj_bias[2 * self.embed_dims :]
 
-        q_bias = in_proj_bias[: self.embed_dims]  # Query biases
-        k_bias = in_proj_bias[self.embed_dims : 2 * self.embed_dims]  # Key biases
-        v_bias = in_proj_bias[2 * self.embed_dims :]  # Value biases
-
-        q_batch_size, q_sequence_size, q_hidden_size = query.shape
-        q_head_size = q_hidden_size // self.num_heads
-
-        k_batch_size, k_sequence_size, k_hidden_size = key.shape
-        k_head_size = k_hidden_size // self.num_heads
-
-        v_batch_size, v_sequence_size, v_hidden_size = value.shape
-        v_head_size = v_hidden_size // self.num_heads
-
-        q_weight = ttnn.permute(q_weight, (1, 0))
-        k_weight = ttnn.permute(k_weight, (1, 0))
-        v_weight = ttnn.permute(v_weight, (1, 0))
-        query = ttnn.linear(query, q_weight, bias=q_bias)
-
-        key = ttnn.linear(key, k_weight, bias=k_bias)
+        # Project Q, K, V using pre-split and pre-permuted weights (no runtime permute!)
+        query = ttnn.linear(query, self.q_weight, bias=q_bias)
+        key = ttnn.linear(key, self.k_weight, bias=k_bias)
 
         if value.get_layout() != ttnn.TILE_LAYOUT:
             value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
-        value = ttnn.linear(value, v_weight, bias=v_bias)
+        value = ttnn.linear(value, self.v_weight, bias=v_bias)
 
-        query = ttnn.reshape(query, (tgt_len, bsz * self.num_heads, q_head_size))
-        query = ttnn.permute(query, (1, 0, 2))
+        # Reshape and transpose for SDPA format
+        # SDPA expects: [batch, num_heads, seq_len, head_dim]
+        query = ttnn.reshape(query, (tgt_len, bsz, self.num_heads, self.head_dim))
+        query = ttnn.permute(query, (1, 2, 0, 3))  # [bsz, num_heads, tgt_len, head_dim]
 
-        key = ttnn.reshape(key, (k_batch_size, bsz * self.num_heads, q_head_size))
-        key = ttnn.permute(key, (1, 0, 2))
+        key = ttnn.reshape(key, (src_len, bsz, self.num_heads, self.head_dim))
+        key = ttnn.permute(key, (1, 2, 0, 3))  # [bsz, num_heads, src_len, head_dim]
 
-        value = ttnn.reshape(value, (v_batch_size, bsz * self.num_heads, q_head_size))
-        value = ttnn.permute(value, (1, 0, 2))
+        value = ttnn.reshape(value, (src_len, bsz, self.num_heads, self.head_dim))
+        value = ttnn.permute(value, (1, 2, 0, 3))  # [bsz, num_heads, src_len, head_dim]
 
-        src_len = key.shape[1]
+        # Use optimized SDPA - fuses Q@K^T + softmax + softmax@V
+        attn_output = ttnn.transformer.scaled_dot_product_attention(
+            query,
+            key,
+            value,
+            is_causal=False,
+            attn_mask=attn_mask,
+            program_config=self.sdpa_program_config,
+            compute_kernel_config=self.compute_kernel_config,
+        )
 
-        B, Nt, E = query.shape
-        q_scaled = query * math.sqrt(1.0 / float(E))
-        key_transposed = ttnn.permute(key, (0, 2, 1))
-
-        if attn_mask is not None:
-            attn_output_weights = ttnn.matmul(q_scaled, key_transposed)
-            attn_output_weights = attn_output_weights + attn_mask
-        else:
-            attn_output_weights = ttnn.matmul(q_scaled, key_transposed)
-
-        attn_output_weights = ttnn.softmax(attn_output_weights, dim=-1)
-
-        attn_output = ttnn.matmul(attn_output_weights, value)
-
-        attn_output = ttnn.permute(attn_output, (1, 0, 2))
+        # Reshape back: [bsz, num_heads, tgt_len, head_dim] -> [tgt_len, bsz, embed_dim]
+        attn_output = ttnn.permute(attn_output, (2, 0, 1, 3))  # [tgt_len, bsz, num_heads, head_dim]
         attn_output = ttnn.reshape(attn_output, (tgt_len * bsz, embed_dim))
 
+        # Output projection
         attn_output = ttnn.linear(attn_output, self.attn_out_proj_weight, bias=self.attn_out_proj_bias)
         attn_output = ttnn.reshape(attn_output, (tgt_len, bsz, attn_output.shape[1]))
-        attn_output_weights = ttnn.reshape(attn_output_weights, (bsz, self.num_heads, tgt_len, src_len))
-        # Optimization: swap dims 1 and 2 for more efficient tiled layout (32x smaller, 32x faster)
-        attn_output_weights = ttnn.permute(attn_output_weights, (0, 2, 1, 3))  # [bsz, tgt_len, num_heads, src_len]
-        attn_output_weights = ttnn.to_layout(attn_output_weights, ttnn.ROW_MAJOR_LAYOUT)
-        attn_output_weights = ttnn.mean(attn_output_weights, dim=2)  # mean over num_heads -> [bsz, tgt_len, src_len]
+
         identity = ttnn.to_layout(identity, ttnn.TILE_LAYOUT)
         if use_signpost:
             signpost(header="TtMultiheadAttention_call_end")

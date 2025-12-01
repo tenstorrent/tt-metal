@@ -71,6 +71,9 @@ class TtSpatialCrossAttention:
 
         bs, num_query, _ = query.shape
 
+        if use_signpost:
+            signpost(header="spatial_cross_attn_mask_compute_start")
+
         D = reference_points_cam.shape[3]
         indexes = []
         for i, mask_per_img in enumerate(bev_mask):
@@ -91,6 +94,12 @@ class TtSpatialCrossAttention:
 
         max_len = max([each.shape[0] for each in indexes])
 
+        if use_signpost:
+            signpost(header="spatial_cross_attn_mask_compute_end")
+
+        if use_signpost:
+            signpost(header="spatial_cross_attn_rebatch_start")
+
         query_torch = ttnn.to_torch(query)
         reference_points_cam_torch = ttnn.to_torch(reference_points_cam)
 
@@ -107,6 +116,13 @@ class TtSpatialCrossAttention:
 
         queries_rebatch = ttnn.from_torch(queries_rebatch, dtype=ttnn.bfloat16, device=self.device)
         reference_points_rebatch = ttnn.from_torch(reference_points_rebatch, dtype=ttnn.bfloat16, device=self.device)
+
+        if use_signpost:
+            signpost(header="spatial_cross_attn_rebatch_end")
+
+        if use_signpost:
+            signpost(header="spatial_cross_attn_deformable_start")
+
         num_cams, l, bs, embed_dims = key.shape
         num_cams, l, bs, embed_dims = key.shape
 
@@ -125,6 +141,9 @@ class TtSpatialCrossAttention:
         )
         ttnn.deallocate(queries_rebatch)
         ttnn.deallocate(reference_points_rebatch)
+
+        if use_signpost:
+            signpost(header="spatial_cross_attn_deformable_end")
 
         queries = ttnn.reshape(queries, (bs, self.num_cams, max_len, self.embed_dims))
 

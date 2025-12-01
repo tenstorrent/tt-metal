@@ -348,11 +348,15 @@ class TtVADHead:
             tmp = hs[lvl]
 
             for i in range(3):
+                # Fuse ReLU with linear for first two layers
+                activation = "relu" if i < 2 else None
                 tmp = ttnn.linear(
-                    tmp, reg_layers[str(i)].weight, bias=reg_layers[str(i)].bias, memory_config=ttnn.L1_MEMORY_CONFIG
+                    tmp,
+                    reg_layers[str(i)].weight,
+                    bias=reg_layers[str(i)].bias,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    activation=activation,
                 )
-                if i < 2:
-                    tmp = ttnn.relu(tmp)
 
             updated_xy = tmp[..., 0:2] + reference[..., 0:2]
             updated_xy = ttnn.sigmoid(updated_xy)
@@ -411,14 +415,15 @@ class TtVADHead:
             reg_params = self.params.head.branches.map_reg_branches[str(lvl)]
             reg_tmp = map_hs[lvl]
             for i in range(3):  # 0,1,2
+                # Fuse ReLU with linear for first two layers
+                activation = "relu" if i < 2 else None
                 reg_tmp = ttnn.linear(
                     reg_tmp,
                     reg_params[str(i)].weight,
                     bias=reg_params[str(i)].bias,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
+                    activation=activation,
                 )
-                if i < 2:
-                    reg_tmp = ttnn.relu(reg_tmp)
             tmp = reg_tmp
 
             assert reference.shape[-1] == 2
@@ -559,14 +564,15 @@ class TtVADHead:
         traj_branch_params = self.params.head.branches.traj_branches["0"]
         motion_h = motion_hs
         for i in range(3):  # 0,1,2
+            # Fuse ReLU with linear for first two layers
+            activation = "relu" if i < 2 else None
             motion_h = ttnn.linear(
                 motion_h,
                 traj_branch_params[str(i)].weight,
                 bias=traj_branch_params[str(i)].bias,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
+                activation=activation,
             )
-            if i < 2:
-                motion_h = ttnn.relu(motion_h)
         outputs_traj = motion_h
         outputs_trajs.append(outputs_traj)
         cls_tmp = motion_hs
@@ -762,14 +768,15 @@ class TtVADHead:
         for i in range(5):
             if i in [0, 2, 4]:  # Linear layers
                 layer_params = ego_fut_decoder_params[str(i)]["0"]
+                # Fuse ReLU with linear for layers 0 and 2 (not 4)
+                activation = "relu" if i in [0, 2] else None
                 cls_tmp = ttnn.linear(
                     cls_tmp,
                     layer_params["weight"],
                     bias=layer_params["bias"],
                     memory_config=ttnn.L1_MEMORY_CONFIG,
+                    activation=activation,
                 )
-            elif i in [1, 3]:  # ReLU layers
-                cls_tmp = ttnn.relu(cls_tmp)
         outputs_ego_trajs = cls_tmp
         outputs_ego_trajs = ttnn.reshape(
             outputs_ego_trajs, (outputs_ego_trajs.shape[0], self.ego_fut_mode, self.fut_ts, 2)

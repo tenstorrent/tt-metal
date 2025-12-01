@@ -90,15 +90,38 @@ class TtDetectionTransformerDecoder:
 
             if reg_branches is not None:
                 # Select reg_branch layers for current lid
-                layers = self.params_branches.reg_branches[str(lid)]
+                # Handle both dict and list access patterns
+                try:
+                    if isinstance(self.params_branches.reg_branches, dict):
+                        layers = self.params_branches.reg_branches[str(lid)]
+                    elif hasattr(self.params_branches.reg_branches, str(lid)):
+                        layers = getattr(self.params_branches.reg_branches, str(lid))
+                    else:
+                        # Fallback: assume it's a list
+                        layers = self.params_branches.reg_branches[lid]
+                except (KeyError, IndexError, AttributeError) as e:
+                    print(f"Error accessing reg_branches for layer {lid}: {e}")
+                    print(f"Type: {type(self.params_branches.reg_branches)}")
+                    print(
+                        f"Available attributes/keys: {dir(self.params_branches.reg_branches) if hasattr(self.params_branches.reg_branches, '__dict__') else 'N/A'}"
+                    )
+                    raise
 
                 tmp = output
                 for i in range(3):
+                    # Also handle dict vs list for layer access
+                    if isinstance(layers, dict):
+                        layer = layers[str(i)]
+                    elif hasattr(layers, str(i)):
+                        layer = getattr(layers, str(i))
+                    else:
+                        layer = layers[i]
+
+                    # Fuse ReLU activation with linear for first two layers
+                    activation = "relu" if i < 2 else None
                     tmp = ttnn.linear(
-                        tmp, layers[str(i)].weight, bias=layers[str(i)].bias, memory_config=ttnn.L1_MEMORY_CONFIG
+                        tmp, layer.weight, bias=layer.bias, memory_config=ttnn.L1_MEMORY_CONFIG, activation=activation
                     )
-                    if i < 2:
-                        tmp = ttnn.relu(tmp)
                 assert reference_points.shape[-1] == 3
 
                 new_reference_points = ttnn.zeros_like(reference_points, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -199,15 +222,35 @@ class TtMapDetectionTransformerDecoder:
             output = ttnn.permute(output, (1, 0, 2))
 
             if map_reg_branches is not None:
-                layers = self.params_branches.map_reg_branches[str(lid)]
+                # Handle both dict and list access patterns
+                try:
+                    if isinstance(self.params_branches.map_reg_branches, dict):
+                        layers = self.params_branches.map_reg_branches[str(lid)]
+                    elif hasattr(self.params_branches.map_reg_branches, str(lid)):
+                        layers = getattr(self.params_branches.map_reg_branches, str(lid))
+                    else:
+                        # Fallback: assume it's a list
+                        layers = self.params_branches.map_reg_branches[lid]
+                except (KeyError, IndexError, AttributeError) as e:
+                    print(f"Error accessing map_reg_branches for layer {lid}: {e}")
+                    print(f"Type: {type(self.params_branches.map_reg_branches)}")
+                    raise
 
                 tmp = output
                 for i in range(3):
+                    # Also handle dict vs list for layer access
+                    if isinstance(layers, dict):
+                        layer = layers[str(i)]
+                    elif hasattr(layers, str(i)):
+                        layer = getattr(layers, str(i))
+                    else:
+                        layer = layers[i]
+
+                    # Fuse ReLU activation with linear for first two layers
+                    activation = "relu" if i < 2 else None
                     tmp = ttnn.linear(
-                        tmp, layers[str(i)].weight, bias=layers[str(i)].bias, memory_config=ttnn.L1_MEMORY_CONFIG
+                        tmp, layer.weight, bias=layer.bias, memory_config=ttnn.L1_MEMORY_CONFIG, activation=activation
                     )
-                    if i < 2:  # Apply ReLU after the first two layers
-                        tmp = ttnn.relu(tmp)
 
                 assert reference_points.shape[-1] == 2
 

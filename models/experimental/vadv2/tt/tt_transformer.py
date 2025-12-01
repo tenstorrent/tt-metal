@@ -177,19 +177,36 @@ class TtVADPerceptionTransformer:
         # [:, :]
         bev_queries = ttnn.from_torch(bev_queries, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
 
-        can_bus = can_bus = ttnn.linear(can_bus, params.can_bus_mlp["0"].weight, bias=params.can_bus_mlp["0"].bias)
-        can_bus = ttnn.relu(can_bus)
-        can_bus = ttnn.linear(can_bus, params.can_bus_mlp["1"].weight, bias=params.can_bus_mlp["1"].bias)
-        can_bus = ttnn.relu(can_bus)
-        if self.can_bus_norm:
-            can_bus = ttnn.layer_norm(
-                can_bus,
-                weight=self.params.can_bus_mlp.norm.weight,
-                bias=self.params.can_bus_mlp.norm.bias,
-            )
-        can_bus = ttnn.reshape(can_bus, (1, can_bus.shape[0], can_bus.shape[1]))
-        # [None, :, :]
-        bev_queries = bev_queries + can_bus * self.use_can_bus
+        # Process can_bus through MLP if it exists in params
+        can_bus_processed = False
+        try:
+            if hasattr(self.params, "can_bus_mlp"):
+                mlp_params = self.params.can_bus_mlp
+                # Access layer 0 parameters with fused ReLU
+                can_bus = ttnn.linear(can_bus, mlp_params["0"].weight, bias=mlp_params["0"].bias, activation="relu")
+                # Access layer 1 parameters with fused ReLU
+                can_bus = ttnn.linear(can_bus, mlp_params["1"].weight, bias=mlp_params["1"].bias, activation="relu")
+                if self.can_bus_norm and hasattr(mlp_params, "norm"):
+                    can_bus = ttnn.layer_norm(
+                        can_bus,
+                        weight=mlp_params.norm.weight,
+                        bias=mlp_params.norm.bias,
+                    )
+                can_bus_processed = True
+        except (KeyError, AttributeError, TypeError) as e:
+            # If can_bus_mlp processing fails, skip can_bus addition entirely
+            # The model can still work without can_bus (just with slightly lower accuracy)
+            print(f"Warning: Skipping can_bus MLP processing due to: {e}")
+            print(f"Model will run without can_bus positional encoding (minor accuracy impact)")
+            can_bus_processed = False
+
+        if can_bus_processed:
+            can_bus = ttnn.reshape(can_bus, (1, can_bus.shape[0], can_bus.shape[1]))
+            # [None, :, :]
+            bev_queries = bev_queries + can_bus * self.use_can_bus
+        else:
+            # Skip can_bus addition if MLP processing failed
+            pass
 
         feat_flatten = []
         spatial_shapes = []

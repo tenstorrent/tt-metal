@@ -301,7 +301,15 @@ class TtVAD:
         if use_signpost:
             signpost(header="TtVAD_simple_test_pts_start")
         x[0] = ttnn.to_layout(x[0], layout=ttnn.TILE_LAYOUT)
+
+        ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer before head
+        if use_signpost:
+            signpost(header="pts_bbox_head_start")
+
         outs = self.pts_bbox_head(x, img_metas, prev_bev=prev_bev, ego_his_trajs=None, ego_lcf_feat=None)
+
+        if use_signpost:
+            signpost(header="pts_bbox_head_end")
         ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer
         outs["bev_embed"] = ttnn.to_torch(outs["bev_embed"]).float()
         outs["all_cls_scores"] = ttnn.to_torch(outs["all_cls_scores"]).float()
