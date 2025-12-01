@@ -33,12 +33,12 @@ def ttnn_integral_image_channel_last(features_nhwc):
     ],
     ids=["OFT32", "OFT16", "OFT8"],
 )
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["DRAM"])
 def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
     torch.manual_seed(0)
 
-    if dtype != ttnn.bfloat16:
+    if dtype != ttnn.bfloat16 and dtype != ttnn.float32:
         pytest.skip("Unsupported dtype")
 
     torch_input_tensor = torch.relu(torch.rand(input_shape_nhwc, dtype=torch.bfloat16))
