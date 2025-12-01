@@ -149,11 +149,11 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
     std::map<std::string, std::string> kernel_defines;
     kernel_defines["RELOAD_IMPL"] = use_reload_impl ? "1" : "0";
 
-    auto src_buffer = input.buffer();
-    auto cos_buffer = cos.buffer();
-    auto sin_buffer = sin.buffer();
-    auto trans_mat_buffer = trans_mat.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* cos_buffer = cos.buffer();
+    auto* sin_buffer = sin.buffer();
+    auto* trans_mat_buffer = trans_mat.buffer();
+    auto* dst_buffer = output.buffer();
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)input_cb_index,
@@ -306,11 +306,11 @@ void RotaryEmbeddingLlamaMultiCore::override_runtime_arguments(
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
 
-    auto src_buffer = tensor_args.input_tensor.buffer();
-    auto cos_buffer = tensor_args.cos_cache.buffer();
-    auto sin_buffer = tensor_args.sin_cache.buffer();
-    auto trans_mat_buffer = tensor_args.trans_mat.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = tensor_args.input_tensor.buffer();
+    auto* cos_buffer = tensor_args.cos_cache.buffer();
+    auto* sin_buffer = tensor_args.sin_cache.buffer();
+    auto* trans_mat_buffer = tensor_args.trans_mat.buffer();
+    auto* dst_buffer = output.buffer();
 
     auto& cached_reader_args = GetRuntimeArgs(program, shared_variables.unary_reader_kernel_id);
     auto& cached_writer_args = GetRuntimeArgs(program, shared_variables.unary_writer_kernel_id);
