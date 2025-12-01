@@ -8,8 +8,8 @@ on:
         type: choice
         options:
           - manual
-          - models-pr
-          - models-accuracy
+          - models-mandatory
+          - models-extended
         default: manual
       build-type:
         required: false
@@ -74,12 +74,18 @@ jobs:
               echo "run-ttnn-models-frequent=${{ inputs.single-card-ttnn-models-frequent }}" >> $GITHUB_OUTPUT
               echo "run-cpp-unit=${{ inputs.cpp-unit }}" >> $GITHUB_OUTPUT
               ;;
-            "models-pr")
-              echo "run-demo=true" >> $GITHUB_OUTPUT
+            "models-mandatory")
+              echo "run-demo=false" >> $GITHUB_OUTPUT
               echo "run-perf-models=false" >> $GITHUB_OUTPUT
-              echo "run-perf-device-models=false" >> $GITHUB_OUTPUT
+              echo "run-perf-device-models=true" >> $GITHUB_OUTPUT
               echo "run-ttnn-models-frequent=true" >> $GITHUB_OUTPUT
-              echo "run-cpp-unit=false" >> $GITHUB_OUTPUT
+              echo "run-cpp-unit=true" >> $GITHUB_OUTPUT
+            "models-extended")
+              echo "run-demo=true" >> $GITHUB_OUTPUT
+              echo "run-perf-models=true" >> $GITHUB_OUTPUT
+              echo "run-perf-device-models=true" >> $GITHUB_OUTPUT
+              echo "run-ttnn-models-frequent=true" >> $GITHUB_OUTPUT
+              echo "run-cpp-unit=true" >> $GITHUB_OUTPUT
               ;;
           esac
   build-artifact:
