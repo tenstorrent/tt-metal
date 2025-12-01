@@ -573,6 +573,10 @@ on:
         description: "Measure end-to-end performance with cold/cached comparison (--perf-with-cache flag)"
         type: boolean
         default: false
+      measure_memory:
+        description: "Capture peak L1 memory usage using graph trace (--measure-memory flag)."
+        type: boolean
+        default: false
       arch:
         required: true
         type: choice
@@ -632,6 +636,7 @@ jobs:
           echo "│ Upload Results:       ${{ github.event.inputs.upload_results == 'true' && 'true' || 'false' }}"
           echo "│ Measure Device Perf:  ${{ github.event.inputs.measure_device_perf == 'true' && 'true' || 'false' }}"
           echo "│ Measure E2E Perf:     ${{ github.event.inputs.measure_e2e_perf == 'true' && 'true' || 'false' }}"
+          echo "│ Measure Memory:       ${{ github.event.inputs.measure_memory == 'true' && 'true' || 'false' }}"
           echo "│ Architecture:         ${{ github.event.inputs.arch || 'wormhole_b0' }}"
           echo "│ Runner Label:         ${{ github.event.inputs['runner-label'] || 'N150' }}"
           echo "│ Log Level:            ${{ github.event.inputs['log-level'] || 'INFO' }}"
@@ -724,6 +729,7 @@ jobs:
           echo "│ Skip on Timeout:      ${{ github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false' }}"
           echo "│ Upload Results:       ${{ github.event.inputs.upload_results == 'true' && 'true' || 'false' }}"
           echo "│ Measure Device Perf:  ${{ github.event.inputs.measure_device_perf == 'true' && 'true' || 'false' }}"
+          echo "│ Measure Memory:       ${{ github.event.inputs.measure_memory == 'true' && 'true' || 'false' }}"
           echo "│ Architecture:         ${{ github.event.inputs.arch || 'wormhole_b0' }}"
           echo "│ Runner Label:         ${{ github.event.inputs['runner-label'] || 'N150' }}"
           echo "│ Log Level:            ${{ github.event.inputs['log-level'] || 'INFO' }}"
@@ -996,6 +1002,11 @@ jobs:
             DEVICE_PERF_FLAG="--device-perf"
           fi
 
+          MEMORY_FLAG=""
+          if [[ "${{ github.event.inputs.measure_memory }}" == "true" ]]; then
+            MEMORY_FLAG="--measure-memory"
+          fi
+
           E2E_PERF_FLAG=""
           if [[ "${{ github.event.inputs.measure_e2e_perf }}" == "true" ]]; then
             E2E_PERF_FLAG="--perf-with-cache"
@@ -1024,6 +1035,10 @@ jobs:
 
           if [[ -n "$SUITE_NAME" ]]; then
             CMD+=(--suite-name "$SUITE_NAME")
+          fi
+
+          if [[ -n "$MEMORY_FLAG" ]]; then
+            CMD+=("$MEMORY_FLAG")
           fi
 
           "${CMD[@]}"
@@ -1099,6 +1114,7 @@ jobs:
           echo "│ Skip on Timeout:      ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false') }}"
           echo "│ Measure Device Perf:  ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.measure_device_perf == 'true' && 'true' || 'false') }}"
           echo "│ Measure E2E Perf:     ${{ github.event_name != 'schedule' && github.event.inputs.measure_e2e_perf == 'true' && 'true' || 'false' }}"
+          echo "│ Measure Memory:       ${{ github.event.inputs.measure_memory == 'true' && 'true' || 'false' }}"
           echo "│ Upload Results:       ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.upload_results == 'true' && 'true' || 'false') }}"
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
@@ -1137,6 +1153,12 @@ jobs:
             E2E_PERF_FLAG="--perf-with-cache"
           fi
 
+          # Enable memory measurement when requested on manual dispatch (disabled by default)
+          MEMORY_FLAG=""
+          if [[ "${{ github.event.inputs.measure_memory }}" == "true" ]]; then
+            MEMORY_FLAG="--measure-memory"
+          fi
+
           CMD=(
             python3 tests/sweep_framework/sweeps_runner.py
             --module-name "$MODULE_SELECTOR"
@@ -1156,6 +1178,10 @@ jobs:
 
           if [[ -n "$E2E_PERF_FLAG" ]]; then
             CMD+=("$E2E_PERF_FLAG")
+          fi
+
+          if [[ -n "$MEMORY_FLAG" ]]; then
+            CMD+=("$MEMORY_FLAG")
           fi
 
           if [[ -n "$SUITE_NAME" ]]; then
