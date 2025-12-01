@@ -72,7 +72,7 @@ inline std::pair<int, int> closest_square_larger_than_b(int b, int width, int he
 }
 
 inline BlockSplitWH split_blocks_for_tilize_wh(
-    CoreRangeSet grid, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles) {
+    CoreRangeSet& grid, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles) {
     // Compute grid area and initial blocks-per-core using integer math.
     const uint32_t grid_area = grid.num_cores();
     auto grid_cores = corerange_to_cores(grid);
@@ -216,7 +216,7 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
         full_cores_per_col};
 }
 
-inline BlockSplit split_blocks_for_tilize(CoreRangeSet grid, uint32_t nblocks) {
+inline BlockSplit split_blocks_for_tilize(const CoreRangeSet& grid, uint32_t nblocks) {
     size_t grid_area = grid.num_cores();
     auto grid_cores = corerange_to_cores(grid);
     const uint32_t nblocks_per_core = grid_area == 0 ? 1 : std::ceil(static_cast<float>(nblocks) / grid_area);

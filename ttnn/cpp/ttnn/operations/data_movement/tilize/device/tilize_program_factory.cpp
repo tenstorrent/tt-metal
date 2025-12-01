@@ -145,9 +145,9 @@ operation::ProgramWithCallbacks tilize_single_core(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_tensors,
             const std::vector<Tensor>& output_tensors) {
-            auto src_buffer = input_tensors.at(0).buffer();
+            auto* src_buffer = input_tensors.at(0).buffer();
 
-            auto dst_buffer = output_tensors.at(0).buffer();
+            auto* dst_buffer = output_tensors.at(0).buffer();
             CoreCoord core_0 = corerange_to_cores(core).at(0);
             {
                 auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core_0);
