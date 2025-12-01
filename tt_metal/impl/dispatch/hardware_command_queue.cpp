@@ -228,10 +228,10 @@ void HWCommandQueue::set_exit_condition() {
 IDevice* HWCommandQueue::device() { return this->device_; }
 
 template <typename T>
-void HWCommandQueue::enqueue_command(T& command, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void HWCommandQueue::enqueue_command(T& command, bool blocking, tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) {
     command.process();
     if (blocking) {
-        this->finish(sub_device_ids);
+        //this->finish(sub_device_ids);
     }
 }
 
@@ -305,7 +305,7 @@ void HWCommandQueue::enqueue_read_from_core(
     }
 
     if (blocking) {
-        this->finish(sub_device_ids);
+        //this->finish(sub_device_ids);
     }
 }
 
@@ -333,7 +333,7 @@ void HWCommandQueue::enqueue_write_to_core(
         sub_device_ids);
 
     if (blocking) {
-        this->finish(sub_device_ids);
+        //this->finish(sub_device_ids);
     }
 }
 
@@ -397,36 +397,6 @@ void HWCommandQueue::read_completion_queue() {
         } else if (this->exit_condition_) {
             return;
         }
-    }
-}
-
-void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScopedN("HWCommandQueue_finish");
-    log_debug(tt::LogDispatch, "Finish for command queue {}", this->id_);
-    std::shared_ptr<Event> event = std::make_shared<Event>();
-    //this->enqueue_record_event(event, sub_device_ids);
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled()) {
-        while (this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_) {
-            if (MetalContext::instance().dprint_server() and
-                MetalContext::instance().dprint_server()->hang_detected()) {
-                // DPrint Server hang, early exit. We're in test mode, so main thread will assert.
-                this->set_exit_condition();
-                return;
-            } else if (MetalContext::instance().watcher_server()->killed_due_to_error()) {
-                // Illegal NOC txn killed watcher, early exit. We're in test mode, so main thread will assert.
-                this->set_exit_condition();
-                return;
-            }
-        }
-    } else {
-        std::unique_lock<std::mutex> lock(this->reads_processed_cv_mutex_);
-        this->reads_processed_cv_.wait(
-            lock, [this] { return this->num_entries_in_completion_q_ == this->num_completed_completion_q_reads_; });
-    }
-    auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
-    for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids)) {
-        auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
-        sub_device_entry.finished(this->id_);
     }
 }
 
