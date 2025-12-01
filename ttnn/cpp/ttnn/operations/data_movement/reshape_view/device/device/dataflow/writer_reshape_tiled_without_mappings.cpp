@@ -10,7 +10,6 @@
 using namespace tt::data_movement::common;
 using ttnn::operations::data_movement::reshape::detail::SegmentMapData;
 using ttnn::operations::data_movement::reshape::detail::unpack_rt_short;
-using ttnn::operations::data_movement::reshape::detail::unpack_short_run_ultra;
 
 void kernel_main() {
     uint32_t num_templates = get_arg_val<uint32_t>(0);
@@ -48,7 +47,8 @@ void kernel_main() {
     uint32_t short_runs_base = tmpl_base + num_templates * 4;
     uint32_t long_runs_base = short_runs_base + num_short_runs * 3;
 
-    uint32_t input_base_addr, previous_input_page_idx = std::numeric_limits<uint32_t>::max();
+    uint32_t input_base_addr = 0;
+    uint32_t previous_input_page_idx = std::numeric_limits<uint32_t>::max();
     bool first = true;
 
     // Process short runs (run_length = 1)

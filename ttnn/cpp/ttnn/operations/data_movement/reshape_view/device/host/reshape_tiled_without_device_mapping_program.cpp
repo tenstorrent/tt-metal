@@ -43,7 +43,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory_with
     tt::tt_metal::Buffer* input_buffer = input_tensor.buffer();
     tt::tt_metal::Buffer* output_buffer = output_tensor.buffer();
 
-    TT_ASSERT(input_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(input_buffer != nullptr, "Input buffer should be allocated on device!");
 
     const uint32_t num_input_pages = tt::div_up(input_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
     const uint32_t num_output_pages = tt::div_up(output_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
@@ -247,4 +247,4 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory_with
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-};  // namespace ttnn::operations::data_movement::reshape
+}  // namespace ttnn::operations::data_movement::reshape
