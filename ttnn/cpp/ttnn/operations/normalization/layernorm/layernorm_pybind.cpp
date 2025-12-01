@@ -100,14 +100,6 @@ void bind_normalization_layernorm_operation(py::module& module) {
                * - BFLOAT16, FLOAT32
                  - TILE, ROW_MAJOR
 
-            .. list-table:: stats (POST_ALL_GATHER only)
-               :header-rows: 1
-
-               * - dtype
-                 - layout
-               * - BFLOAT16
-                 - TILE
-
             .. list-table:: output_tensor
                :header-rows: 1
 
@@ -116,7 +108,7 @@ void bind_normalization_layernorm_operation(py::module& module) {
                * - BFLOAT16, FLOAT32, BFLOAT8_B
                  - TILE
 
-            Output dtype typically matches input; PRE_ALL_GATHER produces BF16
+            Output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
 
         Memory Support:
             - Interleaved: DRAM and L1

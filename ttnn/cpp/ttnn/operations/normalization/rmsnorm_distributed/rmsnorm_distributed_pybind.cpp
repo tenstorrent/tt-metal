@@ -23,7 +23,8 @@ void bind_normalization_rmsnorm_pre_all_gather_operation(py::module& module) {
         module,
         ttnn::rms_norm_pre_all_gather,
         R"doc(
-            Compute sum(:attr:`input_tensor`ˆ2) and sum(:attr:`input_tensor`) over the last dimension.
+            Computes sum(:attr:`input_tensor`ˆ2) and sum(:attr:`input_tensor`) over the last dimension, to efficiently compute RMS norm on a distributed setup.
+            Its output should be combined across devices with an all gather, then followed by :func:`ttnn.rms_norm_post_all_gather` to compute RMS norm.
 
             Note:
               Supported data types and layouts by tensor ::
@@ -43,6 +44,8 @@ void bind_normalization_rmsnorm_pre_all_gather_operation(py::module& module) {
                   - layout
                 * - BFLOAT16, FLOAT32, BFLOAT8_B
                   - TILE
+
+              Output stats tensor will in TILE layout and have dtype of BFLOAT16.
 
             Limitations:
               - All tensors must be on-device.
@@ -67,7 +70,8 @@ void bind_normalization_rmsnorm_post_all_gather_operation(py::module& module) {
         module,
         ttnn::rms_norm_post_all_gather,
         R"doc(
-            Performs the second part of a distributed RMSNorm operation normalizing the input based on the gathered statistics input.
+            Performs the second part of a distributed RMSNorm operation, normalizing the input based on the gathered statistics.
+            The input :attr:`stats` tensor should be computed by :func:`ttnn.rms_norm_pre_all_gather` and then all-gathered across devices.
 
             Note:
               Supported data types and layouts:
@@ -85,7 +89,7 @@ void bind_normalization_rmsnorm_post_all_gather_operation(py::module& module) {
 
                 * - dtype
                   - layout
-                * - BFLOAT16, BFLOAT8_B
+                * - BFLOAT16
                   - TILE
 
               .. list-table:: weight (gamma) and bias (beta)
@@ -95,6 +99,8 @@ void bind_normalization_rmsnorm_post_all_gather_operation(py::module& module) {
                   - layout
                 * - BFLOAT16, FLOAT32
                   - TILE, ROW_MAJOR
+
+              Output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
 
             Limitations:
               - All tensors must be on-device.

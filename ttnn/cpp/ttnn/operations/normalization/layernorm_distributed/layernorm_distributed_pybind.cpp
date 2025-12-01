@@ -28,7 +28,8 @@ void bind_normalization_layernorm_pre_all_gather_operation(py::module& module) {
         module,
         ttnn::layer_norm_pre_all_gather,
         R"doc(
-            Compute sum(:attr:`input_tensor`ˆ2) and sum(:attr:`input_tensor`) over the last dimension.
+          This op computes sum(:attr:`input_tensor`ˆ2) and sum(:attr:`input_tensor`) over the last dimension, to efficiently compute layer norm on a distributed setup.
+          Its output should be combined across devices with an all gather, then followed by :func:`ttnn.layer_norm_post_all_gather` to compute layer norm.
 
             Note:
               Supported data types and layouts by tensor ::
@@ -49,6 +50,7 @@ void bind_normalization_layernorm_pre_all_gather_operation(py::module& module) {
                 * - BFLOAT16, FLOAT32, BFLOAT8_B
                   - TILE
 
+                Output stats tensor will be in TILE layout and have dtype of BFLOAT16.
 
             Limitations:
               - Input tensors must be on-device and rank 4.
@@ -72,7 +74,8 @@ void bind_normalization_layernorm_post_all_gather_operation(py::module& module) 
         module,
         ttnn::layer_norm_post_all_gather,
         R"doc(
-            Performs the second part of a distributed layernorm operation normalizing the input based on the gathered statistics input.
+            Performs the second part of a distributed layernorm operation, normalizing the input based on the gathered statistics.
+            The input :attr:`stats` tensor should be computed by :func:`ttnn.layer_norm_pre_all_gather` and then all-gathered across devices.
 
             Note:
               Supported data types and layouts:
@@ -90,7 +93,7 @@ void bind_normalization_layernorm_post_all_gather_operation(py::module& module) 
 
                 * - dtype
                   - layout
-                * - BFLOAT16, BFLOAT8_B
+                * - BFLOAT16
                   - TILE
 
               .. list-table:: weight (gamma) and bias (beta)
@@ -100,6 +103,8 @@ void bind_normalization_layernorm_post_all_gather_operation(py::module& module) 
                   - layout
                 * - BFLOAT16
                   - ROW_MAJOR
+
+              Output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
 
             Limitations:
               - Input tensors must be on-device and rank 4.
