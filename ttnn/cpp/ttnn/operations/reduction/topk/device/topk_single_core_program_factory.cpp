@@ -36,9 +36,9 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
     uint32_t value_tile_size = tile_size(output_val_cb_data_format);
     uint32_t index_tile_size = tile_size(output_ind_cb_data_format);
 
-    auto input_buffer = input_tensor.buffer();
-    auto values_buffer = value_tensor.buffer();
-    auto index_buffer = index_tensor.buffer();
+    auto* input_buffer = input_tensor.buffer();
+    auto* values_buffer = value_tensor.buffer();
+    auto* index_buffer = index_tensor.buffer();
 
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
     uint32_t Wt = input_shape[3] / TILE_WIDTH;
@@ -190,10 +190,10 @@ void TopKSingleCoreProgramFactory::override_runtime_arguments(
     auto& binary_writer_kernel_id = shared_vars.binary_writer_kernel_id;
     auto& core = shared_vars.core;
 
-    auto input_buffer = tensor_args.input.buffer();
+    auto* input_buffer = tensor_args.input.buffer();
 
-    auto values_buffer = std::get<0>(output_tensors).buffer();
-    auto index_buffer = std::get<1>(output_tensors).buffer();
+    auto* values_buffer = std::get<0>(output_tensors).buffer();
+    auto* index_buffer = std::get<1>(output_tensors).buffer();
 
     {
         auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
