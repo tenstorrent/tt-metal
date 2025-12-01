@@ -80,9 +80,11 @@ class ModelArgs:
 
         # Add missing attributes that Generator expects
         self.max_prefill_chunk_size = 128 * 1024
-        self.model_name = (
-            "gpt-oss-120b" if "gpt-oss-120b" in self.model_path.lower() else "gpt-oss-20b"
-        )  # Model identifier
+        self.model_name = Path(self.model_path).name
+        assert self.model_name in [
+            "gpt-oss-20b",
+            "gpt-oss-120b",
+        ], f"Unrecognized model name {self.model_name} inferred from model path {self.model_path}. Make sure you're using standard huggingface naming convention for your model checkpoint e.g openai/gpt-oss-20b"  # Model identifier
         self.max_context_len = max_seq_len  # Context length for tt_transformers compatibility
 
         if self.dummy_weights:
