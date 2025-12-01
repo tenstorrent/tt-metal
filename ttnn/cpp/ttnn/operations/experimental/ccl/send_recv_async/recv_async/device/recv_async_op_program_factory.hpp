@@ -11,9 +11,9 @@ namespace ttnn::operations::experimental::ccl::recv_async {
 
 struct RecvAsyncSharedVariables {
     std::vector<tt::tt_metal::CoreCoord> receiver_core_coords;
-    tt::tt_metal::KernelHandle reader_kernel_id;
-    tt::tt_metal::KernelHandle writer_kernel_id;
-    bool socket_storage_in_dram;
+    tt::tt_metal::KernelHandle reader_kernel_id{};
+    tt::tt_metal::KernelHandle writer_kernel_id{};
+    bool socket_storage_in_dram = false;
 };
 
 struct RecvAsyncMeshWorkloadFactory {
