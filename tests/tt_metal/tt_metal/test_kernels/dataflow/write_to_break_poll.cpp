@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include "debug/dprint.h"
-#include "hw/inc/dataflow_api.h"
+#include "dataflow_api.h"
 
 void kernel_main() {
     set_l1_data_cache<true>();
