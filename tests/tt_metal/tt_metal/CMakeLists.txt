@@ -77,7 +77,6 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/noc)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/lightmetal)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/sfpi)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/misc)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tunneling)
 
 add_custom_target(
     metal_tests
