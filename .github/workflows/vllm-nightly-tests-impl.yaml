@@ -50,7 +50,7 @@ jobs:
             tt-llama-text-ver: tt_transformers,
             override-tt-config: '{"fabric_config": "FABRIC_1D", "trace_region_size": 28467200}',
             multimodal: true,
-            additional-args: "--max_model_len 2048",
+            additional-server-args: "--max_model_len 2048",
             co-owner-1-id: U07RY6B5FLJ, # Gongyu Wang
           },
           {
@@ -78,7 +78,7 @@ jobs:
             override-tt-config: '{"data_parallel": 8, "sample_on_device_mode": "decode_only"}',
             multimodal: false,
             structured-output: true,
-            additional-args: "--num_scheduler_steps 1",
+            additional-server-args: "--num_scheduler_steps 1",
             owner_id: U091SNDA4TS, # Tomasz Cheda
           },
           {
@@ -107,7 +107,7 @@ jobs:
             override-tt-config: '{"dispatch_core_axis": "col", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 184915840}',
             multimodal: false,
             structured-output: true,
-            additional-args: "--num_scheduler_steps 1",
+            additional-server-args: "--num_scheduler_steps 1",
             owner_id: U091SNDA4TS, # Tomasz Cheda
           },
           {
@@ -122,7 +122,7 @@ jobs:
             override-tt-config: '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 184915840}',
             multimodal: false,
             structured-output: true,
-            additional-args: "--num_scheduler_steps 1",
+            additional-server-args: "--num_scheduler_steps 1",
             owner_id: U091SNDA4TS, # Tomasz Cheda
           },
           {
@@ -165,7 +165,7 @@ jobs:
             mesh-device: "\"(4, 8)\"",
             multimodal: false,
             tt-llama-text-ver: "tt_transformers",
-            additional-args: "--max_num_seqs 1 --num_scheduler_steps 1",
+            additional-server-args: "--max_num_seqs 1 --num_scheduler_steps 1",
             use-vllm-v1: true,
             structured-output: true,
             co-owner-1-id: U08TJ70UFRT, # Harry Andrews
@@ -201,7 +201,7 @@ jobs:
           #   use-vllm-v1: true,
           #   structured-output: true,
           #   multimodal: true,
-          #   additional-args: "--max_model_len 2048",
+          #   additional-server-args: "--max_model_len 2048",
           #   co-owner-1-id: U07RY6B5FLJ, # Gongyu Wang
           # },
           {
@@ -214,7 +214,7 @@ jobs:
             mesh-device: P150x8,
             tt-llama-text-ver: tt_transformers,
             override-tt-config: '{"data_parallel": 8}',
-            additional-args: "--data_parallel_size 8",
+            additional-server-args: "--data_parallel_size 8",
             use-vllm-v1: true,
             structured-output: true,
             multimodal: false,
@@ -230,7 +230,7 @@ jobs:
             mesh-device: TG,
             tt-llama-text-ver: llama3_70b_galaxy,
             override-tt-config: '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 184915840}',
-            additional-args: "--data_parallel_size 4 --max_num_seqs 8",
+            additional-server-args: "--data_parallel_size 4 --max_num_seqs 8",
             use-vllm-v1: true,
             multimodal: false,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
@@ -246,7 +246,7 @@ jobs:
             mesh-device: TG,
             tt-llama-text-ver: llama3_70b_galaxy,
             override-tt-config: '{"dispatch_core_axis": "col", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 184915840}',
-            additional-args: "--data_parallel_size 4 --max_num_seqs 8",
+            additional-server-args: "--data_parallel_size 4 --max_num_seqs 8",
             use-vllm-v1: true,
             structured-output: true,
             multimodal: false,
@@ -263,7 +263,7 @@ jobs:
             mesh-device: TG,
             override-tt-config: '{"data_parallel": 16, "fabric_config": "FABRIC_1D_RING"}',
             tt-llama-text-ver: tt_transformers,
-            additional-args: "--data_parallel_size 16",
+            additional-server-args: "--data_parallel_size 16",
             use-vllm-v1: true,
             structured-output: true,
             multimodal: false,
@@ -279,7 +279,8 @@ jobs:
             arch: arch-wormhole_b0,
             mesh-device: "\"(2, 4)\"",
             override-tt-config: '{"rank_binding": "tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml", "mpi_args": "--allow-run-as-root --tag-output", "config_pkl_dir": "vllm", "register_test_models": true}',
-            additional-args: "--data_parallel_size 8 --tokenizer meta-llama/Llama-3.1-8B-Instruct",
+            additional-server-args: "--data_parallel_size 8 --tokenizer meta-llama/Llama-3.1-8B-Instruct",
+            additional-benchmark-args: "--tokenizer meta-llama/Llama-3.1-8B-Instruct",
             use-vllm-v1: true,
             multimodal: false,
             co-owner-1-id: U08CEGF78ET, # Salar Hosseini Khorasgani
@@ -357,8 +358,8 @@ jobs:
             OVERRIDE_TT_CONFIG=()
           fi
 
-          if [ -n "${{ matrix.test-group.additional-args }}" ]; then
-            ADDITIONAL_ARGS=(${{ matrix.test-group.additional-args }})
+          if [ -n "${{ matrix.test-group.additional-server-args }}" ]; then
+            ADDITIONAL_ARGS=(${{ matrix.test-group.additional-server-args }})
           else
             ADDITIONAL_ARGS=()
           fi
@@ -420,6 +421,12 @@ jobs:
       - name: 📐 Run benchmark
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         run: |
+          if [ -n "${{ matrix.test-group.additional-benchmark-args }}" ]; then
+            ADDITIONAL_BENCHMARK_ARGS=(${{ matrix.test-group.additional-benchmark-args }})
+          else
+            ADDITIONAL_BENCHMARK_ARGS=()
+          fi
+
           vllm bench serve \
             --backend vllm \
             --model ${{ matrix.test-group.model }} \
@@ -431,6 +438,7 @@ jobs:
             --percentile-metrics ttft,tpot,itl,e2el \
             --save-result \
             --result-filename output/vllm_result.json \
+            "${ADDITIONAL_BENCHMARK_ARGS[@]}" \
             2>&1 | tee ${FILE_BENCHMARK_LOG}
 
           # If the backend fails, the benchmark will still complete successfully but with all-zero results.
@@ -445,6 +453,12 @@ jobs:
         if: ${{ matrix.test-group.structured-output }}
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         run: |
+          if [ -n "${{ matrix.test-group.additional-benchmark-args }}" ]; then
+            ADDITIONAL_BENCHMARK_ARGS=(${{ matrix.test-group.additional-benchmark-args }})
+          else
+            ADDITIONAL_BENCHMARK_ARGS=()
+          fi
+
           python3 vllm/benchmarks/benchmark_serving_structured_output.py \
             --backend vllm \
             --model ${{ matrix.test-group.model }} \
@@ -452,6 +466,7 @@ jobs:
             --percentile-metrics ttft,tpot,itl,e2el \
             --save-result \
             --result-filename output/vllm_result_structured.json \
+            "${ADDITIONAL_BENCHMARK_ARGS[@]}" \
             2>&1 | tee ${FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG}
 
           # The benchmark returns zero even if responses are not correct.
