@@ -5,6 +5,7 @@
 #pragma once
 
 #include "compute_kernel_api/common.h"
+#include "tt_metal/include/compute_kernel_api/state_tracker.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
 #include "llk_math_reduce_api.h"
@@ -30,6 +31,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb) {
+    state_configure<Operation::TILIZE>(icb, ocb);
     UNPACK((llk_unpack_tilize_init(icb, block)));
     MATH((llk_math_eltwise_unary_datacopy_init<
           A2D,
@@ -58,6 +60,7 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb) {
  */
 // clang-format on
 ALWI void tilize_init_no_pack(uint32_t icb, uint32_t block) {
+    state_configure<Operation::TILIZE>(icb);
     UNPACK((llk_unpack_tilize_init(icb, block)));
     MATH((llk_math_eltwise_unary_datacopy_init<
           A2D,
@@ -95,6 +98,7 @@ ALWI void tilizeA_B_reduce_init(
     uint32_t ocb,
     uint32_t num_faces = 4,
     uint32_t face_r_dim = 16) {
+    state_configure<Operation::REDUCE>(icb0, icb1_scaler, ocb);
     UNPACK((llk_unpack_tilizeA_B_hw_configure_disaggregated<DST_ACCUM_MODE>(icb0, icb1_scaler)));
     UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true, false, zero_srcA_reduce>(
         icb0, icb1_scaler, block, num_faces, face_r_dim, 1)));
@@ -278,6 +282,7 @@ ALWI void unpack_tilizeA_B_block(
     uint32_t tile_idx_b,
     uint32_t num_faces = 4,
     uint32_t srca_face_r_dim = 16) {
+    state_configure<Operation::BINARY>(icb0, icb1);
     UNPACK((llk_unpack_tilizeA_B_block<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
         icb0, icb1, block, tile_idx_b, num_faces, srca_face_r_dim)));
 }
@@ -373,6 +378,7 @@ ALWI void tilize_uninit_with_dt_no_pack(uint32_t old_icb, uint32_t new_icb) {
 }
 
 ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
+    state_configure<Operation::TILIZE>(icb, ocb);
 #ifdef ARCH_BLACKHOLE
     // Blackhole fallback
     tilize_init(icb, full_dim, ocb);
