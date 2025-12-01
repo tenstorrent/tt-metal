@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
 #include <variant>
 #include <cstdint>
 #include "ttnn/operations/data_movement/reshape_view/reshape_kernel_common.hpp"
@@ -9,12 +10,12 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
-#pragma once
 using PadValue = std::variant<uint32_t, float>;
 
 namespace ttnn::operations::data_movement::reshape {
 namespace detail {
 
+const uint32_t MAX_RT_ARGS = 341;
 struct Dims {
     Dims(const Shape& shape, const std::array<uint32_t, 2>& tile_shape) :
         w(tt::div_up(shape[-1], tile_shape[1])),
@@ -458,7 +459,7 @@ struct ReshapeRTArgsEstimate {
     uint32_t total_cores_used;
     bool exceeds_limit;
 
-    bool can_fit_in_rt_args(uint32_t limit = 341) const {
+    bool can_fit_in_rt_args(uint32_t limit = MAX_RT_ARGS) const {
         return !exceeds_limit && max_reader_args_per_core < limit && max_writer_args_per_core < limit;
     }
 };
@@ -537,7 +538,8 @@ inline ReshapeRTArgsEstimate estimate_reshape_rt_args(
     estimate.max_writer_args_per_core = max_writer_args;
 
     // Check if we exceed limits
-    estimate.exceeds_limit = (estimate.max_reader_args_per_core >= 341) || (estimate.max_writer_args_per_core >= 341);
+    estimate.exceeds_limit =
+        (estimate.max_reader_args_per_core >= MAX_RT_ARGS) || (estimate.max_writer_args_per_core >= MAX_RT_ARGS);
 
     return estimate;
 }

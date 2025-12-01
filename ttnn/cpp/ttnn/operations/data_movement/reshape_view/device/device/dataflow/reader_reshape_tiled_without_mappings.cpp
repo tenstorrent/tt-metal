@@ -12,8 +12,6 @@
 using tt::data_movement::common::enhanced_noc_async_read;
 using ttnn::operations::data_movement::reshape::detail::SegmentMapData;
 using ttnn::operations::data_movement::reshape::detail::unpack_rt_short;
-using ttnn::operations::data_movement::reshape::detail::unpack_short_run_ultra;
-constexpr uint32_t One_Tile_Reserve = 1;
 
 void kernel_main() {
     constexpr uint32_t Tile_Size_Bytes = get_compile_time_arg_val(0);
