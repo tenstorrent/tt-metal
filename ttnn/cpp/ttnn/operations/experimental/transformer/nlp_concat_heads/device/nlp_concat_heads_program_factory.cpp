@@ -213,8 +213,8 @@ void NLPConcatHeadsProgramFactory::override_runtime_arguments(
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
-    auto src_buffer = tensor_args.input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = tensor_args.input.buffer();
+    auto* dst_buffer = output.buffer();
 
     if (shared_vars.in_sharded) {
         UpdateDynamicCircularBufferAddress(program, shared_vars.cb_src0, *src_buffer);

@@ -76,6 +76,7 @@ target_sources(
         core/graph/graph_argument_serializer.cpp
         core/graph/graph_processor.cpp
         core/graph/graph_trace_utils.cpp
+        core/graph/levelized_graph.cpp
         core/old_infra_device_operation.cpp
         core/reports.cpp
         core/run_operation.cpp
@@ -483,6 +484,7 @@ target_sources(
             api/ttnn/graph/graph_query_op_constraints.hpp
             api/ttnn/graph/graph_query_op_runtime.hpp
             api/ttnn/graph/graph_trace_utils.hpp
+            api/ttnn/graph/levelized_graph.hpp
             api/ttnn/mesh_device_operation_adapter.hpp
             api/ttnn/mesh_device_operation_utils.hpp
             api/ttnn/old_infra_device_operation.hpp
@@ -530,9 +532,9 @@ target_sources(
         cpp/ttnn/operations/generic/generic_op.cpp
         cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp
         cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp
-        cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_op.cpp
+        cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_device_operation.cpp
+        cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_program_factory.cpp
         cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather.cpp
-        cpp/ttnn/operations/experimental/ccl/rms_allgather/device/multi_core/rms_allgather_pf.cpp
         cpp/ttnn/operations/experimental/test/hang_device/hang_device_program_factory.cpp
         cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_pre_all_gather.cpp
         cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.cpp

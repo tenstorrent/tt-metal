@@ -395,7 +395,7 @@ TO-DO:
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
     uint32_t test_case_id = 310;
 
     /* Parameters */
@@ -414,7 +414,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllPacketSizes) {
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     uint32_t test_case_id = 311;
 
@@ -518,7 +518,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementAllFromAllCustom) {
     uint32_t test_case_id = 318;
 
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     // Parameters
     CoreCoord mst_start_coord = {0, 0};
