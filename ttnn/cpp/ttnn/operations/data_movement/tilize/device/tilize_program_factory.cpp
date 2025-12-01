@@ -418,29 +418,32 @@ operation::ProgramWithCallbacks tilize_multi_core_block(
         }
     }
 
-    auto override_runtime_args_callback =
-        [reader_kernel_id = unary_reader_kernel_id, writer_kernel_id = unary_writer_kernel_id, cores = cores](
-            const void* operation,
-            const Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            auto* src_buffer = input_tensors.at(0).buffer();
-            auto* dst_buffer = output_tensors.at(0).buffer();
+    auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
+                                           writer_kernel_id = unary_writer_kernel_id,
+                                           cores = cores,
+                                           ncores = ncores](
+                                              const void* operation,
+                                              const Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto* src_buffer = input_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
 
-            auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
-            for (const auto& core : cores) {
-                {
-                    auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
-                    runtime_args[0] = src_buffer->address();
-                }
-                {
-                    auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
-                    runtime_args[0] = dst_buffer->address();
-                }
+        auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+        auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+        for (uint32_t i = 0; i < ncores; ++i) {
+            const auto& core = cores[i];
+            {
+                auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
+                runtime_args[0] = src_buffer->address();
             }
-        };
+            {
+                auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
+                runtime_args[0] = dst_buffer->address();
+            }
+        }
+    };
 
     return {std::move(program), override_runtime_args_callback};
 }
@@ -618,29 +621,32 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(
         SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
     }
 
-    auto override_runtime_args_callback =
-        [reader_kernel_id = unary_reader_kernel_id, writer_kernel_id = unary_writer_kernel_id, cores = cores](
-            const void* operation,
-            const Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            auto* src_buffer = input_tensors.at(0).buffer();
-            auto* dst_buffer = output_tensors.at(0).buffer();
+    auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
+                                           writer_kernel_id = unary_writer_kernel_id,
+                                           cores = cores,
+                                           ncores = ncores](
+                                              const void* operation,
+                                              const Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto* src_buffer = input_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
 
-            auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
-            for (const auto& core : cores) {
-                {
-                    auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
-                    runtime_args[0] = src_buffer->address();
-                }
-                {
-                    auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
-                    runtime_args[0] = dst_buffer->address();
-                }
+        auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+        auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+        for (uint32_t i = 0; i < ncores; ++i) {
+            const CoreCoord& core = cores[i];
+            {
+                auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
+                runtime_args[0] = src_buffer->address();
             }
-        };
+            {
+                auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
+                runtime_args[0] = dst_buffer->address();
+            }
+        }
+    };
 
     return {std::move(program), override_runtime_args_callback};
 }
