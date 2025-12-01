@@ -9,8 +9,8 @@ on:
         type: choice
         options:
           - manual
-          - models-pr
-          - models-accuracy
+          - models-mandatory # unit tests only
+          - models-extended # unit, demo, model perf tests
         default: manual
       build-type:
         required: false
@@ -77,6 +77,22 @@ on:
           - gemma3
           - wan22
           - mochi
+      t3000-model-perf:
+        description: "Model perf tests (needs tracy): Select 'all', specific model or 'disabled'"
+        type: choice
+        default: disabled
+        options:
+          - disabled
+          - all
+          - falcon7b
+          - falcon40b
+          - resnet50
+          - sentence_bert
+          - stable_diffusion_35_large
+          - mochi
+          - wan22
+          - flux1-dev
+          - gemma-3-27b-it
       t3000-frequent:
         description: "Frequent tests: Select 'all', specific model or 'disabled'"
         type: choice
@@ -95,30 +111,14 @@ on:
           - llama3 accuracy
           - llama3_70n90b accuracy
           - llama3_90b
-          # - llama3_70b
-          # - mixtral
+          # - llama3_70b # disabled in -impl file
+          # - mixtral # disabled in -impl file
           - resnet
           - sd35_large
           - flux1
           - mistral
           - wan2.2
           - mochi
-      t3000-model-perf:
-        description: "Model perf tests (needs tracy): Select 'all', specific model or 'disabled'"
-        type: choice
-        default: disabled
-        options:
-          - disabled
-          - all
-          - falcon7b
-          - falcon40b
-          - resnet50
-          - sentence_bert
-          - stable_diffusion_35_large
-          - mochi
-          - wan22
-          - flux1-dev
-          - gemma-3-27b-it
       t3000-nightly:
         required: false
         type: boolean
@@ -137,9 +137,9 @@ jobs:
     outputs:
       run-unit: ${{ steps.logic.outputs.run-unit }}
       run-demo: ${{ steps.logic.outputs.run-demo }}
+      run-model-perf: ${{ steps.logic.outputs.run-model-perf }}
       run-frequent: ${{ steps.logic.outputs.run-frequent }}
       run-nightly: ${{ steps.logic.outputs.run-nightly }}
-      run-model-perf: ${{ steps.logic.outputs.run-model-perf }}
       run-profiler: ${{ steps.logic.outputs.run-profiler }}
     steps:
       - name: Determine test execution
@@ -149,24 +149,24 @@ jobs:
             "manual")
               echo "run-unit=${{ inputs.t3000-unit != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-demo=${{ inputs.t3000-demo != 'disabled' }}" >> $GITHUB_OUTPUT
-              echo "run-frequent=${{ inputs.t3000-frequent != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-model-perf=${{ inputs.t3000-model-perf != 'disabled' }}" >> $GITHUB_OUTPUT
+              echo "run-frequent=${{ inputs.t3000-frequent != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-nightly=${{ inputs.t3000-nightly }}" >> $GITHUB_OUTPUT
               echo "run-profiler=${{ inputs.t3000-profiler }}" >> $GITHUB_OUTPUT
               ;;
-            "models-pr")
+            "models-mandatory")
               echo "run-unit=true" >> $GITHUB_OUTPUT
-              echo "run-demo=true" >> $GITHUB_OUTPUT
-              echo "run-frequent=true" >> $GITHUB_OUTPUT
+              echo "run-demo=false" >> $GITHUB_OUTPUT
               echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              echo "run-frequent=false" >> $GITHUB_OUTPUT
               echo "run-nightly=false" >> $GITHUB_OUTPUT
               echo "run-profiler=false" >> $GITHUB_OUTPUT
               ;;
-            "models-accuracy")
-              echo "run-unit=false" >> $GITHUB_OUTPUT
-              echo "run-demo=false" >> $GITHUB_OUTPUT
+            "models-extended")
+              echo "run-unit=true" >> $GITHUB_OUTPUT
+              echo "run-demo=true" >> $GITHUB_OUTPUT
+              echo "run-model-perf=true" >> $GITHUB_OUTPUT
               echo "run-frequent=false" >> $GITHUB_OUTPUT
-              echo "run-model-perf=false" >> $GITHUB_OUTPUT
               echo "run-nightly=false" >> $GITHUB_OUTPUT
               echo "run-profiler=false" >> $GITHUB_OUTPUT
               ;;
@@ -204,17 +204,6 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-demo || 'all' }}
-  t3000-frequent-tests:
-    if: ${{ needs.determine-tests.outputs.run-frequent == 'true' }}
-    needs: [build-artifact, determine-tests]
-    secrets: inherit
-    uses: ./.github/workflows/t3000-frequent-tests-impl.yaml
-    with:
-      extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-frequent || 'all' }}
   t3000-model-perf-tests:
     if: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
     needs: [build-artifact, determine-tests]
@@ -226,6 +215,17 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-model-perf || 'all' }}
+  t3000-frequent-tests:
+    if: ${{ needs.determine-tests.outputs.run-frequent == 'true' }}
+    needs: [build-artifact, determine-tests]
+    secrets: inherit
+    uses: ./.github/workflows/t3000-frequent-tests-impl.yaml
+    with:
+      extra-tag: ${{ inputs.extra-tag }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-frequent || 'all' }}
   t3000-nightly-tests:
     if: ${{ needs.determine-tests.outputs.run-nightly == 'true' }}
     needs: [build-artifact, determine-tests]
