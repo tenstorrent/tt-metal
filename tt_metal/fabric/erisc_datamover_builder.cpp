@@ -288,6 +288,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         // counters are packed contiguously in memory, This can lead to resends of values but
         // this is safe for free running counters, which are enabled in this mode.
         size_t num_words_consumed_per_counter = tt::align(sizeof(uint32_t) * num_sender_channels, field_size);
+        this->router_buffer_clear_size_words = num_words_consumed_per_counter;
 
         next_l1_addr = tt::align(next_l1_addr, field_size);
 
