@@ -78,6 +78,7 @@ class TtBasicTransformerBlock(LightweightModule):
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
+        self.ln_core_grid_x = model_config.core_grid_x
 
     def forward(self, input_tensor, attention_mask=None, encoder_hidden_states=None):
         N, C, H, W = list(input_tensor.shape)
@@ -93,11 +94,12 @@ class TtBasicTransformerBlock(LightweightModule):
             )
             is_base = True
         elif W == 1280:
+            block_w = W // 32 // self.ln_core_grid_x
             ln_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
-                subblock_w=5,
+                compute_with_storage_grid_size=ttnn.CoreCoord(self.ln_core_grid_x, 8),
+                subblock_w=block_w,
                 block_h=4,
-                block_w=5,
+                block_w=block_w,
                 inplace=False,
                 legacy_reduction=True,
                 legacy_rsqrt=True,
