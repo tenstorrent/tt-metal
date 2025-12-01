@@ -5,6 +5,7 @@
 #include <mesh_device.hpp>
 #include <mesh_device_view.hpp>
 #include <cstddef>
+#include <functional>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -195,10 +196,6 @@ std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates(
     const auto [num_rows, num_cols] = mesh_shape;
     auto [start_row, start_col] = mesh_offset;
 
-    // If true, the line will loop back to the start coordinate as a ring.
-    // Keeping this as a constant for now, may make it configurable in the future.
-    const bool loop_back = true;
-
     // Validate starting position
     TT_FATAL(
         start_row < num_rows && start_col < num_cols,
@@ -209,18 +206,18 @@ std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates(
         num_cols);
 
     const MeshCoordinate start_coord(start_row, start_col);
-    std::unordered_set<MeshCoordinate> visited;
-    std::stack<MeshCoordinate> stack;
-    stack.push(start_coord);
 
-    // Lambda to check if two coordinates are adjacent
+    // Lambda to check if two coordinates are adjacent (direct neighbors only: up, down, left, right)
+    // Does NOT consider diagonal neighbors
     auto are_adjacent = [](const MeshCoordinate& a, const MeshCoordinate& b) -> bool {
         const size_t row_diff = (a[0] > b[0]) ? (a[0] - b[0]) : (b[0] - a[0]);
         const size_t col_diff = (a[1] > b[1]) ? (a[1] - b[1]) : (b[1] - a[1]);
+        // Adjacent means exactly one dimension differs by 1 and the other by 0
+        // This excludes diagonal neighbors (where both differ by 1)
         return (row_diff == 1 && col_diff == 0) || (row_diff == 0 && col_diff == 1);
     };
 
-    // Lambda to get valid unvisited neighbors
+    // Lambda to get valid neighbors (not checking visited - that's done in DFS)
     auto get_neighbors = [&](const MeshCoordinate& coord) -> std::vector<MeshCoordinate> {
         std::vector<MeshCoordinate> neighbors;
         const size_t row = coord[0];
@@ -242,43 +239,66 @@ std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates(
         return neighbors;
     };
 
-    // Simple DFS traversal that forms a ring
-    while (!stack.empty() && line_coords.size() < length) {
-        MeshCoordinate current = stack.top();
-        stack.pop();
-
-        // Skip if already visited
-        if (visited.find(current) != visited.end()) {
-            continue;
+    // Recursive DFS helper with backtracking
+    // First tries to find a ring path, then falls back to any valid path if ring is impossible
+    std::function<bool(std::vector<MeshCoordinate>&, std::unordered_set<MeshCoordinate>&, bool require_ring)> dfs =
+        [&](std::vector<MeshCoordinate>& path, std::unordered_set<MeshCoordinate>& visited, bool require_ring) -> bool {
+        if (path.size() >= length) {
+            return true;
         }
 
-        // If this is the last coordinate, it must be adjacent to start to form a ring
-        if (loop_back && line_coords.size() == length - 1) {
-            if (!are_adjacent(current, start_coord)) {
+        MeshCoordinate current = path.back();
+
+        // Get unvisited neighbors
+        auto neighbors = get_neighbors(current);
+        for (const auto& neighbor : neighbors) {
+            if (visited.find(neighbor) != visited.end()) {
                 continue;
             }
-        }
 
-        // Add to result
-        visited.insert(current);
-        line_coords.push_back(current);
-
-        // If we've collected enough coordinates, stop
-        if (line_coords.size() >= length) {
-            break;
-        }
-
-        // Explore neighbors in DFS order (push in reverse order to process in desired order)
-        auto neighbors = get_neighbors(current);
-        for (auto it = neighbors.rbegin(); it != neighbors.rend(); ++it) {
-            if (visited.find(*it) == visited.end()) {
-                stack.push(*it);
+            // If this is the last coordinate and we require a ring, it must be adjacent to start
+            if (require_ring && path.size() == length - 1) {
+                if (!are_adjacent(neighbor, start_coord)) {
+                    continue;
+                }
             }
+
+            // Try this neighbor
+            path.push_back(neighbor);
+            visited.insert(neighbor);
+
+            if (dfs(path, visited, require_ring)) {
+                return true;
+            }
+
+            // Backtrack
+            path.pop_back();
+            visited.erase(neighbor);
         }
+
+        return false;
+    };
+
+    // Initialize DFS
+    std::unordered_set<MeshCoordinate> visited;
+    visited.insert(start_coord);
+    line_coords.push_back(start_coord);
+
+    // First try to find a ring path (preferred)
+    bool found_ring = dfs(line_coords, visited, /*require_ring=*/true);
+
+    // If ring not possible, fall back to any valid path
+    if (!found_ring) {
+        // Reset and try without ring requirement
+        line_coords.clear();
+        visited.clear();
+        visited.insert(start_coord);
+        line_coords.push_back(start_coord);
+        found_ring = dfs(line_coords, visited, /*require_ring=*/false);
     }
 
     TT_FATAL(
-        line_coords.size() == length,
+        found_ring && line_coords.size() == length,
         "Failed to get line coordinates, got {} coordinates, expected {}",
         line_coords.size(),
         length);
