@@ -11,11 +11,11 @@
 namespace ttnn::operations::data_movement::indexed_fill {
 
 struct IndexedFillDeviceOperation {
-    using operation_attributes_t = operation_attributes_t;
-    using tensor_args_t = tensor_args_t;
-    using spec_return_value_t = spec_return_value_t;
-    using tensor_return_value_t = tensor_return_value_t;
-    using program_factory_t = std::variant<program::IndexedFillProgramFactory>;
+    using operation_attributes_t = indexed_fill::operation_attributes_t;
+    using tensor_args_t = indexed_fill::tensor_args_t;
+    using spec_return_value_t = indexed_fill::spec_return_value_t;
+    using tensor_return_value_t = indexed_fill::tensor_return_value_t;
+    using program_factory_t = std::variant<indexed_fill::program::IndexedFillProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
