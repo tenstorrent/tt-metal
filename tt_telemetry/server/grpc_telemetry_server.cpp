@@ -18,7 +18,7 @@
 #include <atomic>
 #include <map>
 
-#include "telemetry_service.grpc.pb.h"
+#include "include/server/telemetry_service.grpc.pb.h"
 #include <utils/simple_concurrent_queue.hpp>
 
 using grpc::Server;

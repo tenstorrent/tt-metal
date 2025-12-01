@@ -6,8 +6,14 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # Find required packages
 find_package(Threads REQUIRED)
 
-# Find gRPC and Protobuf (handles both modern and older systems)
-include(FindSystemgRPC)
+# Use gRPC and Protobuf from third_party (fetched via CPM)
+# Set up the variables expected by BuildTelemetryProto.cmake
+set(_PROTOBUF_LIBPROTOBUF protobuf::libprotobuf)
+set(_PROTOBUF_PROTOC $<TARGET_FILE:protobuf::protoc>)
+set(_GRPC_GRPCPP grpc++)
+set(_GRPC_CPP_PLUGIN_EXECUTABLE $<TARGET_FILE:grpc_cpp_plugin>)
+set(_REFLECTION grpc++_reflection)
+set(GRPC_FOUND_VIA_CMAKE TRUE)
 
 # Fetch cpp-httplib using CPM (consistent with third_party dependencies)
 CPMAddPackage(

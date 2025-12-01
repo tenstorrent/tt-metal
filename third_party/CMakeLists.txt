@@ -105,6 +105,100 @@ target_compile_options(
 )
 
 ############################################################################################################################
+# abseil-cpp : https://github.com/abseil/abseil-cpp
+############################################################################################################################
+
+CPMAddPackage(
+    NAME abseil-cpp
+    GITHUB_REPOSITORY abseil/abseil-cpp
+    GIT_TAG
+        20230125.2 # Version required by gRPC 1.54.3
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "ABSL_PROPAGATE_CXX_STD ON"
+        "BUILD_TESTING OFF"
+        "ABSL_BUILD_TESTING OFF"
+        "BUILD_SHARED_LIBS OFF"
+        "CMAKE_POSITION_INDEPENDENT_CODE ON"
+)
+
+############################################################################################################################
+# c-ares : https://github.com/c-ares/c-ares
+############################################################################################################################
+
+CPMAddPackage(
+    NAME c-ares
+    GITHUB_REPOSITORY c-ares/c-ares
+    GIT_TAG cares-1_21_0
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "CARES_STATIC ON"
+        "CARES_SHARED OFF"
+        "CARES_BUILD_TOOLS OFF"
+        "CARES_BUILD_TESTS OFF"
+        "BUILD_SHARED_LIBS OFF"
+)
+
+############################################################################################################################
+# re2 : https://github.com/google/re2
+############################################################################################################################
+
+CPMAddPackage(
+    NAME re2
+    GITHUB_REPOSITORY google/re2
+    GIT_TAG 2023-11-01
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "RE2_BUILD_TESTING OFF"
+        "BUILD_SHARED_LIBS OFF"
+        "CMAKE_POSITION_INDEPENDENT_CODE ON"
+    PATCHES
+        re2_disable_install.patch
+)
+
+############################################################################################################################
+# gRPC : https://github.com/grpc/grpc
+############################################################################################################################
+
+CPMAddPackage(
+    NAME gRPC
+    GITHUB_REPOSITORY grpc/grpc
+    GIT_TAG v1.54.3
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "gRPC_BUILD_TESTS OFF"
+        "gRPC_BUILD_CODEGEN ON"
+        "gRPC_BUILD_CSHARP_EXT OFF"
+        "gRPC_BUILD_GRPC_CSHARP_PLUGIN OFF"
+        "gRPC_BUILD_GRPC_NODE_PLUGIN OFF"
+        "gRPC_BUILD_GRPC_OBJECTIVE_C_PLUGIN OFF"
+        "gRPC_BUILD_GRPC_PHP_PLUGIN OFF"
+        "gRPC_BUILD_GRPC_PYTHON_PLUGIN OFF"
+        "gRPC_BUILD_GRPC_RUBY_PLUGIN OFF"
+        "gRPC_INSTALL OFF"
+        "BUILD_SHARED_LIBS OFF"
+        "gRPC_SSL_PROVIDER package"
+        "gRPC_ZLIB_PROVIDER package"
+        "gRPC_PROTOBUF_PROVIDER package"
+        "gRPC_ABSL_PROVIDER package"
+        "gRPC_CARES_PROVIDER package"
+        "gRPC_RE2_PROVIDER package"
+        "gRPC_BUILD_GRPC_CPP_PLUGIN ON"
+        "gRPC_BUILD_GRPC_REFLECTION OFF"
+        "gRPC_BUILD_GRPCPP_CHANNELZ OFF"
+    PATCHES
+        grpc_tools_target.patch
+)
+
+# Help gRPC find protobuf well-known includes
+if(gRPC_ADDED AND protobuf_ADDED)
+    get_target_property(PROTOBUF_INCLUDE_DIR protobuf::libprotobuf INTERFACE_INCLUDE_DIRECTORIES)
+    # Set the variable that gRPC's proto generation rules expect
+    set(_gRPC_PROTOBUF_WELLKNOWN_INCLUDE_DIR "${protobuf_SOURCE_DIR}/src" CACHE STRING "Protobuf wellknown includes" FORCE)
+    message(STATUS "Set _gRPC_PROTOBUF_WELLKNOWN_INCLUDE_DIR to ${_gRPC_PROTOBUF_WELLKNOWN_INCLUDE_DIR}")
+endif()
+
+############################################################################################################################
 # yaml-cpp
 ############################################################################################################################
 
