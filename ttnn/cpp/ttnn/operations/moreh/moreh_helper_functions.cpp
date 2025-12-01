@@ -238,19 +238,6 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     return cb_id;
 }
 
-[[maybe_unused]] CBHandle CreateScratchCB(
-    Program& program, const CoreRangeSet& cores, const uint32_t scratch_cb_index, const tt::DataFormat data_format) {
-    // This CB will be used as scratch storage when reading data from DRAM into L1,
-    // since the two have different alignment requirements on some architectures.
-    // 2 tiles in scratch CB so one can be written to while the other is being read from.
-    constexpr uint32_t scratch_cb_num_tiles = 2;
-    tt_metal::CircularBufferConfig cb_config =
-        tt_metal::CircularBufferConfig(
-            scratch_cb_num_tiles * tt::tile_size(data_format), {{scratch_cb_index, data_format}})
-            .set_page_size(scratch_cb_index, tt::tile_size(data_format));
-    return tt_metal::CreateCircularBuffer(program, cores, cb_config);
-}
-
 void check_tensor(
     const Tensor& tensor,
     const std::string& op_name,

@@ -46,10 +46,7 @@ void kernel_main() {
 
 #if defined(WEIGHT)
     // weight: (1, C)
-    DPRINT << "Calling read_line for weight: " << cb_weight << ", weight_num_tile: " << weight_num_tile << ENDL();
     read_line(cb_weight, cb_weight_scratch, addrg_weight, weight_num_tile);
-
-    DPRINT << "After read_line for weight: " << cb_weight << ", weight_num_tile: " << weight_num_tile << ENDL();
 
     cb_wait_front(cb_weight, weight_num_tile);
     auto weight_l1_ptr = get_read_ptr<uint16_t>(cb_weight);
