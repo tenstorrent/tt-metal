@@ -135,6 +135,8 @@ sfpi_inline void calculate_div_int32_body(
     }
     v_endif;
 
+    // Since the correction might have been rounded, we may need to correct one
+    // additional bit.  The (r - 1) < 0 check is required to handle r=INT_MIN.
     v_if(r < 0 && (r - 1) < 0) {
         q -= 1;
         r += b;
