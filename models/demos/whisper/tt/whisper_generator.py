@@ -32,6 +32,9 @@ class GenerationParams:
     return_timestamps: bool = False
     language: str = "en"
     task: str = "transcribe"
+    prompt: Optional[
+        str
+    ] = None  # Prompt to guide the model's style or specify how to spell unfamiliar words (limited to 224 tokens)
 
 
 # Default values for quality metrics
@@ -48,6 +51,11 @@ NO_SPEECH_TOKEN_ID = 50363
 EOS_TOKEN_ID = 50257  # <|endoftext|> token
 TIMESTAMP_TOKEN_START = 50365
 TIMESTAMP_TOKEN_END = 51864  # 1500 tokens = 30 seconds max
+
+# Prompt-related tokens
+STARTOFPREV_TOKEN_ID = 50362  # <|startofprev|> token for prompt conditioning
+STARTOFTRANSCRIPT_TOKEN_ID = 50258  # <|startoftranscript|> token
+MAX_PROMPT_TOKENS = 224  # Maximum number of tokens allowed in prompt
 
 
 def generate(
@@ -80,6 +88,7 @@ def generate(
     return_timestamps = generation_params.return_timestamps
     language = generation_params.language
     task = generation_params.task
+    prompt = generation_params.prompt
 
     # Process input features
     all_input_features = []
@@ -153,6 +162,7 @@ def generate(
             audio_durations=audio_durations,
             language=language,
             task=task,
+            prompt=prompt,
             streaming=True,
         )
 
@@ -186,6 +196,7 @@ def generate(
                 audio_durations=audio_durations,
                 language=language,
                 task=task,
+                prompt=prompt,
                 streaming=False,  # Non-streaming mode for quality checks
             )
 
@@ -306,6 +317,7 @@ def _generate_with_temperature(
     audio_durations=None,
     language="en",
     task="transcribe",
+    prompt=None,
     streaming=False,
 ):
     """
@@ -330,28 +342,58 @@ def _generate_with_temperature(
             max_pos = max((pos for pos, _ in forced_decoder_ids), default=0)
             forced_decoder_ids.append((max_pos + 1, NOTIMESTAMPS_TOKEN_ID))
 
-    # Create a position-to-token mapping instead of a simple list
-    # This preserves the actual positions (which may be 1-indexed or have gaps)
-    forced_tokens_dict = {pos: token_id for pos, token_id in forced_decoder_ids}
+    # When prompt is provided, the sequence becomes:
+    # <|startofprev|> -> [prompt tokens] -> <|startoftranscript|> -> <|language|> -> <|task|> -> ...
+    prompt_offset = 0
+    if prompt is not None:
+        # Tokenize the prompt
+        prompt_tokens = processor.tokenizer.encode(prompt, add_special_tokens=False)
+
+        # Truncate prompt to MAX_PROMPT_TOKENS if needed
+        if len(prompt_tokens) > MAX_PROMPT_TOKENS:
+            logger.warning(f"Prompt has {len(prompt_tokens)} tokens, truncating to {MAX_PROMPT_TOKENS} tokens")
+            prompt_tokens = prompt_tokens[:MAX_PROMPT_TOKENS]
+
+        # Build forced tokens dict
+        forced_tokens_dict = {0: STARTOFPREV_TOKEN_ID}
+        for i, token in enumerate(prompt_tokens):
+            forced_tokens_dict[i + 1] = token
+        # Add <|startoftranscript|> after prompt
+        forced_tokens_dict[len(prompt_tokens) + 1] = STARTOFTRANSCRIPT_TOKEN_ID
+
+        # Offset for the rest of the forced decoder ids
+        prompt_offset = len(prompt_tokens) + 1  # +1 for <|startofprev|>
+
+        # Shift forced_decoder_ids positions to account for prompt prefix
+        for pos, tok in forced_decoder_ids:
+            forced_tokens_dict[pos + prompt_offset] = tok
+
+        logger.debug(f"Prompt tokens ({len(prompt_tokens)}): {prompt_tokens}")
+    else:
+        # Create a position-to-token mapping
+        forced_tokens_dict = {pos: token_id for pos, token_id in forced_decoder_ids}
+        # Add decoder_start_token at position 0
+        forced_tokens_dict[0] = config.decoder_start_token_id
+
     logger.debug(f"forced_tokens_dict after manipulation: {forced_tokens_dict}")
 
-    # Start with simple start token
-    input_ids = torch.tensor([[1]]) * config.decoder_start_token_id
-    input_ids = input_ids.repeat(input_features.shape[0], 1)
+    # Calculate where actual transcription starts (after all forced tokens including prompt)
+    # This is the first position that is NOT a forced token
+    transcription_start_pos = max(forced_tokens_dict.keys()) + 1 if forced_tokens_dict else 0
+    logger.debug(f"Transcription starts at position: {transcription_start_pos}")
+
+    # Build the full prefix sequence from forced_tokens_dict
+    prefix_sequence = [forced_tokens_dict[pos] for pos in sorted(forced_tokens_dict.keys())]
+    prefix_len = len(prefix_sequence)
+    logger.debug(f"Prefix sequence length: {prefix_len}, tokens: {prefix_sequence}")
+
+    # Initialize input_ids with the full prefix sequence for proper conditioning
+    input_ids = torch.tensor([prefix_sequence]).repeat(input_features.shape[0], 1).to(torch.long)
     logits_processor = get_logits_processor(input_ids, config)
 
     if not kv_cache:
         input_ids = _pad_input_32(input_ids, config.pad_token_id).to(torch.long)
         decoder_start_values = generation_config.pad_token_id * torch.ones(1, 32).to(torch.long)
-
-    # Initial decode position
-    current_decode_pos = (
-        ttnn.from_torch(
-            torch.zeros(unpadded_batch_size), device=mesh_device, dtype=ttnn.int32, mesh_mapper=input_mesh_mapper
-        )
-        if kv_cache
-        else None
-    )
 
     MAX_GEN_LEN = config.max_length
     output_ids = []
@@ -369,8 +411,67 @@ def _generate_with_temperature(
     ttft = 0.0
     avg_decode_throughput = 0.0
 
-    # Generation loop
-    for i in tqdm(range(MAX_GEN_LEN), desc=f"Decode inference iterations (temp={temperature})"):
+    # Run prefill pass for KV cache mode to populate cache with prompt context
+    # Process all but the last prefix token; the last one will be handled by the generation loop
+    # to avoid processing the same token twice with different position embeddings
+    if kv_cache and prefix_len > 1:
+        logger.debug(f"Running prefill pass for {prefix_len - 1} prefix tokens (out of {prefix_len})")
+        # Process prefix tokens except the last one
+        for prefill_pos in range(prefix_len - 1):
+            prefill_input = input_ids[:, prefill_pos : prefill_pos + 1]
+            current_decode_pos = ttnn.from_torch(
+                torch.full((unpadded_batch_size,), prefill_pos),
+                device=mesh_device,
+                dtype=ttnn.int32,
+                mesh_mapper=input_mesh_mapper,
+            )
+
+            decoder_hidden_states, decoder_attention_mask = ttnn_optimized_functional_whisper.preprocess_decoder_inputs(
+                config=config,
+                input_ids=prefill_input,
+                attention_mask=None,
+                parameters=parameters.decoder,
+                device=mesh_device,
+                decode_pos=prefill_pos,
+                create_attention_mask=False,
+                input_mesh_mapper=input_mesh_mapper,
+            )
+
+            _ = ttnn_optimized_functional_whisper.decoder(
+                config,
+                decoder_hidden_states,
+                decoder_attention_mask=decoder_attention_mask,
+                encoder_hidden_states=encoder_hidden_states,
+                kv_cache=kv_cache,
+                current_decode_pos=current_decode_pos,
+                parameters=parameters.decoder,
+            )
+
+        # Set decode position to last prefix position for generation to continue
+        # Prefill filled positions 0 to prefix_len-2, generation continues from prefix_len-1
+        current_decode_pos = ttnn.from_torch(
+            torch.full((unpadded_batch_size,), prefix_len - 1),
+            device=mesh_device,
+            dtype=ttnn.int32,
+            mesh_mapper=input_mesh_mapper,
+        )
+        # Set input_ids to the second-to-last prefix token (the last one processed by prefill)
+        input_ids = input_ids[:, -2:-1]
+        logger.debug(f"Prefill complete, starting generation from position {prefix_len - 1}")
+    else:
+        # Initial decode position for non-KV-cache mode or empty prefix
+        current_decode_pos = (
+            ttnn.from_torch(
+                torch.zeros(unpadded_batch_size), device=mesh_device, dtype=ttnn.int32, mesh_mapper=input_mesh_mapper
+            )
+            if kv_cache
+            else None
+        )
+
+    # Generation loop - start from one position before transcription_start_pos to process the last prefix token
+    # (prefill only processes up to prefix_len-2, so generation handles prefix_len-1 onwards)
+    generation_start = (transcription_start_pos - 1) if kv_cache else 0
+    for i in tqdm(range(generation_start, MAX_GEN_LEN), desc=f"Decode inference iterations (temp={temperature})"):
         start_iter = time.time()
 
         decoder_hidden_states, decoder_attention_mask = ttnn_optimized_functional_whisper.preprocess_decoder_inputs(
@@ -406,7 +507,7 @@ def _generate_with_temperature(
         decoder_output = decoder_output @ ttnn_linear_weight
         logits_to_torch = ttnn.to_torch(decoder_output, mesh_composer=output_mesh_composer)
         next_token_logits = logits_to_torch[:, output_idx, :]
-        next_tokens_scores = logits_processor(input_features, next_token_logits)
+        next_tokens_scores = logits_processor(input_ids, next_token_logits)
 
         # Force tokens at specific positions based on forced_tokens_dict
         if i in forced_tokens_dict:
@@ -414,20 +515,23 @@ def _generate_with_temperature(
         else:
             next_tokens = _sample_token(next_tokens_scores, temperature)
 
-        # Track log probabilities
-        with torch.no_grad():
-            log_probs.append(
-                torch.log_softmax(next_tokens_scores, dim=-1).gather(1, next_tokens.unsqueeze(1)).squeeze(1)
-            )
+        # Only collect output tokens after the forced prefix (prompt + special tokens)
+        # This ensures prompt text doesn't appear in the transcription
+        if i >= transcription_start_pos:
+            # Track log probabilities for actual transcription tokens only
+            with torch.no_grad():
+                log_probs.append(
+                    torch.log_softmax(next_tokens_scores, dim=-1).gather(1, next_tokens.unsqueeze(1)).squeeze(1)
+                )
 
-        output_ids.append(next_tokens)
+            output_ids.append(next_tokens)
 
-        # Track full token sequences for timestamp extraction
-        if return_timestamps:
-            for batch_idx in range(unpadded_batch_size):
-                full_token_sequences[batch_idx].append(next_tokens[batch_idx].item())
+            # Track full token sequences for timestamp extraction
+            if return_timestamps:
+                for batch_idx in range(unpadded_batch_size):
+                    full_token_sequences[batch_idx].append(next_tokens[batch_idx].item())
 
-        if i == 0:
+        if i == generation_start:
             first_token_time = time.time()
             ttft = first_token_time - start_encode
             # Extract no_speech probability from first frame logits
@@ -445,7 +549,9 @@ def _generate_with_temperature(
             ttnn.plus_one(current_decode_pos)
 
         total_decode_time += time.time() - start_iter
-        avg_decode_throughput = (i + 1) / total_decode_time
+        # Calculate throughput based on tokens generated (not including prefix)
+        tokens_generated = i - generation_start + 1
+        avg_decode_throughput = tokens_generated / total_decode_time
 
         for user_id, user_decode_id in enumerate(next_tokens[:unpadded_batch_size]):
             if user_decode_id == config.eos_token_id:
@@ -453,32 +559,34 @@ def _generate_with_temperature(
             if prompt_is_done[user_id]:
                 next_tokens[user_id] = config.eos_token_id
 
-        ttnn_transcription = processor.batch_decode(next_tokens.unsqueeze(dim=1), skip_special_tokens=True)
+        # Only output transcription tokens (skip prompt and forced prefix tokens)
+        if i >= transcription_start_pos:
+            ttnn_transcription = processor.batch_decode(next_tokens.unsqueeze(dim=1), skip_special_tokens=True)
 
-        # Streaming mode: yield incremental results
-        if streaming:
-            # Calculate current average log probability for each batch item
-            if log_probs:
-                current_avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
-            else:
-                current_avg_logprob = torch.zeros(input_features.shape[0])
+            # Streaming mode: yield incremental results
+            if streaming:
+                # Calculate current average log probability for each batch item
+                if log_probs:
+                    current_avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
+                else:
+                    current_avg_logprob = torch.zeros(input_features.shape[0])
 
-            # Use zeros for no_speech_probs if not yet calculated
-            if no_speech_probs is None:
-                current_no_speech_probs = torch.zeros(input_features.shape[0])
-            else:
-                current_no_speech_probs = no_speech_probs
+                # Use zeros for no_speech_probs if not yet calculated
+                if no_speech_probs is None:
+                    current_no_speech_probs = torch.zeros(input_features.shape[0])
+                else:
+                    current_no_speech_probs = no_speech_probs
 
-            # For streaming, we yield the current transcription without timestamps
-            # Timestamps will be processed at the end if return_timestamps=True
-            if return_perf_metrics:
-                yield ttnn_transcription, current_avg_logprob, current_no_speech_probs, ttft, avg_decode_throughput
+                # For streaming, we yield the current transcription without timestamps
+                # Timestamps will be processed at the end if return_timestamps=True
+                if return_perf_metrics:
+                    yield ttnn_transcription, current_avg_logprob, current_no_speech_probs, ttft, avg_decode_throughput
+                else:
+                    yield ttnn_transcription, current_avg_logprob, current_no_speech_probs
             else:
-                yield ttnn_transcription, current_avg_logprob, current_no_speech_probs
-        else:
-            # Non-streaming mode: collect results
-            for idx in range(input_features.shape[0]):
-                output[idx].append(ttnn_transcription[idx])
+                # Non-streaming mode: collect results
+                for idx in range(input_features.shape[0]):
+                    output[idx].append(ttnn_transcription[idx])
 
         if all(prompt_is_done):
             break
@@ -530,15 +638,15 @@ def _generate_with_temperature(
                 decoded_text = processor.batch_decode(
                     torch.tensor(batch_tokens).unsqueeze(0), skip_special_tokens=True
                 )[0]
-                final_output.append(decoded_text)
+                final_output.append(decoded_text.strip())
 
             if return_perf_metrics:
                 yield final_output, avg_logprob, no_speech_probs, ttft, avg_decode_throughput
             else:
                 yield final_output, avg_logprob, no_speech_probs
         else:
-            # Join the collected tokens into final text
-            output = ["".join(tokens) for tokens in output]
+            # Join the collected tokens into final text and strip leading/trailing whitespace
+            output = ["".join(tokens).strip() for tokens in output]
             if return_perf_metrics:
                 yield (output, avg_logprob, no_speech_probs, ttft, avg_decode_throughput)
             else:

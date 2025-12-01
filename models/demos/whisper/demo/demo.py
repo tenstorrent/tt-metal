@@ -685,6 +685,10 @@ def test_demo_for_audio_classification_dataset(
     "stream",
     [False],
 )
+@pytest.mark.parametrize(
+    "prompt",
+    [None],
+)
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_demo_for_conditional_generation(
@@ -702,6 +706,7 @@ def test_demo_for_conditional_generation(
     return_timestamps,
     batch_size_per_device,
     stream,
+    prompt,
     request,
 ):
     generation_params = GenerationParams(
@@ -712,6 +717,7 @@ def test_demo_for_conditional_generation(
         return_timestamps=return_timestamps,
         language=language,
         task=task,
+        prompt=prompt,
     )
     ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
         input_path,
@@ -796,6 +802,10 @@ def test_demo_for_conditional_generation(
     "stream",
     [False],
 )
+@pytest.mark.parametrize(
+    "prompt",
+    [None],
+)
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
 def test_demo_for_conditional_generation_dataset(
     mesh_device,
@@ -810,6 +820,7 @@ def test_demo_for_conditional_generation_dataset(
     return_timestamps,
     batch_size_per_device,
     stream,
+    prompt,
     request,
 ):
     # Skip test in CI when using generate_kwargs
@@ -824,6 +835,7 @@ def test_demo_for_conditional_generation_dataset(
         return_timestamps=return_timestamps,
         language=language,
         task=task,
+        prompt=prompt,
     )
     return run_demo_whisper_for_conditional_generation_dataset(
         mesh_device,
@@ -831,6 +843,59 @@ def test_demo_for_conditional_generation_dataset(
         generation_params,
         batch_size_per_device,
         stream=stream,
+    )
+
+
+@pytest.mark.parametrize(
+    "model_repo",
+    ("openai/whisper-large-v3",),
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size_per_device",
+    [(1)],
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [available_devices]
+    if os.getenv("CI") != "true"
+    else ([1, available_devices] if available_devices != 1 else [available_devices]),
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        'Here are several example lines using “Mister”: Good morning. This is Mister John Smith speaking. Mister Smith will join us shortly and Mister Jones is already here. I asked Mister Anderson if Mister Brown could review the file. From here on, whenever the speaker says the name "Mister …", use "Mister" (not "Mr.") in the transcription.'
+    ],
+)
+def test_demo_for_conditional_generation_with_prompt(
+    mesh_device,
+    model_repo,
+    batch_size_per_device,
+    prompt,
+    is_ci_env,
+    request,
+):
+    """Test conditional generation with a prompt to guide the model's style or spelling."""
+    if is_ci_env:
+        pytest.skip("Skipping prompt test in CI since it provides redundant testing")
+
+    generation_params = GenerationParams(
+        temperatures=0.0,
+        compression_ratio_threshold=None,
+        logprob_threshold=None,
+        no_speech_threshold=None,
+        return_timestamps=False,
+        language="English",
+        task="transcribe",
+        prompt=prompt,
+    )
+    return run_demo_whisper_for_conditional_generation_dataset(
+        mesh_device,
+        model_repo,
+        generation_params,
+        batch_size_per_device,
+        stream=False,
     )
 
 
@@ -858,6 +923,10 @@ def test_demo_for_conditional_generation_dataset(
     "temperatures,compression_ratio_threshold,logprob_threshold,no_speech_threshold,return_timestamps",
     [(0.0, None, None, None, False), (0.0, 2.4, -2.0, 0.6, True)],  # Translation needs relaxed thresholds
 )
+@pytest.mark.parametrize(
+    "prompt",
+    [None],
+)
 def test_demo_for_translation_dataset(
     mesh_device,
     model_repo,
@@ -870,6 +939,7 @@ def test_demo_for_translation_dataset(
     logprob_threshold,
     no_speech_threshold,
     return_timestamps,
+    prompt,
     request,
 ):
     if is_ci_env:
@@ -883,6 +953,7 @@ def test_demo_for_translation_dataset(
         return_timestamps=return_timestamps,
         language=source_language,
         task="translate",
+        prompt=prompt,
     )
     return run_demo_whisper_for_translation_dataset(
         mesh_device,
