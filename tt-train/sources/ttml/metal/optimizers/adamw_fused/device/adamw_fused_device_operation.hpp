@@ -45,6 +45,7 @@ struct AdamWFusedDeviceOperation {
         float epsilon,
         float weight_decay,
         bool amsgrad,
+        bool stochastic_rounding,
         uint32_t step);
 };
 

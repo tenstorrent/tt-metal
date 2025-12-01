@@ -37,6 +37,24 @@ constexpr uint32_t num_tiles_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 constexpr uint32_t twice_block_size = 2 * block_size;
 
+// TODO: This might have to be moved higher, so other optimizers can use it too
+#ifdef TRISC_MATH
+template <int ITERATIONS = 8>
+inline void stochastic_round_tile_face() {
+#pragma GCC unroll ITERATIONS
+    for (int i = 0; i < ITERATIONS; i++) {
+        vFloat a = dst_reg[0];
+        vUInt rounded = float_to_fp16b(a, 1);
+        dst_reg[0] = reinterpret<vFloat>(rounded);
+        dst_reg++;
+    }
+}
+#endif
+
+inline void stochastic_round_tile(uint32_t idx_dst0) {
+    MATH(_llk_math_eltwise_unary_sfpu_params_<false>(stochastic_round_tile_face<8>, idx_dst0));
+}
+
 void MAIN {
     uint32_t runtime_args_counter = 0;
     uint32_t lr = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -209,8 +227,8 @@ void MAIN {
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(cb_param_idx, block_idx, block_size + block_idx);
         }
-        // is weight decay != 1?
         // 0x3F800000 is hexadecimal encoding of 1 in fp32
+        // TODO: Change to be more elegant
         if (decay_factor != 0x3F800000) {
             binop_with_scalar_tile_init();
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
@@ -221,6 +239,11 @@ void MAIN {
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             sub_binary_tile(block_size + block_idx, block_idx, block_idx);
         }
+#if STOCH_ROUND
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            stochastic_round_tile(block_idx);
+        }
+#endif
         tile_regs_commit();
         pack_and_push_block(cb_output_idx, block_size);
         cb_pop_front(cb_param_idx, block_size);

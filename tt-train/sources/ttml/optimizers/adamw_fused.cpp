@@ -82,6 +82,7 @@ void AdamWFused::step() {
             m_beta2_pow,
             m_config.epsilon,
             m_config.weight_decay,
+            m_config.stochastic_rounding,
             m_steps);
     }
 }
@@ -173,6 +174,14 @@ void AdamWFused::set_amsgrad(bool amsgrad) {
     }
     m_config.amsgrad = amsgrad;
     amsgrad ? init_max_exp_avg_sq() : m_max_exp_avg_sq.clear();
+}
+
+bool AdamWFused::get_stochastic_rounding() const {
+    return m_config.stochastic_rounding;
+}
+
+void AdamWFused::set_stochastic_rounding(bool stochastic_rounding) {
+    m_config.stochastic_rounding = stochastic_rounding;
 }
 
 void AdamWFused::init_max_exp_avg_sq() {
