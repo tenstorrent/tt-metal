@@ -271,9 +271,9 @@ void NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory::override_runtime_a
     const auto& overlap_qk_coregrid = cached_program.shared_variables.overlap_qk_coregrid;
     const auto& use_batch_offset = cached_program.shared_variables.use_batch_offset;
 
-    auto dst_buffer_query = output_tensors.at(0).buffer();
-    auto dst_buffer_key = output_tensors.at(1).buffer();
-    auto dst_buffer_value = output_tensors.at(2).buffer();
+    auto *dst_buffer_query = output_tensors.at(0).buffer();
+    auto *dst_buffer_key = output_tensors.at(1).buffer();
+    auto *dst_buffer_value = output_tensors.at(2).buffer();
 
     UpdateDynamicCircularBufferAddress(program, cb_q_output, *dst_buffer_query);
     UpdateDynamicCircularBufferAddress(program, cb_k_output, *dst_buffer_key);
