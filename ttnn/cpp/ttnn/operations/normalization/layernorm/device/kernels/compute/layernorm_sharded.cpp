@@ -14,8 +14,34 @@
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
+#include "dprint_tensix.h"
+#include "dprint_pages.h"
 
 // SPLIT REDUCE across Cores
+
+namespace detail {
+/**
+ * @brief C++17 compatible bit_cast replacement using union
+ * @tparam To The type to cast to
+ * @tparam From The type to cast from
+ * @param from The value to cast from
+ * @return The casted value
+ */
+template <typename To, typename From>
+inline To bit_cast(const From& from) noexcept {
+    static_assert(sizeof(To) == sizeof(From), "Types must have same size");
+    static_assert(std::is_trivially_copyable_v<From>, "From must be trivially copyable");
+    static_assert(std::is_trivially_copyable_v<To>, "To must be trivially copyable");
+
+    union {
+        From f;
+        To t;
+    } u;
+
+    u.f = from;
+    return u.t;
+}
+}  // namespace detail
 namespace NAMESPACE {
 void MAIN {
     namespace kutil = norm::kernel_util;
@@ -142,9 +168,6 @@ void MAIN {
 #endif
     cb_wait_front(cb_in, num_tiles_per_block);
 #else
-#ifndef RMSNORM
-    reconfig_data_format_srcb(cb_in0, cb_scaler);
-#endif  // RMSNORM
 #endif  // FUSE_PRE_ADD
 
 #ifndef RMSNORM
@@ -167,7 +190,6 @@ void MAIN {
     // }
     // reduce_uninit();
     // cb_push_back(cb_ex_partial, block_h);
-
     numeric::row_wise_accumulate_with_epilogue<
         FLOAT32_REDUCTION,
         policies::WaitForInputPolicy::NO_WAIT,
@@ -175,7 +197,12 @@ void MAIN {
         policies::WaitAtEndPolicy::NO_WAIT>(
         cb_in, cb_scaler, cb_ex_partial, block_h, num_reduce_tiles_per_block_h, 1, block_w);
 
-    reconfig_data_format_srca(cb_in, cb_ex_external);
+    // cb_wait_front(cb_ex_partial, block_h);
+    // for (uint32_t i = 0; i < block_h; i++) {
+    //     UNPACK(tt::compute::common::print_full_tile(cb_ex_partial, i, true));
+    // }
+
+    // reconfig_data_format_srca(cb_in, cb_ex_external);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr (is_allgather_worker) {
@@ -194,11 +221,6 @@ void MAIN {
         //     if (use_two_stage_reduce && !is_second_stage_reader) {
         //         cb_wait_front(cb_ex_external, num_blocks_second_stage - 1);
         //         cb_pop_front(cb_ex_external, num_blocks_second_stage - 1);
-        //     }
-        //     if (!use_two_stage_reduce || (use_two_stage_reduce && is_second_stage_reader)) {
-        //         // Divide the accumulated sum by W
-        //         cb_wait_front(cb_ex_external, num_blocks_reduce - 1);
-        //         cb_pop_front(cb_ex_external, num_blocks_reduce - 1);
         //     }
         //     tile_regs_commit();
         //     tile_regs_wait();
@@ -246,6 +268,10 @@ void MAIN {
                 num_tiles_per_allgather_worker,
                 num_blocks_reduce,
                 1);
+
+            // for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
+            //     UNPACK(tt::compute::common::print_full_tile(cb_ex, i, true));
+            // }
         }
     }
 
@@ -343,9 +369,11 @@ void MAIN {
     numeric::row_wise_accumulate_with_epilogue<
         FLOAT32_REDUCTION,
         policies::WaitForInputPolicy::WAIT,
-        policies::PopInputPolicy::POP,
+        policies::PopInputPolicy::NO_POP,
         policies::WaitAtEndPolicy::NO_WAIT>(
         cb_xmm2, cb_scaler, cb_ex_partial2, block_h, num_reduce_tiles_per_block_h, 1, block_w);
+
+    cb_pop_front(cb_xmm2, num_tiles_per_block);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr (is_allgather_worker) {

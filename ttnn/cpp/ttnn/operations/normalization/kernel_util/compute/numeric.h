@@ -16,6 +16,8 @@
 #include "ttnn/operations/normalization/kernel_util/compute/policies.h"
 #include <type_traits>
 #include <array>
+#include "dprint_pages.h"
+#include "dprint_tensix.h"
 
 namespace policies = norm::kernel_util::compute::policies;
 
@@ -62,12 +64,13 @@ inline void accumulate_compute_loop(
     static_assert(
         (std::conjunction_v<std::is_same<AdditionalCBs, uint32_t>...>), "All additional CBs must be uint32_t");
 
+    constexpr bool wait_for_input = wait_for_input_policy == policies::WaitForInputPolicy::WAIT;
     constexpr bool pop_input = pop_input_policy == policies::PopInputPolicy::POP;
 
     auto accumulate_cb = [cb_scalar, block_size, cb_out, num_tiles, start_tile](uint32_t cb) {
         for (uint32_t t = 0; t < num_tiles; t += block_size) {
             const uint32_t num_previous_tiles = pop_input ? 0 : t;
-            if constexpr (wait_for_input_policy == policies::WaitForInputPolicy::WAIT) {
+            if constexpr (wait_for_input) {
                 cb_wait_front(cb, num_previous_tiles + block_size);
             }
             for (uint32_t j = 0; j < block_size; j++) {
@@ -127,7 +130,6 @@ inline void row_wise_accumulate_with_epilogue(
     uint32_t next_tile_row_tile_stride = 0,
     Epilogue epilogue = detail::no_op,
     AdditionalCBs... additional_cbs) {
-    constexpr bool pop_input = pop_input_policy == policies::PopInputPolicy::POP;
     constexpr bool wait_at_end = wait_at_end_policy == policies::WaitAtEndPolicy::WAIT;
 
     cb_wait_front(cb_scalar, 1);
@@ -136,11 +138,17 @@ inline void row_wise_accumulate_with_epilogue(
     pack_reconfig_data_format(cb_out);
     reconfig_data_format(cb_in, cb_scalar);
     reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in, cb_scalar, cb_out);
-    tile_regs_acquire();
     uint32_t start_tile = 0;
     for (uint32_t i = 0; i < num_tile_rows; i++) {
+        tile_regs_acquire();
+
         detail::accumulate_compute_loop<FLOAT32_REDUCTION, wait_for_input_policy, pop_input_policy>(
             cb_in, cb_scalar, cb_out, start_tile, num_tiles_per_tile_row, block_size, additional_cbs...);
+
+        // if constexpr (wait_for_input_policy == policies::WaitForInputPolicy::WAIT && pop_input_policy ==
+        // policies::PopInputPolicy::POP) {
+        //     dprint_tensix_dest_reg<true>(detail::dst0);
+        // }
 
         epilogue();
 
@@ -150,9 +158,16 @@ inline void row_wise_accumulate_with_epilogue(
         pack_tile(detail::dst0, cb_out);
         tile_regs_release();
 
+        // if constexpr (wait_for_input_policy == policies::WaitForInputPolicy::WAIT && pop_input_policy ==
+        // policies::PopInputPolicy::POP) {
+        //     cb_push_back(cb_out, 1);
+        //     cb_wait_front(cb_out, 1);
+        //     UNPACK(tt::compute::common::print_full_tile(cb_out, 0, true));
+        // }
+
         start_tile += next_tile_row_tile_stride;
     }
-    reduce_uninit<FLOAT32_REDUCTION>();
+    reduce_uninit();
     cb_push_back(cb_out, num_tile_rows);
 
     if constexpr (wait_at_end) {
@@ -208,7 +223,7 @@ inline void row_wise_mean(
         num_tiles_per_tile_row,
         block_size,
         next_tile_row_tile_stride,
-        [&one_over_N]() { detail::scale_dest(detail::dst0, one_over_N); });
+        [one_over_N]() { detail::scale_dest(detail::dst0, one_over_N); });
 }
 
 /**
