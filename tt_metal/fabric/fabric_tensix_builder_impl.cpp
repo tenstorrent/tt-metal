@@ -457,7 +457,7 @@ std::vector<MuxConnectionInfo> FabricTensixDatamoverMuxConfig::get_all_mux_conne
     // Collect connection info for each downstream mux
     for (uint32_t i = 0; i < downstream_dirs.size(); i++) {
         auto downstream_dir = downstream_dirs[i];
-        auto downstream_mux_noc_coord =
+        const auto* downstream_mux_noc_coord =
             tensix_config.get_router_noc_coords(fabric_node_id, routing_plane_id, downstream_dir);
 
         // Calculate which channel on the downstream mux this mux should connect to
@@ -484,8 +484,8 @@ std::vector<uint32_t> FabricTensixDatamoverMuxConfig::get_compile_time_args(
     const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     const auto& fabric_router_config = fabric_context.get_fabric_router_config(fabric_tensix_config);
 
-    auto channel_allocator = fabric_router_config.channel_allocator.get();
-    const auto static_channel_allocator =
+    auto* channel_allocator = fabric_router_config.channel_allocator.get();
+    auto* const static_channel_allocator =
         dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
     TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
 
@@ -676,7 +676,7 @@ FabricTensixDatamoverRelayConfig::get_all_mux_connection_infos(
 
     for (uint32_t i = 0; i < NUM_MUX_CONNECTIONS; i++) {
         auto target_dir = target_mux_dirs[i];
-        auto mux_noc_coord = tensix_config.get_router_noc_coords(fabric_node_id, routing_plane_id, target_dir);
+        const auto* mux_noc_coord = tensix_config.get_router_noc_coords(fabric_node_id, routing_plane_id, target_dir);
 
         // Determine which channel on the target mux we connect to
         uint32_t mux_channel_id;
@@ -1016,7 +1016,7 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_persistent_channels_f
                 UdmMuxRelayToMuxChannelId::WEST_OR_SOUTH_RELAY_CHANNEL};
 
             for (size_t i = 0; i < upstream_relay_dirs.size(); i++) {
-                auto noc_coords =
+                const auto* noc_coords =
                     tensix_config.get_router_noc_coords(local_fabric_node_id_, link_idx_, upstream_relay_dirs[i]);
                 if (noc_coords) {
                     is_persistent_channels[static_cast<uint32_t>(upstream_relay_channels[i])] = 1;
@@ -1030,7 +1030,8 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_persistent_channels_f
 
             auto upstream_mux_dirs = get_all_other_directions(direction_);
             for (auto upstream_dir : upstream_mux_dirs) {
-                auto noc_coords = tensix_config.get_router_noc_coords(local_fabric_node_id_, link_idx_, upstream_dir);
+                const auto* noc_coords =
+                    tensix_config.get_router_noc_coords(local_fabric_node_id_, link_idx_, upstream_dir);
                 if (noc_coords) {
                     uint32_t channel_id = get_upstream_mux_channel_id(direction_, upstream_dir);
                     is_persistent_channels[channel_id] = 1;
