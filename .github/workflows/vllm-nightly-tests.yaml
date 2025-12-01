@@ -7,6 +7,10 @@ on:
         description: "vLLM branch or sha"
         required: false
         default: dev
+      model:
+        description: "Model to test (or 'all' for all models)"
+        required: false
+        default: "all"
   schedule:
     - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC
 
@@ -28,3 +32,4 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       vllm-commit: ${{ inputs.vllm-commit || 'dev' }}
+      model: ${{ inputs.model || 'all' }}
