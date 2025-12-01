@@ -274,7 +274,7 @@ RotaryEmbeddingProgramFactory::cached_program_t RotaryEmbeddingProgramFactory::c
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations//experimental/transformer/rotary_embedding/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/dataflow/"
         "writer_rotary_embedding_interleaved_start_id.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_kernel_defines));
