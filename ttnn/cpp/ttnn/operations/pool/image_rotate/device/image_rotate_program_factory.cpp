@@ -11,6 +11,7 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_utils.hpp"
+#include "fixed_point_q16.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -230,15 +231,21 @@ ImageRotateDeviceOperation::ProgramFactory::cached_program_t ImageRotateDeviceOp
         const uint32_t num_sticks =
             core_group_1.contains(core) ? num_sticks_per_core_group_1 : num_sticks_per_core_group_2;
 
+        // Convert rotation parameters to Q16.16 fixed-point format on host side
+        const int32_t cos_angle_q16 = float_to_q16(cos_angle);
+        const int32_t sin_angle_q16 = float_to_q16(sin_angle);
+        const int32_t center_x_q16 = float_to_q16(center_x);
+        const int32_t center_y_q16 = float_to_q16(center_y);
+
         // Reader runtime args
         std::vector<uint32_t> reader_runtime_args = {
             input_tensor.buffer()->address(),       // rt_arg[0]: input_buffer_address
             num_sticks,                             // rt_arg[1]: num_sticks
             sticks_processed,                       // rt_arg[2]: start_stick_id
-            std::bit_cast<uint32_t>(cos_angle),     // rt_arg[3]: cos_angle (as uint32 bits)
-            std::bit_cast<uint32_t>(sin_angle),     // rt_arg[4]: sin_angle (as uint32 bits)
-            std::bit_cast<uint32_t>(center_x),      // rt_arg[5]: center_x (as uint32 bits)
-            std::bit_cast<uint32_t>(center_y),      // rt_arg[6]: center_y (as uint32 bits)
+            static_cast<uint32_t>(cos_angle_q16),   // rt_arg[3]: cos_angle (Q16.16)
+            static_cast<uint32_t>(sin_angle_q16),   // rt_arg[4]: sin_angle (Q16.16)
+            static_cast<uint32_t>(center_x_q16),    // rt_arg[5]: center_x (Q16.16)
+            static_cast<uint32_t>(center_y_q16),    // rt_arg[6]: center_y (Q16.16)
             static_cast<uint32_t>(fill_value_bf16)  // rt_arg[7]: fill_value (bfloat16)
         };
 
@@ -302,17 +309,23 @@ void ImageRotateDeviceOperation::ProgramFactory::override_runtime_arguments(
 
     const uint16_t fill_value_bf16 = float_to_bfloat16(operation_attributes.fill);
 
+    // Convert rotation parameters to Q16.16 fixed-point format
+    const int32_t cos_angle_q16 = float_to_q16(cos_angle);
+    const int32_t sin_angle_q16 = float_to_q16(sin_angle);
+    const int32_t center_x_q16 = float_to_q16(center_x);
+    const int32_t center_y_q16 = float_to_q16(center_y);
+
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
-            // Update rotation parameters (rt_args 3-7)
-            runtime_args[3] = std::bit_cast<uint32_t>(cos_angle);
-            runtime_args[4] = std::bit_cast<uint32_t>(sin_angle);
-            runtime_args[5] = std::bit_cast<uint32_t>(center_x);
-            runtime_args[6] = std::bit_cast<uint32_t>(center_y);
+            // Update rotation parameters (rt_args 3-7) - now in Q16.16 format
+            runtime_args[3] = static_cast<uint32_t>(cos_angle_q16);
+            runtime_args[4] = static_cast<uint32_t>(sin_angle_q16);
+            runtime_args[5] = static_cast<uint32_t>(center_x_q16);
+            runtime_args[6] = static_cast<uint32_t>(center_y_q16);
             runtime_args[7] = static_cast<uint32_t>(fill_value_bf16);
         }
 
