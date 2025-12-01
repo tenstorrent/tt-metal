@@ -732,8 +732,13 @@ void py_module(nb::module_& mod) {
             )doc");
     mod.def(
            "from_host_shards",
-           [](const std::list<Tensor>& tensors, const MeshShape& mesh_shape) -> Tensor {
-               std::vector<Tensor> vec{tensors.begin(), tensors.end()};
+           [](nb::list tensors, const MeshShape& mesh_shape) -> Tensor {
+               std::vector<Tensor> vec;
+               vec.reserve(tensors.size());
+
+               for (nb::handle h : tensors) {
+                   vec.emplace_back(nb::cast<Tensor>(h));
+               }
 
                return from_host_shards(vec, mesh_shape);
            },
