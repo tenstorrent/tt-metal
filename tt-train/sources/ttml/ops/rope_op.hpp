@@ -25,7 +25,6 @@ struct RotaryEmbeddingParams {
     uint32_t sequence_length = 0U;
     uint32_t head_dim = 0U;
     float theta = 10000.0F;
-    bool is_decode_mode = false;
 
     RopeScalingParams rope_scaling_params;
 };

@@ -145,12 +145,14 @@ autograd::TensorPtr rope(
         neg_sin_cache_to_use = ttnn::slice(params.neg_sin_cache, start, end, step);
     }
 
+    // after setting is_decode_mode to and converting all required tensors' memory layout to SHARDED, receiving DRAM OOM
+    // errors
     auto out_tensor = ttnn::experimental::rotary_embedding_llama(
         squish_batch(input->get_value()),
         cos_cache_to_use,
         sin_cache_to_use,
         params.trans_mat,
-        /*is_decode_mode=*/params.is_decode_mode,
+        /*is_decode_mode=*/false,
         /*memory_config=*/std::nullopt,
         /*compute_kernel_config=*/core::ComputeKernelConfig::precise());
     auto batched_output = unsquish_batch(out_tensor);
@@ -169,7 +171,7 @@ autograd::TensorPtr rope(
                 neg_cos_cache_to_use,
                 neg_sin_cache_to_use,
                 params.trans_mat,
-                /*is_decode_mode=*/params.is_decode_mode,
+                /*is_decode_mode=*/false,
                 /*memory_config=*/std::nullopt,
                 /*compute_kernel_config=*/core::ComputeKernelConfig::precise());
             auto unsquished = unsquish_batch(dL_dinput);
