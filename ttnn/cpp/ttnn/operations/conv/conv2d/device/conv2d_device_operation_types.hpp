@@ -118,6 +118,10 @@ struct Conv2dConfig {
     // Feature is currently supported only for BLOCK_SHARDED layout, without DRAM slicing
     // Additionally, NHW number of cores must match between input and output tensors
     bool override_output_sharding_config = false;
+
+    // Forces activation multicast splitting for block sharded convolutions when split reader is enabled.
+    // When enabled, the activation multicast operation is split between the main reader and second reader.
+    std::optional<bool> force_act_mcast_split = std::nullopt;
     // ===============================================================
 
     static constexpr auto attribute_names = std::make_tuple(
@@ -140,7 +144,8 @@ struct Conv2dConfig {
         "enable_kernel_stride_folding",
         "enable_activation_reuse",
         "force_split_reader",
-        "override_output_sharding_config");
+        "override_output_sharding_config",
+        "force_act_mcast_split");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->weights_dtype),
@@ -162,7 +167,8 @@ struct Conv2dConfig {
             std::cref(this->enable_kernel_stride_folding),
             std::cref(this->enable_activation_reuse),
             std::cref(this->force_split_reader),
-            std::cref(this->override_output_sharding_config));
+            std::cref(this->override_output_sharding_config),
+            std::cref(this->force_act_mcast_split));
     }
 };
 
@@ -207,6 +213,7 @@ struct operation_attributes_t {
     bool config_tensors_in_dram = false;
     uint32_t pre_op_l1_allocation_size_bytes = 0;
     std::optional<bool> force_split_reader;
+    std::optional<bool> force_act_mcast_split;
 };
 
 struct hashable_operation_attributes_t {
@@ -226,6 +233,7 @@ struct hashable_operation_attributes_t {
     bool enable_activation_reuse = false;
     bool config_tensors_in_dram = false;
     std::optional<bool> force_split_reader;
+    std::optional<bool> force_act_mcast_split;
 };
 
 struct tensor_args_t {

@@ -94,6 +94,7 @@ ttnn::operations::conv::conv2d::Conv2dDeviceOperation::tensor_return_value_t con
     bool full_inner_dim,
     bool enable_activation_reuse,
     bool config_tensors_in_dram,
-    std::optional<bool> force_split_reader);
+    std::optional<bool> force_split_reader,
+    std::optional<bool> force_act_mcast_split);
 
 }  // namespace ttnn::prim

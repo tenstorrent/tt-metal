@@ -283,10 +283,13 @@ void MAIN {
                         }
                         tilize_in<true, !split_reader || split_reader_cb_shared>(
                             in0_pretilize_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
-
+                        DPRINT << "cb: " << tilized_in0_cb_id
+                               << " FIRST TILIZE IN: " << in0_num_subblocks_read * in0_block_w << ENDL();
                         if constexpr (split_reader && !split_reader_cb_shared) {
                             tilize_in<false, true>(
                                 in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
+                            DPRINT << "cb: " << tilized_in0_cb_id
+                                   << " SECOND TILIZE IN: " << in0_num_subblocks_read_last * in0_block_w << ENDL();
                         }
                         mm_block_init_short_with_both_dt(
                             in0_cb_id,
@@ -517,6 +520,7 @@ void MAIN {
 
                 cb_pop_front(mm_in0_cb_id, in0_block_num_tiles);
                 cb_pop_front(in1_cb_id, in1_block_num_tiles);
+                DPRINT << "POP FRONT MM CBS" << ENDL();
             }  // for in0_num_blocks_w
             if constexpr (matmul_partials_cb == mm_out_cb_id && partials_cb_uses_output) {
                 UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);

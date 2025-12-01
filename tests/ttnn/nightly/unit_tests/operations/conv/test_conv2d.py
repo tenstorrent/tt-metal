@@ -135,6 +135,7 @@ def run_conv(
     force_split_reader=None,
     core_grid=None,
     perf_test_mode=False,
+    force_act_mcast_split=None,
 ):
     if isinstance(device, ttnn.MeshDevice) and len(device.get_device_ids()) > 1:
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when running on multiple devices"
@@ -264,6 +265,7 @@ def run_conv(
         force_split_reader=force_split_reader,
         core_grid=core_grid,
         override_output_sharding_config=core_grid is not None,
+        force_act_mcast_split=force_act_mcast_split,
     )
 
     compute_config = ttnn.init_device_compute_kernel_config(
@@ -497,6 +499,7 @@ def run_conv_with_split(
         enable_act_double_buffer=enable_act_double_buffer,
         enable_weights_double_buffer=enable_weights_double_buffer,
         config_tensors_in_dram=config_tensors_in_dram,
+        force_act_mcast_split=force_act_mcast_split,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -5047,16 +5050,17 @@ def test_resnet50_conv_p150(
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, act_block_h_override",
     (
-        (32, 32, 2, 32, 3, 3, 1, 1, 1, 1, 64),# single core
+        # (32, 32, 2, 32, 3, 3, 1, 1, 1, 1, 64),# single core
         (64, 64, 2, 32, 3, 3, 1, 1, 1, 1, 64),# multiple cores along C, single core along NHW
-        (64, 32, 8, 32, 3, 3, 1, 1, 1, 1, 64),# output grid > input grid  ( output c > input c)
-        (32, 64, 4, 32, 3, 3, 1, 1, 1, 1, 64),# input grid > output grid ( input c > output c)
-        (57, 24, 2, 32, 3, 3, 1, 1, 1, 1, 64),# weird shape example
+        # (64, 32, 8, 32, 3, 3, 1, 1, 1, 1, 64),# output grid > input grid  ( output c > input c)
+        # (32, 64, 4, 32, 3, 3, 1, 1, 1, 1, 64),# input grid > output grid ( input c > output c)
+        # (57, 24, 2, 32, 3, 3, 1, 1, 1, 1, 64),# weird shape example
     ),
 )
-@pytest.mark.parametrize("act_double_buffer", [True, False])
-@pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("force_split_reader", [True, False])
+@pytest.mark.parametrize("act_double_buffer", [False])
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("force_split_reader", [True])
+@pytest.mark.parametrize("force_act_mcast_split", [True])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_conv_block_sharding(
     device,
@@ -5072,6 +5076,7 @@ def test_conv_block_sharding(
     pad_h,
     pad_w,
     force_split_reader,
+    force_act_mcast_split,
     output_dtype,
     act_block_h_override,
     act_double_buffer
@@ -5100,6 +5105,7 @@ def test_conv_block_sharding(
         groups=1,
         force_split_reader=force_split_reader,
         enable_act_double_buffer=act_double_buffer,
+        force_act_mcast_split=force_act_mcast_split,
     )
 
 

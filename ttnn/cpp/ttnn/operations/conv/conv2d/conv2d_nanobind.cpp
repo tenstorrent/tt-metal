@@ -299,7 +299,8 @@ void bind_conv2d(nb::module_& mod) {
             std::optional<bool>,
             bool,
             std::optional<bool>,
-            bool>(),
+            bool,
+            std::optional<bool>>(),
         nb::kw_only(),
         nb::arg("weights_dtype") = nb::none(),
         nb::arg("activation") = nb::none(),
@@ -320,7 +321,8 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("enable_kernel_stride_folding") = nb::none(),
         nb::arg("enable_activation_reuse") = false,
         nb::arg("force_split_reader") = nb::none(),
-        nb::arg("override_output_sharding_config") = false);
+        nb::arg("override_output_sharding_config") = false,
+        nb::arg("force_act_mcast_split") = nb::none());
 
     py_conv_config.def_rw("weights_dtype", &Conv2dConfig::weights_dtype, R"doc(
         Optional argument which specifies the data type of the preprocessed weights & bias tensor if the Conv2D op is responsible for preparing the weights.
@@ -511,6 +513,26 @@ void bind_conv2d(nb::module_& mod) {
         This impacts the core grid that executes matmul part of conv2d
         Feature is currently supported only for BLOCK_SHARDED layout, without DRAM slicing
         Additionally, NHW number of cores must match between input and output tensors
+
+        ===============================================================
+    )doc");
+
+    py_conv_config.def_rw("force_act_mcast_split", &Conv2dConfig::force_act_mcast_split, R"doc(
+        ===================== EXPERIMENTAL FEATURE ======================
+
+        Forces activation multicast splitting for block sharded convolutions when split reader is enabled.
+
+        When enabled, the activation multicast operation is split between the main reader and second reader:
+        - The main reader multicasts the first portion of activation tiles
+        - The second reader (writer kernel) multicasts the remaining tiles
+
+        This optimization is only applicable for block sharded convolutions with split reader enabled.
+
+        Args:
+            force_act_mcast_split (Optional[bool]):
+                - None (default): Uses internal heuristics to decide
+                - True: Force enable activation multicast splitting
+                - False: Disable activation multicast splitting
 
         ===============================================================
     )doc");

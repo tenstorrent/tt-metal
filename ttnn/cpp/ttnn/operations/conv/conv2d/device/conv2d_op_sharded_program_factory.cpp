@@ -201,6 +201,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     const auto enable_activation_reuse = operation_attributes.enable_activation_reuse;
     const auto config_tensors_in_dram = operation_attributes.config_tensors_in_dram;
     const auto& force_split_reader = operation_attributes.force_split_reader;
+    const auto& force_act_mcast_split = operation_attributes.force_act_mcast_split;
 
     distributed::MeshDevice* device = a.device();
     TT_FATAL(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
@@ -342,6 +343,8 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         TT_FATAL(stride_h == 1 && stride_w == 1, "Activation data reuse is not supported for stride > 1");
         TT_FATAL(enable_split_reader, "Activation data reuse requires split reader to be on");
     }
+    const bool act_mcast_split =
+        enable_split_reader && block_sharded && !skip_activation_mcast && force_act_mcast_split.value_or(false);
 
     TT_FATAL(input_channels_padded >= ashape[3], "Incorrect padding of input channels!");
     // check is for 16-byte alignment
@@ -631,7 +634,8 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         .enable_act_double_buffer = enable_act_double_buffer,
         .enable_weights_double_buffer = enable_weights_double_buffer,
         .enable_activation_reuse = enable_activation_reuse,
-        .force_split_reader = force_split_reader};
+        .force_split_reader = force_split_reader,
+        .force_act_mcast_split = force_act_mcast_split};
     std::vector<CBInfo> cb_info = get_cb_info(
         compute_kernel_config,
         block_config,
@@ -685,6 +689,8 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     uint32_t act_mcast_receiver_semaphore_id = 0;
     uint32_t act_split_reader_reserve_done_semaphore_id = 0;
     uint32_t act_split_reader_write_done_semaphore_id = 0;
+    uint32_t act_mcast_reserve_done_semaphore_id = 0;
+    uint32_t act_mcast_receiver_second_semaphore_id = 0;
 
     // Check if we should run BRISC kernels on cores that are not in the output grid ( when split reader is enabled and
     // the output grid is smaller than the input grid)
@@ -716,6 +722,11 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         }
         act_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
         act_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+
+        if (act_mcast_split) {
+            act_mcast_reserve_done_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+            act_mcast_receiver_second_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+        }
 
         if (split_reader_cb_shared) {
             weights_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
@@ -877,6 +888,13 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         reader_compile_time_args.push_back(0);
         reader_compile_time_args.push_back(0);
     }
+
+    // Add act_mcast_split arguments only for block sharded
+    if (block_sharded) {
+        reader_compile_time_args.push_back(static_cast<uint32_t>(act_mcast_split));  // arg 35
+        reader_compile_time_args.push_back(act_mcast_reserve_done_semaphore_id);     // arg 36
+        reader_compile_time_args.push_back(act_mcast_receiver_second_semaphore_id);  // arg 37
+    }
     if (skip_activation_mcast) {
         reader_defines["SKIP_MCAST"] = "1";
     }
@@ -997,6 +1015,37 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
             split_reader_args.end(), activation_reuse_dummy_args.begin(), activation_reuse_dummy_args.end());
     }
     writer_compile_time_args.insert(writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
+
+    // Add act_mcast_split compile-time arguments only for block sharded writer kernels
+    if (block_sharded) {
+        // Always add act_mcast_split flag and act_block_num_tiles_split for block sharded
+        writer_compile_time_args.push_back((uint32_t)act_mcast_split);  // arg 36
+
+        if (act_mcast_split) {
+            writer_compile_time_args.push_back((uint32_t)act_block_num_tiles_split);  // arg 37
+            const uint32_t act_mcast_write_offset =
+                act_block_h_nsubblocks_split * act_block_w_ntiles * tilized_act_tile_size;
+            const uint32_t act_mcast_write_offset_last =
+                enable_act_double_buffer ? (act_block_h_nsubblocks_split_last + act_block_h_nsubblocks_split) *
+                                               act_block_w_ntiles * tilized_act_tile_size
+                                         : act_mcast_write_offset;
+            const uint32_t act_mcast_num_cores_for_split = transpose_mcast ? num_cores_y - 1 : num_cores_x - 1;
+
+            writer_compile_time_args.push_back(act_mcast_reserve_done_semaphore_id);                        // arg 38
+            writer_compile_time_args.push_back(act_mcast_receiver_second_semaphore_id);                     // arg 39
+            writer_compile_time_args.push_back(get_cb_info_by_name(cb_info, Conv2dCb::ACT).index);          // arg 40
+            writer_compile_time_args.push_back(get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index);  // arg 41
+            writer_compile_time_args.push_back(get_cb_info_by_name(cb_info, Conv2dCb::L1_ARRAY).index);     // arg 42
+            writer_compile_time_args.push_back(act_mcast_write_offset);                                     // arg 43
+            writer_compile_time_args.push_back(act_mcast_write_offset_last);                                // arg 44
+            writer_compile_time_args.push_back(act_mcast_num_cores_for_split);                              // arg 45
+            writer_compile_time_args.push_back(tilized_act_tile_size);  // arg 46 - act_mcast_sender_size_bytes
+        } else {
+            // Add dummy args to maintain consistent indexing for block sharded (args 38-46)
+            writer_compile_time_args.insert(writer_compile_time_args.end(), 10, 0);
+        }
+    }
+
     tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(writer_compile_time_args);
 
@@ -1111,6 +1160,9 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     };
 
     // Setup reader runtime arguments
+    const CoreCoord out_bottom_right_core = {(std::size_t)num_cores_x - 1, (std::size_t)num_cores_y - 1};
+    const CoreCoord out_bottom_right_core_physical = device->worker_core_from_logical_core(out_bottom_right_core);
+    const bool reader_is_noc_0 = reader_noc == tt::tt_metal::NOC::NOC_0;
     if (block_sharded) {
         const uint32_t in_num_cores_x = input_cores.bounding_box().end_coord.x + 1;
         const uint32_t in_num_cores_y = input_cores.bounding_box().end_coord.y + 1;
@@ -1127,11 +1179,6 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                 act_mcast_noc_y.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
             }
         }
-
-        const CoreCoord out_bottom_right_core = {(std::size_t)num_cores_x - 1, (std::size_t)num_cores_y - 1};
-        const CoreCoord out_bottom_right_core_physical = device->worker_core_from_logical_core(out_bottom_right_core);
-        const bool reader_is_noc_0 = reader_noc == tt::tt_metal::NOC::NOC_0;
-
         for (const CoreRange& core_range : all_cores.ranges()) {
             for (const CoreCoord& core : core_range) {
                 const bool is_receiver_core = output_cores.contains(core);
@@ -1194,12 +1241,41 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     for (const CoreRange& core_range : mcast_sender_cores.ranges()) {
         for (const CoreCoord& core : core_range) {
             if (populate_skipped_work_cores && !output_cores.contains(core)) {
-                std::vector<uint32_t> args = std::vector<uint32_t>(14, 0);
+                std::vector<uint32_t> args = std::vector<uint32_t>(15, 0);
                 args[10] = weights_mcast_sender_semaphore_id;
                 args[11] = weights_mcast_receiver_semaphore_id;
                 args[12] =
                     static_cast<uint32_t>(true);  // is_sender_core, is always true for cores that belong to input_cores
-                args[13] = static_cast<uint32_t>(true);  //  skip work
+                args[13] = static_cast<uint32_t>(
+                    false);  // is_receiver_core, is always false for cores that belong to input_cores
+                args[14] = static_cast<uint32_t>(true);  //  skip work
+                if (act_mcast_split) {
+                    std::vector<uint32_t> sender_rt_args;
+                    if (transpose_mcast) {
+                        CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)num_cores_y - 1};
+                        CoreCoord bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+                        std::vector<uint32_t> mcast_coords = setup_mcast_args(
+                            writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
+                            bottom_core_physical.x,
+                            top_left_core_physical.y,
+                            bottom_core_physical.x,
+                            bottom_core_physical.y);
+                        sender_rt_args.insert(sender_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
+                        sender_rt_args.push_back(core.y);  // act_mcast_sender_id
+                    } else {
+                        CoreCoord core_physical = device->worker_core_from_logical_core(core);
+
+                        std::vector<uint32_t> mcast_coords = setup_mcast_args(
+                            writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
+                            top_left_core_physical.x,
+                            core_physical.y,
+                            out_bottom_right_core_physical.x,
+                            core_physical.y);
+                        sender_rt_args.insert(sender_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
+                        sender_rt_args.push_back(core.x);  // act_mcast_sender_id
+                    }
+                    args.insert(args.end(), sender_rt_args.begin(), sender_rt_args.end());
+                }
                 SetRuntimeArgs(program, writer_mcast_sender_id, core, args);
                 continue;
             }
@@ -1218,6 +1294,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                 weight_dram_addr, bias_dram_addr, out_start_tile_id_w, bias_tile_offset};
             if (block_sharded) {
                 const bool is_sender_core = input_cores.contains(core);
+                const bool is_receiver_core = output_cores.contains(core);
                 // 2D multicast setup
                 if (transpose_mcast) {
                     CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
@@ -1262,8 +1339,29 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                             weights_mcast_sender_semaphore_id,
                             weights_mcast_receiver_semaphore_id,
                             static_cast<uint32_t>(is_sender_core),
+                            static_cast<uint32_t>(is_receiver_core),
                             static_cast<uint32_t>(false)  // skip_work
                         });
+                    // Add act_mcast runtime args if enabled
+                    if (act_mcast_split) {
+                        if (transpose_mcast) {
+                            CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)num_cores_y - 1};
+                            CoreCoord bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+                            sender_rt_args.push_back(bottom_core_physical.x);    // act_mcast_dest_noc_start_x
+                            sender_rt_args.push_back(top_left_core_physical.y);  // act_mcast_dest_noc_start_y
+                            sender_rt_args.push_back(bottom_core_physical.x);    // act_mcast_dest_noc_end_x
+                            sender_rt_args.push_back(bottom_core_physical.y);    // act_mcast_dest_noc_end_y
+                            sender_rt_args.push_back(core.y);                    // act_mcast_sender_id
+                        } else {
+                            CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
+                            CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
+                            sender_rt_args.push_back(top_left_core_physical.x);  // act_mcast_dest_noc_start_x
+                            sender_rt_args.push_back(right_core_physical.y);     // act_mcast_dest_noc_start_y
+                            sender_rt_args.push_back(right_core_physical.x);     // act_mcast_dest_noc_end_x
+                            sender_rt_args.push_back(right_core_physical.y);     // act_mcast_dest_noc_end_y
+                            sender_rt_args.push_back(core.x);                    // act_mcast_sender_id
+                        }
+                    }
                     SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
                 }
             } else {
@@ -1319,6 +1417,28 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                 }
                 const bool is_sender_core = input_cores.contains(core);
                 receiver_args.push_back(static_cast<uint32_t>(is_sender_core));
+                // Add act_mcast runtime args if enabled
+                if (act_mcast_split) {
+                    const bool is_receiver_core = output_cores.contains(core);
+                    if (transpose_mcast) {
+                        CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)num_cores_y - 1};
+                        CoreCoord bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+                        receiver_args.push_back(bottom_core_physical.x);    // act_mcast_dest_noc_start_x
+                        receiver_args.push_back(top_left_core_physical.y);  // act_mcast_dest_noc_start_y
+                        receiver_args.push_back(bottom_core_physical.x);    // act_mcast_dest_noc_end_x
+                        receiver_args.push_back(bottom_core_physical.y);    // act_mcast_dest_noc_end_y
+                        receiver_args.push_back(core.y);                    // act_mcast_sender_id
+                    } else {
+                        CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
+                        CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
+                        receiver_args.push_back(top_left_core_physical.x);  // act_mcast_dest_noc_start_x
+                        receiver_args.push_back(right_core_physical.y);     // act_mcast_dest_noc_start_y
+                        receiver_args.push_back(right_core_physical.x);     // act_mcast_dest_noc_end_x
+                        receiver_args.push_back(right_core_physical.y);     // act_mcast_dest_noc_end_y
+                        receiver_args.push_back(core.x);                    // act_mcast_sender_id
+                    }
+                    receiver_args.push_back(static_cast<uint32_t>(is_receiver_core));
+                }
             } else {
                 bool is_no_op_core = !input_cores.contains(core);
                 receiver_args = std::vector<uint32_t>{
