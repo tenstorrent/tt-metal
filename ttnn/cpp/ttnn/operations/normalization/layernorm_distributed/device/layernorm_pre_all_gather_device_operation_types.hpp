@@ -12,7 +12,7 @@ namespace ttnn::operations::normalization {
 
 struct operation_attributes_t {
     LayerNormDistributedType norm_type;
-    DataType dtype;
+    tt::tt_metal::DataType dtype;
     DeviceComputeKernelConfig compute_kernel_config;
     std::optional<bool> use_2d_core_grid;
     LayerNormDistributedDefaultProgramConfig program_config;
