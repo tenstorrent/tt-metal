@@ -10,11 +10,10 @@
 #include <unordered_map>
 #include <memory>
 #include <filesystem>
-#include <optional>
+#include "tt_metal/api/tt-metalium/experimental/fabric/control_plane.hpp"
+#include "tt_metal/api/tt-metalium/experimental/fabric/fabric_types.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
-#include "tt_metal/api/tt-metalium/control_plane.hpp"
-#include "tt_metal/api/tt-metalium/fabric_types.hpp"
 
 namespace tt::scaleout_tools {
 

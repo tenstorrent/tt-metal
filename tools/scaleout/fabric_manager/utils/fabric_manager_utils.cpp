@@ -17,7 +17,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <enchantum/enchantum.hpp>
 
 namespace tt::scaleout_tools {
@@ -66,7 +66,9 @@ void configure_fabric_routing(
 
     tt::tt_fabric::SetFabricConfig(
         fabric_config_enum, reliability_mode_enum, num_routing_planes, fabric_tensix_config_enum);
-    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    tt::tt_metal::distributed::MeshDeviceConfig mesh_device_config(tt::tt_metal::distributed::MeshShape(8, 4));
+    auto mesh_device = tt::tt_metal::distributed::MeshDevice::create(mesh_device_config);
 }
 
 // ============================================================================
