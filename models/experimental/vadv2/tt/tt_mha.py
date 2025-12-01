@@ -5,6 +5,13 @@
 import ttnn
 import math
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtMultiheadAttention:
     def __init__(
@@ -42,6 +49,8 @@ class TtMultiheadAttention:
         batch_first=False,
         **kwargs,
     ):
+        if use_signpost:
+            signpost(header="TtMultiheadAttention_call_start")
         if key is None:
             key = query
         if value is None:
@@ -142,5 +151,6 @@ class TtMultiheadAttention:
         attn_output_weights = ttnn.to_layout(attn_output_weights, ttnn.ROW_MAJOR_LAYOUT)
         attn_output_weights = ttnn.mean(attn_output_weights, dim=2)  # mean over num_heads -> [bsz, tgt_len, src_len]
         identity = ttnn.to_layout(identity, ttnn.TILE_LAYOUT)
-
+        if use_signpost:
+            signpost(header="TtMultiheadAttention_call_end")
         return attn_output + identity

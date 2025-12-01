@@ -6,6 +6,13 @@ import ttnn
 import warnings
 from models.experimental.vadv2.tt.tt_utils import multi_scale_deformable_attn
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtTemporalSelfAttention:
     def __init__(
@@ -66,6 +73,8 @@ class TtTemporalSelfAttention:
         flag="decoder",
         **kwargs,
     ):
+        if use_signpost:
+            signpost(header="TtTemporalSelfAttention_call_start")
         params = self.params
         if value is None:
             assert self.batch_first
@@ -215,4 +224,6 @@ class TtTemporalSelfAttention:
 
         output = ttnn.add(output, identity)
         ttnn.deallocate(identity)
+        if use_signpost:
+            signpost(header="TtTemporalSelfAttention_call_end")
         return output

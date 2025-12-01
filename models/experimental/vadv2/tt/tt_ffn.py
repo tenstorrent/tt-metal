@@ -4,6 +4,13 @@
 
 import ttnn
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtFFN:
     def __init__(self, params, device):
@@ -14,6 +21,8 @@ class TtFFN:
         self.linear2_bias = params.linear2.bias
 
     def __call__(self, x, identity=None):
+        if use_signpost:
+            signpost(header="TtFFN_call_start")
         if identity is None:
             identity = x
 
@@ -27,4 +36,6 @@ class TtFFN:
         # Residual connection
         x = ttnn.add(x, identity)
         ttnn.deallocate(identity)
+        if use_signpost:
+            signpost(header="TtFFN_call_end")
         return x

@@ -6,6 +6,13 @@ import ttnn
 import warnings
 from models.experimental.vadv2.tt.tt_utils import multi_scale_deformable_attn
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtCustomMSDeformableAttention:
     def __init__(
@@ -65,6 +72,8 @@ class TtCustomMSDeformableAttention:
         flag="decoder",
         **kwargs,
     ):
+        if use_signpost:
+            signpost(header="TtCustomMSDeformableAttention_call_start")
         params = self.params
         if value is None:
             value = query
@@ -152,4 +161,6 @@ class TtCustomMSDeformableAttention:
 
         output = ttnn.add(output, identity)
 
+        if use_signpost:
+            signpost(header="TtCustomMSDeformableAttention_call_end")
         return output

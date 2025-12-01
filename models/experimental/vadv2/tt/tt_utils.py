@@ -4,6 +4,13 @@
 
 import ttnn
 
+try:
+    pass
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations, attention_weights, device):
     bs, _, num_heads, embed_dims = value.shape

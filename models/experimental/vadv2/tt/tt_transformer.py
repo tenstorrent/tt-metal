@@ -9,6 +9,13 @@ from torchvision.transforms.functional import rotate
 from models.experimental.vadv2.tt.tt_encoder import TtBEVFormerEncoder
 from models.experimental.vadv2.tt.tt_decoder import TtDetectionTransformerDecoder, TtMapDetectionTransformerDecoder
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtVADPerceptionTransformer:
     def __init__(
@@ -273,6 +280,8 @@ class TtVADPerceptionTransformer:
         can_bus=None,
         **kwargs,
     ):
+        if use_signpost:
+            signpost(header="TtVADPerceptionTransformer_call_start")
         bev_embed = self.get_bev_features(
             self.params,
             mlvl_feats,
@@ -366,6 +375,8 @@ class TtVADPerceptionTransformer:
             map_inter_states = ttnn.unsqueeze(map_query, 0)
             map_inter_references_out = ttnn.unsqueeze(map_reference_points, 0)
 
+        if use_signpost:
+            signpost(header="TtVADPerceptionTransformer_call_end")
         return (
             bev_embed,
             inter_states,

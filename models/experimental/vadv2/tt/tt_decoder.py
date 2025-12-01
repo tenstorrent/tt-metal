@@ -6,6 +6,13 @@ import ttnn
 from models.experimental.vadv2.tt.tt_base_transformer_layer import TtBaseTransformerLayer
 from models.experimental.vadv2.tt.tt_utils import inverse_sigmoid
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtDetectionTransformerDecoder:
     def __init__(self, num_layers, embed_dim, num_heads, params, params_branches, device):
@@ -62,6 +69,8 @@ class TtDetectionTransformerDecoder:
         cls_branches=None,
         **kwargs,
     ):
+        if use_signpost:
+            signpost(header="TtDetectionTransformerDecoder_call_start")
         output = query
         intermediate = []
         intermediate_reference_points = []
@@ -111,6 +120,8 @@ class TtDetectionTransformerDecoder:
             a = ttnn.stack(intermediate, dim=0)
             b = ttnn.stack(intermediate_reference_points, dim=0)
             return a, b
+        if use_signpost:
+            signpost(header="TtDetectionTransformerDecoder_call_end")
         return output, reference_points
 
 
@@ -169,6 +180,8 @@ class TtMapDetectionTransformerDecoder:
         cls_branches=None,
         **kwargs,
     ):
+        if use_signpost:
+            signpost(header="TtMapDetectionTransformerDecoder_call_start")
         output = query
         intermediate = []
         intermediate_reference_points = []
@@ -219,6 +232,8 @@ class TtMapDetectionTransformerDecoder:
             a = ttnn.stack(intermediate, dim=0)
             b = ttnn.stack(intermediate_reference_points, dim=0)
             return a, b
+        if use_signpost:
+            signpost(header="TtMapDetectionTransformerDecoder_call_end")
         return output, reference_points
 
 
@@ -268,6 +283,8 @@ class TtCustomTransformerDecoder:
         *args,
         **kwargs,
     ):
+        if use_signpost:
+            signpost(header="TtCustomTransformerDecoder_call_start")
         intermediate = []
         for lid, layer in enumerate(self.layers):
             query = layer(
@@ -287,5 +304,6 @@ class TtCustomTransformerDecoder:
 
         if self.return_intermediate:
             return ttnn.stack(intermediate, dim=0)
-
+        if use_signpost:
+            signpost(header="TtCustomTransformerDecoder_call_end")
         return query

@@ -11,6 +11,13 @@ from models.experimental.vadv2.tt.tt_temporal_self_attention import TtTemporalSe
 from models.experimental.vadv2.tt.tt_spatial_cross_attention import TtSpatialCrossAttention
 from models.experimental.vadv2.tt.tt_ffn import TtFFN
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtBEVFormerEncoder:
     def __init__(
@@ -245,6 +252,8 @@ class TtBEVFormerEncoder:
         shift=0.0,
         **kwargs,
     ):
+        if use_signpost:
+            signpost(header="TtBEVFormerEncoder_call_start")
         output = bev_query
         intermediate = []
 
@@ -316,7 +325,8 @@ class TtBEVFormerEncoder:
             for it in intermediate:
                 ttnn.deallocate(it)
             return stacked
-
+        if use_signpost:
+            signpost(header="TtBEVFormerEncoder_call_end")
         return output
 
 
@@ -409,6 +419,8 @@ class TtBEVFormerLayer:
         prev_bev=None,
         **kwargs,
     ):
+        if use_signpost:
+            signpost(header="TtBEVFormerLayer_call_start")
         norm_index = 0
         attn_index = 0
         ffn_index = 0
@@ -483,5 +495,6 @@ class TtBEVFormerLayer:
             elif layer == "ffn":
                 query = self.ffns[ffn_index](query, identity if self.pre_norm else None)
                 ffn_index += 1
-
+        if use_signpost:
+            signpost(header="TtBEVFormerLayer_call_end")
         return query

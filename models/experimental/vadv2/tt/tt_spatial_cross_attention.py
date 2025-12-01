@@ -6,6 +6,13 @@ import warnings
 import ttnn
 from models.experimental.vadv2.tt.tt_utils import multi_scale_deformable_attn
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtSpatialCrossAttention:
     def __init__(
@@ -49,6 +56,8 @@ class TtSpatialCrossAttention:
         flag="encoder",
         **kwargs,
     ):
+        if use_signpost:
+            signpost(header="TtSpatialCrossAttention_call_start")
         if key is None:
             key = query
         if value is None:
@@ -154,7 +163,8 @@ class TtSpatialCrossAttention:
         output = slots + inp_residual
         ttnn.deallocate(slots)
         ttnn.deallocate(inp_residual)
-
+        if use_signpost:
+            signpost(header="TtSpatialCrossAttention_call_end")
         return output
 
 
@@ -218,6 +228,8 @@ class TtMSDeformableAttention3D:
         level_start_index=None,
         **kwargs,
     ):
+        if use_signpost:
+            signpost(header="TtMSDeformableAttention3D_call_start")
         params = self.params
         if value is None:
             value = query
@@ -351,4 +363,6 @@ class TtMSDeformableAttention3D:
         if not self.batch_first:
             output = ttnn.permute(output, (1, 0, 2))
 
+        if use_signpost:
+            signpost(header="TtMSDeformableAttention3D_call_end")
         return output

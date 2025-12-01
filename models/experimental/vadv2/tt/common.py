@@ -4,6 +4,13 @@
 
 import ttnn
 
+try:
+    pass
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtConv2D:
     def __init__(

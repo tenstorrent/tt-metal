@@ -9,6 +9,13 @@ from models.experimental.vadv2.tt.tt_ffn import TtFFN
 from models.experimental.vadv2.tt.tt_mha import TtMultiheadAttention
 from models.experimental.vadv2.tt.tt_deformable_attention import TtCustomMSDeformableAttention
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtBaseTransformerLayer:
     def __init__(
@@ -129,6 +136,8 @@ class TtBaseTransformerLayer:
         key_padding_mask=None,
         **kwargs,
     ):
+        if use_signpost:
+            signpost(header="TtBaseTransformerLayer_call_start")
         norm_index = 0
         attn_index = 0
         ffn_index = 0
@@ -222,4 +231,6 @@ class TtBaseTransformerLayer:
                 if prev_query is not original_query and prev_query is not prev_identity:
                     ttnn.deallocate(prev_query)
 
+        if use_signpost:
+            signpost(header="TtBaseTransformerLayer_call_end")
         return query

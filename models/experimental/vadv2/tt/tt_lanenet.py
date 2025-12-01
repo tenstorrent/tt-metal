@@ -5,6 +5,13 @@
 import ttnn
 from models.experimental.vadv2.tt.tt_mlp import TtMLP
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtLaneNet:
     def __init__(self, params, device, in_channels, hidden_unit, num_subgraph_layers):
@@ -20,6 +27,8 @@ class TtLaneNet:
             in_channels = hidden_unit * 2  # Update if output is concatenated like in LaneNet
 
     def __call__(self, pts_lane_feats):
+        if use_signpost:
+            signpost(header="TtLaneNet_call_start")
         x = pts_lane_feats
         for layer in self.layer_seq:
             if isinstance(layer, TtMLP):
@@ -31,5 +40,6 @@ class TtLaneNet:
                 x = ttnn.concat([x, x_max], dim=-1)
 
         x_max = ttnn.max(x, -2)[0]
-
+        if use_signpost:
+            signpost(header="TtLaneNet_call_end")
         return x_max

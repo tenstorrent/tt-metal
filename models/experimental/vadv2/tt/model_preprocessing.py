@@ -10,6 +10,13 @@ import sys
 import gc
 
 try:
+    pass
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
+try:
     import psutil
 except ImportError:
     psutil = None

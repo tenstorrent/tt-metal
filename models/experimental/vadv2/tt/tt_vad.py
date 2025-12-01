@@ -12,6 +12,13 @@ from models.experimental.vadv2.reference.planning_metric import PlanningMetric
 from models.experimental.vadv2.tt.tt_fpn import TtFPN
 from models.experimental.vadv2.tt.tt_head import TtVADHead
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 def bbox3d2result(bboxes, scores, labels, attrs=None):
     result_dict = dict(boxes_3d=bboxes, scores_3d=scores, labels_3d=labels)
@@ -126,6 +133,8 @@ class TtVAD:
         self.valid_fut_ts = self.pts_bbox_head.valid_fut_ts
 
     def extract_img_feat(self, img, img_metas, len_queue=None):
+        if use_signpost:
+            signpost(header="TtVAD_extract_img_feat_start")
         B = img.shape[0]
 
         if img is not None:
@@ -163,6 +172,8 @@ class TtVAD:
                 img_feat = ttnn.reshape(img_feat, (B, int(BN / B), C, H, W))
                 img_feats_reshaped.append(img_feat)
         ttnn.deallocate(img_feats[0])
+        if use_signpost:
+            signpost(header="TtVAD_extract_img_feat_end")
         return img_feats_reshaped
 
     def extract_feat(self, img, img_metas=None, len_queue=None):
@@ -186,6 +197,8 @@ class TtVAD:
         gt_attr_labels=None,
         **kwargs,
     ):
+        if use_signpost:
+            signpost(header="TtVAD_forward_test_start")
         for var, name in [(img_metas, "img_metas")]:
             if not isinstance(var, list):
                 raise TypeError("{} must be a list, but got {}".format(name, type(var)))
@@ -225,7 +238,8 @@ class TtVAD:
         self.prev_frame_info["prev_pos"] = tmp_pos
         self.prev_frame_info["prev_angle"] = tmp_angle
         self.prev_frame_info["prev_bev"] = new_prev_bev
-
+        if use_signpost:
+            signpost(header="TtVAD_forward_test_end")
         return bbox_results
 
     def simple_test(
@@ -245,6 +259,8 @@ class TtVAD:
         gt_attr_labels=None,
         **kwargs,
     ):
+        if use_signpost:
+            signpost(header="TtVAD_simple_test_start")
         img_feats = self.extract_feat(img=img, img_metas=img_metas)
         bbox_list = [dict() for i in range(len(img_metas))]
         new_prev_bev, bbox_list = self.simple_test_pts(
@@ -262,7 +278,8 @@ class TtVAD:
             ego_lcf_feat=ego_lcf_feat,
             gt_attr_labels=gt_attr_labels,
         )
-
+        if use_signpost:
+            signpost(header="TtVAD_simple_test_end")
         return new_prev_bev, bbox_list
 
     def simple_test_pts(
@@ -281,6 +298,8 @@ class TtVAD:
         ego_lcf_feat=None,
         gt_attr_labels=None,
     ):
+        if use_signpost:
+            signpost(header="TtVAD_simple_test_pts_start")
         x[0] = ttnn.to_layout(x[0], layout=ttnn.TILE_LAYOUT)
         outs = self.pts_bbox_head(x, img_metas, prev_bev=prev_bev, ego_his_trajs=None, ego_lcf_feat=None)
         ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer
@@ -324,7 +343,8 @@ class TtVAD:
             fut_valid_flag,
             rescale,
         )
-
+        if use_signpost:
+            signpost(header="TtVAD_simple_test_pts_end")
         return outs["bev_embed"], bbox_results
 
     def post_process_with_metrics(
@@ -339,6 +359,8 @@ class TtVAD:
         fut_valid_flag,
         rescale=False,
     ):
+        if use_signpost:
+            signpost(header="TtVAD_post_process_with_metrics_start")
         mapped_class_names = [
             "car",
             "truck",
@@ -409,7 +431,8 @@ class TtVAD:
         for result_dict, pts_bbox in zip(bbox_list, bbox_results):
             result_dict["pts_bbox"] = pts_bbox
             result_dict["metric_results"] = metric_dict
-
+        if use_signpost:
+            signpost(header="TtVAD_post_process_with_metrics_end")
         return bbox_list
 
     def map_pred2result(self, bboxes, scores, labels, pts, attrs=None):
@@ -455,6 +478,8 @@ class TtVAD:
         mapped_class_names,
         match_dis_thresh=2.0,
     ):
+        if use_signpost:
+            signpost(header="TtVAD_compute_motion_metric_vip3d_start")
         motion_cls_names = ["car", "pedestrian"]
         motion_metric_names = ["gt", "cnt_ade", "cnt_fde", "hit", "fp", "ADE", "FDE", "MR"]
 
@@ -508,13 +533,16 @@ class TtVAD:
                         metric_dict["hit_" + box_name] += 1
                     else:
                         metric_dict["MR_" + box_name] += 1
-
+        if use_signpost:
+            signpost(header="TtVAD_compute_motion_metric_vip3d_end")
         return metric_dict
 
     ### same planning metric as stp3
     def compute_planner_metric_stp3(
         self, pred_ego_fut_trajs, gt_ego_fut_trajs, gt_agent_boxes, gt_agent_feats, fut_valid_flag
     ):
+        if use_signpost:
+            signpost(header="TtVAD_compute_planner_metric_stp3_start")
         metric_dict = {
             "plan_L2_1s": 0,
             "plan_L2_2s": 0,
@@ -551,5 +579,6 @@ class TtVAD:
                 metric_dict["plan_L2_{}s".format(i + 1)] = 0.0
                 metric_dict["plan_obj_col_{}s".format(i + 1)] = 0.0
                 metric_dict["plan_obj_box_col_{}s".format(i + 1)] = 0.0
-
+        if use_signpost:
+            signpost(header="TtVAD_compute_planner_metric_stp3_end")
         return metric_dict

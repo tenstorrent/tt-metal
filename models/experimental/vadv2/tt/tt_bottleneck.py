@@ -5,6 +5,13 @@
 import ttnn
 from models.experimental.vadv2.tt.common import TtConv2D
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtBottleneck:
     def __init__(
@@ -43,6 +50,8 @@ class TtBottleneck:
             )
 
     def __call__(self, x_identity):
+        if use_signpost:
+            signpost(header="TtBottleneck_call_start")
         x, out_ht, out_wdth = self.conv1(x_identity)
         if self.activation_dtype == ttnn.bfloat8_b:
             x_identity = ttnn.to_memory_config(x_identity, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
@@ -61,4 +70,6 @@ class TtBottleneck:
         x = ttnn.relu(x)
 
         ttnn.deallocate(x_identity)
+        if use_signpost:
+            signpost(header="TtBottleneck_call_end")
         return x

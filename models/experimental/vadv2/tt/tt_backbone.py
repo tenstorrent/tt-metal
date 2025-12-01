@@ -6,6 +6,13 @@ import ttnn
 from models.experimental.vadv2.tt.common import TtConv2D
 from models.experimental.vadv2.tt.tt_bottleneck import TtBottleneck
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtResnet50:
     def __init__(self, conv_args, conv_pth, device):
@@ -72,6 +79,8 @@ class TtResnet50:
         self.layer4_2 = TtBottleneck(conv_args.layer4[2], conv_pth.layer4_2, device=self.device, conv3_blk_sharded=True)
 
     def __call__(self, x, batch_size=1):
+        if use_signpost:
+            signpost(header="TtResnet50_call_start")
         x, out_ht, out_wdth = self.conv1(x)
 
         x = ttnn.sharded_to_interleaved(x)
@@ -158,5 +167,6 @@ class TtResnet50:
         outputs.append(x)
 
         ttnn.ReadDeviceProfiler(self.device)  # Clear device profiler buffer
-
+        if use_signpost:
+            signpost(header="TtResnet50_call_end")
         return outputs

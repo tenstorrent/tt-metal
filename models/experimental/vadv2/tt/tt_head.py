@@ -12,6 +12,13 @@ from models.experimental.vadv2.tt.tt_utils import inverse_sigmoid, bbox_xyxy_to_
 from models.experimental.vadv2.reference.nms_free_coder import MapNMSFreeCoder, CustomNMSFreeCoder
 from models.experimental.vadv2.tt.common import advanced_indexing, boolean_indexing
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtLearnedPositionalEncoding:
     def __init__(
@@ -33,6 +40,8 @@ class TtLearnedPositionalEncoding:
         self.col_num_embed = col_num_embed
 
     def __call__(self, mask):
+        if use_signpost:
+            signpost(header="TtLearnedPositionalEncoding_call_start")
         _, h, w = mask.shape
         x = ttnn.arange(w, device=self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
         y = ttnn.arange(h, device=self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -54,6 +63,8 @@ class TtLearnedPositionalEncoding:
         out = ttnn.unsqueeze(out, 0)
         out = ttnn.repeat(out, (mask.shape[0], 1, 1, 1))
         pos = out
+        if use_signpost:
+            signpost(header="TtLearnedPositionalEncoding_call_end")
         return pos
 
 
@@ -210,6 +221,8 @@ class TtVADHead:
         ego_his_trajs=None,
         ego_lcf_feat=None,
     ):
+        if use_signpost:
+            signpost(header="TtVADHead_call_start")
         bs, num_cam, _, _, _ = mlvl_feats[0].shape
         if not self.as_two_stage:
             object_query_embeds = self.query_embedding.weight
@@ -777,6 +790,8 @@ class TtVADHead:
             "map_enc_pts_preds": None,
             "ego_fut_preds": outputs_ego_trajs,
         }
+        if use_signpost:
+            signpost(header="TtVADHead_call_end")
 
         return outs
 
