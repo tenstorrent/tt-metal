@@ -36,7 +36,7 @@ TopKDeviceOperation::program_factory_t TopKDeviceOperation::select_program_facto
 
     // don't bother with longer check if already false
     if (multicore_supported) {
-        auto device = input_tensor.device();
+        auto* device = input_tensor.device();
         tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
         tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;
 
@@ -123,7 +123,7 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
     bool uint16_output = (input_shape[args.dim] <= std::numeric_limits<uint16_t>::max());
 
     if (input_shape[args.dim] >= topk::constants::multi_core_min_width) {  // multicore implementation
-        auto device = input_tensor.device();
+        auto* device = input_tensor.device();
         tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
         tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;
 
