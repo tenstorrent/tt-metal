@@ -435,7 +435,7 @@ def test_to_layout_wh1(shape, input_layout, output_layout, device):
         ),
     ),
 )
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint16])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -447,7 +447,10 @@ def test_to_layout_wh1(shape, input_layout, output_layout, device):
 )
 def test_to_layout_low_perf(shape, device, sub_core_grids, dtype):
     torch.manual_seed(0)
-    input_a = torch.randn(shape, dtype=torch.bfloat16)
+    if dtype in [ttnn.int32, ttnn.uint16]:
+        input_a = torch.randint(0, 1000, shape, dtype=torch.int32)
+    else:
+        input_a = torch.randn(shape, dtype=torch.bfloat16)
 
     input_tensor = ttnn.from_torch(input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype)
     output_tensor = ttnn.tilize(input_tensor, sub_core_grids=sub_core_grids, use_low_perf=True)
