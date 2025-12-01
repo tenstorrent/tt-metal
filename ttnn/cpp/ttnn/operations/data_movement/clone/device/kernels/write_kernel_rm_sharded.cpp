@@ -10,7 +10,6 @@ void kernel_main() {
     uint32_t num_sticks = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t dst_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t output_page_size = get_compile_time_arg_val(1);
 
     uint64_t local_l1_write_addr = get_noc_addr(output_buffer_address);
 
