@@ -309,8 +309,8 @@ std::vector<uint32_t> FabricTensixDatamoverMuxConfig::get_compile_time_args() co
         tt::tt_fabric::FabricEriscDatamoverAxis::Short,
         fabric_tensix_config);
 
-    auto channel_allocator = fabric_router_config.channel_allocator.get();
-    const auto static_channel_allocator =
+    auto* channel_allocator = fabric_router_config.channel_allocator.get();
+    auto* const static_channel_allocator =
         dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
     TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
 

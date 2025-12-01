@@ -16,7 +16,7 @@
 
 namespace ttnn::operations::experimental::reduction::detail {
 void bind_reduction_intimg_operation(py::module& module) {
-    auto docstring =
+    const auto* docstring =
         R"doc(
         Compute the summed-area table (integral image) per channel.
 
