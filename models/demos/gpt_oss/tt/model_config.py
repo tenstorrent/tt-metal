@@ -161,8 +161,10 @@ class ModelArgs:
         """Load model state dict compatible with tt_transformers
 
         Args:
-            convert_to_meta_format: If True, convert HF QKV weights to Meta format for RoPE.
-                                   Set to False when loading for HuggingFace reference models.
+            weights_path (str or Path): Path to the model weights directory or file.
+            dummy_weights (bool): If True, returns a dummy state dict for testing purposes.
+            convert_to_meta_format (bool): If True, convert HF QKV weights to Meta format for RoPE.
+                Set to False when loading for HuggingFace reference models.
         """
         if dummy_weights:
             # Return dummy state dict for testing
