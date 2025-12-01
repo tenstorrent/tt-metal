@@ -96,27 +96,20 @@ class DecoderLayer:
         # Input state: row-sharded (4), column-replicated (8)
         # Calculate per-device sizes dynamically
         num_rows = self.mesh_config.mesh_shape[0]
-
-        # Calculate padded hidden size (must be divisible by num_rows * TILE_SIZE)
-        shard_chunk_size = num_rows * ttnn.TILE_SIZE
         per_device_hidden = self.hidden_size // num_rows if num_rows > 1 else self.hidden_size
-        if self.hidden_size % shard_chunk_size != 0:
-            padded_hidden_size = ((self.hidden_size + shard_chunk_size - 1) // shard_chunk_size) * shard_chunk_size
-        else:
-            padded_hidden_size = self.hidden_size
-        per_device_hidden_padded = padded_hidden_size // num_rows if num_rows > 1 else padded_hidden_size
         batch_size = int(hidden_states.shape[0])
         padded_seq_len = int(hidden_states.shape[-2])
         seq_len = int(position_idx.shape[-1]) if position_idx is not None else padded_seq_len
         residual_mem_config = hidden_states.memory_config()
         is_prefill = seq_len > 1
 
-        import torch
-        mesh_composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, mesh_shape=self.mesh_config.mesh_shape, dims=(-1, -2))
-        torch.save(ttnn.to_torch(hidden_states, mesh_composer=mesh_composer), "gpt_oss_debug/tt_input.pt")
+        mesh_composer = ttnn.ConcatMesh2dToTensor(
+            self.mesh_device, mesh_shape=self.mesh_config.mesh_shape, dims=(-1, -2)
+        )
+        # torch.save(ttnn.to_torch(hidden_states, mesh_composer=mesh_composer), "gpt_oss_debug/tt_input.pt")
         residual = hidden_states
         hidden_states_post_norm = self.input_layernorm(hidden_states)
-        torch.save(ttnn.to_torch(hidden_states_post_norm, mesh_composer=mesh_composer), "gpt_oss_debug/tt_input_post_norm.pt")
+        # torch.save(ttnn.to_torch(hidden_states_post_norm, mesh_composer=mesh_composer), "gpt_oss_debug/tt_input_post_norm.pt")
         if is_prefill:
             hidden_states_post_norm = ttnn.to_memory_config(hidden_states_post_norm, ttnn.DRAM_MEMORY_CONFIG)
 
@@ -129,14 +122,14 @@ class DecoderLayer:
             page_table=page_table,
             kv_cache=kv_cache,
         )
-        torch.save(ttnn.to_torch(hidden_states, mesh_composer=mesh_composer), "gpt_oss_debug/tt_output_attn.pt")
+        # torch.save(ttnn.to_torch(hidden_states, mesh_composer=mesh_composer), "gpt_oss_debug/tt_output_attn.pt")
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=residual)
-        torch.save(ttnn.to_torch(hidden_states, mesh_composer=mesh_composer), "gpt_oss_debug/tt_output_attn_add.pt")
+        # torch.save(ttnn.to_torch(hidden_states, mesh_composer=mesh_composer), "gpt_oss_debug/tt_output_attn_add.pt")
         residual = hidden_states
 
         # Second RMSNorm
         hidden_states_post_norm = self.post_attention_layernorm(hidden_states)
-        torch.save(ttnn.to_torch(hidden_states_post_norm, mesh_composer=mesh_composer), "gpt_oss_debug/tt_input_post_attention_norm.pt")
+        # torch.save(ttnn.to_torch(hidden_states_post_norm, mesh_composer=mesh_composer), "gpt_oss_debug/tt_input_post_attention_norm.pt")
         if is_prefill:
             hidden_states_post_norm = ttnn.to_memory_config(hidden_states_post_norm, ttnn.DRAM_MEMORY_CONFIG)
 
@@ -145,7 +138,6 @@ class DecoderLayer:
         if num_rows > 1:
             if is_prefill:
                 hidden_states_post_norm = ttnn.to_memory_config(hidden_states_post_norm, ttnn.DRAM_MEMORY_CONFIG)
-            hidden_states_post_norm = hidden_states_post_norm[:, :, : per_device_hidden]
             hidden_states_post_norm = ttnn.all_gather(
                 hidden_states_post_norm,
                 dim=-1,
@@ -158,12 +150,11 @@ class DecoderLayer:
                 (batch_size, seq_len, self.hidden_size),
                 (batch_size, padded_seq_len, self.hidden_size),
             )
-            # hidden_states_post_norm = hidden_states_post_norm[:, :, : self.hidden_size]
         else:
             hidden_states_post_norm = ttnn.reshape(
                 hidden_states_post_norm,
-                (batch_size, seq_len, per_device_hidden_padded),
-                (batch_size, padded_seq_len, per_device_hidden_padded),
+                (batch_size, seq_len, per_device_hidden),
+                (batch_size, padded_seq_len, per_device_hidden),
             )
             if is_prefill:
                 hidden_states_post_norm = ttnn.to_memory_config(hidden_states_post_norm, ttnn.DRAM_MEMORY_CONFIG)
@@ -171,23 +162,19 @@ class DecoderLayer:
         # MLP with MoE (expects fully replicated input)
         # Output: fully replicated after EP + TP all-reduces
         # breakpoint()
-        torch.save(ttnn.to_torch(hidden_states_post_norm, mesh_composer=mesh_composer), "gpt_oss_debug/tt_input_mlp.pt")
+        # (ttnn.to_torch(hidden_states_post_norm, mesh_composer=mesh_composer), "gpt_oss_debug/tt_input_mlp.pt")
         hidden_states, _ = self.mlp(hidden_states_post_norm)  # diff with llama: router scores
-        torch.save(ttnn.to_torch(hidden_states, mesh_composer=mesh_composer), "gpt_oss_debug/tt_output_mlp.pt")
+        # torch.save(ttnn.to_torch(hidden_states, mesh_composer=mesh_composer), "gpt_oss_debug/tt_output_mlp.pt")
         mlp_seq_len = int(hidden_states.shape[-2])
         if num_rows > 1:
-            # local_hidden = padded_hidden_size // num_rows
-            current_shape = tuple(int(dim) for dim in hidden_states.shape)
-            if current_shape[-1] > per_device_hidden:
-                hidden_states = ttnn.slice(
-                    hidden_states,
-                    (0, 0, 0, 0),
-                    (current_shape[0], current_shape[1], current_shape[2], per_device_hidden),
-                )
-                residual = ttnn.slice(
-                    residual,
-                    (0, 0, 0),
-                    (current_shape[0], current_shape[-2], per_device_hidden),
+            if is_prefill:
+                hidden_states = ttnn.from_torch(
+                    ttnn.to_torch(ttnn.get_device_tensors(hidden_states)[0]),
+                    device=self.mesh_device,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        self.mesh_device, dims=(-1, None), mesh_shape=list(self.mesh_device.shape)
+                    ),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
             hidden_states = ttnn.reshape(
                 hidden_states,
@@ -206,19 +193,13 @@ class DecoderLayer:
                 (batch_size, seq_len, self.hidden_size),
                 (batch_size, mlp_seq_len, self.hidden_size),
             )
-            if padded_hidden_size > self.hidden_size:
-                hidden_states = ttnn.pad(
-                    hidden_states,
-                    [(0, 0), (0, 0), (0, padded_hidden_size - self.hidden_size)],
-                    0,
-                )
             hidden_states = ttnn.reshape(
                 hidden_states,
-                (batch_size, 1, seq_len, padded_hidden_size),
-                (batch_size, mlp_seq_len, padded_hidden_size),
+                (batch_size, 1, seq_len, self.hidden_size),
+                (batch_size, mlp_seq_len, self.hidden_size),
             )
-        breakpoint()
-        torch.save(ttnn.to_torch(hidden_states, mesh_composer=mesh_composer), "gpt_oss_debug/tt_output_mlp_add.pt")
+        # breakpoint()
+        # torch.save(ttnn.to_torch(hidden_states, mesh_composer=mesh_composer), "gpt_oss_debug/tt_output_mlp_add.pt")
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=residual)
-        torch.save(ttnn.to_torch(hidden_states, mesh_composer=mesh_composer), "gpt_oss_debug/tt_output_mlp_add_final.pt")
+        # torch.save(ttnn.to_torch(hidden_states, mesh_composer=mesh_composer), "gpt_oss_debug/tt_output_mlp_add_final.pt")
         return hidden_states

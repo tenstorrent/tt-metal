@@ -110,29 +110,9 @@ def load_expert_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # Load down projection and pad hidden_size dimension for row-sharding
+    # Load down projection
     down_proj = state_dict["down_proj"].reshape(1, config.num_experts, config.intermediate_size, config.hidden_size)
     down_proj_bias = state_dict["down_proj_bias"].reshape(1, config.num_experts, config.hidden_size)
-
-    # Calculate padded hidden size for row-sharding (must be divisible by num_rows * TILE_SIZE)
-    # Note: mesh_config may have EP on rows, need to check the actual sharding dimension
-    num_rows = mesh_config.mesh_shape[0]
-    shard_chunk_size = num_rows * ttnn.TILE_SIZE
-    hidden_size = config.hidden_size
-    if hidden_size % shard_chunk_size != 0:
-        padded_hidden_size = ((hidden_size + shard_chunk_size - 1) // shard_chunk_size) * shard_chunk_size
-        padding_size = 192
-        assert padding_size % num_rows == 0, "Expert down_proj weight padding size must be divisible by number of rows"
-        local_padding_size = padding_size // num_rows  # (padded_hidden_size - hidden_size) / num_rows
-
-        assert hidden_size % num_rows == 0, "Hidden size must be divisible by number of rows"
-        local_hidden_size = hidden_size // num_rows
-        # Pad last dimension: [1, num_experts, intermediate_size, hidden_size] -> [1, num_experts, intermediate_size, padded_hidden_size]
-        down_proj_sliced = [down_proj[:, :, :, i*local_hidden_size:(i+1)*local_hidden_size] for i in range(num_rows)]
-        down_proj = torch.cat([torch.nn.functional.pad(d, (0, local_padding_size), value=0.0) for d in down_proj_sliced], dim=-1)
-        # Pad last dimension: [1, num_experts, hidden_size] -> [1, num_experts, padded_hidden_size]
-        down_proj_bias_sliced = [down_proj_bias[:, :, i*local_hidden_size:(i+1)*local_hidden_size] for i in range(num_rows)]
-        down_proj_bias = torch.cat([torch.nn.functional.pad(d, (0, local_padding_size), value=0.0) for d in down_proj_bias_sliced], dim=-1)
 
     print("down proj", down_proj.shape, down_proj_bias.shape)
     down_proj_tt = ttnn.as_tensor(

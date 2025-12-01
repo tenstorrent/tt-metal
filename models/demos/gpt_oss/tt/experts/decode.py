@@ -125,8 +125,8 @@ def decode_forward(
     next_states = ttnn.typecast(next_states, ttnn.bfloat8_b)
     # Use device's actual grid size instead of hardcoding (6, 8)
     mem = ttnn.create_sharded_memory_config(
-        shape=(1, 1, config.num_experts, 64),  # hidden_size_per_device_distributed_ln//num_cores_ln),
-        core_grid=ttnn.CoreGrid(y=6, x=8),
+        shape=(1, 1, config.num_experts, 96),  # hidden_size_per_device_distributed_ln//num_cores_ln),
+        core_grid=ttnn.CoreGrid(y=6, x=5),
         strategy=ttnn.ShardStrategy.WIDTH,
         use_height_and_width_as_shard_shape=True,
     )
@@ -136,8 +136,6 @@ def decode_forward(
 
     # Reduce across experts
     next_states = ttnn.unsqueeze_to_4D(ttnn.sum(next_states, dim=1))
-    
-
 
     next_states = ttnn.unsqueeze_to_4D(next_states)
 
@@ -158,7 +156,6 @@ def decode_forward(
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-    
     # Final reshape
     # next_states = ttnn.reshape(
     #     next_states,

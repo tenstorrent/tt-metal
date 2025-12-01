@@ -198,9 +198,16 @@ private:
 };
 
 ttnn::Shape compute_padded_shape(
-    const ttnn::Shape& logical_shape,
+    ttnn::Shape logical_shape,
     uint32_t tile_height = tt::constants::TILE_HEIGHT,
     uint32_t tile_width = tt::constants::TILE_WIDTH);
+
+/**
+ * Pads a shape to align with tile dimensions
+ * @param unpadded_shape Original shape to be padded
+ * @return Padded shape aligned to tile dimensions
+ */
+ttnn::Shape pad_to_tile_shape(const ttnn::Shape& unpadded_shape);
 
 enum class ShardStrategy { BLOCK, HEIGHT, WIDTH };
 

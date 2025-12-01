@@ -15,6 +15,7 @@ from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
 
@@ -36,15 +37,16 @@ class ModelArgs:
         self.dummy_weights = dummy_weights
         self.max_batch_size = max_batch_size
         self.max_seq_len = max_seq_len
-        self.optimizations = optimizations
+        if optimizations is not None:
+            logger.warning("GPT-OSS doesn't support any performance optimizations - ignoring optimizations argument")
+        self.optimizations = None
         self.cache_hf = cache_hf
-        self.can_enable_trace = lambda seqlen: False
 
         # GPT-OSS specific paths - use HF_MODEL environment variable (tt_transformers standard)
         # Default paths are internal CI paths for automated testing
         default_models = [
-            "/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-20B",  # Internal CI path
-            "/mnt/MLPerf/tt_dnn-models/tt/GPT-OSS-120B",  # Internal CI path
+            "/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b",  # Internal CI path
+            "/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b",  # Internal CI path
         ]
 
         # Use first available model as default, or HF_MODEL environment variable override
@@ -80,7 +82,7 @@ class ModelArgs:
 
         # Add missing attributes that Generator expects
         self.max_prefill_chunk_size = 128 * 1024
-        self.model_name = "GPT-OSS-120B" if "GPT-OSS-120B" in self.model_path else "GPT-OSS-20B"  # Model identifier
+        self.model_name = "gpt-oss-120b" if "gpt-oss-120b" in self.model_path else "gpt-oss-20b"  # Model identifier
         self.max_context_len = max_seq_len  # Context length for tt_transformers compatibility
 
         if self.dummy_weights:
@@ -91,6 +93,49 @@ class ModelArgs:
             # Load tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
             self.processor = None  # GPT-OSS doesn't use vision processor
+
+        self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
+
+    def can_enable_trace(self, prefill_seq_len):
+        """
+        This function is used to determine if trace should be enabled for the prefill.
+        Tracing is used only for certain sequence lengths, because for bigger sequence lengths, op2op gaps are already small, so we don't need tracing.
+        # TODO: Support chunked prefill with tracing - https://github.com/tenstorrent/tt-metal/issues/32056
+        """
+
+        allowed_seq_lens = self.trace_prefill_supported_seq_lens
+
+        return (
+            prefill_seq_len in allowed_seq_lens
+            and prefill_seq_len <= self.max_prefill_chunk_size
+            and prefill_seq_len <= self.max_seq_len
+        )
+
+    def get_trace_prefill_supported_seq_lens(self):
+        # No supported sequence lengths for GPT-OSS model, see issue below
+        # TODO: https://github.com/tenstorrent/tt-metal/issues/32818
+        default_supported_seq_lens = {}
+
+        # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
+        model_specific_supported_seq_lens = {
+            # exmaple : #base_model_name : {device_name : [sequence_lengths]}
+        }
+
+        model_name = self.model_name
+        device_name = determine_device_name(self.mesh_device)
+
+        # Try model-specific sequence lengths first
+        result = model_specific_supported_seq_lens.get(model_name, {}).get(device_name)
+        if result:
+            return result
+
+        # Fall back to default sequence lengths
+        result = default_supported_seq_lens.get(device_name)
+        if result:
+            return result
+
+        # No supported sequence lengths found, return empty list
+        return []
 
     def encode_prompt(self, prompt_text, instruct=True, system_prompt_text=None):
         """
@@ -177,4 +222,49 @@ class ModelArgs:
     @property
     def max_grid_size(self):
         """Return maximum grid size for the device"""
-        return self.mesh_device.compute_with_storage_grid_size()
+        return ttnn.CoreGrid(y=8, x=8)  # Standard grid size
+
+
+def determine_device_name(mesh_device):
+    """
+    Determine device name based on number of devices and architecture.
+
+    Args:
+        mesh_device (MeshDevice): MeshDevice object
+
+    Returns:
+        str: Device name (e.g., "CPU", "N150", "P100", etc.)
+
+    Raises:
+        ValueError: If architecture or device count is unsupported
+    """
+    num_devices = mesh_device.get_num_devices() if mesh_device else 0
+    arch_name = ttnn.get_arch_name()
+    dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None  # CoreCoord with (x, y)
+
+    if num_devices == 0:
+        return "CPU"
+
+    if is_blackhole():
+        dict_device_names = {
+            1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",  # P100 DRAM grid is 7x1, P150 is 8x1
+            2: "P300",
+            4: "P150x4",
+            8: "P150x8",
+            32: "BHGLX",
+        }
+    elif is_wormhole_b0():
+        dict_device_names = {
+            1: "N150",
+            2: "N300",
+            4: "N150x4",
+            8: "T3K",
+            32: "TG",
+        }
+    else:
+        raise ValueError(f"Unsupported architecture: {arch_name}")
+
+    if num_devices in dict_device_names:
+        return dict_device_names[num_devices]
+    else:
+        raise ValueError(f"Unsupported number of devices: {num_devices} for {arch_name}")

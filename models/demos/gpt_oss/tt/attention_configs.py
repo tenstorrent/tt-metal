@@ -19,8 +19,8 @@ class GPTOSSAttentionProgramConfig(ProgramConfig):
 
     # SDPA chunk sizes
     decode_k_chunk_size: int = 128
-    prefill_q_chunk_size_small: int = 32
-    prefill_k_chunk_size_small: int = 32
+    prefill_q_chunk_size_small: int = 64
+    prefill_k_chunk_size_small: int = 64
     prefill_q_chunk_size_large: int = 256
     prefill_k_chunk_size_large: int = 256
     prefill_threshold: int = 2048

@@ -28,13 +28,14 @@ from models.demos.gpt_oss.tests.test_factory import TestFactory, parametrize_mes
 
 # Import GPT-OSS components using our refactored patterns
 from models.demos.gpt_oss.tt.common import create_tt_model
+from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.demo.simple_text_demo import create_tt_page_table
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill, sample_host
 
 # Import specific utilities from tt_transformers
 from models.tt_transformers.tt.generator import Generator, create_submeshes
-from models.tt_transformers.tt.model_config import DecodersPrecision
+from models.tt_transformers.tt.model_config import determine_device_name
 
 
 def prepare_gpt_oss_generator_args(
@@ -159,7 +160,7 @@ def test_gpt_oss_demo(
     instruct,
     page_params,
     sampling_params,
-    num_layers,
+    is_ci_env,
 ):
     """GPT-OSS demo using full tt_transformers generation pipeline"""
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
@@ -189,8 +190,8 @@ def test_gpt_oss_demo(
     profiler.start("run")
     batch_idx = 0
 
-    # Use performance optimizations
-    optimizations = lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name)
+    # GPT-OSS doesn't support any performance optimizations
+    optimizations = None
 
     # Prepare GPT-OSS with tt_transformers infrastructure
     profiler.start(f"generator_setup", iteration=batch_idx)
@@ -401,6 +402,21 @@ def test_gpt_oss_demo(
     decode_tok_s_user = (num_tokens_generated_decode[0] - 1) / total_inference_decode_time  # t/s/u
     decode_tok_s = (num_tokens_generated_decode[0] - 1) / total_inference_decode_time * global_batch_size  # total t/s
 
+    measurements = {
+        # Required measurements
+        "compile_prefill": compile_prefill_time,
+        "compile_decode": compile_decode_time,
+        "inference_prefill": total_inference_prefill_time,
+        "inference_decode": total_inference_decode_time,
+        "prefill_time_to_token": avg_time_to_first_token,
+        "prefill_t/s": prefill_tok_s,  # tokens/s
+        "decode_t/s/u": decode_tok_s_user,  # tokens/s/u
+        "decode_t/s": decode_tok_s,  # tokens/s
+        # Optional measurements
+        "Total compile time": compile_prefill_time + compile_decode_time,
+        "Full demo runtime": profiler.get_duration("run"),
+    }
+
     # Performance logging (like tt-transformers)
     logger.info("")
     logger.info(f"=== Performance metrics ===")
@@ -414,3 +430,122 @@ def test_gpt_oss_demo(
     logger.info(f"Data parallel: {data_parallel}, Global batch size: {global_batch_size}")
 
     logger.info("GPT-OSS demo completed successfully!")
+
+    tt_device_name = determine_device_name(mesh_device)  # submesh device should not decide performance target
+    model_name = model_args[0].model_name
+    model_device_key = f"{tt_device_name}_{model_name}"
+
+    dict_target_prefill_tok_s = {
+        "T3K_gpt-oss-20b": 43,
+        "T3K_gpt-oss-120b": 43,
+        "TG_gpt-oss-20b": 43,
+        "TG_gpt-oss-120b": 43,
+    }
+
+    dict_target_decode_tok_s_u = {
+        "T3K_gpt-oss-20b": 17.5,
+        "T3K_gpt-oss-120b": 17.5,
+        "TG_gpt-oss-20b": 17.5,
+        "TG_gpt-oss-120b": 17.5,
+    }
+
+    dict_target_decode_tok_s = {
+        "T3K_gpt-oss-20b": 2200,
+        "T3K_gpt-oss-120b": 2200,
+        "TG_gpt-oss-20b": 2200,
+        "TG_gpt-oss-120b": 2200,
+    }
+
+    targets = {
+        "prefill_t/s": dict_target_prefill_tok_s[model_device_key],
+        "decode_t/s": dict_target_decode_tok_s[model_device_key],
+        "decode_t/s/u": dict_target_decode_tok_s_u[model_device_key],
+    }
+
+    if is_ci_env:
+        # Instead of running warmup iterations, the demo profiles the initial compile iteration
+        bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
+        benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
+
+        # Save the decode performance of every iteration for plotting in superset
+        for i in range(1, num_tokens_generated_decode[0]):
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                "inference_decode",
+                f"time_to_token_{i}",
+                profiler.get_duration(f"inference_decode_time_{i}") * 1000,
+                step_warm_up_num_iterations=None,
+                target=None,
+            )
+
+        # Also save the avg decode performance for the 128 iterations (excluding the compile time)
+        num_iterations_for_avg = min(128, num_tokens_generated_decode[0])
+        inference_decode_time_first_128 = sum(
+            profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, num_iterations_for_avg)
+        )
+        benchmark_data.add_measurement(
+            profiler,
+            0,
+            "inference_decode",
+            "avg_decode_time_first_128",
+            inference_decode_time_first_128 * 1000 / max(1, num_iterations_for_avg - 1),
+            step_warm_up_num_iterations=None,
+            target=None,
+        )
+        benchmark_data.save_partial_run_json(
+            profiler,
+            run_type=f"{tt_device_name}-demo",
+            ml_model_name=model_name,
+            ml_model_type="llm",
+            num_layers=model_args[0].n_layers,
+            batch_size=global_batch_size,
+            config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
+            input_sequence_length=max(prefill_lens),
+            output_sequence_length=num_tokens_generated_decode[0],
+        )
+
+        # check measurements against CI performance targets
+        logger.info(f"Checking measurements against CI performance targets for {model_name} on {tt_device_name}")
+        # Targets set to 0.95x observed values for decode rates (higher is better)
+        # and observed/0.95 for TTFT (lower is better) to allow 5% buffer + 5% room for growth
+        ci_target_ttft = {
+            # N150 targets (milliseconds) - lower is better
+            "T3K_gpt-oss-20b": (700, 1.2),
+            "TG_gpt-oss-20b": (450, 1.2),
+            "T3K_gpt-oss-120b": (3600, 1.2),
+            "TG_gpt-oss-120b": (1600, 1.2),
+        }
+        ci_target_decode_tok_s_u = {
+            "T3K_gpt-oss-20b": 13,
+            "TG_gpt-oss-20b": 13,
+            "T3K_gpt-oss-120b": 8,
+            "TG_gpt-oss-120b": 8,
+        }
+
+        # Only call verify_perf if the model_device_key exists in the targets
+        ci_targets = {}
+        if model_device_key in ci_target_ttft:
+            current_ttft_target = ci_target_ttft[model_device_key]
+            if isinstance(current_ttft_target, tuple):
+                high_tol_percentage = current_ttft_target[1]
+                current_ttft_target = current_ttft_target[0]
+            else:
+                high_tol_percentage = 1.15
+            ci_targets["prefill_time_to_token"] = current_ttft_target / 1000  # convert to seconds
+        if model_device_key in ci_target_decode_tok_s_u:
+            ci_targets["decode_t/s/u"] = ci_target_decode_tok_s_u[model_device_key]
+            # calculate from per-user rate
+            ci_targets["decode_t/s"] = ci_target_decode_tok_s_u[model_device_key] * global_batch_size
+
+        if ci_targets:  # Only verify performance if we have targets for this model/device combination
+            verify_perf(
+                measurements,
+                ci_targets,
+                high_tol_percentage=high_tol_percentage,
+                expected_measurements={k: True for k in ci_targets.keys()},
+            )
+        else:
+            logger.warning(
+                f"No CI performance targets found for {model_device_key}. Skipping performance verification."
+            )

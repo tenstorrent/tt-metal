@@ -4,9 +4,9 @@
 
 #include <unordered_map>
 #include <vector>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <enchantum/enchantum.hpp>
@@ -14,6 +14,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric {
@@ -48,14 +49,10 @@ tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::F
     switch (fabric_config) {
         case tt::tt_fabric::FabricConfig::FABRIC_1D: return tt::tt_fabric::Topology::Linear;
         case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: return tt::tt_fabric::Topology::Ring;
-        case tt::tt_fabric::FabricConfig::FABRIC_2D:
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC: return tt::tt_fabric::Topology::Mesh;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D: return tt::tt_fabric::Topology::Mesh;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X:
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y:
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY:
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X:
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y:
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY: return tt::tt_fabric::Topology::Torus;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY: return tt::tt_fabric::Topology::Torus;
         case tt::tt_fabric::FabricConfig::DISABLED:
         case tt::tt_fabric::FabricConfig::CUSTOM:
             TT_THROW("Unsupported fabric config: {}", enchantum::to_string(fabric_config));
@@ -67,19 +64,19 @@ bool FabricContext::is_2D_topology(tt::tt_fabric::Topology topology) {
     return topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Torus;
 }
 
-bool FabricContext::is_dynamic_routing_config(tt::tt_fabric::FabricConfig fabric_config) {
-    return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY;
-}
-
 size_t FabricContext::get_packet_header_size_bytes() const {
-    if (this->is_2D_routing_enabled()) {
-        return (this->is_dynamic_routing_enabled()) ? sizeof(tt::tt_fabric::MeshPacketHeader)
-                                                    : sizeof(tt::tt_fabric::HybridMeshPacketHeader);
+    bool udm_enabled =
+        tt::tt_metal::MetalContext::instance().get_fabric_udm_mode() == tt::tt_fabric::FabricUDMMode::ENABLED;
+    if (udm_enabled) {
+        // UDM mode only supports 2D routing
+        TT_FATAL(this->is_2D_routing_enabled(), "UDM mode only supports 2D routing");
+        return sizeof(tt::tt_fabric::UDMHybridMeshPacketHeader);
     } else {
-        return sizeof(tt::tt_fabric::PacketHeader);
+        if (this->is_2D_routing_enabled()) {
+            return sizeof(tt::tt_fabric::HybridMeshPacketHeader);
+        } else {
+            return sizeof(tt::tt_fabric::PacketHeader);
+        }
     }
 }
 
@@ -120,14 +117,12 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     TT_FATAL(
         fabric_config != tt::tt_fabric::FabricConfig::DISABLED,
         "Trying to initialize fabric context for disabled fabric config");
-
     this->fabric_config_ = fabric_config;
 
     this->wrap_around_mesh_ = this->check_for_wrap_around_mesh();
     this->topology_ = this->get_topology_from_config(fabric_config);
 
     this->is_2D_routing_enabled_ = this->is_2D_topology(this->topology_);
-    this->is_dynamic_routing_enabled_ = this->is_dynamic_routing_config(fabric_config);
 
     this->packet_header_size_bytes_ = this->get_packet_header_size_bytes();
     this->max_payload_size_bytes_ = this->get_max_payload_size_bytes();
@@ -182,7 +177,7 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     this->master_router_chans_.resize(num_devices, UNINITIALIZED_MASTER_ROUTER_CHAN);
     this->num_initialized_routers_.resize(num_devices, UNINITIALIZED_ROUTERS);
 
-    set_routing_mode(this->topology_, this->fabric_config_);
+    set_routing_mode(this->topology_);
 }
 
 bool FabricContext::is_wrap_around_mesh(MeshId mesh_id) const {
@@ -194,8 +189,6 @@ bool FabricContext::is_wrap_around_mesh(MeshId mesh_id) const {
 tt::tt_fabric::Topology FabricContext::get_fabric_topology() const { return this->topology_; }
 
 bool FabricContext::is_2D_routing_enabled() const { return this->is_2D_routing_enabled_; }
-
-bool FabricContext::is_dynamic_routing_enabled() const { return this->is_dynamic_routing_enabled_; }
 
 bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions direction) const {
     if (topology_ == Topology::Ring) {
@@ -230,6 +223,7 @@ tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_conf
     auto axis_index = static_cast<std::size_t>(fabric_edm_axis);
     switch (fabric_tensix_config) {
         case tt::tt_fabric::FabricTensixConfig::DISABLED:
+        case tt::tt_fabric::FabricTensixConfig::UDM:
             switch (fabric_edm_type) {
                 case tt::tt_fabric::FabricEriscDatamoverType::Default:
                     TT_FATAL(this->router_config_ != nullptr, "Error, fabric router config is uninitialized");

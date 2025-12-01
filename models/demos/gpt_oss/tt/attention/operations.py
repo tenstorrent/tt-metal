@@ -33,14 +33,23 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights, mesh_config, 
     # After this: row-replicated, column-sharded (ready for head splitting)
     num_rows = mesh_config.mesh_shape[0]
     if num_rows > 1:
-        xqkv_fused = ttnn.all_reduce(
+        out = ttnn.reduce_scatter(
             xqkv_fused,
-            num_links=1,
-            topology=ttnn.Topology.Linear,
+            dim=3,
+            # num_links=1,
+            # topology=ttnn.Topology.Ring,
             cluster_axis=0,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
+        out = ttnn.all_gather(
+            out,
+            dim=3,
+            # num_links=1,
+            # topology=ttnn.Topology.Ring,
+            cluster_axis=0,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return out
     return xqkv_fused
 
 
@@ -139,7 +148,7 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype,
     Returns:
         Output tensor [batch, seq_len, hidden_size] row-sharded
     """
-    tensor = ttnn.typecast(tensor, ttnn.bfloat8_b)
+    # tensor = ttnn.typecast(tensor, ttnn.bfloat8_b)
     # Matmul with 2D sharded weights produces partial results
     out = ttnn.matmul(tensor, weights.o_proj, dtype=activation_dtype)
     tensor.deallocate(True)
@@ -148,12 +157,21 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype,
     # All-reduce along COLUMNS (cluster_axis=1) to sum partial results
     # After this: column-replicated, row-sharded (ready for residual add)
     if mesh_config.tp > 1:
-        out = ttnn.all_reduce(
+        out = ttnn.reduce_scatter(
             out,
-            num_links=4,
-            topology=ttnn.Topology.Ring,
+            dim=3,
+            # num_links=1,
+            # topology=ttnn.Topology.Ring,
             cluster_axis=1,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        out = ttnn.all_gather(
+            out,
+            dim=3,
+            # num_links=1,
+            # topology=ttnn.Topology.Ring,
+            cluster_axis=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     return out

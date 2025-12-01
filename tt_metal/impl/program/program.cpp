@@ -9,7 +9,6 @@
 #include <graph_tracking.hpp>
 #include <enchantum/enchantum.hpp>
 #include <memory_reporter.hpp>
-#include <persistent_kernel_cache.hpp>
 #include "impl/buffers/semaphore.hpp"
 #include <tt_align.hpp>
 #include <algorithm>
@@ -52,7 +51,6 @@
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
-#include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "profiler_state.hpp"
 #include "program_command_sequence.hpp"
@@ -75,8 +73,10 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
-#include "kernels/kernel_impl.hpp"
+#include "kernels/kernel.hpp"
 #include "tt_stl/reflection.hpp"
+#include <impl/dispatch/dispatch_query_manager.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt {
 class tt_hlk_desc;
@@ -106,28 +106,14 @@ size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable
 
 void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel) {
     // Placement rules:
-    //  Slow dispatch:
-    //      - kernels cannot be on storage only cores
     //  Fast dispatch (tensix):
-    //      - kernels cannot be on storage only cores an
     //      - tensix kernels cannot be on dispatch cores
     //  Fast dispatch (ethernet):
-    //      - kernels cannot be on storage only cores
     //      - eth kernels cannot be on idle eth cores
     bool slow_dispatch = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
 
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     tt::CoreType dispatch_core_type = dispatch_core_config.get_core_type();
-    const std::vector<CoreCoord>& storage_cores =
-        MetalContext::instance().get_dispatch_query_manager().get_logical_storage_cores_on_user_chips();
-    bool on_storage_only_core =
-        std::any_of(storage_cores.begin(), storage_cores.end(), [&kernel](const CoreCoord& storage_core) {
-            return kernel->is_on_logical_core(storage_core);
-        });
-    TT_FATAL(
-        not on_storage_only_core,
-        "Illegal kernel placement for {}. Kernels cannot be placed on storage only cores!",
-        kernel->name());
 
     // Kernels used to implement fast dispatch can be placed on dispatch cores
     if (not slow_dispatch and not force_slow_dispatch) {
@@ -167,7 +153,7 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
     try {
         jit_build_genfiles_descriptors(
             BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, build_options);
-        KernelImpl::from(*kernel).generate_binaries(device, build_options);
+        kernel->generate_binaries(device, build_options);
     } catch (std::runtime_error& ex) {
         TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
     }
@@ -244,17 +230,17 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
 
-    for (auto& cb_descriptor : descriptor.cbs) {
+    for (const auto& cb_descriptor : descriptor.cbs) {
         internal_->add_circular_buffer_(std::make_shared<CircularBuffer>(cb_descriptor));
     }
 
     for (size_t i = 0; i < descriptor.semaphores.size(); i++) {
-        auto& semaphore_descriptor = descriptor.semaphores[i];
+        const auto& semaphore_descriptor = descriptor.semaphores[i];
         internal_->add_semaphore(
             semaphore_descriptor.core_ranges, i, semaphore_descriptor.initial_value, semaphore_descriptor.core_type);
     }
 
-    for (auto& kernel_descriptor : descriptor.kernels) {
+    for (const auto& kernel_descriptor : descriptor.kernels) {
         bool is_file = kernel_descriptor.source_type == KernelDescriptor::SourceType::FILE_PATH;
         std::vector<uint32_t> compile_args(
             kernel_descriptor.compile_time_args.begin(), kernel_descriptor.compile_time_args.end());
@@ -941,7 +927,7 @@ std::vector<std::vector<CoreCoord>> detail::ProgramImpl::logical_cores() const {
     std::vector<std::set<CoreCoord>> unique_cores;
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < kernels_.size();
          programmable_core_type_index++) {
-        auto& kernels = this->kernels_[programmable_core_type_index];
+        const auto& kernels = this->kernels_[programmable_core_type_index];
         cores_in_program.push_back({});
         unique_cores.push_back({});
         for (const auto& [id, kernel] : kernels) {
@@ -1074,9 +1060,8 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     // This is generic for workers and eth cores
     for (const auto& kernels : this->kernels_) {
         for (const auto& [kernel_id, kernel] : kernels) {
-            auto& kernel_impl = KernelImpl::from(*kernel);
-            const auto& binaries = kernel_impl.binaries(
-                BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
+            const auto& binaries =
+                kernel->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
             std::vector<uint32_t> dst_base_addrs;
             std::vector<uint32_t> page_offsets;
             std::vector<uint32_t> lengths;
@@ -1101,7 +1086,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                         page_offsets[transfer_info_index] =
                             binaries_data.size() * sizeof(uint32_t) / HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
                         lengths[transfer_info_index] = len * sizeof(uint32_t);
-                        processor_ids[transfer_info_index] = kernel_impl.get_kernel_processor_type(sub_kernel_index);
+                        processor_ids[transfer_info_index] = kernel->get_kernel_processor_type(sub_kernel_index);
 
                         binaries_data.insert(binaries_data.end(), mem_ptr, mem_ptr + len);
                         binaries_data.resize(
@@ -1373,7 +1358,7 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
 
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     // ZoneScoped;
-    auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->build_id());
+    const auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->build_id());
 
     if (compiled_.contains(build_env.build_key())) {
         Inspector::program_compile_already_exists(this, device, build_env.build_key());
@@ -1401,7 +1386,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             launch_build_step(
                 [kernel, device, this, &build_env] {
                     JitBuildOptions build_options(build_env.build_env);
-                    KernelImpl::from(*kernel).set_build_options(build_options);
+                    kernel->set_build_options(build_options);
                     if (this->compiled_.empty()) {
                         this->set_remote_circular_buffer_init(kernel);
                     }
@@ -1414,9 +1399,9 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     kernel->set_full_name(kernel_path_suffix);
                     build_options.set_name(kernel_path_suffix);
 
-                    KernelImpl::from(*kernel).register_kernel_elf_paths_with_watcher(*device);
+                    kernel->register_kernel_elf_paths_with_watcher(*device);
 
-                    if (enable_persistent_kernel_cache && KernelImpl::from(*kernel).binaries_exist_on_disk(device)) {
+                    if (enable_persistent_kernel_cache && kernel->binaries_exist_on_disk(device)) {
                         if (not detail::HashLookup::inst().exists(kernel_hash)) {
                             detail::HashLookup::inst().add(kernel_hash);
                             detail::HashLookup::inst().add_generated_bin(kernel_hash);
@@ -1436,7 +1421,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     for (auto& kernels : kernels_) {
         for (auto& [id, kernel] : kernels) {
-            launch_build_step([kernel, device] { KernelImpl::from(*kernel).read_binaries(device); }, events);
+            launch_build_step([kernel, device] { kernel->read_binaries(device); }, events);
         }
     }
     sync_build_steps(events);
@@ -1740,7 +1725,7 @@ void detail::ProgramCompileGroup::add_program(
 void detail::ProgramCompileGroup::compile_all(bool force_slow_dispatch) {
     std::vector<std::shared_future<void>> events;
     for (auto& [device, program] : program_device_map_) {
-        auto pgm = program.get();
+        auto* pgm = program.get();
         launch_build_step(
             [device, pgm, force_slow_dispatch]() { pgm->impl().compile(device, force_slow_dispatch); }, events);
     }

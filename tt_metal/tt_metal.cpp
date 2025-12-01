@@ -34,7 +34,7 @@
 #include <filesystem>
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
-#include "kernels/kernel_impl.hpp"
+#include "kernels/kernel.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "device/device_impl.hpp"
 #include "hal_types.hpp"
@@ -45,7 +45,7 @@
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
-#include "tt-metalium/program.hpp"
+#include <tt-metalium/program.hpp>
 #include "program/program_impl.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "tracy/Tracy.hpp"
@@ -55,6 +55,7 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "get_platform_architecture.hpp"
+#include "common/tt_backend_api_types.hpp"
 
 namespace tt {
 
@@ -358,6 +359,14 @@ std::string get_platform_architecture_name() {
     return tt::get_string_lowercase(tt::tt_metal::get_platform_architecture({}));
 }
 
+IDevice* GetActiveDevice(ChipId device_id) {
+    IDevice* device = nullptr;
+    if (tt::DevicePool::instance().is_device_active(device_id)) {
+        device = tt::DevicePool::instance().get_active_device(device_id);
+    }
+    return device;
+}
+
 std::map<ChipId, IDevice*> CreateDevices(
     const std::vector<ChipId>& device_ids,
     const uint8_t num_hw_cqs,
@@ -404,7 +413,7 @@ std::map<ChipId, IDevice*> CreateDevices(
 void CloseDevices(const std::map<ChipId, IDevice*>& devices) {
     std::vector<IDevice*> devices_to_close;
     devices_to_close.reserve(devices.size());
-    for (auto& [id, device] : devices) {
+    for (const auto& [id, device] : devices) {
         devices_to_close.push_back(device);
     }
     tt::DevicePool::instance().close_devices(devices_to_close);
@@ -441,7 +450,7 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
     uint32_t page_size = buffer.page_size();
     TT_ASSERT(page_size == 0 ? buffer.size() == 0 : buffer.size() % page_size == 0);
 
-    auto device = buffer.device();
+    auto* device = buffer.device();
     const auto& allocator = device->allocator();
 
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
@@ -494,7 +503,7 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
     size_t page_size = buffer.page_size();
     size_t num_pages = buffer.num_pages();
 
-    auto device = buffer.device();
+    auto* device = buffer.device();
     size_t num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
     size_t bank_index = 0;
     size_t data_index = 0;
@@ -545,19 +554,19 @@ void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buf
     size_t page_size = buffer.page_size();
     size_t num_pages = buffer.num_pages();
 
-    auto device = buffer.device();
+    auto* device = buffer.device();
     size_t num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
 
     size_t host_idx = 0;
     size_t bank_index = 0;
-    std::vector<uint32_t> page;
-    page.resize(page_size / sizeof(uint32_t));
+    std::vector<uint8_t> page(page_size);
     for (size_t page_index = 0; page_index < num_pages; page_index++) {
         const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
-        page.clear();
         switch (buffer.buffer_type()) {
             case BufferType::DRAM:
-            case BufferType::TRACE: ReadFromDeviceDRAMChannel(device, bank_index, address, page_size, page); break;
+            case BufferType::TRACE: {
+                ReadFromDeviceDRAMChannel(device, bank_index, address, std::span<uint8_t>(page));
+            } break;
             case BufferType::L1:
             case BufferType::L1_SMALL: {
                 auto core_coordinates = device->worker_core_from_logical_core(
@@ -602,7 +611,7 @@ void read_pages_to_host_helper(
 }
 
 void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer) {
-    auto device = buffer.device();
+    auto* device = buffer.device();
 
     uint32_t page_size = buffer.page_size();
 
@@ -968,7 +977,7 @@ IDevice* CreateDevice(
 
     tt::DevicePool::initialize(
         {device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config, l1_bank_remap, worker_l1_size);
-    auto dev = tt::DevicePool::instance().get_active_device(device_id);
+    auto* dev = tt::DevicePool::instance().get_active_device(device_id);
     return dev;
 }
 
@@ -977,7 +986,7 @@ IDevice* CreateDeviceMinimal(
     ZoneScoped;
     tt::tt_metal::MetalContext::instance().initialize(
         dispatch_core_config, num_hw_cqs, {}, DEFAULT_L1_SMALL_SIZE, true);
-    auto dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
+    auto* dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
     tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(true);
     return dev;
 }
@@ -1035,6 +1044,10 @@ KernelHandle CreateDataMovementKernel(
     auto mode = control_plane.get_routing_mode();
     if (mode != ROUTING_MODE_UNDEFINED) {
         kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
+        auto udm_mode = tt::tt_metal::MetalContext::instance().get_fabric_udm_mode();
+        if (udm_mode == tt::tt_fabric::FabricUDMMode::ENABLED) {
+            kernel->add_defines({{"UDM_MODE", std::to_string(static_cast<int>(udm_mode))}});
+        }
     }
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);
 }
@@ -1063,6 +1076,10 @@ KernelHandle CreateEthernetKernel(
     auto mode = control_plane.get_routing_mode();
     if (mode != ROUTING_MODE_UNDEFINED) {
         kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
+        auto udm_mode = tt::tt_metal::MetalContext::instance().get_fabric_udm_mode();
+        if (udm_mode == tt::tt_fabric::FabricUDMMode::ENABLED) {
+            kernel->add_defines({{"UDM_MODE", std::to_string(static_cast<int>(udm_mode))}});
+        }
     }
 
     TT_FATAL(

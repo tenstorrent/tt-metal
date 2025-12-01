@@ -4,7 +4,7 @@
 
 #include "all_reduce.hpp"
 
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
@@ -34,12 +34,11 @@ ttnn::Tensor ExecuteAllReduce::invoke(
         }
     }
     // Get mesh device from input tensor
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required for all_reduce operation");
 
     // Determine topology
-    tt::tt_fabric::Topology topology_ = topology.value_or(
-        ::ttnn::ccl::get_usable_topology(input_tensor, tt::tt_fabric::get_fabric_topology(), cluster_axis));
+    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     topology_ = ::ttnn::ccl::convert_2d_to_1d_topology(topology_);
     // Call the experimental all_reduce_async with Sum operation
     return ::ttnn::experimental::all_reduce_async(

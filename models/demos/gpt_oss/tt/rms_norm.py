@@ -112,8 +112,8 @@ class RMSNorm(nn.Module):
             )
             ttnn.deallocate(tt_gathered_stats)
 
-            # Reshape to remove padding dimension
-            tt_output = ttnn.reshape(tt_output, (1, tt_output.shape[-2], per_device_hidden))
+            # Reshape output
+            tt_output = ttnn.reshape(tt_output, (1, tt_output.shape[-2], tt_output.shape[-1]))
             if is_prefill:
                 tt_output = ttnn.to_memory_config(tt_output, ttnn.DRAM_MEMORY_CONFIG)
             return tt_output

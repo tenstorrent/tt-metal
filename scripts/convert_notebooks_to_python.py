@@ -128,21 +128,43 @@ def main() -> None:
             continue
 
         tmp_file = OUTPUT_DIR / f".tmp_{notebook.stem}.py"
+        # Clean up any existing temporary file from previous runs
+        if tmp_file.exists():
+            tmp_file.unlink()
+
         try:
             convert_with_nbconvert(notebook, tmp_file)
         except subprocess.CalledProcessError:
             print(f"⚠️ Failed to convert {notebook}, continuing.")
             continue
 
+        # Verify that the temporary file was created
+        if not tmp_file.exists():
+            print(f"⚠️ Temporary file {tmp_file} was not created after conversion, skipping.")
+            # List files in the directory to help debug
+            if OUTPUT_DIR.exists():
+                existing_files = list(OUTPUT_DIR.glob(f"*{notebook.stem}*"))
+                if existing_files:
+                    print(f"   Found similar files: {existing_files}")
+            continue
+
         if not output_file.exists():
             shutil.move(str(tmp_file), str(output_file))
             new_files.append(output_file)
         else:
-            if output_file.read_text() != tmp_file.read_text():
-                shutil.move(str(tmp_file), str(output_file))
-                updated_files.append(output_file)
-            else:
-                tmp_file.unlink()
+            try:
+                tmp_content = tmp_file.read_text()
+                output_content = output_file.read_text()
+                if output_content != tmp_content:
+                    shutil.move(str(tmp_file), str(output_file))
+                    updated_files.append(output_file)
+                else:
+                    tmp_file.unlink()
+            except FileNotFoundError as e:
+                print(f"⚠️ Error reading files for comparison: {e}, skipping.")
+                if tmp_file.exists():
+                    tmp_file.unlink()
+                continue
 
     # Stage new or changed files
     files_to_add = new_files + updated_files

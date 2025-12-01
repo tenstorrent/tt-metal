@@ -71,7 +71,7 @@ def test_transformerblock(
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_input_tensor = ttnn.from_torch(
-        torch_input_tensor,
+        torch_input_tensor.unsqueeze(0),
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,

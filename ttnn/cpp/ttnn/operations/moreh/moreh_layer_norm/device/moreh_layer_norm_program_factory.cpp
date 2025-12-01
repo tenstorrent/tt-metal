@@ -27,12 +27,12 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
-    auto& input = tensor_args.input;
-    auto& gamma = tensor_args.gamma;
-    auto& beta = tensor_args.beta;
+    const auto& input = tensor_args.input;
+    const auto& gamma = tensor_args.gamma;
+    const auto& beta = tensor_args.beta;
 
-    auto& mean_inp = tensor_args.mean;
-    auto& rstd_inp = tensor_args.rstd;
+    const auto& mean_inp = tensor_args.mean;
+    const auto& rstd_inp = tensor_args.rstd;
 
     const std::optional<const Tensor>& output = output_tensor.at(0);
 
@@ -233,11 +233,11 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
-    const auto reader_kernel_file =
+    const auto* const reader_kernel_file =
         use_large_algorithm
             ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/reader_moreh_layer_norm_large.cpp"
             : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/reader_moreh_layer_norm_small.cpp";
-    const auto writer_kernel_file =
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/writer_moreh_layer_norm.cpp";
 
     const auto reader_kernels_id =
@@ -257,7 +257,7 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
         static_cast<uint32_t>(is_lastdim_layer_norm),
         static_cast<uint32_t>(is_groupnorm)};
 
-    const auto compute_kernel_file =
+    const auto* const compute_kernel_file =
         use_large_algorithm
             ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_large_kernel.cpp"
             : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_small_kernel.cpp";
@@ -381,13 +381,13 @@ void MorehLayerNormOperation::ProgramFactory::override_runtime_arguments(
     auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
 
-    auto input_buffer = tensor_args.input.buffer();
-    auto gamma_buffer = tensor_args.gamma.has_value() ? tensor_args.gamma->buffer() : nullptr;
-    auto beta_buffer = tensor_args.beta.has_value() ? tensor_args.beta->buffer() : nullptr;
-    auto mean_buffer = tensor_args.mean.has_value() ? tensor_args.mean->buffer() : nullptr;
-    auto rstd_buffer = tensor_args.rstd.has_value() ? tensor_args.rstd->buffer() : nullptr;
+    auto* input_buffer = tensor_args.input.buffer();
+    auto* gamma_buffer = tensor_args.gamma.has_value() ? tensor_args.gamma->buffer() : nullptr;
+    auto* beta_buffer = tensor_args.beta.has_value() ? tensor_args.beta->buffer() : nullptr;
+    auto* mean_buffer = tensor_args.mean.has_value() ? tensor_args.mean->buffer() : nullptr;
+    auto* rstd_buffer = tensor_args.rstd.has_value() ? tensor_args.rstd->buffer() : nullptr;
 
-    auto output_buffer = tensor_return_value.at(0)->buffer();
+    auto* output_buffer = tensor_return_value.at(0)->buffer();
 
     auto num_cores = cached_program.shared_variables.num_cores;
     auto num_cores_y = cached_program.shared_variables.num_cores_y;
