@@ -173,10 +173,10 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
     def prefill_forward(
         self,
         tokens,
-        images,
         page_table,
         kv_cache,
         prompt_lens,  # [INFO] prompt_lens is pre-padding number of tokens after text-image processing
+        **kwargs,  # images for V0, pixel_values and image_grid_thw for V1
     ):
         # [INFO] tokens are padded to the same length by appending 0s; change the padding to use pad_token_id
         pad_token_id = self.tokenizer.pad_token_id
@@ -196,7 +196,9 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             for i, plen in enumerate(prompt_lens):
                 inputs.attention_mask[i, :plen] = 1
         else:
-            inputs.input_ids = tokens.to(images[0].attention_mask.dtype) if images[0] is not None else tokens
+            inputs.input_ids = (
+                tokens.to(kwargs["images"][0].attention_mask.dtype) if kwargs["images"][0] is not None else tokens
+            )
             inputs.attention_mask = torch.concat(
                 [
                     torch.nn.functional.pad(
@@ -204,25 +206,44 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
                     )
                     if im is not None
                     else torch.ones_like(tokens[i : i + 1], dtype=tokens.dtype)
-                    for i, im in enumerate(images)
+                    for i, im in enumerate(kwargs["images"])
                 ],
                 dim=0,
             )
 
-        if images[0] is not None and "pixel_values" in images[0]:
-            # we currently do not support mixed inputs of text-only users and text-image users; hence checking images[0] is enough
-            if envs.VLLM_USE_V1:
-                inputs.pixel_values = torch.concat([im["pixel_values"][0] for im in images], dim=0)
-                inputs.image_grid_thw = torch.concat([im["image_grid_thw"][0] for im in images], dim=0)
+        print(f"kwargs: {kwargs}")
+        if envs.VLLM_USE_V1:
+            if (
+                "pixel_values" in kwargs
+                and kwargs["pixel_values"][0] is not None
+                # kwargs["pixel_values"] is a list,
+                # each element is a list of images for one user
+                # We only check if the first user's pixel_values is not None
+                # as we currently do not support mixed inputs of text-only
+                # users and text-image users
+            ):
+                inputs.pixel_values = torch.concat(
+                    [im for user_pixel_values in kwargs["pixel_values"] for im in user_pixel_values], dim=0
+                )
+                inputs.image_grid_thw = torch.concat(
+                    [im for user_image_grid_thw in kwargs["image_grid_thw"] for im in user_image_grid_thw], dim=0
+                )
+                print(f"inputs.pixel_values: {inputs.pixel_values}")
+                # Vision prefill
+                image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
             else:
-                inputs.pixel_values = torch.concat([im.pixel_values for im in images], dim=0)
-                inputs.image_grid_thw = torch.concat([im.image_grid_thw for im in images], dim=0)
-
-            # Vision prefill
-            image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+                # text-only users
+                image_embeds = torch.tensor([], dtype=torch.bfloat16)
         else:
-            # text-only users
-            image_embeds = torch.tensor([], dtype=torch.bfloat16)
+            if "images" in kwargs and kwargs["images"][0] is not None and "pixel_values" in kwargs["images"][0]:
+                # we currently do not support mixed inputs of text-only users and text-image users; hence checking images[0] is enough
+                inputs.pixel_values = torch.concat([im.pixel_values for im in kwargs["images"]], dim=0)
+                inputs.image_grid_thw = torch.concat([im.image_grid_thw for im in kwargs["images"]], dim=0)
+
+                image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+            else:
+                # text-only users
+                image_embeds = torch.tensor([], dtype=torch.bfloat16)
 
         # Prepare text + vision inputs for decoder model
         text_embeds = self.reference_model.model.language_model.embed_tokens(inputs.input_ids)
