@@ -178,7 +178,7 @@ jobs:
               "benchmark-timeout": 10,
               "runner-label": "topology-6u",
               "arch": "arch-wormhole_b0",
-              "mesh-device": "\\"(4, 8)\\"",
+              "mesh-device": "(4, 8)",
               "multimodal": false,
               "tt-llama-text-ver": "tt_transformers",
               "additional-args": "--max_num_seqs 1 --num_scheduler_steps 1",
