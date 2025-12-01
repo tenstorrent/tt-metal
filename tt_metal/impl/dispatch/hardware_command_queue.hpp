@@ -79,9 +79,7 @@ public:
 
     // This function is temporarily needed since MeshCommandQueue relies on the CommandQueue object
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;
-
-    void enqueue_record_event(
-        const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
+    
     void enqueue_wait_for_event(const std::shared_ptr<Event>& sync_event) override;
 
     void enqueue_read_from_core(

@@ -337,41 +337,6 @@ void HWCommandQueue::enqueue_write_to_core(
     }
 }
 
-void HWCommandQueue::enqueue_record_event(
-    const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScopedN("HWCommandQueue_enqueue_record_event");
-
-    TT_FATAL(!this->manager_.get_bypass_mode(), "Enqueue Record Event cannot be used with tracing");
-
-    // Populate event struct for caller. When async queues are enabled, this is in child thread, so consumers
-    // of the event must wait for it to be ready (ie. populated) here. Set ready flag last. This couldn't be
-    // in main thread otherwise event_id selection would get out of order due to main/worker thread timing.
-    event->cq_id = this->id_;
-    event->event_id = this->manager_.get_next_event(this->id_);
-    event->device = this->device_;
-    event->ready = true;
-
-    sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
-    event_dispatch::issue_record_event_commands(
-        device_,
-        device_->id(),
-        event->event_id,
-        id_,
-        device_->num_hw_cqs(),
-        this->manager_,
-        sub_device_ids,
-        this->expected_num_workers_completed_);
-    this->issued_completion_q_reads_.push(
-        std::make_shared<CompletionReaderVariant>(std::in_place_type<ReadEventDescriptor>, event->event_id));
-    this->increment_num_entries_in_completion_q();
-
-    auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
-    for (const auto& sub_device_id : sub_device_ids) {
-        auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
-        sub_device_entry.recorded_event(event->event_id, event->cq_id);
-    }
-}
-
 void HWCommandQueue::enqueue_wait_for_event(const std::shared_ptr<Event>& sync_event) {
     ZoneScopedN("HWCommandQueue_enqueue_wait_for_event");
     event_dispatch::issue_wait_for_event_commands(id_, sync_event->cq_id, this->manager_, sync_event->event_id);
@@ -448,7 +413,7 @@ void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_finish");
     log_debug(tt::LogDispatch, "Finish for command queue {}", this->id_);
     std::shared_ptr<Event> event = std::make_shared<Event>();
-    this->enqueue_record_event(event, sub_device_ids);
+    //this->enqueue_record_event(event, sub_device_ids);
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled()) {
         while (this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_) {
             if (MetalContext::instance().dprint_server() and
