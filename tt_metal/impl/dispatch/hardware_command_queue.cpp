@@ -338,15 +338,6 @@ void HWCommandQueue::enqueue_write_to_core(
     }
 }
 
-void HWCommandQueue::enqueue_wait_for_event(const std::shared_ptr<Event>& sync_event) {
-    ZoneScopedN("HWCommandQueue_enqueue_wait_for_event");
-    event_dispatch::issue_wait_for_event_commands(id_, sync_event->cq_id, this->manager_, sync_event->event_id);
-    auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
-    for (auto& sub_device : sub_device_cq_owner) {
-        sub_device.waited_for_event(sync_event->event_id, sync_event->cq_id, this->id_);
-    }
-}
-
 void HWCommandQueue::read_completion_queue() {
     ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_->id());
