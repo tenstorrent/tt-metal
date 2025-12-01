@@ -143,7 +143,9 @@ def get_decode_sdpa_configs(config, device):
     return sdpa_batch_sharded_memcfg, sdpa_decode_progcfg, sdpa_decode_compute_kernel_config
 
 
-def functional_sdpa(query_states, key_states, value_states, scaling, attention_mask, is_cross_attention=False):
+def functional_sdpa(
+    query_states, key_states, value_states, scaling, attention_mask, is_cross_attention=False, is_decode=False
+):
     if is_cross_attention and query_states.shape[1] == 20:
         # num_heads must be 20 to be sharded
         core_grid = ttnn.CoreGrid(y=4, x=5)
@@ -190,8 +192,39 @@ def functional_sdpa(query_states, key_states, value_states, scaling, attention_m
         ttnn.deallocate(value_states)
         attn_output = ttnn.to_memory_config(attn_output, WHISPER_MEMORY_CONFIG)
 
+    elif (not is_decode) and (query_states.shape[-2] == value_states.shape[-2]):
+        ## Encoder-self-attention
+        q_chunk_size = 32
+        k_chunk_size = 32
+        core_grid_8x8 = ttnn.CoreGrid(y=8, x=8)
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=k_chunk_size,
+            exp_approx_mode=True,  # NOTE: False is more correct
+        )
+
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
+        attn_output = ttnn.transformer.scaled_dot_product_attention(
+            query_states,
+            key_states,
+            value_states,
+            scale=scaling,
+            attn_mask=None,
+            is_causal=False,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     else:
-        ## Encoder-self-attention or no-KV-cache-decoder-attention
+        # original implementation for decoder-attention-no-KV-cache
         query_states *= scaling
 
         attn_weights = query_states @ key_states
@@ -206,41 +239,6 @@ def functional_sdpa(query_states, key_states, value_states, scaling, attention_m
         attn_output = attn_probs @ value_states
 
     return attn_output
-    """
-    q_chunk_size = 32
-    k_chunk_size = 32
-    core_grid_8x8 = ttnn.CoreGrid(y=8, x=8)
-    program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
-        q_chunk_size=q_chunk_size,
-        k_chunk_size=k_chunk_size,
-        exp_approx_mode=True,  # NOTE: False is more correct
-    )
-
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
-    )
-
-    if attention_mask is not None:
-        # Mask num_heads must be 1 to be broadcasted across all heads
-        attention_mask = attention_mask[:,:1,:,:]
-
-    attn_output = ttnn.transformer.scaled_dot_product_attention(
-        query_states,
-        key_states,
-        value_states,
-        scale=scaling,
-        attn_mask=attention_mask,
-        is_causal=False,
-        program_config=program_config,
-        compute_kernel_config=compute_kernel_config,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    return attn_output
-    """
 
 
 def whisper_attention(
@@ -260,6 +258,14 @@ def whisper_attention(
 
     is_cross_attention = encoder_hidden_states is not None
     sdpa_with_kv_cache = not is_cross_attention and is_decode and kv_cache is not None
+    # Enabling encoder SDPA, to diable the K-transpose in ttnn.experimental.nlp_create_qkv_heads
+    encoder_sdpa_attention = not is_decode
+    if encoder_sdpa_attention:
+        no_transpose_k_heads = False
+    elif sdpa_with_kv_cache:
+        no_transpose_k_heads = False
+    else:
+        no_transpose_k_heads = True
 
     if is_cross_attention:
         query_states = hidden_states @ parameters.q_proj.weight + parameters.q_proj.bias
@@ -269,10 +275,32 @@ def whisper_attention(
         query_states = ttnn.transpose(query_states, 1, 2)  # 1, H, 32, d
         key_states, value_states = calculate_key_values(config, encoder_hidden_states, parameters=parameters)
         attn_output = functional_sdpa(
-            query_states, key_states, value_states, scaling, attention_mask, is_cross_attention=is_cross_attention
+            query_states,
+            key_states,
+            value_states,
+            scaling,
+            attention_mask,
+            is_cross_attention=is_cross_attention,
+            is_decode=is_decode,
         )
     else:
-        fused_qkv = hidden_states @ parameters.query_key_value.weight + parameters.query_key_value.bias  # 1, S, 3xHxd
+        # fused_qkv = hidden_states @ parameters.query_key_value.weight + parameters.query_key_value.bias  # 1, S, 3xHxd
+        core_grid = ttnn.CoreGrid(y=8, x=8)
+        if not is_decode:
+            fused_qkv_dtype = ttnn.bfloat8_b
+        else:
+            fused_qkv_dtype = ttnn.bfloat16
+        fused_qkv = ttnn.linear(
+            hidden_states,
+            parameters.query_key_value.weight,
+            bias=parameters.query_key_value.bias,
+            core_grid=core_grid,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=fused_qkv_dtype,
+        )
+        ttnn.deallocate(hidden_states)
+        fused_qkv = ttnn.to_memory_config(fused_qkv, WHISPER_MEMORY_CONFIG)
+
         fused_qkv = ttnn.unsqueeze_to_4D(fused_qkv)
 
         (
@@ -283,7 +311,7 @@ def whisper_attention(
             fused_qkv,
             num_heads=config.decoder_attention_heads,
             num_kv_heads=config.decoder_attention_heads,
-            transpose_k_heads=(not sdpa_with_kv_cache),
+            transpose_k_heads=no_transpose_k_heads,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         if sdpa_with_kv_cache:
@@ -332,7 +360,15 @@ def whisper_attention(
             attn_output = ttnn.transpose(attn_output, 1, 2)
         else:
             # Encoder-attention or no-KV-cache-decoder-attention
-            attn_output = functional_sdpa(query_states, key_states, value_states, scaling, attention_mask)
+            attn_output = functional_sdpa(
+                query_states,
+                key_states,
+                value_states,
+                scaling,
+                attention_mask,
+                is_cross_attention=is_cross_attention,
+                is_decode=is_decode,
+            )
 
     attn_output = ttnn.experimental.nlp_concat_heads(attn_output)
     attn_output = ttnn.squeeze(attn_output, 0)
