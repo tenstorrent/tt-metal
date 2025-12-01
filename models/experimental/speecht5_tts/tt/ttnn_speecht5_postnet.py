@@ -11,12 +11,7 @@ import ttnn
 import torch
 from typing import Tuple
 from dataclasses import dataclass
-
-
-# ============================================================================
-# Memory Management Utilities - Comprehensive L1 Optimization
-# ============================================================================
-
+from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
 
 # ============================================================================
 # High-Performance Compute Kernel Configs - Maximum Core Utilization
@@ -101,7 +96,7 @@ class TtConv1d:
         # PHASE 1: Ensure input is in L1 and reshape (L1 outputs)
         x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
         x = ttnn.permute(x, [0, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
-        x = ttnn.reshape(x, [batch_size, input_length, 1, self.in_channels], memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.reshape(x, [batch_size, 1, input_length, self.in_channels], memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # PHASE 2: Apply conv2d with return_weights_and_bias=True to get prepared weights
         # This prevents re-preparation during trace
@@ -148,11 +143,11 @@ class TTNNSpeechT5BatchNormConvLayer:
         has_activation: bool,
     ):
         """
-        Initialize Conv1D + BatchNorm layer.
+        Initialize Conv1D layer with BatchNorm folded in.
 
         Args:
             device: TTNN device
-            parameters: Dictionary with 'conv', 'batch_norm' sub-dicts
+            parameters: Dictionary with 'conv' sub-dict (BatchNorm already folded)
             config: Post-net configuration
             has_activation: Whether to apply Tanh activation
         """
@@ -160,14 +155,8 @@ class TTNNSpeechT5BatchNormConvLayer:
         self.config = config
         self.has_activation = has_activation
 
-        # Create conv instance (similar to YOLOv8 pattern)
+        # Create conv instance (BatchNorm effects already folded into conv weights)
         self.conv = TtConv1d(device, parameters)
-
-        # Store BatchNorm weights as class members
-        self.bn_weight = parameters["batch_norm"]["weight"]
-        self.bn_bias = parameters["batch_norm"]["bias"]
-        self.bn_running_mean = parameters["batch_norm"]["running_mean"]
-        self.bn_running_var = parameters["batch_norm"]["running_var"]
 
         # Get dimensions from conv
         self.out_channels = self.conv.out_channels
@@ -191,40 +180,20 @@ class TTNNSpeechT5BatchNormConvLayer:
         batch_size = hidden_states.shape[0]
         input_length = hidden_states.shape[2]
 
-        # PHASE 2: Op 1: Conv1d (L1 output)
+        # PHASE 2: Op 1: Conv1d (BatchNorm effects already folded in) (L1 output)
         conv_result = self.conv(hidden_states, batch_size, input_length)
         conv_result = ttnn.to_memory_config(conv_result, ttnn.L1_MEMORY_CONFIG)
 
-        # PHASE 3: Op 2: BatchNorm (L1 outputs)
-        # Reshape for batch_norm: [B, C, L] -> [B, C, L, 1] for TTNN
-        conv_result = ttnn.reshape(
-            conv_result, [batch_size, self.out_channels, input_length, 1], memory_config=ttnn.L1_MEMORY_CONFIG
-        )
-
-        bn_result = ttnn.batch_norm(
-            conv_result,
-            running_mean=self.bn_running_mean,
-            running_var=self.bn_running_var,
-            weight=self.bn_weight,
-            bias=self.bn_bias,
-            training=False,  # Inference mode
-            eps=1e-05,
-        )
-        bn_result = ttnn.to_memory_config(bn_result, ttnn.L1_MEMORY_CONFIG)
-
-        # Reshape back: [B, C, L, 1] -> [B, C, L]
-        bn_result = ttnn.reshape(
-            bn_result, [batch_size, self.out_channels, input_length], memory_config=ttnn.L1_MEMORY_CONFIG
-        )
-
-        # PHASE 4: Op 3: Tanh activation (if present) (L1 output)
+        # PHASE 3: Op 2: Tanh activation (if present) (L1 output)
+        # NOTE: TTNN internally performs WH transposes around tanh despite it being element-wise
+        # This is an inefficiency in TTNN - tanh doesn't need layout changes
         if self.has_activation:
-            bn_result = ttnn.tanh(bn_result)
-            bn_result = ttnn.to_memory_config(bn_result, ttnn.L1_MEMORY_CONFIG)
+            conv_result = ttnn.tanh(conv_result)
+            conv_result = ttnn.to_memory_config(conv_result, ttnn.L1_MEMORY_CONFIG)
 
-        # PHASE 5: Op 4: Dropout (only in training mode, skip in inference)
+        # PHASE 4: Op 3: Dropout (only in training mode, skip in inference)
         # In inference, dropout is a no-op
-        hidden_states = bn_result
+        hidden_states = conv_result
         hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
 
         # PHASE 6: Final output must be in L1
@@ -482,49 +451,47 @@ def preprocess_postnet_parameters(torch_model, config: TTNNPostNetConfig, device
 
         # Conv1d weights: [out_channels, in_channels, kernel_size]
         # Reshape to [out_channels, in_channels, kernel_size, 1] for conv2d
-        # Conv weights must be in ROW_MAJOR layout and on device
         conv_weight = torch_layer.conv.weight.data.unsqueeze(-1)  # Add 4th dimension
+
+        # Extract BatchNorm parameters and fold into Conv
+        # Create mock conv/bn objects compatible with fold_batch_norm2d_into_conv2d
+        class MockConv:
+            def __init__(self, weight, bias):
+                self.weight = weight
+                self.bias = bias
+
+        class MockBN:
+            def __init__(self, weight, bias, running_mean, running_var, eps):
+                self.weight = weight
+                self.bias = bias
+                self.running_mean = running_mean
+                self.running_var = running_var
+                self.eps = eps
+                self.track_running_stats = True
+
+        mock_conv = MockConv(conv_weight, None)  # Conv has no bias
+        mock_bn = MockBN(
+            torch_layer.batch_norm.weight.data,
+            torch_layer.batch_norm.bias.data,
+            torch_layer.batch_norm.running_mean.data,
+            torch_layer.batch_norm.running_var.data,
+            torch_layer.batch_norm.eps,
+        )
+
+        # Fold BatchNorm into Conv weights and bias
+        folded_weight, folded_bias = fold_batch_norm2d_into_conv2d(mock_conv, mock_bn)
+
+        # Store only folded conv parameters
         layer_params["conv"] = {
             "weight": ttnn.from_torch(
-                conv_weight,
+                folded_weight,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
                 memory_config=DRAM_MEMCFG,  # Weights in DRAM
             ),
-        }
-
-        # BatchNorm parameters
-        # Reshape to [1, C, 1, 1] for TTNN batch_norm
-        bn_weight = torch_layer.batch_norm.weight.data.reshape(1, -1, 1, 1)
-        bn_bias = torch_layer.batch_norm.bias.data.reshape(1, -1, 1, 1)
-        bn_running_mean = torch_layer.batch_norm.running_mean.data.reshape(1, -1, 1, 1)
-        bn_running_var = torch_layer.batch_norm.running_var.data.reshape(1, -1, 1, 1)
-
-        layer_params["batch_norm"] = {
-            "weight": ttnn.from_torch(
-                bn_weight,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=DRAM_MEMCFG,  # Weights in DRAM
-            ),
             "bias": ttnn.from_torch(
-                bn_bias,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=DRAM_MEMCFG,  # Weights in DRAM
-            ),
-            "running_mean": ttnn.from_torch(
-                bn_running_mean,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=DRAM_MEMCFG,  # Weights in DRAM
-            ),
-            "running_var": ttnn.from_torch(
-                bn_running_var,
+                folded_bias.reshape(1, 1, 1, -1),  # Reshape to [1, 1, 1, out_channels] for conv2d
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,

@@ -162,7 +162,7 @@ def generate_speech_ttnn(
 
         # PHASE 1: Decoder inference (includes prenet + 6 transformer layers)
         decoder_inference_start = time.time()
-        print("output_sequence_ttnn", output_sequence_ttnn.shape)
+        # print("output_sequence_ttnn", output_sequence_ttnn.shape)
         if enable_trace and generator is not None:
             # Use trace execution for faster inference
             current_seq_len = output_sequence_ttnn.shape[1]
