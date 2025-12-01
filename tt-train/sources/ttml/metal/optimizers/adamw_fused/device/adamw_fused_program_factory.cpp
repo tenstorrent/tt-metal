@@ -7,6 +7,7 @@
 #include <common/TracyQueue.hpp>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
+#include <random>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -43,6 +44,7 @@ constexpr uint32_t kComputeInvSqrtBiasCorrection2Idx = 6U;
 constexpr uint32_t kComputeOneMinusBeta1Idx = 7U;
 constexpr uint32_t kComputeOneMinusBeta2Idx = 8U;
 constexpr uint32_t kComputeDecayFactorIdx = 9U;
+constexpr uint32_t kComputeSeedIdx = 10U;
 // writer runtime args
 constexpr uint32_t kOutputAddrIdx = 0;
 constexpr uint32_t kExpAvgAddrIdxOut = 1U;
@@ -105,7 +107,8 @@ void assign_per_core_runtime_args(
     uint32_t num_tiles_per_core_group_1,
     uint32_t num_tiles_per_core_group_2,
     const tt::tt_metal::CoreRangeSet& core_group_1,
-    const tt::tt_metal::CoreRangeSet& core_group_2) {
+    const tt::tt_metal::CoreRangeSet& core_group_2,
+    bool stochastic_rounding) {
     float one_minus_beta1 = 1.0f - beta1;
     float one_minus_beta2 = 1.0f - beta2;
 
@@ -114,6 +117,17 @@ void assign_per_core_runtime_args(
     float step_size = lr / bias_correction1;
     float inv_sqrt_bc2 = 1.0f / std::sqrt(bias_correction2);
     float decay_factor = 1.0f - lr * weight_decay;
+
+    // Generate seeds for stochastic rounding (0 if disabled)
+    std::vector<uint32_t> seeds(num_cores, 0);
+    if (stochastic_rounding) {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<uint32_t> dis(1, 0xFFFFFFFF);
+        for (uint32_t i = 0; i < num_cores; i++) {
+            seeds[i] = dis(gen);
+        }
+    }
 
     // Update:
     // theta_t = theta_{t-1} - step_size * (m_t / ((sqrt(v_t) * inv_sqrt_bc2) + epsilon))
@@ -160,7 +174,8 @@ void assign_per_core_runtime_args(
                  std::bit_cast<uint32_t>(inv_sqrt_bc2),
                  std::bit_cast<uint32_t>(one_minus_beta1),
                  std::bit_cast<uint32_t>(one_minus_beta2),
-                 std::bit_cast<uint32_t>(decay_factor)});
+                 std::bit_cast<uint32_t>(decay_factor),
+                 seeds[i]});
         } else if (core_group_2.contains(core)) {
             SetRuntimeArgs(
                 program,
@@ -175,7 +190,8 @@ void assign_per_core_runtime_args(
                  std::bit_cast<uint32_t>(inv_sqrt_bc2),
                  std::bit_cast<uint32_t>(one_minus_beta1),
                  std::bit_cast<uint32_t>(one_minus_beta2),
-                 std::bit_cast<uint32_t>(decay_factor)});
+                 std::bit_cast<uint32_t>(decay_factor),
+                 seeds[i]});
         } else {
             TT_THROW("Core {} not in specified core ranges", core);
         }
@@ -405,7 +421,8 @@ AdamWFusedProgramFactory::cached_program_t AdamWFusedProgramFactory::create(
         num_tiles_per_core_group_1,
         num_tiles_per_core_group_2,
         core_group_1,
-        core_group_2);
+        core_group_2,
+        stochastic_rounding);
 
     // -------------------------------------------------------------------------
     // 6) Return the fully configured program & relevant shared variables
@@ -473,6 +490,18 @@ void AdamWFusedProgramFactory::override_runtime_arguments(
     float inv_sqrt_bc2 = 1.0f / std::sqrt(bias_correction2);
     float decay_factor = 1.0f - lr * weight_decay;
 
+    // Generate seeds for stochastic rounding (0 if disabled)
+    const auto& stochastic_rounding = operation_attributes.stochastic_rounding;
+    std::vector<uint32_t> seeds(num_cores, 0);
+    if (false && stochastic_rounding) {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<uint32_t> dis(1, 0xFFFFFFFF);
+        for (uint32_t i = 0; i < num_cores; i++) {
+            seeds[i] = dis(gen);
+        }
+    }
+
     // Update:
     // theta_t = theta_{t-1} - step_size * (m_t / ((sqrt(v_t) * inv_sqrt_bc2) + epsilon))
 
@@ -501,6 +530,7 @@ void AdamWFusedProgramFactory::override_runtime_arguments(
             runtime_args[kComputeOneMinusBeta1Idx] = std::bit_cast<uint32_t>(one_minus_beta1);
             runtime_args[kComputeOneMinusBeta2Idx] = std::bit_cast<uint32_t>(one_minus_beta2);
             runtime_args[kComputeDecayFactorIdx] = std::bit_cast<uint32_t>(decay_factor);
+            runtime_args[kComputeSeedIdx] = seeds[i];
         } else if (core_group_2.contains(core)) {
             [[maybe_unused]] auto& runtime_args = compute_group_2_runtime_args[core.x][core.y];
             runtime_args[kComputeLrIdx] = std::bit_cast<uint32_t>(lr);
@@ -513,6 +543,7 @@ void AdamWFusedProgramFactory::override_runtime_arguments(
             runtime_args[kComputeOneMinusBeta1Idx] = std::bit_cast<uint32_t>(one_minus_beta1);
             runtime_args[kComputeOneMinusBeta2Idx] = std::bit_cast<uint32_t>(one_minus_beta2);
             runtime_args[kComputeDecayFactorIdx] = std::bit_cast<uint32_t>(decay_factor);
+            runtime_args[kComputeSeedIdx] = seeds[i];
         } else {
             TT_THROW("Core {} not in specified core ranges", core);
         }
