@@ -431,7 +431,7 @@ void UntilizeWithHaloProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
 
     auto *src_buffer = tensor_args.input_tensor.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    auto *dst_buffer = output_tensor.buffer();
     auto& src_cb = cached_program.shared_variables.src_cb;
     auto& out_cb = cached_program.shared_variables.out_cb;
 
