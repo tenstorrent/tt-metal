@@ -34,7 +34,7 @@ jobs:
             arch: arch-wormhole_b0,
             mesh-device: T3K,
             tt-llama-text-ver: tt_transformers,
-            override-tt-config: "{\"fabric_config\": \"FABRIC_1D\"}",
+            override-tt-config: '{"fabric_config": "FABRIC_1D"}',
             multimodal: false,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
@@ -48,7 +48,7 @@ jobs:
             arch: arch-wormhole_b0,
             mesh-device: T3K,
             tt-llama-text-ver: tt_transformers,
-            override-tt-config: "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
+            override-tt-config: '{"fabric_config": "FABRIC_1D", "trace_region_size": 28467200}',
             multimodal: true,
             additional-args: "--max_model_len 2048",
             co-owner-1-id: U07RY6B5FLJ, # Gongyu Wang
@@ -62,7 +62,7 @@ jobs:
             arch: arch-blackhole,
             mesh-device: P150x2,
             tt-llama-text-ver: tt_transformers,
-            override-tt-config: "{\"data_parallel\": 2}",
+            override-tt-config: '{"data_parallel": 2}',
             multimodal: false,
             owner_id: U08GELBB1AP, # Ambrose Ling
           },
@@ -75,7 +75,7 @@ jobs:
             arch: arch-blackhole,
             mesh-device: P150x8,
             tt-llama-text-ver: tt_transformers,
-            override-tt-config: "{\"data_parallel\": 8, \"sample_on_device_mode\": \"decode_only\"}",
+            override-tt-config: '{"data_parallel": 8, "sample_on_device_mode": "decode_only"}',
             multimodal: false,
             structured-output: true,
             additional-args: "--num_scheduler_steps 1",
@@ -90,7 +90,7 @@ jobs:
             arch: arch-wormhole_b0,
             mesh-device: TG,
             tt-llama-text-ver: llama3_70b_galaxy,
-            override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
+            override-tt-config: '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 184915840}',
             multimodal: false,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
@@ -104,7 +104,7 @@ jobs:
             arch: arch-wormhole_b0,
             mesh-device: TG,
             tt-llama-text-ver: llama3_70b_galaxy,
-            override-tt-config: "{\"dispatch_core_axis\": \"col\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
+            override-tt-config: '{"dispatch_core_axis": "col", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 184915840}',
             multimodal: false,
             structured-output: true,
             additional-args: "--num_scheduler_steps 1",
@@ -119,7 +119,7 @@ jobs:
             arch: arch-wormhole_b0,
             mesh-device: TG,
             tt-llama-text-ver: llama3_70b_galaxy,
-            override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
+            override-tt-config: '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 184915840}',
             multimodal: false,
             structured-output: true,
             additional-args: "--num_scheduler_steps 1",
@@ -133,7 +133,7 @@ jobs:
             runner-label: topology-6u,
             arch: arch-wormhole_b0,
             mesh-device: TG,
-            override-tt-config: "{\"data_parallel\": 16, \"fabric_config\": \"FABRIC_1D_RING\"}",
+            override-tt-config: '{"data_parallel": 16, "fabric_config": "FABRIC_1D_RING"}',
             tt-llama-text-ver: tt_transformers,
             multimodal: false,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
@@ -148,7 +148,7 @@ jobs:
             runner-label: config-t3000,
             arch: arch-wormhole_b0,
             mesh-device: T3K,
-            override-tt-config: "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"worker_l1_size\": 1344544, \"trace_region_size\": 21448704, \"l1_small_size\": 24576}",
+            override-tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "worker_l1_size": 1344544, "trace_region_size": 21448704, "l1_small_size": 24576}',
             tt-llama-text-ver: tt_transformers,
             multimodal: true,
             use-vllm-v1: true,
@@ -180,7 +180,7 @@ jobs:
             arch: arch-wormhole_b0,
             mesh-device: T3K,
             tt-llama-text-ver: tt_transformers,
-            override-tt-config: "{\"fabric_config\": \"FABRIC_1D\"}",
+            override-tt-config: '{"fabric_config": "FABRIC_1D"}',
             use-vllm-v1: true,
             structured-output: true,
             multimodal: false,
@@ -197,7 +197,7 @@ jobs:
           #   arch: arch-wormhole_b0,
           #   mesh-device: T3K,
           #   tt-llama-text-ver: tt_transformers,
-          #   override-tt-config: "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
+          #   override-tt-config: '{"fabric_config": "FABRIC_1D", "trace_region_size": 28467200}',
           #   use-vllm-v1: true,
           #   structured-output: true,
           #   multimodal: true,
@@ -213,7 +213,7 @@ jobs:
             arch: arch-blackhole,
             mesh-device: P150x8,
             tt-llama-text-ver: tt_transformers,
-            override-tt-config: "{\"data_parallel\": 8}",
+            override-tt-config: '{"data_parallel": 8}',
             additional-args: "--data_parallel_size 8",
             use-vllm-v1: true,
             structured-output: true,
@@ -229,7 +229,7 @@ jobs:
             arch: arch-wormhole_b0,
             mesh-device: TG,
             tt-llama-text-ver: llama3_70b_galaxy,
-            override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
+            override-tt-config: '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 184915840}',
             additional-args: "--data_parallel_size 4 --max_num_seqs 8",
             use-vllm-v1: true,
             multimodal: false,
@@ -245,7 +245,7 @@ jobs:
             arch: arch-wormhole_b0,
             mesh-device: TG,
             tt-llama-text-ver: llama3_70b_galaxy,
-            override-tt-config: "{\"dispatch_core_axis\": \"col\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
+            override-tt-config: '{"dispatch_core_axis": "col", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 184915840}',
             additional-args: "--data_parallel_size 4 --max_num_seqs 8",
             use-vllm-v1: true,
             structured-output: true,
@@ -261,7 +261,7 @@ jobs:
             runner-label: topology-6u,
             arch: arch-wormhole_b0,
             mesh-device: TG,
-            override-tt-config: "{\"data_parallel\": 16, \"fabric_config\": \"FABRIC_1D_RING\"}",
+            override-tt-config: '{"data_parallel": 16, "fabric_config": "FABRIC_1D_RING"}',
             tt-llama-text-ver: tt_transformers,
             additional-args: "--data_parallel_size 16",
             use-vllm-v1: true,
@@ -356,7 +356,6 @@ jobs:
           else
             OVERRIDE_TT_CONFIG=()
           fi
-          echo "Override TT config: ${OVERRIDE_TT_CONFIG[@]}"
 
           if [ -n "${{ matrix.test-group.additional-args }}" ]; then
             ADDITIONAL_ARGS=(${{ matrix.test-group.additional-args }})
