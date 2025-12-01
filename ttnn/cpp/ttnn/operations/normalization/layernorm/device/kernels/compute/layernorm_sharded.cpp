@@ -218,7 +218,11 @@ void MAIN {
 
             // We're in a two-stage reduce but not the second stage reader,
             // so we just accumulate the sum
-            numeric::row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION>(
+            numeric::row_wise_accumulate_with_epilogue<
+                FLOAT32_REDUCTION,
+                policies::WaitForInputPolicy::WAIT,
+                policies::PopInputPolicy::POP,
+                policies::WaitAtEndPolicy::WAIT>(
                 cb_ex_external,
                 cb_scaler_global,
                 cb_ex,
@@ -230,7 +234,11 @@ void MAIN {
         } else {
             // We're either a single-stage reduce or a second stage reader,
             // so we compute the final mean
-            constexpr uint32_t numeric::row_wise_mean<FLOAT32_REDUCTION, >(
+            numeric::row_wise_mean<
+                FLOAT32_REDUCTION,
+                policies::WaitForInputPolicy::WAIT,
+                policies::PopInputPolicy::POP,
+                policies::WaitAtEndPolicy::WAIT>(
                 cb_ex_external,
                 cb_scaler_global,
                 cb_ex,
@@ -369,8 +377,8 @@ void MAIN {
         if (use_two_stage_reduce && !is_second_stage_reader) {
             // This is just needed to stay in sync with readers
             auto keep_in_sync_fn = [cb_ex_external2, num_blocks_second_stage]() {
-                cb_wait_front(cb_ex_global2, num_blocks_second_stage - 1);
-                cb_pop_front(cb_ex_global2, num_blocks_second_stage - 1);
+                cb_wait_front(cb_ex_external2, num_blocks_second_stage - 1);
+                cb_pop_front(cb_ex_external2, num_blocks_second_stage - 1);
             };
 
             // We're in a two-stage reduce but not the second stage reader,
