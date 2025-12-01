@@ -82,7 +82,7 @@ void kernel_main() {
             cb_target,
             addrg_target,
             traget_noc_id,
-            NOC_DRAM_READ_ALIGNMENT_BYTES / element_size * target_element_size,
+            NOC_MINIMUM_READ_SIZE / element_size * target_element_size,
             target_offset);
 
 #if defined(WEIGHT)

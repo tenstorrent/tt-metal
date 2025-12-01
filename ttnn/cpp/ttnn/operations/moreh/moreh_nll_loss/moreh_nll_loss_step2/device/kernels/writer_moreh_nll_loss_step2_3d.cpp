@@ -43,7 +43,7 @@ void kernel_main() {
         get_noc_offset(n, w, element_size, noc_offset);
 
         uint64_t dst_noc_addr = get_noc_addr(noc_id, output_addrg, noc_offset);
-        noc_async_write(output_l1_write_addr, dst_noc_addr, NOC_DRAM_READ_ALIGNMENT_BYTES);
+        noc_async_write(output_l1_write_addr, dst_noc_addr, NOC_MINIMUM_READ_SIZE);
         noc_async_write_barrier();
 
         cb_pop_front(cb_output, onetile);
