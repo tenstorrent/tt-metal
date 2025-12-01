@@ -29,6 +29,5 @@ void kernel_main() {
     mailbox_write(ckernel::ThreadId::PackThreadId, 1);
     mailbox_write(ckernel::ThreadId::UnpackThreadId, 1);
 
-    
     DPRINT_DATA0(DPRINT << "Test Debug Print: Data0" << ENDL(); print_test_data(););
 }
