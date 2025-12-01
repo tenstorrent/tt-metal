@@ -104,7 +104,8 @@ target_sources(
         rotary_embedding/device/rotary_embedding_program_factory.cpp
         rotary_embedding/rotary_embedding.cpp
         rotary_embedding_llama/device/rotary_embedding_llama_device_operation.cpp
-        rotary_embedding_llama/device/rotary_embedding_llama_program_factory.cpp
+        rotary_embedding_llama/device/rotary_embedding_llama_multi_core_program_factory.cpp
+        rotary_embedding_llama/device/rotary_embedding_llama_sharded_program_factory.cpp
         rotary_embedding_llama/rotary_embedding_llama.cpp
         rotary_embedding_llama_fused_qk/device/rotary_embedding_llama_fused_qk_device_operation.cpp
         rotary_embedding_llama_fused_qk/device/rotary_embedding_llama_fused_qk_program_factory.cpp

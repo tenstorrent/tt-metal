@@ -38,7 +38,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
         auto device_owner = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
-        auto device = device_owner.get();
+        auto* device = device_owner.get();
 
         run_softmax(device, Shape({1, 1, TILE_HEIGHT, TILE_WIDTH}));
         run_softmax(device, Shape({1, 1, TILE_HEIGHT * 2, TILE_WIDTH * 2}));

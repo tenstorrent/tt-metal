@@ -153,9 +153,9 @@ void configure_local_kernels(
                     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(curr_chip_id);
                     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(neighbor_chip_id);
 
-                    auto sender_kernel_path =
+                    const auto* sender_kernel_path =
                         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp";
-                    auto receiver_kernel_path =
+                    const auto* receiver_kernel_path =
                         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp";
                     std::vector<uint32_t> sender_compile_args = {packet_size_bytes, packet_size_words};
                     std::vector<uint32_t> receiver_compile_args = {};
@@ -1327,6 +1327,10 @@ void reset_cross_node_ethernet_links(
             cluster.read_core(reset, sizeof(uint32_t), tt_cxy_pair(src_chip_id, src_coord), 0x1EFC);
         }
     }
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    // Barrier ensures all hosts have completed their cross-node ethernet link resets before proceeding.
+    // This is critical because cross-node resets involve coordination between paired hosts.
+    distributed_context.barrier();
 }
 
 void reset_ethernet_links(
@@ -1334,6 +1338,9 @@ void reset_ethernet_links(
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     // Reset All Local Ethernet Links, specified in the topology. Ethernet Links on Exit Nodes are reset separately.
     reset_local_ethernet_links(physical_system_descriptor, asic_topology);
+    // Barrier ensures all hosts have completed local link resets before starting cross-node resets.
+    // This prevents race conditions where one host might start cross-node reset while another is still
+    // resetting local links.
     distributed_context.barrier();
 
     // Reset All Cross-Node Ethernet Links, specified in the topology.
@@ -1429,6 +1436,79 @@ AsicTopology generate_asic_topology_from_connections(
         }
     }
     return asic_topology;
+}
+
+tt::tt_metal::AsicTopology build_reset_topology(
+    const std::string& reset_host,
+    uint32_t reset_tray_id,
+    uint32_t reset_asic_location,
+    uint32_t reset_channel,
+    PhysicalSystemDescriptor& physical_system_descriptor) {
+    log_output_rank0("Building reset topology for specified link");
+    log_output_rank0("  Host: " + reset_host);
+    log_output_rank0("  Tray ID: " + std::to_string(reset_tray_id));
+    log_output_rank0("  ASIC Location: " + std::to_string(reset_asic_location));
+    log_output_rank0("  Channel: " + std::to_string(reset_channel));
+
+    tt::tt_metal::AsicID src_asic_id = physical_system_descriptor.get_asic_id(
+        reset_host, tt::tt_metal::TrayID(reset_tray_id), tt::tt_metal::ASICLocation(reset_asic_location));
+    uint8_t src_channel = static_cast<uint8_t>(reset_channel);
+
+    auto [dst_asic_id, dst_channel] =
+        physical_system_descriptor.get_connected_asic_and_channel(src_asic_id, src_channel);
+
+    const auto& asic_descriptors = physical_system_descriptor.get_asic_descriptors();
+    TT_FATAL(
+        asic_descriptors.find(dst_asic_id) != asic_descriptors.end(),
+        "Could not find ASIC descriptor for destination ASIC ID: {}",
+        dst_asic_id);
+
+    const auto& dst_asic_descriptor = asic_descriptors.at(dst_asic_id);
+    std::string dst_host = dst_asic_descriptor.host_name;
+    bool is_local = (reset_host == dst_host);
+
+    log_output_rank0("  Discovered Destination:");
+    log_output_rank0("    Host: " + dst_host);
+    log_output_rank0("    Tray ID: " + std::to_string(*dst_asic_descriptor.tray_id));
+    log_output_rank0("    ASIC Location: " + std::to_string(*dst_asic_descriptor.asic_location));
+    log_output_rank0("    Channel: " + std::to_string(dst_channel));
+    log_output_rank0("  Connection Type: " + std::string(is_local ? "Local" : "Remote"));
+
+    tt::tt_metal::AsicTopology asic_topology;
+
+    tt::tt_metal::EthConnection src_to_dst_conn;
+    src_to_dst_conn.src_chan = src_channel;
+    src_to_dst_conn.dst_chan = dst_channel;
+    src_to_dst_conn.is_local = is_local;
+
+    tt::tt_metal::EthConnection dst_to_src_conn;
+    dst_to_src_conn.src_chan = dst_channel;
+    dst_to_src_conn.dst_chan = src_channel;
+    dst_to_src_conn.is_local = is_local;
+
+    asic_topology[src_asic_id].push_back({dst_asic_id, {src_to_dst_conn}});
+    asic_topology[dst_asic_id].push_back({src_asic_id, {dst_to_src_conn}});
+
+    log_output_rank0("Reset topology built successfully");
+
+    return asic_topology;
+}
+
+void perform_link_reset(
+    const std::string& reset_host,
+    uint32_t reset_tray_id,
+    uint32_t reset_asic_location,
+    uint32_t reset_channel,
+    PhysicalSystemDescriptor& physical_system_descriptor) {
+    bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
+    TT_FATAL(link_retrain_supported, "Link reset is only supported on WORMHOLE_B0 architecture");
+
+    AsicTopology reset_topology =
+        build_reset_topology(reset_host, reset_tray_id, reset_asic_location, reset_channel, physical_system_descriptor);
+
+    reset_ethernet_links(physical_system_descriptor, reset_topology);
+
+    log_output_rank0("Link reset completed. Please run the validation tool again to verify the link.");
 }
 
 std::string get_factory_system_descriptor_path(

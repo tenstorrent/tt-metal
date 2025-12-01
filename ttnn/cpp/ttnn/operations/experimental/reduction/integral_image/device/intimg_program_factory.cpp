@@ -83,8 +83,8 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
 
     Program program{};
 
-    auto src_buffer{input_tensor.buffer()};
-    auto dst_buffer{output_tensor.buffer()};
+    auto* src_buffer{input_tensor.buffer()};
+    auto* dst_buffer{output_tensor.buffer()};
 
     const auto dst_cb_data_format{datatype_to_dataformat_converter(input_tensor.dtype())};
     const bool fp32_dest_acc_en{

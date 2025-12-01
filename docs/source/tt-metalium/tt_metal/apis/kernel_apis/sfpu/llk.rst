@@ -348,7 +348,7 @@ Returns the count of leading (left-most) zeros of ''v'' ignoring the sign bit.
 
 .. code-block:: c++
 
-    vFloat int_to_float(vInt in, int round_mode = 1)
+    vFloat int32_to_float(vInt in, int round_mode = 1)
     vUInt float_to_fp16a(vFloat in, int round_mode = 1)
     vUInt float_to_fp16b(vFloat in, int round_mode = 1)
     vUInt float_to_uint8(vFloat in, int round_mode = 1)

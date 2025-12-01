@@ -377,7 +377,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     std::optional<size_t> num_preferred_links,
     std::optional<ttnn::ccl::Topology> topology) {
     auto topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required");
     return ExecuteAllReduceAsync::invoke(
         input_tensor,

@@ -43,7 +43,7 @@ jobs:
               "arch": "wormhole_b0",
               "save-perf-data": true,
               "timeout": 60,
-              "cmd": "./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type tg_llama_model_perf_tg_device --dispatch-mode \"\"",
+              "cmd": "TT_METAL_KERNELS_EARLY_RETURN=1 TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest -n auto models/demos/llama3_70b_galaxy/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch --timeout=600 && TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest -n auto models/demos/llama3_70b_galaxy/tests/test_decoder_device_perf.py::test_llama_TG_perf_device --timeout=600",
               "owner_id": "U053W15B6JF"
             }, # Djordje Ivanovic
             {
@@ -63,7 +63,7 @@ jobs:
               "arch": "wormhole_b0",
               "save-perf-data": true,
               "timeout": 60,
-              "cmd": "./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type tg_llama_prefill_model_perf_tg_device --dispatch-mode \"\"",
+              "cmd": "FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest -n auto models/demos/llama3_70b_galaxy/tests/test_prefill_device_perf.py::test_llama_TG_perf_device --timeout=1000",
               "owner_id": "U03PUAKE719"
             } # Miguel Tairum
           ]' --compact-output)
@@ -76,8 +76,8 @@ jobs:
               "arch": "wormhole_b0",
               "save-perf-data": false,
               "timeout": 30,
-              "cmd": "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=\"7,7\" ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type cnn_model_perf_tg_device --dispatch-mode \"\""
-            }, # Pavle Josipovic
+              "cmd": "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=\"7,7\" pytest -n auto models/demos/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m \"model_perf_tg\" && python3 models/perf/merge_perf_results.py --upper-threshold 1.10"
+            },
             {
               "name": "Galaxy DiT SD3.5 model perf tests",
               "model-type": "SD3.5",
@@ -114,7 +114,7 @@ jobs:
               "model-type": "sentence_bert",
               "model-name": "sentence_bert",
               "save-perf-data": false,
-              "cmd": "./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type tg_sentence_bert_model_perf_tg_device --dispatch-mode \"\"",
+              "cmd": "pytest models/demos/tg/sentence_bert/tests/device_perf_test.py && python3 models/perf/merge_perf_results.py",
               "timeout": 15,
               "owner_id": "U088413NP0Q"
             }, # Ashai Reddy
@@ -135,7 +135,7 @@ jobs:
               "arch": "wormhole_b0",
               "save-perf-data": true,
               "timeout": 20,
-              "cmd": "export TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" && pytest models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k \"4x8sp1tp0 and yes_use_cache\"",
+              "cmd": "export TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" && export NO_PROMPT=1 && pytest models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k \"4x8sp1tp0 and yes_use_cache\"",
               "owner_id": "U09ELB03XRU"
             } # Stephen Osborne
           ]' --compact-output)
