@@ -245,6 +245,14 @@ Notes:
             case AddrgenApiVariant::ScatterWrite: return {OperationType::Scatter, ApiVariant::Basic};
             case AddrgenApiVariant::ScatterWriteWithState: return {OperationType::Scatter, ApiVariant::WithState};
             case AddrgenApiVariant::ScatterWriteSetState: return {OperationType::Scatter, ApiVariant::SetState};
+            // Route variants
+            case AddrgenApiVariant::UnicastWriteRoute: return {OperationType::BasicWrite, ApiVariant::RouteBasic};
+            case AddrgenApiVariant::UnicastWriteWithStateRoute:
+                return {OperationType::BasicWrite, ApiVariant::RouteWithState};
+            case AddrgenApiVariant::UnicastWriteSetStateRoute:
+                return {OperationType::BasicWrite, ApiVariant::RouteSetState};
+            case AddrgenApiVariant::FusedAtomicIncWriteRoute:
+                return {OperationType::FusedAtomicInc, ApiVariant::RouteBasic};
             default: TT_FATAL(false, "Unknown API variant"); return {OperationType::BasicWrite, ApiVariant::Basic};
         }
     };
@@ -329,11 +337,10 @@ Notes:
             .compile_args = writer_cta,
             .defines = defines});
 
-    // Resolve forwarding and append fabric connection args
-    uint32_t link_idx = 0;
-    if (!pick_forwarding_link_or_fail(src, dst, link_idx, p)) {
-        return;
-    }
+    // Check if this is a route variant
+    const bool is_route_variant =
+        (api_variant == ApiVariant::RouteBasic || api_variant == ApiVariant::RouteWithState ||
+         api_variant == ApiVariant::RouteSetState);
 
     std::vector<uint32_t> writer_rt = {
         (uint32_t)dst_buf->address(),  // 0: dst_base (receiver L1 offset)
@@ -344,11 +351,36 @@ Notes:
         (uint32_t)gsem->address()      // 5: receiver L1 semaphore addr
     };
 
-    // Pack the fabric-connection runtime args for the writer kernel.
-    // This establishes the send path (routing/link identifiers) for fabric traffic.
-    // The device kernel must unpack these in the same order via build_from_args(...).
-    tt::tt_fabric::append_fabric_connection_rt_args(
-        src, dst, /*link_idx=*/link_idx, sender_prog, p.sender_core, writer_rt);
+    if (is_route_variant) {
+        // Route variant: use routing plane connection manager
+        // Add num_connections (always 1 for single destination test)
+        writer_rt.push_back(1u);  // num_connections
+
+        // Use append_routing_plane_connection_manager_rt_args for route setup
+        std::vector<tt::tt_fabric::FabricNodeId> dst_nodes = {dst};
+        std::vector<uint32_t> connection_link_indices = {};  // Empty means auto-select
+        tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+            src,
+            dst_nodes,
+            connection_link_indices,
+            sender_prog,
+            writer_k,
+            p.sender_core,
+            writer_rt,
+            tt::tt_fabric::FabricApiType::Mesh,
+            CoreType::WORKER);
+    } else {
+        // Basic variant: use regular fabric connection args
+        uint32_t link_idx = 0;
+        if (!pick_forwarding_link_or_fail(src, dst, link_idx, p)) {
+            return;
+        }
+        // Pack the fabric-connection runtime args for the writer kernel.
+        // This establishes the send path (routing/link identifiers) for fabric traffic.
+        // The device kernel must unpack these in the same order via build_from_args(...).
+        tt::tt_fabric::append_fabric_connection_rt_args(
+            src, dst, /*link_idx=*/link_idx, sender_prog, p.sender_core, writer_rt);
+    }
     tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
     // -------------------------- end PROGRAM FACTORY --------------------------
 

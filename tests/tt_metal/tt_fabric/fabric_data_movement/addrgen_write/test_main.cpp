@@ -107,11 +107,16 @@ static std::string GetVariantName(tt::tt_fabric::test::AddrgenApiVariant variant
         case tt::tt_fabric::test::AddrgenApiVariant::ScatterWrite: return "ScatterWrite";
         case tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteWithState: return "ScatterWriteWithState";
         case tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteSetState: return "ScatterWriteSetState";
+        case tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteRoute: return "UnicastWriteRoute";
+        case tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteWithStateRoute: return "UnicastWriteWithStateRoute";
+        case tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteSetStateRoute: return "UnicastWriteSetStateRoute";
+        case tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteRoute: return "FusedAtomicIncWriteRoute";
         default: return "UnknownVariant";
     }
 }
 
-// Instantiate comprehensive test suite with all 18 variants × 3 page sizes × 2 destinations = 108 test cases
+// Instantiate comprehensive test suite with all 22 variants (18 basic + 4 route) × 6 page sizes × 2 destinations = 264
+// test cases
 INSTANTIATE_TEST_SUITE_P(
     AllVariantsAndSizes,
     AddrgenComprehensiveTest,
@@ -134,7 +139,11 @@ INSTANTIATE_TEST_SUITE_P(
             tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteSetState,
             tt::tt_fabric::test::AddrgenApiVariant::ScatterWrite,
             tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteWithState,
-            tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteSetState),
+            tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteSetState,
+            tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteRoute,
+            tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteWithStateRoute,
+            tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteSetStateRoute,
+            tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteRoute),
         ::testing::Values(100, 112, 2048, 10000, 10100, 99999),  // Page sizes: Aligned and unaligned
         ::testing::Bool()                                        // Destination: false=L1, true=DRAM
         ),

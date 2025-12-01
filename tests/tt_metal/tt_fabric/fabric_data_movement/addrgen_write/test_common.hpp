@@ -33,7 +33,12 @@ enum class AddrgenApiVariant {
     MulticastFusedAtomicIncWriteSetState,  // fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state + _with_state
     ScatterWrite,                          // fabric_unicast_noc_scatter_write
     ScatterWriteWithState,                 // fabric_unicast_noc_scatter_write_with_state
-    ScatterWriteSetState                   // fabric_unicast_noc_scatter_write_set_state + _with_state
+    ScatterWriteSetState,                  // fabric_unicast_noc_scatter_write_set_state + _with_state
+    UnicastWriteRoute,                     // fabric_unicast_noc_unicast_write (route variant)
+    UnicastWriteWithStateRoute,            // fabric_unicast_noc_unicast_write_with_state (route variant)
+    UnicastWriteSetStateRoute,             // fabric_unicast_noc_unicast_write_set_state (route variant)
+    FusedAtomicIncWriteRoute               // fabric_unicast_noc_fused_unicast_with_atomic_inc (route variant)
+    // Note: No route variants exist for FusedAtomicInc WithState/SetState
 };
 
 // ---- Reusable defaults for addrgen tests ----

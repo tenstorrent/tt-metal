@@ -2081,7 +2081,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
  * | offset                                | Offset within page                      | uint32_t                                      | False    |
  */
 // clang-format on
-template <typename AddrGenType>
+template <typename AddrGenType, typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
 FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,

@@ -10,6 +10,8 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/mesh/api.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/api_common.h"
 #include "accessor/tensor_accessor.h"
 #include "accessor/tensor_accessor_args.h"
 #include "kernel_common.hpp"
@@ -17,22 +19,24 @@
 using namespace tt;
 using namespace tt::tt_fabric;
 using namespace tt::tt_fabric::mesh::experimental;
+using namespace tt::tt_fabric::common::experimental;
 
 //
-// Unified unicast writer (fabric sender) kernel — consolidates 9 variants.
+// Unified unicast writer (fabric sender) kernel — consolidates 9 variants + 6 route variants.
 // Sends pages from CB c_0 to the dst device using compile-time parameters to select:
 //   - OPERATION_TYPE: BasicWrite, Scatter, or FusedAtomicInc
-//   - API_VARIANT: Basic, WithState, or SetState
+//   - API_VARIANT: Basic, WithState, SetState, or Route
 //
 // CT args:
 //   0: OPERATION_TYPE (OperationType enum: BasicWrite, Scatter, FusedAtomicInc)
-//   1: API_VARIANT (ApiVariant enum: Basic, WithState, SetState)
+//   1: API_VARIANT (ApiVariant enum: Basic, WithState, SetState, Route)
 //   2: TOTAL_PAGES
 //   3: PAGE_SIZE (actual data size to transfer)
 //   4: ALIGNED_PAGE_SIZE (destination buffer spacing for address calculation)
 //   5: SRC_ALIGNED_PAGE_SIZE (source CB stride for scatter operations)
 //
 // RT args (must match host):
+//   For Basic/WithState/SetState variants:
 //   0: dst_base       (u32)  // receiver buffer base (L1 offset or DRAM base)
 //   1: dst_mesh_id    (u32)  // logical (truncated to u16)
 //   2: dst_dev_id     (u32)  // logical (truncated to u16)
@@ -40,6 +44,16 @@ using namespace tt::tt_fabric::mesh::experimental;
 //   4: rx_noc_y       (u32)
 //   5: sem_l1_addr    (u32)  // receiver L1 semaphore address
 //   ... fabric connection args ...
+//
+//   For Route variants:
+//   0: dst_base       (u32)  // receiver buffer base (L1 offset or DRAM base)
+//   1: dst_mesh_id    (u32)  // logical (truncated to u16)
+//   2: dst_dev_id     (u32)  // logical (truncated to u16)
+//   3: rx_noc_x       (u32)  // receiver worker XY
+//   4: rx_noc_y       (u32)
+//   5: sem_l1_addr    (u32)  // receiver L1 semaphore address
+//   6: num_connections (u32) // number of connections in route
+//   ... routing plane connection manager args ...
 
 void kernel_main() {
     constexpr auto ta_args = TensorAccessorArgs<0>();
@@ -69,35 +83,50 @@ void kernel_main() {
     const uint32_t rx_noc_y = get_arg_val<uint32_t>(idx++);
     const uint32_t sem_l1_addr = get_arg_val<uint32_t>(idx++);
 
-    // Build a fabric send adapter from the runtime args that the host packed.
-    auto sender = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
+    // Route variant setup
+    tt::tt_fabric::RoutingPlaneConnectionManager connection_manager;
+    uint8_t route_id = 0;
+    WorkerToFabricEdmSender sender;
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* header = nullptr;
 
-    // TEMP (2D API): manual packet header.
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* header = PacketHeaderPool::allocate_header();
+    constexpr bool is_route_variant =
+        (api_variant == ApiVariant::RouteBasic || api_variant == ApiVariant::RouteWithState ||
+         api_variant == ApiVariant::RouteSetState);
 
-    // Fabric route setup (temporary 2D API):
-    auto mh = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header);
+    if constexpr (is_route_variant) {
+        // Route variant: allocate route and build connection manager
+        const uint32_t num_connections = get_arg_val<uint32_t>(idx++);
+        route_id = PacketHeaderPool::allocate_header_n(num_connections);
+        open_connections(connection_manager, num_connections, idx);
+    } else {
+        // Basic variant: build sender and allocate single header
+        sender = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
+        header = PacketHeaderPool::allocate_header();
+
+        // Fabric route setup (temporary 2D API):
+        auto mh = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header);
 #if defined(DYNAMIC_ROUTING_ENABLED)
-    static_assert(false, "Dynamic routing is not supported");
+        static_assert(false, "Dynamic routing is not supported");
 #endif
 
-    // Route setup - required for Basic and WithState variants
-    if constexpr (api_variant == ApiVariant::Basic || api_variant == ApiVariant::WithState) {
-        (void)fabric_set_unicast_route(mh, /*dst_dev_id=*/dst_dev_id, /*dst_mesh_id=*/dst_mesh_id);
-    }
-
-    // WithState pattern: manually set send type
-    if constexpr (api_variant == ApiVariant::WithState) {
-        if constexpr (operation_type == OperationType::BasicWrite) {
-            header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
-        } else if constexpr (operation_type == OperationType::Scatter) {
-            header->noc_send_type = tt::tt_fabric::NOC_UNICAST_SCATTER_WRITE;
-        } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
-            header->noc_send_type = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
+        // Route setup - required for Basic and WithState variants
+        if constexpr (api_variant == ApiVariant::Basic || api_variant == ApiVariant::WithState) {
+            (void)fabric_set_unicast_route(mh, /*dst_dev_id=*/dst_dev_id, /*dst_mesh_id=*/dst_mesh_id);
         }
-    }
 
-    sender.open<true>();
+        // WithState pattern: manually set send type
+        if constexpr (api_variant == ApiVariant::WithState) {
+            if constexpr (operation_type == OperationType::BasicWrite) {
+                header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
+            } else if constexpr (operation_type == OperationType::Scatter) {
+                header->noc_send_type = tt::tt_fabric::NOC_UNICAST_SCATTER_WRITE;
+            } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
+                header->noc_send_type = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
+            }
+        }
+
+        sender.open<true>();
+    }
 
     // For non-scatter: Use ALIGNED_PAGE_SIZE (dst) for address calculation
     // For scatter: Use SRC_ALIGNED_PAGE_SIZE to match CB stride (less BW efficient but correct)
@@ -162,6 +191,43 @@ void kernel_main() {
                 true  // flush
             );
         }
+    } else if constexpr (api_variant == ApiVariant::RouteWithState) {
+        // Route variant WithState setup: set route, noc_send_type, and initialize payload_size_bytes
+        // Note: populate_unicast_write_fields with UpdateMask::None doesn't set payload_size_bytes,
+        // so we must initialize it here (similar to how basic WithState initializes via to_noc_unicast_write)
+        // Use FABRIC_MAX_PACKET_SIZE since that's what the first packet will use, and it's safe for uint16_t
+        if constexpr (operation_type == OperationType::BasicWrite) {
+            PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+                auto& slot = connection_manager.get(i);
+                fabric_set_unicast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id);
+                packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
+                packet_header->payload_size_bytes = static_cast<uint16_t>(FABRIC_MAX_PACKET_SIZE);
+            });
+            // Ensure route setup is complete before use
+            noc_async_writes_flushed();
+        } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
+            PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+                auto& slot = connection_manager.get(i);
+                fabric_set_unicast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id);
+                packet_header->noc_send_type = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
+                packet_header->payload_size_bytes = static_cast<uint16_t>(FABRIC_MAX_PACKET_SIZE);
+            });
+            // Ensure route setup is complete before use
+            noc_async_writes_flushed();
+        }
+        // Note: Scatter doesn't have route variant
+    } else if constexpr (api_variant == ApiVariant::RouteSetState) {
+        // Route variant SetState setup
+        if constexpr (operation_type == OperationType::BasicWrite) {
+            fabric_unicast_noc_unicast_write_set_state(
+                connection_manager,
+                route_id,
+                dst_acc,
+                0  // page_id for initial configuration
+            );
+        }
+        // Note: FusedAtomicInc doesn't have route variant SetState with addrgen
+        // Note: Scatter doesn't have route variant, so no SetState for scatter route
     }
 
     // Main loop - process pages
@@ -185,7 +251,49 @@ void kernel_main() {
                     i,
                     0  // offset
                 );
-            } else {  // WithState or SetState
+            } else if constexpr (api_variant == ApiVariant::RouteBasic) {
+                // Route variant Basic - uses route-based API
+                fabric_unicast_noc_unicast_write(
+                    connection_manager,
+                    route_id,
+                    src_l1_addr,
+                    dst_acc,
+                    i,
+                    0  // offset
+                );
+            } else if constexpr (api_variant == ApiVariant::RouteWithState) {
+                // Route variant WithState - uses route-based API
+                fabric_unicast_noc_unicast_write_with_state(
+                    connection_manager,
+                    route_id,
+                    src_l1_addr,
+                    dst_acc,
+                    i,
+                    0  // offset
+                );
+            } else if constexpr (api_variant == ApiVariant::RouteSetState) {
+                // Route variant SetState - uses route-based API
+                fabric_unicast_noc_unicast_write_with_state(
+                    connection_manager,
+                    route_id,
+                    src_l1_addr,
+                    dst_acc,
+                    i,
+                    0  // offset
+                );
+            } else if constexpr (api_variant == ApiVariant::WithState) {
+                // Basic variant WithState
+                fabric_unicast_noc_unicast_write_with_state(
+                    &sender,
+                    header,
+                    dst_dev_id,
+                    dst_mesh_id,
+                    src_l1_addr,
+                    dst_acc,
+                    i,
+                    0  // offset
+                );
+            } else {  // SetState
                 fabric_unicast_noc_unicast_write_with_state(
                     &sender,
                     header,
@@ -199,6 +307,7 @@ void kernel_main() {
             }
         } else if constexpr (operation_type == OperationType::Scatter) {
             // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
+            // Note: Scatter doesn't have route variant
             if constexpr (api_variant == ApiVariant::Basic) {
                 fabric_unicast_noc_scatter_write(
                     &sender,
@@ -241,7 +350,38 @@ void kernel_main() {
                     0,    // offset
                     true  // flush
                 );
-            } else {  // WithState or SetState
+            } else if constexpr (
+                api_variant == ApiVariant::RouteBasic || api_variant == ApiVariant::RouteWithState ||
+                api_variant == ApiVariant::RouteSetState) {
+                // Route variants - only RouteBasic exists with addrgen for FusedAtomicInc
+                // RouteWithState and RouteSetState fall back to RouteBasic behavior
+                fabric_unicast_noc_fused_unicast_with_atomic_inc(
+                    connection_manager,
+                    route_id,
+                    src_l1_addr,
+                    dst_acc,
+                    i,
+                    sem_noc,
+                    1,    // val (increment by 1)
+                    0,    // offset
+                    true  // flush
+                );
+            } else if constexpr (api_variant == ApiVariant::WithState) {
+                // Basic variant WithState
+                fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
+                    &sender,
+                    header,
+                    dst_dev_id,
+                    dst_mesh_id,
+                    src_l1_addr,
+                    dst_acc,
+                    i,
+                    sem_noc,
+                    1,    // val (increment by 1)
+                    0,    // offset
+                    true  // flush
+                );
+            } else {  // SetState
                 fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
                     &sender,
                     header,
@@ -276,13 +416,25 @@ void kernel_main() {
         ASSERT(sem_l1_addr != 0);
         const uint64_t sem_noc_final = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, /*NOC_INDEX=*/0);
 
-        fabric_unicast_noc_unicast_atomic_inc(
-            &sender,
-            header,
-            dst_dev_id,
-            dst_mesh_id,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader(sem_noc_final, /*inc=*/1, /*width_bits=*/32));
+        if constexpr (is_route_variant) {
+            // Route variant: use route-based atomic inc
+            fabric_unicast_noc_unicast_atomic_inc(
+                connection_manager,
+                route_id,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader(sem_noc_final, /*inc=*/1, /*width_bits=*/32));
+        } else {
+            fabric_unicast_noc_unicast_atomic_inc(
+                &sender,
+                header,
+                dst_dev_id,
+                dst_mesh_id,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader(sem_noc_final, /*inc=*/1, /*width_bits=*/32));
+        }
     }
 
-    sender.close();
+    if constexpr (is_route_variant) {
+        close_connections(connection_manager);
+    } else {
+        sender.close();
+    }
 }
