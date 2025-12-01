@@ -3,23 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "dataflow_api.h"
+#include "debug/dprint.h"
 
 void kernel_main() {
     set_l1_data_cache<true>();
     uint32_t poll_addr = get_arg_val<uint32_t>(0);
     uint32_t expected_value = get_arg_val<uint32_t>(1);
-    uint32_t semaphore_id = get_arg_val<uint32_t>(2);
+    auto sem_addr = reinterpret_cast<volatile uint32_t*>(get_semaphore(get_arg_val<uint32_t>(2)));
     uint32_t invalidate_cache =
         get_arg_val<uint32_t>(3);  // For CI this will be true but for debug this can be modified
 
-    experimental::CoreLocalMem<uint32_t> poll_value(poll_addr);
-    uint32_t base_value = poll_value[0];  // Read once to cache it
+    volatile tt_l1_ptr uint32_t* poll_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll_addr);
+    uint32_t base_value = *poll_addr_ptr;  // Read once to cache it
 
-    experimental::Semaphore sem(semaphore_id);
-    sem.set(1);
+    noc_semaphore_set(sem_addr, 1);
 
-    while (poll_value[0] != expected_value) {
+    while (*poll_addr_ptr != expected_value) {
         if (invalidate_cache) {
             invalidate_l1_cache();
         }
