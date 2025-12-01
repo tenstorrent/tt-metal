@@ -12,6 +12,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_static_channels_ct_args.hpp"
+#include "tt_metal/hw/inc/fabric_telemetry_msgs.h"
 
 #include <array>
 #include <utility>
@@ -382,10 +383,24 @@ constexpr size_t PERF_TELEMETRY_MODE_IDX = SPECIAL_MARKER_1_IDX + SPECIAL_MARKER
 
 constexpr bool ENABLE_FABRIC_TELEMETRY = static_cast<bool>(get_compile_time_arg_val(PERF_TELEMETRY_MODE_IDX));
 
-constexpr PerfTelemetryRecorderType perf_telemetry_mode =
-    static_cast<PerfTelemetryRecorderType>(get_compile_time_arg_val(PERF_TELEMETRY_MODE_IDX + 1));
+constexpr uint8_t FABRIC_TELEMETRY_STATS_MASK =
+    static_cast<uint8_t>(get_compile_time_arg_val(PERF_TELEMETRY_MODE_IDX + 1));
+constexpr bool FABRIC_TELEMETRY_BANDWIDTH =
+    ENABLE_FABRIC_TELEMETRY &&
+    ((FABRIC_TELEMETRY_STATS_MASK & static_cast<uint8_t>(DynamicStatistics::BANDWIDTH)) != 0);
+constexpr bool FABRIC_TELEMETRY_HEARTBEAT_TX =
+    ENABLE_FABRIC_TELEMETRY &&
+    ((FABRIC_TELEMETRY_STATS_MASK & static_cast<uint8_t>(DynamicStatistics::HEARTBEAT_TX)) != 0);
+constexpr bool FABRIC_TELEMETRY_HEARTBEAT_RX =
+    ENABLE_FABRIC_TELEMETRY &&
+    ((FABRIC_TELEMETRY_STATS_MASK & static_cast<uint8_t>(DynamicStatistics::HEARTBEAT_RX)) != 0);
+constexpr bool FABRIC_TELEMETRY_ANY_DYNAMIC_STAT =
+    FABRIC_TELEMETRY_BANDWIDTH || FABRIC_TELEMETRY_HEARTBEAT_TX || FABRIC_TELEMETRY_HEARTBEAT_RX;
 
-constexpr size_t PERF_TELEMETRY_BUFFER_ADDR_IDX = PERF_TELEMETRY_MODE_IDX + 2;
+constexpr PerfTelemetryRecorderType perf_telemetry_mode =
+    static_cast<PerfTelemetryRecorderType>(get_compile_time_arg_val(PERF_TELEMETRY_MODE_IDX + 2));
+
+constexpr size_t PERF_TELEMETRY_BUFFER_ADDR_IDX = PERF_TELEMETRY_MODE_IDX + 3;
 constexpr size_t perf_telemetry_buffer_addr = get_compile_time_arg_val(PERF_TELEMETRY_BUFFER_ADDR_IDX);
 
 

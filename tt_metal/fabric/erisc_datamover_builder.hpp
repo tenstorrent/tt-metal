@@ -372,6 +372,11 @@ struct FabricRiscConfig {
     }
 
     void set_configured_noc(tt::tt_metal::NOC noc) { noc_ = noc; };
+    bool telemetry_enabled() const { return telemetry_enabled_; }
+    void set_telemetry_enabled(bool enabled) { telemetry_enabled_ = enabled; }
+    uint8_t telemetry_stats_mask() const { return telemetry_stats_mask_; }
+    void set_telemetry_stats_mask(uint8_t mask) { telemetry_stats_mask_ = mask; }
+
 private:
     tt::tt_metal::NOC noc_ = tt::tt_metal::NOC::NOC_0;
     size_t iterations_between_ctx_switch_and_teardown_checks_ = 0;
@@ -380,6 +385,8 @@ private:
     bool enable_interrupts_ = false;
     std::array<bool, builder_config::num_sender_channels> is_sender_channel_serviced_{};
     std::array<bool, builder_config::num_receiver_channels> is_receiver_channel_serviced_{};
+    bool telemetry_enabled_ = true;
+    uint8_t telemetry_stats_mask_ = 0xFF;
 };
 
 struct edm_termination_info_t {
@@ -487,7 +494,7 @@ public:
     [[nodiscard]] std::vector<uint32_t> get_compile_time_args(uint32_t risc_id) const;
 
     // Helper for `get_compile_time_args`
-    void get_telemetry_compile_time_args(std::vector<uint32_t>& ct_args) const;
+    void get_telemetry_compile_time_args(uint32_t risc_id, std::vector<uint32_t>& ct_args) const;
 
     [[nodiscard]] std::vector<uint32_t> get_runtime_args() const;
 

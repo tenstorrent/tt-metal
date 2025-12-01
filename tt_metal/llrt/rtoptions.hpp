@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <map>
 #include <set>
+#include <unordered_set>
 #include <string>
 #include <vector>
 #include "llrt/hal.hpp"
@@ -24,6 +25,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include "tt_metal/hw/inc/fabric_telemetry_msgs.h"
 
 namespace tt {
 
@@ -94,6 +96,33 @@ struct InspectorSettings {
     uint16_t rpc_server_port = 50051;
     bool rpc_server_enabled = true;
     std::string rpc_server_address() const { return rpc_server_host + ":" + std::to_string(rpc_server_port); }
+};
+
+template <typename T>
+struct FabricTelemetrySelection {
+    bool monitor_all = true;
+    std::unordered_set<T> ids;
+
+    bool matches(T value) const { return monitor_all || ids.count(value) > 0; }
+
+    void set_monitor_all(bool value) {
+        monitor_all = value;
+        if (monitor_all) {
+            ids.clear();
+        }
+    }
+};
+
+struct FabricTelemetrySettings {
+    static constexpr uint8_t kAllStatsMask =
+        static_cast<uint8_t>(DynamicStatistics::ROUTER_STATE) | static_cast<uint8_t>(DynamicStatistics::BANDWIDTH) |
+        static_cast<uint8_t>(DynamicStatistics::HEARTBEAT_TX) | static_cast<uint8_t>(DynamicStatistics::HEARTBEAT_RX);
+
+    bool enabled = false;
+    FabricTelemetrySelection<uint32_t> chips;
+    FabricTelemetrySelection<uint32_t> channels;
+    FabricTelemetrySelection<uint32_t> eriscs;
+    uint8_t stats_mask = kAllStatsMask;
 };
 
 class RunTimeOptions {
@@ -220,6 +249,7 @@ class RunTimeOptions {
 
     // Enable fabric telemetry
     bool enable_fabric_telemetry = false;
+    FabricTelemetrySettings fabric_telemetry_settings;
 
     // Mock cluster initialization using a provided cluster descriptor
     std::string mock_cluster_desc_path;
@@ -545,6 +575,7 @@ public:
 
     bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
     void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
+    const FabricTelemetrySettings& get_fabric_telemetry_settings() const { return fabric_telemetry_settings; }
 
     // If true, enables code profiling for receiver channel forward operations
     bool get_enable_fabric_code_profiling_rx_ch_fwd() const { return fabric_profiling_settings.enable_rx_ch_fwd; }
@@ -592,6 +623,7 @@ private:
     void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feature, const std::string& env_var);
+    void ParseFabricTelemetryEnv(const char* value);
     void HandleEnvVar(
         EnvVarID id, const char* value);  // Handle single env var (value usually non-null, see cpp for details)
     void InitializeFromEnvVars();         // Initialize all environment variables from table
