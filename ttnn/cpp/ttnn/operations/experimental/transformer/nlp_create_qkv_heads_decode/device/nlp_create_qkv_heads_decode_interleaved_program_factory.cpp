@@ -153,9 +153,9 @@ void NLPCreateQKVHeadsDecodeInterleavedProgramFactory::override_runtime_argument
     const auto& element_size = cached_program.shared_variables.element_size;
     const auto& sub_tile_line_bytes = cached_program.shared_variables.sub_tile_line_bytes;
 
-    auto dst_buffer_query = output_tensors.at(0).buffer();
-    auto dst_buffer_key = output_tensors.at(1).buffer();
-    auto dst_buffer_value = output_tensors.at(2).buffer();
+    auto *dst_buffer_query = output_tensors.at(0).buffer();
+    auto *dst_buffer_key = output_tensors.at(1).buffer();
+    auto *dst_buffer_value = output_tensors.at(2).buffer();
 
     UpdateDynamicCircularBufferAddress(program, cb_q_output, *dst_buffer_query);
     UpdateDynamicCircularBufferAddress(program, cb_k_output, *dst_buffer_key);
