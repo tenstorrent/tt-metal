@@ -1,8 +1,11 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
 from loguru import logger
 from datetime import datetime
+import hashlib
+import requests
 import json
 import torch
 import pytest
@@ -20,11 +23,76 @@ from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.common.utility_functions import (
     comp_pcc,
 )
-from models.demos.llama3_70b_galaxy.demo.demo_common import load_inputs_advanced
 
 
-# Use common functions from demo_common.py
-# load_and_cache_context and load_inputs are now imported from demo_common
+def load_and_cache_context(context_url, cache_dir, max_length=None):
+    cache_file = cache_dir / hashlib.md5(context_url.encode()).hexdigest()
+
+    if cache_file.exists():
+        with open(cache_file, "r") as f:
+            context_text = f.read()
+        logger.info(f"Loaded context from cache: {context_url}")
+    else:
+        try:
+            response = requests.get(context_url)
+            if response.status_code == 200:
+                context_text = response.text
+                with open(cache_file, "w") as f:
+                    f.write(context_text)
+                logger.info(f"Downloaded and cached context: {context_url}")
+            else:
+                logger.warning(f"Failed to fetch context from URL: {context_url}. Status code: {response.status_code}")
+                context_text = ""
+        except Exception as e:
+            logger.error(f"Error fetching context from URL: {context_url}. Error: {str(e)}")
+            context_text = ""
+
+    # Clip the context to the max length provided
+    if max_length:
+        context_text = context_text[:max_length]
+        logger.info(f"Clipped the context text to {max_length} characters")
+
+    return context_text
+
+
+# load input prompts from json, return as a list
+def load_inputs(user_input, len_per_batch, instruct):
+    if isinstance(user_input, str):
+        with open(user_input, "r") as f:
+            user_input = json.load(f)
+    batch = len(len_per_batch)
+    user_input = user_input * batch
+    in_prompt = []
+    all_prompts = []
+    cache_dir = Path("models/tt_transformers/demo/context_cache")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # The demo supports a custom prompt file, where the context is provided by a link to a book from the gutenberg project
+    # It clips the excerpt to the max length provided to allow testing different long context lengthts
+    for i in range(len(user_input)):
+        prompt = user_input[i]["prompt"]
+        if "context" in user_input[i]:
+            # TODO This might override the expected input size give in the prompt file
+            if "max_length" in user_input[i]:  # Clip the context to the max length provided
+                context_text = load_and_cache_context(
+                    user_input[i]["context"],
+                    cache_dir,
+                    max_length=(user_input[i]["max_length"]) if batch == 1 else len_per_batch[i],
+                )
+            else:
+                context_text = load_and_cache_context(user_input[i]["context"], cache_dir)
+            if instruct:
+                prompt = (
+                    "```" + context_text + "```\n\n" + prompt
+                )  # Add the markdown block to the context to comply with the prompt
+            else:
+                prompt = context_text
+
+        all_prompts.append(prompt)  # return all the prompts taken from the input file to be used when repeat_batch > 1
+        if i in range(batch):
+            in_prompt.append(prompt)
+
+    return in_prompt, all_prompts
 
 
 def load_demo_targets(filename, galaxy_type):
@@ -591,11 +659,10 @@ def test_demo_text(
 
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
-    input_prompts, all_prompts = load_inputs_advanced(
+    input_prompts, all_prompts = load_inputs(
         input_prompts,
         input_lengths,
         instruct,
-        "models/tt_transformers/demo/context_cache",
     )
     profiler.end("loading_inputs")
 

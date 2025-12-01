@@ -3,12 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+import json
 from time import time
 from datetime import datetime
 from loguru import logger
 import os
 import ttnn
 import pytest
+import requests
+from pathlib import Path
+import hashlib
 
 
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
@@ -36,8 +40,63 @@ TSU_THRESHOLDS = {
 }
 
 
-# Use common functions from demo_common.py
-# load_and_cache_context and load_inputs are now imported from demo_common
+def load_and_cache_context(context_url, cache_dir, max_length=None):
+    cache_file = cache_dir / hashlib.md5(context_url.encode()).hexdigest()
+
+    if cache_file.exists():
+        with open(cache_file, "r") as f:
+            context_text = f.read()
+        logger.info(f"Loaded context from cache: {context_url}")
+    else:
+        try:
+            response = requests.get(context_url)
+            if response.status_code == 200:
+                context_text = response.text
+                with open(cache_file, "w") as f:
+                    f.write(context_text)
+                logger.info(f"Downloaded and cached context: {context_url}")
+            else:
+                logger.warning(f"Failed to fetch context from URL: {context_url}. Status code: {response.status_code}")
+                context_text = ""
+        except Exception as e:
+            logger.error(f"Error fetching context from URL: {context_url}. Error: {str(e)}")
+            context_text = ""
+
+    # Clip the context to the max length provided
+    if max_length:
+        context_text = context_text[:max_length]
+        logger.info(f"Clipped the context text to {max_length} characters")
+
+    return context_text
+
+
+# load from json, return as a list
+def load_inputs(user_input, batch, instruct_mode):
+    if isinstance(user_input, str):
+        with open(user_input, "r") as f:
+            user_input = json.load(f)
+    assert len(user_input) >= batch, f"Number of users (batch) must be {batch}!"
+    in_prompt = []
+    cache_dir = Path("models/demos/llama3/demo/context_cache")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    for i in range(batch):
+        prompt = user_input[i]["prompt"]
+        if "context" in user_input[i]:
+            if "max_length" in user_input[i]:  # Clip the context to the max length provided
+                context_text = load_and_cache_context(
+                    user_input[i]["context"], cache_dir, max_length=user_input[i]["max_length"]
+                )
+            else:
+                context_text = load_and_cache_context(user_input[i]["context"], cache_dir)
+            # if instruct_mode:
+            #     prompt = (
+            #         "```" + context_text + "```\n\n" + prompt
+            #     )  # Add the markdown block to the context to comply with the prompt
+            # else:
+            prompt = context_text
+        in_prompt.append(prompt)
+    return in_prompt
 
 
 def run_llama3_demo(
@@ -103,9 +162,7 @@ def run_llama3_demo(
     if len(user_input) == 1:
         input_prompts = user_input * batch_size
     else:
-        input_prompts = load_inputs_simple(
-            user_input, batch_size, instruct_mode, "models/demos/llama3/demo/context_cache"
-        )
+        input_prompts = load_inputs(user_input, batch_size, instruct_mode)
     profiler.end("loading_inputs")
 
     # Generate the batched prompts (rotate the inputs between the users, for each batch)
@@ -273,7 +330,7 @@ def run_llama3_demo(
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 1 if is_cur_pos_sharded else 0) if (batch_size > 1) else (None, None),
+            dims=(None, 1 if is_cur_pos_sharded else 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),
     )
@@ -372,7 +429,7 @@ def run_llama3_demo(
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 1 if is_cur_pos_sharded else 0) if (batch_size > 1) else (None, None),
+            dims=(None, 1 if is_cur_pos_sharded else 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),
     )
