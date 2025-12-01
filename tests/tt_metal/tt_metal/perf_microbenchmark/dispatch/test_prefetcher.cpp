@@ -47,6 +47,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/tt_io.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 #define CQ_PREFETCH_CMD_BARE_MIN_SIZE \
     tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST)
@@ -2363,7 +2364,7 @@ void configure_for_single_chip(
 
 int main(int argc, char** argv) {
     log_info(tt::LogTest, "test_prefetcher.cpp - Test Start");
-    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     init(argc, argv);

@@ -22,7 +22,8 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     Tensor& output,
     ReduceOpMath reduce_op,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-    float scaler) {
+    float scaler,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     const auto& shape = a.padded_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
 
@@ -46,8 +47,18 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto num_rows = NC * Ht;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows);
+    uint32_t num_cores;
+    CoreRangeSet all_cores, core_group_1, core_group_2;
+    uint32_t num_rows_per_core_group_1, num_rows_per_core_group_2;
+    if (sub_core_grids.has_value()) {
+        std::tie(
+            num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2) =
+            tt::tt_metal::split_work_to_cores(*sub_core_grids, num_rows);
+    } else {
+        std::tie(
+            num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2) =
+            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows);
+    }
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -127,8 +138,18 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     }
 
     uint32_t out_dim_divider = Wt;
-    const auto& cores =
-        grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, false);
+    std::vector<CoreCoord> cores;
+    if (sub_core_grids.has_value()) {
+        for (const auto& range : all_cores.ranges()) {
+            for (int y = range.start_coord.y; y <= range.end_coord.y; ++y) {
+                for (int x = range.start_coord.x; x <= range.end_coord.x; ++x) {
+                    cores.emplace_back(x, y);
+                }
+            }
+        }
+    } else {
+        cores = grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, false);
+    }
     for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
         const CoreCoord& core = cores[i];
         uint32_t num_rows_per_core = 0;
@@ -168,9 +189,9 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_dram_buffer = input_tensors.at(0).buffer();
+        auto* src_dram_buffer = input_tensors.at(0).buffer();
 
-        auto dst_dram_buffer = output_tensors.at(0).buffer();
+        auto* dst_dram_buffer = output_tensors.at(0).buffer();
 
         auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
         auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);

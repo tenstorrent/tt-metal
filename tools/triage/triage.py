@@ -34,6 +34,7 @@ Description:
 # Check if tt-exalens is installed
 import inspect
 import os
+import traceback
 import utils
 from collections.abc import Iterable
 from pathlib import Path
@@ -208,7 +209,7 @@ class TriageScript:
         except Exception as e:
             if log_error:
                 self.failed = True
-                self.failure_message = str(e)
+                self.failure_message = traceback.format_exc()
                 return None
             else:
                 raise
@@ -410,6 +411,24 @@ def log_check(success: bool, message: str) -> None:
         FAILURE_CHECKS.append(message)
 
 
+def log_check_device(device: Device, success: bool, message: str) -> None:
+    formatted_message = f"Device {device._id}: {message}"
+    log_check(success, formatted_message)
+
+
+def log_check_location(location: OnChipCoordinate, success: bool, message: str) -> None:
+    device = location.device
+    block_type = device.get_block_type(location)
+    location_str = location.to_user_str()
+    formatted_message = f"{block_type} [{location_str}]: {message}"
+    log_check_device(device, success, formatted_message)
+
+
+def log_check_risc(risc_name: str, location: OnChipCoordinate, success: bool, message: str) -> None:
+    formatted_message = f"{risc_name}: {message}"
+    log_check_location(location, success, formatted_message)
+
+
 def serialize_result(script: TriageScript | None, result):
     from dataclasses import fields, is_dataclass
 
@@ -421,10 +440,12 @@ def serialize_result(script: TriageScript | None, result):
     failures = FAILURE_CHECKS
     FAILURE_CHECKS = []
     if result is None:
-        if len(failures) > 0:
+        if len(failures) > 0 or script.failed:
             utils.ERROR("  fail")
             for failure in failures:
                 utils.ERROR(f"    {failure}")
+            if script.failed:
+                utils.ERROR(f"    {script.failure_message}")
         else:
             utils.INFO("  pass")
         return

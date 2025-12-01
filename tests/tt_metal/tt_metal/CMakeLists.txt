@@ -126,6 +126,7 @@ target_sources(
             ${kernels}
             perf_microbenchmark/common/kernel_utils.hpp
             perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp
+            perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp
 )
 
 install(

@@ -14,7 +14,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
 
 uint32_t get_pf_type(bool output_is_sharded, const Tensor& tensor) {
-    auto device = tensor.device();
+    auto* device = tensor.device();
     uint32_t max_l1_size =
         (device->l1_size_per_core() / 2) - device->allocator()->get_base_allocator_addr(HalMemType::L1);
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());

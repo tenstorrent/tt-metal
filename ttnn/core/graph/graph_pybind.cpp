@@ -21,7 +21,7 @@ void py_graph_module_types(py::module& m) {
 }
 
 void py_graph_module(py::module& m) {
-    auto doc_begin =
+    const auto* doc_begin =
         R"doc(begin_graph_capture()
     )doc";
 
@@ -31,7 +31,7 @@ void py_graph_module(py::module& m) {
         doc_begin,
         py::arg("run_mode") = IGraphProcessor::RunMode::NORMAL);
 
-    auto doc_end =
+    const auto* doc_end =
         R"doc(end_graph_capture() -> Union[None, bool, int, float, list, dict]
         returns the value captured graph as a json object converted to python object
     )doc";
@@ -56,6 +56,20 @@ void py_graph_module(py::module& m) {
         },
         "Extracts calltrace from the graph trace",
         py::arg("trace"));
+
+    m.def(
+        "extract_levelized_graph",
+        [](const py::object& py_trace, size_t max_level) {
+            auto json_module = py::module::import("json");
+            std::string trace_str = py::str(json_module.attr("dumps")(py_trace));
+            nlohmann::json trace = nlohmann::json::parse(trace_str);
+            nlohmann::json levelized_graph = extract_levelized_graph(trace, max_level);
+            auto levelized_graph_str = levelized_graph.dump();
+            return json_module.attr("loads")(levelized_graph_str);
+        },
+        "Extracts levelized graph from the graph trace",
+        py::arg("trace"),
+        py::arg("max_level") = 1);
 }
 
 }  // namespace ttnn::graph

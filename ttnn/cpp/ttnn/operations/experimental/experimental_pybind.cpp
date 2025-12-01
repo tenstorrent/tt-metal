@@ -63,9 +63,8 @@ void py_module(py::module& module) {
     transformer::detail::bind_concatenate_heads(module);
     transformer::detail::bind_split_qkv(module);
     transformer::detail::bind_nlp_create_qkv_heads(module);
-    transformer::detail::bind_create_qkv_heads(module);
     transformer::detail::bind_create_qkv_heads_from_separate_tensors(module);
-    transformer::detail::bind_nlp_concat_heads(module);
+    nlp_concat_heads::detail::bind_nlp_concat_heads(module);
     transformer::detail::bind_nlp_concat_heads_decode(module);
     transformer::detail::bind_nlp_concat_heads_boltz(module);
     transformer::detail::bind_nlp_create_qkv_heads_decode(module);
@@ -81,6 +80,8 @@ void py_module(py::module& module) {
     transformer::py_bind_rotary_embedding_llama(module);
     transformer::py_bind_rotary_embedding_llama_fused_qk(module);
     transformer::py_bind_rotate_half(module);
+
+    create_qkv_heads::detail::bind_create_qkv_heads(module);
 
     reduction::detail::bind_fast_reduce_nc(module);
     reduction::detail::bind_reduction_intimg_operation(module);

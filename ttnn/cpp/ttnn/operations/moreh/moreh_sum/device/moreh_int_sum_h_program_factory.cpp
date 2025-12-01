@@ -104,9 +104,9 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
     }
     std::vector<uint32_t> writer_compile_time_args = {};
     TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
-    const auto reader_kernel_file{
+    const auto* const reader_kernel_file{
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/reader_moreh_int_sum_h.cpp"};
-    const auto writer_kernel_file{
+    const auto* const writer_kernel_file{
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/writer_moreh_int_sum_h.cpp"};
     const auto reader_kernel_id{
         CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines)};
@@ -124,7 +124,7 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto compute_kernel_file{
+    const auto* const compute_kernel_file{
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/moreh_int_sum_h.cpp"};
     CreateComputeKernel(
         program,
@@ -200,8 +200,8 @@ void MorehSumOperation::MorehSumHIntFactory::override_runtime_arguments(
     auto num_cores_y = cached_program.shared_variables.num_cores_y;
 
     log_debug(tt::LogOp, "{}:{} args_callback ", __func__, __LINE__);
-    auto src_dram_buffer = tensor_args.input.buffer();
-    auto dst_dram_buffer = tensor_return_value.buffer();
+    auto* src_dram_buffer = tensor_args.input.buffer();
+    auto* dst_dram_buffer = tensor_return_value.buffer();
 
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

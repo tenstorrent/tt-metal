@@ -21,15 +21,16 @@
 
 #include "hal.hpp"
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "hal_types.hpp"
 #include "llrt.hpp"
 #include <umd/device/driver_atomics.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace {
 void print_aerisc_training_status(tt::ChipId device_id, const CoreCoord& virtual_core) {
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
         return;
     }

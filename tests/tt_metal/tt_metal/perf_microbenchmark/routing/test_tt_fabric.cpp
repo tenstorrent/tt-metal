@@ -87,12 +87,22 @@ int main(int argc, char** argv) {
         test_context.enable_progress_monitoring(progress_config);
     }
 
-    bool benchmark_mode = std::any_of(
-        raw_test_configs.begin(), raw_test_configs.end(), [](const auto& config) { return config.benchmark_mode; });
+    bool has_bandwidth_tests = std::any_of(raw_test_configs.begin(), raw_test_configs.end(), [](const auto& config) {
+        return config.performance_test_mode == PerformanceTestMode::BANDWIDTH;
+    });
 
-    // Initialize CSV file for bandwidth results if any of the configs have benchmark mode set
-    if (benchmark_mode) {
+    // Initialize CSV file for bandwidth results if any of the configs have bandwidth test mode set
+    if (has_bandwidth_tests) {
         test_context.initialize_bandwidth_results_csv_file();
+    }
+
+    bool has_latency_tests = std::any_of(raw_test_configs.begin(), raw_test_configs.end(), [](const auto& config) {
+        return config.performance_test_mode == PerformanceTestMode::LATENCY;
+    });
+
+    // Initialize CSV file for latency results if any of the configs have latency test mode set
+    if (has_latency_tests) {
+        test_context.initialize_latency_results_csv_file();
     }
 
     cmdline_parser.apply_overrides(raw_test_configs);
@@ -150,8 +160,8 @@ int main(int argc, char** argv) {
 
         const auto& topology = test_config.fabric_setup.topology;
         const auto& fabric_tensix_config = test_config.fabric_setup.fabric_tensix_config.value();
-        if (test_config.benchmark_mode) {
-            tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_telemetry(true);
+        if (test_config.performance_test_mode != PerformanceTestMode::NONE) {
+            tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_bw_telemetry(true);
         }
 
         log_info(
@@ -182,9 +192,10 @@ int main(int argc, char** argv) {
             log_info(tt::LogTest, "Building tests");
             auto built_tests = builder.build_tests({test_config}, cmdline_parser);
 
-            // Set benchmark mode and line sync for this test group
-            test_context.set_benchmark_mode(test_config.benchmark_mode);
-            test_context.set_telemetry_enabled(test_config.benchmark_mode);
+            // Set performance test mode and line sync for this test group
+            test_context.set_performance_test_mode(test_config.performance_test_mode);
+            // Enable telemetry for both benchmark and latency modes to ensure buffer clearing
+            test_context.set_telemetry_enabled(test_config.performance_test_mode != PerformanceTestMode::NONE);
 
             // Set code profiling enabled based on rtoptions
             auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
@@ -201,6 +212,11 @@ int main(int argc, char** argv) {
 
                 test_context.process_traffic_config(built_test);
                 log_info(tt::LogTest, "Traffic config processed");
+
+                // Setup latency test mode AFTER process_traffic_config so that senders_/receivers_ maps are populated
+                if (built_test.performance_test_mode == PerformanceTestMode::LATENCY) {
+                    test_context.setup_latency_test_mode(built_test);
+                }
 
                 // Clear code profiling buffers before test execution
                 if (test_context.get_code_profiling_enabled()) {
@@ -233,11 +249,18 @@ int main(int argc, char** argv) {
                 }
 
                 test_context.validate_results();
-                log_info(tt::LogTest, "Test {} Results validated.", built_test.parametrized_name);
 
-                if (test_context.get_benchmark_mode()) {
+                // Performance profiling (bandwidth mode)
+                if (test_context.get_performance_test_mode() == PerformanceTestMode::BANDWIDTH) {
                     test_context.profile_results(built_test);
                 }
+
+                // Latency measurement (latency test mode)
+                if (test_context.get_performance_test_mode() == PerformanceTestMode::LATENCY) {
+                    test_context.collect_latency_results();
+                    test_context.report_latency_results(built_test);
+                }
+
                 if (test_context.get_telemetry_enabled()) {
                     test_context.clear_telemetry();
                 }
@@ -250,15 +273,18 @@ int main(int argc, char** argv) {
 
     test_context.close_devices();
 
-    tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_telemetry(false);
+    tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_bw_telemetry(false);
 
-    // Bandwidth summary is generated after all tests have run, to collect multi-run statistics
-    if (benchmark_mode) {
+    // Generate summaries after all tests have run
+    if (has_bandwidth_tests) {
         test_context.generate_bandwidth_summary();
     }
+    if (has_latency_tests) {
+        test_context.generate_latency_summary();
+    }
 
-    // Setup Bandwidth CSV files for CI to upload
-    if (benchmark_mode) {
+    // Setup CSV files for CI to upload (handles both bandwidth and latency)
+    if (has_bandwidth_tests || has_latency_tests) {
         test_context.setup_ci_artifacts();
     }
 

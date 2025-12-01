@@ -8,7 +8,7 @@
 #include "hostdevcommon/kernel_structs.h"
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt-metalium/kernel_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
@@ -1194,7 +1194,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
     TT_ASSERT(num_commands_expected == slices.size());
 
     // If we are on device zero, we send n-1 chunks in ascending order
-    auto& input_tensor = this->op_config.get_input_tensor(0);
+    const auto& input_tensor = this->op_config.get_input_tensor(0);
     TT_ASSERT(input_tensor.padded_shape().size() == 4, "Only 4D tensors are supported for ccl");
 
     std::vector<uint32_t> args = {

@@ -25,6 +25,7 @@
 #include "tt_metal/impl/dispatch/util/size_literals.hpp"
 #include "vector_aligned.hpp"
 #include "work_thread.hpp"
+#include <llrt/tt_cluster.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -91,7 +92,7 @@ TestResult mem_bench_page_sizing(benchmark::State& state) {
     };
 
     auto src_data = generate_random_src_data(ctx.total_size);
-    auto hugepage = get_hugepage(device_id, 0);
+    auto* hugepage = get_hugepage(device_id, 0);
     auto hugepage_size = get_hugepage_size(device_id);
     bool cached = state.range(2);
 
@@ -126,7 +127,7 @@ TestResult mem_bench_copy_multithread(benchmark::State& state) {
         0,               // Iterations is managed by the benchmark framework
     };
     auto src_data = generate_random_src_data(ctx.total_size);
-    auto hugepage = get_hugepage(device_id, 0);
+    auto* hugepage = get_hugepage(device_id, 0);
     const auto hugepage_size = get_hugepage_size(device_id);
     const auto bytes_per_thread = ((ctx.total_size / ctx.threads) + (MEMCPY_ALIGNMENT)-1) & -(MEMCPY_ALIGNMENT);
     const auto last_thread_bytes = ctx.total_size - (bytes_per_thread * (ctx.threads - 1));
@@ -181,7 +182,7 @@ TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
     }
 
     auto src_data = generate_random_src_data(ctx.total_size);
-    auto hugepage = get_hugepage(device->id(), 0);
+    auto* hugepage = get_hugepage(device->id(), 0);
     auto hugepage_size = get_hugepage_size(device->id());
 
     for (auto _ : state) {
@@ -250,7 +251,7 @@ TestResult mem_bench_copy_active_kernel_different_page(benchmark::State& state) 
     auto device_hugepage_size = get_hugepage_size(device->id());
 
     // 2nd open device is not required
-    auto host_hugepage = get_hugepage(device->id() + 1, 0);
+    auto* host_hugepage = get_hugepage(device->id() + 1, 0);
     auto host_hugepage_size = get_hugepage_size(device->id() + 1);
 
     for (auto _ : state) {
@@ -403,7 +404,7 @@ TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
     };
 
     auto src_data = generate_random_src_data(ctx.total_size);
-    auto hugepage = get_hugepage(device->id(), 0);
+    auto* hugepage = get_hugepage(device->id(), 0);
     auto hugepage_size = get_hugepage_size(device->id());
 
     // Don't need to separate device results

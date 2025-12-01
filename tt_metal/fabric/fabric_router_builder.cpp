@@ -31,18 +31,23 @@ std::unique_ptr<FabricRouterBuilder> FabricRouterBuilder::build(
     const tt::tt_fabric::FabricEriscDatamoverConfig& edm_config,
     tt::tt_fabric::FabricEriscDatamoverType fabric_edm_type,
     tt::tt_fabric::eth_chan_directions eth_direction,
-    bool fabric_tensix_extension_enabled,
     bool dispatch_link,
     tt::tt_fabric::chan_id_t eth_chan,
     tt::tt_fabric::Topology topology) {
+    bool fabric_tensix_extension_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
+                                           tt::tt_fabric::FabricTensixConfig::DISABLED;
+    bool fabric_tensix_extension_mux_mode =
+        tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() == tt::tt_fabric::FabricTensixConfig::MUX;
+    bool fabric_tensix_extension_udm_mode =
+        tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() == tt::tt_fabric::FabricTensixConfig::UDM;
 
-    bool has_tensix_extension = false;
-    if (fabric_tensix_extension_enabled && !dispatch_link) {
-        has_tensix_extension = true;
+    bool downstream_is_tensix_extension = false;
+    if (fabric_tensix_extension_mux_mode && !dispatch_link) {
+        downstream_is_tensix_extension = true;
     }
 
-    auto edm_builder = std::make_unique<tt::tt_fabric::FabricEriscDatamoverBuilder>(
-        tt::tt_fabric::FabricEriscDatamoverBuilder::build(
+    auto edm_builder =
+        std::make_unique<tt::tt_fabric::FabricEriscDatamoverBuilder>(tt::tt_fabric::FabricEriscDatamoverBuilder::build(
             device,
             fabric_program,
             eth_logical_core,
@@ -52,7 +57,7 @@ std::unique_ptr<FabricRouterBuilder> FabricRouterBuilder::build(
             false, /* build_in_worker_connection_mode */
             fabric_edm_type,
             eth_direction,
-            has_tensix_extension));
+            downstream_is_tensix_extension));
 
     if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE &&
         tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
@@ -67,22 +72,27 @@ std::unique_ptr<FabricRouterBuilder> FabricRouterBuilder::build(
     if (fabric_tensix_extension_enabled) {
         // Only create tensix builder if this channel is not used by dispatch
         if (!dispatch_link) {
-            auto tensix_builder = tt::tt_fabric::FabricTensixDatamoverBuilder::build(
+            tensix_builder_opt = tt::tt_fabric::FabricTensixDatamoverBuilder::build(
                 device, fabric_program, fabric_node_id, remote_fabric_node_id, eth_chan, eth_direction);
-            tensix_builder_opt = tensix_builder;
         }
     }
 
     // Create channel mapping
     // Only enable tensix extension in mapping if we actually created a tensix builder
-    bool has_tensix_builder = tensix_builder_opt.has_value();
-    auto channel_mapping = tt::tt_fabric::FabricRouterChannelMapping(
-        topology, eth_direction, has_tensix_builder);
+    bool downstream_is_tensix_builder = tensix_builder_opt.has_value() && fabric_tensix_extension_mux_mode;
+    auto channel_mapping =
+        tt::tt_fabric::FabricRouterChannelMapping(topology, eth_direction, downstream_is_tensix_builder);
 
-    return std::make_unique<tt::tt_fabric::FabricRouterBuilder>(
-        std::move(edm_builder), tensix_builder_opt, std::move(channel_mapping));
+    auto router_builder = std::make_unique<tt::tt_fabric::FabricRouterBuilder>(
+        std::move(edm_builder), std::move(tensix_builder_opt), std::move(channel_mapping));
+
+    // Setup the local relay kernel connection if in UDM mode
+    if (fabric_tensix_extension_udm_mode && router_builder->has_tensix_builder()) {
+        router_builder->connect_to_local_tensix_builder(router_builder->get_tensix_builder());
+    }
+
+    return router_builder;
 }
-
 
 void FabricRouterBuilder::connect_to_downstream_router_over_noc(
     FabricRouterBuilder& other, uint32_t vc) {
@@ -253,6 +263,33 @@ FabricNodeId FabricRouterBuilder::get_local_fabric_node_id() const {
 
 FabricNodeId FabricRouterBuilder::get_peer_fabric_node_id() const {
     return erisc_builder_->peer_fabric_node_id;
+}
+
+void FabricRouterBuilder::connect_to_local_tensix_builder(FabricTensixDatamoverBuilder& tensix_builder) {
+    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
+    TT_FATAL(is_2D_routing, "connect_to_local_tensix_builder requires 2D routing");
+
+    // In UDM mode, router receiver connects to local relay on the tensix core
+    // Get connection specs from relay builder to set up receiver-to-relay connection
+    // Relay only has one channel (ROUTER_CHANNEL = 0) for upstream fabric router traffic
+    eth_chan_directions local_tensix_dir = tensix_builder.get_direction();
+    auto adapter_spec = tensix_builder.build_connection_to_relay_channel();
+
+    // Enable UDM mode and store relay buffer count
+    erisc_builder_->udm_mode = true;
+    erisc_builder_->local_tensix_relay_num_buffers = adapter_spec.num_buffers_per_channel;
+
+    // Only one local relay connection (we can consider the local relay connection as one ds tensix connection)
+    erisc_builder_->num_downstream_tensix_connections = 1;
+
+    auto* adapter_ptr = erisc_builder_->receiver_channel_to_downstream_adapter.get();
+    const auto tensix_noc_x = tensix_builder.get_noc_x();
+    const auto tensix_noc_y = tensix_builder.get_noc_y();
+    adapter_ptr->add_local_tensix_connection(adapter_spec, local_tensix_dir, CoreCoord(tensix_noc_x, tensix_noc_y));
+
+    // Provide router NOC coordinates to relay kernel for sending packets back to router
+    tensix_builder.append_relay_router_noc_xy(erisc_builder_->get_noc_x(), erisc_builder_->get_noc_y());
 }
 
 }  // namespace tt::tt_fabric

@@ -6,7 +6,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/ccl/all_broadcast/device/all_broadcast_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -49,7 +49,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_multicore(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     tt::tt_metal::Program program{};
 
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     [[maybe_unused]] bool is_first_chip = ring_index == 0;
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
     log_trace(

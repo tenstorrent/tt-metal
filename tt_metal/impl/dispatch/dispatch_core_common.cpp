@@ -6,6 +6,8 @@
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <impl/dispatch/dispatch_core_manager.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {
 

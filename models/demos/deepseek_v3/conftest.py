@@ -53,6 +53,8 @@ def mesh_device(request, device_params):
         default_mesh_shape = ttnn.MeshShape(16, 8)  # If running on QUAD system
     elif mesh_device_env == "TG" or len(device_ids) == 32:  # If running on Galaxy system
         default_mesh_shape = ttnn.MeshShape(4, 8)
+    elif hasattr(request, "param") and isinstance(request.param, tuple):
+        default_mesh_shape = ttnn.MeshShape(*request.param)
     else:
         default_mesh_shape = ttnn.MeshShape(1, len(device_ids))
 

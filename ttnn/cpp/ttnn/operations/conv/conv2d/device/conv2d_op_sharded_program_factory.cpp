@@ -886,7 +886,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     }
 
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), total_num_cores, compute_defines, ttnn::get_throttle_level(compute_kernel_config));
+        device->arch(), output_cores.num_cores(), compute_defines, ttnn::get_throttle_level(compute_kernel_config));
 
     for (auto elem : compute_defines) {
         log_trace(tt::LogOp, "compute_defines: {} = {}", elem.first, elem.second);
@@ -1368,8 +1368,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             // Reader config indices is an optional static sharded tensor, so no need to update address
             TT_FATAL(output_tensors.size() == 1, "Expected exactly 1 output tensor but got {}", output_tensors.size());
 
-            auto src_buffer_a = input_tensors.at(0).buffer();
-            auto src_buffer_b = input_tensors.at(1).buffer();
+            auto* src_buffer_a = input_tensors.at(0).buffer();
+            auto* src_buffer_b = input_tensors.at(1).buffer();
 
             std::optional<tt::tt_metal::Buffer*> src_buffer_c = std::nullopt;
             if (has_bias) {

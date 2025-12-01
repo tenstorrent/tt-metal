@@ -36,6 +36,11 @@ uint32_t get_input_channels_alignment(
     bool is_mm_conv,
     const std::optional<MemoryConfig>& input_memory_config);
 
+CoreCoord get_output_compute_grid_size(
+    const CoreCoord& device_compute_grid_size,
+    const Conv2dConfig& conv_config,
+    const sliding_window::ParallelConfig& input_parallel_config);
+
 bool use_matmul_for_1x1_conv(
     const std::array<uint32_t, 2>& kernel_size,
     const std::array<uint32_t, 2>& stride,

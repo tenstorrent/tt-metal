@@ -194,7 +194,7 @@ BufferCorePageMapping::Iterator::Range BufferCorePageMapping::Iterator::next_ran
 BufferPageMapping::Iterator& BufferPageMapping::Iterator::operator++() {
     host_page_index_++;
 
-    auto& core_page_mapping = page_mapping_->core_page_mappings[core_id_][page_mapping_index_];
+    const auto& core_page_mapping = page_mapping_->core_page_mappings[core_id_][page_mapping_index_];
     if (host_page_index_ < core_page_mapping.host_ranges[host_range_index_].num_pages) {
         return *this;
     }

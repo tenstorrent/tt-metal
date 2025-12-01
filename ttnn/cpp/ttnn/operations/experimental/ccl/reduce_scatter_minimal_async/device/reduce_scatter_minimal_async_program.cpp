@@ -6,7 +6,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
@@ -686,7 +686,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset) {
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     [[maybe_unused]] bool is_first_chip = ring_index == 0;
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
 
@@ -1340,7 +1340,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
      * - otherwise, receive a slice, locally reduce it, and send the result in that direction
      *
      */
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
 

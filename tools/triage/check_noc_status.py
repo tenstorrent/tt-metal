@@ -15,11 +15,11 @@ Description:
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.elf import MemoryAccess
-from ttexalens.tt_exalens_lib import read_tensix_register
+from ttexalens.tt_exalens_lib import read_register
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from run_checks import run as get_run_checks
-from triage import ScriptConfig, log_check, run_script
+from triage import ScriptConfig, log_check_location, run_script
 
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "elfs_cache"],
@@ -42,7 +42,7 @@ def check_noc_status(
     fw_elf_path = dispatcher_data.get_core_data(location, risc_name).firmware_path
     fw_elf = elfs_cache[fw_elf_path]
 
-    message = f"Device {location._device._id} at {location.to_user_str()} on {risc_name} for NOC {noc_id}\n"
+    message = f"{risc_name} NOC{noc_id}: "
     passed = True
 
     loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
@@ -52,7 +52,7 @@ def check_noc_status(
         reg = var_to_reg_map[var]
         # If reading fails, write error message and skip to next core
         try:
-            reg_val = read_tensix_register(location=location, register=reg, noc_id=noc_id)
+            reg_val = read_register(location=location, register=reg, noc_id=noc_id)
             var_val = fw_elf.get_global(var, loc_mem_access)[noc_id]
         except Exception as e:
             message += "    " + str(e) + "\n"
@@ -64,7 +64,7 @@ def check_noc_status(
             message += f"    {reg} {var} {reg_val} {var_val}\n"
             passed = False
 
-    log_check(passed, message)
+    log_check_location(location, passed, message)
 
 
 def run(args, context: Context):

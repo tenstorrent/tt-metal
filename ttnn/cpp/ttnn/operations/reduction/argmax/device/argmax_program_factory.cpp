@@ -233,8 +233,8 @@ operation::ProgramWithCallbacks argmax_single_core(
     std::vector<uint32_t> ctime_args = get_ctime_args_single_core(
         input, output, src_page_size, dst_page_size, src_cb_index, dst_cb_index, keepdim, reduce_all);
 
-    const auto src_buffer = input.buffer();
-    const auto dst_buffer = output.buffer();
+    auto* const src_buffer = input.buffer();
+    auto* const dst_buffer = output.buffer();
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(ctime_args);
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(ctime_args);
 
@@ -261,8 +261,8 @@ operation::ProgramWithCallbacks argmax_single_core(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* src_buffer = input_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
         for (const auto& core : cores) {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
@@ -371,8 +371,8 @@ operation::ProgramWithCallbacks argmax_multi_core(
 
     const tt::tt_metal::IDevice* device = output.device();
 
-    const auto src_buffer = input.buffer();
-    const auto dst_buffer = output.buffer();
+    auto* const src_buffer = input.buffer();
+    auto* const dst_buffer = output.buffer();
     const auto src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     // NOC transactions need to be aligned.
@@ -581,9 +581,9 @@ operation::ProgramWithCallbacks argmax_multi_core(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
+        auto* src_buffer = input_tensors.at(0).buffer();
 
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
         for (const auto& core : cores_coords0) {
             {
                 auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id0, core);

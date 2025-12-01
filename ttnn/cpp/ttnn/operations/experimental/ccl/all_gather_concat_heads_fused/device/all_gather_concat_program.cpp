@@ -15,7 +15,7 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
@@ -570,7 +570,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
             const auto& input = input_tensors[0];
             const auto& temp_tensor = input_tensors[1];
             const auto& output = output_tensors[0];
-            auto dst_buffer_query = output.buffer();
+            auto* dst_buffer_query = output.buffer();
 
             UpdateDynamicCircularBufferAddress(program, cb_q_output, *dst_buffer_query);
 

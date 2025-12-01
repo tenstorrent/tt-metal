@@ -119,6 +119,7 @@ constexpr uint32_t completion_queue_base_addr_16B = completion_queue_base_addr >
 constexpr uint32_t dispatch_cb_size = dispatch_cb_page_size * dispatch_cb_pages;
 constexpr uint32_t dispatch_cb_end = dispatch_cb_base + dispatch_cb_size;
 constexpr uint32_t downstream_cb_end = downstream_cb_base + downstream_cb_size;
+constexpr uint32_t fd_core_type_idx = static_cast<uint32_t>(fd_core_type);
 
 // Break buffer into blocks, 1/n of the total (dividing equally)
 // Do bookkeeping (release, etc) based on blocks
@@ -718,7 +719,9 @@ void process_write_packed_large(uint32_t* l1_cache) {
     bool must_barrier = true;
     while (count != 0) {
         uint32_t dst_addr = sub_cmd_ptr->addr + local_write_offset;
-        uint32_t length = sub_cmd_ptr->length;
+        // CQDispatchWritePackedLargeSubCmd always stores length - 1, so add 1 to get the actual length
+        // This avoids the need to handle the special case where 65536 bytes overflows to 0
+        uint32_t length = sub_cmd_ptr->length_minus1 + 1;
         uint32_t num_dests = sub_cmd_ptr->num_mcast_dests;
         uint32_t pad_size = align_power_of_2(length, alignment) - length;
         uint32_t unlink = sub_cmd_ptr->flags & CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;

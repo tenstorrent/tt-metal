@@ -8,7 +8,6 @@
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 
 #include <tt-metalium/hal.hpp>
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include "ttnn/operations/core/core.hpp"

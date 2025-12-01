@@ -12,20 +12,20 @@ namespace ttnn::operations::reduction::detail {
 namespace py = pybind11;
 
 void bind_manual_seed_operation(py::module& module) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
             Sets a seed to pseudo random number generators (PRNGs) on the specified device.
 
             This operation allows users to either set a single seed value to all PRNGs in the device, or to specify potentially different seed values to PRNGs at the cores assigned to the provided user IDs.
 
             Args:
-                device (ttnn.MeshDevice): The device on which to set the manual seed.
-                seeds (int or ttnn.Tensor): A single integer seed or a tensor of seeds to initialize the random number generator.
+                seeds (uint32_t or ttnn.Tensor): A single integer seed or a tensor of seeds to initialize the random number generator.
 
             Keyword Args:
-                user_ids (int or ttnn.Tensor, optional): An optional user ID or tensor of user IDs associated with the seeds.
-
+                device (ttnn.MeshDevice, optional): The device on which to set the manual seed. Provided only if user_ids is uint32_t or None.
+                user_ids (uint32_t or ttnn.Tensor, optional): An optional user ID or tensor of user IDs associated with the seeds.
+                sub_core_grids (optional): Custom core range set must be provided for multi-user execution. Core IDs are constrained to numbers 0 to 31.
             Returns:
-                Tensor: An empty tensor, as this operation does not produce a meaningful output. To be changed in the future.
+                Tensor (ttnn.Tensor): An empty tensor, as this operation does not produce a meaningful output. To be changed in the future.
 
             Note:
 
@@ -36,10 +36,8 @@ void bind_manual_seed_operation(py::module& module) {
 
                     * - Dtypes
                       - Layouts
-                    * - X
-                      - X
-                    * - X
-                      - X
+                    * - UINT32
+                      - ROW_MAJOR_LAYOUT
 
                 Supported dtypes and layout for user_ids tensor values:
 
@@ -48,10 +46,9 @@ void bind_manual_seed_operation(py::module& module) {
 
                     * - Dtypes
                       - Layouts
-                    * - X, X
-                      - X
+                    * - UINT32
+                      - ROW_MAJOR_LAYOUT
         )doc";
-    // TODO: To be filled when implementing device logic
     using OperationType = decltype(ttnn::manual_seed);
     bind_registered_operation(
         module,
@@ -59,15 +56,17 @@ void bind_manual_seed_operation(py::module& module) {
         doc,
         ttnn::pybind_overload_t{
             [](const OperationType& self,
-               MeshDevice& device,
-               std::variant<uint32_t, ttnn::Tensor> seeds,
-               std::optional<std::variant<uint32_t, ttnn::Tensor>> user_ids) -> Tensor {
-                return self(device, seeds, user_ids);
+               const std::variant<uint32_t, ttnn::Tensor>& seeds,
+               const std::optional<std::reference_wrapper<MeshDevice>> device,
+               const std::optional<std::variant<uint32_t, ttnn::Tensor>>& user_ids,
+               const std::optional<CoreRangeSet>& sub_core_grids) -> Tensor {
+                return self(seeds, device, user_ids, sub_core_grids);
             },
-            py::arg("device"),
-            py::arg("seeds"),
+            py::arg("seeds") = 0,
             py::kw_only(),
-            py::arg("user_ids") = std::nullopt});
+            py::arg("device") = std::nullopt,
+            py::arg("user_ids") = std::nullopt,
+            py::arg("sub_core_grids") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::reduction::detail

@@ -14,12 +14,12 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "distributed.hpp"
-#include "fabric_types.hpp"
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "hal/blackhole_impl.hpp"
 #include "hal/lite_fabric_hal.hpp"
 #include "hal/wormhole_impl.hpp"
@@ -27,6 +27,7 @@
 
 #include "tt_metal/lite_fabric/host_util.hpp"
 #include "tt_metal/lite_fabric/build.hpp"
+#include <llrt/tt_cluster.hpp>
 
 // UMD opens lite fabric on P300. Only run this test on P150 so we don't overwrite binaries
 #define CHECK_TEST_REQS()                                                                            \
@@ -129,7 +130,7 @@ INSTANTIATE_TEST_SUITE_P(
     });
 
 TEST(FabricLiteBuild, BuildAllTargets) {
-    auto home_dir_string = std::getenv("TT_METAL_HOME");
+    auto* home_dir_string = std::getenv("TT_METAL_HOME");
     if (home_dir_string == nullptr) {
         GTEST_FAIL() << "TT_METAL_HOME not set";
     }

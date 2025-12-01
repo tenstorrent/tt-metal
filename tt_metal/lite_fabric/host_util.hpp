@@ -6,7 +6,7 @@
 
 #include "hal/lite_fabric_hal.hpp"
 #include <umd/device/types/xy_pair.hpp>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <memory>
 
 namespace lite_fabric {

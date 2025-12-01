@@ -127,20 +127,21 @@ Tests:
 # ================================================
 # 2D Torus (Y)
 # ================================================
-  - name: UnicastAlltoAll
-    fabric_setup:
-      topology: Torus
-      torus_config: Y
-      num_links: 2
+# Hangs: https://github.com/tenstorrent/tt-metal/issues/33456
+  # - name: UnicastAlltoAll
+  #   fabric_setup:
+  #     topology: Torus
+  #     torus_config: Y
+  #     num_links: 2
 
-    parametrization_params:
-      size: [256, 512, 1024]
-      num_packets: [2000]
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
-    defaults:
-      ftype: unicast
-    patterns:
-      - type: all_to_all
+  #   parametrization_params:
+  #     size: [256, 512, 1024]
+  #     num_packets: [2000]
+  #     ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+  #   defaults:
+  #     ftype: unicast
+  #   patterns:
+  #     - type: all_to_all
 # ================================================
 # 2D Torus (XY) (low latency)
 # ================================================

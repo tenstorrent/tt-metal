@@ -451,7 +451,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     bool float32_reduction = fp32_dest_acc_en && !program_config.legacy_reduction;
     std::vector<uint32_t> compute_args = {Wt, block_size, float32_reduction ? 1 : 0};
 
-    auto compute_kernel_file =
+    const auto* compute_kernel_file =
         is_rmsnorm ? "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/"
                      "rmsnorm_pre_allgather.cpp"
                    : "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"

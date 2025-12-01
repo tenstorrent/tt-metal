@@ -44,6 +44,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
+#include <llrt/tt_cluster.hpp>
 
 std::string dtype_to_string(DataType dtype) {
     switch (dtype) {

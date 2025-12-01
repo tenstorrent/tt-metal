@@ -76,8 +76,6 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
             start_latent_seed, int
         ), "start_latent_seed must be an integer or None"
 
-        if start_latent_seed is not None:
-            torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed)
         # the function returns img_latents, noise but we don't use noise at the moment, so discard it
         img_latents = prepare_image_latents(
             self.torch_pipeline,
@@ -92,6 +90,8 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
             self.pipeline_config.strength == 1,
             True,  # Make this configurable
             None,  # passed in latents
+            start_latent_seed,
+            fixed_seed_for_batch,
         )
 
         if isinstance(img_latents, ttnn.Tensor):
@@ -118,6 +118,7 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
             all_prompt_embeds_torch.dtype,
             self.cpu_device,
             None,
+            fixed_seed_for_batch,
         )
 
         B, C, H, W = mask.shape
@@ -207,8 +208,6 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
                 self.tt_image_latents_shape,
                 self.tt_vae if self.pipeline_config.vae_on_device else self.torch_pipeline.vae,
                 self.batch_size,
-                self.ag_persistent_buffer,
-                self.ag_semaphores,
                 capture_trace=False,
                 use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
                 guidance_rescale=self.guidance_rescale,
@@ -271,8 +270,6 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
             self.tt_image_latents_shape,
             self.tt_vae if self.pipeline_config.vae_on_device else self.torch_pipeline.vae,
             self.batch_size,
-            self.ag_persistent_buffer,
-            self.ag_semaphores,
             tid=self.tid if hasattr(self, "tid") else None,
             output_device=self.output_device if hasattr(self, "output_device") else None,
             output_shape=self.output_shape,
@@ -429,8 +426,6 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
             self.tt_image_latents_shape,
             self.tt_vae if self.pipeline_config.vae_on_device else self.torch_pipeline.vae,
             self.batch_size,
-            self.ag_persistent_buffer,
-            self.ag_semaphores,
             capture_trace=False,
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
             guidance_rescale=self.guidance_rescale,

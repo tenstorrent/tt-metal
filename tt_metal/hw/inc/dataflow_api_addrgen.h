@@ -7,7 +7,7 @@
 #include "dataflow_api_common.h"
 #include "dataflow_cmd_bufs.h"
 #include "debug/assert.h"
-#include "debug/sanitize_noc.h"
+#include "debug/sanitize.h"
 #include "debug/waypoint.h"
 #include "utils/utils.h"
 
