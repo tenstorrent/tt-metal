@@ -38,7 +38,6 @@ class DummyT3000MultiProcessModel:
         self.submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 4)))
         self.max_batch_size = max_batch_size
         self.vocab_size = vocab_size
-        logger.info(f"DummyT3000MultiProcessModel initialized with vocab_size: {self.vocab_size}")
 
     @classmethod
     def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, **kwargs):
