@@ -135,6 +135,8 @@ At this stage, you have a compilable operation with stub kernels. The next phase
 
 This stage discovered only 2 bugs through TDD, which were quickly fixed.
 
+**See the complete implementation**: The `image_rotate` operation built using these agents can be found in branch [`dev/dnijemcevic/image_rotate`](https://github.com/tenstorrent/tt-metal/tree/dev/dnijemcevic/image_rotate).
+
 **Note**: Agent automation for Stage 5 is planned for future development, including:
 - **Kernel writer agents**: Specialized agents for implementing reader, compute, and writer kernels
 - **Debug agent**: General-purpose debugging agent for TTNN operations
