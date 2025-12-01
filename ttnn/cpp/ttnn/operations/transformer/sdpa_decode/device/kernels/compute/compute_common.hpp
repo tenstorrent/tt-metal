@@ -269,6 +269,7 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uin
             cb_reserve_back(out_cb, 1);
             pack_tile(0, out_cb);
             cb_push_back(out_cb, 1);
+            DPRINT << "BEFORE release dst\n";
             release_dst();
             DPRINT << "after release dst\n";
         }
