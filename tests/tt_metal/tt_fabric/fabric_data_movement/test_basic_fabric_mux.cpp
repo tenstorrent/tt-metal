@@ -896,6 +896,7 @@ TEST_F(Fabric1DMuxFixture, TestFabricMuxStressOpenClose) {
 }
 
 TEST_F(Fabric1DMuxFixture, TestFabricMuxNumFullSizeChannelIters) {
+    SKIP_FOR_WATCHER();
     TestConfig test_config = {
         .num_devices = 2,  // running on 2 devices will allow to test on all types of multi-chip systems
         .num_sender_clients = 8,
