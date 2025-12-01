@@ -65,7 +65,7 @@ public:
     }
 
     // Initialize KV cache for inference
-    void initialize_kv_cache(uint32_t batch_size = 1);
+    void initialize_kv_cache(const uint32_t batch_size = 1);
 
     // Reset cache position for new sequence
     void reset_cache() {
