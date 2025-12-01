@@ -137,7 +137,7 @@ void NLPConcatHeadsDecodeProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
 
-    auto dst_buffer_query = output.buffer();
+    auto *dst_buffer_query = output.buffer();
     UpdateDynamicCircularBufferAddress(program, shared_variables.cb_q_output, *dst_buffer_query);
 
     uint32_t q_base_addr = input_tensor.buffer()->address();
