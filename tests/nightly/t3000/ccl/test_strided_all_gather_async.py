@@ -4,6 +4,7 @@
 
 import torch
 import pytest
+import copy
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
@@ -102,9 +103,11 @@ def run_strided_all_gather_impl(
 
     ### Create persistent output buffers
     logger.info("Creating persistent buffers")
+    persistent_buffer_shape = copy.deepcopy(ag_output_shape)
+    persistent_buffer_shape[other_dim] = persistent_buffer_shape[other_dim] // mesh_device.shape[0]
     persistent_output_buffers = [
         ttnn.from_torch(
-            torch.zeros(ag_output_shape),
+            torch.zeros(persistent_buffer_shape),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ag_input_dtype,
