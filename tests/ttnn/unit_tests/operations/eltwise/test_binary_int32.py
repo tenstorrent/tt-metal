@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
 
 
 def create_full_range_tensor(input_shape, dtype, value_ranges):
@@ -782,20 +782,20 @@ def test_div_int32_optional_output(device):
         (-2147483647, -2e9, -2077000000, -2e9),  # large negative input
         (-2147483647, 2147483647, -2147483647, 2147483647),  # full range
         (-10, 10, -2147483647, 2147483647),  # small numerator, large denominator
-        # -2147483648 is not supported because the input is typecasted to float32 and ttnn.typecast rounds -2147483648 to 0.
-        # ToDo:
-        # Enable the following test case after fixing the precision issue with large numerator and small denominator.
-        # Problematic case for rounding modes floor and trunc: (-2147483647, 2147483647, -10, 10) -> large numerator, small denominator
-        # For example, 2021531526/9 = 224614614. But, in PyTorch:
-        #   torch.div([2021531526], [9], rounding_mode=None) = 224614608.0      (float32 result) -> division computed in float32 precision
-        #   torch.div([2021531526], [9], rounding_mode='trunc') = 224614614     (int32 result) -> division computed in int32 precision
-        # Since ttnn.div is implemented using fp32 division, the intermediate result is calculated using float32 precision.
-        # We effectively perform floor/trunc operation on 224614608.0 instead of 224614614.0 since fp32 cannot represent integers > 2**24 exactly.
-        # This results in an absolute difference of 6 for this specific example.
+        (-2147483647, 2147483647, -10, 10),  # large numerator, small denominator
+        # a=-2147483648 and b=-1 is not supported
+        (-2147483648, 2147483647, -2147483648, -2),
+        (-2147483648, 2147483647, 1, 2147483647),
+        (2021531526, 2147483647, 9, 123),
     ],
 )
 @pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 def test_div_int32_round_modes(input_shapes, low_a, high_a, low_b, high_b, round_mode, device):
+    # Skip some cases for rounding_mode==None that aren't supported due to:
+    # https://github.com/tenstorrent/tt-metal/issues/33334
+    if round_mode is None and low_a == -2147483648:
+        pytest.skip("a == -2147483648 is not supported for round_mode=None")
+
     num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
     torch_input_tensor_a = torch_input_tensor_a[:num_elements].reshape(input_shapes)
@@ -828,15 +828,11 @@ def test_div_int32_round_modes(input_shapes, low_a, high_a, low_b, high_b, round
         torch_input_tensor_a, torch_input_tensor_b, round_mode=round_mode, device=device
     )
 
-    # round modes are not supported in binary ng, so we use legacy implementation for testing
-    output_tensor = ttnn.div(input_tensor_a, input_tensor_b, round_mode=round_mode, use_legacy=True)
+    output_tensor = ttnn.div(input_tensor_a, input_tensor_b, round_mode=round_mode)
     output_tensor = ttnn.to_torch(output_tensor)
 
     if round_mode is not None:
-        # A maximum absolute difference of 1 is expected for round modes floor and trunc.
-        # This minor deviation comes from accumulated FP32 division rounding errors.
-        # For example, (1000 / 500) = 1.9999... (in FP32) rounds to 1 (in INT32) when floored or truncated.
-        assert torch.max(torch.abs(torch_output_tensor - output_tensor)) <= 1
+        assert_equal(torch_output_tensor, output_tensor)
     else:
         assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-6, equal_nan=False)
 
