@@ -878,7 +878,7 @@ std::unique_ptr<tt::umd::SysmemBuffer> Cluster::map_sysmem_buffer(
 
 void Cluster::verify_sw_fw_versions(
     int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const {
-    umd::tt_version sw(sw_version), fw_first_eth_core(fw_versions.at(0));
+    umd::semver_t sw(sw_version), fw_first_eth_core(fw_versions.at(0));
     log_info(
         tt::LogDevice,
         "Software version {}, Ethernet FW version {} (Device {})",
@@ -886,7 +886,7 @@ void Cluster::verify_sw_fw_versions(
         fw_first_eth_core.str(),
         device_id);
     for (std::uint32_t &fw_version : fw_versions) {
-        umd::tt_version fw(fw_version);
+        umd::semver_t fw(fw_version);
 
         TT_FATAL(fw == fw_first_eth_core, "FW versions are not the same across different ethernet cores");
         TT_FATAL(sw.major == fw.major, "SW/FW major version number out of sync");
