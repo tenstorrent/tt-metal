@@ -2176,7 +2176,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
  * | offset                                | Offset within page                      | uint32_t                                      | False    |
  */
 // clang-format on
-template <typename AddrGenType>
+template <typename AddrGenType, typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
 FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
@@ -2190,7 +2190,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
     // The WithState calls in the loop will handle actual chunking
     uint32_t init_payload_size = (page_size > FABRIC_MAX_PACKET_SIZE) ? FABRIC_MAX_PACKET_SIZE : page_size;
 
-    fabric_unicast_noc_unicast_write_set_state(
+    fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::All>(
         connection_manager, route_id, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, init_payload_size);
 }
 
