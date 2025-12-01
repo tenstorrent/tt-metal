@@ -5,6 +5,7 @@
 import contextlib
 import json
 import importlib
+from importlib.metadata import entry_points
 import os
 import pathlib
 import re
@@ -22,6 +23,26 @@ if "TTNN_CONFIG_PATH" in os.environ:
     CONFIG_PATH = pathlib.Path(os.environ["TTNN_CONFIG_PATH"])
 
 CONFIG_OVERRIDES = os.environ.get("TTNN_CONFIG_OVERRIDES", None)
+
+
+def load_custom_paths(base_path: str) -> str:
+    """Apply all registered set_custom_path entrypoint functions
+    and return the final modified path.
+    """
+    eps = entry_points(group="ttnn.set_custom_path")
+    updated_path = base_path
+
+    for ep in eps:
+        func = ep.load()
+        try:
+            new_path = func()
+            if new_path is not None:
+                updated_path = new_path
+        except Exception as exc:
+            # You may want to log or handle plugin errors gracefully
+            print(f"Plugin '{ep.name}' failed: {exc}")
+
+    return updated_path
 
 
 def load_config_from_dictionary(config, from_file=False):
@@ -434,5 +455,7 @@ if "TT_METAL_RUNTIME_ROOT" not in os.environ:
     else:
         # For installed packages, reference bundled data directory
         root_dir = this_dir
+
+    root_dir = load_custom_paths(str(root_dir))
 
     SetRootDir(str(root_dir))
