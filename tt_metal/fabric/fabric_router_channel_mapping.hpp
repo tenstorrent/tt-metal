@@ -9,6 +9,8 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
 
+#include <vector>
+
 namespace tt::tt_fabric {
 
 enum class BuilderType : uint8_t {
@@ -78,6 +80,17 @@ public:
      * Get the internal receiver channel mapping for a logical receiver channel
      */
     InternalReceiverChannelMapping get_receiver_mapping(uint32_t vc, uint32_t receiver_channel_idx) const;
+
+    /**
+     * Get the topology for this router
+     */
+    Topology get_topology() const { return topology_; }
+
+    uint32_t get_num_virtual_channels() const;
+
+    uint32_t get_num_sender_channels_for_vc(uint32_t vc) const;
+
+    std::vector<InternalSenderChannelMapping> get_all_sender_mappings() const;
 
 private:
     Topology topology_;
