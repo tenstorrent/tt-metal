@@ -166,8 +166,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_f32_accurate_(sfpi::vFloat val) {
     sfpi::vFloat result = sfpi::vConst0;
 
     // Clamp to prevent overflow/underflow
-    constexpr float OVERFLOW_THRESHOLD = 127.0f;
-    constexpr float UNDERFLOW_THRESHOLD = -127.0f;
+    constexpr float OVERFLOW_THRESHOLD = 128.0f;
+    constexpr float UNDERFLOW_THRESHOLD = -128.0f;
 
     // Step 1: Compute k = round(x / ln(2))
     // z = x / ln(2) = x * (1/ln(2))
