@@ -99,7 +99,11 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
 
     if (weight_has_value) {
         std::cout << "weight_has_value. Creating scratch CB for weight" << std::endl;
-        CreateScratchCB(program, all_cores, tt::CBIndex::c_7, data_format);
+        // This CB will be used as scratch storage when reading data from DRAM into L1,
+        // since the two have different alignment requirements on some architectures.
+        // Single tile in scratch CB, because content is read immediately after writing.
+        CreateCircularBuffer(program, all_cores, data_format, {tt::CBIndex::c_7, 1, data_format});
+        //        CreateScratchCB(program, all_cores, tt::CBIndex::c_7, data_format);
     } else {
         std::cout << "weight_has no value. Not creating scratch CB for weight" << std::endl;
     }
