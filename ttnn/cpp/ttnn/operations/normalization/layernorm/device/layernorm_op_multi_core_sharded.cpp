@@ -811,8 +811,9 @@ LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory:
     union {
         float f;
         uint32_t u;
-    } e{};
+    } e{}, one_over_K{};
     e.f = eps;
+    one_over_K.f = 1.0f / K;
     if (use_welford) {
         // For Welford combine
         all_to_all_except_top_compute_compile_time_args.push_back(tile_width);
@@ -825,6 +826,9 @@ LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory:
         not_all_to_all_compute_compile_time_args.push_back(K);
         not_all_to_all_compute_compile_time_args.push_back(e.u);
         not_all_to_all_compute_compile_time_args.push_back(per_core_recip_lut_size);
+    } else if (!(is_pre_all_gather || is_post_all_gather)) {
+        all_to_all_except_top_compute_compile_time_args.push_back(one_over_K.u);
+        not_all_to_all_compute_compile_time_args.push_back(one_over_K.u);
     }
 
     // compute kernel
@@ -1350,20 +1354,29 @@ LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory:
         }
 
         // Set writer runtime args
+        // Pre and post all-gather need the cinv and winv
+        // scalar values. Non-pre/post only need the packed 1 value
+        const bool is_pre_or_post_all_gather = is_pre_all_gather || is_post_all_gather;
         if ((not use_two_stage_reduce and width_index < num_cores_all_to_all) or
             (use_two_stage_reduce and width_index_two_stage < num_cores_all_to_all_first_stage)) {
             std::vector<uint32_t> writer_mcast_sender_args;
             if (use_two_stage_reduce) {
                 if (width_index < num_cores_all_to_all_first_stage) {
-                    writer_mcast_sender_args.push_back(packed_cinv_value);
-                    writer_mcast_sender_args.push_back(packed_winv_value);
+                    const auto cinv_value = is_pre_or_post_all_gather ? packed_cinv_value : packed_cinv_value_one;
+                    const auto winv_value = is_pre_or_post_all_gather ? packed_winv_value : packed_cinv_value_one;
+                    writer_mcast_sender_args.push_back(cinv_value);
+                    writer_mcast_sender_args.push_back(winv_value);
                 } else {
-                    writer_mcast_sender_args.push_back(packed_cinv_value_one);
-                    writer_mcast_sender_args.push_back(packed_winv_value);
+                    const auto cinv_value = packed_cinv_value_one;
+                    const auto winv_value = is_pre_or_post_all_gather ? packed_winv_value : packed_cinv_value_one;
+                    writer_mcast_sender_args.push_back(cinv_value);
+                    writer_mcast_sender_args.push_back(winv_value);
                 }
             } else {
-                writer_mcast_sender_args.push_back(packed_cinv_value);
-                writer_mcast_sender_args.push_back(packed_winv_value);
+                const auto cinv_value = is_pre_or_post_all_gather ? packed_cinv_value : packed_cinv_value_one;
+                const auto winv_value = is_pre_or_post_all_gather ? packed_winv_value : packed_cinv_value_one;
+                writer_mcast_sender_args.push_back(cinv_value);
+                writer_mcast_sender_args.push_back(winv_value);
             }
             writer_mcast_sender_args.push_back(e.u);
             writer_mcast_sender_args.push_back(gamma_dram_addr);
@@ -1379,8 +1392,11 @@ LayerNormShardedProgramFactory::cached_program_t LayerNormShardedProgramFactory:
             writer_kernel_ids.push_back(writer_mcast_sender_kernels_id);
         } else {
             std::vector<uint32_t> writer_mcast_receiver_args;
-            writer_mcast_receiver_args.push_back(packed_cinv_value);
-            writer_mcast_receiver_args.push_back(packed_winv_value);
+            const auto cinv_value = is_pre_or_post_all_gather ? packed_cinv_value : packed_cinv_value_one;
+            const auto winv_value = is_pre_or_post_all_gather ? packed_winv_value : packed_cinv_value_one;
+            writer_mcast_receiver_args.push_back(cinv_value);
+            writer_mcast_receiver_args.push_back(winv_value);
+
             writer_mcast_receiver_args.push_back(e.u);
             writer_mcast_receiver_args.push_back(gamma_dram_addr);
             writer_mcast_receiver_args.push_back(beta_dram_addr);
