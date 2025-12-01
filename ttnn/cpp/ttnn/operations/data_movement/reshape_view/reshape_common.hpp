@@ -6,6 +6,8 @@
 #include <cstdint>
 #include "ttnn/operations/data_movement/reshape_view/reshape_kernel_common.hpp"
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
 
 #pragma once
 using PadValue = std::variant<uint32_t, float>;
