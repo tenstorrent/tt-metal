@@ -58,7 +58,7 @@ void kernel_main() {
     DPRINT << "termination signal address: " << (uint32_t)fabric_mux_termination_signal_address << "\n";
     DPRINT << "num mux clients: " << (uint32_t)num_mux_clients << "\n";
 
-    uint32_t chunk_size = 4;  // 8; HERE
+    uint32_t chunk_size = 16;  // 8; HERE
 
     const uint32_t receiver_base_address = get_arg_val<uint32_t>(0);
     const uint32_t page_idx_start = get_arg_val<uint32_t>(1);
@@ -68,7 +68,7 @@ void kernel_main() {
     const auto payload_size_bytes = get_arg_val<uint32_t>(4);
     // send a single packet for l tensor (8 pages)
     // send a single packet for m and s tensors (2 pages: 1 each)
-    const uint32_t max_pages_per_packet_l = 4;  // 2;  // get_arg_val<uint32_t>(6); //HERE
+    const uint32_t max_pages_per_packet_l = 16;  // 2;  // get_arg_val<uint32_t>(6); //HERE
     const uint32_t max_pages_per_packet_ms = 2;
     const auto page_segments = get_arg_val<uint32_t>(5);  // always 1 delete unecessay parts
     const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(6);
@@ -200,6 +200,9 @@ void kernel_main() {
     cb_pop_front(cb_id_m, 1);
 
     DPRINT << "print data from packet cb before send\n";
+    // print_full_tile(packet_cb_id, 5, false);
+    // print_full_tile(packet_cb_id, 16, false);
+    // print_full_tile(packet_cb_id, 17, false);
     cb_push_back(packet_cb_id, 1);
 
     // const uint64_t dst_noc_addr = dst_buffer.get_noc_addr(packet_idx, 0, 0);

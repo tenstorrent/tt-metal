@@ -112,7 +112,7 @@ void kernel_main() {
 
     // reusing the last arg for fabric setup, therefore index overlaps.
     size_t arg_idx = 16;
-    uint32_t input_num_tiles = 4;  // to be modified with tiny tiles HERE
+    uint32_t input_num_tiles = 16;  // to be modified with tiny tiles HERE
 
     const uint32_t new_packet_size_bytes = packet_size_bytes + 2 * align(page_size_bytes, alignment);
 
