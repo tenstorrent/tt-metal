@@ -13,7 +13,7 @@ struct ShardedToInterleavedSharedVariables {
     tt::tt_metal::KernelHandle unary_reader_kernel_id{};
     tt::tt_metal::KernelHandle unary_writer_kernel_id{};
     tt::tt_metal::CBHandle cb_src0{};
-    std::vector<CoreCoord> cores{};
+    std::vector<CoreCoord> cores;
     uint32_t num_slices{};
     uint32_t num_cores_unpadded{};
 };
