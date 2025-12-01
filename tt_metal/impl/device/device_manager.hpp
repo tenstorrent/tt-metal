@@ -35,7 +35,7 @@ public:
     bool close_device(ChipId device_id);
     std::vector<ChipId> get_all_active_device_ids() const;
     std::unordered_map<ChipId, std::vector<uint32_t>> get_all_command_queue_event_infos() const;
-    bool close_devices(const std::vector<IDevice*>& devices, bool skip_synchronize = false);
+    bool close_devices(const std::vector<IDevice*>& devices, bool skip_synchronize = false, bool is_mesh_device = false);
     bool is_device_active(ChipId id) const;
     // True if dispatch firmware is active on this device pool
     bool is_dispatch_firmware_active() const;
