@@ -40,6 +40,7 @@ inline __attribute__((always_inline)) void risc_context_switch_without_noc_sync(
 #elif defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
     update_boot_results_eth_link_status_check();
 #endif
+#endif
 }
 
 inline __attribute__((always_inline)) void disable_erisc_app() { flag_disable[0] = 0; }
