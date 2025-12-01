@@ -55,8 +55,6 @@ public:
     // This function is temporarily needed since MeshCommandQueue relies on the CommandQueue object
     virtual WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) = 0;
 
-    virtual void enqueue_wait_for_event(const std::shared_ptr<Event>& sync_event) = 0;
-
     virtual void finish(tt::stl::Span<const SubDeviceId> sub_device_ids) = 0;
 };
 
