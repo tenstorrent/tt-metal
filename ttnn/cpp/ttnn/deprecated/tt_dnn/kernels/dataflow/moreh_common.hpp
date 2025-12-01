@@ -646,44 +646,43 @@ FORCE_INLINE void generate_mask_tiles(
 }
 
 uint32_t get_tilized_idx(uint32_t h, uint32_t w) {
-    h = h % tt::constants::TILE_HEIGHT;
-    w = w % tt::constants::TILE_WIDTH;
+    using namespace tt::constants;
+    h = h % TILE_HEIGHT;
+    w = w % TILE_WIDTH;
     uint32_t idx = 0;
-    if (w >= tt::constants::FACE_WIDTH) {
-        w -= tt::constants::FACE_WIDTH;
-        idx += tt::constants::FACE_HEIGHT * tt::constants::FACE_WIDTH;
+    if (w >= FACE_WIDTH) {
+        w -= FACE_WIDTH;
+        idx += FACE_HEIGHT * FACE_WIDTH;
     }
-    if (h >= tt::constants::FACE_WIDTH) {
-        h -= tt::constants::FACE_WIDTH;
-        idx += tt::constants::FACE_HEIGHT * tt::constants::TILE_WIDTH;
+    if (h >= FACE_WIDTH) {
+        h -= FACE_WIDTH;
+        idx += FACE_HEIGHT * TILE_WIDTH;
     }
-
-    idx += h * tt::constants::FACE_WIDTH + w;
+    idx += h * FACE_WIDTH + w;
     return idx;
 }
 
 void get_noc_offset(uint32_t h, uint32_t w, uint32_t element_size, uint32_t& noc_offset) {
+    using namespace tt::constants;
     noc_offset = 0;
 
     // compute h, w in tile
-    h = h - (h / tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
-    w = w - (w / tt::constants::TILE_WIDTH) * tt::constants::TILE_WIDTH;
+    h = h - (h / TILE_HEIGHT) * TILE_HEIGHT;
+    w = w - (w / TILE_WIDTH) * TILE_WIDTH;
 
-    const bool is_even_face = (w < tt::constants::FACE_HEIGHT);
+    const bool is_even_face = (w < FACE_HEIGHT);
     const bool is_odd_face = !is_even_face;
 
-    const uint32_t face_width_bytes = tt::constants::FACE_WIDTH * element_size;
+    const uint32_t face_width_bytes = FACE_WIDTH * element_size;
 
-    if (h < tt::constants::FACE_WIDTH && is_even_face) {
+    if (h < FACE_WIDTH && is_even_face) {
         noc_offset += h * face_width_bytes + w * element_size;  // face 0
-    } else if (h < tt::constants::FACE_WIDTH && is_odd_face) {
-        noc_offset += (tt::constants::FACE_HEIGHT + h) * face_width_bytes +
-                      (w - tt::constants::FACE_WIDTH) * element_size;  // face 1
-    } else if (h >= tt::constants::FACE_WIDTH && is_even_face) {
-        noc_offset += (tt::constants::FACE_HEIGHT + h) * face_width_bytes + w * element_size;  // face 2
-    } else if (h >= tt::constants::FACE_WIDTH && is_odd_face) {
-        noc_offset += (2 * tt::constants::FACE_HEIGHT + h) * face_width_bytes +
-                      (w - tt::constants::FACE_WIDTH) * element_size;  // face 3
+    } else if (h < FACE_WIDTH && is_odd_face) {
+        noc_offset += (FACE_HEIGHT + h) * face_width_bytes + (w - FACE_WIDTH) * element_size;  // face 1
+    } else if (h >= FACE_WIDTH && is_even_face) {
+        noc_offset += (FACE_HEIGHT + h) * face_width_bytes + w * element_size;  // face 2
+    } else if (h >= FACE_WIDTH && is_odd_face) {
+        noc_offset += (2 * FACE_HEIGHT + h) * face_width_bytes + (w - FACE_WIDTH) * element_size;  // face 3
     }
 
     const uint32_t noc_offset_align = (noc_offset / NOC_MINIMUM_READ_SIZE) * NOC_MINIMUM_READ_SIZE;
@@ -788,13 +787,14 @@ void read_line(
     uint32_t num_tiles,
     bool do_reserve = true,
     bool do_push_back = true) {
+    using namespace tt::constants;
     if (do_reserve) {
         cb_reserve_back(cb_id, num_tiles);
     }
 
     auto tile_bytes = get_tile_size(cb_id);
-    auto element_bytes = tile_bytes / (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
-    auto valid_elements_bytes = tt::constants::FACE_WIDTH * element_bytes;
+    auto element_bytes = tile_bytes / (TILE_HEIGHT * TILE_WIDTH);
+    auto valid_elements_bytes = FACE_WIDTH * element_bytes;
 
     // We want to read all valid elements, but may need to read more from DRAM,
     // because DRAM has larger read size than L1 on some architectures.
@@ -805,7 +805,7 @@ void read_line(
         uint32_t noc_id = i / 2;
         uint32_t noc_offset = 0;
         if (noc_id * 2 != i) {
-            noc_offset += (tt::constants::FACE_HEIGHT * tt::constants::FACE_WIDTH) * element_bytes;
+            noc_offset += (FACE_HEIGHT * FACE_WIDTH) * element_bytes;
         }
         auto src_noc_addr = get_noc_addr(noc_id, addrgen, noc_offset);
         if (noc_read_size_bytes == valid_elements_bytes) {

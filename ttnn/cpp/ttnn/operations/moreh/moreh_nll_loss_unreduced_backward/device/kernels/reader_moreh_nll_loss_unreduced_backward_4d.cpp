@@ -5,6 +5,7 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
+    using namespace tt::constants;
     uint32_t i = 0;
     auto target_addr = get_arg_val<uint32_t>(i++);
     auto output_grad_addr = get_arg_val<uint32_t>(i++);
@@ -76,9 +77,9 @@ void kernel_main() {
         auto target_l1_ptr = get_read_ptr<int32_t>(cb_target);
         auto output_grad_l1_ptr = get_read_ptr<uint16_t>(cb_output_grad);
 
-        for (uint32_t h = 0; h < tt::constants::TILE_HEIGHT; h++) {
-            for (uint32_t w = 0; w < tt::constants::TILE_WIDTH; w++) {
-                uint32_t idx = h * tt::constants::TILE_WIDTH + w;  // target and input_grad idx
+        for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
+            for (uint32_t w = 0; w < TILE_WIDTH; w++) {
+                uint32_t idx = h * TILE_WIDTH + w;  // target and input_grad idx
 
                 int32_t target_val = target_l1_ptr[idx];
 

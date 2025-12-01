@@ -5,6 +5,7 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
+    using namespace tt::constants;
     uint32_t i = 0;
     auto input_addr = get_arg_val<uint32_t>(i++);
     auto target_addr = get_arg_val<uint32_t>(i++);
@@ -84,8 +85,8 @@ void kernel_main() {
         cb_reserve_back(cb_tmp_weight, onetile);
         auto tmp_weight_l1_ptr = get_write_ptr<FP32_DEST_ACC_FTYPE>(cb_tmp_weight);
 
-        for (uint32_t h = 0; h < tt::constants::TILE_HEIGHT; h++) {
-            for (uint32_t w = 0; w < tt::constants::TILE_WIDTH; w++) {
+        for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
+            for (uint32_t w = 0; w < TILE_WIDTH; w++) {
                 uint32_t tilized_idx = get_tilized_idx(h, w);
                 int32_t target_val = target_l1_ptr[tilized_idx];
                 if (target_val != ignore_index) {
@@ -103,8 +104,8 @@ void kernel_main() {
         cb_reserve_back(cb_tmp_input, onetile);
         auto tmp_input_l1_ptr = get_write_ptr<FP32_DEST_ACC_FTYPE>(cb_tmp_input);
 
-        for (uint32_t h = 0; h < tt::constants::TILE_HEIGHT; h++) {
-            for (uint32_t w = 0; w < tt::constants::TILE_WIDTH; w++) {
+        for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
+            for (uint32_t w = 0; w < TILE_WIDTH; w++) {
                 uint32_t tilized_idx = get_tilized_idx(h, w);
                 int32_t target_val = target_l1_ptr[tilized_idx];
 

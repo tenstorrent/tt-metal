@@ -5,6 +5,7 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
+    using namespace tt::constants;
     uint32_t i = 0;
     auto target_addr = get_arg_val<uint32_t>(i++);
     auto output_grad_addr = get_arg_val<uint32_t>(i++);
@@ -65,7 +66,7 @@ void kernel_main() {
 
     read_tile(cb_output_grad, addrg_output_grad, 0);
 
-    uint32_t Ct = (C + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
+    uint32_t Ct = (C + TILE_HEIGHT - 1) / TILE_HEIGHT;
 
     uint32_t end_id = start_id + num_tiles_per_core;
     for (uint32_t i = start_id; i < end_id; ++i) {
@@ -83,10 +84,10 @@ void kernel_main() {
         auto tmp_weight_l1_ptr = get_write_ptr<FP32_DEST_ACC_FTYPE>(cb_tmp_weight);
         auto target_l1_ptr = get_read_ptr<int32_t>(cb_target);
 
-        for (uint32_t h = 0; h < tt::constants::TILE_HEIGHT; h++) {
-            for (uint32_t w = 0; w < tt::constants::TILE_WIDTH; w++) {
-                uint32_t n = nt * tt::constants::TILE_HEIGHT + h;
-                uint32_t c = ct * tt::constants::TILE_WIDTH + w;
+        for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
+            for (uint32_t w = 0; w < TILE_WIDTH; w++) {
+                uint32_t n = nt * TILE_HEIGHT + h;
+                uint32_t c = ct * TILE_WIDTH + w;
 
                 uint32_t target_tilized_idx = get_tilized_idx(0, h);  // 0, n
                 int32_t target_val = target_l1_ptr[target_tilized_idx];
