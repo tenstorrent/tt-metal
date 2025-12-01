@@ -153,6 +153,10 @@ def test_accuracy_sdxl(
         denoising_split=1.0,
     )
 
+    skip_check_and_save = os.getenv("TT_SDXL_SKIP_CHECK_AND_SAVE", "0") == "1"
+    if skip_check_and_save:
+        logger.info("Skipping accuracy check and saving results as per environment variable.")
+        return
     clip = CLIPEncoder()
 
     clip_scores = []
