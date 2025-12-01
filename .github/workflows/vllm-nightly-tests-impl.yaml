@@ -39,7 +39,7 @@ jobs:
           # Tomasz Cheda (U091SNDA4TS) - Structured output tests
           # Radoica Draskic (U08BH66EXAL) - DP tests
           # Harry Andrews (U08TJ70UFRT), Stuti Raizada (U06F3ER8X9A) - GPT-OSS
-          
+
           # Note: This matrix must be kept in sync with the original static matrix
           all_tests='[
             {
@@ -270,14 +270,14 @@ jobs:
               "co-owner-2-id": "U08BH66EXAL"
             }
           ]'
-          
+
           # Filter matrix based on model selection
           if [ "${{ inputs.model }}" = "all" ]; then
             matrix="$all_tests"
           else
             matrix=$(echo "$all_tests" | jq -c "[.[] | select(.model == \"${{ inputs.model }}\")]")
           fi
-          
+
           echo "matrix=$(echo "$matrix" | jq -c .)" >> $GITHUB_OUTPUT
 
   vllm-tests:
