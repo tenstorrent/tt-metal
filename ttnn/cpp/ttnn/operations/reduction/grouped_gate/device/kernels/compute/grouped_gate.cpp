@@ -78,6 +78,7 @@ void process_and_sort_tiles(
     bool switch_dir,
     bool& ascending,
     int end_phase) {
+    cb_wait_front(index_cb_index, Wt);
     cb_reserve_back(input_transposed_cb_index, Wt);
     cb_reserve_back(index_transposed_cb_index, Wt);
 
@@ -86,7 +87,6 @@ void process_and_sort_tiles(
         acquire_dst();
         // local sort into k groups
         cb_wait_front(input_cb_index, 2);
-        cb_wait_front(index_cb_index, 2);
 
         // transpose and unpack into dest regs
         reconfig_data_format_srca(input_cb_index);
@@ -97,8 +97,8 @@ void process_and_sort_tiles(
         // transpose and unpack into dest regs
         reconfig_data_format_srca(index_cb_index);
         transpose_wh_init_short(index_cb_index);
-        transpose_wh_tile(index_cb_index, 0, 2);
-        transpose_wh_tile(index_cb_index, 1, 3);
+        transpose_wh_tile(index_cb_index, wt, 2);
+        transpose_wh_tile(index_cb_index, wt + 1, 3);
 
         // llk_topk_sort -> inplace
         ckernel::topk_local_sort(0, (int)ascending, end_phase);
@@ -131,19 +131,10 @@ void sum_top_experts_per_group(
     add_tiles_init(summed_experts_cb_index, summed_experts_cb_index, true);
     cb_wait_front(summed_experts_cb_index, summed_experts_per_group);
 
-    // UNPACK(print_tile(summed_experts_cb_index, 0, true, 0, 8, 0, 16));  // always good
-    // UNPACK(print_tile(summed_experts_cb_index, 1, true, 0, 8, 0, 16));  // always good
-
     cb_reserve_back(group_scores_cb_index, 1);
     tile_regs_acquire();
     for (uint32_t i = 0; i < summed_experts_per_group; i += 2) {
-        // #ifdef TRISC_UNPACK
-        // for (uint32_t j = 0; j < 100; j++) {
-        //     TTI_NOP;
-        // }
-        // #endif
         add_tiles(summed_experts_cb_index, summed_experts_cb_index, i, i + 1, 0);
-        // dprint_tensix_dest_reg(0);  // with full init, good, without full init, bad
     }
     tile_regs_commit();
     tile_regs_wait();
@@ -168,9 +159,7 @@ void topk_group_scores(
     acquire_dst();
     // local sort into k groups
     cb_wait_front(group_scores_cb_index, 1);
-    // UNPACK(print_tile(group_scores_cb_index, 0, true, 0, 8, 0, 16));
     cb_wait_front(group_indices_cb_index, 1);
-    // UNPACK(print_tile(group_indices_cb_index, 0, true, 0, 8, 0, 16));
 
     // copy scores tile to dest reg 0
     copy_tile_to_dst_init_short(group_scores_cb_index);
@@ -242,36 +231,20 @@ void MAIN {
         // Perform sigmoid on scores
         for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
             cb_wait_front(scores_cb_index, 1);
-            // if (width_tile == 3 || width_tile == 6) {
-            //     UNPACK(DPRINT << "Pre-sigmoid Width tile: " << width_tile << ENDL());
-            //     UNPACK(print_tile(scores_cb_index, 0, true, 0, 1));
-            // }
 
             tile_regs_acquire();
             // copy tile from scores cb to destination register 0
             copy_tile_to_dst_init_short(scores_cb_index);
-            copy_tile(scores_cb_index, 0, 0);
+            copy_tile(scores_cb_index, width_tile, 0);
 
             sigmoid_tile_init();
-            // if (width_tile == 3 || width_tile == 6) {
-            //     MATH(DPRINT << "Pre-sigmoid Width tile: " << width_tile << ENDL());
-            //     dprint_tensix_dest_reg(0);
-            // }
             sigmoid_tile(0);
-            // if (width_tile == 3 || width_tile == 6) {
-            //     MATH(DPRINT << "Post-sigmoid Width tile: " << width_tile << ENDL());
-            //     dprint_tensix_dest_reg(0);
-            // }
             tile_regs_commit();
 
             cb_reserve_back(sigmoid_input_cb_index, 1);
             tile_regs_wait();
             pack_tile<true>(0, sigmoid_input_cb_index, 0);
             tile_regs_release();
-            // if (width_tile == 3 || width_tile == 6) {
-            //     PACK(DPRINT << "Post-sigmoid Width tile: " << width_tile << ENDL());
-            //     PACK(print_tile(sigmoid_input_cb_index, 0, true, 0, 1));
-            // }
             cb_push_back(sigmoid_input_cb_index, 1);
         }
 
@@ -307,7 +280,6 @@ void MAIN {
             log_n_groups - 1);
 
         cb_wait_front(sorted_group_indices_cb_index, 1);
-        // UNPACK(print_tile(sorted_group_indices_cb_index, 0, true, 0, 8, 0, 16));
     }
 }
 }  // namespace NAMESPACE
