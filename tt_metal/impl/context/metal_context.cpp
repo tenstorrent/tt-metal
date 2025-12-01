@@ -382,7 +382,7 @@ const DispatchMemMap& MetalContext::dispatch_mem_map() const {
 }
 
 const DispatchMemMap& MetalContext::dispatch_mem_map(const CoreType& core_type) const {
-    auto& mem_map = dispatch_mem_map_[enchantum::to_underlying(core_type)];
+    const auto& mem_map = dispatch_mem_map_[enchantum::to_underlying(core_type)];
     TT_FATAL(mem_map, "Tried to get dispatch_mem_map for {} before initializing it.", core_type);
     return *mem_map;
 }

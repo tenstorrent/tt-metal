@@ -200,7 +200,7 @@ void JitBuildEnv::init(
     if (rtoptions.get_watcher_noc_sanitize_linked_transaction()) {
         this->defines_ += "-DWATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION ";
     }
-    for (auto& feature : rtoptions.get_watcher_disabled_features()) {
+    for (const auto& feature : rtoptions.get_watcher_disabled_features()) {
         this->defines_ += "-DWATCHER_DISABLE_" + feature + " ";
     }
 
@@ -600,13 +600,13 @@ void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
 
 void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings) {
     std::vector<std::shared_future<void>> events;
-    for (auto& build : build_subset) {
+    for (const auto& build : build_subset) {
         // Capture the necessary objects by reference
         launch_build_step([&build, settings] { build.build(settings); }, events);
     }
 
     sync_build_steps(events);
-    for (auto& build : build_subset) {
+    for (const auto& build : build_subset) {
         write_successful_jit_build_marker(build, settings);
     }
 }
