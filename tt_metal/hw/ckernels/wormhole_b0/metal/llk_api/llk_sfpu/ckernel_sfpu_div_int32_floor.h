@@ -24,7 +24,7 @@ sfpi_inline void calculate_div_int32_body(
     // want to use MOD0_FMT_INT32=4, which gives us the original two's
     // complement integers.
 
-    // sfpi::vUInt b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+    // Equivalent to: sfpi::vUInt b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
     sfpi::vUInt b = __builtin_rvtt_sfpload(
         4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].get());
 
@@ -40,39 +40,46 @@ sfpi_inline void calculate_div_int32_body(
     v_if(b_f < 0.0f) { b_f = 2147483648.0f; }
     v_endif;
 
-    // Compute 1/b accurate to ~21 bits of precision via Halley's Method.
-    // Since the inputs can be as large as 2**31-1, this only gives us an
-    // initial approximation.
+    // Compute 1/b accurate to ~21 bits of precision via:
+    // 1. Linear approximation: ~3 bits
+    // 2. Newton-Raphson: ~7 bits
+    // 3. Halley's Method: ~21 bits
+
     // We interleave SFPMAD with the loading and conversion of `a`.
 
     // Combines the sign and exponent of -1.0 with the mantissa of `b_f`.
     // Scale the input value to the range [1.0, 2.0), and make it negative.
     sfpi::vFloat neg_b_f = sfpi::setman(sfpi::vConstNeg1, sfpi::reinterpret<sfpi::vInt>(b_f));
+    // Linear approximation.
     sfpi::vFloat inv_b_f = sfpi::vConstFloatPrgm2 + sfpi::vConstFloatPrgm1 * neg_b_f;
     sfpi::vFloat scale = sfpi::setman(b_f, 0);
 
-    // N-R
+    // Newton-Raphson
     sfpi::vFloat t = inv_b_f * neg_b_f + sfpi::vConst1;
     scale = sfpi::reinterpret<sfpi::vFloat>((254 << 23) - sfpi::reinterpret<sfpi::vInt>(scale));
     inv_b_f = t * inv_b_f + inv_b_f;
 
-    // Halley
+    // Halley's Method
     sfpi::vFloat e = inv_b_f * neg_b_f + sfpi::vConst1;
 
-    // sfpi::vUInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+    // Equivalent to: sfpi::vUInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
     sfpi::vUInt a = __builtin_rvtt_sfpload(
         4, sfpi::SFPLOAD_ADDR_MODE_NOINC, sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].get());
 
+    // Continue Halley's Method
     e = e * e + e;
     a = sfpi::abs(a);
 
+    // Final step of Halley's Method
     inv_b_f = e * inv_b_f + inv_b_f;
     sfpi::vFloat a_f = sfpi::int32_to_float(a, 0);
+
+    // Apply scale
     inv_b_f = inv_b_f * scale;
     v_if(a_f < 0.0f) { a_f = 2147483648.0f; }
     v_endif;
 
-    // Initial approximation q = a * 1/b.
+    // Initial approximation of quotient: q = a * 1/b.
     // We add a special mantissa alignment factor 2.0f**(23+11), which shifts
     // the mantissa so that we extract the top 21 bits of the result.
     sfpi::vFloat q_f = a_f * inv_b_f + sfpi::vConstFloatPrgm0;
