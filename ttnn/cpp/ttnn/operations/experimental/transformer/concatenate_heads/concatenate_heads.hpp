@@ -7,7 +7,7 @@
 #include <utility>
 
 #include "device/concatenate_heads_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn {
@@ -19,13 +19,8 @@ struct ConcatenateHeadsOperation {
         const CoreCoord& compute_with_storage_grid_size,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return tt::tt_metal::operation::run(
-                   ConcatenateHeadsDeviceOperation{
-                       compute_with_storage_grid_size, memory_config.value_or(input_tensor.memory_config())},
-                   {input_tensor},
-                   {},
-                   {std::move(optional_output_tensor)})
-            .at(0);
+        return ttnn::prim::concatenate_heads(
+            input_tensor, compute_with_storage_grid_size, memory_config, optional_output_tensor);
     }
 };
 

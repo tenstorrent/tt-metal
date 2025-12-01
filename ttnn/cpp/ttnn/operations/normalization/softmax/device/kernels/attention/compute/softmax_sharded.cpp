@@ -13,13 +13,10 @@
 #include "compute_kernel_api/softmax.h"
 #include "compute_kernel_api/reduce.h"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
-
 template <uint32_t block_w, uint32_t num_subblocks_w, uint32_t subblock_w>
 ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t cb_max, uint32_t cb_out) {
     // calculate max val per row
-    ACQ();
+    tile_regs_acquire();
     reconfig_data_format(cb_in, cb_bcast_scaler);
     pack_reconfig_data_format(cb_max);
     cb_reserve_back(cb_max, 1);
@@ -30,9 +27,11 @@ ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t
         reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, w, bcast_scaler0, 0);
     }
     reduce_uninit();
+    tile_regs_commit();
+    tile_regs_wait();
     pack_tile(0, cb_max);
+    tile_regs_release();
     cb_push_back(cb_max, 1);
-    REL();
 
     // calculate x-max(x)
     exp_tile_init<EXP_APPROX>();
@@ -41,7 +40,7 @@ ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t
     sub_bcast_cols_init_short(cb_in, cb_max);
     uint32_t index_subblock_w_offset = 0;
     for (uint32_t j = 0; j < num_subblocks_w; j++) {
-        ACQ();
+        tile_regs_acquire();
         cb_reserve_back(cb_out, subblock_w);
         for (uint32_t w = 0; w < subblock_w; w++) {
             uint32_t index = w + index_subblock_w_offset;
@@ -50,10 +49,14 @@ ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t
         cb_reserve_back(cb_out, subblock_w);
         for (uint32_t w = 0; w < subblock_w; w++) {
             exp_tile<EXP_APPROX>(w);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t w = 0; w < subblock_w; w++) {
             pack_tile(w, cb_out);
         }
+        tile_regs_release();
         cb_push_back(cb_out, subblock_w);
-        REL();
         index_subblock_w_offset += subblock_w;
     }
     cb_pop_front(cb_in, block_w);
@@ -98,15 +101,19 @@ void MAIN {
         mul_tiles_bcast_scalar_init_short(cb_in0, cb_fused_scale);
         index_subblock_w_offset = 0;
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            ACQ();
+            tile_regs_acquire();
             cb_reserve_back(cb_scale_mask, subblock_w);
             for (uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset;
                 mul_tiles_bcast_scalar(cb_in0, cb_fused_scale, index, 0, w);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t w = 0; w < subblock_w; w++) {
                 pack_tile(w, cb_scale_mask);
             }
+            tile_regs_release();
             cb_push_back(cb_scale_mask, subblock_w);
-            REL();
             index_subblock_w_offset += subblock_w;
         }
         cb_pop_front(cb_in0, block_w);
@@ -131,7 +138,7 @@ void MAIN {
         exp_tile_init<EXP_APPROX>();
 #endif
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            ACQ();
+            tile_regs_acquire();
 #ifdef CAUSAL_MASK
             for (uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset;
@@ -144,14 +151,18 @@ void MAIN {
             }
 #endif
             cb_reserve_back(cb_x, subblock_w);
-            for (uint32_t w = 0; w < subblock_w; w++) {
 #ifndef NUMERIC_STABLE
+            for (uint32_t w = 0; w < subblock_w; w++) {
                 exp_tile<EXP_APPROX>(w);
+            }
 #endif
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t w = 0; w < subblock_w; w++) {
                 pack_tile(w, cb_x);
             }
+            tile_regs_release();
             cb_push_back(cb_x, subblock_w);
-            REL();
             index_subblock_w_offset += subblock_w;
         }
         cb_pop_front(cb_scale_mask, block_w);
@@ -180,7 +191,7 @@ void MAIN {
         copy_tile_to_dst_init_short(cb_in0);
         exp_tile_init<EXP_APPROX>();
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            ACQ();
+            tile_regs_acquire();
             for (uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset;
                 copy_tile(cb_in0, index, w);
@@ -188,10 +199,14 @@ void MAIN {
             cb_reserve_back(cb_exps, subblock_w);
             for (uint32_t w = 0; w < subblock_w; w++) {
                 exp_tile<EXP_APPROX>(w);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t w = 0; w < subblock_w; w++) {
                 pack_tile(w, cb_exps);
             }
+            tile_regs_release();
             cb_push_back(cb_exps, subblock_w);
-            REL();
             index_subblock_w_offset += subblock_w;
         }
         cb_pop_front(cb_in0, block_w);
@@ -200,7 +215,7 @@ void MAIN {
 #endif  // FUSED_SCALE_MASK
 
         // sum(exp(x))
-        ACQ();
+        tile_regs_acquire();
         reduce_init<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
         cb_wait_front(cb_exps, block_w);
         cb_wait_front(cb_bcast_scaler, 1);
@@ -212,9 +227,11 @@ void MAIN {
         reduce_uninit();
         recip_tile_init();
         recip_tile(dst0);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(dst0, cb_recipsumexps);
+        tile_regs_release();
         cb_push_back(cb_recipsumexps, 1);
-        REL();
 
         // exp(x) / (sum(exp(x)))
         reconfig_data_format(cb_exps, cb_recipsumexps);
@@ -223,15 +240,19 @@ void MAIN {
         mul_bcast_cols_init_short(cb_exps, cb_recipsumexps);
         index_subblock_w_offset = 0;
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            ACQ();
+            tile_regs_acquire();
             cb_reserve_back(cb_out0, subblock_w);
             for (uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset;
                 mul_tiles_bcast<BroadcastType::COL>(cb_exps, cb_recipsumexps, index, 0, w);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t w = 0; w < subblock_w; w++) {
                 pack_tile(w, cb_out0);
             }
+            tile_regs_release();
             cb_push_back(cb_out0, subblock_w);
-            REL();
             index_subblock_w_offset += subblock_w;
         }
         cb_pop_front(cb_recipsumexps, 1);

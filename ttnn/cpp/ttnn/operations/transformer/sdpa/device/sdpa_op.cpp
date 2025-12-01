@@ -8,6 +8,7 @@
 #include "sdpa_program_factory.hpp"
 #include "ttnn/run_operation.hpp"
 #include <tt-metalium/constants.hpp>
+#include "ttnn/device.hpp"
 
 using namespace tt::tt_metal;
 
@@ -25,10 +26,10 @@ void ScaledDotProductAttention::validate(
         TT_FATAL(input_tensors.size() == 3, "Must have 3 input tensors (Q, K, V)");
     }
     TT_FATAL(
-        optional_input_tensors.size() == 1 or optional_input_tensors.size() == 2,
-        "Must have 1 or 2 optional tensors (mask/page_table)");
+        optional_input_tensors.size() == 1 or optional_input_tensors.size() == 2 or optional_input_tensors.size() == 3,
+        "Must have 1, 2, or 3 optional tensors (mask/page_table/attention_sink)");
 
-    for (auto& input_tensor : input_tensors) {
+    for (const auto& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device");
         TT_FATAL(input_tensor.buffer() != nullptr, "Operands to SDPA need to be allocated in buffers on device");
         TT_FATAL((input_tensor.layout() == Layout::TILE), "Inputs to SDPA must be tilized");
@@ -37,9 +38,7 @@ void ScaledDotProductAttention::validate(
                 input_tensor.dtype() == DataType::BFLOAT4_B,
             "Data type of input tensor must be BFLOAT16, BFLOAT8_B, or BFLOAT4_B and is {}",
             input_tensor.dtype());
-        TT_FATAL(
-            input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
-            "Operands to SDPA need to be in DRAM");
+        TT_FATAL(!input_tensor.is_sharded(), "Operands to SDPA need to be DRAM/L1 interleaved");
     }
 
     auto validate_padding = [&](const Tensor& tensor) {
@@ -253,15 +252,49 @@ void ScaledDotProductAttention::validate(
             chunk_start_idx.value());
     };
 
+    auto validate_attention_sink = [&]() {
+        // Validate attention sink if provided (optional_input_tensors[2])
+        if (optional_input_tensors.size() > 2 && optional_input_tensors.at(2).has_value()) {
+            const auto& attention_sink = optional_input_tensors.at(2).value();
+            TT_FATAL(attention_sink.storage_type() == StorageType::DEVICE, "Attention sink tensor must be on device");
+            TT_FATAL(
+                input_tensors.at(0).device() == attention_sink.device(),
+                "Attention sink must be on the same device as the input tensors");
+            TT_FATAL(attention_sink.layout() == Layout::TILE, "Attention sink must be tilized");
+            TT_FATAL(
+                attention_sink.dtype() == DataType::BFLOAT16 || attention_sink.dtype() == DataType::BFLOAT8_B ||
+                    attention_sink.dtype() == DataType::BFLOAT4_B,
+                "Attention sink must be in BF16, BFP8, or BFP4 dataformat");
+            TT_FATAL(
+                attention_sink.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+                "Attention sink must be in DRAM");
+
+            const auto& sink_shape = attention_sink.logical_shape();
+            const auto q_shape = input_tensors.at(0).logical_shape();
+
+            // Attention sink must have shape [1, NH, 1, 1] - single value per head, broadcast across batch and tile
+            // dims
+            TT_FATAL(sink_shape[0] == 1, "Attention sink batch dimension must be 1. Got {}", sink_shape[0]);
+            TT_FATAL(
+                sink_shape[1] == q_shape[1],
+                "Attention sink num_heads must match Q num_heads. Got sink: {}, Q: {}",
+                sink_shape[1],
+                q_shape[1]);
+            TT_FATAL(sink_shape[2] == 1, "Attention sink sequence dimension must be 1. Got {}", sink_shape[2]);
+            TT_FATAL(sink_shape[3] == 1, "Attention sink hidden dimension must be 1. Got {}", sink_shape[3]);
+        }
+    };
+
     auto check_conditions = [&]() {
         bool has_chunk_start = chunk_start_idx.has_value();
-        bool has_two_optional_inputs = optional_input_tensors.size() == 2;
+        bool has_gt_one_optional_inputs = optional_input_tensors.size() > 1;
         bool has_page_table = optional_input_tensors.size() > 1 && optional_input_tensors.at(1).has_value();
-        TT_FATAL(
-            has_chunk_start == has_two_optional_inputs, "chunk_start_idx and number of optional inputs must match");
-        TT_FATAL(
-            has_two_optional_inputs == has_page_table,
-            "page_table must be provided if and only if there are two optional inputs");
+
+        // For chunked mode, we need at least 2 optional inputs (mask placeholder and page_table)
+        if (has_chunk_start) {
+            TT_FATAL(has_gt_one_optional_inputs, "chunk_start_idx requires at least 2 optional input slots");
+            TT_FATAL(has_page_table, "page_table must be provided when chunk_start_idx is set");
+        }
     };
 
     check_conditions();
@@ -274,6 +307,9 @@ void ScaledDotProductAttention::validate(
         validate_regular_mode();
     }
 
+    // Validate attention sink if provided
+    validate_attention_sink();
+
     // Check padding: Only the sequence dimension may be padded. For all other dims, logical shape must be equal to
     // legacy shape
     for (const auto& tensor : input_tensors) {
@@ -283,7 +319,7 @@ void ScaledDotProductAttention::validate(
 
 std::vector<TensorSpec> ScaledDotProductAttention::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
-    auto& input = input_tensors.at(0);
+    const auto& input = input_tensors.at(0);
     auto shape = input.logical_shape();
     if (use_mla) {
         shape[3] = this->head_dim_v.value_or(shape[3]);
@@ -303,9 +339,9 @@ operation::ProgramWithCallbacks ScaledDotProductAttention::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto& input_tensor_q = input_tensors.at(0);
-    auto& input_tensor_k = input_tensors.at(1);
-    auto& input_tensor_v = this->use_mla.value_or(false) ? input_tensors.at(1) : input_tensors.at(2);
+    const auto& input_tensor_q = input_tensors.at(0);
+    const auto& input_tensor_k = input_tensors.at(1);
+    const auto& input_tensor_v = this->use_mla.value_or(false) ? input_tensors.at(1) : input_tensors.at(2);
     auto& output_tensor = output_tensors.at(0);
     const auto& attn_mask = optional_input_tensors.at(0);
 
@@ -320,6 +356,9 @@ operation::ProgramWithCallbacks ScaledDotProductAttention::create_program(
     // get page table if chunked
     const auto page_table = this->chunk_start_idx.has_value() ? optional_input_tensors.at(1) : std::nullopt;
 
+    // get attention sink if provided
+    const auto attention_sink = (optional_input_tensors.size() > 2) ? optional_input_tensors.at(2) : std::nullopt;
+
     return detail::sdpa_multi_core(
         input_tensor_q,
         input_tensor_k,
@@ -327,6 +366,7 @@ operation::ProgramWithCallbacks ScaledDotProductAttention::create_program(
         output_tensor,
         attn_mask,
         page_table,
+        attention_sink,
         this->chunk_start_idx,
         scale,
         this->is_causal,
@@ -343,9 +383,9 @@ operation::OpPerformanceModel ScaledDotProductAttention::create_op_performance_m
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto& input_tensor_q = input_tensors.at(0);
-    auto& input_tensor_k = input_tensors.at(1);
-    auto& input_tensor_v = this->use_mla.value_or(false) ? input_tensors.at(1) : input_tensors.at(2);
+    const auto& input_tensor_q = input_tensors.at(0);
+    const auto& input_tensor_k = input_tensors.at(1);
+    const auto& input_tensor_v = this->use_mla.value_or(false) ? input_tensors.at(1) : input_tensors.at(2);
     auto& output_tensor = output_tensors.at(0);
 
     if (output_tensor.storage_type() != StorageType::DEVICE) {
@@ -354,9 +394,8 @@ operation::OpPerformanceModel ScaledDotProductAttention::create_op_performance_m
 
     // calculate arch specific parameters
     MathFidelity math_fidelity = ttnn::get_math_fidelity(compute_kernel_config);
-    auto arch = output_tensor.storage_type() == StorageType::DEVICE
-                    ? output_tensor.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = output_tensor.storage_type() == StorageType::DEVICE ? output_tensor.device()->arch()
+                                                                    : ttnn::GetDefaultDevice()->arch();
     if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
         log_warning(tt::LogOp, "SDPA perf model does not support tt::arch '{}'", enchantum::to_string(arch));
         return operation::OpPerformanceModel(input_tensors, output_tensors, 0);

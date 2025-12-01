@@ -20,13 +20,9 @@
 #include <vector>
 
 #include "tracy/Tracy.hpp"
+#include "common/core_coord.hpp"
 
-auto fmt::formatter<CoreCoord>::format(const CoreCoord& core_coord, format_context& ctx) const
-    -> format_context::iterator {
-    std::stringstream ss;
-    ss << core_coord.str();
-    return fmt::format_to(ctx.out(), "{}", ss.str());
-}
+namespace tt::tt_metal {
 
 std::string RelativeCoreCoord::str() const { return "(x=" + std::to_string(x) + ",y=" + std::to_string(y) + ")"; }
 
@@ -158,13 +154,6 @@ CoreRange::CoreIterator CoreRange::end() const {
 bool CoreRange::CoreIterator::operator==(const CoreIterator& other) const { return current_ == other.current_; }
 
 bool CoreRange::CoreIterator::operator!=(const CoreIterator& other) const { return !(current_ == other.current_); }
-
-auto fmt::formatter<CoreRange>::format(const CoreRange& core_range, format_context& ctx) const
-    -> format_context::iterator {
-    std::stringstream ss;
-    ss << core_range.str();
-    return fmt::format_to(ctx.out(), "{}", ss.str());
-}
 
 CoreRangeSet::CoreRangeSet(tt::stl::Span<const CoreRange> core_ranges) :
     ranges_(core_ranges.begin(), core_ranges.end()) {
@@ -654,6 +643,22 @@ std::optional<CoreRange> select_contiguous_range_from_corerangeset(const CoreRan
 
 bool operator!=(const CoreRangeSet& a, const CoreRangeSet& b) { return !(a == b); }
 
+}  // namespace tt::tt_metal
+
+auto fmt::formatter<CoreCoord>::format(const CoreCoord& core_coord, format_context& ctx) const
+    -> format_context::iterator {
+    std::stringstream ss;
+    ss << core_coord.str();
+    return fmt::format_to(ctx.out(), "{}", ss.str());
+}
+
+auto fmt::formatter<CoreRange>::format(const CoreRange& core_range, format_context& ctx) const
+    -> format_context::iterator {
+    std::stringstream ss;
+    ss << core_range.str();
+    return fmt::format_to(ctx.out(), "{}", ss.str());
+}
+
 auto fmt::formatter<CoreRangeSet>::format(const CoreRangeSet& core_range_set, format_context& ctx) const
     -> format_context::iterator {
     std::stringstream ss;
@@ -662,6 +667,8 @@ auto fmt::formatter<CoreRangeSet>::format(const CoreRangeSet& core_range_set, fo
 }
 
 namespace std {
+
+using tt::tt_metal::RelativeCoreCoord;
 
 std::size_t hash<RelativeCoreCoord>::operator()(RelativeCoreCoord const& o) const {
     std::size_t seed = 0;
@@ -696,11 +703,13 @@ CoreCoord from_json_t<CoreCoord>::operator()(const nlohmann::json& json) noexcep
     return {from_json<uint32_t>(json.at("x")), from_json<uint32_t>(json.at("y"))};
 }
 
-nlohmann::json to_json_t<RelativeCoreCoord>::operator()(const RelativeCoreCoord& relative_core_coord) noexcept {
+nlohmann::json to_json_t<tt::tt_metal::RelativeCoreCoord>::operator()(
+    const tt::tt_metal::RelativeCoreCoord& relative_core_coord) noexcept {
     return {{"x", to_json(relative_core_coord.x)}, {"y", to_json(relative_core_coord.y)}};
 }
 
-RelativeCoreCoord from_json_t<RelativeCoreCoord>::operator()(const nlohmann::json& json) noexcept {
+tt::tt_metal::RelativeCoreCoord from_json_t<tt::tt_metal::RelativeCoreCoord>::operator()(
+    const nlohmann::json& json) noexcept {
     return {from_json<int32_t>(json.at("x")), from_json<int32_t>(json.at("y"))};
 }
 

@@ -12,7 +12,7 @@
 #include "fabric_edm_packet_header_validate.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "fabric_stream_regs.hpp"
-#include "fabric_edm_types.hpp"
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "hostdevcommon/fabric_common.h"
 #include "edm_fabric_flow_control_helpers.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
@@ -535,14 +535,14 @@ private:
                     auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
                     noc_inline_dw_write<InlineWriteDst::REG>(noc_sem_addr_, packed_val, 0xf, noc);
                 } else {
-                    noc_inline_dw_write_with_state<true, false, true>(
+                    noc_inline_dw_write_with_state<true, false, true, false, false, InlineWriteDst::REG>(
                         0,  // val unused
                         this->edm_buffer_remote_free_slots_update_addr,
                         this->sync_noc_cmd_buf,
                         noc);
                 }
             } else {
-                noc_inline_dw_write_with_state<false, false, true>(
+                noc_inline_dw_write_with_state<false, false, true, false, false, InlineWriteDst::REG>(
                     0,  // val unused
                     0,  // addr unused
                     this->sync_noc_cmd_buf,

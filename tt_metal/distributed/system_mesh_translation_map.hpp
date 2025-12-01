@@ -5,7 +5,7 @@
 #pragma once
 
 #include <mesh_coord.hpp>
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <stdint.h>
 #include <tuple>
 

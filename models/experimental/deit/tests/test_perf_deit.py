@@ -15,6 +15,7 @@ from models.common.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     torch_to_tt_tensor_tile,
+    torch_to_tt_tensor_rm,
     profiler,
 )
 from models.perf.perf_utils import prep_perf_report
@@ -24,7 +25,6 @@ BATCH_SIZE = 1
 
 
 def run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device):
-    disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
@@ -48,8 +48,6 @@ def run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_s
         tt_output = tt_model(tt_inputs)[0]
         ttnn.synchronize_device(device)
         profiler.end(first_key)
-
-        enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_output = tt_model(tt_inputs)[0]

@@ -3,15 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
 #include <cstdint>
-#include "ttnn/operations/conv/conv_types.hpp"
-#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
+#include <optional>
+#include <tuple>
+#include <variant>
+
 #include "ttnn/decorators.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 
-namespace ttnn {
-
-namespace operations::conv {
-namespace conv_transpose2d {
+namespace ttnn::operations::conv::conv_transpose2d {
 
 using OutputHeight = uint32_t;
 using OutputWidth = uint32_t;
@@ -25,30 +26,6 @@ using Result = std::variant<
         std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>>;
 
 struct ConvTranpose2dOperation {
-    static Result invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& weight_tensor,
-        IDevice* device,
-        uint32_t in_channels,
-        uint32_t out_channels,
-        uint32_t batch_size,
-        uint32_t input_height,
-        uint32_t input_width,
-        std::array<uint32_t, 2> kernel_size,
-        std::array<uint32_t, 2> stride = std::array<uint32_t, 2>{1, 1},
-        std::array<uint32_t, 2> padding = std::array<uint32_t, 2>{0, 0},
-        std::array<uint32_t, 2> output_padding = std::array<uint32_t, 2>{0, 0},
-        std::array<uint32_t, 2> dilation = std::array<uint32_t, 2>{1, 1},
-        uint32_t groups = 1,
-        const std::optional<const DataType>& dtype = std::nullopt,
-        std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
-        const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
-        const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
-        const std::optional<const MemoryConfig>& memory_config = std::nullopt,
-        bool mirror_kernel = true,
-        bool return_output_dim = false,
-        bool return_weights_and_bias = false);
-
     static Result invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
@@ -66,7 +43,7 @@ struct ConvTranpose2dOperation {
         uint32_t groups = 1,
         const std::optional<const DataType>& dtype = std::nullopt,
         const std::optional<const ttnn::Tensor>& bias_tensor = std::nullopt,
-        const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
+        const std::optional<const conv2d::Conv2dConfig>& conv_config_ = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         bool mirror_kernel = true,
@@ -74,9 +51,7 @@ struct ConvTranpose2dOperation {
         bool return_weights_and_bias = false);
 };
 
-}  // namespace conv_transpose2d
-}  // namespace operations::conv
-}  // namespace ttnn
+}  // namespace ttnn::operations::conv::conv_transpose2d
 
 namespace ttnn {
 constexpr auto conv_transpose2d =

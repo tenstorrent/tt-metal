@@ -1,23 +1,35 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "attn_matmul_device_operation.hpp"
+#include "attn_matmul_program_factory.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include <tt-metalium/work_split.hpp>
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::matmul {
+namespace ttnn::operations::experimental::matmul::attn_matmul {
 
-void AttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
+AttnMatmulDeviceOperation::program_factory_t AttnMatmulDeviceOperation::select_program_factory(
+    const operation_attributes_t&, const tensor_args_t&) {
+    return program::AttnMatmulProgramFactory{};
+}
+
+void AttnMatmulDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(args, tensor_args);
+}
+
+void AttnMatmulDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // input_a: [q_len, q_heads, batch, head_dim]
     // input_b: [batch, kv_heads, head_dim, kv_len]
     // intermediate: [q_heads, batch, batch, kv_len]
     // output: [q_len, q_heads, batch, kv_len]
 
-    TT_FATAL(input_tensors.size() == 2, "Expected 2 input tensors but got {}", input_tensors.size());
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);
+    const auto& input_tensor_a = tensor_args.input_tensor_a;
+    const auto& input_tensor_b = tensor_args.input_tensor_b;
     TT_FATAL(
         (input_tensor_a.layout() == Layout::TILE && input_tensor_b.layout() == Layout::TILE),
         "Inputs to matmul must be tilized");
@@ -38,22 +50,22 @@ void AttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_tensor
     TT_FATAL((ashape[2] == bshape[0]), "Num of users must match!");
 
     bool read_from_kv_cache = false;
-    if (this->num_tokens.has_value() or this->transpose_hw.has_value()) {
+    if (args.num_tokens.has_value() or args.transpose_hw.has_value()) {
         TT_FATAL(
-            (this->num_tokens.has_value() and this->transpose_hw.has_value()),
+            (args.num_tokens.has_value() and args.transpose_hw.has_value()),
             "Must provide num_tokens and transpose_hw flag if we are reading from cache for in1!");
-        TT_FATAL(this->num_tokens.value() % 32 == 0, "Number of tokens must be divisble by 32!");
+        TT_FATAL(args.num_tokens.value() % 32 == 0, "Number of tokens must be divisble by 32!");
         read_from_kv_cache = true;
     }
 
     if (read_from_kv_cache) {
-        if (this->transpose_hw.value()) {
+        if (args.transpose_hw.value()) {
             TT_FATAL(
                 ashape[3] == bshape[3],
                 "For pre-attention matmul, dimension K for B is in B.shape[3], so A.shape[3] must match B.shape[3]");  // A.K == B.K
         } else {
             TT_FATAL(
-                ashape[3] == this->num_tokens,
+                ashape[3] == args.num_tokens,
                 "For post-attention matmul, dimension K (A.shape[3]) is the kv_seq_len in this case and must match the "
                 "length of the cache we read");  // A.K == B.K
         }
@@ -64,67 +76,92 @@ void AttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_tensor
             ashape,
             bshape);  // A.K == B.K
     }
+
+    auto device_compute_with_storage_grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
+    TT_ASSERT(
+        (args.compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x &&
+         args.compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y),
+        "Unsupported grid shape");
 }
 
-std::vector<ttnn::TensorSpec> AttnMatmulDeviceOperation::compute_output_specs(
-    const std::vector<Tensor>& input_tensors) const {
+AttnMatmulDeviceOperation::spec_return_value_t AttnMatmulDeviceOperation::compute_output_specs(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // input_a: [q_len, q_heads, batch, head_dim]
     // input_b: [batch, kv_heads, head_dim, kv_len]
     // intermediate: [q_heads, batch, batch, kv_len]
     // output: [q_len, q_heads, batch, kv_len]
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);
+    const auto& input_tensor_a = tensor_args.input_tensor_a;
+    const auto& input_tensor_b = tensor_args.input_tensor_b;
     const auto& ashape = input_tensor_a.padded_shape();
     const auto& bshape = input_tensor_b.padded_shape();
 
     uint32_t N = bshape[3];
-    if (this->transpose_hw.value_or(false)) {
-        N = this->num_tokens.value();
+    if (args.transpose_hw.value_or(false)) {
+        N = args.num_tokens.value();
     }
     Shape shape({1, ashape[1], ashape[2], N});
-    return {TensorSpec(shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), output_mem_config))};
+    return TensorSpec(shape, TensorLayout(args.output_dtype, PageConfig(Layout::TILE), args.output_mem_config));
 }
 
-operation::ProgramWithCallbacks AttnMatmulDeviceOperation::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);
-    auto& output_tensor = output_tensors.at(0);
-
-    auto device_compute_with_storage_grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
-    TT_ASSERT(
-        (this->compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x &&
-         this->compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y),
-        "Unsupported grid shape");
-
-    return multi_core_attn_matmul(
-        input_tensor_a,
-        input_tensor_b,
-        output_tensor,
-        this->num_tokens,
-        this->transpose_hw,
-        this->compute_with_storage_grid_size,
-        this->compute_kernel_config);
+AttnMatmulDeviceOperation::tensor_return_value_t AttnMatmulDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.preallocated_output.has_value()) {
+        return tensor_args.preallocated_output.value();
+    }
+    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    return create_device_tensor(output_spec, tensor_args.input_tensor_a.device());
 }
 
-operation::Hash AttnMatmulDeviceOperation::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
+tt::stl::hash::hash_t AttnMatmulDeviceOperation::compute_program_hash(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(input_tensors.at(0).storage()),
+        std::holds_alternative<DeviceStorage>(tensor_args.input_tensor_a.storage()),
         "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(input_tensors.at(0).storage()));
+        tt::stl::get_active_type_name_in_variant(tensor_args.input_tensor_a.storage()));
     TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(input_tensors.at(1).storage()),
+        std::holds_alternative<DeviceStorage>(tensor_args.input_tensor_b.storage()),
         "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(input_tensors.at(1).storage()));
+        tt::stl::get_active_type_name_in_variant(tensor_args.input_tensor_b.storage()));
+
+    auto program_factory = select_program_factory(args, tensor_args);
 
     return operation::hash_operation<AttnMatmulDeviceOperation>(
-        this->transpose_hw,
-        this->output_mem_config,
-        this->output_dtype,
-        input_tensors.at(0).memory_config(),
-        input_tensors.at(0).dtype(),
-        input_tensors.at(1).memory_config(),
-        input_tensors.at(1).dtype());
+        args,
+        program_factory.index(),
+        args.transpose_hw,
+        args.output_mem_config,
+        args.output_dtype,
+        tensor_args.input_tensor_a.dtype(),
+        tensor_args.input_tensor_a.memory_config(),
+        tensor_args.input_tensor_b.dtype(),
+        tensor_args.input_tensor_b.memory_config());
 }
 
-}  // namespace ttnn::operations::experimental::matmul
+std::tuple<AttnMatmulDeviceOperation::operation_attributes_t, AttnMatmulDeviceOperation::tensor_args_t>
+AttnMatmulDeviceOperation::invoke(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const CoreCoord& compute_with_storage_grid_size,
+    std::optional<const DataType> output_dtype,
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<const uint32_t> num_tokens,
+    std::optional<const bool> transpose_hw,
+    std::optional<Tensor> optional_output_tensor) {
+    auto arch = input_tensor_a.device()->arch();
+    auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config);
+
+    operation_attributes_t attributes{
+        num_tokens,
+        transpose_hw,
+        compute_with_storage_grid_size,
+        memory_config.value_or(input_tensor_a.memory_config()),
+        output_dtype.value_or(input_tensor_a.dtype()),
+        kernel_config_val};
+
+    tensor_args_t tensor_args{input_tensor_a, input_tensor_b, std::move(optional_output_tensor)};
+
+    return {attributes, tensor_args};
+}
+
+}  // namespace ttnn::operations::experimental::matmul::attn_matmul

@@ -19,7 +19,8 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
     auto start = operation_attributes.start;
     auto step = operation_attributes.step;
 
-    auto grid = tensor_args.any.device()->compute_with_storage_grid_size();
+    auto* device = output.device();
+    auto grid = device->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(grid, Wt);
 

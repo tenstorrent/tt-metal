@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/fabric_types.hpp>
-#include <tt-metalium/mesh_graph.hpp>                   // FabricType
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>  // FabricType
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include "erisc_datamover_builder.hpp"
 #include <vector>
@@ -29,11 +29,9 @@ public:
     static tt::tt_fabric::Topology get_topology_from_config(tt::tt_fabric::FabricConfig fabric_config);
 
     static bool is_2D_topology(tt::tt_fabric::Topology topology);
-    static bool is_dynamic_routing_config(tt::tt_fabric::FabricConfig fabric_config);
 
     tt::tt_fabric::Topology get_fabric_topology() const;
     bool is_2D_routing_enabled() const;
-    bool is_dynamic_routing_enabled() const;
 
     bool need_deadlock_avoidance_support(eth_chan_directions direction) const;
 
@@ -83,7 +81,6 @@ private:
     tt::tt_fabric::Topology topology_{};
 
     bool is_2D_routing_enabled_ = false;
-    bool is_dynamic_routing_enabled_ = false;
 
     std::unordered_map<MeshId, bool> wrap_around_mesh_;
 

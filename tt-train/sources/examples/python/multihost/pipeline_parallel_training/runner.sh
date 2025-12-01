@@ -45,7 +45,7 @@ done
 # Set defaults based on profile if not explicitly provided
 if [[ "$PROFILE" == "loudboxes" ]]; then
     USER="${USER:-ttuser}"
-    CONFIG_FILE="${CONFIG_FILE:-training_shakespeare_llama7b_pp_fabric.yaml}"
+    CONFIG_FILE="${CONFIG_FILE:-training_shakespeare_llama8b_pp_fabric.yaml}"
     HOST_FILE="${HOST_FILE:-${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/configurations/5loudboxes/hosts.txt}"
     RANK_BINDINGS_FILE="${RANK_BINDINGS_FILE:-${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/configurations/5loudboxes/rank_bindings.yaml}"
 elif [[ "$PROFILE" == "galaxies" ]]; then
@@ -63,7 +63,7 @@ fi
 ${TT_METAL_HOME}/tt-train/sources/examples/nano_gpt/3tier/all_machines_copy.sh --run --sync --user "$USER" --hostfile "$HOST_FILE"
 
 # install requirements
-mpirun --hostfile ${HOST_FILE} --tag-output pip install -r ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/requirements.txt
+mpirun-ulfm --hostfile ${HOST_FILE} --tag-output pip install -r ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/requirements.txt
 
 CMD="python3 ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/training.py -c ${CONFIG_FILE}"
 # use tt-run to run the training script across all machines

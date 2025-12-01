@@ -33,7 +33,8 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>
-#include "kernel_impl.hpp"
+#include "kernel.hpp"
+#include <impl/debug/watcher_server.hpp>
 
 namespace tt {
 
@@ -152,7 +153,7 @@ void Kernel::register_kernel_with_watcher() {
     }
 }
 
-void KernelImpl::register_kernel_elf_paths_with_watcher(IDevice& device) const {
+void Kernel::register_kernel_elf_paths_with_watcher(IDevice& device) const {
     TT_ASSERT(!this->kernel_full_name_.empty(), "Kernel full name not set!");
     auto paths = this->file_paths(device);
     MetalContext::instance().watcher_server()->register_kernel_elf_paths(this->watcher_kernel_id_, paths);
@@ -181,13 +182,13 @@ CoreType Kernel::get_kernel_core_type() const {
     TT_THROW("Unreachable");
 }
 
-const std::string& KernelImpl::get_full_kernel_name() const { return this->kernel_full_name_; }
+const std::string& Kernel::get_full_kernel_name() const { return this->kernel_full_name_; }
 
 void Kernel::add_defines(const std::map<std::string, std::string>& defines) {
     this->defines_.insert(defines.begin(), defines.end());
 }
 
-void KernelImpl::process_defines(
+void Kernel::process_defines(
     const std::function<void(const std::string& define, const std::string& value)> callback) const {
     for (const auto& [define, value] : this->defines_) {
         callback(define, value);
@@ -196,7 +197,7 @@ void KernelImpl::process_defines(
 
 void DataMovementKernel::process_defines(
     const std::function<void(const std::string& define, const std::string& value)> callback) const {
-    KernelImpl::process_defines(callback);
+    Kernel::process_defines(callback);
     callback("NOC_INDEX", std::to_string(this->config_.noc));
     callback("NOC_MODE", std::to_string(this->config_.noc_mode));
 }
@@ -212,7 +213,7 @@ void ComputeKernel::process_defines(
 
 void EthernetKernel::process_defines(
     const std::function<void(const std::string& define, const std::string& value)> callback) const {
-    KernelImpl::process_defines(callback);
+    Kernel::process_defines(callback);
     callback("NOC_INDEX", std::to_string(this->config_.noc));
     // pass default noc mode as eth does not need it, just for compile to pass
     callback("NOC_MODE", std::to_string(NOC_MODE::DM_DEDICATED_NOC));
@@ -236,17 +237,16 @@ std::string_view EthernetKernel::get_compiler_opt_level() const {
 
 std::string_view EthernetKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
 
-void KernelImpl::process_compile_time_args(
-    const std::function<void(const std::vector<uint32_t>& values)> callback) const {
+void Kernel::process_compile_time_args(const std::function<void(const std::vector<uint32_t>& values)> callback) const {
     callback(this->compile_time_args());
 }
 
-void KernelImpl::process_named_compile_time_args(
+void Kernel::process_named_compile_time_args(
     const std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)> callback) const {
     callback(this->named_compile_time_args());
 }
 
-bool KernelImpl::binaries_exist_on_disk(const IDevice* device) const {
+bool Kernel::binaries_exist_on_disk(const IDevice* device) const {
     const uint32_t core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t processor_class = enchantum::to_underlying(this->get_kernel_processor_class());
@@ -266,9 +266,9 @@ bool KernelImpl::binaries_exist_on_disk(const IDevice* device) const {
     return std::filesystem::exists(build_success_marker_path);
 }
 
-std::vector<std::string> KernelImpl::file_paths(IDevice& device) const {
+std::vector<std::string> Kernel::file_paths(IDevice& device) const {
     std::vector<std::string> file_paths;
-    auto& hal = MetalContext::instance().hal();
+    const auto& hal = MetalContext::instance().hal();
     uint32_t core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t processor_class = enchantum::to_underlying(this->get_kernel_processor_class());
     for (int i = 0; i < this->expected_num_binaries(); i++) {
@@ -288,7 +288,7 @@ uint8_t ComputeKernel::expected_num_binaries() const {
     return 3;
 }
 
-const std::vector<const ll_api::memory*>& KernelImpl::binaries(uint64_t build_key) const {
+const std::vector<const ll_api::memory*>& Kernel::binaries(uint64_t build_key) const {
     auto iter = binaries_.find(build_key);
     TT_FATAL(iter != binaries_.end(), "binary not found");
     if (iter->second.size() != expected_num_binaries()) {
@@ -403,18 +403,26 @@ RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtim
 void Kernel::validate_runtime_args_size(
     size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) {
     uint32_t total_rt_args = (num_unique_rt_args + num_common_rt_args);
-    uint32_t idle_eth_max_runtime_args = MetalContext::instance().hal().get_dev_size(
-                                             HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG) /
-                                         sizeof(uint32_t);
-    uint32_t max_rt_args = is_idle_eth() ? idle_eth_max_runtime_args : max_runtime_args;
+    uint32_t expected_max_rt_args = 0;
 
-    if (total_rt_args > max_rt_args) {
+    switch (this->get_kernel_programmable_core_type()) {
+        case HalProgrammableCoreType::TENSIX: expected_max_rt_args = max_runtime_args; break;
+        case HalProgrammableCoreType::ACTIVE_ETH:
+        case HalProgrammableCoreType::IDLE_ETH:
+            expected_max_rt_args = MetalContext::instance().hal().get_dev_size(
+                                       this->get_kernel_programmable_core_type(), HalL1MemAddrType::KERNEL_CONFIG) /
+                                   sizeof(uint32_t);
+            break;
+        default: TT_THROW("Invalid programmable core type: {}", this->get_kernel_programmable_core_type());
+    }
+
+    if (total_rt_args > expected_max_rt_args) {
         TT_THROW(
             "{} unique+common runtime args targeting kernel {} on {} are too large. Max allowable is {}",
             total_rt_args,
             this->name(),
             logical_core.str(),
-            max_runtime_args);
+            expected_max_rt_args);
     }
 }
 
@@ -518,13 +526,13 @@ detail::KernelMeta Kernel::meta(IDevice* device) const {
     return result;
 }
 
-uint32_t KernelImpl::get_binary_packed_size(IDevice* device, int index) const {
+uint32_t Kernel::get_binary_packed_size(IDevice* device, int index) const {
     // In testing situations we can query the size w/o a binary
     auto iter = binaries_.find(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
     return iter != this->binaries_.end() ? iter->second[index]->get_packed_size() : 0;
 }
 
-uint32_t KernelImpl::get_binary_text_size(IDevice* device, int index) const {
+uint32_t Kernel::get_binary_text_size(IDevice* device, int index) const {
     // In testing situations we can query the size w/o a binary
     auto iter = binaries_.find(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
     return iter != this->binaries_.end() ? iter->second[index]->get_text_size() : 0;
@@ -576,7 +584,7 @@ void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_
     jit_build_subset(build_states, this);
 }
 
-void KernelImpl::set_binaries(uint64_t build_key, std::vector<const ll_api::memory*>&& binaries) {
+void Kernel::set_binaries(uint64_t build_key, std::vector<const ll_api::memory*>&& binaries) {
     // Try inserting an empty vector, as that is cheap to construct
     // and avoids an additional move.
     auto pair = binaries_.insert({build_key, {}});

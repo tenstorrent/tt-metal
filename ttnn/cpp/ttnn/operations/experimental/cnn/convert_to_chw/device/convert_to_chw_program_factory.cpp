@@ -6,13 +6,42 @@
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace ttnn::operations::experimental::cnn::detail {
+namespace ttnn::operations::experimental::cnn::to_chw::program {
 
 using namespace tt::constants;
 
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_chw(
-    const Tensor& a, Tensor& output, CoreCoord compute_with_storage_grid_size) {
+namespace {
+// Helper function to set runtime arguments for reader, writer, and compute kernels
+void set_runtime_args_for_all_kernels(
+    tt::tt_metal::Program& program,
+    const std::vector<CoreCoord>& cores,
+    tt::tt_metal::KernelHandle reader_kernel_id,
+    tt::tt_metal::KernelHandle writer_kernel_id,
+    tt::tt_metal::KernelHandle compute_kernel_id,
+    uint32_t total_tiles_per_core) {
+    std::vector<std::vector<uint32_t>> reader_runtime_args = {cores.size(), {0}};   // (num_tiles_per_core)
+    std::vector<std::vector<uint32_t>> writer_runtime_args = {cores.size(), {0}};   // (num_tiles_per_core)
+    std::vector<std::vector<uint32_t>> compute_runtime_args = {cores.size(), {0}};  // (num_tiles_per_core)
+
+    for (uint32_t i = 0; i < cores.size(); i++) {
+        reader_runtime_args[i][0] = total_tiles_per_core;
+        writer_runtime_args[i][0] = total_tiles_per_core;
+        compute_runtime_args[i][0] = total_tiles_per_core;
+    }
+    SetRuntimeArgs(program, reader_kernel_id, cores, reader_runtime_args);
+    SetRuntimeArgs(program, writer_kernel_id, cores, writer_runtime_args);
+    SetRuntimeArgs(program, compute_kernel_id, cores, compute_runtime_args);
+}
+}  // namespace
+
+ConvertToCHWProgramFactory::cached_program_t ConvertToCHWProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+
+    const auto& a = tensor_args.input;
+    auto& output = tensor_return_value;
 
     const auto& input_shape = a.logical_shape();
     const auto input_core_grid = a.shard_spec()->grid;
@@ -106,41 +135,51 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_chw(
             .math_approx_mode = false,
             .compile_args = compute_compile_time_args});
 
-    auto set_runtime_args =
-        [cb_in, cb_out, input_cores, total_tiles_per_core, reader_kernel_id, writer_kernel_id, compute_kernel_id](
-            tt::tt_metal::Program& program, const Tensor& a, const Tensor& output) {
-            tt::tt_metal::Buffer* a_buffer = a.buffer();
-            tt::tt_metal::Buffer* output_buffer = output.buffer();
-            UpdateDynamicCircularBufferAddress(program, cb_in, *a_buffer);
-            UpdateDynamicCircularBufferAddress(program, cb_out, *output_buffer);
+    // Set initial runtime args
+    tt::tt_metal::Buffer* a_buffer = a.buffer();
+    tt::tt_metal::Buffer* output_buffer = output.buffer();
+    UpdateDynamicCircularBufferAddress(program, cb_in, *a_buffer);
+    UpdateDynamicCircularBufferAddress(program, cb_out, *output_buffer);
 
-            std::vector<std::vector<uint32_t>> reader_runtime_args = {input_cores.size(), {0}};  // (num_tiles_per_core)
-            std::vector<std::vector<uint32_t>> writer_runtime_args = {input_cores.size(), {0}};  // (num_tiles_per_core)
-            std::vector<std::vector<uint32_t>> compute_runtime_args = {
-                input_cores.size(), {0}};  // (num_tiles_per_core)
+    set_runtime_args_for_all_kernels(
+        program, input_cores, reader_kernel_id, writer_kernel_id, compute_kernel_id, total_tiles_per_core);
 
-            for (uint32_t i = 0; i < input_cores.size(); i++) {
-                reader_runtime_args[i][0] = total_tiles_per_core;
-                writer_runtime_args[i][0] = total_tiles_per_core;
-                compute_runtime_args[i][0] = total_tiles_per_core;
-            }
-            SetRuntimeArgs(program, reader_kernel_id, input_cores, reader_runtime_args);
-            SetRuntimeArgs(program, writer_kernel_id, input_cores, writer_runtime_args);
-            SetRuntimeArgs(program, compute_kernel_id, input_cores, compute_runtime_args);
-        };
-    set_runtime_args(program, a, output);
-
-    auto override_runtime_arguments_callback = [set_runtime_args](
-                                                   const void* operation,
-                                                   tt::tt_metal::Program& program,
-                                                   const std::vector<Tensor>& input_tensors,
-                                                   const std::vector<std::optional<const Tensor>>&,
-                                                   const std::vector<Tensor>& output_tensors) {
-        const auto& output_tensor = output_tensors.at(0);
-        set_runtime_args(program, input_tensors.at(0), output_tensor);
-    };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return cached_program_t{
+        std::move(program),
+        shared_variables_t{
+            .cb_in = cb_in,
+            .cb_out = cb_out,
+            .input_cores = input_cores,
+            .reader_kernel_id = reader_kernel_id,
+            .writer_kernel_id = writer_kernel_id,
+            .compute_kernel_id = compute_kernel_id,
+            .total_tiles_per_core = total_tiles_per_core,
+        }};
 }
 
-}  // namespace ttnn::operations::experimental::cnn::detail
+void ConvertToCHWProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    auto& program = cached_program.program;
+    const auto& cb_in = cached_program.shared_variables.cb_in;
+    const auto& cb_out = cached_program.shared_variables.cb_out;
+    const auto& input_cores = cached_program.shared_variables.input_cores;
+    const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
+    const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
+    const auto& compute_kernel_id = cached_program.shared_variables.compute_kernel_id;
+    const auto& total_tiles_per_core = cached_program.shared_variables.total_tiles_per_core;
+
+    // buffers are not provided so we take them from output/input tensors
+    auto* output_dram_buffer = output.buffer();
+    auto* input_dram_buffer = tensor_args.input.buffer();
+
+    UpdateDynamicCircularBufferAddress(program, cb_in, *input_dram_buffer);
+    UpdateDynamicCircularBufferAddress(program, cb_out, *output_dram_buffer);
+
+    set_runtime_args_for_all_kernels(
+        program, input_cores, reader_kernel_id, writer_kernel_id, compute_kernel_id, total_tiles_per_core);
+}
+
+}  // namespace ttnn::operations::experimental::cnn::to_chw::program

@@ -49,7 +49,7 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks AllBroadcast::create_mesh_wor
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto mesh_device = input_tensors[0].device();
+    auto* mesh_device = input_tensors[0].device();
     auto sub_device_id = this->sub_device_id;
 
     auto subdevice = sub_device_id.has_value() ? *sub_device_id : mesh_device->get_sub_device_ids().at(0);
@@ -154,10 +154,6 @@ std::vector<Tensor> all_broadcast_impl(
         num_devices,
         tensor_topology_shape);
 
-    ttnn::ccl::Topology ccl_topology = topology;
-    if (num_devices == 2) {
-        ccl_topology = ttnn::ccl::Topology::Linear;
-    }
     log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", num_devices, num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
@@ -166,7 +162,7 @@ std::vector<Tensor> all_broadcast_impl(
             num_links,
             num_devices,
             memory_config.value_or(input_tensor.memory_config()),
-            ccl_topology,
+            topology,
             sub_device_id,
             cluster_axis),
         {input_tensor});

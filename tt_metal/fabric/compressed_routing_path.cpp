@@ -5,7 +5,7 @@
 #include <cstring>
 #include "compressed_routing_path.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
-#include "tt_metal/api/tt-metalium/control_plane.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 
 namespace tt::tt_fabric {
@@ -13,7 +13,7 @@ namespace tt::tt_fabric {
 // 1D routing specialization
 template <>
 void intra_mesh_routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
-    const FabricNodeId& src_fabric_node_id, uint16_t num_chips) {
+    const FabricNodeId& /*src_fabric_node_id*/, uint16_t num_chips) {
     uint32_t* route_ptr = reinterpret_cast<uint32_t*>(&paths);
     route_ptr[0] = 0;
     for (uint16_t hops = 1; hops < num_chips; ++hops) {
@@ -25,7 +25,7 @@ void intra_mesh_routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
 // 1D compressed routing specialization. No-op
 template <>
 void intra_mesh_routing_path_t<1, true>::calculate_chip_to_all_routing_fields(
-    const FabricNodeId& src_fabric_node_id, uint16_t num_chips) {
+    const FabricNodeId& /*src_fabric_node_id*/, uint16_t /*num_chips*/) {
     // No-op
 }
 
@@ -33,8 +33,8 @@ void intra_mesh_routing_path_t<1, true>::calculate_chip_to_all_routing_fields(
 template <>
 void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
     const FabricNodeId& src_fabric_node_id, uint16_t num_chips) {
-    auto& src_chip_id = src_fabric_node_id.chip_id;
-    auto& mesh_id = src_fabric_node_id.mesh_id;
+    const auto& src_chip_id = src_fabric_node_id.chip_id;
+    const auto& mesh_id = src_fabric_node_id.mesh_id;
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 

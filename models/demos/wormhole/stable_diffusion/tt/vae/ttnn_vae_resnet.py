@@ -19,8 +19,6 @@ class ResnetBlock:
         out_channels,
         norm1_num_blocks=1,
         norm2_num_blocks=1,
-        conv1_channel_split_factors=(1, 1),
-        conv2_channel_split_factors=(1, 1),
     ):
         self.device = device
         self.in_channels = in_channels
@@ -29,7 +27,7 @@ class ResnetBlock:
 
         # groupnorm 1
         self.norm1_num_blocks = norm1_num_blocks
-        self.norm1_grid_core = ttnn.CoreGrid(y=4, x=4) if in_channels == 128 else ttnn.CoreGrid(y=8, x=8)
+        self.norm1_grid_core = ttnn.CoreGrid(y=4, x=8) if in_channels == 128 else ttnn.CoreGrid(y=8, x=8)
         (
             self.norm1_input_mask,
             self.norm1_weights,
@@ -50,13 +48,11 @@ class ResnetBlock:
             input_height,
             input_width,
             out_channels,
-            conv1_channel_split_factors[0],
-            conv1_channel_split_factors[1],
         )
 
         # groupnorm 2
         self.norm2_num_blocks = norm2_num_blocks
-        self.norm2_grid_core = ttnn.CoreGrid(y=4, x=4) if out_channels == 128 else ttnn.CoreGrid(y=8, x=8)
+        self.norm2_grid_core = ttnn.CoreGrid(y=4, x=8) if out_channels == 128 else ttnn.CoreGrid(y=8, x=8)
         (
             self.norm2_input_mask,
             self.norm2_weights,
@@ -77,8 +73,6 @@ class ResnetBlock:
             input_height,
             input_width,
             out_channels,
-            conv2_channel_split_factors[0],
-            conv2_channel_split_factors[1],
         )
 
         # conv shortcut
@@ -91,8 +85,6 @@ class ResnetBlock:
                 input_height,
                 input_width,
                 out_channels,
-                conv1_channel_split_factors[0],
-                conv1_channel_split_factors[1],
                 kernel_size=1,
                 padding=0,
             )
@@ -121,7 +113,7 @@ class ResnetBlock:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        hidden_states = ttnn.silu(hidden_states)
+        hidden_states = ttnn.silu(hidden_states, output_tensor=hidden_states)
 
         hidden_states = self.conv1(hidden_states)
 

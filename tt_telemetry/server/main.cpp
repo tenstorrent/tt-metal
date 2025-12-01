@@ -12,6 +12,7 @@
 #include <iostream>
 #include <optional>
 #include <sstream>
+#include <fstream>
 
 #include <boost/functional/hash.hpp>
 #include <cxxopts.hpp>
@@ -173,7 +174,7 @@ int main(int argc, char* argv[]) {
         "ws://server1:8081,ws://server2:8081). Enables aggregator mode, disabling the collection endpoint.",
         cxxopts::value<std::string>())(
         "metal-src-dir",
-        "Metal source directory (optional, defaults to TT_METAL_HOME env var)",
+        "Metal source directory (optional override, auto-detected by default)",
         cxxopts::value<std::string>())("h,help", "Print usage")(
         "disable-telemetry",
         "Disables collection of telemetry. Only permitted in aggregator mode, which by default also collects local "
@@ -270,7 +271,7 @@ int main(int argc, char* argv[]) {
     std::shared_ptr<TelemetrySubscriber> websocket_subscriber;
     if (!aggregator_mode) {
         log_info(tt::LogAlways, "Starting collection endpoint on port {}", collector_port);
-        std::tie(websocket_server, websocket_subscriber) = run_collection_endpoint(collector_port, metal_src_dir);
+        std::tie(websocket_server, websocket_subscriber) = run_collection_endpoint(collector_port);
         subscribers.push_back(websocket_subscriber);
     } else {
         std::promise<bool> promise;  // create promise that immediately resolves to true

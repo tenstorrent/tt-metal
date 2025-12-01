@@ -55,7 +55,6 @@ def test_embedding_forward_pass(
     mesh_device,
     ccl,
     model_path,
-    tmp_path,
     cache_path,
     force_recalculate_weight_config,
     set_deterministic_env,
@@ -75,9 +74,6 @@ def test_embedding_forward_pass(
         torch_input = torch.randint(0, hf_config.vocab_size, (1, 1, batch_size_or_seq_len))
         reference_output = reference_model(torch_input)
 
-        # Do not cache random weights
-        cache_path = tmp_path
-        force_recalculate_weight_config = True
     else:
         state_dict = sub_state_dict(state_dict, module_path + ".")
         torch_input, reference_output = load_reference_io_tensors_for_module(

@@ -17,12 +17,12 @@ void bind_moreh_arange_operation(py::module& module) {
             py::arg("start") = 0,
             py::arg("end"),
             py::arg("step") = 1,
-            py::arg("any"),
+            py::arg("device"),
             py::kw_only(),
             py::arg("output") = std::nullopt,
             py::arg("untilize_out") = false,
-            py::arg("dtype") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
+            py::arg("dtype") = DataType::BFLOAT16,
+            py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG,
         });
 }
 }  // namespace ttnn::operations::moreh::moreh_arange

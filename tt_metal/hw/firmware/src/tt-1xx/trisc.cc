@@ -19,7 +19,7 @@
 #include "circular_buffer.h"
 #include "circular_buffer_init.h"
 #endif
-#include "circular_buffer_constants.h"
+#include "tt-metalium/circular_buffer_constants.h"
 // clang-format on
 
 #if defined(PROFILE_KERNEL)
@@ -105,6 +105,12 @@ int main(int argc, char* argv[]) {
 
     reset_cfg_state_id();
 
+    {
+        // #31901: initialize PRNG seed to 0 to avoid nondeterministic behavior
+        volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+        cfg[PRNG_SEED_Seed_Val_ADDR32] = 0;
+        riscv_wait(600);
+    }
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
     *trisc_run = RUN_SYNC_MSG_DONE;

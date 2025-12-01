@@ -65,7 +65,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     TT_ASSERT(device_sequence.size() == program_sequence.size());
 
     for (size_t i = 0; i < device_sequence.size(); i++) {
-        log_trace(tt::LogOp, "device[{}] id={}", i, device_sequence[i]->id());
+        log_trace(tt::LogFabric, "device[{}] id={}", i, device_sequence[i]->id());
     }
     auto get_min_link_count =
         [&](tt::tt_metal::IDevice* src_device, tt::tt_metal::IDevice* dest_device, size_t min_link_count) {
@@ -82,13 +82,13 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
 
     size_t min_link_count = desired_num_links.value_or(std::numeric_limits<size_t>::max());
     for (size_t hop = 0; hop < device_sequence.size() - 1; hop++) {
-        auto src_device = device_sequence[hop];
-        auto dest_device = device_sequence[hop + 1];
+        auto* src_device = device_sequence[hop];
+        auto* dest_device = device_sequence[hop + 1];
         min_link_count = get_min_link_count(src_device, dest_device, min_link_count);
     }
     if (topology == Topology::Ring) {
-        auto src_device = device_sequence.back();
-        auto dest_device = device_sequence.front();
+        auto* src_device = device_sequence.back();
+        auto* dest_device = device_sequence.front();
         min_link_count = get_min_link_count(src_device, dest_device, min_link_count);
     }
 
@@ -121,7 +121,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
 
         TT_ASSERT(local_link_cores.size() == remote_link_cores.size());
         // set edm types based on topology and device ids.
-        bool dateline = false;
+        [[maybe_unused]] bool dateline = false;
         auto src_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default;
         auto dest_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default;
         if (topology == Topology::Ring) {
@@ -163,7 +163,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         const auto src_curr_edm_config =
             tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, src_edm_options);
         log_debug(
-            tt::LogOp,
+            tt::LogFabric,
             "FabricEriscDatamoverConfig for src_device {}: buffer_size={}, topology={}",
             src_device->id(),
             edm_buffer_size,
@@ -171,7 +171,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         const auto dest_curr_edm_config =
             tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, dest_edm_options);
         log_debug(
-            tt::LogOp,
+            tt::LogFabric,
             "FabricEriscDatamoverConfig for dest_device {}: buffer_size={}, topology={}",
             dest_device->id(),
             edm_buffer_size,
@@ -181,12 +181,12 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         edm_builders_backward_direction[dest_device->id()].reserve(local_link_cores.size());
         for (size_t l = 0; l < this->num_links; l++) {
             log_trace(
-                tt::LogOp,
+                tt::LogFabric,
                 "Building forward direction EDM on chip {} on link {}",
                 src_device->id(),
                 edm_builders_forward_direction[src_device->id()].size());
             log_debug(
-                tt::LogOp,
+                tt::LogFabric,
                 "src_device {}, dest_device {}, is_dateline {}",
                 src_device->id(),
                 dest_device->id(),
@@ -203,7 +203,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                     src_device_edm_type));
 
             log_trace(
-                tt::LogOp,
+                tt::LogFabric,
                 "Building backward direction EDM on chip {} on link {}",
                 dest_device->id(),
                 edm_builders_backward_direction[dest_device->id()].size());
@@ -223,20 +223,20 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     tt::tt_fabric::FabricEriscDatamoverBuilder* a_builder = nullptr;
     // Construct the builders
     for (size_t hop = 0; hop < device_sequence.size() - 1; hop++) {
-        auto src_device = device_sequence[hop];
-        auto dest_device = device_sequence[hop + 1];
-        auto src_program = programs[hop];
-        auto dest_program = programs[hop + 1];
+        auto* src_device = device_sequence[hop];
+        auto* dest_device = device_sequence[hop + 1];
+        auto* src_program = programs[hop];
+        auto* dest_program = programs[hop + 1];
         build_edm_directions(src_device, dest_device, src_program, dest_program);
         // Move out of loop?
         a_builder = &edm_builders_backward_direction[dest_device->id()].front();
         this->buffer_size_bytes = a_builder->channel_buffer_size;
     }
     if (topology == Topology::Ring) {
-        auto src_device = device_sequence.back();
-        auto dest_device = device_sequence.front();
-        auto src_program = programs.back();
-        auto dest_program = programs.front();
+        auto* src_device = device_sequence.back();
+        auto* dest_device = device_sequence.front();
+        auto* src_program = programs.back();
+        auto* dest_program = programs.front();
         build_edm_directions(src_device, dest_device, src_program, dest_program);
 
         a_builder = &edm_builders_backward_direction[dest_device->id()].front();
@@ -299,8 +299,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             auto& backward_direction_edm = edm_builders_backward_direction.at(device_sequence[i]->id());
 
             for (size_t l = 0; l < num_links; l++) {
-                forward_direction_edm.at(l).connect_to_downstream_edm(backward_direction_edm.at(l));
-                backward_direction_edm.at(l).connect_to_downstream_edm(forward_direction_edm.at(l));
+                forward_direction_edm.at(l).connect_to_downstream_edm(&backward_direction_edm.at(l));
+                backward_direction_edm.at(l).connect_to_downstream_edm(&forward_direction_edm.at(l));
             }
         }
     }
@@ -322,13 +322,13 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         sizeof(tt::tt_fabric::PacketHeader);
     const auto config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology);
 
-    log_trace(tt::LogOp, "device id={}", local_device->id());
-    log_trace(tt::LogOp, "EDM Fabric Factory ctor on device: {}", local_device->id());
+    log_trace(tt::LogFabric, "device id={}", local_device->id());
+    log_trace(tt::LogFabric, "EDM Fabric Factory ctor on device: {}", local_device->id());
     if (forward_device.has_value()) {
-        log_trace(tt::LogOp, "\tConnect[FORWARD]: {} -> {}", local_device->id(), forward_device.value()->id());
+        log_trace(tt::LogFabric, "\tConnect[FORWARD]: {} -> {}", local_device->id(), forward_device.value()->id());
     }
     if (backward_device.has_value()) {
-        log_trace(tt::LogOp, "\tConnect[BACKWARD]: {} -> {}", local_device->id(), backward_device.value()->id());
+        log_trace(tt::LogFabric, "\tConnect[BACKWARD]: {} -> {}", local_device->id(), backward_device.value()->id());
     }
 
     // Construct the builders
@@ -351,7 +351,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             continue;
         }
         log_trace(
-            tt::LogOp,
+            tt::LogFabric,
             "Device {} is connected to {} at index {}",
             local_device->id(),
             device_pairs[i].second.value()->id(),
@@ -373,7 +373,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 break;
             }
             log_trace(
-                tt::LogOp,
+                tt::LogFabric,
                 "DEBUG: build EDM: device: {}, &program: {}: core-logi(x={},y={})",
                 local_device->id(),
                 (void*)program,
@@ -407,8 +407,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             auto& backward_direction_edm = edm_builders_backward_direction.at(local_device->id());
 
             for (size_t l = 0; l < this->num_links; l++) {
-                forward_direction_edm.at(l).connect_to_downstream_edm(backward_direction_edm.at(l));
-                backward_direction_edm.at(l).connect_to_downstream_edm(forward_direction_edm.at(l));
+                forward_direction_edm.at(l).connect_to_downstream_edm(&backward_direction_edm.at(l));
+                backward_direction_edm.at(l).connect_to_downstream_edm(&forward_direction_edm.at(l));
             }
         }
     }
@@ -443,10 +443,10 @@ EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_
 void EdmLineFabricOpInterface::build_kernels() const {
     auto generate_kernels_in_direction =
         [this](tt::tt_metal::IDevice* device, tt::tt_metal::Program* program, Direction direction) {
-            auto& edm_builders =
+            const auto& edm_builders =
                 direction == FORWARD ? edm_builders_forward_direction : edm_builders_backward_direction;
             if (edm_builders.find(device->id()) != edm_builders.end()) {
-                for (auto& edm_builder : edm_builders.at(device->id())) {
+                for (const auto& edm_builder : edm_builders.at(device->id())) {
                     auto noc_ids = std::array<tt::tt_metal::NOC, 2>{tt::tt_metal::NOC::NOC_0, tt::tt_metal::NOC::NOC_1};
                     TT_FATAL(
                         edm_builder.get_configured_risc_count() <= 2,
@@ -454,7 +454,7 @@ void EdmLineFabricOpInterface::build_kernels() const {
                         edm_builder.get_configured_risc_count());
                     for (uint32_t risc_id = 0; risc_id < edm_builder.get_configured_risc_count(); risc_id++) {
                         log_trace(
-                            tt::LogOp,
+                            tt::LogFabric,
                             "Building EDM kernel on device {}, logical-core (y={},x={}), noc_core (y={},x={}), risc_id "
                             "{}",
                             device->id(),
@@ -489,7 +489,7 @@ EdmLineFabricOpInterface::generate_local_chip_fabric_termination_infos(tt::tt_me
     auto generate_termination_info =
         [](const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder) -> tt::tt_fabric::edm_termination_info_t {
         return tt::tt_fabric::edm_termination_info_t{
-            0, edm_builder.my_noc_x, edm_builder.my_noc_y, edm_builder.config.termination_signal_address};
+            0, edm_builder.get_noc_x(), edm_builder.get_noc_y(), edm_builder.config.termination_signal_address};
     };
     std::vector<tt::tt_fabric::edm_termination_info_t> edm_termination_infos;
     edm_termination_infos.reserve(this->num_links * 2);
@@ -520,7 +520,7 @@ EdmLineFabricOpInterface::generate_ordered_termination_info_farthest_to_nearest(
     std::vector<tt::tt_fabric::edm_termination_info_t> edm_termination_infos;
     edm_termination_infos.reserve(num_hops * 2 * this->num_links);
     for (int i = num_hops - 1; i >= 0; i--) {
-        log_trace(tt::LogOp, "Generating termination info for hop {}", i);
+        log_trace(tt::LogFabric, "Generating termination info for hop {}", i);
         TT_ASSERT(i + 1 != 0);
         TT_ASSERT(i + 1 < device_sequence.size());
         TT_ASSERT(
@@ -533,37 +533,37 @@ EdmLineFabricOpInterface::generate_ordered_termination_info_farthest_to_nearest(
             "Device {} at index {} not found in `edm_builders_forward_direction` but it was expected there",
             i,
             device_sequence[i]->id());
-        auto& farther_edms = edm_builders_backward_direction.at(device_sequence[i + 1]->id());
-        auto& nearer_edms = edm_builders_forward_direction.at(device_sequence[i]->id());
+        const auto& farther_edms = edm_builders_backward_direction.at(device_sequence[i + 1]->id());
+        const auto& nearer_edms = edm_builders_forward_direction.at(device_sequence[i]->id());
 
         TT_ASSERT(farther_edms.size() <= this->num_links);
         TT_ASSERT(nearer_edms.size() <= this->num_links);
         for (size_t l = 0; l < this->num_links; l++) {
-            auto& farther_edm = farther_edms.at(l);
+            const auto& farther_edm = farther_edms.at(l);
             const std::size_t distance_receiver = i + 1;
             edm_termination_infos.push_back(
-                {distance_receiver, farther_edm.my_noc_x, farther_edm.my_noc_y, config.termination_signal_address});
+                {distance_receiver, farther_edm.get_noc_x(), farther_edm.get_noc_y(), config.termination_signal_address});
         }
         for (size_t l = 0; l < this->num_links; l++) {
-            auto& nearer_edm = nearer_edms.at(l);
+            const auto& nearer_edm = nearer_edms.at(l);
             const std::size_t distance_sender = i;
             edm_termination_infos.push_back(
-                {distance_sender, nearer_edm.my_noc_x, nearer_edm.my_noc_y, config.termination_signal_address});
+                {distance_sender, nearer_edm.get_noc_x(), nearer_edm.get_noc_y(), config.termination_signal_address});
         }
     }
-    log_trace(tt::LogOp, "Done Generating termination infos");
+    log_trace(tt::LogFabric, "Done Generating termination infos");
     return edm_termination_infos;
 }
 
 void EdmLineFabricOpInterface::teardown_from_host(TerminationSignal termination_signal) const {
     for (tt::tt_metal::IDevice* d : this->device_sequence) {
         if (edm_builders_forward_direction.find(d->id()) != edm_builders_forward_direction.end()) {
-            for (auto& edm_builder : edm_builders_forward_direction.at(d->id())) {
+            for (const auto& edm_builder : edm_builders_forward_direction.at(d->id())) {
                 edm_builder.teardown_from_host(d, termination_signal);
             }
         }
         if (edm_builders_backward_direction.find(d->id()) != edm_builders_backward_direction.end()) {
-            for (auto& edm_builder : edm_builders_backward_direction.at(d->id())) {
+            for (const auto& edm_builder : edm_builders_backward_direction.at(d->id())) {
                 edm_builder.teardown_from_host(d, termination_signal);
             }
         }

@@ -11,12 +11,12 @@
 #include <filesystem>
 
 #include "fabric_fixture.hpp"
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
 
 namespace {
 
-constexpr auto k_FabricConfig = tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC;
+constexpr auto k_FabricConfig = tt::tt_fabric::FabricConfig::FABRIC_2D;
 constexpr auto k_ReliabilityMode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
 
 std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::filesystem::path& graph_desc) {
@@ -33,7 +33,7 @@ namespace tt::tt_fabric::fabric_router_tests {
 TEST_F(ControlPlaneFixture, TestCustom2x2ControlPlaneInit) {
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/n300_2x2_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/n300_2x2_mesh_graph_descriptor.textproto";
     [[maybe_unused]] auto control_plane = make_control_plane(mesh_graph_desc_path);
 }
 

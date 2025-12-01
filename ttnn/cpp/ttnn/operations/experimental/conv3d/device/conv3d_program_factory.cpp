@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "conv3d_device_operation.hpp"
 #include "conv3d_program_factory.hpp"
+#include "conv3d_device_operation_types.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
@@ -11,15 +11,20 @@
 #include <algorithm>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::conv3d::detail {
+namespace ttnn::operations::experimental::conv3d::program {
 
-tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
-    const Tensor& input_tensor,
-    const Tensor& weight_tensor,
-    const std::optional<const Tensor>& bias_tensor,
-    const Conv3dConfig& config,
-    const Tensor& output_tensor,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& weight_tensor = tensor_args.weight_tensor;
+    const auto& bias_tensor = tensor_args.bias_tensor;
+    const auto& output_tensor = tensor_return_value;
+
+    // Extract config from operation_attributes
+    const auto& config = operation_attributes.config;
+    const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     auto grid_size = config.compute_with_storage_grid_size;
@@ -35,8 +40,8 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
     uint32_t H_in = input_tensor_shape[2];
     uint32_t W_in = input_tensor_shape[3];
     uint32_t C_in = input_tensor_shape[4];
-    auto [T_out, H_out, W_out] =
-        detail::compute_output_dims(T_in, H_in, W_in, config.padding, config.stride, config.kernel_size);
+    auto [T_out, H_out, W_out] = ttnn::operations::experimental::conv3d::detail::compute_output_dims(
+        T_in, H_in, W_in, config.padding, config.stride, config.kernel_size);
     uint32_t C_out = config.output_channels;
 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -222,7 +227,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // Matmul parameters
-    auto device = input_tensor.device();
+    auto* device = input_tensor.device();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
@@ -554,7 +559,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
                 cores_str += "(" + std::to_string(core.x) + "," + std::to_string(core.y) + ")";
             }
 
-            CoreCoord reducer_core = {
+            [[maybe_unused]] CoreCoord reducer_core = {
                 reducer_core_ids[group_id] % grid_size.x, reducer_core_ids[group_id] / grid_size.x};
 
             log_debug(
@@ -628,33 +633,48 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
         SetRuntimeArgs(program, writer_kernels_id, core, writer_args);
     }
 
-    auto override_runtime_arguments_callback =
-        [num_cores, cores, grid_size, reader_kernels_id, writer_kernels_id](
-            const void* operation,
-            tt::tt_metal::Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
-            auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
-
-            auto input_addr = input_tensors.at(0).buffer()->address();
-            auto weight_addr = input_tensors.at(1).buffer()->address();
-            auto output_addr = output_tensors.at(0).buffer()->address();
-            auto bias_addr =
-                optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer()->address() : 0;
-
-            for (uint32_t i = 0; i < num_cores; ++i) {
-                CoreCoord core = cores.at(i);
-                auto& reader_args = reader_args_by_core[core.x][core.y];
-                auto& writer_args = writer_args_by_core[core.x][core.y];
-                reader_args[0] = input_addr;
-                writer_args[0] = output_addr;
-                writer_args[1] = weight_addr;
-                writer_args[2] = bias_addr;
-            }
-        };
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    // Return cached program with shared variables
+    return cached_program_t{
+        std::move(program),
+        {/* num_cores = */ num_cores,
+         /* cores = */ cores,
+         /* grid_size = */ grid_size,
+         /* reader_kernels_id = */ reader_kernels_id,
+         /* writer_kernels_id = */ writer_kernels_id,
+         /* compute_kernels_id = */ compute_kernels_id}};
 }
 
-}  // namespace ttnn::operations::experimental::conv3d::detail
+void Conv3dProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    using namespace tt::tt_metal;
+
+    auto& shared_vars = cached_program.shared_variables;
+    auto& reader_kernels_id = shared_vars.reader_kernels_id;
+    auto& writer_kernels_id = shared_vars.writer_kernels_id;
+    auto& num_cores = shared_vars.num_cores;
+    auto& cores = shared_vars.cores;
+    auto& program = cached_program.program;
+
+    auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
+    auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
+
+    auto input_addr = tensor_args.input_tensor.buffer()->address();
+    auto weight_addr = tensor_args.weight_tensor.buffer()->address();
+    auto output_addr = tensor_return_value.buffer()->address();
+    auto bias_addr = tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
+
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        CoreCoord core = cores.at(i);
+        auto& reader_args = reader_args_by_core[core.x][core.y];
+        auto& writer_args = writer_args_by_core[core.x][core.y];
+        reader_args[0] = input_addr;
+        writer_args[0] = output_addr;
+        writer_args[1] = weight_addr;
+        writer_args[2] = bias_addr;
+    }
+}
+
+}  // namespace ttnn::operations::experimental::conv3d::program

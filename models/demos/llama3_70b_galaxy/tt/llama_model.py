@@ -16,7 +16,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
-from models.demos.llama3_70b_galaxy.tt.sampling import TTSampling
+from models.common.sampling.generator import SamplingGenerator
 
 
 class TtTransformer(LightweightModule):
@@ -171,7 +171,7 @@ class TtTransformer(LightweightModule):
         )
         if mesh_sub_device_manager_id_decode is None:
             self.tt_ccl = TT_CCL(self.mesh_device, self.args, self.prefetcher_setup.worker_sub_device_id)
-            self.tt_sampling = TTSampling(
+            self.sampling = SamplingGenerator(
                 args=self.args,
                 mesh_device=self.mesh_device,
                 tt_ccl=self.tt_ccl,
@@ -511,6 +511,19 @@ class TtTransformer(LightweightModule):
         )
         return tt_logits
 
+    def _increment_decode_positions_device(self, current_pos, rot_mat_idxs, is_cur_pos_sharded=False):
+        ttnn.plus_one(
+            current_pos,
+            sub_core_grids=self.args.sub_core_grids
+            if is_cur_pos_sharded
+            else ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+            skip_negative_entries=True,
+        )
+        ttnn.plus_one(
+            rot_mat_idxs,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        )
+
     def ttnn_decode_forward(
         self,
         x,
@@ -521,6 +534,7 @@ class TtTransformer(LightweightModule):
         tt_out_logits_saved=None,
         is_cur_pos_sharded=False,
         return_logits=False,
+        capture_sampling_trace=False,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -536,6 +550,8 @@ class TtTransformer(LightweightModule):
             page_table=page_table,
             kv_cache=kv_cache,
         )
+        self._increment_decode_positions_device(current_pos, rot_mat_idxs, is_cur_pos_sharded)
+
         if return_logits:
             tt_logits = self.tt_ccl.line_all_gather(
                 tt_logits[0],
@@ -550,10 +566,7 @@ class TtTransformer(LightweightModule):
 
             return tt_logits
 
-        # sampling
-        tt_toks = self.tt_sampling(tt_logits[0], tt_out_tok=x)
-
-        # Save otuput logits to global python object
+        # Save output logits to global python object
         if tt_out_logits_saved is not None:
             tt_out_logits = ttnn.to_torch(
                 tt_logits[0],
@@ -564,18 +577,13 @@ class TtTransformer(LightweightModule):
             tt_out_logits = tt_out_logits[0, 0, 0, :128256]
             tt_out_logits_saved.copy_(tt_out_logits)
 
-        # Increment current position and rot_mat_idxs
-        # NOTE: if cur pos sharded, each L1 needs to update their own local copy of cur pos
-        ttnn.plus_one(
-            current_pos,
-            sub_core_grids=self.args.sub_core_grids
-            if is_cur_pos_sharded
-            else ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
-            skip_negative_entries=True,
-        )
-        ttnn.plus_one(
-            rot_mat_idxs,
-            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        if capture_sampling_trace:
+            return tt_logits
+
+        tt_toks = self.sampling.sample(
+            tt_logits[0],
+            tt_out_tok=x,
+            enable_trace=False,
         )
         return tt_toks
 

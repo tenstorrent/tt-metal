@@ -73,7 +73,7 @@ bool test_interleaved_l1_buffer(tt_metal::IDevice* device, int num_pages_one, in
 int main(int argc, char** argv) {
     bool pass = true;
 
-    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
     try {
         ////////////////////////////////////////////////////////////////////////////

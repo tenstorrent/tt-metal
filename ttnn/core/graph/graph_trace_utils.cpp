@@ -12,6 +12,7 @@
 
 #include "ttnn/graph/graph_consts.hpp"
 #include "ttnn/graph/graph_processor.hpp"
+#include "ttnn/graph/levelized_graph.hpp"
 #include <tt_stl/assert.hpp>
 
 namespace ttnn::graph {
@@ -151,6 +152,11 @@ std::vector<std::string> extract_calltrace(const nlohmann::json& trace) {
     }
 
     return op_calls;
+}
+
+nlohmann::json extract_levelized_graph(const nlohmann::json& trace, size_t max_level) {
+    LevelizedGraph levelized_graph(trace, max_level);
+    return levelized_graph.to_json();
 }
 
 std::vector<OperationInfo> extract_arguments(const nlohmann::json& trace) {

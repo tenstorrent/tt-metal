@@ -67,7 +67,6 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_
     assert_with_pcc(torch_input_tensor, output_tensor, expected_pcc)
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
 @pytest.mark.parametrize("n", [1])
 @pytest.mark.parametrize("c", [1])
 @pytest.mark.parametrize("m", [1024])
@@ -247,7 +246,6 @@ def test_matmul_reuse_config_sharded_fd_column(
     assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
 @pytest.mark.parametrize("b", [2])
 @pytest.mark.parametrize("h", [3])
 @pytest.mark.parametrize("m", [256])
@@ -355,7 +353,7 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
     return padded_number
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
+@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
 @pytest.mark.parametrize("k", [1024])
 @pytest.mark.parametrize("n", [1280])
 @pytest.mark.parametrize("has_bias", [False, True])
@@ -793,7 +791,6 @@ def run_matmul_2d_tiny_tile(
     assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
 @pytest.mark.parametrize("m", [512])
 @pytest.mark.parametrize("k", [512])
 @pytest.mark.parametrize("n", [768])
@@ -951,7 +948,6 @@ def run_matmul_1d_tiny_tile(
     assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #29890")
 @pytest.mark.parametrize("m", [128])
 @pytest.mark.parametrize("k", [1024])
 @pytest.mark.parametrize("n", [1024])
@@ -1738,7 +1734,6 @@ def test_sharded_matmul(
         input_tensor_b = ttnn.to_memory_config(input_tensor_b, input_b_sharded_memory_config)
 
     output = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.from_device(output)
     output = ttnn.to_torch(output)
 
@@ -2462,3 +2457,42 @@ def test_matmul_padding(
 
     # Verify values match with high precision
     assert torch.allclose(golden_output, output, atol=1e-6)
+
+
+@pytest.mark.parametrize("input_shape", [(1576, 768)])
+@pytest.mark.parametrize("weight_shape", [(768, 768)])
+def test_linear_with_non_tile_aligned_bias(device, input_shape, weight_shape):
+    """
+    Regression test for issue #32441.
+    Tests ttnn.linear with bias that has non-tile-aligned padded dimensions.
+    The bias shape [1576, 768] pads to [1600, 768] where 1600 != tile_height (32),
+    which previously caused a validation error during bias fusion.
+    """
+    torch.manual_seed(0)
+
+    # Create tensors matching the issue repro
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_weight = torch.randn(weight_shape, dtype=torch.bfloat16)
+    torch_bias = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    # Compute expected output using PyTorch
+    # linear(input, weight, bias) with transpose_b=True means: input @ weight.T + bias
+    torch_output = torch.nn.functional.linear(torch_input, torch_weight, bias=None) + torch_bias
+
+    # Convert to ttnn tensors with DRAM memory config as in the original issue
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    weight_tensor = ttnn.from_torch(
+        torch_weight, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    bias_tensor = ttnn.from_torch(
+        torch_bias, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    # This should not crash with "Unsupported bias shape" error
+    output_tensor = ttnn.linear(input_tensor, weight_tensor, bias=bias_tensor, transpose_b=True)
+    output = ttnn.to_torch(output_tensor)
+
+    # Verify correctness
+    assert_with_pcc(torch_output, output, pcc=0.99)

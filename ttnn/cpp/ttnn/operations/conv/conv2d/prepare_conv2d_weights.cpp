@@ -1039,8 +1039,10 @@ static Conv2dBlockConfig get_opt_block_config(
             true,
             conv_config.act_block_h_override);
     }
+
+    auto output_compute_grid_size = get_output_compute_grid_size(compute_grid_size, conv_config, parallel_config);
     ParallelConfig output_parallel_config = determine_output_parallel_config(
-        parallel_config, compute_grid_size, out_channels, parallel_config.shard_orientation, mm_conv);
+        parallel_config, output_compute_grid_size, out_channels, parallel_config.shard_orientation, mm_conv);
 
     MemoryConfig conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
         ttnn::Shape(
@@ -1115,12 +1117,15 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     auto orig_stride = stride;
     const bool is_conv1d = is_1d_conv(kernel_size[1], input_width);
     conv_config.enable_kernel_stride_folding = auto_enable_kernel_folding(
+        input_memory_config,
+        input_layout,
+        input_dtype,
         conv_config.enable_kernel_stride_folding,
-        input_memory_config.is_dram(),
         input_height,
         input_width,
         kernel_size,
         stride,
+        dilation,
         padding_n4);
     if (conv_config.enable_kernel_stride_folding.value()) {
         auto folding_result = compute_kernel_stride_folding_params(
@@ -1320,12 +1325,10 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             conv_config.shard_layout.value(), input_layout, false, mm_conv, input_tensor_sharded_memory_config);
     }
 
+    auto output_compute_grid_size =
+        get_output_compute_grid_size(device->compute_with_storage_grid_size(), conv_config, parallel_config);
     ParallelConfig output_parallel_config = determine_output_parallel_config(
-        parallel_config,
-        device->compute_with_storage_grid_size(),
-        out_channels,
-        parallel_config.shard_orientation,
-        mm_conv);
+        parallel_config, output_compute_grid_size, out_channels, parallel_config.shard_orientation, mm_conv);
 
     const bool auto_shard = !input_memory_config.is_sharded() && !conv_config.shard_layout.has_value();
     return Conv2dWeightsBiasPrepConfig(

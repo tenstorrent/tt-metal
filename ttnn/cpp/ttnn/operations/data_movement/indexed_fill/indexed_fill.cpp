@@ -16,8 +16,7 @@ ttnn::Tensor IndexedFillOperation::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     int64_t dim) {
     auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
-    return operation::run_without_autoformat(
-               IndexedFill{output_memory_config, dim}, {batch_id, input_tensor_a, input_tensor_b}, {}, {})
+    return operation::run(IndexedFill{output_memory_config, dim}, {batch_id, input_tensor_a, input_tensor_b}, {}, {})
         .at(0);
 }
 

@@ -13,16 +13,17 @@ from models.experimental.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from diffusers.utils import export_to_video
 from ....parallel.config import DiTParallelConfig, VaeHWParallelConfig, ParallelFactor
 from ....utils.test import line_params, ring_params
+from models.common.utility_functions import is_blackhole
 
 
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear],
+        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
         # WH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring],
+        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear],
+        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
     ],
     ids=[
         "2x4sp0tp1",
@@ -55,6 +56,7 @@ def test_pipeline_performance(
     height: int,
     is_ci_env: bool,
     galaxy_type: str,
+    is_fsdp: bool,
 ) -> None:
     """Performance test for Wan pipeline with detailed timing analysis."""
 
@@ -118,6 +120,7 @@ def test_pipeline_performance(
         boundary_ratio=0.875,
         dynamic_load=dynamic_load,
         topology=topology,
+        is_fsdp=is_fsdp,
     )
 
     # Warmup run (not timed)
@@ -239,24 +242,32 @@ def test_pipeline_performance(
     if tuple(mesh_device.shape) == (2, 4) and height == 480:
         expected_metrics = {
             "text_encoding_time": 14.8,
-            "denoising_time": 909,
+            "denoising_time": 909.0,
             "vae_decoding_time": 64.6,
-            "total_time": 990,
+            "total_time": 990.0,
         }
     elif tuple(mesh_device.shape) == (4, 8) and height == 480:
         expected_metrics = {
-            "text_encoding_time": 9.34,
-            "denoising_time": 163,
+            "text_encoding_time": 15.0,
+            "denoising_time": 163.0,
             "vae_decoding_time": 18.2,
-            "total_time": 192,
+            "total_time": 192.0,
         }
     elif tuple(mesh_device.shape) == (4, 8) and height == 720:
-        expected_metrics = {
-            "text_encoding_time": 9.15,
-            "denoising_time": 502,
-            "vae_decoding_time": 39.6,
-            "total_time": 556,
-        }
+        if is_blackhole():
+            expected_metrics = {
+                "text_encoding_time": 15.0,
+                "denoising_time": 290.0,
+                "vae_decoding_time": 36.0,
+                "total_time": 341.0,
+            }
+        else:
+            expected_metrics = {
+                "text_encoding_time": 15.0,
+                "denoising_time": 440.0,
+                "vae_decoding_time": 42.0,
+                "total_time": 497.0,
+            }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
 

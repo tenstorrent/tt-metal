@@ -23,7 +23,6 @@ def test_layer_norm(device, h, w, use_welford):
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
     output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -50,7 +49,6 @@ def test_layer_norm_with_weight_and_bias(device, h, w, use_welford):
 
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
     output_tensor = ttnn.layer_norm(input_tensor, weight=weight, bias=bias, program_config=program_config)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -77,7 +75,6 @@ def test_layer_norm_with_weight_and_bias_row_major(device, h, w, use_welford):
 
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
     output_tensor = ttnn.layer_norm(input_tensor, weight=weight, bias=bias, program_config=program_config)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -111,7 +108,6 @@ def test_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welfor
         bias=bias,
         program_config=program_config,
     )
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -151,7 +147,6 @@ def test_layer_norm_with_tile_layout(device, h, w):
         bias=bias,
     )
 
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -174,7 +169,6 @@ def test_large_layer_norm(device, h, w, use_welford, dtype):
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
     output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -201,7 +195,6 @@ def test_large_layer_norm_with_weight_and_bias(device, h, w, use_welford):
 
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
     output_tensor = ttnn.layer_norm(input_tensor, weight=weight, bias=bias, program_config=program_config)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -224,7 +217,6 @@ def test_large_layer_norm_with_weight(device, h, w, use_welford):
 
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
     output_tensor = ttnn.layer_norm(input_tensor, weight=weight, program_config=program_config)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -247,7 +239,6 @@ def test_large_layer_norm_with_bias(device, h, w, use_welford):
 
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
     output_tensor = ttnn.layer_norm(input_tensor, bias=bias, program_config=program_config)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -281,7 +272,6 @@ def test_large_layer_norm_with_legacy_reduction_and_rsqrt(device, h, w, legacy_r
     output_tensor = ttnn.layer_norm(
         input_tensor, bias=bias, compute_kernel_config=compute_kernel_config, program_config=program_config
     )
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -318,7 +308,6 @@ def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_
         bias=bias,
         program_config=program_config,
     )
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -345,7 +334,6 @@ def test_l1_interleaved(device, use_welford, dtype):
     )
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
     output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 

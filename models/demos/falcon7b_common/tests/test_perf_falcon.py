@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from models.common.utility_functions import disable_persistent_kernel_cache, is_blackhole, is_e75, is_wormhole_b0
+from models.common.utility_functions import is_blackhole, is_e75, is_wormhole_b0
 from models.demos.falcon7b_common.tests.run_falcon_end_to_end import (
     DECODE_CONFIG_TO_PCC,
     PREFILL_CONFIG_TO_PCC,
@@ -73,8 +73,6 @@ class TestParametrized:
         model_config = get_model_config(model_config_str, seq_len, batch)
         tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 
-        disable_persistent_kernel_cache()
-
         if llm_mode == "prefill":
             expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc = PREFILL_CONFIG_TO_PCC[
                 DeviceSetup.GRAYSKULL
@@ -119,8 +117,6 @@ class TestParametrized:
         model_config = get_model_config(model_config_str, seq_len, batch)
         tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 
-        disable_persistent_kernel_cache()
-
         run_test_FalconCausalLM_end_to_end(
             mesh_device,
             model_version,
@@ -149,7 +145,7 @@ class TestParametrized:
             ("decode", 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", 0.063),
             ("decode", 32, 32, 1, 1024, "BFLOAT16-DRAM", 0.38),
             ("decode", 32, 32, 1, 1024, "BFLOAT16-L1", 0.29),
-            ("decode", 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.059),
+            ("decode", 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.065),
             ("decode", 32, 32, 1, 2047, "BFLOAT16-DRAM", 0.70),
             ("decode", 32, 32, 1, 2047, "BFLOAT16-L1", 0.55),
             ("decode", 32, 32, 1, 2047, "BFLOAT16-L1_SHARDED", 0.064),

@@ -12,6 +12,8 @@
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <ostream>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -27,7 +29,7 @@
 #include "jit_build_settings.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
-#include "impl/kernels/kernel_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 
 enum class UnpackToDestMode : uint8_t;
 
@@ -41,7 +43,9 @@ namespace {
 
 void gen_kernel_cpp(const string& src, const string& dst_name, const vector<string>& prolog) {
     std::ofstream out(dst_name);
-    for (const string& s : prolog) out << s;
+    for (const string& s : prolog) {
+        out << s;
+    }
     out << src;
 }
 

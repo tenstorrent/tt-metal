@@ -7,8 +7,8 @@
 #include <cstdint>
 #include <cstddef>
 
-#include "tt_metal/api/tt-metalium/fabric_types.hpp"
-#include "tt_metal/api/tt-metalium/fabric_edm_types.hpp"
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
 #include <vector>
 
@@ -83,7 +83,7 @@ static constexpr std::size_t num_downstream_sender_channels = num_sender_channel
 static constexpr std::size_t num_receiver_channels = 2;
 
 static constexpr std::size_t num_downstream_edms_vc0 = 1;
-static constexpr std::size_t num_downstream_edms_2d_vc0 = 4;
+static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;
 static constexpr std::size_t num_downstream_edms_vc1 = 1;
 static constexpr std::size_t num_downstream_edms = num_downstream_edms_vc0 + num_downstream_edms_vc1;
 static constexpr std::size_t num_downstream_edms_2d = num_downstream_edms_2d_vc0 + num_downstream_edms_vc1;

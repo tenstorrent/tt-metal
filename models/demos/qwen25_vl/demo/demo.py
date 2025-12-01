@@ -481,10 +481,14 @@ def test_demo(
 
         # Start decoding
         iteration = 0
-        argmax_on_device = sampling_params["temperature"] == 0
+        argmax_on_device = model._supports_on_device_sampling
         if argmax_on_device:
+            logger.info(f"Using on-device sampling with temperature=0.0, top_k=-1, top_p=1.0")
             device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
         else:
+            logger.info(
+                f"Using host sampling with temperature={sampling_params['temperature']}, top_p={sampling_params['top_p']}"
+            )
             device_sampling_params = None
 
         users_decoding = True
@@ -809,6 +813,7 @@ def test_demo(
             ml_model_type="llm",
             num_layers=model_args.n_layers,
             batch_size=batch_size,
+            config_params={"data_parallel": 1, "tensor_parallel": mesh_device.get_num_devices()},
             input_sequence_length=max(prefill_lens),
             output_sequence_length=num_tokens_generated_decode[0],
         )

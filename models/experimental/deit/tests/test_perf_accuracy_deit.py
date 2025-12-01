@@ -18,6 +18,8 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     torch_to_tt_tensor_tile,
+from models.common.utility_functions import (
+    torch_to_tt_tensor_rm,
     profiler,
 )
 from models.perf.perf_utils import prep_perf_report
@@ -36,7 +38,6 @@ def run_perf_deit(
     iterations,
     model_location_generator,
 ):
-    disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     third_key = "third_iter"
@@ -62,8 +63,6 @@ def run_perf_deit(
         ttnn.synchronize_device(device)
         profiler.end(first_key)
         del tt_output
-
-        enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_output = tt_model_with_teacher(tt_input)[0]

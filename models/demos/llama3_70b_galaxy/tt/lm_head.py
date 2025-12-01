@@ -213,6 +213,15 @@ class LMHead(LightweightModule):
                     program_config=self.prefill_pc,
                     dtype=ttnn.bfloat8_b,
                 )
+                # Minimal matmul is not giving any performance improvement over linear
+                # output = ttnn.experimental.minimal_matmul(
+                #     input_tensor=x,
+                #     weight_tensor=weight,
+                #     config=self.prefill_pc,
+                #     dtype=ttnn.bfloat8_b,
+                #     compute_kernel_config=self.compute_kernel_config,
+                #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                # )
                 x.deallocate(True)
                 outputs.append(output)
 

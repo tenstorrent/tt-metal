@@ -37,9 +37,9 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
     uint32_t value_tile_size = tile_size(output_val_cb_data_format);
     uint32_t index_tile_size = tile_size(output_ind_cb_data_format);
 
-    auto input_buffer = input_tensor.buffer();
-    auto values_buffer = value_tensor.buffer();
-    auto index_buffer = index_tensor.buffer();
+    auto* input_buffer = input_tensor.buffer();
+    auto* values_buffer = value_tensor.buffer();
+    auto* index_buffer = index_tensor.buffer();
 
     auto input_shape = input_tensor.padded_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
@@ -184,10 +184,10 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto input_buffer = input_tensors.at(0).buffer();
+        auto* input_buffer = input_tensors.at(0).buffer();
 
-        auto values_buffer = output_tensors.at(0).buffer();
-        auto index_buffer = output_tensors.at(1).buffer();
+        auto* values_buffer = output_tensors.at(0).buffer();
+        auto* index_buffer = output_tensors.at(1).buffer();
 
         {
             auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
@@ -267,12 +267,12 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
     uint32_t value_tile_size = tile_size(value_cb_data_format);
     uint32_t index_tile_size = tile_size(index_cb_data_format);
 
-    auto input_buffer = input_tensor.buffer();
-    auto values_buffer = value_tensor.buffer();
-    auto index_buffer = index_tensor.buffer();
-    auto input_indices_buffer = input_indices_tensor.has_value() ? input_indices_tensor->buffer() : nullptr;
+    auto* input_buffer = input_tensor.buffer();
+    auto* values_buffer = value_tensor.buffer();
+    auto* index_buffer = index_tensor.buffer();
+    auto* input_indices_buffer = input_indices_tensor.has_value() ? input_indices_tensor->buffer() : nullptr;
 
-    auto device = input_tensor.device();
+    auto* device = input_tensor.device();
 
     auto input_shape = input_tensor.padded_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
@@ -556,10 +556,10 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            auto input_buffer = input_tensors.at(0).buffer();
-            auto values_buffer = output_tensors.at(0).buffer();
-            auto index_buffer = output_tensors.at(1).buffer();
-            auto input_indices_buffer =
+            auto* input_buffer = input_tensors.at(0).buffer();
+            auto* values_buffer = output_tensors.at(0).buffer();
+            auto* index_buffer = output_tensors.at(1).buffer();
+            auto* input_indices_buffer =
                 optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer() : nullptr;
 
             for (auto core : local_cores) {

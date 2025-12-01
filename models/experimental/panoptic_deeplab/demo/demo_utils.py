@@ -51,16 +51,13 @@ def preprocess_input_params(output_dir, model_category, current_dir, model_locat
     return images_paths, weights_path, output_dir
 
 
-def preprocess_image(
-    image_path: str, target_size: Tuple[int, int] = (512, 1024), use_imagenet_norm: bool = True
-) -> torch.Tensor:
+def preprocess_image(image_path: str, target_size: Tuple[int, int] = (512, 1024)) -> torch.Tensor:
     """
     Preprocess image for Panoptic DeepLab inference.
 
     Args:
         image_path: Path to input image
         target_size: Target size as (height, width)
-        use_imagenet_norm: Whether to apply ImageNet normalization (will be done on device if True)
 
     Returns:
         Preprocessed tensor in NCHW format (normalized to [0,1], ImageNet norm applied on device)

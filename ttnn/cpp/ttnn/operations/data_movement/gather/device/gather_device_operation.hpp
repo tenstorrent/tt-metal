@@ -37,7 +37,8 @@ struct GatherDeviceOperation {
         const Tensor& input_index_tensor,
         bool sparse_grad,
         const MemoryConfig& output_memory_config,
-        const std::optional<Tensor>& output_tensors);
+        const std::optional<Tensor>& output_tensors,
+        const std::optional<CoreRangeSet>& sub_core_grids);
 };
 
 }  // namespace ttnn::operations::data_movement::gather

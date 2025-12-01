@@ -25,8 +25,10 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         slice_write.cpp
-        device/slice_write_op.cpp
-        device/slice_write_program_factory.cpp
+        device/slice_write_device_operation.cpp
+        device/slice_write_rm_sharded_input_program_factory.cpp
+        device/slice_write_tiled_sharded_input_program_factory.cpp
+        device/slice_write_rm_interleaved_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_slice_write PRIVATE ${FixmeOpIncDirs})

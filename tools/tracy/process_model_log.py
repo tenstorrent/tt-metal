@@ -53,12 +53,18 @@ def post_process_ops_log(output_logs_subdir, columns=None, sum_vals=True, op_nam
 
 
 def run_device_profiler(
-    command, output_logs_subdir, check_test_return_code=True, device_analysis_types=[], cpp_post_process=False
+    command,
+    output_logs_subdir,
+    check_test_return_code=True,
+    device_analysis_types=[],
+    cpp_post_process=False,
+    capture_perf_counters_groups=[],
 ):
     output_profiler_dir = get_profiler_folder(output_logs_subdir)
     check_return_code = ""
     device_analysis_opt = ""
     cpp_post_process_opt = ""
+    capture_perf_counters_opt = ""
     if cpp_post_process:
         cpp_post_process_opt = "--cpp-post-process"
     if check_test_return_code:
@@ -67,9 +73,12 @@ def run_device_profiler(
         assert type(device_analysis_types) == list
         device_analysis_opt_list = [f" -a {analysis}" for analysis in device_analysis_types]
         device_analysis_opt = "".join(device_analysis_opt_list)
+    if capture_perf_counters_groups:
+        assert type(capture_perf_counters_groups) == list
+        capture_perf_counters_opt = "--profiler-capture-perf-counters=" + ",".join(capture_perf_counters_groups)
     # Quote the embedded command so that arguments like `-k "expr with spaces"` survive through the outer shell
     quoted_command = shlex.quote(command)
-    profiler_cmd = f"python3 -m tracy -p -r -o {output_profiler_dir} {check_return_code} {device_analysis_opt} {cpp_post_process_opt} -t 5000 -m {quoted_command}"
+    profiler_cmd = f"python3 -m tracy -p -r -o {output_profiler_dir} {check_return_code} {device_analysis_opt} {cpp_post_process_opt} {capture_perf_counters_opt} -t 5000 -m {quoted_command}"
     logger.info(profiler_cmd)
     subprocess.run([profiler_cmd], shell=True, check=True)
 

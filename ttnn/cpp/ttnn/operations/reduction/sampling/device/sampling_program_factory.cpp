@@ -2,30 +2,36 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/reduction/sampling/device/sampling_program_factory.hpp"
+
+#include <algorithm>
+
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/operation.hpp"
-#include <algorithm>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/operation.hpp"
 
-namespace ttnn::operations::reduction::detail {
+namespace ttnn::operations::reduction::sampling::program {
 
-tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
-    const std::vector<Tensor>& input_tensors,
-    const std::optional<uint32_t>& seed,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    Tensor& output_tensor) {
+SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
     using namespace tt::constants;
+
+    const auto& input_values_tensor = tensor_args.input_values;
+    const auto& input_indices_tensor = tensor_args.input_indices;
+    const auto& k = tensor_args.k;
+    const auto& p = tensor_args.p;
+    const auto& temp = tensor_args.temp;
+
+    const auto& seed = operation_attributes.seed;
+    const auto& sub_core_grids = operation_attributes.sub_core_grids;
+
     tt::tt_metal::Program program{};
     uint32_t random_seed = 0;
-
-    const auto& input_values_tensor = input_tensors[0];
-    const auto& input_indices_tensor = input_tensors[1];
-    const auto& k = input_tensors[2];
-    const auto& p = input_tensors[3];
-    const auto& temp = input_tensors[4];
 
     tt::DataFormat input_values_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(input_values_tensor.dtype());
@@ -39,14 +45,14 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
     uint32_t input_values_tile_size = tile_size(input_values_cb_data_format);
     uint32_t index_tile_size = tile_size(index_cb_data_format);
 
-    auto input_values_buffer = input_values_tensor.buffer();
-    auto input_indices_buffer = input_indices_tensor.buffer();
-    auto k_buffer = k.buffer();
-    auto p_buffer = p.buffer();
-    auto temp_buffer = temp.buffer();
-    auto output_buffer = output_tensor.buffer();
+    auto* input_values_buffer = input_values_tensor.buffer();
+    auto* input_indices_buffer = input_indices_tensor.buffer();
+    auto* k_buffer = k.buffer();
+    auto* p_buffer = p.buffer();
+    auto* temp_buffer = temp.buffer();
+    auto* output_buffer = output_tensor.buffer();
 
-    auto device = input_values_tensor.device();
+    auto* device = input_values_tensor.device();
 
     auto input_shape = input_values_tensor.logical_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
@@ -311,37 +317,39 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
         compute_kernel_ids.push_back(compute_kernel_id);
     }
 
-    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_ids, cores](
-                                              const void* operation,
-                                              tt::tt_metal::Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto input_values_buffer = input_tensors.at(0).buffer();
-        auto input_indices_buffer = input_tensors.at(1).buffer();
-        auto k_buffer = input_tensors.at(2).buffer();
-        auto p_buffer = input_tensors.at(3).buffer();
-        auto temp_buffer = input_tensors.at(4).buffer();
-
-        auto output_buffer = output_tensors.at(0).buffer();
-
-        for (uint32_t i = 0; i < cores.size(); ++i) {
-            const auto& core = cores[i];
-            auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            reader_runtime_args[0] = input_values_buffer->address();
-            reader_runtime_args[1] = input_indices_buffer->address();
-
-            auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_ids.at(i), core);
-            writer_runtime_args[0] = output_buffer->address();
-            writer_runtime_args[1] = temp_buffer->address();
-            writer_runtime_args[2] = k_buffer->address();
-            writer_runtime_args[3] = p_buffer->address();
-        }
-    };
-
-    return {std::move(program), override_runtime_args_callback};
+    return cached_program_t{std::move(program), {reader_kernel_id, writer_kernel_ids, cores}};
 }
 
-}  // namespace ttnn::operations::reduction::detail
+void SamplingProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto& program = cached_program.program;
+    auto& shared_vars = cached_program.shared_variables;
+    auto& reader_kernel_id = shared_vars.reader_kernel_id;
+    auto& writer_kernel_ids = shared_vars.writer_kernel_ids;
+    auto& cores = shared_vars.cores;
 
-// accept optional core_grid
+    auto* input_values_buffer = tensor_args.input_values.buffer();
+    auto* input_indices_buffer = tensor_args.input_indices.buffer();
+    auto* k_buffer = tensor_args.k.buffer();
+    auto* p_buffer = tensor_args.p.buffer();
+    auto* temp_buffer = tensor_args.temp.buffer();
+    auto* output_buffer = tensor_return_value.buffer();
+
+    for (uint32_t i = 0; i < cores.size(); ++i) {
+        const auto& core = cores[i];
+        auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+        reader_runtime_args[0] = input_values_buffer->address();
+        reader_runtime_args[1] = input_indices_buffer->address();
+
+        auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_ids.at(i), core);
+        writer_runtime_args[0] = output_buffer->address();
+        writer_runtime_args[1] = temp_buffer->address();
+        writer_runtime_args[2] = k_buffer->address();
+        writer_runtime_args[3] = p_buffer->address();
+    }
+}
+
+}  // namespace ttnn::operations::reduction::sampling::program

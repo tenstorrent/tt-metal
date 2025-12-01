@@ -20,26 +20,14 @@ def from_channel_last_ttnn(ttnn_tensor, output_shape):
 
 
 def prepare_gn_mask(device, C, G, num_cores):
-    input_mask_tensor = ttnn.create_group_norm_input_mask(C, G, num_cores)
-    input_mask_tensor = ttnn.from_torch(
-        input_mask_tensor,
-        dtype=ttnn.DataType.BFLOAT8_B,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, G, num_cores, ttnn.DataType.BFLOAT8_B)
+    input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
     return input_mask_tensor
 
 
 def prepare_gn_mask_negative_mask(device, C, G, num_cores):
-    input_mask_tensor = ttnn.create_group_norm_input_negative_mask(C, G, num_cores)
-    input_mask_tensor = ttnn.from_torch(
-        input_mask_tensor,
-        dtype=ttnn.DataType.BFLOAT8_B,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    input_mask_tensor = ttnn.create_group_norm_input_negative_mask(C, G, num_cores, ttnn.DataType.BFLOAT8_B)
+    input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
     return input_mask_tensor
 
 
