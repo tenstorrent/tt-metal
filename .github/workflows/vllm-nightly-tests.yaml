@@ -8,9 +8,17 @@ on:
         required: false
         default: dev
       model:
-        description: "Model to test (or 'all' for all models)"
+        description: "Model to test"
         required: false
+        type: choice
         default: "all"
+        options:
+          - all
+          - meta-llama/Llama-3.1-8B-Instruct
+          - meta-llama/Llama-3.3-70B-Instruct
+          - Qwen/Qwen2.5-VL-72B-Instruct
+          - google/gemma-3-27b-it
+          - openai/gpt-oss-120b
   schedule:
     - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC
 
