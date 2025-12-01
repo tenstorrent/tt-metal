@@ -85,9 +85,8 @@ std::unique_ptr<FabricRouterBuilder> FabricRouterBuilder::build(
 
     std::vector<bool> tensix_injection_flags;
     if (will_create_tensix_builder) {
-        // TENSIX in MUX mode handles all VC0 channels (same count as topology-based)
-        bool is_2d = (topology == Topology::Mesh || topology == Topology::Torus);
-        size_t tensix_num_channels = builder_config::get_sender_channel_count(is_2d);
+        size_t tensix_num_channels = builder_config::get_num_tensix_sender_channels(
+            topology, tt::tt_metal::MetalContext::instance().get_fabric_tensix_config());
         auto tensix_to_router_channel_map =
             get_variant_to_router_channel_map(channel_mapping, BuilderType::TENSIX, tensix_num_channels);
         tensix_injection_flags = get_child_builder_variant_sender_channel_injection_flags(

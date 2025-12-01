@@ -77,21 +77,13 @@ static constexpr std::size_t num_downstream_edms = num_downstream_edms_vc0;
 static constexpr std::size_t num_downstream_edms_2d = num_downstream_edms_2d_vc0;
 static constexpr std::size_t max_downstream_edms = std::max(num_downstream_edms, num_downstream_edms_2d);
 
+uint32_t get_sender_channel_count(bool is_2D_routing);
 
-inline uint32_t get_sender_channel_count(const bool is_2D_routing) {
-    return is_2D_routing ? builder_config::num_sender_channels_2d : builder_config::num_sender_channels_1d;
-}
+uint32_t get_num_tensix_sender_channels(Topology topology, tt::tt_fabric::FabricTensixConfig fabric_tensix_config);
 
-inline uint32_t get_downstream_edm_count(const bool is_2D_routing) {
-    return is_2D_routing ? builder_config::num_downstream_edms_2d
-                         : builder_config::num_downstream_edms;
-}
+uint32_t get_downstream_edm_count(bool is_2D_routing);
 
-inline uint32_t get_vc0_downstream_edm_count(const bool is_2D_routing) {
-    return is_2D_routing ? builder_config::num_downstream_edms_2d_vc0
-                         : builder_config::num_downstream_edms_vc0;
-}
-
+uint32_t get_vc0_downstream_edm_count(bool is_2D_routing);
 
 }  // namespace builder_config
 

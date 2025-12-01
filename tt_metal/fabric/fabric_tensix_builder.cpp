@@ -226,28 +226,7 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
     auto topology = fabric_context.get_fabric_topology();
     auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
 
-    // Determine num_channels_for_mux based on mode
-    if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
-        // UDM mode: MUX temporarily has 3 channels (one for worker, one for relay, one for forwarding channel between
-        // mux)
-        // TODO: later need to calculate the number of channels based on the number of worker served, plus one relay
-        // channel, plus one forwarding channel between mux. RELAY permanently has 1 channel (configured separately in
-        // its constructor)
-        num_channels_for_mux_ = static_cast<size_t>(UdmMuxChannelId::NUM_CHANNELS);
-    } else {
-        // MUX mode: use topology-based channel count
-        switch (topology) {
-            case tt::tt_fabric::Topology::Linear:
-            case tt::tt_fabric::Topology::Ring:
-                num_channels_for_mux_ = tt::tt_fabric::builder_config::num_sender_channels_1d_linear;
-                break;
-            case tt::tt_fabric::Topology::Mesh:
-            case tt::tt_fabric::Topology::Torus:
-                num_channels_for_mux_ = tt::tt_fabric::builder_config::num_sender_channels_2d_mesh;
-                break;
-            default: TT_THROW("unknown fabric topology: {}", topology); break;
-        }
-    }
+    num_channels_for_mux_ = builder_config::get_num_tensix_sender_channels(topology, fabric_tensix_config);
 
     // Calculate buffers per channel based on available space and max channels
     size_t space_needed_for_max_channels = num_channels_for_mux_ * buffer_size_bytes_full_size_channel_;
