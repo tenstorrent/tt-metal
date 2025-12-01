@@ -270,6 +270,20 @@ jobs:
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08BH66EXAL, # Radoica Draskic
           },
+          {
+            name: "[WH-T3K][v1] Multi-process reduce scatter test model",
+            model: "models/vllm_test_utils/t3000_multiproc_test",
+            server-timeout: 5,
+            benchmark-timeout: 5,
+            runner-label: config-t3000,
+            arch: arch-wormhole_b0,
+            mesh-device: "\"(2, 4)\"",
+            override-tt-config: "{\"rank_binding\": \"tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml\", \"mpi_args\": \"--allow-run-as-root --tag-output\", \"config_pkl_dir\": \"vllm\", \"register_test_models\": true}",
+            additional-args: "--data_parallel_size 8 --tokenizer meta-llama/Llama-3.1-8B-Instruct",
+            use-vllm-v1: true,
+            multimodal: false,
+            co-owner-1-id: U08CEGF78ET, # Salar Hosseini Khorasgani
+          },
         ]
     runs-on:
       - ${{ matrix.test-group.runner-label }}
@@ -349,7 +363,9 @@ jobs:
           fi
 
           export MESH_DEVICE=${{ matrix.test-group.mesh-device }}
-          export TT_LLAMA_TEXT_VER=${{ matrix.test-group.tt-llama-text-ver }}
+          if [ -n "${{ matrix.test-group.tt-llama-text-ver }}" ]; then
+            export TT_LLAMA_TEXT_VER=${{ matrix.test-group.tt-llama-text-ver }}
+          fi
 
           # Keep TT cache separate from HF hub
           export HF_MODEL="${{ matrix.test-group.model }}"
