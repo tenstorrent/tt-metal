@@ -15,7 +15,7 @@ on:
       extra-tag:
         required: false
         type: string
-        default: "g09glx01"
+        default: "g14glx02"
       blackhole:
         required: false
         type: boolean
