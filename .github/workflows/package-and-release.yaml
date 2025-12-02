@@ -167,12 +167,44 @@ jobs:
     permissions: read-all
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Get previous tag for changelog
+        id: get-previous-tag
+        run: |
+          # Fetch all tags
+          git fetch --tags --force origin
+
+          release_type="${{ needs.release-precheck.outputs.tag-type }}"
+          echo "Release type: $release_type"
+
+          if [[ "$release_type" == "dev" ]]; then
+            # For dev releases, find the second latest dev tag (contains -dev) - skip the current one
+            previous_tag=$(git tag -l --sort=-version:refname | grep -E ".*-dev.*" | sed -n '2p' || echo "")
+          elif [[ "$release_type" == "rc" ]]; then
+            # For rc releases, find the second latest rc tag (contains -rc) - skip the current one
+            previous_tag=$(git tag -l --sort=-version:refname | grep -E ".*-rc.*" | sed -n '2p' || echo "")
+          else
+            # For prod releases, find the second latest stable release (no -dev or -rc suffix) - skip the current one
+            previous_tag=$(git tag -l --sort=-version:refname | grep -v -E ".*(dev|rc).*" | sed -n '2p' || echo "")
+          fi
+
+          if [[ -z "$previous_tag" ]]; then
+            echo "No previous tag found for release type: $release_type"
+            echo "Using first commit as fallback"
+            previous_tag=$(git rev-list --max-parents=0 HEAD)
+          fi
+
+          echo "Previous tag: $previous_tag"
+          echo "previous-tag=$previous_tag" >> "$GITHUB_OUTPUT"
       - name: Create changelog
         id: create-changelog
         uses: mikepenz/release-changelog-builder-action@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          fromTag: ${{ needs.release-precheck.outputs.tag-type == 'dev' && 'latest-dev' || (needs.release-precheck.outputs.tag-type == 'rc' && 'latest-rc' || 'latest') }}
+          fromTag: ${{ steps.get-previous-tag.outputs.previous-tag }}
           toTag: ${{ needs.create-tag.outputs.version }}
           failOnError: true
           outputFile: CHANGELOG.txt
