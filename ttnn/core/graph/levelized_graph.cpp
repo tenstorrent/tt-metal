@@ -428,9 +428,7 @@ void LevelizedGraph::populate_input_connections(const nlohmann::json& trace) {
             return;
         }
 
-        int function_start_counter = node_counter;
-
-        // Check if the new input_tensors field is available
+        // Check if input_tensors field is available, use it to populate in_edges
         if (node.contains(kInputTensors) && node[kInputTensors].is_array()) {
             // New format: directly use input_tensors field which preserves order
             auto input_tensors = node[kInputTensors];
@@ -461,70 +459,6 @@ void LevelizedGraph::populate_input_connections(const nlohmann::json& trace) {
                     }
                 }
             }
-        } else {
-            // Old format: fall back to inference logic for backward compatibility
-            // First, collect all input tensors with their usage counts
-            std::unordered_map<int, size_t> tensor_usage_count;
-            auto tensor_nodes =
-                trace | std::views::filter([&](const auto& node) { return node[kNodeType] == kNodeTensor; });
-            std::ranges::for_each(tensor_nodes, [&](const auto& node) {
-                int tensor_counter = node[kCounter].template get<int>();
-                auto connections = get_connections(node);
-                // Count how many times this function_start appears in the tensor's connections
-                size_t count = std::ranges::count(connections, function_start_counter);
-                if (count > 0) {
-                    tensor_usage_count[tensor_counter] = count;
-                }
-            });
-
-            // Build a list of input tensors, with each tensor appearing once per usage
-            std::vector<int> input_tensor_list;
-            std::ranges::for_each(tensor_nodes, [&](const auto& node) {
-                int tensor_counter = node[kCounter].template get<int>();
-                auto it = tensor_usage_count.find(tensor_counter);
-                if (it != tensor_usage_count.end()) {
-                    // Add this tensor once for each time it's used
-                    std::ranges::fill_n(std::back_inserter(input_tensor_list), it->second, tensor_counter);
-                    // Remove from map so we don't add it again
-                    tensor_usage_count.erase(it);
-                }
-            });
-
-            // For each argument in order, if it's a Tensor, find its producer
-            size_t tensor_list_index = 0;
-            auto tensor_args =
-                vertex.arguments | std::views::filter([](const std::string& arg) { return arg.find("Tensor(") == 0; });
-            std::ranges::for_each(tensor_args, [&](const std::string&) {
-                // This is a tensor argument - match it to the next input tensor in order
-                if (tensor_list_index < input_tensor_list.size()) {
-                    int tensor_counter = input_tensor_list[tensor_list_index];
-                    tensor_list_index++;
-
-                    // Check if this tensor is a vertex in our graph (level 1 tensor)
-                    auto tensor_vertex_it = id_map.find(tensor_counter);
-                    if (tensor_vertex_it != id_map.end()) {
-                        // This is a level 1 tensor vertex, add it as input
-                        size_t tensor_vertex_id = tensor_vertex_it->second;
-                        vertex.in_edges.push_back(tensor_vertex_id);
-                    } else {
-                        // Find which operation produced this tensor
-                        auto tensor_producer_it = tensor_to_producer_end.find(tensor_counter);
-                        if (tensor_producer_it != tensor_to_producer_end.end()) {
-                            int producer_end = tensor_producer_it->second;
-                            auto end_to_start_it = function_end_to_start.find(producer_end);
-                            if (end_to_start_it != function_end_to_start.end()) {
-                                int producer_start = end_to_start_it->second;
-                                // Check if producer is in our levelized graph
-                                auto producer_id_it = id_map.find(producer_start);
-                                if (producer_id_it != id_map.end()) {
-                                    size_t producer_vertex_id = producer_id_it->second;
-                                    vertex.in_edges.push_back(producer_vertex_id);
-                                }
-                            }
-                        }
-                    }
-                }
-            });
         }
     });
 }
