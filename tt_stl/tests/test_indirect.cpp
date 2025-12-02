@@ -83,6 +83,7 @@ TEST(IndirectTest, CopyConstructionFromValueless) {
     indirect<int> i2(std::move(i1));
 
     // i1 is now valueless
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     EXPECT_TRUE(i1.valueless_after_move());
 
     // Copy from valueless should create a valueless indirect
@@ -95,6 +96,7 @@ TEST(IndirectTest, MoveConstruction) {
     indirect<TestValue> i1(TestValue(42));
     indirect<TestValue> i2(std::move(i1));
 
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     EXPECT_TRUE(i1.valueless_after_move());
     EXPECT_FALSE(i2.valueless_after_move());
     EXPECT_EQ(i2->value, 42);
@@ -120,6 +122,7 @@ TEST(IndirectTest, CopyAssignmentFromValueless) {
     indirect<int> i2(std::move(i1));
 
     // i1 is now valueless
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     EXPECT_TRUE(i1.valueless_after_move());
 
     indirect<int> i3(100);
@@ -134,6 +137,7 @@ TEST(IndirectTest, CopyAssignmentToValueless) {
     indirect<int> i2(std::move(i1));
 
     // i1 is now valueless
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     EXPECT_TRUE(i1.valueless_after_move());
 
     indirect<int> i3(100);
@@ -161,6 +165,7 @@ TEST(IndirectTest, MoveAssignment) {
 
     i2 = std::move(i1);
 
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     EXPECT_TRUE(i1.valueless_after_move());
     EXPECT_FALSE(i2.valueless_after_move());
     EXPECT_EQ(i2->value, 42);
@@ -191,6 +196,7 @@ TEST(IndirectTest, ValueAssignmentToValueless) {
     indirect<int> i2(std::move(i1));
 
     // i1 is now valueless
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     EXPECT_TRUE(i1.valueless_after_move());
 
     i1 = 100;
@@ -351,6 +357,13 @@ TEST(IndirectTest, PolymorphicTypes) {
     struct Base {
         int value;
         explicit Base(int v) : value(v) {}
+
+        Base(const Base&) = default;
+        Base(Base&&) noexcept = default;
+
+        Base& operator=(const Base&) = default;
+        Base& operator=(Base&&) noexcept = default;
+
         virtual ~Base() = default;
         virtual int get() const { return value; }
     };
