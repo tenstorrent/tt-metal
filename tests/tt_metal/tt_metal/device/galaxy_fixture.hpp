@@ -15,6 +15,7 @@ namespace tt::tt_metal {
 class GalaxyFixture : public MeshDispatchFixture {
 protected:
     bool SkipTestSuiteIfNotGalaxyMotherboard() {
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
         return !(this->arch_ == tt::ARCH::WORMHOLE_B0 && num_devices >= 32);
     }
@@ -43,6 +44,11 @@ protected:
             GTEST_SKIP() << "This test can only run on TG";
         }
     }
+    void SetUp() override {
+        this->DetectDispatchMode();
+        this->SkipTestSuiteIfNotTG();
+        MeshDispatchFixture::SetUp();
+    };
 };
 
 }  // namespace tt::tt_metal
