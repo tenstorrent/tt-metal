@@ -327,6 +327,10 @@ auto_register_ttnn_cpp_operations(ttnn._ttnn)
 import ttnn.experimental_loader
 import ttnn.experimental_loader.golden_functions
 
+# Set up divide as an alias for div before importing operations module
+# This is needed because operations/binary.py tries to attach golden functions to ttnn.divide
+divide = ttnn.div
+
 import ttnn.operations
 
 sub = ttnn.subtract
