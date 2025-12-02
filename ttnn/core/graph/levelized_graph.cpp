@@ -398,8 +398,7 @@ void LevelizedGraph::populate_output_shape(const nlohmann::json& trace) {
 
 // Seventh pass: Populate input_connections
 // For each vertex, find input tensor producers for each tensor argument
-// Use the input_tensors field from graph capture if available (new format)
-// Otherwise, fall back to inference logic (backward compatibility)
+// Use the input_tensors field from graph capture if available
 void LevelizedGraph::populate_input_connections(const nlohmann::json& trace) {
     auto vertex_ids = std::views::iota(0u, graph.size());
     std::ranges::for_each(vertex_ids, [&](size_t vertex_id) {
