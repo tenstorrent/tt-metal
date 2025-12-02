@@ -95,20 +95,20 @@ jobs:
           #   co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
           #   co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
           # },
-          {
-            name: "[WH-GH] Gemma3-27B",
-            model: "google/gemma-3-27b-it",
-            server-timeout: 35,
-            benchmark-timeout: 10,
-            runner-label: topology-6u,
-            arch: arch-wormhole_b0,
-            mesh-device: TG,
-            override-tt-config: "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"worker_l1_size\": 1344544, \"trace_region_size\": 21448704, \"l1_small_size\": 24576, \"data_parallel\": 4}",
-            tt-llama-text-ver: tt_transformers,
-            multimodal: true,
-            co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
-            co-owner-2-id: U08BH66EXAL, # Radoica Draskic
-          },
+          # {
+          #   name: "[WH-GH] Gemma3-27B",
+          #   model: "google/gemma-3-27b-it",
+          #   server-timeout: 35,
+          #   benchmark-timeout: 10,
+          #   runner-label: topology-6u,
+          #   arch: arch-wormhole_b0,
+          #   mesh-device: TG,
+          #   override-tt-config: "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"worker_l1_size\": 1344544, \"trace_region_size\": 21448704, \"l1_small_size\": 24576, \"data_parallel\": 4}",
+          #   tt-llama-text-ver: tt_transformers,
+          #   multimodal: true,
+          #   co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
+          #   co-owner-2-id: U08BH66EXAL, # Radoica Draskic
+          # },
           # {
           #   name: "[WH-GLX] Llama-3.3-70B-Instruct v0 structured-output",
           #   model: "meta-llama/Llama-3.3-70B-Instruct",
@@ -169,22 +169,22 @@ jobs:
           #   co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
           #   co-owner-2-id: U08BH66EXAL, # Radoica Draskic
           # },
-          # {
-          #   name: "[WH-GH][v1] Gemma3-27B",
-          #   model: "google/gemma-3-27b-it",
-          #   server-timeout: 10,
-          #   benchmark-timeout: 5,
-          #   runner-label: topology-6u,
-          #   arch: arch-wormhole_b0,
-          #   mesh-device: "\"(4, 8)\"",
-          #   override-tt-config: "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"worker_l1_size\": 1344544, \"trace_region_size\": 21448704, \"l1_small_size\": 24576, \"data_parallel\": 4}",
-          #   additional-args: "--data_parallel_size 4",
-          #   tt-llama-text-ver: tt_transformers,
-          #   multimodal: true,
-          #   use-vllm-v1: true,
-          #   co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
-          #   co-owner-2-id: U08BH66EXAL, # Radoica Draskic
-          # },
+          {
+            name: "[WH-GH][v1] Gemma3-27B",
+            model: "google/gemma-3-27b-it",
+            server-timeout: 10,
+            benchmark-timeout: 5,
+            runner-label: topology-6u,
+            arch: arch-wormhole_b0,
+            mesh-device: "\"(4, 8)\"",
+            override-tt-config: "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"worker_l1_size\": 1344544, \"trace_region_size\": 21448704, \"l1_small_size\": 24576, \"data_parallel\": 4}",
+            additional-args: "--data_parallel_size 4 --max_num_seqs 8",
+            tt-llama-text-ver: tt_transformers,
+            multimodal: true,
+            use-vllm-v1: true,
+            co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
+            co-owner-2-id: U08BH66EXAL, # Radoica Draskic
+          },
           # {
           #   name: "[WH-GLX][v1] GPT-OSS-120B",
           #   model: "openai/gpt-oss-120b",
