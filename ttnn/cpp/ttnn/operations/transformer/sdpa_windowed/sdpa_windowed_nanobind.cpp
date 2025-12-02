@@ -75,10 +75,10 @@ void bind_sdpa_windowed(nb::module_& mod) {
             nb::arg("input_tensor_v").noconvert(),
             nb::arg("cu_window_seqlens").noconvert(),
             nb::kw_only(),
-            nb::arg("scale").noconvert() = nb::none(),
-            nb::arg("memory_config").noconvert() = nb::none(),
-            nb::arg("program_config").noconvert() = nb::none(),
-            nb::arg("compute_kernel_config").noconvert() = nb::none(),
+            nb::arg("scale") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("program_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
         });
 }
 
