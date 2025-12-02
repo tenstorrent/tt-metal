@@ -105,8 +105,6 @@ void bind_normalization_rmsnorm_post_all_gather_operation(py::module& module) {
 
                 See `Root Mean Square Layer Normalization <https://arxiv.org/pdf/1910.07467>`_ for more details.
 
-                The input :attr:`stats` tensor should be computed by :func:`ttnn.rms_norm_pre_all_gather` and then all-gathered across devices.
-
                 Performs the second part of a distributed RMSNorm operation, using the gathered statistics to compute the mean and variance, and finally normalizing the input.
                 The input :attr:`stats` tensor should be computed by gathering the output of :func:`ttnn.rms_norm_pre_all_gather` across all devices.
 

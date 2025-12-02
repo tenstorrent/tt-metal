@@ -45,7 +45,6 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     # Matrix Multiplication
     "ttnn.matmul": matrix_multiplication.test_matmul,
     "ttnn.linear": matrix_multiplication.test_linear,
-    # "ttnn.matmul_batched_weights": matrix_multiplication.test_matmul_batched_weights, # Lack of example
     "ttnn.addmm": matrix_multiplication.test_addmm,
     "ttnn.sparse_matmul": matrix_multiplication.test_sparse_matmul,
     # Pointwise Unary

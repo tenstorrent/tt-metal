@@ -171,6 +171,7 @@ def test_layernorm_distributed(device):
     logger.info(f"Layer Norm Pre All Gather result: {stats}")
 
     # On a distributed setup, all gather would go here to collect the stats from all devices
+    # See documentation for ttnn.all_gather for example usage of all_gather
 
     # Now apply the post-all-gather layer normalization
     output = ttnn.layer_norm_post_all_gather(input_tensor, stats)
