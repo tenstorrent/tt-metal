@@ -833,9 +833,8 @@ void issue_read_buffer_dispatch_command_sequence(
     uint64_t pinned_dst_addr = 0;
 
     if (has_pinned_inputs && is_unpadded) {
-        const ChipId mmio_device_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(
-                dispatch_params.device->id());
+        const ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(
+            dispatch_params.device->id());
         auto noc_addr_pair_opt = dispatch_params.pinned_memory->get_noc_addr(dispatch_params.device->id());
         if (noc_addr_pair_opt.has_value() && noc_addr_pair_opt->device_id == mmio_device_id) {
             const uint64_t pinned_noc_base = noc_addr_pair_opt->addr;
@@ -894,8 +893,7 @@ void issue_read_buffer_dispatch_command_sequence(
     // Select write op once, then unify relay
     if (use_pinned_transfer) {
         // fmt::println(stderr, "Reading pinned");
-        command_sequence.add_dispatch_write_linear_h<false, false>(
-            0, pinned_dst_noc_xy, pinned_dst_addr, xfer_bytes);
+        command_sequence.add_dispatch_write_linear_h<false, false>(0, pinned_dst_noc_xy, pinned_dst_addr, xfer_bytes);
     } else {
         bool flush_prefetch = false;
         // fmt::println(stderr, "Reading unpinned");

@@ -633,7 +633,8 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
         tt::stl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
 
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
-    auto pinned_unique = experimental::PinnedMemory::Create(*mesh_device_,
+    auto pinned_unique = experimental::PinnedMemory::Create(
+        *mesh_device_,
         coordinate_range_set,
         host_buffer,
         /*map_to_noc=*/true);
@@ -693,7 +694,8 @@ TEST_F(MeshBufferTestSuite, EnqueueReadWithDistributedHostBufferAndPinnedMemory)
         tt::stl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
 
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
-    auto pinned_unique = experimental::PinnedMemory::Create(*mesh_device_,
+    auto pinned_unique = experimental::PinnedMemory::Create(
+        *mesh_device_,
         coordinate_range_set,
         host_buffer,
         /*map_to_noc=*/true);
@@ -707,7 +709,8 @@ TEST_F(MeshBufferTestSuite, EnqueueReadWithDistributedHostBufferAndPinnedMemory)
     distributed_host_buffer.emplace_shard(coord, [&host_buffer]() { return host_buffer; });
 
     // Read back using enqueue_read with DistributedHostBuffer
-    mesh_device_->mesh_command_queue().enqueue_read(mesh_buffer, distributed_host_buffer, std::nullopt, /*blocking=*/true);
+    mesh_device_->mesh_command_queue().enqueue_read(
+        mesh_buffer, distributed_host_buffer, std::nullopt, /*blocking=*/true);
 
     std::vector<uint32_t> dst_aligned(dst_ptr_aligned, dst_ptr_aligned + (bytes_per_device / sizeof(uint32_t)));
 
@@ -751,11 +754,11 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRangeUnaligned)
     uint8_t* dst_ptr_unaligned = dst->data() + unaligned_shift;
 
     // Create HostBuffer on top of dst
-    HostBuffer host_buffer(
-        tt::stl::Span<uint8_t>(dst_ptr_unaligned, bytes_per_device), MemoryPin(dst));
+    HostBuffer host_buffer(tt::stl::Span<uint8_t>(dst_ptr_unaligned, bytes_per_device), MemoryPin(dst));
 
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
-    auto pinned_unique = experimental::PinnedMemory::Create(*mesh_device_,
+    auto pinned_unique = experimental::PinnedMemory::Create(
+        *mesh_device_,
         coordinate_range_set,
         host_buffer,
         /*map_to_noc=*/true);
