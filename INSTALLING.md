@@ -26,10 +26,10 @@ chmod +x install.sh
 
 > [!WARNING]
 > TT-Installer automatically installs all latest versions. Wormhole Galaxy (6U) and Blackhole systems require the following versions:
-> | Device               | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
-> |----------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
-> | Galaxy               | Ubuntu 22.04    | 3.10     | v2.3.0 or above    | fw_pack-18.12.0.fwbundle (v18.12.0)         | v3.0.28 or above      | N/A                          |
-> | Blackhole            | Ubuntu 22.04    | 3.10     | v2.4.1 or above    | fw_pack-18.12.0.fwbundle (v18.12.0)         | v3.0.31 or above      | N/A                          |
+> | Device               | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                   |
+> |----------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|-------------------------------|
+> | Galaxy               | Ubuntu 22.04    | 3.10     | v2.3.0 or above    | fw_pack-18.12.0.fwbundle (v18.12.0)        | v3.0.28 or above      | N/A                          |
+> | Blackhole            | Ubuntu 22.04    | 3.10     | v2.4.1 or above    | fw_pack-18.12.0.fwbundle (v18.12.0)        | v3.0.31 or above      | N/A                          |
 
 - If required, add the following flags for specifying dependencies versions:
 
@@ -38,9 +38,9 @@ chmod +x install.sh
 
 ```
 ./install.sh \
-  --smi-version=v3.0.17 \
-  --fw-version=18.3.0 \
-  --kmd-version=1.34 \
+  --smi-version=v3.0.31 \
+  --fw-version=18.12.0 \
+  --kmd-version=2.4.1 \
   --no-install-podman \
   --no-install-metalium-container
 ```
