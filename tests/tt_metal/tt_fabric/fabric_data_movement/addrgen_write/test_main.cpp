@@ -115,11 +115,14 @@ static std::string GetVariantName(tt::tt_fabric::test::AddrgenApiVariant variant
             return "FusedAtomicIncWriteWithStateRoute";
         case tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteSetStateRoute:
             return "FusedAtomicIncWriteSetStateRoute";
+        case tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteRoute: return "ScatterWriteRoute";
+        case tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteWithStateRoute: return "ScatterWriteWithStateRoute";
+        case tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteSetStateRoute: return "ScatterWriteSetStateRoute";
         default: return "UnknownVariant";
     }
 }
 
-// Instantiate comprehensive test suite with all 24 variants (18 basic + 6 route) × 6 page sizes × 2 destinations = 288
+// Instantiate comprehensive test suite with all 27 variants (18 basic + 9 route) × 6 page sizes × 2 destinations = 324
 // test cases
 INSTANTIATE_TEST_SUITE_P(
     AllVariantsAndSizes,
@@ -149,7 +152,10 @@ INSTANTIATE_TEST_SUITE_P(
             tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteSetStateRoute,
             tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteRoute,
             tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteWithStateRoute,
-            tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteSetStateRoute),
+            tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteSetStateRoute,
+            tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteRoute,
+            tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteWithStateRoute,
+            tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteSetStateRoute),
         ::testing::Values(100, 112, 2048, 10000, 10100, 99999),  // Page sizes: Aligned and unaligned
         ::testing::Bool()                                        // Destination: false=L1, true=DRAM
         ),

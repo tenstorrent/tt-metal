@@ -214,8 +214,16 @@ void kernel_main() {
             });
             // Ensure route setup is complete before use
             noc_async_writes_flushed();
+        } else if constexpr (operation_type == OperationType::Scatter) {
+            // Route variant WithState setup for Scatter
+            PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+                auto& slot = connection_manager.get(i);
+                fabric_set_unicast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id);
+                packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_SCATTER_WRITE;
+                packet_header->payload_size_bytes = static_cast<uint16_t>(SRC_ALIGNED_PAGE_SIZE * 2);
+            });
+            noc_async_writes_flushed();
         }
-        // Note: Scatter doesn't have route variant
     } else if constexpr (api_variant == ApiVariant::RouteSetState) {
         // Route variant SetState setup
         if constexpr (operation_type == OperationType::BasicWrite) {
@@ -236,8 +244,17 @@ void kernel_main() {
                 0,    // offset
                 true  // flush
             );
+        } else if constexpr (operation_type == OperationType::Scatter) {
+            fabric_unicast_noc_scatter_write_set_state(
+                connection_manager,
+                route_id,
+                scatter_acc,
+                0,  // page_id0 for initial configuration
+                1,  // page_id1
+                0,  // offset0
+                0   // offset1
+            );
         }
-        // Note: Scatter doesn't have route variant, so no SetState for scatter route
     }
 
     // Main loop - process pages
@@ -317,7 +334,6 @@ void kernel_main() {
             }
         } else if constexpr (operation_type == OperationType::Scatter) {
             // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
-            // Note: Scatter doesn't have route variant
             if constexpr (api_variant == ApiVariant::Basic) {
                 fabric_unicast_noc_scatter_write(
                     &sender,
@@ -331,7 +347,32 @@ void kernel_main() {
                     0,      // offset0
                     0       // offset1
                 );
-            } else {  // WithState or SetState
+            } else if constexpr (api_variant == ApiVariant::RouteBasic) {
+                // Route variant Basic
+                fabric_unicast_noc_scatter_write(
+                    connection_manager,
+                    route_id,
+                    src_l1_addr,
+                    scatter_acc,
+                    i,      // page_id0
+                    i + 1,  // page_id1
+                    0,      // offset0
+                    0       // offset1
+                );
+            } else if constexpr (
+                api_variant == ApiVariant::RouteWithState || api_variant == ApiVariant::RouteSetState) {
+                // Route variant WithState/SetState
+                fabric_unicast_noc_scatter_write_with_state(
+                    connection_manager,
+                    route_id,
+                    src_l1_addr,
+                    scatter_acc,
+                    i,      // page_id0
+                    i + 1,  // page_id1
+                    0,      // offset0
+                    0       // offset1
+                );
+            } else {  // WithState or SetState (basic variants)
                 fabric_unicast_noc_scatter_write_with_state(
                     &sender,
                     header,

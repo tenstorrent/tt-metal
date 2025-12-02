@@ -260,6 +260,11 @@ Notes:
                 return {OperationType::FusedAtomicInc, ApiVariant::RouteWithState};
             case AddrgenApiVariant::FusedAtomicIncWriteSetStateRoute:
                 return {OperationType::FusedAtomicInc, ApiVariant::RouteSetState};
+            case AddrgenApiVariant::ScatterWriteRoute: return {OperationType::Scatter, ApiVariant::RouteBasic};
+            case AddrgenApiVariant::ScatterWriteWithStateRoute:
+                return {OperationType::Scatter, ApiVariant::RouteWithState};
+            case AddrgenApiVariant::ScatterWriteSetStateRoute:
+                return {OperationType::Scatter, ApiVariant::RouteSetState};
             default: TT_FATAL(false, "Unknown API variant"); return {OperationType::BasicWrite, ApiVariant::Basic};
         }
     };
