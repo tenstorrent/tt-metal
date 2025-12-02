@@ -93,6 +93,7 @@ struct InspectorSettings {
     std::string rpc_server_host = "localhost";
     uint16_t rpc_server_port = 50051;
     bool rpc_server_enabled = true;
+    bool serialize_on_dispatch_timeout = true;
     std::string rpc_server_address() const { return rpc_server_host + ":" + std::to_string(rpc_server_port); }
 };
 
@@ -230,6 +231,8 @@ class RunTimeOptions {
     TargetDevice runtime_target_device_ = TargetDevice::Silicon;
     // Timeout duration for operations
     std::chrono::duration<float> timeout_duration_for_operations = std::chrono::duration<float>(0.0f);
+    // Command to run when a dispatch timeout occurs
+    std::string dispatch_timeout_command_to_execute;
 
     // Using MGD 2.0 syntax for mesh graph descriptor
     bool use_mesh_graph_descriptor_2_0 = false;
@@ -296,6 +299,9 @@ public:
     bool get_inspector_rpc_server_enabled() const { return inspector_settings.rpc_server_enabled; }
     const std::string& get_inspector_rpc_server_host() const { return inspector_settings.rpc_server_host; }
     uint16_t get_inspector_rpc_server_port() const { return inspector_settings.rpc_server_port; }
+    bool get_serialize_inspector_on_dispatch_timeout() const {
+        return inspector_settings.serialize_on_dispatch_timeout;
+    }
     bool get_watcher_noc_sanitize_linked_transaction() const {
         return watcher_settings.noc_sanitize_linked_transaction;
     }
@@ -567,6 +573,7 @@ public:
     TargetDevice get_target_device() const { return runtime_target_device_; }
 
     std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
+    std::string get_dispatch_timeout_command_to_execute() const { return dispatch_timeout_command_to_execute; }
     // Mesh graph descriptor version accessor
     bool get_use_mesh_graph_descriptor_2_0() const { return use_mesh_graph_descriptor_2_0; }
 
