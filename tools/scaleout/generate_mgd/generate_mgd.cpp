@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string_view>
@@ -49,7 +50,7 @@ inline const std::unordered_map<std::string, NodeTypeInfo>& create_node_type_loo
         {"WH_GALAXY_XY_TORUS", {{8, 4}, tt::tt_fabric::proto::Architecture::WORMHOLE_B0, 4}},  // WH Galaxy: 4 channels
 
         // Blackhole architectures
-        {"P150_LB", {{2, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},             // P150: 2 channels
+        {"P150_LB", {{2, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 4}},             // P150: 4 channels
         {"P150_QB_AE_DEFAULT", {{2, 2}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 4}},  // P150: 4 channels
         {"P300_QB_GE", {{2, 2}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},          // P300: 2 channels
         {"BH_GALAXY", {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},           // BH Galaxy: 2 channels
@@ -155,8 +156,9 @@ CablingDescriptorInfo get_cabling_info_from_proto(const proto::ClusterDescriptor
 
 }  // anonymous namespace
 
+// Internal helper that generates MGD, accepting an optional file path to avoid temp file creation
 static tt::tt_fabric::proto::MeshGraphDescriptor generate_mgd_impl(
-    const proto::ClusterDescriptor& cluster_desc, bool verbose) {
+    const proto::ClusterDescriptor& cluster_desc, const std::optional<std::string>& cabling_file_path, bool verbose) {
     // Extract cluster information from protobuf
     auto cabling_info = get_cabling_info_from_proto(cluster_desc);
 
@@ -174,8 +176,10 @@ static tt::tt_fabric::proto::MeshGraphDescriptor generate_mgd_impl(
     std::vector<std::string> hostnames = generate_hostnames(cabling_info.num_hosts);
 
     // Create the cabling generator to get chip connections
-    auto cabling_generator = CablingGenerator(cluster_desc, hostnames);
-    const auto& chip_connections = cabling_generator.get_chip_connections();
+    auto cabling_descriptor = cabling_file_path.has_value()
+                                  ? CablingGenerator(*cabling_file_path, hostnames)  // Use file path directly
+                                  : CablingGenerator(cluster_desc, hostnames);  // Use protobuf directly (no file I/O)
+    auto chip_connections = cabling_descriptor.get_chip_connections();
 
     if (verbose) {
         std::cout << "Node type: " << cabling_info.node_type << '\n';
@@ -304,27 +308,32 @@ static tt::tt_fabric::proto::MeshGraphDescriptor generate_mgd_impl(
 
 tt::tt_fabric::proto::MeshGraphDescriptor generate_mgd_from_cabling(
     const proto::ClusterDescriptor& cluster_desc, bool verbose) {
-    return generate_mgd_impl(cluster_desc, verbose);
+    // Call internal helper without file path (will use temp file)
+    return generate_mgd_impl(cluster_desc, std::nullopt, verbose);
 }
 
 tt::tt_fabric::proto::MeshGraphDescriptor generate_mgd_from_cabling(
     const std::filesystem::path& cabling_descriptor_path, const bool verbose) {
-    if (verbose) {
-        std::cout << "Reading cabling descriptor: " << cabling_descriptor_path << '\n';
-    }
-
-    std::ifstream file(cabling_descriptor_path);
-    if (!file.is_open()) {
+    if (std::ifstream file(cabling_descriptor_path); !file.is_open()) {
         throw std::runtime_error("Cannot open cabling descriptor file: " + cabling_descriptor_path.string());
     }
-    const std::string file_content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+    const std::string file_content = [&cabling_descriptor_path]() {
+        std::ifstream file(cabling_descriptor_path);
+        return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    }();
 
     proto::ClusterDescriptor cluster_desc;
     if (!google::protobuf::TextFormat::ParseFromString(file_content, &cluster_desc)) {
         throw std::runtime_error("Failed to parse cabling descriptor protobuf: " + cabling_descriptor_path.string());
     }
 
-    return generate_mgd_from_cabling(cluster_desc, verbose);
+    if (verbose) {
+        std::cout << "Reading cabling descriptor: " << cabling_descriptor_path << '\n';
+    }
+
+    // Call internal helper with file path (avoids temp file creation)
+    return generate_mgd_impl(cluster_desc, cabling_descriptor_path.string(), verbose);
 }
 
 void write_mgd_to_file(const tt::tt_fabric::proto::MeshGraphDescriptor& mgd, const std::filesystem::path& output_path) {
