@@ -116,6 +116,7 @@ ReduceDeviceOperation::tensor_return_value_t ReduceDeviceOperation::create_outpu
 tt::stl::hash::hash_t ReduceDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
+    auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
     return tt::tt_metal::operation::hash_operation<ReduceDeviceOperation>(
         operation_attributes.math_op,
@@ -125,6 +126,7 @@ tt::stl::hash::hash_t ReduceDeviceOperation::compute_program_hash(
         operation_attributes.output_dtype,
         operation_attributes.compute_kernel_config,
         operation_attributes.sub_core_grids,
+        program_factory.index(),
         input_tensor.dtype(),
         input_tensor.memory_config(),
         input_tensor.padded_shape());
