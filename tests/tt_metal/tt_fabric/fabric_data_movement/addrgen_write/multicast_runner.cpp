@@ -210,6 +210,11 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
                 return {OperationType::BasicWrite, ApiVariant::RouteWithState};
             case AddrgenApiVariant::MulticastWriteSetStateRoute:
                 return {OperationType::BasicWrite, ApiVariant::RouteSetState};
+            case AddrgenApiVariant::MulticastScatterWriteRoute: return {OperationType::Scatter, ApiVariant::RouteBasic};
+            case AddrgenApiVariant::MulticastScatterWriteWithStateRoute:
+                return {OperationType::Scatter, ApiVariant::RouteWithState};
+            case AddrgenApiVariant::MulticastScatterWriteSetStateRoute:
+                return {OperationType::Scatter, ApiVariant::RouteSetState};
             default: TT_FATAL(false, "Unknown API variant"); return {OperationType::BasicWrite, ApiVariant::Basic};
         }
     };
