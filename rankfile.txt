@@ -1,0 +1,8 @@
+rank 0=g08blx04 slots=1
+rank 1=g08blx04 slots=1
+rank 2=g08blx03 slots=1
+rank 3=g08blx03 slots=1
+rank 4=g08blx03 slots=1
+rank 5=g08blx03 slots=1
+rank 6=g08blx04 slots=1
+rank 7=g08blx04 slots=1

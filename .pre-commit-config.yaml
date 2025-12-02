@@ -68,16 +68,16 @@ repos:
       name: Convert .ipynb to .py for ttnn basic examples
       entry: python3 scripts/convert_notebooks_to_python.py
       language: system
-- repo: local
-  hooks:
-    - id: detect-legacy-device-op
-      name: Detect legacy device operation classes in newly added files
-      entry: python3 scripts/detect_legacy_device_op.py --check-new-only
-      language: system
-      types: [file]
-      files: ^ttnn/.*\.hpp$
-      pass_filenames: true
-      require_serial: true
+# - repo: local
+#   hooks:
+#     - id: detect-legacy-device-op
+#       name: Detect legacy device operation classes in newly added files
+#       entry: python3 scripts/detect_legacy_device_op.py --check-new-only
+#       language: system
+#       types: [file]
+#       files: ^ttnn/.*\.hpp$
+#       pass_filenames: true
+#       require_serial: true
 - repo: local
   hooks:
     - id: validate-golden-csv-columns

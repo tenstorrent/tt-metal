@@ -1,0 +1,35 @@
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"
+  - rank: 1
+    mesh_id: 1
+    env_overrides:
+      TT_VISIBLE_DEVICES: "16,17,18,19,20,21,22,23"
+  - rank: 2
+    mesh_id: 2
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7"
+  - rank: 3
+    mesh_id: 3
+    env_overrides:
+      TT_VISIBLE_DEVICES: "16,17,18,19,20,21,22,23"
+  - rank: 4
+    mesh_id: 4
+    env_overrides:
+      TT_VISIBLE_DEVICES: "24,25,26,27,28,29,30,31"
+  - rank: 5
+    mesh_id: 5
+    env_overrides:
+      TT_VISIBLE_DEVICES: "8,9,10,11,12,13,14,15"
+  - rank: 6
+    mesh_id: 6
+    env_overrides:
+      TT_VISIBLE_DEVICES: "24,25,26,27,28,29,30,31"
+  - rank: 7
+    mesh_id: 7
+    env_overrides:
+      TT_VISIBLE_DEVICES: "8,9,10,11,12,13,14,15"
+
+mesh_graph_desc_path: "tt_metal/fabric/mesh_graph_descriptors/bh_dual_glx_pipeline.textproto"

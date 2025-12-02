@@ -22,7 +22,10 @@
 
 namespace tt::tt_metal {
 
-class FabricSendRecv2x4Fixture : public MeshDevice4x8Fabric2DFixture,
+class FabricSendRecv2x4Fixture : public MeshDevice2x4Fabric2DFixture,
+                                 public testing::WithParamInterface<SocketTestArgs> {};
+
+class FabricSendRecv4x8Fixture : public MeshDevice4x8Fabric2DFixture,
                                  public testing::WithParamInterface<SocketTestArgs> {};
 
 template <typename T>
@@ -123,7 +126,7 @@ TEST_P(FabricSendRecv2x4Fixture, SendRecvAsync) {
 
 INSTANTIATE_TEST_SUITE_P(FabricSendRecv2x4Tests, FabricSendRecv2x4Fixture, ::testing::ValuesIn(get_socket_test_args()));
 
-TEST_F(FabricSendRecv2x4Fixture, SRTest) {
+TEST_F(FabricSendRecv4x8Fixture, SRTest) {
     auto mesh_device = get_mesh_device();
 
     auto sender_logical_coord = CoreCoord(0, 0);
@@ -141,18 +144,6 @@ TEST_F(FabricSendRecv2x4Fixture, SRTest) {
     auto intermed_device_coord_6 = distributed::MeshCoordinate(3, 6);
     auto end_device_coord = distributed::MeshCoordinate(3, 7);
 
-    std::cout << "Start Device ID: " << mesh_device->get_device(start_device_coord)->id() << std::endl;
-    std::cout << "Intermed Device ID: " << mesh_device->get_device(intermed_device_coord)->id() << std::endl;
-    std::cout << "Intermed Device 2 ID: " << mesh_device->get_device(intermed_device_coord_2)->id() << std::endl;
-    std::cout << "Intermed Device 3 ID: " << mesh_device->get_device(intermed_device_coord_3)->id() << std::endl;
-    std::cout << "Intermed Device 4 ID: " << mesh_device->get_device(intermed_device_coord_4)->id() << std::endl;
-    std::cout << "Intermed Device 5 ID: " << mesh_device->get_device(intermed_device_coord_5)->id() << std::endl;
-    std::cout << "Intermed Device 6 ID: " << mesh_device->get_device(intermed_device_coord_6)->id() << std::endl;
-    std::cout << "End Device ID: " << mesh_device->get_device(end_device_coord)->id() << std::endl;
-
-    // Create connections for:
-    // Stage 0 -> 1
-    // Stage 1 -> 2
     distributed::SocketConnection socket_connection_01 = {
         .sender_core = {start_device_coord, sender_logical_coord},
         .receiver_core = {intermed_device_coord, copy_logical_coord}};
@@ -264,7 +255,7 @@ TEST_F(FabricSendRecv2x4Fixture, SRTest) {
             *ttnn::distributed::replicate_tensor_to_mesh_mapper(*mesh_device),
             std::nullopt)
             .to_device(mesh_device.get(), memory_config);
-    // for (uint32_t i = 0; i < 3000; i++) {
+
     ttnn::experimental::send_async(input_tensor, send_socket_0);
     ttnn::experimental::socket_forward(recv_socket_1, send_socket_1, num_elems * sizeof(uint32_t));
     ttnn::experimental::socket_forward(recv_socket_2, send_socket_2, num_elems * sizeof(uint32_t));
@@ -273,18 +264,15 @@ TEST_F(FabricSendRecv2x4Fixture, SRTest) {
     ttnn::experimental::socket_forward(recv_socket_5, send_socket_5, num_elems * sizeof(uint32_t));
     ttnn::experimental::socket_forward(recv_socket_6, send_socket_6, num_elems * sizeof(uint32_t));
     ttnn::experimental::recv_async(output_tensor, recv_socket_7);
-    // }
 
-    // auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*mesh_device, /*dim=*/0);
-    // auto output_data = ttnn::distributed::aggregate_tensor(output_tensor, *composer).to_vector<uint32_t>();
-    // auto expected_output_data = ttnn::arange(0, num_elems, 1, tt::tt_metal::DataType::UINT32);
-    // auto expected_output_data_vector = expected_output_data.to_vector<uint32_t>();
+    auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*mesh_device, /*dim=*/0);
+    auto output_data = ttnn::distributed::aggregate_tensor(output_tensor, *composer).to_vector<uint32_t>();
+    auto expected_output_data = ttnn::arange(0, num_elems, 1, tt::tt_metal::DataType::UINT32);
+    auto expected_output_data_vector = expected_output_data.to_vector<uint32_t>();
 
-    // auto chunked_output_vector =
-    //     std::vector<uint32_t>(output_data.begin() + num_elems, output_data.begin() + 2 * num_elems);
-    // EXPECT_EQ(chunked_output_vector, expected_output_data_vector);
-    // }
-    Synchronize(mesh_device.get(), std::nullopt);
+    auto chunked_output_vector =
+        std::vector<uint32_t>(output_data.begin() + 31 * num_elems, output_data.begin() + 32 * num_elems);
+    EXPECT_EQ(chunked_output_vector, expected_output_data_vector);
 }
 
 }  // namespace tt::tt_metal

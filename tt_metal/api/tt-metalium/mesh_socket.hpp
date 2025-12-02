@@ -70,6 +70,7 @@ enum class SocketEndpoint : uint8_t { SENDER, RECEIVER };
 class MeshSocket {
 public:
     MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketConfig& config);
+    MeshSocket() = default;
     // Sockets can only be created in sender/receiver pairs.
     static std::pair<MeshSocket, MeshSocket> create_socket_pair(
         const std::shared_ptr<MeshDevice>& sender,

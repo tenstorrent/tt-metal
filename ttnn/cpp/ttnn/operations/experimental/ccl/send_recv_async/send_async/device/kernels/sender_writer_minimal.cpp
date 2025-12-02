@@ -19,7 +19,7 @@ constexpr uint32_t whole_packet_size = get_compile_time_arg_val(4);
 constexpr uint32_t num_whole_packets_link_0 = get_compile_time_arg_val(5);
 constexpr uint32_t num_whole_packets_link_1 = get_compile_time_arg_val(6);
 
-void write_data_to_remote_core_with_ack(
+FORCE_INLINE void write_data_to_remote_core_with_ack(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header_addr,
     uint32_t l1_read_addr,
@@ -73,7 +73,7 @@ void kernel_main() {
 
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
         downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, sender_socket.downstream_bytes_sent_addr);
-    for (int i = 0; i < 100; i++) {
+    for (int i = 0; i < 1000000; i++) {
         DPRINT << "Reserving page:" << i << ENDL();
         socket_reserve_pages(sender_socket, 1);
         DPRINT << "Done reserving page:" << i << ENDL();
@@ -108,14 +108,15 @@ void kernel_main() {
             dst_addr += whole_packet_size;
             l1_read_addr += whole_packet_size;
         }
-
-        write_data_to_remote_core_with_ack(
-            fabric_connection_2,
-            data_packet_header_addr_2,
-            l1_read_addr,
-            dst_addr,
-            downstream_bytes_sent_noc_addr,
-            aligned_partial_packet_size);
+        if constexpr (aligned_partial_packet_size) {
+            write_data_to_remote_core_with_ack(
+                fabric_connection_2,
+                data_packet_header_addr_2,
+                l1_read_addr,
+                dst_addr,
+                downstream_bytes_sent_noc_addr,
+                aligned_partial_packet_size);
+        }
 
         cb_pop_front(data_cb_id, 1);
         socket_push_pages(sender_socket, 1);

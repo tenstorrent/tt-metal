@@ -23,7 +23,7 @@ void kernel_main() {
     auto input_addr_gen_args = TensorAccessorArgs<input_args_cta_idx, input_args_crta_idx>();
     auto input_addr_gen = TensorAccessor(input_addr_gen_args, input_base_addr, input_page_size);
 
-    for (int i = 0; i < 100; i++) {
+    for (int i = 0; i < 1000000; i++) {
         auto noc_read_addr = input_addr_gen.get_noc_addr(0);
         cb_reserve_back(cb0_id, 1);
         auto l1_write_addr = get_write_ptr(cb0_id);

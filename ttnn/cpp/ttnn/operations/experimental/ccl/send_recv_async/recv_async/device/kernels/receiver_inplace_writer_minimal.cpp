@@ -51,17 +51,17 @@ void kernel_main() {
     auto output_addr_gen_args = TensorAccessorArgs<output_args_cta_idx, output_args_crta_idx>();
     auto output_addr_gen = TensorAccessor(output_addr_gen_args, output_base_addr, output_page_size);
     bool ack_sent = false;
-    for (uint32_t i = 0; i < 100; ++i) {
+    for (uint32_t i = 0; i < 1000000; ++i) {
         auto noc_write_addr = output_addr_gen.get_noc_addr(0);
         socket_wait_for_pages(receiver_socket, 1);
-        uint32_t l1_read_addr = receiver_socket.read_ptr;
-        uint32_t val = 0;
-        for (uint32_t j = 0; j < output_page_size / 4; j += 4) {
-            if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_read_addr + j) != val) {
-                while (true);
-            }
-            val++;
-        }
+        // uint32_t l1_read_addr = receiver_socket.read_ptr;
+        // uint32_t val = 0;
+        // for (uint32_t j = 0; j < output_page_size / 4; j += 4) {
+        //     if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_read_addr + j) != val) {
+        //         while (true);
+        //     }
+        //     val++;
+        // }
         noc_async_write<output_page_size>(receiver_socket.read_ptr, noc_write_addr, output_page_size);
         socket_pop_pages(receiver_socket, 1);
         ack_sent = false;

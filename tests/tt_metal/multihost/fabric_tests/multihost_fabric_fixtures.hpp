@@ -312,5 +312,29 @@ public:
     }
 };
 
+class MeshDeviceDualGalaxyPipelineFixture : public tt::tt_metal::GenericMeshDeviceFabric2DFixture {
+public:
+    void SetUp() override {
+        if (not system_supported()) {
+            GTEST_SKIP() << "Skipping since this is not a supported system.";
+        }
+        tt::tt_metal::GenericMeshDeviceFabric2DFixture::SetUp();
+    }
+
+    void TearDown() override {
+        if (system_supported()) {
+            tt::tt_metal::GenericMeshDeviceFabric2DFixture::TearDown();
+        }
+    }
+
+    bool system_supported() {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+        return *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) ==
+                   mesh_graph.get_mesh_ids().size() &&
+               (cluster.user_exposed_chip_ids().size() == 8) && cluster.is_ubb_galaxy();
+    }
+};
+
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric
