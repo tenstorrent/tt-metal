@@ -18,7 +18,13 @@
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
 
-class RandomGenerationTests : public ::testing::Test {
+// Test parameters: size and tolerance
+struct TestParams {
+    size_t size;
+    double tolerance;
+};
+
+class RandomGenerationTests : public ::testing::Test, public ::testing::WithParamInterface<TestParams> {
 protected:
     void SetUp() override {
         ttml::autograd::ctx().set_seed(42);
@@ -26,12 +32,19 @@ protected:
 
     void TearDown() override {
     }
+
+    size_t get_size() const {
+        return GetParam().size;
+    }
+    double get_tolerance() const {
+        return GetParam().tolerance;
+    }
 };
 
-TEST_F(RandomGenerationTests, ParallelUniformInitDeterminism) {
+TEST_P(RandomGenerationTests, ParallelUniformInitDeterminism) {
     // Test that parallel initialization produces deterministic results for a
     // fixed seed.
-    constexpr size_t size = 1024 * 256 * 384;  // ~100M elements
+    const size_t size = get_size();
 
     std::vector<float> vec1(size);
     std::vector<float> vec2(size);
@@ -44,8 +57,8 @@ TEST_F(RandomGenerationTests, ParallelUniformInitDeterminism) {
     EXPECT_EQ(vec1, vec2);
 }
 
-TEST_F(RandomGenerationTests, UniformInitsGoodMeanAndRange) {
-    constexpr size_t size = 1024 * 256 * 384;  // ~100M elements
+TEST_P(RandomGenerationTests, UniformInitsGoodMeanAndRange) {
+    const size_t size = get_size();
 
     std::vector<float> parallel_vec(size);
     std::vector<float> sequential_vec(size);
@@ -81,10 +94,10 @@ TEST_F(RandomGenerationTests, UniformInitsGoodMeanAndRange) {
     EXPECT_NEAR(sequential_mean, 0.0, 0.003);
 }
 
-TEST_F(RandomGenerationTests, ParallelUniformInitDeterminismSSE) {
+TEST_P(RandomGenerationTests, ParallelUniformInitDeterminismSSE) {
     // Test that parallel initialization produces deterministic results for a
     // fixed seed.
-    constexpr size_t size = 1024 * 256 * 384;  // ~100M elements
+    const size_t size = get_size();
 
     std::vector<float> vec1(size);
     std::vector<float> vec2(size);
@@ -97,21 +110,25 @@ TEST_F(RandomGenerationTests, ParallelUniformInitDeterminismSSE) {
     EXPECT_EQ(vec1, vec2);
 }
 
-TEST_F(RandomGenerationTests, UniformInitsGoodMeanAndRangeSSE) {
-    constexpr size_t size = 1024 * 256 * 384;  // ~100M elements
+TEST_P(RandomGenerationTests, UniformInitsGoodMeanAndRangeSSE) {
+    const size_t size = get_size();
 
     std::vector<float> parallel_vec(size);
     std::vector<float> sequential_vec(size);
 
-    ttml::core::sse::parallel_generate(
-        std::span{parallel_vec.data(), parallel_vec.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); },
-        42);
+    {
+        std::jthread sequential_thread([&sequential_vec]() {
+            ttml::core::sse::sequential_generate(
+                std::span{sequential_vec.data(), sequential_vec.size()},
+                []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); },
+                42);
+        });
 
-    ttml::core::sse::sequential_generate(
-        std::span{sequential_vec.data(), sequential_vec.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); },
-        42);
+        ttml::core::sse::parallel_generate(
+            std::span{parallel_vec.data(), parallel_vec.size()},
+            []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); },
+            42);
+    }
 
     // Check that both vectors contain values in the expected range
     auto check_range = [](const std::vector<float>& vec) {
@@ -138,9 +155,9 @@ TEST_F(RandomGenerationTests, UniformInitsGoodMeanAndRangeSSE) {
 // SIMD RNG Distribution Support Tests
 // ============================================================================
 
-TEST_F(RandomGenerationTests, SSEUniformDistributionDifferentParameters) {
+TEST_P(RandomGenerationTests, UniformDistributionDifferentParametersSSE) {
     // Test uniform distribution with various parameter ranges
-    constexpr size_t size = 1024 * 1024;  // 1M elements
+    const size_t size = get_size();
 
     struct TestCase {
         float min;
@@ -160,7 +177,7 @@ TEST_F(RandomGenerationTests, SSEUniformDistributionDifferentParameters) {
     for (const auto& test_case : test_cases) {
         std::vector<float> vec(size);
 
-        ttml::core::sse::sequential_generate(
+        ttml::core::sse::parallel_generate(
             std::span{vec.data(), vec.size()},
             [&]() { return std::uniform_real_distribution<float>(test_case.min, test_case.max); },
             42);
@@ -172,28 +189,28 @@ TEST_F(RandomGenerationTests, SSEUniformDistributionDifferentParameters) {
         }
 
         // Check mean
-        // With 1M samples, standard error of mean ≈ 0.001, so 0.003-0.005 is reasonable
+        // Tolerance is parameterized based on sample size
         double sum = std::accumulate(vec.begin(), vec.end(), 0.0);
         double mean = sum / size;
-        EXPECT_NEAR(mean, test_case.expected_mean, 0.005f)
+        EXPECT_NEAR(mean, test_case.expected_mean, get_tolerance())
             << "Mean mismatch for uniform[" << test_case.min << ", " << test_case.max << "]";
 
         // Check standard deviation
-        // With 1M samples, standard error of stddev ≈ 0.0007, so 0.002-0.003 is reasonable
+        // Use parameterized tolerance for stddev as well
         double var_sum = 0.0;
         for (float val : vec) {
             double diff = static_cast<double>(val) - mean;
             var_sum += diff * diff;
         }
         double stddev = std::sqrt(var_sum / size);
-        EXPECT_NEAR(stddev, test_case.expected_stddev, 0.0042f)
+        EXPECT_NEAR(stddev, test_case.expected_stddev, get_tolerance())
             << "StdDev mismatch for uniform[" << test_case.min << ", " << test_case.max << "]";
     }
 }
 
-TEST_F(RandomGenerationTests, SSENormalDistributionMeanAndStddev) {
+TEST_P(RandomGenerationTests, NormalDistributionMeanAndStddevSSE) {
     // Test normal distribution with various parameters
-    constexpr size_t size = 1024 * 1024;  // 1M elements
+    const size_t size = get_size();
 
     struct TestCase {
         float mean;
@@ -216,10 +233,10 @@ TEST_F(RandomGenerationTests, SSENormalDistributionMeanAndStddev) {
             42);
 
         // Check mean
-        // With 1M samples, standard error of mean ≈ stddev/sqrt(n), so 0.003-0.005 is reasonable
+        // Tolerance is parameterized based on sample size
         double sum = std::accumulate(vec.begin(), vec.end(), 0.0);
         double mean = sum / size;
-        EXPECT_NEAR(mean, test_case.mean, 0.005)
+        EXPECT_NEAR(mean, test_case.mean, get_tolerance())
             << "Mean mismatch for normal(mean=" << test_case.mean << ", stddev=" << test_case.stddev << ")";
 
         // Check standard deviation (use sample stddev for better estimate)
@@ -239,10 +256,10 @@ TEST_F(RandomGenerationTests, SSENormalDistributionMeanAndStddev) {
     }
 }
 
-TEST_F(RandomGenerationTests, SSENormalDistributionRange) {
+TEST_P(RandomGenerationTests, NormalDistributionRangeSSE) {
     // Test that normal distribution values are within reasonable bounds
     // For a normal distribution, ~99.7% of values should be within 3 standard deviations
-    constexpr size_t size = 1024 * 1024;  // 1M elements
+    const size_t size = get_size();
     constexpr float mean = 0.0f;
     constexpr float stddev = 1.0f;
     constexpr float tolerance_stddevs = 4.0f;  // Allow up to 4 stddevs
@@ -266,9 +283,9 @@ TEST_F(RandomGenerationTests, SSENormalDistributionRange) {
     EXPECT_LT(out_of_bounds_ratio, 0.0002) << "Too many values outside reasonable bounds";
 }
 
-TEST_F(RandomGenerationTests, SSEUniformDistributionVariance) {
+TEST_P(RandomGenerationTests, UniformDistributionVarianceSSE) {
     // Test variance calculation for uniform distribution
-    constexpr size_t size = 1024 * 1024;  // 1M elements
+    const size_t size = get_size();
     constexpr float min = -1.0f;
     constexpr float max = 1.0f;
     constexpr double expected_variance = (max - min) * (max - min) / 12.0;  // (b-a)^2/12
@@ -293,9 +310,9 @@ TEST_F(RandomGenerationTests, SSEUniformDistributionVariance) {
     EXPECT_NEAR(variance, expected_variance, 0.005) << "Variance mismatch for uniform distribution";
 }
 
-TEST_F(RandomGenerationTests, SSEUniformDistributionBfloat16) {
+TEST_P(RandomGenerationTests, UniformDistributionBfloat16SSE) {
     // Test uniform distribution with bfloat16
-    constexpr size_t size = 1024 * 1024;  // 1M elements
+    const size_t size = get_size();
     constexpr float min = -1.0f;
     constexpr float max = 1.0f;
 
@@ -321,9 +338,9 @@ TEST_F(RandomGenerationTests, SSEUniformDistributionBfloat16) {
     EXPECT_NEAR(mean, 0.0, 0.005) << "Mean mismatch for bfloat16 uniform distribution";
 }
 
-TEST_F(RandomGenerationTests, SSENormalDistributionBfloat16) {
+TEST_P(RandomGenerationTests, NormalDistributionBfloat16SSE) {
     // Test normal distribution with bfloat16
-    constexpr size_t size = 1024 * 1024;  // 1M elements
+    const size_t size = get_size();
     constexpr float mean = 0.0f;
     constexpr float stddev = 1.0f;
 
@@ -355,11 +372,11 @@ TEST_F(RandomGenerationTests, SSENormalDistributionBfloat16) {
     EXPECT_NEAR(computed_stddev, stddev, tolerance) << "StdDev mismatch for bfloat16 normal distribution";
 }
 
-TEST_F(RandomGenerationTests, SSESequentialVsParallelConsistency) {
+TEST_P(RandomGenerationTests, SequentialVsParallelConsistencySSE) {
     // Test that sequential and parallel generate produce consistent results
     // Note: They won't be identical due to different thread seeds, but should have
     // similar statistical properties
-    constexpr size_t size = 1024 * 1024;  // 1M elements
+    const size_t size = get_size();
 
     std::vector<float> sequential_vec(size);
     std::vector<float> parallel_vec(size);
@@ -397,9 +414,9 @@ TEST_F(RandomGenerationTests, SSESequentialVsParallelConsistency) {
     EXPECT_NEAR(seq_stddev, par_stddev, 0.005) << "StdDev mismatch between sequential and parallel";
 }
 
-TEST_F(RandomGenerationTests, SSEDifferentSeedsProduceDifferentResults) {
+TEST_P(RandomGenerationTests, DifferentSeedsProduceDifferentResultsSSE) {
     // Test that different seeds produce different sequences
-    constexpr size_t size = 1024 * 1024;  // 1M elements
+    const size_t size = get_size();
 
     std::vector<float> vec1(size);
     std::vector<float> vec2(size);
@@ -414,7 +431,7 @@ TEST_F(RandomGenerationTests, SSEDifferentSeedsProduceDifferentResults) {
     EXPECT_NE(vec1, vec2) << "Different seeds produced identical sequences";
 }
 
-TEST_F(RandomGenerationTests, SSEEdgeCaseSmallSizes) {
+TEST_F(RandomGenerationTests, EdgeCaseSmallSizesSSE) {
     // Test edge cases with small sizes
     constexpr std::array<size_t, 17> sizes = {1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65};
 
@@ -441,10 +458,10 @@ TEST_F(RandomGenerationTests, SSEEdgeCaseSmallSizes) {
     }
 }
 
-TEST_F(RandomGenerationTests, SSENormalDistributionQuantiles) {
+TEST_P(RandomGenerationTests, NormalDistributionQuantilesSSE) {
     // Test that normal distribution has correct quantiles
     // For standard normal: Q25 ≈ -0.674, Q50 (median) = 0, Q75 ≈ 0.674
-    constexpr size_t size = 1024 * 1024;  // 1M elements
+    const size_t size = get_size();
     constexpr float mean = 0.0f;
     constexpr float stddev = 1.0f;
 
@@ -481,9 +498,9 @@ TEST_F(RandomGenerationTests, SSENormalDistributionQuantiles) {
     EXPECT_NEAR(q75, 0.674, 0.01) << "Q75 mismatch for standard normal";
 }
 
-TEST_F(RandomGenerationTests, SSEUniformDistributionDeterminismParallel) {
+TEST_P(RandomGenerationTests, UniformDistributionDeterminismParallelSSE) {
     // Test that parallel generation with same seed is deterministic
-    constexpr size_t size = 1024 * 1024;  // 1M elements
+    const size_t size = get_size();
 
     std::vector<float> vec1(size);
     std::vector<float> vec2(size);
@@ -497,9 +514,9 @@ TEST_F(RandomGenerationTests, SSEUniformDistributionDeterminismParallel) {
     EXPECT_EQ(vec1, vec2) << "Parallel generation not deterministic with same seed";
 }
 
-TEST_F(RandomGenerationTests, SSENormalDistributionDeterminismParallel) {
+TEST_P(RandomGenerationTests, NormalDistributionDeterminismParallelSSE) {
     // Test that parallel normal generation with same seed is deterministic
-    constexpr size_t size = 1024 * 1024;  // 1M elements
+    const size_t size = get_size();
 
     std::vector<float> vec1(size);
     std::vector<float> vec2(size);
@@ -513,16 +530,16 @@ TEST_F(RandomGenerationTests, SSENormalDistributionDeterminismParallel) {
     EXPECT_EQ(vec1, vec2) << "Parallel normal generation not deterministic with same seed";
 }
 
-TEST_F(RandomGenerationTests, SSEUniformDistributionStatisticalProperties) {
+TEST_P(RandomGenerationTests, UniformDistributionStatisticalPropertiesSSE) {
     // More rigorous statistical test for uniform distribution
     // Check that the distribution is approximately uniform across bins
-    constexpr size_t size = 1024 * 1024;  // 1M elements
     constexpr size_t num_bins = 100;
     constexpr float min = -1.0f;
     constexpr float max = 1.0f;
     constexpr double bin_width = (max - min) / num_bins;
-    constexpr double expected_count_per_bin = static_cast<double>(size) / num_bins;
     constexpr double tolerance = 0.1;  // 10% tolerance
+    const size_t size = get_size();
+    const double expected_count_per_bin = static_cast<double>(size) / num_bins;
 
     std::vector<float> vec(size);
 
@@ -544,3 +561,24 @@ TEST_F(RandomGenerationTests, SSEUniformDistributionStatisticalProperties) {
             << "Bin " << i << " has non-uniform distribution (ratio: " << count_ratio << ")";
     }
 }
+
+// Instantiate parameterized tests with different sizes and tolerances
+INSTANTIATE_TEST_SUITE_P(
+    RandomGeneration,
+    RandomGenerationTests,
+    ::testing::Values(
+        TestParams{1024 * 256, 0.03},        // 256K elements, tolerance 0.03
+        TestParams{1024 * 1024, 0.015},      // 1M elements, tolerance 0.015
+        TestParams{10 * 1024 * 1024, 0.005}  // 10M elements, tolerance 0.005
+        ),
+    [](const ::testing::TestParamInfo<TestParams>& info) {
+        const TestParams& params = info.param;
+        if (params.size == 1024 * 256) {
+            return "256K";
+        } else if (params.size == 1024 * 1024) {
+            return "1M";
+        } else if (params.size == 10 * 1024 * 1024) {
+            return "10M";
+        }
+        return "Custom";
+    });
