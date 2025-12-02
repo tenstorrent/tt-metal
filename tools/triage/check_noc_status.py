@@ -59,7 +59,7 @@ def check_noc_status(
         prev_noc_mode = fw_elf.get_global("prev_noc_mode", loc_mem_access).read_value()
         if prev_noc_mode != DM_DEDICATED_NOC:
             message += "    Skipping NOC status check: prev_noc_mode != DM_DEDICATED_NOC\n"
-            log_check(True, message)
+            log_check_location(location, True, message)
             return
 
         # Also validate that BRISC's runtime-selected NOC matches the NOC being checked.
@@ -71,7 +71,7 @@ def check_noc_status(
         noc_mode = kernel_elf.get_global("noc_mode", loc_mem_access).read_value()
         if noc_mode != DM_DEDICATED_NOC:
             message += "    Skipping NOC status check: noc_mode != DM_DEDICATED_NOC\n"
-            log_check(True, message)
+            log_check_location(location, True, message)
             return
         noc_index = kernel_elf.get_global("noc_index", loc_mem_access).read_value()
         if noc_index != noc_id:
