@@ -4,10 +4,8 @@
 
 #pragma once
 
-#include <functional>
 #include <map>
 #include <memory>
-#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -139,8 +137,7 @@ private:
     // Common initialization logic for all constructors
     void initialize_cluster(
         const cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
-        std::optional<std::reference_wrapper<const deployment::proto::DeploymentDescriptor>> deployment_descriptor =
-            std::nullopt);
+        const deployment::proto::DeploymentDescriptor* deployment_descriptor = nullptr);
 
     // Validate that each host_id is assigned to exactly one node
     void validate_host_id_uniqueness();
