@@ -111,6 +111,7 @@ target_sources(
         rotate_half/device/single_core/rotate_half_program_factory.cpp
         rotate_half/rotate_half.cpp
         split_query_key_value_and_split_heads/device/split_query_key_value_and_split_heads_device_operation.cpp
+        split_query_key_value_and_split_heads/device/split_query_key_value_and_split_heads_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_transformer PRIVATE ${FixmeOpIncDirs})
