@@ -363,8 +363,6 @@ Tensor ExecuteDiv::invoke(
 
     Tensor result;
     // No accurate_mode for FP32 div as inf/nan are handled at kernel level
-    std::optional<bool> div_fast_mode = std::optional<bool>(approx_mode);
-
     if (is_fp32) {
         result = ttnn::divide(
             input_a,
@@ -376,7 +374,7 @@ Tensor ExecuteDiv::invoke(
             lhs_activations,
             rhs_activations,
             use_legacy,
-            div_fast_mode,
+            std::nullopt,
             sub_core_grids);
     } else {
         Tensor a = typecast(input_a, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids);
@@ -391,7 +389,7 @@ Tensor ExecuteDiv::invoke(
             lhs_activations,
             rhs_activations,
             use_legacy,
-            div_fast_mode,
+            std::nullopt,
             sub_core_grids);
     }
 
@@ -471,7 +469,7 @@ Tensor run_remainder(
                 input_a,
                 input_b,
                 true,
-                std::optional<std::string>("floor"),
+                "floor",
                 std::nullopt,
                 output_mem_config,
                 std::nullopt,
@@ -596,19 +594,7 @@ Tensor ExecuteBinaryFmod::invoke(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     DataType input_dtype = input_a.dtype();
-    using FusedActivations = tt::stl::Span<const unary::EltwiseUnaryWithParam>;
-    Tensor div_res = ttnn::div(
-        input_a,
-        input_b,
-        true,
-        std::optional<std::string>("trunc"),
-        std::nullopt,
-        output_mem_config,
-        std::nullopt,
-        FusedActivations{},
-        FusedActivations{},
-        FusedActivations{},
-        std::nullopt);
+    Tensor div_res = ttnn::div(input_a, input_b, true, "trunc", std::nullopt, output_mem_config);
     // No typecast for FP32 input
     if (input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32) {
         return run_fmod(input_a, input_b, div_res, output_mem_config);
@@ -643,31 +629,8 @@ Tensor _floor_div_overload(const Tensor& input_a, float value, const std::option
 }
 
 Tensor _floor_div(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    using FusedActivations = tt::stl::Span<const unary::EltwiseUnaryWithParam>;
-    Tensor temp = ttnn::div(
-        input_a,
-        input_b,
-        true,
-        std::nullopt,
-        std::nullopt,
-        output_mem_config,
-        std::nullopt,
-        FusedActivations{},
-        FusedActivations{},
-        FusedActivations{},
-        std::nullopt);
-    Tensor result = ttnn::div(
-        input_a,
-        input_b,
-        true,
-        std::optional<std::string>("floor"),
-        std::nullopt,
-        output_mem_config,
-        std::nullopt,
-        FusedActivations{},
-        FusedActivations{},
-        FusedActivations{},
-        std::nullopt);
+    Tensor temp = ttnn::div(input_a, input_b, true, std::nullopt, std::nullopt, output_mem_config);
+    Tensor result = ttnn::div(input_a, input_b, true, "floor", std::nullopt, output_mem_config);
     // floor(nan, inf, -inf) = nan, inf, -inf
     return ttnn::where(
         ttnn::logical_or(
