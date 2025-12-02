@@ -362,8 +362,16 @@ class Generator:
 
     def _mix_slots(self, empty_slots):
         max_batch_size_per_model = self.model_args[0].max_batch_size
-        slots = list(enumerate(empty_slots))
-        slots.sort(key=lambda x: x[1] % max_batch_size_per_model)
+        dp_groups = {i: [] for i in range(self.data_parallel)}
+        for idx, user_id in enumerate(empty_slots):
+            model_id = user_id // max_batch_size_per_model
+            dp_groups[model_id].append((idx, user_id))
+
+        slots = []
+        while any(dp_groups.values()):
+            for i in range(self.data_parallel):
+                if dp_groups[i]:
+                    slots.append(dp_groups[i].pop(0))
         return slots
 
     def prefill_forward_single_user_text(
