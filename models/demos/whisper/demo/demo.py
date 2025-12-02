@@ -723,9 +723,6 @@ def test_demo_for_conditional_generation(
         stream=stream,
     )
 
-    logger.info(f"TTFT: {ttft}")
-    logger.info(f"Decode throughput: {decode_throughput}")
-
     # Skip test in CI when using generate_kwargs
     if is_ci_env and model_repo == "openai/whisper-large-v3" and compression_ratio_threshold is not None:
         pytest.skip("Skipping test in CI since it provides redundant testing")

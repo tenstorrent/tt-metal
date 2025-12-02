@@ -66,13 +66,11 @@ def calculate_key_values(config, key_value_states, *, parameters):
     bsz, tgt_len, hidden_size = key_value_states.shape
     head_size = hidden_size // config.encoder_attention_heads
 
-    core_grid = ttnn.CoreGrid(y=8, x=8)
     key_value_states = ttnn.to_memory_config(key_value_states, ttnn.L1_MEMORY_CONFIG)
     fused_kv = ttnn.linear(
         key_value_states,
         parameters.key_value.weight,
         bias=parameters.key_value.bias,
-        core_grid=core_grid,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn.deallocate(key_value_states)
@@ -81,6 +79,8 @@ def calculate_key_values(config, key_value_states, *, parameters):
     key_states = fused_kv[:, :, :, :hidden_size]
     value_states = fused_kv[:, :, :, hidden_size:]
 
+    # num_kv_heads=0 is required here because we're calling nlp_create_qkv_heads
+    # on just the K or V tensor (not combined QKV)
     key_states = ttnn.experimental.nlp_create_qkv_heads(
         key_states,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -125,8 +125,9 @@ def get_decode_sdpa_configs(config, device):
         ),
     )
 
+    compute_grid_size = device.compute_with_storage_grid_size()
     sdpa_decode_progcfg = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        compute_with_storage_grid_size=(compute_grid_size.x, compute_grid_size.y),
         exp_approx_mode=False,
         q_chunk_size=256,
         k_chunk_size=256,
@@ -147,7 +148,8 @@ def functional_sdpa(
     query_states, key_states, value_states, scaling, attention_mask, is_cross_attention=False, is_decode=False
 ):
     if is_cross_attention and query_states.shape[1] == 20:
-        # num_heads must be 20 to be sharded
+        # NOTE: This will only work for openai/whisper-large-v3 & distil-whisper/distil-large-v3 models
+        # since the number of heads is 20
         core_grid = ttnn.CoreGrid(y=4, x=5)
         height_sharded_config_query_states = ttnn.create_sharded_memory_config(
             query_states.padded_shape,
@@ -196,9 +198,9 @@ def functional_sdpa(
         ## Encoder-self-attention
         q_chunk_size = 32
         k_chunk_size = 32
-        core_grid_8x8 = ttnn.CoreGrid(y=8, x=8)
+        compute_grid_size = query_states.device().compute_with_storage_grid_size()
         program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            compute_with_storage_grid_size=(compute_grid_size.x, compute_grid_size.y),
             q_chunk_size=q_chunk_size,
             k_chunk_size=k_chunk_size,
             exp_approx_mode=True,  # NOTE: False is more correct
@@ -258,14 +260,14 @@ def whisper_attention(
 
     is_cross_attention = encoder_hidden_states is not None
     sdpa_with_kv_cache = not is_cross_attention and is_decode and kv_cache is not None
-    # Enabling encoder SDPA, to diable the K-transpose in ttnn.experimental.nlp_create_qkv_heads
+    # Enabling encoder SDPA, to disable the K-transpose in ttnn.experimental.nlp_create_qkv_heads
     encoder_sdpa_attention = not is_decode
     if encoder_sdpa_attention:
-        no_transpose_k_heads = False
+        transpose_k_heads = False
     elif sdpa_with_kv_cache:
-        no_transpose_k_heads = False
+        transpose_k_heads = False
     else:
-        no_transpose_k_heads = True
+        transpose_k_heads = True
 
     if is_cross_attention:
         query_states = hidden_states @ parameters.q_proj.weight + parameters.q_proj.bias
@@ -284,8 +286,6 @@ def whisper_attention(
             is_decode=is_decode,
         )
     else:
-        # fused_qkv = hidden_states @ parameters.query_key_value.weight + parameters.query_key_value.bias  # 1, S, 3xHxd
-        core_grid = ttnn.CoreGrid(y=8, x=8)
         if not is_decode:
             fused_qkv_dtype = ttnn.bfloat8_b
         else:
@@ -294,7 +294,6 @@ def whisper_attention(
             hidden_states,
             parameters.query_key_value.weight,
             bias=parameters.query_key_value.bias,
-            core_grid=core_grid,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=fused_qkv_dtype,
         )
@@ -311,7 +310,7 @@ def whisper_attention(
             fused_qkv,
             num_heads=config.decoder_attention_heads,
             num_kv_heads=config.decoder_attention_heads,
-            transpose_k_heads=no_transpose_k_heads,
+            transpose_k_heads=transpose_k_heads,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         if sdpa_with_kv_cache:
