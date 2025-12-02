@@ -152,7 +152,8 @@ public:
         tt::tt_fabric::FabricNodeId local_fabric_node_id,
         tt::tt_fabric::FabricNodeId remote_fabric_node_id,
         uint32_t ethernet_channel_id,
-        eth_chan_directions direction);
+        eth_chan_directions direction,
+        std::vector<bool>&& sender_channel_injection_flags);
 
     // Create and compile the kernel(s) based on mode
     void create_and_compile(tt::tt_metal::Program& program);
@@ -172,6 +173,9 @@ public:
     void append_relay_router_noc_xy(uint32_t noc_x, uint32_t noc_y);
 
 private:
+    // Set injection channel flags for bubble flow control (takes ownership via move)
+    // Called internally by build() method
+    void set_sender_channel_injection_flags_from_vector(std::vector<bool>&& flags);
     // Private constructor - use build() factory method
     FabricTensixDatamoverBuilder(
         std::unique_ptr<FabricTensixDatamoverMuxBuilder> mux_builder,

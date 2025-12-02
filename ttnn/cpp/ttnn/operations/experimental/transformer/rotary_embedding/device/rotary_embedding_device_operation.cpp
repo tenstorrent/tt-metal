@@ -1,31 +1,46 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rotary_embedding_device_operation.hpp"
-#include "rotary_embedding_program_factory.hpp"
 
-#include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/work_split.hpp>
 
 using namespace tt::constants;
 
-namespace tt {
+namespace ttnn::operations::experimental::transformer::rotary_embedding {
 
-namespace tt_metal {
+RotaryEmbeddingDeviceOperation::program_factory_t RotaryEmbeddingDeviceOperation::select_program_factory(
+    const operation_attributes_t&, const tensor_args_t&) {
+    return rotary_embedding::program::RotaryEmbeddingProgramFactory{};
+}
 
-void RotaryEmbedding::validate(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& cos = input_tensors.at(1);
-    const auto& sin = input_tensors.at(2);
-    TT_FATAL(input_tensors.size() == 3, "Expected 3 input tensors but got {}", input_tensors.size());
-    auto ref_device = input_tensor.device();
-    for (const auto& input : input_tensors) {
-        TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
-        TT_FATAL(input.buffer() != nullptr, "Operands to rotary embedding need to be allocated in buffers on device!");
-        TT_FATAL(input.device() == ref_device, "Operands to rotary embedding need to be on same device!");
-        TT_FATAL((input.layout() == Layout::TILE), "Inputs to rotary embedding must be tilized");
-    }
+void RotaryEmbeddingDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(args, tensor_args);
+}
+
+void RotaryEmbeddingDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input;
+    const auto& cos = tensor_args.cos;
+    const auto& sin = tensor_args.sin;
+
+    auto* ref_device = input_tensor.device();
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
+    TT_FATAL(
+        input_tensor.buffer() != nullptr, "Operands to rotary embedding need to be allocated in buffers on device!");
+    TT_FATAL(cos.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
+    TT_FATAL(cos.buffer() != nullptr, "Operands to rotary embedding need to be allocated in buffers on device!");
+    TT_FATAL(sin.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
+    TT_FATAL(sin.buffer() != nullptr, "Operands to rotary embedding need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.device() == ref_device, "Operands to rotary embedding need to be on same device!");
+    TT_FATAL(cos.device() == ref_device, "Operands to rotary embedding need to be on same device!");
+    TT_FATAL(sin.device() == ref_device, "Operands to rotary embedding need to be on same device!");
+    TT_FATAL((input_tensor.layout() == Layout::TILE), "Inputs to rotary embedding must be tilized");
+    TT_FATAL((cos.layout() == Layout::TILE), "Inputs to rotary embedding must be tilized");
+    TT_FATAL((sin.layout() == Layout::TILE), "Inputs to rotary embedding must be tilized");
 
     TT_FATAL(input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
     uint32_t seq_len = input_tensor.padded_shape()[-2];
@@ -35,8 +50,8 @@ void RotaryEmbedding::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(
         cos.padded_shape()[0] == 1 && cos.padded_shape()[1] == 1 && cos.padded_shape()[-1] == X,
         "Cos dims must match input dims");
-    if (this->token_idx.has_value()) {
-        TT_FATAL(cos.padded_shape()[-2] >= token_idx, "Cos dims must match input dims");
+    if (args.token_idx.has_value()) {
+        TT_FATAL(cos.padded_shape()[-2] >= args.token_idx.value(), "Cos dims must match input dims");
     } else {
         TT_FATAL(cos.padded_shape()[-2] >= seq_len, "Cos dims must match input dims");
     }
@@ -56,38 +71,39 @@ void RotaryEmbedding::validate(const std::vector<Tensor>& input_tensors) const {
                     input_tensor.shard_spec().value().shape[0] ==
                 0,
             "Error");
-        if (this->output_mem_config.is_sharded()) {
+        if (args.output_mem_config.is_sharded()) {
             TT_FATAL(
-                this->output_mem_config.memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
+                args.output_mem_config.memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
                 "Output memory config layout must not be WIDTH_SHARDED but got {}",
-                this->output_mem_config.memory_layout());
+                args.output_mem_config.memory_layout());
         }
-    } else if (this->output_mem_config.is_sharded()) {
+    } else if (args.output_mem_config.is_sharded()) {
         TT_FATAL(
-            this->output_mem_config.memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
+            args.output_mem_config.memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
             "Output memory config layout must not be WIDTH_SHARDED but got {}",
-            this->output_mem_config.memory_layout());
+            args.output_mem_config.memory_layout());
     } else {
         TT_FATAL(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Input tensor memory layout must be INTERLEAVED but got {}",
             input_tensor.memory_config().memory_layout());
         TT_FATAL(
-            this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            args.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Output memory config layout must be INTERLEAVED but got {}",
-            this->output_mem_config.memory_layout());
+            args.output_mem_config.memory_layout());
     }
 }
 
-std::vector<ttnn::TensorSpec> RotaryEmbedding::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
+spec_return_value_t RotaryEmbeddingDeviceOperation::compute_output_specs(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input;
     auto shape = input_tensor.padded_shape();
-    if (!this->token_idx.has_value()) {
-        shape[-2] = round_up(this->seq_len, TILE_HEIGHT);
+    if (!args.token_idx.has_value()) {
+        shape[-2] = tt::round_up(args.seq_len, TILE_HEIGHT);
     }
 
-    if (this->output_mem_config.is_sharded()) {
-        ShardSpec shard_spec{CoreRangeSet(), {0, 0}};
+    if (args.output_mem_config.is_sharded()) {
+        tt::tt_metal::ShardSpec shard_spec{CoreRangeSet(), {0, 0}};
         if (input_tensor.is_sharded()) {
             shard_spec = input_tensor.shard_spec().value();
         } else {
@@ -101,42 +117,59 @@ std::vector<ttnn::TensorSpec> RotaryEmbedding::compute_output_specs(const std::v
                     break;
                 }
             }
-            uint32_t Ht = div_up(num_blocks, num_cores);
-            shard_spec.grid = num_cores_to_corerangeset(num_cores, core_grid, true);
+            uint32_t Ht = tt::div_up(num_blocks, num_cores);
+            shard_spec.grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, core_grid, true);
             shard_spec.shape = {Ht * TILE_HEIGHT, input_tensor.padded_shape()[-1]};
             shard_spec.orientation = ShardOrientation::ROW_MAJOR;
         }
-        auto mem_config = this->output_mem_config.with_shard_spec(shard_spec);
-        return {TensorSpec(shape, TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), mem_config))};
+        auto mem_config = args.output_mem_config.with_shard_spec(shard_spec);
+        return TensorSpec(
+            shape,
+            tt::tt_metal::TensorLayout(
+                input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), mem_config));
     }
 
+    return TensorSpec(
+        shape,
+        tt::tt_metal::TensorLayout(
+            input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), args.output_mem_config));
+}
+
+tensor_return_value_t RotaryEmbeddingDeviceOperation::create_output_tensors(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
+}
+
+tt::stl::hash::hash_t RotaryEmbeddingDeviceOperation::compute_program_hash(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    auto program_factory = select_program_factory(args, tensor_args);
+    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<RotaryEmbeddingDeviceOperation>(
+        args.seq_len,
+        args.output_mem_config,
+        program_factory.index(),
+        tensor_args.input,
+        tensor_args.cos,
+        tensor_args.sin);
+    return hash;
+}
+
+std::tuple<RotaryEmbeddingDeviceOperation::operation_attributes_t, RotaryEmbeddingDeviceOperation::tensor_args_t>
+RotaryEmbeddingDeviceOperation::invoke(
+    const Tensor& input,
+    const Tensor& cos,
+    const Tensor& sin,
+    uint32_t seq_len,
+    std::optional<uint32_t> token_idx,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     return {
-        TensorSpec(shape, TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), output_mem_config))};
+        operation_attributes_t{
+            .seq_len = seq_len,
+            .token_idx = token_idx,
+            .output_mem_config = output_mem_config,
+            .compute_kernel_config = compute_kernel_config,
+        },
+        tensor_args_t{.input = input, .cos = cos, .sin = sin}};
 }
 
-operation::ProgramWithCallbacks RotaryEmbedding::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& cos = input_tensors.at(1);
-    const auto& sin = input_tensors.at(2);
-    auto& output_tensor = output_tensors.at(0);
-
-    switch (this->get_parallelization_strategy(input_tensors)) {
-        case RotaryEmbeddingOpParallelizationStrategy::MULTI_CORE:
-        default:
-            return rotary_embedding_multi_core(
-                input_tensor, cos, sin, output_tensor, this->token_idx, this->compute_kernel_config);
-    }
-}
-
-RotaryEmbeddingOpParallelizationStrategy RotaryEmbedding::get_parallelization_strategy(
-    const std::vector<Tensor>& input_tensors) const {
-    return RotaryEmbeddingOpParallelizationStrategy::MULTI_CORE;
-}
-
-operation::Hash RotaryEmbedding::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
-    return operation::hash_operation<RotaryEmbedding>(this->seq_len, this->output_mem_config, input_tensors);
-}
-
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace ttnn::operations::experimental::transformer::rotary_embedding

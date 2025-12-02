@@ -13,8 +13,8 @@ MorehNllLossStep1DeviceOperation::program_factory_t MorehNllLossStep1DeviceOpera
 
 void MorehNllLossStep1DeviceOperation::validate_inputs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    auto& target_tensor = tensor_args.target_tensor;
-    auto& weight_tensor = tensor_args.weight_tensor;
+    const auto& target_tensor = tensor_args.target_tensor;
+    const auto& weight_tensor = tensor_args.weight_tensor;
 
     TT_FATAL(target_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss need to be on device!");
     TT_FATAL(target_tensor.buffer() != nullptr, "Operands to nll_loss need to be allocated in buffers on device!");
