@@ -88,6 +88,60 @@ def test_unary_sharded_ops(input_shape, sharded_config, ttnn_op, dtype, atol_thr
 
 
 @pytest.mark.parametrize(
+    "input_shapes",
+    [(torch.Size([2, 3, 64, 128]), torch.Size([4, 7, 64, 128]))],
+)
+@pytest.mark.parametrize("sharded_config", [block_sharded_memory_config])
+@pytest.mark.parametrize("ttnn_op", [ttnn.log_sigmoid])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("atol_threshold", [1e-1])
+@pytest.mark.parametrize("ulp_threshold", [7])
+def test_unary_sharded_program_cache(
+    input_shapes, sharded_config, ttnn_op, dtype, atol_threshold, ulp_threshold, device
+):
+    torch.manual_seed(2024)
+
+    # Map ttnn dtype to torch dtype
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+
+    # Get golden result from torch
+    golden_function = ttnn.get_golden_function(ttnn_op)
+
+    device.clear_program_cache()
+
+    # Sanity check
+    assert device.num_program_cache_entries() == 0
+
+    for input_shape in input_shapes:
+        # Create input tensor with range suitable for the operation
+        torch_input = torch.randn(input_shape, dtype=torch_dtype)
+
+        torch_output = golden_function(torch_input, device=device)
+
+        # Convert to ttnn with sharded memory config
+        ttnn_input = ttnn.from_torch(
+            torch_input,
+            dtype=dtype,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=sharded_config,
+        )
+
+        # Run operation with sharded input
+        ttnn_output_sharded = ttnn_op(ttnn_input, memory_config=sharded_config)
+
+        # Convert output back to torch
+        ttnn_output = ttnn.to_torch(ttnn_output_sharded)
+
+        # Compare with golden using specified thresholds
+        assert torch.allclose(ttnn_output, torch_output, atol=atol_threshold)
+        assert_with_ulp(torch_output, ttnn_output, ulp_threshold)
+
+    # Same shard spec should reuse same program cache entry regardless of tensor shape
+    assert device.num_program_cache_entries() == 1
+
+
+@pytest.mark.parametrize(
     "ttnn_op, dtype, low, high, atol_threshold, ulp_threshold",
     [
         (ttnn.log_sigmoid, ttnn.bfloat16, -87.0, 10.0, 1e-1, 7.0),
