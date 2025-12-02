@@ -318,6 +318,11 @@ The test runner reads in test vectors from the test vector database and executes
     4. NOT RUN: The test was run with a vector that is marked as invalid. The invalid reason given from the op test file is stored with the result.
     5. FAIL_L1_OUT_OF_MEM: The test failed specifically due to an L1 Out of Memory error.
     6. FAIL_WATCHER: The test failed due to a Watcher raised exception. This only occurs if `--watcher` is passed in the run command.
+- Memory Profiling: Peak L1 memory usage can be captured using the `--measure-memory` flag. This uses graph trace in NO_DISPATCH mode to profile memory requirements without execution overhead. Memory data is stored in test results as `peak_l1_memory_bytes` metric and can be analyzed in downstream dashboards. This is useful for:
+    - Identifying memory-intensive operations and configurations
+    - Tracking memory usage trends across commits
+    - Optimizing memory layouts and tensor sizes
+    - Detecting memory regressions in CI
 - Granularity of Testing: Tests can be run by all sweeps, individual sweep, or individual suite to allow for faster/slower test runs, spanning larger/smaller suites of tests.
 - Git Hash information is stored with each test run, so it is easy to see on which commit the test is breaking/passing.
 - Data Aggregation: Results are accumulated in a database that can be queried to see desired details of test runs.
@@ -328,6 +333,53 @@ The test runner reads in test vectors from the test vector database and executes
 **NOTE: Elasticsearch support has been removed from the parameter generator. Vectors are now always exported to disk in JSON format.**
 
 Go to [`tests/README.md`](../README.md) for the latest information on how to run the sweeps_runner.
+
+#### Memory Profiling
+
+To capture peak L1 memory usage during sweep runs, add the `--measure-memory` flag:
+
+```bash
+python3 tests/sweep_framework/sweeps_runner.py \
+  --module-name <module_name> \
+  --vector-source vectors_export \
+  --result-dest results_export \
+  --measure-memory \
+  --tag <your_tag>
+```
+
+**How it works:**
+- Uses ttnn graph trace with NO_DISPATCH mode (fast, no device execution overhead)
+- Captures peak L1 memory usage in bytes for each test vector
+- Stores memory data in results as `peak_l1_memory_bytes` metric
+- Compatible with `--perf-with-cache` flag (captures memory for both cached/uncached runs)
+- Memory capture failures are non-fatal (returns null but test continues)
+
+**Memory metrics in results:**
+- Single run mode: `peak_l1_memory_bytes`
+- Cache comparison mode: `peak_l1_memory_uncached_bytes` and `peak_l1_memory_cached_bytes`
+
+**Example result with memory:**
+```json
+{
+  "status": "pass",
+  "metrics": [
+    {
+      "metric_name": "peak_l1_memory_bytes",
+      "metric_value": 30720
+    },
+    {
+      "metric_name": "e2e_perf_ms",
+      "metric_value": 2.5
+    }
+  ]
+}
+```
+
+**Use cases:**
+- Identify memory-intensive operation configurations
+- Track memory usage trends across commits
+- Detect memory regressions in CI
+- Optimize memory layouts before running on hardware
 
 ## FAQ / Troubleshooting
 
