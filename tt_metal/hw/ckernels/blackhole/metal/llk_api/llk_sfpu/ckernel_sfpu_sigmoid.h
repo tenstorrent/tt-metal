@@ -30,10 +30,10 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
 
     sfpi::vFloat result;
     if constexpr (is_fp32_acc_to_dest_mode) {
-        return _sfpu_reciprocal_<2>(denominator);
+        result = _sfpu_reciprocal_<2>(denominator);
     } else {
         result = _sfpu_reciprocal_<1>(denominator);
-        return sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+        result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
     }
 
     return result;
@@ -74,8 +74,8 @@ inline void calculate_sigmoid() {
 
 template <bool APPROXIMATION_MODE>
 inline void sigmoid_init() {
-    if constexpr (APPROXIMATION_MODE == false) {
-        _init_reciprocal_<false, false>();
+    if constexpr (!APPROXIMATION_MODE) {
+        _init_sfpu_reciprocal_<false>();
     } else {
         sigmoid_appx_init();
     }
