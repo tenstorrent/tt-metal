@@ -79,10 +79,14 @@ jobs:
           requested_cpp_tests=$(jq --argjson nightly_run "${{ inputs.nightly-run }}" '[.[] | select(.nightly == $nightly_run)]' <<< "$requested_cpp_tests")
           echo "[info] after filtering for requested workflow tests: $requested_cpp_tests"
 
-          # Filter for merge-gate-call: only keep CCL and tools tests
+          # Filter for merge-gate-call: only keep CCL, tools, distributed, and 'eth, misc, and user kernel path' tests
           if [[ "${{ inputs.merge-gate-call }}" == "true" ]]; then
             requested_cpp_tests=$(jq '[.[] | select(.name == "CCL" or .name == "tools" or .name == "eth, misc, and user kernel path" or .name == "distributed")]' <<< "$requested_cpp_tests")
             echo "[info] after filtering for merge-gate-call (CCL and tools only): $requested_cpp_tests"
+          # Exclude CCL, tools, distributed, and 'eth, misc, and user kernel path' if both nightly-run and merge-gate-call are false
+          elif [[ "${{ inputs.nightly-run }}" == "false" && ("${{ inputs.runner-label }}" == "N150" || "${{ inputs.runner-label }}" == "N300") ]]; then
+            requested_cpp_tests=$(jq '[.[] | select(.name != "CCL" and .name != "tools" and .name != "eth, misc, and user kernel path" and .name != "distributed")]' <<< "$requested_cpp_tests")
+            echo "[info] after filtering out CCL, tools, distributed, and eth/misc/kernel path for regular post-commit: $requested_cpp_tests"
           fi
 
           # Check that we have a valid test list that's not empty
