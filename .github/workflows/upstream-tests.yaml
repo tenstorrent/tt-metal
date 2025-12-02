@@ -222,7 +222,6 @@ jobs:
             extra-tag: pipeline-perf
     runs-on:
       - ${{ matrix.bh-config.runner-label }}
-      - in-service
       - issue-miw-740
       - ${{ matrix.bh-config.extra-tag }}
     steps:
