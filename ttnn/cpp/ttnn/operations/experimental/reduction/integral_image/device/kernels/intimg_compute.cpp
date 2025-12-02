@@ -272,7 +272,7 @@ void MAIN {
     constexpr auto ctas{get_ctas()};
 
     constexpr uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
-    constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, ctas.block_depth);
+    constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, 32);
 
     for (uint32_t rows_block_i = 0; rows_block_i < num_blocks_in_column; ++rows_block_i) {
         perform_intimg_along_row_chunk(ctas, num_blocks_in_row, rows_block_i);
