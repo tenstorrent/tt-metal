@@ -306,11 +306,10 @@ inline uint32_t get_estimated_size_of_cbs(
     uint32_t in0_single_tile_size = tt::tile_size(in0_data_format);  // use as estimate for output as well
     uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
     uint32_t output_single_tile_size = in0_single_tile_size;
-    auto* in0_buffer = input_tensor_a.buffer();
-    auto in0_tile = input_tensor_a.tensor_spec().tile();
     uint32_t in2_block_tiles = 0;
     uint32_t in0_shard_width_in_tiles = 0;
     if (input_tensor_a.is_sharded()) {
+        auto* in0_buffer = input_tensor_a.buffer();
         const auto in0_tile = get_matmul_tile(input_tensor_a, transpose_a);
         in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_width();
     }
