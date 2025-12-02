@@ -8,7 +8,7 @@
 
 #include "device/sdpa_decode_op.hpp"
 #include "ttnn/run_operation.hpp"
-
+#include "ttnn/device.hpp"
 using namespace tt::tt_metal;
 
 namespace {
@@ -45,10 +45,9 @@ ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    [[maybe_unused]] auto arch =
-        input_tensor_q.storage_type() == StorageType::DEVICE
-            ? input_tensor_q.device()->arch()
-            : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
+                                     ? input_tensor_q.device()->arch()
+                                     : ttnn::GetDefaultDevice()->arch();
     uint32_t s = input_tensor_k.logical_shape()[-2];
     uint32_t k_chunk_size = get_chunk_size(s);
     if (program_config.has_value() && program_config.value().k_chunk_size > 0) {
@@ -101,10 +100,9 @@ ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    [[maybe_unused]] auto arch =
-        input_tensor_q.storage_type() == StorageType::DEVICE
-            ? input_tensor_q.device()->arch()
-            : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
+                                     ? input_tensor_q.device()->arch()
+                                     : ttnn::GetDefaultDevice()->arch();
 
     // Use k_chunk_size as override; if k_chunk_size == 0, figure it out in kernels
     // uint32_t k_chunk_size = get_chunk_size(s);
@@ -154,10 +152,9 @@ ttnn::Tensor ExecuteFlashMultiLatentAttentionDecode::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    [[maybe_unused]] auto arch =
-        input_tensor_q.storage_type() == StorageType::DEVICE
-            ? input_tensor_q.device()->arch()
-            : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
+                                     ? input_tensor_q.device()->arch()
+                                     : ttnn::GetDefaultDevice()->arch();
     uint32_t s = input_tensor_k.logical_shape()[-2];
     uint32_t k_chunk_size = get_chunk_size(s);
     if (program_config.has_value() && program_config.value().k_chunk_size > 0) {
@@ -212,10 +209,9 @@ ttnn::Tensor ExecutePagedFlashMultiLatentAttentionDecode::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    [[maybe_unused]] auto arch =
-        input_tensor_q.storage_type() == StorageType::DEVICE
-            ? input_tensor_q.device()->arch()
-            : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
+                                     ? input_tensor_q.device()->arch()
+                                     : ttnn::GetDefaultDevice()->arch();
 
     // Use k_chunk_size as override; if k_chunk_size == 0, figure it out in kernels
     // uint32_t k_chunk_size = get_chunk_size(s);

@@ -69,7 +69,7 @@ CoreCoord from_flatbuffer(const distributed::flatbuffer::CoreCoord* fb_core_coor
 }
 
 MeshCoordinate from_flatbuffer(const distributed::flatbuffer::MeshCoordinate* fb_mesh_coord) {
-    auto flat_buf = fb_mesh_coord->values();
+    const auto* flat_buf = fb_mesh_coord->values();
     return MeshCoordinate(tt::stl::Span<const uint32_t>{flat_buf->data(), flat_buf->size()});
 }
 
@@ -131,7 +131,7 @@ SocketMemoryConfig from_flatbuffer(const distributed::flatbuffer::SocketMemoryCo
 
 std::vector<uint8_t> serialize_to_bytes(const SocketPeerDescriptor& socket_peer_desc) {
     flatbuffers::FlatBufferBuilder builder;
-    auto& socket_config = socket_peer_desc.config;
+    const auto& socket_config = socket_peer_desc.config;
     // Build the connections FlatBuffer
     auto connections_vector_fb = to_flatbuffer(builder, socket_config.socket_connection_config);
     // Build the memory config FlatBuffer`
@@ -163,8 +163,8 @@ SocketPeerDescriptor deserialize_from_bytes(const std::vector<uint8_t>& data) {
         distributed::flatbuffer::VerifySocketPeerDescriptorBuffer(verifier),
         "Invalid FlatBuffer data of distributed socket metadata");
 
-    auto socket_peer_desc_fb = distributed::flatbuffer::GetSocketPeerDescriptor(data.data());
-    auto socket_config_fb = socket_peer_desc_fb->config();
+    const auto* socket_peer_desc_fb = distributed::flatbuffer::GetSocketPeerDescriptor(data.data());
+    const auto* socket_config_fb = socket_peer_desc_fb->config();
 
     SocketPeerDescriptor socket_peer_desc;
     // Populate the SocketPeerDescriptor from the FlatBuffer (connections, memory config, ranks, peer address, Mesh IDs,
