@@ -27,13 +27,7 @@ from helpers.utils import passed_test
     mathop=[MathOperation.ReduceColumn],
     reduce_pool=[ReducePool.Max],  # Only MAX is supported for SDPA reduce
     input_dimensions=[
-        [32, 32],
-        [32, 64],
-        [64, 32],
-        [128, 64],
-        [64, 128],
-        [32, 128],
-        [128, 32],
+        [128, 64],  # 4x2 subblock
     ],
 )
 def test_sfpu_reduce_sdpa(
