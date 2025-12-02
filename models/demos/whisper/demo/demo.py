@@ -97,31 +97,6 @@ def repeat_inputs_cyclically(input_data, total_inputs):
 
 
 def load_conditional_generation_ref_model(model_repo, language, task):
-def repeat_inputs_cyclically(input_data, total_inputs):
-    """
-    Repeat input data cyclically to match the total number of inputs needed.
-
-    Args:
-        input_data: List of input items to repeat
-        total_inputs: Total number of inputs needed
-
-    Returns:
-        List of input items repeated cyclically to match total_inputs
-    """
-    if len(input_data) < total_inputs:
-        # Repeat inputs cyclically to match total_inputs
-        logger.info(
-            f"Only {len(input_data)} audio files available, repeating cyclically to match {total_inputs} total inputs"
-        )
-        original_input_data = input_data.copy()
-        while len(input_data) < total_inputs:
-            input_data.extend(original_input_data)
-        # Trim to exact size needed
-        input_data = input_data[:total_inputs]
-    return input_data
-
-
-def load_conditional_generation_ref_model(model_repo, language, task):
     """
     Load Whisper model for conditional generation.
 
