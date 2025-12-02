@@ -50,7 +50,6 @@ class TransformerModelFactory:
         """
         self.device_config = DeviceConfig(yaml_config)
         self.multihost_config = MultiHostConfig(yaml_config)
-        training_config = yaml_config.get("training_config", {})
         self.transformer_config = TransformerConfig(yaml_config)
         self.model_type = self.transformer_config.model_type
 

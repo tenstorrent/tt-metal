@@ -48,7 +48,7 @@ struct TrainingConfig {
     float momentum = 0.9F;
     float weight_decay = 0.F;
     int model_save_interval = 500;
-    std::string model_config = "configs/model_configs/mnist_mlp.yaml";
+    std::string model_config = "configs/model_configs/mlp_config.yaml";
     std::string model_path = "/tmp/mnist_mlp.msgpack";
     ttml::modules::MultiLayerPerceptronParameters mlp_config;
 };
