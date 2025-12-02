@@ -344,7 +344,7 @@ void py_module(py::module& module) {
         Args:
             grid_size (ttnn.CoreCoord): The size of the core grid (x, y dimensions).
             units_to_divide (int): The total number of work units to distribute.
-            row_wise (bool, optional): Whether to distribute row-wise. Defaults to False.
+            row_wise (bool, optional): Whether to distribute work by iterating row-wise. Defaults to False.
 
         Returns:
             tuple: A tuple containing:
@@ -355,6 +355,11 @@ void py_module(py::module& module) {
                 - units_per_core_group_1 (int): Work units per core in group 1
                 - units_per_core_group_2 (int): Work units per core in group 2
 
+        Example:
+        >>> # Split 100 tiles across an 8x8 core grid
+        >>> num_cores, all_cores, core_group_1, core_group_2, units_1, units_2 = \\
+        ...     ttnn.split_work_to_cores(ttnn.CoreCoord(8, 8), 100)
+        >>> print(f"Using {num_cores} cores, {units_1} units per core in group 1, {units_2} in group 2")
         )doc");
 
     module.def(
@@ -373,7 +378,7 @@ void py_module(py::module& module) {
         Args:
             core_grid (ttnn.CoreRangeSet): The set of core ranges to distribute work across.
             units_to_divide (int): The total number of work units to distribute.
-            row_wise (bool, optional): Whether to distribute row-wise. Defaults to False.
+            row_wise (bool, optional): Whether to distribute work by iterating row-wise. Defaults to False.
 
         Returns:
             tuple: A tuple containing:
@@ -384,6 +389,12 @@ void py_module(py::module& module) {
                 - units_per_core_group_1 (int): Work units per core in group 1
                 - units_per_core_group_2 (int): Work units per core in group 2
 
+        Example:
+        >>> # Split 100 tiles across an 8x8 core grid
+        >>> core_rangeset = ttnn.CoreRangeSet(ttnn.CoreRange(ttnn.CoreCoord(0,0), ttnn.CoreCoord(7,7)))
+        >>> num_cores, all_cores, core_group_1, core_group_2, units_1, units_2 = \\
+        ...     ttnn.split_work_to_cores(core_rangeset, 100)
+        >>> print(f"Using {num_cores} cores, {units_1} units per core in group 1, {units_2} in group 2")
         )doc");
 }
 

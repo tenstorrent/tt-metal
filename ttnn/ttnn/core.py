@@ -16,6 +16,8 @@ from ttnn.types import (
     BufferType,
 )
 
+split_work_to_cores = ttnn._ttnn.operations.core.split_work_to_cores
+
 set_printoptions = ttnn._ttnn.core.set_printoptions
 
 
@@ -76,46 +78,6 @@ def num_cores_to_corerangeset_in_subcoregrids(
         start_core,
         target_num_cores,
         sub_core_grids,
-        row_wise,
-    )
-
-
-def split_work_to_cores(
-    grid_size: Union[ttnn.CoreCoord, ttnn.CoreRangeSet],
-    units_to_divide: int,
-    row_wise: bool = False,
-) -> Tuple[int, ttnn.CoreRangeSet, ttnn.CoreRangeSet, ttnn.CoreRangeSet, int, int]:
-    """
-    Split work units across cores in a grid.
-
-    This function divides a specified number of work units across cores in a grid or CoreRangeSet.
-    It returns information about how the work is distributed, including core ranges for different
-    groups if work cannot be evenly divided.
-
-    Args:
-        grid_size (ttnn.CoreCoord | ttnn.CoreRangeSet): The size of the core grid (x, y dimensions)
-            or a CoreRangeSet specifying the cores to use.
-        units_to_divide (int): The total number of work units to distribute.
-        row_wise (bool, optional): Whether to distribute row-wise. Defaults to False.
-
-    Returns:
-        tuple: A tuple containing:
-            - num_cores (int): Number of cores being used
-            - all_cores (ttnn.CoreRangeSet): All cores involved
-            - core_group_1 (ttnn.CoreRangeSet): Cores doing more work
-            - core_group_2 (ttnn.CoreRangeSet): Cores doing less work (empty if evenly divisible)
-            - units_per_core_group_1 (int): Work units per core in group 1
-            - units_per_core_group_2 (int): Work units per core in group 2
-
-    Example:
-        >>> # Split 100 tiles across an 8x8 core grid
-        >>> num_cores, all_cores, core_group_1, core_group_2, units_1, units_2 = \\
-        ...     ttnn.split_work_to_cores(ttnn.CoreCoord(8, 8), 100)
-        >>> print(f"Using {num_cores} cores, {units_1} units per core in group 1, {units_2} in group 2")
-    """
-    return ttnn._ttnn.operations.core.split_work_to_cores(
-        grid_size,
-        units_to_divide,
         row_wise,
     )
 
