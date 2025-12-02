@@ -203,6 +203,7 @@ def test_rms_norm_distributed(device):
     logger.info(f"RMS Norm Pre All Gather result: {stats}")
 
     # On a distributed setup, an all gather would go here to collect the stats from all the devices
+    # See documentation for ttnn.all_gather for example usage of all_gather
 
     # Now apply the post-all-gather RMS normalization
     output = ttnn.rms_norm_post_all_gather(input_tensor, stats, weight=weight)

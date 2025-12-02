@@ -42,7 +42,7 @@ void bind_normalization_layernorm_pre_all_gather_operation(py::module& module) {
               See `Layer Normalization <https://arxiv.org/abs/1607.06450>`_ for more details.
 
               This operation computes :math:`\sum_{}^{}x` and :math:`\sum_{}^{}x^2` over the last dimension.
-              Its output should be combined across devices with an all gather, then followed by :func:`ttnn.layer_norm_post_all_gather` to compute layer norm.
+              Its output should be combined across devices with :func:`ttnn.all_gather`, then followed by :func:`ttnn.layer_norm_post_all_gather` to compute layer norm.
 
               Args:
                 input_tensor (ttnn.Tensor): the input tensor.
@@ -115,7 +115,7 @@ void bind_normalization_layernorm_post_all_gather_operation(py::module& module) 
                 See `Layer Normalization <https://arxiv.org/abs/1607.06450>`_ for more details.
 
                 Performs the second part of a distributed layernorm operation, using the gathered statistics to compute the mean and variance, and finally normalizing the input.
-                The input :attr:`stats` tensor should be computed by gathering the output of :func:`ttnn.layer_norm_pre_all_gather` across all devices.
+                The input :attr:`stats` tensor should be computed by first using :func:`ttnn.layer_norm_pre_all_gather` and then using :func:`ttnn.all_gather` to gather the statistics across all devices.
 
                 Args:
                   input_tensor (ttnn.Tensor): the input tensor.
