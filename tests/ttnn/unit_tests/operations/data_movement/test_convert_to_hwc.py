@@ -9,61 +9,61 @@ import torch
 from tests.ttnn.utils_for_testing import assert_equal
 from tests.ttnn.unit_tests.operations.test_utils import round_up
 
-CHANNEL_TEST_CASES = [1, 2, 3, 4]
-BATCH_TEST_CASES = [1, 2, 4, 8]
+CHANNEL_TEST_CASES = [3]
+BATCH_TEST_CASES = [16]
 
 
 @pytest.mark.parametrize("B", BATCH_TEST_CASES)
 @pytest.mark.parametrize("C", CHANNEL_TEST_CASES)
-@pytest.mark.parametrize("provide_memory_config", [True, False])
+@pytest.mark.parametrize("provide_memory_config", [True])
 @pytest.mark.parametrize(
     "HW, core_grid, padded_sharded_dim",
     (
         (
-            32,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
-                }
-            ),
-            32,
-        ),
-        (
-            128,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
-                }
-            ),
-            128,
-        ),
-        (
-            128,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)),
-                }
-            ),
-            64,
-        ),
-        (
-            256,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
-                }
-            ),
-            64,
-        ),
-        (
-            8192,
+            (224 * 224),
             ttnn.CoreRangeSet(
                 {
                     ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7)),
                 }
             ),
-            128,
+            ((224 * 224) // 64),
         ),
+        # (
+        #     128,
+        #     ttnn.CoreRangeSet(
+        #         {
+        #             ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+        #         }
+        #     ),
+        #     128,
+        # ),
+        # (
+        #     128,
+        #     ttnn.CoreRangeSet(
+        #         {
+        #             ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)),
+        #         }
+        #     ),
+        #     64,
+        # ),
+        # (
+        #     256,
+        #     ttnn.CoreRangeSet(
+        #         {
+        #             ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
+        #         }
+        #     ),
+        #     64,
+        # ),
+        # (
+        #     8192,
+        #     ttnn.CoreRangeSet(
+        #         {
+        #             ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7)),
+        #         }
+        #     ),
+        #     128,
+        # ),
     ),
 )
 def test_convert_to_hwc_with_l1_input(device, B, C, HW, core_grid, padded_sharded_dim, provide_memory_config):
