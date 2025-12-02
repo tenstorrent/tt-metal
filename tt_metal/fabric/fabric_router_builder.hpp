@@ -5,73 +5,63 @@
 #pragma once
 
 #include <memory>
-#include <optional>
+#include "tt_metal/fabric/fabric_router_types.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
-#include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
+
+namespace tt::tt_metal {
+class IDevice;
+class Program;
+}  // namespace tt::tt_metal
 
 namespace tt::tt_fabric {
 
+class FabricBuilderContext;
+
 /**
- * FabricRouterBuilder
+ * FabricRouterBuilder - Abstract interface for fabric router builders
  *
- * Wrapper class that wraps FabricEriscDatamoverBuilder (always present) and optionally
- * FabricTensixDatamoverBuilder (0 or 1). This wrapper acts as the external interface for
- * router connections, translating between logical channels (VC + sender/receiver indices)
- * and internal builder channels.
+ * This interface abstracts the differences between compute mesh and switch mesh
+ * router builders, allowing polymorphic behavior while maintaining a consistent API.
+ *
+ * Implementations:
+ * - ComputeMeshRouterBuilder: For compute mesh routers (with tensix support)
+ * - SwitchMeshRouterBuilder: For switch mesh routers (future, routing-only)
+ *
+ * Usage:
+ *   auto router = FabricRouterBuilder::create(device, program, local_node, location, spec);
+ *   router->connect_to_downstream_router_over_noc(*other_router, vc);
  */
 class FabricRouterBuilder {
 public:
-    /**
-     * Constructor
-     *
-     * @param erisc_builder The erisc datamover builder (always required)
-     * @param tensix_builder Optional tensix datamover builder
-     * @param channel_mapping The channel mapping object that defines logical to internal channel mappings
-     */
-    FabricRouterBuilder(
-        std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder,
-        std::optional<FabricTensixDatamoverBuilder> tensix_builder,
-        FabricRouterChannelMapping channel_mapping);
+    virtual ~FabricRouterBuilder() = default;
 
     /**
-     * Build a FabricRouterBuilder with all necessary components
+     * Factory method to create the appropriate router builder based on spec
      *
      * @param device The device to build on
-     * @param fabric_program The fabric program
-     * @param eth_logical_core The ethernet logical core
-     * @param fabric_node_id The local fabric node ID
-     * @param remote_fabric_node_id The remote fabric node ID
-     * @param edm_config The EDM configuration
-     * @param fabric_edm_type The fabric EDM type
-     * @param eth_direction The ethernet direction
-     * @param dispatch_link Whether this is a dispatch link
-     * @param eth_chan The ethernet channel (for tensix builder)
-     * @param topology The fabric topology
-     * @return A unique_ptr to the constructed FabricRouterBuilder
+     * @param program The fabric program
+     * @param local_node The local fabric node ID
+     * @param location Router location (eth_chan, remote_node, direction, is_dispatch)
+     * @param spec Router build specification (determines builder type)
+     * @return A unique_ptr to the appropriate FabricRouterBuilder implementation
      */
-    static std::unique_ptr<FabricRouterBuilder> build(
+    static std::unique_ptr<FabricRouterBuilder> create(
         tt::tt_metal::IDevice* device,
-        tt::tt_metal::Program& fabric_program,
-        umd::CoreCoord eth_logical_core,
-        FabricNodeId fabric_node_id,
-        FabricNodeId remote_fabric_node_id,
-        const tt::tt_fabric::FabricEriscDatamoverConfig& edm_config,
-        tt::tt_fabric::eth_chan_directions eth_direction,
-        bool dispatch_link,
-        tt::tt_fabric::chan_id_t eth_chan,
-        tt::tt_fabric::Topology topology);
+        tt::tt_metal::Program& program,
+        FabricNodeId local_node,
+        const RouterLocation& location,
+        const RouterBuildSpec& spec);
+
+    // ============ Connection Methods ============
 
     /**
-     * Connect the downstream router over noc or Ethernet. Iterates through all VCs and channels
-     * between the routers and connects them.
-     *
-     * Establishes one-way connection
+     * Connect to downstream router over NOC (one-way connection)
      *
      * @param other The other router builder to connect to
      * @param vc Virtual channel ID
      */
-    void connect_to_downstream_router_over_noc(FabricRouterBuilder& other, uint32_t vc);
+    virtual void connect_to_downstream_router_over_noc(FabricRouterBuilder& other, uint32_t vc) = 0;
 
     /**
      * Build connection to fabric channel (for sender channels)
@@ -80,101 +70,54 @@ public:
      * @param sender_channel_idx Logical sender channel index within the VC
      * @return SenderWorkerAdapterSpec for external connections
      */
-    SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc, uint32_t sender_channel_idx);
-
-
-    uint32_t get_downstream_sender_channel(bool is_2D_routing, eth_chan_directions downstream_direction) const;
-
-    // Getters/delegators for wrapped builder properties
-    eth_chan_directions get_direction() const;
-    size_t get_noc_x() const;
-    size_t get_noc_y() const;
-    size_t get_configured_risc_count() const;
-    FabricNodeId get_local_fabric_node_id() const;
-    FabricNodeId get_peer_fabric_node_id() const;
-
-    // Access to wrapped builders (if needed for advanced use cases)
-    FabricEriscDatamoverBuilder& get_erisc_builder() { return *erisc_builder_; }
-    const FabricEriscDatamoverBuilder& get_erisc_builder() const { return *erisc_builder_; }
-    bool has_tensix_builder() const { return tensix_builder_.has_value(); }
-    FabricTensixDatamoverBuilder& get_tensix_builder() {
-        TT_FATAL(tensix_builder_.has_value(), "Tensix builder not available");
-        return tensix_builder_.value();
-    }
-    const FabricTensixDatamoverBuilder& get_tensix_builder() const {
-        TT_FATAL(tensix_builder_.has_value(), "Tensix builder not available");
-        return tensix_builder_.value();
-    }
+    virtual SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc, uint32_t sender_channel_idx) = 0;
 
     /**
-     * Determine if bubble flow control should be enabled based on topology.
-     * Bubble flow control is enabled for Ring and Torus topologies to prevent deadlocks.
+     * Get downstream sender channel index
      *
-     * @param topology The fabric topology
-     * @return True if bubble flow control should be enabled
+     * @param is_2D_routing Whether 2D routing is enabled
+     * @param downstream_direction The downstream direction
+     * @return The sender channel index for downstream connections
+     */
+    virtual uint32_t get_downstream_sender_channel(
+        bool is_2D_routing, eth_chan_directions downstream_direction) const = 0;
+
+    // ============ Property Getters ============
+
+    virtual eth_chan_directions get_direction() const = 0;
+    virtual size_t get_noc_x() const = 0;
+    virtual size_t get_noc_y() const = 0;
+    virtual size_t get_configured_risc_count() const = 0;
+    virtual FabricNodeId get_local_fabric_node_id() const = 0;
+    virtual FabricNodeId get_peer_fabric_node_id() const = 0;
+
+    // ============ Builder Access ============
+    // These provide access to underlying builders for operations that haven't
+    // been abstracted yet. Phase 4 will move more logic into the interface.
+
+    virtual FabricEriscDatamoverBuilder& get_erisc_builder() = 0;
+    virtual const FabricEriscDatamoverBuilder& get_erisc_builder() const = 0;
+
+    virtual bool has_tensix_builder() const = 0;
+    virtual FabricTensixDatamoverBuilder& get_tensix_builder() = 0;
+    virtual const FabricTensixDatamoverBuilder& get_tensix_builder() const = 0;
+
+    // ============ Mesh Type Query ============
+
+    /**
+     * Check if this is a switch mesh router
+     * @return true if this is a switch mesh router, false for compute mesh
+     */
+    virtual bool is_switch_mesh() const = 0;
+
+    // ============ Static Utilities ============
+
+    /**
+     * Determine if bubble flow control should be enabled based on topology
      */
     static bool is_bubble_flow_control_enabled(Topology topology) {
         return topology == Topology::Ring || topology == Topology::Torus;
     }
-
-private:
-    /**
-     * Compute which sender channels are traffic injection channels for a specific VC.
-     * Injection channels are channels where traffic originates (not forwarded):
-     * - VC0: Worker channel (channel 0) is always an injection channel
-     * - VC1+: No worker channel; channel 0 maps to VC0's channel 1 semantics
-     * - In Torus topology, "turn channels" are injection channels (where traffic changes direction)
-     *
-     * @param topology The fabric topology
-     * @param direction The router's direction
-     * @param vc The virtual channel to compute flags for
-     * @param num_channels Number of channels in this VC
-     * @return Array indicating which sender channels are injection channels for this VC
-     */
-    static std::vector<bool> compute_sender_channel_injection_flags_for_vc(
-        Topology topology, eth_chan_directions direction, uint32_t vc, uint32_t num_channels);
-
-    /**
-     * Map router-level injection flags to a child builder variant's channel space.
-     * This is a generic helper that doesn't know which builder variant it's serving.
-     *
-     * @param router_injection_flags Injection flags indexed by router's semantic channel IDs
-     * @param variant_to_router_channel_map Maps variant's internal channel index to optional router channel index
-     *        (nullopt for internal-only channels)
-     * @return Injection flags for the variant builder (false for internal-only channels)
-     */
-    static std::vector<bool> get_child_builder_variant_sender_channel_injection_flags(
-        const std::vector<bool>& router_injection_flags,
-        const std::vector<std::optional<size_t>>& variant_to_router_channel_map);
-
-    /**
-     * Build a reverse mapping from a builder variant's internal channels to router's external facing channel IDs.
-     * For kernel internal channels that aren't externally facing, the mapping will be nullopt.
-     * Iterates through the channel mapping to find which logical channels are handled by the given builder type,
-     * then maps their internal channel IDs to router channel IDs.
-     *
-     * @param channel_mapping The channel mapping to use (already knows topology and mode)
-     * @param builder_type Which builder variant (ERISC or TENSIX)
-     * @param variant_num_sender_channels Number of sender channels the variant has
-     * @return Vector where index is the variant's internal channel ID, value is optional router channel ID
-     *         (nullopt for internal-only channels not exposed to external topology)
-     */
-    static std::vector<std::optional<size_t>> get_variant_to_router_channel_map(
-        const FabricRouterChannelMapping& channel_mapping,
-        BuilderType builder_type,
-        size_t variant_num_sender_channels);
-
-    /**
-     * Connect the local tensix builder to the erisc builder in UDM mode
-     * This sets up the receiver-to-relay connection for the local tensix relay interface
-     *
-     * @param tensix_builder The tensix builder to connect
-     */
-    void connect_to_local_tensix_builder(FabricTensixDatamoverBuilder& tensix_builder);
-
-    std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder_;
-    std::optional<FabricTensixDatamoverBuilder> tensix_builder_;
-    FabricRouterChannelMapping channel_mapping_;
 };
 
 }  // namespace tt::tt_fabric

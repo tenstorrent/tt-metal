@@ -6,6 +6,9 @@
 
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>  // FabricNodeId
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>               // RoutingDirection
+#include "hostdevcommon/fabric_common.h"                                // chan_id_t, eth_chan_directions
 
 namespace tt::tt_fabric {
 

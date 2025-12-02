@@ -13,6 +13,7 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/fabric_router_builder.hpp"
+#include "tt_metal/fabric/compute_mesh_router_builder.hpp"
 #include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
 #include "tt_metal/fabric/builder/fabric_core_placement.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
@@ -35,7 +36,8 @@ namespace tt::tt_fabric {
 void build_tt_fabric_program(
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program* fabric_program_ptr,
-    std::unordered_map<tt::tt_fabric::chan_id_t, std::unique_ptr<tt::tt_fabric::FabricRouterBuilder>>& router_builders) {
+    std::unordered_map<tt::tt_fabric::chan_id_t, std::unique_ptr<tt::tt_fabric::ComputeMeshRouterBuilder>>&
+        router_builders) {
     using namespace tt_fabric;
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
@@ -140,7 +142,7 @@ void build_tt_fabric_program(
             const auto& curr_edm_config = get_fabric_router_config(dispatch_link, eth_direction);
 
             const auto topology = fabric_context.get_fabric_topology();
-            auto router_builder = tt::tt_fabric::FabricRouterBuilder::build(
+            auto router_builder = tt::tt_fabric::ComputeMeshRouterBuilder::build(
                 device,
                 *fabric_program_ptr,
                 eth_logical_core,
@@ -235,7 +237,8 @@ void build_tt_fabric_program(
 
 std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::tt_metal::IDevice* device) {
     std::unique_ptr<tt::tt_metal::Program> fabric_program_ptr = std::make_unique<tt::tt_metal::Program>();
-    std::unordered_map<tt::tt_fabric::chan_id_t, std::unique_ptr<tt::tt_fabric::FabricRouterBuilder>> router_builders;
+    std::unordered_map<tt::tt_fabric::chan_id_t, std::unique_ptr<tt::tt_fabric::ComputeMeshRouterBuilder>>
+        router_builders;
 
     const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     auto& fabric_context = control_plane.get_fabric_context();

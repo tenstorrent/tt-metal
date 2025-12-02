@@ -31,6 +31,7 @@ namespace tt::tt_fabric {
 
 struct FabricRiscConfig;
 class FabricRouterBuilder;
+class ComputeMeshRouterBuilder;
 class MultiPoolChannelAllocator;
 class ChannelToPoolMapping;
 class FabricRemoteChannelsAllocator;
@@ -360,6 +361,7 @@ size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args
  */
 class FabricEriscDatamoverBuilder : public FabricDatamoverBuilderBase {
     friend class FabricRouterBuilder;
+    friend class ComputeMeshRouterBuilder;
 
 public:
     static constexpr size_t default_firmware_context_switch_interval = 10000;
