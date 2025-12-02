@@ -22,13 +22,6 @@ inline uint32_t get_worker_connected_sender_channel() {
     return 0;
 }
 
-inline size_t get_dateline_sender_channel_skip_idx(const bool is_2D_routing) {
-    // Dateline channel skip indices
-    static constexpr size_t dateline_sender_channel_skip_idx = 2;
-    static constexpr size_t dateline_sender_channel_skip_idx_2d = 4;
-    return is_2D_routing ? dateline_sender_channel_skip_idx_2d : dateline_sender_channel_skip_idx;
-}
-
 // This helper returns the sender channel on the downstream router that should receive traffic from the upstream router.
 inline uint32_t get_downstream_edm_sender_channel(
     const bool is_2D_routing,
