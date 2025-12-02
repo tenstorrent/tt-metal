@@ -380,9 +380,9 @@ jobs:
             ADDITIONAL_SERVER_ARGS=()
           fi
 
-          export MESH_DEVICE=${{ matrix.test-group.mesh-device }}
+          export MESH_DEVICE="${{ matrix.test-group.mesh-device }}"
           if [ -n "${{ matrix.test-group.tt-llama-text-ver }}" ]; then
-            export TT_LLAMA_TEXT_VER=${{ matrix.test-group.tt-llama-text-ver }}
+            export TT_LLAMA_TEXT_VER="${{ matrix.test-group.tt-llama-text-ver }}"
           fi
 
           # Keep TT cache separate from HF hub
