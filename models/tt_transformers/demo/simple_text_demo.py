@@ -651,7 +651,7 @@ def prepare_generator_args(
             False,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
-            1,  # batch_size
+            32,  # batch_size
             2,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params

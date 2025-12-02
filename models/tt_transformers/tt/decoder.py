@@ -200,6 +200,7 @@ class TransformerBlock(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        batch_size=1,
     ) -> ttnn.Tensor:
         TG = self.args.is_galaxy
         residual = x
@@ -227,6 +228,7 @@ class TransformerBlock(LightweightModule):
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
+            batch_size=batch_size,
         )
 
         # To match the batch-related reshape inside the attention module

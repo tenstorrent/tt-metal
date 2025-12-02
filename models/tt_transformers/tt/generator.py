@@ -118,8 +118,12 @@ class Generator:
         page_table=None,
         kv_cache=None,
         model_id=-1,
+        batch_size=1,
+        user_id=0,
     ):
-        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table)
+        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(
+            prefill_ids, page_table=page_table, batch_size=batch_size, user_id=user_id
+        )
         # These matrices will actually be pointing to the whole cos_matrix and sin_matrix that was allocated on device in the RotarySetup class
         tt_rot_mats_prefill_global = host_inputs[1]
         tt_rot_mats_prefill_local = host_inputs[2]
@@ -134,6 +138,7 @@ class Generator:
             page_table=transformed_inputs[1],
             chunk_page_table=transformed_inputs[2],
             kv_cache=kv_cache,
+            batch_size=batch_size,
         )
         ttnn.synchronize_device(self.model_args[model_id].mesh_device)
         logger.info("Done Compiling Model")
@@ -148,6 +153,7 @@ class Generator:
             page_table=transformed_inputs[1],
             chunk_page_table=transformed_inputs[2],
             kv_cache=kv_cache,
+            batch_size=batch_size,
         )
         ttnn.end_trace_capture(self.model_args[model_id].mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(self.model_args[model_id].mesh_device)
@@ -163,16 +169,19 @@ class Generator:
         kv_cache=None,
         model_id=-1,
         prefill_seq_len=None,
+        batch_size=1,
         **kwargs,
     ):
         # We are not appending host/device here because we never do device sampling in prefill with TTT
-        trace_key = f"{prefill_seq_len}_{model_id}"
+        trace_key = f"{prefill_seq_len}_{model_id}_{batch_size}"
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
                 prefill_ids,
                 page_table=page_table,
                 kv_cache=kv_cache,
                 model_id=model_id,
+                batch_size=batch_size,
+                user_id=user_id,
             )
             self.trace_id_prefill[trace_key] = trace_id
             self.trace_inputs_prefill[trace_key] = device_inputs
@@ -185,6 +194,7 @@ class Generator:
             prefill_ids,
             page_table=page_table,
             model_id=model_id,
+            batch_size=batch_size,
         )
 
         return tt_out_trace
@@ -198,8 +208,11 @@ class Generator:
         user_id=0,
         page_table=None,
         model_id=-1,
+        batch_size=1,
     ):
-        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table)
+        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(
+            prefill_ids, page_table=page_table, batch_size=batch_size
+        )
         host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
 
         device_inputs = copy_host_to_device(
@@ -244,23 +257,58 @@ class Generator:
         if empty_slots is None:
             empty_slots = list(range(batch_size))
 
+        if not isinstance(prompt_lens, list):
+            prompt_lens = prompt_lens.tolist()
+
+        prefill_seq_lens = [get_padded_prefill_len(seq_len) for seq_len in prompt_lens]
+        # If batch is 32 and prompt_lens are all the same and batch_seq_len* batch is less than 128*1024, use batched prefill
+        use_batched_prefill = False
+        if batch_size == 32 and len(set(prefill_seq_lens)) == 1 and prefill_seq_lens[0] * batch_size < 128 * 1024:
+            use_batched_prefill = True
+            assert self.data_parallel == 1, "Batched prefill is only supported for data_parallel=1 currently"
+
+        all_users = [0] if use_batched_prefill else empty_slots
+
         out_list = []
-        for idx, user_id in enumerate(empty_slots):
+        for idx, user_id in enumerate(all_users):
             # if model_id is not None, it means that prefill is called from warmup_prefill_traces
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
             group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
-            seq_len = int(prompt_lens[idx])
-            last_token_idx = seq_len - 1
-            prefill_seq_len = get_padded_prefill_len(seq_len)
+
+            if use_batched_prefill:
+                user_id = empty_slots
+                last_token_idx = [(seq_len - 1) for seq_len in prompt_lens]
+                prefill_seq_len = prefill_seq_lens[0]
+                seq_len = prompt_lens
+            else:
+                seq_len = int(prompt_lens[idx])
+                last_token_idx = seq_len - 1
+                prefill_seq_len = prefill_seq_lens[idx]
+                logger.info(f"Prefilling User {user_id + 1} up to {seq_len} tokens")
+
             local_kwargs = kwargs.copy()  # Avoid modifying original kwargs
 
-            logger.info(f"Prefilling User {user_id + 1} up to {seq_len} tokens")
-
-            # Extracting data for the current user
-            # If page_table is not provided, we keep track of the relative/model user_id through group_user_id
-            prefill_ids = torch.cat(
-                [tokens[idx : idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
-            )
+            if use_batched_prefill:
+                # reordering the tokens when empty_slots are not sequential (from vllm)
+                inverse_empty_slots = [empty_slots.index(i) for i in range(batch_size)]
+                prefill_ids = torch.cat(
+                    [
+                        torch.cat(
+                            [
+                                tokens[idx : idx + 1, : seq_len[idx]],
+                                torch.zeros(1, prefill_seq_len - seq_len[idx]).long(),
+                            ],
+                            dim=-1,
+                        )
+                        for idx in inverse_empty_slots
+                    ],
+                    dim=-1,
+                )
+                last_token_idx = [last_token_idx[idx] for idx in inverse_empty_slots]
+            else:
+                prefill_ids = torch.cat(
+                    [tokens[idx : idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
+                )
 
             enable_trace_current_prompt = enable_trace and self.model_args[model_id].can_enable_trace(prefill_seq_len)
 
@@ -270,11 +318,13 @@ class Generator:
 
             page_table_user = (
                 self._get_prefill_user_page_table(
-                    page_table[idx : idx + 1],
+                    page_table,
                     kv_cache[model_id],
                     seq_len,
                     trace_enabled=enable_trace_current_prompt,
                     prefill_seq_len=prefill_seq_len,
+                    use_batched_prefill=use_batched_prefill,
+                    user_id=user_id,
                 )
                 if page_table is not None
                 else None
@@ -286,12 +336,14 @@ class Generator:
                 local_kwargs["pixel_values"] = local_kwargs["pixel_values"][idx]
                 if "image_grid_thw" in local_kwargs:
                     local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
+            if use_batched_prefill:
+                local_kwargs["batch_size"] = batch_size if use_batched_prefill else 1
 
             if enable_trace_current_prompt:
                 logits = self._easy_trace_prefill(
                     prefill_ids,
                     page_table=page_table_user,
-                    user_id=group_user_id,
+                    user_id=0 if use_batched_prefill else group_user_id,
                     last_token_idx=last_token_idx,
                     kv_cache=model_kv_cache,
                     model_id=model_id,
@@ -308,21 +360,29 @@ class Generator:
                     model_id=model_id,
                     **local_kwargs,
                 )
-            if enable_trace_current_prompt:
-                # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
-                # We need to do this here, because we can't do this part in forward() if we have trace enabled
-                # The reason we can't do it in trace is because we can't pass the correct get_last_token to trace
-                logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx)
-
-            # if data parallel is greater than 1, we need to add logits to out_list and do the processing after all the prefill are done
-            # otherwise, we can process the logits after prefill immediately
-            if self.data_parallel > 1:
-                out_list.append(logits)
+            if use_batched_prefill:
+                ## TODO: Fix logits batch!!
+                for i in range(batch_size):
+                    _logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx[i])
+                    output_logits[i] = self.model[model_id].process_output_prefill(
+                        _logits, last_token_idx=(last_token_idx[i] % 32)
+                    )
             else:
-                output_logits[idx] = self.model[model_id].process_output_prefill(
-                    logits, last_token_idx=(last_token_idx % 32)
-                )
-                del logits
+                if enable_trace_current_prompt:
+                    # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
+                    # We need to do this here, because we can't do this part in forward() if we have trace enabled
+                    # The reason we can't do it in trace is because we can't pass the correct get_last_token to trace
+                    logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx)
+
+                # if data parallel is greater than 1, we need to add logits to out_list and do the processing after all the prefill are done
+                # otherwise, we can process the logits after prefill immediately
+                if self.data_parallel > 1:
+                    out_list.append(logits)
+                else:
+                    output_logits[idx] = self.model[model_id].process_output_prefill(
+                        logits, last_token_idx=(last_token_idx % 32)
+                    )
+                    del logits
 
         # Process the logits after all the prefill are done in data parallel mode
         if self.data_parallel > 1:
@@ -341,7 +401,7 @@ class Generator:
         return output_logits
 
     def prefill_forward_single_user_text(
-        self, tokens, page_table, user_id, last_token_idx, kv_cache=None, model_id=-1, **kwargs
+        self, tokens, page_table, user_id, last_token_idx, kv_cache=None, model_id=-1, batch_size=1, **kwargs
     ):
         seq_len = tokens.shape[-1]
         use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
@@ -392,6 +452,7 @@ class Generator:
                     start_pos=chunk_start,
                     page_table=page_table_user_padded,
                     chunk_page_table=chunk_page_table,
+                    batch_size=batch_size,
                     **kwargs,
                 )
                 tt_logits = self.model[model_id].ttnn_prefill_forward(
@@ -404,6 +465,7 @@ class Generator:
                     chunk_start_idx=chunk_start,
                     get_last_token=(last_token_idx_in_chunk // 32) * 32,
                     kv_cache=kv_cache,
+                    batch_size=batch_size,
                     **kwargs,
                 )
 
@@ -421,6 +483,7 @@ class Generator:
             ) = self.model[model_id].prepare_inputs_prefill(
                 tokens,
                 page_table=page_table,
+                batch_size=batch_size,
                 **kwargs,
             )
 
@@ -432,6 +495,7 @@ class Generator:
                 page_table=page_table_tt,
                 get_last_token=(last_token_idx // 32) * 32,
                 kv_cache=kv_cache,
+                batch_size=batch_size,
             )
             return tt_logits
 
@@ -1625,7 +1689,14 @@ class Generator:
         return generation
 
     def _get_prefill_user_page_table(
-        self, page_table, kv_cache, prefill_len, trace_enabled=False, prefill_seq_len=None
+        self,
+        page_table,
+        kv_cache,
+        prefill_len,
+        trace_enabled=False,
+        prefill_seq_len=None,
+        use_batched_prefill=False,
+        user_id=None,
     ):
         # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
         block_size = get_block_size(kv_cache)
@@ -1634,12 +1705,21 @@ class Generator:
             num_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
         else:
             num_blocks = num_blocks_in_seq(prefill_len, block_size)
+        page_table = page_table[:, :num_blocks]
         if trace_enabled:
             if page_table.shape[1] < num_blocks:
                 # If page table is too short, pad it with -1
                 padding = torch.ones(1, num_blocks - page_table.shape[1], dtype=torch.int32) * -1
                 page_table = torch.cat([page_table, padding], dim=1)
-        return page_table[:, :num_blocks]
+        # Pad page table to 32 users
+        padded_page_table = torch.ones(32, page_table.shape[1], dtype=torch.int32) * -1
+        if use_batched_prefill:
+            assert user_id is not None
+            for i, user in enumerate(user_id):
+                padded_page_table[user, :] = page_table[i, :]
+        else:
+            padded_page_table[user_id, :] = page_table[0, :]
+        return padded_page_table
 
     ## Destructor
 
