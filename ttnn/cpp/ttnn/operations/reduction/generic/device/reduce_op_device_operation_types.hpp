@@ -1,0 +1,32 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <optional>
+
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "common.hpp"
+
+namespace ttnn::operations::reduction::generic {
+
+struct operation_attributes_t {
+    tt::tt_metal::ReduceOpMath math_op{};
+    tt::tt_metal::ReduceOpDim dim{};
+    float scaler{1.0f};
+    tt::tt_metal::MemoryConfig output_mem_config;
+    tt::tt_metal::DataType output_dtype;
+    ttnn::DeviceComputeKernelConfig compute_kernel_config;
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
+};
+
+struct tensor_args_t {
+    Tensor input_tensor;
+};
+
+using ReduceTensorReturnValue = Tensor;
+using ReduceSpecReturnValue = ttnn::TensorSpec;
+
+}  // namespace ttnn::operations::reduction::generic
