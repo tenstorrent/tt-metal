@@ -244,7 +244,11 @@ public:
     }
 
     template <class U>
-    friend constexpr auto operator<=>(const indirect& lhs, const U& rhs) {
+    friend constexpr auto operator<=>(const indirect& lhs, const U& rhs) -> decltype(*lhs <=> rhs) {
+        if (lhs.valueless_after_move()) {
+            return std::strong_ordering::less;
+        }
+
         return *lhs <=> rhs;
     }
 
