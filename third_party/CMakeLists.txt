@@ -143,6 +143,20 @@ CPMAddPackage(
         grpc_cmake_minimum_required.patch
 )
 
+# When building telemetry, gRPC provides protobuf. Create protobuf:: namespace aliases
+# so tt-metal code can reference protobuf consistently regardless of source.
+if(BUILD_TELEMETRY AND gRPC_ADDED)
+    if(NOT TARGET protobuf::libprotobuf)
+        add_library(protobuf::libprotobuf ALIAS libprotobuf)
+    endif()
+    if(NOT TARGET protobuf::protoc)
+        add_executable(protobuf::protoc ALIAS protoc)
+    endif()
+    if(NOT TARGET protobuf::libprotoc)
+        add_library(protobuf::libprotoc ALIAS libprotoc)
+    endif()
+endif()
+
 ############################################################################################################################
 # yaml-cpp
 ############################################################################################################################
