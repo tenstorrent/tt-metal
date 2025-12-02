@@ -24,9 +24,10 @@ class TimestepEmbedderRef(nn.Module):
             nn.Linear(hidden_size, hidden_size, dtype=dtype),
         )
         self.frequency_embedding_size = frequency_embedding_size
+        self.dtype = dtype
 
     @staticmethod
-    def timestep_embedding(t, dim, max_period=10000):
+    def timestep_embedding(t, dim, max_period=10000, dtype=None):
         half = dim // 2
         freqs = torch.exp(-math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half).to(
             device=t.device
@@ -37,10 +38,13 @@ class TimestepEmbedderRef(nn.Module):
         if dim % 2:
             embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
 
+        # Convert to specified dtype if provided, otherwise use input dtype
+        if dtype is not None:
+            return embedding.to(dtype)
         return embedding.to(t.dtype)
 
     def forward(self, t):
-        t_freq = self.timestep_embedding(t, self.frequency_embedding_size)
+        t_freq = self.timestep_embedding(t, self.frequency_embedding_size, dtype=self.dtype)
         return self.mlp(t_freq)
 
 

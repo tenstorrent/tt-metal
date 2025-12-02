@@ -15,7 +15,14 @@ class Mlp(torch.nn.Module):
     """Reference PyTorch MLP matching MM-DiT implementation"""
 
     def __init__(
-        self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, bias=True, dtype=torch.bfloat16
+        self,
+        in_features,
+        hidden_features=None,
+        out_features=None,
+        act_layer=nn.GELU,
+        bias=True,
+        dtype=torch.bfloat16,
+        act_kwargs=None,
     ):
         super().__init__()
         out_features = out_features or in_features
@@ -23,7 +30,12 @@ class Mlp(torch.nn.Module):
 
         # Add dtype=torch.bfloat16 to match input dtype
         self.fc1 = torch.nn.Linear(in_features, hidden_features, bias=bias, dtype=torch.bfloat16)
-        self.act = act_layer()
+        # Handle act_layer: if it's already an instance, use it; otherwise instantiate with kwargs
+        if isinstance(act_layer, torch.nn.Module):
+            self.act = act_layer
+        else:
+            act_kwargs = act_kwargs or {}
+            self.act = act_layer(**act_kwargs)
         self.fc2 = torch.nn.Linear(hidden_features, out_features, bias=bias, dtype=torch.bfloat16)
 
     def forward(self, x):

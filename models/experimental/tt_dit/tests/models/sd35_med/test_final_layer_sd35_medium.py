@@ -17,7 +17,7 @@ def modulate(x, shift, scale):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
 
-class ReferenceFinalLayer(torch.nn.Module):
+class FinalLayer(torch.nn.Module):
     """Reference PyTorch implementation matching MM-DiT FinalLayer"""
 
     def __init__(
@@ -74,7 +74,7 @@ def test_sd35_medium_final_layer(
     torch.manual_seed(1234)
 
     # Create reference model
-    reference_model = ReferenceFinalLayer(
+    reference_model = FinalLayer(
         hidden_size=hidden_size,
         patch_size=patch_size,
         out_channels=out_channels,

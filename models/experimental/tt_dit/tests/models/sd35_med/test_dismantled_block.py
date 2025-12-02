@@ -104,7 +104,8 @@ class DismantledBlock(torch.nn.Module):
                 self.mlp = Mlp(
                     in_features=hidden_size,
                     hidden_features=mlp_hidden_dim,
-                    act_layer=torch.nn.GELU(approximate="tanh"),
+                    act_layer=torch.nn.GELU,
+                    act_kwargs={"approximate": "tanh"},
                     dtype=torch.bfloat16,
                 )
             else:
