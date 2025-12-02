@@ -203,7 +203,7 @@ TEST_F(TestLevelizedGraphCapture, ReductionOp) {
     EXPECT_EQ(levelized_graph_2.get_vertex(vertex_1.internals[0]).name, "ttnn::fill_implicit_tile_padding");
     EXPECT_EQ(levelized_graph_2.get_vertex(vertex_1.internals[1]).name, "ttnn::reshape");
     EXPECT_EQ(levelized_graph_2.get_vertex(vertex_1.internals[2]).name, "ttnn::tilize_with_val_padding");
-    EXPECT_EQ(levelized_graph_2.get_vertex(vertex_1.internals[3]).name, "ttnn::prim::old_infra_device_operation");
+    EXPECT_EQ(levelized_graph_2.get_vertex(vertex_1.internals[3]).name, "ttnn::prim::reduce");
     EXPECT_EQ(levelized_graph_2.get_vertex(vertex_1.internals[4]).name, "ttnn::reshape");
     // Find mean vertex by name
     auto mean_vertex_it =
@@ -216,8 +216,7 @@ TEST_F(TestLevelizedGraphCapture, ReductionOp) {
     EXPECT_EQ(levelized_graph_2.get_vertex(mean_vertex_it->internals[0]).name, "ttnn::fill_implicit_tile_padding");
     EXPECT_EQ(levelized_graph_2.get_vertex(mean_vertex_it->internals[1]).name, "ttnn::reshape");
     EXPECT_EQ(levelized_graph_2.get_vertex(mean_vertex_it->internals[2]).name, "ttnn::tilize_with_val_padding");
-    EXPECT_EQ(
-        levelized_graph_2.get_vertex(mean_vertex_it->internals[3]).name, "ttnn::prim::old_infra_device_operation");
+    EXPECT_EQ(levelized_graph_2.get_vertex(mean_vertex_it->internals[3]).name, "ttnn::prim::reduce");
     EXPECT_EQ(levelized_graph_2.get_vertex(mean_vertex_it->internals[4]).name, "ttnn::reshape");
 }
 
