@@ -29,21 +29,13 @@ on:
         type: boolean
         default: true
         description: "Set to false to allow write access to MLPerf mount"
-      mlperf-read-only:
-        required: false
-        type: boolean
-        default: true
-        description: "Set to false to allow write access to MLPerf mount"
 
 jobs:
   generate-matrix:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.generate.outputs.matrix }}
-      matrix: ${{ steps.generate.outputs.matrix }}
     steps:
-      - name: Generate test matrix
-        id: generate
       - name: Generate test matrix
         id: generate
         run: |
@@ -78,13 +70,9 @@ jobs:
           # Filter matrix based on model selection
           if [ "${{ inputs.model }}" = "all" ]; then
             matrix="$all_tests"
-            matrix="$all_tests"
           else
             matrix=$(echo "$all_tests" | jq -c "[.[] | select(.model == \"${{ inputs.model }}\")]")
-            matrix=$(echo "$all_tests" | jq -c "[.[] | select(.model == \"${{ inputs.model }}\")]")
           fi
-
-          echo "matrix=$(echo "$matrix" | jq -c .)" >> $GITHUB_OUTPUT
 
           echo "matrix=$(echo "$matrix" | jq -c .)" >> $GITHUB_OUTPUT
 
@@ -111,7 +99,6 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf${{ inputs.mlperf-read-only && ':ro' || ':rw' }}
         - /mnt/MLPerf:/mnt/MLPerf${{ inputs.mlperf-read-only && ':ro' || ':rw' }}
       options: "--device /dev/tenstorrent"
     defaults:
