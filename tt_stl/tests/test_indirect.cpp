@@ -361,7 +361,7 @@ TEST(IndirectTest, RvalueDereference) {
     };
 
     indirect<MoveOnly> i(MoveOnly{42});
-    MoveOnly extracted = std::move(i);
+    MoveOnly extracted = *std::move(i);
 
     EXPECT_EQ(*extracted.ptr, 42);
 }
