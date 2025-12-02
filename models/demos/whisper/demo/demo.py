@@ -164,7 +164,6 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
         return_perf_metrics=False,
         generation_params_override: Optional[GenerationParams] = None,
     ):
-
         # Use override if provided, otherwise use the original generation_params
         params = generation_params_override if generation_params_override is not None else generation_params
 
