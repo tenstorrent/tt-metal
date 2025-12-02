@@ -137,7 +137,7 @@ target_sources(
         move/device/move_device_operation.cpp
         move/device/move_program_factory.cpp
         move/move.cpp
-        non_zero_indices/device/non_zero_indices_op.cpp
+        non_zero_indices/device/non_zero_indices_device_operation.cpp
         non_zero_indices/device/non_zero_indices_program_factory.cpp
         non_zero_indices/non_zero_indices.cpp
         pad/device/pad_op.cpp
@@ -155,8 +155,8 @@ target_sources(
         reshape_on_device/device/reshape_tile_program_factory.cpp
         reshape_on_device/device/reshape_rm_program_factory.cpp
         reshape_on_device/reshape.cpp
-        reshape_view/device/host/reshape_rm_program_factory.cpp
-        reshape_view/device/host/reshape_tiled_program_factory.cpp
+        reshape_view/device/reshape_rm_program_factory.cpp
+        reshape_view/device/reshape_tiled_program_factory.cpp
         reshape_view/device/reshape_device_operation.cpp
         reshape_view/reshape.cpp
         roll/roll.cpp
