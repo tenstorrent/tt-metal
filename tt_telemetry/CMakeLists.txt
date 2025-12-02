@@ -15,7 +15,8 @@ set(_PROTOBUF_PROTOC $<TARGET_FILE:protoc>)  # gRPC's bundled protoc
 set(_GRPC_GRPCPP grpc++_unsecure)
 set(_GRPC_CPP_PLUGIN_EXECUTABLE $<TARGET_FILE:grpc_cpp_plugin>)
 set(_REFLECTION grpc++_reflection)
-set(GRPC_FOUND_VIA_CMAKE TRUE)
+# gRPC's bundled protobuf doesn't provide protobuf_generate() function, use manual approach
+set(GRPC_FOUND_VIA_CMAKE FALSE)
 
 # Fetch cpp-httplib using CPM (consistent with third_party dependencies)
 CPMAddPackage(

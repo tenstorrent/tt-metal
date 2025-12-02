@@ -63,24 +63,39 @@ else()
     # Get the proto file path
     get_target_property(proto_sources telemetry_grpc_proto SOURCES)
 
-    # Generate protobuf C++ files
-    protobuf_generate_cpp(
-        PROTO_SRCS
-        PROTO_HDRS
-        ${proto_sources}
-    )
-
-    # Generate gRPC C++ files
+    # Manually generate protobuf and gRPC C++ files
+    set(PROTO_SRCS)
+    set(PROTO_HDRS)
     set(GRPC_SRCS)
     set(GRPC_HDRS)
+
     foreach(proto_file ${proto_sources})
         get_filename_component(proto_file_abs ${proto_file} ABSOLUTE)
         get_filename_component(proto_file_we ${proto_file} NAME_WE)
         get_filename_component(proto_path ${proto_file_abs} PATH)
 
+        set(proto_src "${CMAKE_CURRENT_BINARY_DIR}/${proto_file_we}.pb.cc")
+        set(proto_hdr "${CMAKE_CURRENT_BINARY_DIR}/${proto_file_we}.pb.h")
         set(grpc_src "${CMAKE_CURRENT_BINARY_DIR}/${proto_file_we}.grpc.pb.cc")
         set(grpc_hdr "${CMAKE_CURRENT_BINARY_DIR}/${proto_file_we}.grpc.pb.h")
 
+        # Generate protobuf C++ files
+        add_custom_command(
+            OUTPUT
+                ${proto_src}
+                ${proto_hdr}
+            COMMAND
+                ${_PROTOBUF_PROTOC}
+            ARGS
+                --cpp_out=${CMAKE_CURRENT_BINARY_DIR}
+                -I${proto_path} ${proto_file_abs}
+            DEPENDS
+                ${proto_file_abs}
+            COMMENT "Generating protobuf C++ code for ${proto_file}"
+            VERBATIM
+        )
+
+        # Generate gRPC C++ files
         add_custom_command(
             OUTPUT
                 ${grpc_src}
@@ -88,7 +103,8 @@ else()
             COMMAND
                 ${_PROTOBUF_PROTOC}
             ARGS
-                --grpc_out=${CMAKE_CURRENT_BINARY_DIR} --plugin=protoc-gen-grpc=${_GRPC_CPP_PLUGIN_EXECUTABLE}
+                --grpc_out=${CMAKE_CURRENT_BINARY_DIR}
+                --plugin=protoc-gen-grpc=${_GRPC_CPP_PLUGIN_EXECUTABLE}
                 -I${proto_path} ${proto_file_abs}
             DEPENDS
                 ${proto_file_abs}
@@ -96,6 +112,8 @@ else()
             VERBATIM
         )
 
+        list(APPEND PROTO_SRCS ${proto_src})
+        list(APPEND PROTO_HDRS ${proto_hdr})
         list(APPEND GRPC_SRCS ${grpc_src})
         list(APPEND GRPC_HDRS ${grpc_hdr})
     endforeach()
