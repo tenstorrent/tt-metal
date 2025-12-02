@@ -75,7 +75,7 @@ class TtConv:
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat16,
             activation=None,
-            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED if not self.change_shard else None,
             deallocate_activation=False,
             enable_act_double_buffer=self.enable_act_double_buffer,
             output_layout=self.output_layout,
@@ -88,8 +88,9 @@ class TtConv:
         if self.deallocate_activation:
             conv_config.deallocate_activation = self.deallocate_activation
 
-        if self.change_shard:
-            conv_config.shard_layout = None
+        # doesn't work in nanobind. Use inline if in init
+        # if self.change_shard:
+        #    conv_config.shard_layout = None
 
         if self.is_act_false != True:
             conv_config.activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)

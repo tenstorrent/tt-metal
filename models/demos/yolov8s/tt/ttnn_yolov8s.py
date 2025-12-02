@@ -137,7 +137,7 @@ class TtConv:
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat16,
             activation=None if self.is_detect_cv2 else ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
-            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED if not self.change_shard else None,
             act_block_w_div=1,
             transpose_shards=False,
             deallocate_activation=False,
@@ -150,8 +150,9 @@ class TtConv:
         if self.deallocate_activation:
             conv_config.deallocate_activation = self.deallocate_activation
 
-        if self.change_shard:
-            conv_config.shard_layout = None
+        # does not work in nanobind. use inline if instead
+        # if self.change_shard:
+        #    conv_config.shard_layout = None
 
         if self.act_block_h:
             conv_config.act_block_h_override = self.act_blocks

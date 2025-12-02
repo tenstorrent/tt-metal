@@ -79,7 +79,7 @@ class TtYOLOv5xConv2D:
 
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=weights_dtype,
-            shard_layout=shard_layout,
+            shard_layout=shard_layout if not auto_shard else None,
             deallocate_activation=self.deallocate_activation,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
@@ -88,8 +88,9 @@ class TtYOLOv5xConv2D:
             enable_weights_double_buffer=self.enable_weights_double_buffer,
         )
 
-        if auto_shard:
-            self.conv_config.shard_layout = None
+        # doesn't work with nanobind. use inline if in init
+        # if auto_shard:
+        #    self.conv_config.shard_layout = None
 
         config_override = {"act_block_h": 64} if conv.in_channels == 3 or conv.in_channels == 6 else config_override
         if config_override and "act_block_h" in config_override:

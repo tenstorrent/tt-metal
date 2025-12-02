@@ -73,7 +73,7 @@ class TtYolov10Conv2D:
         self.conv_output_dtype = activation_dtype
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=weights_dtype,
-            shard_layout=shard_layout,
+            shard_layout=shard_layout if not auto_shard else None,
             deallocate_activation=self.deallocate_activation,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
@@ -86,8 +86,10 @@ class TtYolov10Conv2D:
             if shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
             else enable_weights_double_buffer,
         )
-        if auto_shard:
-            self.conv_config.shard_layout = None
+
+        # doesn't work in nanobind. use inline if instead
+        # if auto_shard:
+        #    self.conv_config.shard_layout = None
 
         config_override = None
         config_override = {"act_block_h": 64} if conv.in_channels == 3 else None

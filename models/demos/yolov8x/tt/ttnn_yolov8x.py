@@ -109,6 +109,7 @@ class TtConv:
         if self.deallocate_activation:
             conv_config.deallocate_activation = self.deallocate_activation
 
+        # doesn't work in nanobind. Use inline if in init
         # if self.change_shard:
         #    conv_config.shard_layout = None
 
