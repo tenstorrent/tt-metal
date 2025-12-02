@@ -45,6 +45,8 @@ inline void read_from_local(
     uint32_t onetile,
     uint32_t input_num_tiles) {
     // read l, s, m data from own device and push it to compute cbs
+    DPRINT << "pushing first set of inputs for compute to cbs " << (uint32_t)cb_id_in_l << ", " << (uint32_t)cb_id_in_s
+           << ", " << (uint32_t)cb_id_in_m << "\n";
     DPRINT << "before reserving compute cbs\n";
     cb_reserve_back(cb_id_in_l, input_num_tiles);
     DPRINT << "after reserving compute cb l\n";
@@ -291,6 +293,8 @@ void kernel_main() {
     print_full_tile(receiver_cb_id_l, 14, false);
     cb_push_back(receiver_cb_id_l, chunk_size);
 
+    DPRINT << "pushing second set of inputs for compute to cbs " << (uint32_t)receiver_cb_id_l << ", "
+           << (uint32_t)receiver_cb_id_s << ", " << (uint32_t)receiver_cb_id_m << "\n";
     // now receiving s and m
     cb_reserve_back(receiver_cb_id_s, 1);
     cb_reserve_back(receiver_cb_id_m, 1);

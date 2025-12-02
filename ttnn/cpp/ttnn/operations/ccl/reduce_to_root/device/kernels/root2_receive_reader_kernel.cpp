@@ -44,6 +44,8 @@ inline void read_from_local(
     uint32_t cb_id_in_m,  // compute cb for m
     uint32_t onetile,
     uint32_t input_num_tiles) {
+    DPRINT << "pushing first set of inputs for compute to cbs " << (uint32_t)cb_id_in_l << ", " << (uint32_t)cb_id_in_s
+           << ", " << (uint32_t)cb_id_in_m << "\n";
     // for tensor l
     cb_reserve_back(cb_id_in_l, input_num_tiles);
     uint32_t l1_write_addr = get_write_ptr(cb_id_in_l);
@@ -256,6 +258,8 @@ void kernel_main() {
     cb_push_back(receiver_cb_id_l, chunk_size);
 
     // now receiving s and m
+    DPRINT << "pushing second set of inputs for compute to cbs " << (uint32_t)receiver_cb_id_l << ", "
+           << (uint32_t)receiver_cb_id_s << ", " << (uint32_t)receiver_cb_id_m << "\n";
     cb_reserve_back(receiver_cb_id_s, 1);
     cb_reserve_back(receiver_cb_id_m, 1);
 

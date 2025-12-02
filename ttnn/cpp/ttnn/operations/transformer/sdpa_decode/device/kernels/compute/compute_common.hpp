@@ -312,9 +312,13 @@ void add_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_t
     // Postcondition: in1_cb has num_tiles consumed
     DPRINT << "START OF ADD\n";
     add_tiles_init(in0_cb, in1_cb);
+    DPRINT << "after init\n";
     cb_wait_front(in0_cb, num_tiles);
+    DPRINT << "after waiting in0\n";
     cb_wait_front(in1_cb, num_tiles);
+    DPRINT << "after waiting\n";
     cb_reserve_back(out_cb, num_tiles);
+    DPRINT << "after reserving\n";
     for (uint32_t i = 0; i < num_tiles; i++) {
         DPRINT << "add tile i=" << i << "\n";
         acquire_dst();
@@ -345,7 +349,7 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     cb_wait_front(in0_cb, num_tiles);
     DPRINT << "after wait in0\n";
     cb_wait_front(in1_cb, num_tiles);
-    DPRINT << "before mul loop\n";
+    DPRINT << "before mul loop with num_tiles " << (uint32_t)num_tiles << "\n";
     for (uint32_t i = 0; i < num_tiles; i++) {
         invalidate_l1_cache();
         acquire_dst();
@@ -358,6 +362,11 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
         release_dst();
         DPRINT << "after release dst\n";
     }
+
+    cb_wait_front(in0_cb, num_tiles);
+    DPRINT << "after wait in0 again\n";
+    cb_wait_front(in1_cb, num_tiles);
+    DPRINT << "END OF MUL\n";
 }
 
 #ifdef TRISC_MATH
