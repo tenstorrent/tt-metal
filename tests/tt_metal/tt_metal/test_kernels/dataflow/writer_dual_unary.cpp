@@ -17,7 +17,6 @@ inline void write_tiles(uint32_t num_tiles, uint32_t dst_addr, uint32_t bank_id,
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
         cb.wait_front(ublock_size_tiles);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out);
         noc.async_write(cb, dram_dst, ublock_size_bytes, {}, {.bank_id = bank_id, .addr = dst_addr});
         noc.async_write_barrier();
         cb.pop_front(ublock_size_tiles);
