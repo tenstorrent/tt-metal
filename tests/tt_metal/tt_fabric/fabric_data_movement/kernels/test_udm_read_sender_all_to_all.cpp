@@ -50,6 +50,20 @@ void kernel_main() {
     // Runtime args: for each provider: (noc_x, noc_y, dst_dev_id, dst_mesh_id)
     uint32_t arg_index = 0;
 
+    // Wait for notifications from all data providers
+    // Each provider writes to slot = provider_device_idx on this reader
+    // So we poll on all slots except our own (reader_device_idx)
+    uint32_t num_devices = num_providers + 1;  // Total devices = providers + self
+    for (uint32_t device_idx = 0; device_idx < num_devices; device_idx++) {
+        if (device_idx == reader_device_idx) {
+            continue;  // Skip our own slot - no one writes there
+        }
+        // Poll on slot for this device
+        uint32_t notification_addr = notification_mailbox_address + device_idx * req_notification_size_bytes;
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header =
+            wait_for_notification(notification_addr, time_seed_init, req_notification_size_bytes);
+    }
+
     // Loop over all data providers
     for (uint32_t prov = 0; prov < num_providers; prov++) {
         uint32_t noc_x_start = get_arg_val<uint32_t>(arg_index++);
@@ -60,10 +74,6 @@ void kernel_main() {
         uint32_t remote_read_addr = remote_read_addr_base;
         uint32_t local_read_addr = source_l1_buffer_address;
         uint32_t time_seed = time_seed_base;
-
-        // Wait for notification from this data provider that data is ready
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header =
-            wait_for_notification(notification_mailbox_address, time_seed_init, req_notification_size_bytes);
 
         for (uint32_t i = 0; i < num_packets; i++) {
             time_seed = prng_next(time_seed);

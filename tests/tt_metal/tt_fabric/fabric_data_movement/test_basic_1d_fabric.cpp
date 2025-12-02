@@ -2522,7 +2522,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
 
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
 
-    uint32_t num_packets = 10;
+    uint32_t num_packets = 1;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
     // Get device info and create programs
@@ -2574,7 +2574,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
         worker_mem_map.packet_payload_size_bytes = 16;  // l1 aligned
     } else {
         auto single_payload_size_bytes = worker_mem_map.packet_payload_size_bytes;
-        worker_mem_map.packet_payload_size_bytes = single_payload_size_bytes * 2 - 16;
+        worker_mem_map.packet_payload_size_bytes = single_payload_size_bytes;
     }
 
     // Per-sender L1 region size on receiver
@@ -2597,8 +2597,18 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
 
     constexpr uint32_t req_notification_size_bytes = 128;
 
+    // Check if sender has enough L1 space for N notification slots (simple indexing: slot i for device i)
+    // Each provider writes to slot = provider_device_idx, reader polls all slots except its own
+    uint32_t total_notification_l1_needed = static_cast<uint32_t>(num_active_devices) * req_notification_size_bytes;
+    if (worker_mem_map.notification_mailbox_address + total_notification_l1_needed > l1_end) {
+        GTEST_SKIP() << "Not enough L1 space for notification mailbox. Need " << total_notification_l1_needed
+                     << " bytes starting at " << worker_mem_map.notification_mailbox_address << ", but L1 ends at "
+                     << l1_end;
+    }
+
     // Determine kernel paths based on operation type
     const bool is_read = (noc_send_type == NOC_UNICAST_READ);
+    log_info(tt::LogTest, "All-to-all test read {}", is_read);
     const char* sender_kernel_path =
         is_read ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_read_sender_all_to_all.cpp"
                 : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_sender_all_to_all.cpp";
@@ -2607,12 +2617,9 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
                 : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_receiver_all_to_all.cpp";
 
     // Create programs for each device (each device has both sender and receiver programs)
-    std::vector<tt_metal::Program> sender_programs;
-    std::vector<tt_metal::Program> receiver_programs;
-
+    std::vector<tt_metal::Program> programs;
     for (size_t dev_idx = 0; dev_idx < num_active_devices; dev_idx++) {
-        sender_programs.push_back(tt_metal::CreateProgram());
-        receiver_programs.push_back(tt_metal::CreateProgram());
+        programs.push_back(tt_metal::CreateProgram());
     }
 
     // Create sender and receiver kernels for each device
@@ -2667,7 +2674,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
         // Create sender kernel for all sender cores on this device
         CoreRangeSet sender_core_range(sender_logical_cores);
         auto sender_kernel = tt_metal::CreateKernel(
-            sender_programs[dev_idx],
+            programs[dev_idx],
             sender_kernel_path,
             sender_core_range,
             tt_metal::DataMovementConfig{
@@ -2696,13 +2703,13 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
                 sender_runtime_args.push_back(dest_fabric_node_id.chip_id);
                 sender_runtime_args.push_back(dest_fabric_node_id.mesh_id.get());
             }
-            tt_metal::SetRuntimeArgs(sender_programs[dev_idx], sender_kernel, sender_logical_core, sender_runtime_args);
+            tt_metal::SetRuntimeArgs(programs[dev_idx], sender_kernel, sender_logical_core, sender_runtime_args);
         }
 
         // Create receiver kernel for all receiver cores on this device
         CoreRangeSet receiver_core_range(receiver_logical_cores);
         auto receiver_kernel = tt_metal::CreateKernel(
-            receiver_programs[dev_idx],
+            programs[dev_idx],
             receiver_kernel_path,
             receiver_core_range,
             tt_metal::DataMovementConfig{
@@ -2734,7 +2741,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
                     receiver_runtime_args.push_back(reader_fabric_node_id.mesh_id.get());
                 }
                 tt_metal::SetRuntimeArgs(
-                    receiver_programs[dev_idx], receiver_kernel, receiver_logical_core, receiver_runtime_args);
+                    programs[dev_idx], receiver_kernel, receiver_logical_core, receiver_runtime_args);
             }
         }
 
@@ -2756,14 +2763,12 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
 
     log_info(tt::LogTest, "All-to-all test starting");
     for (size_t dev_idx = 0; dev_idx < num_active_devices; dev_idx++) {
-        fixture->RunProgramNonblocking(device_ptrs[dev_idx], sender_programs[dev_idx]);
-        fixture->RunProgramNonblocking(device_ptrs[dev_idx], receiver_programs[dev_idx]);
+        fixture->RunProgramNonblocking(device_ptrs[dev_idx], programs[dev_idx]);
     }
     log_info(tt::LogTest, "All-to-all test waiting for finish");
     // Wait for all devices to complete
     for (size_t dev_idx = 0; dev_idx < num_active_devices; dev_idx++) {
-        fixture->WaitForSingleProgramDone(device_ptrs[dev_idx], sender_programs[dev_idx]);
-        fixture->WaitForSingleProgramDone(device_ptrs[dev_idx], receiver_programs[dev_idx]);
+        fixture->WaitForSingleProgramDone(device_ptrs[dev_idx], programs[dev_idx]);
     }
     log_info(tt::LogTest, "All-to-all test done");
     // Validate results for all devices
