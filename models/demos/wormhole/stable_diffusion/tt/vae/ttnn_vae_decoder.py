@@ -97,11 +97,14 @@ class VaeDecoder:
 
     def __call__(self, hidden_states):
         hidden_states = self.conv_in(hidden_states)
+        ttnn.ReadDeviceProfiler(self.device)
 
         hidden_states = self.midblock(hidden_states)
+        ttnn.ReadDeviceProfiler(self.device)
 
         for upblock in self.upblocks:
             hidden_states = upblock(hidden_states)
+            ttnn.ReadDeviceProfiler(self.device)
 
         hidden_states = ttnn.typecast(hidden_states, ttnn.bfloat16)
 
@@ -118,10 +121,12 @@ class VaeDecoder:
             epsilon=GROUPNORM_EPSILON,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.ReadDeviceProfiler(self.device)
 
         hidden_states = ttnn.silu(hidden_states, output_tensor=hidden_states)
         self.conv_out.conv_config.enable_weights_double_buffer = False
         self.conv_out.conv_config.enable_act_double_buffer = False
         hidden_states = self.conv_out(hidden_states)
+        ttnn.ReadDeviceProfiler(self.device)
 
         return hidden_states

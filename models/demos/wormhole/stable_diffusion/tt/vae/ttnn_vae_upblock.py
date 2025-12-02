@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import ttnn
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_resnet import ResnetBlock
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_upsample import UpsampleBlock
 
@@ -19,6 +20,7 @@ class UpDecoderBlock:
         output_width,
         resnet_norm_blocks=[(1, 1), (1, 1), (1, 1)],
     ):
+        self.device = device
         self.resnets = []
         for i in range(3):
             self.resnets.append(
@@ -50,6 +52,7 @@ class UpDecoderBlock:
     def __call__(self, hidden_states):
         for resnet in self.resnets:
             hidden_states = resnet(hidden_states)
+            ttnn.ReadDeviceProfiler(self.device)
 
         if self.upsample:
             hidden_states = self.upsample(hidden_states)
