@@ -1,0 +1,8 @@
+--- a/third_party/cares/cares/CMakeLists.txt
++++ b/third_party/cares/cares/CMakeLists.txt
+@@ -1,4 +1,4 @@
+-CMAKE_MINIMUM_REQUIRED (VERSION 3.4.0 FATAL_ERROR)
++CMAKE_MINIMUM_REQUIRED (VERSION 3.10.0 FATAL_ERROR)
+
+ INCLUDE (CheckIncludeFiles)
+ INCLUDE (CheckTypeSize)

@@ -133,6 +133,7 @@ CPMAddPackage(
         "gRPC_BUILD_GRPCPP_CHANNELZ OFF"
     PATCHES
         grpc_tools_target.patch
+        grpc_cmake_minimum_required.patch
 )
 
 ############################################################################################################################
