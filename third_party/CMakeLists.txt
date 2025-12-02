@@ -118,6 +118,10 @@ endif()
 # This is intentional to keep gRPC's dependencies isolated from tt-metal's protobuf.
 # We use BoringSSL (bundled) instead of system OpenSSL since we only need it for UNIX sockets with InsecureServerCredentials.
 
+# Force static libraries for gRPC and its dependencies (overrides tt-metal's BUILD_SHARED_LIBS=ON)
+set(_BUILD_SHARED_LIBS_SAVED ${BUILD_SHARED_LIBS})
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libraries" FORCE)
+
 CPMAddPackage(
     NAME gRPC
     GITHUB_REPOSITORY grpc/grpc
@@ -142,6 +146,9 @@ CPMAddPackage(
         grpc_tools_target.patch
         grpc_cmake_minimum_required.patch
 )
+
+# Restore BUILD_SHARED_LIBS setting after gRPC is configured
+set(BUILD_SHARED_LIBS ${_BUILD_SHARED_LIBS_SAVED} CACHE BOOL "Build shared libraries" FORCE)
 
 # When building telemetry, gRPC provides protobuf. Create protobuf:: namespace aliases
 # so tt-metal code can reference protobuf consistently regardless of source.
