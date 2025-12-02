@@ -699,7 +699,6 @@ class TtMaxPool2d:
             "padding": self.configuration.padding,
             "dilation": self.configuration.dilation,
             "ceil_mode": self.configuration.ceil_mode,
-            "in_place_halo": self.configuration.in_place,
             "deallocate_input": self.configuration.deallocate_input,
             "reallocate_halo_output": self.configuration.reallocate_halo_output,
             "dtype": self.configuration.dtype,

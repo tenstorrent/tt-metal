@@ -81,7 +81,7 @@ uint32_t firmware_config_init(
     extern uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT];
 
     // TODO: check the asm for this loop to be sure loads are scheduled ok
-    uint32_t kernel_config_base[ProgrammableCoreType::COUNT];
+    uintptr_t kernel_config_base[ProgrammableCoreType::COUNT];
     launch_msg_t* launch_msg_address = &(mailboxes->launch[mailboxes->launch_msg_rd_ptr]);
 #pragma GCC unroll ProgrammableCoreType::COUNT
     for (uint32_t index = 0; index < ProgrammableCoreType::COUNT; index++) {

@@ -9,7 +9,7 @@
 
 namespace ttnn::operations::data_movement::clone {
 void bind_clone_operation(py::module& module) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
         Clones the input tensor, creating a copy with the specified memory configuration and converting its data type to dtype. This operation does not alter the tensor's layout.
 
         Args:
@@ -27,10 +27,6 @@ void bind_clone_operation(py::module& module) {
             * ROW_MAJOR_LAYOUT: Returns the tensor unpadded in the last two dimensions.
             * TILE_LAYOUT: Pads the tensor to ensure its width and height are multiples of 32.
             * If the input's current layout matches the specified layout, padding adjustments are applied to the last two dimensions as necessary.
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.rand([1, 32, 32], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = ttnn.clone(tensor, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     )doc";
 
     bind_registered_operation(

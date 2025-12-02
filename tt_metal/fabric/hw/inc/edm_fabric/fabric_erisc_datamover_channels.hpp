@@ -17,7 +17,7 @@
 #include "tt_metal/hw/inc/utils/utils.h"
 #include "risc_attribs.h"
 #include "fabric/fabric_edm_packet_header.hpp"
-#include "fabric_edm_types.hpp"
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "fabric_static_channels_ct_args.hpp"
 #include "edm_fabric_flow_control_helpers.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"

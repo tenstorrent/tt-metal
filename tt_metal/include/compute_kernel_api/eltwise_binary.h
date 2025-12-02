@@ -201,13 +201,13 @@ ALWI void binary_dest_reuse_tiles_init(uint32_t icb0) {
 // clang-format off
 /**
  * Performs element-wise binary operations, such as multiply, add, or sub of tiles.
- * If binary_reuse_dest = EltwiseBinaryReuseDestType::DST_TO_SRCA, then the tile specified by idst will be loaded from
+ * If binary_reuse_dest = EltwiseBinaryReuseDestType::DEST_TO_SRCA, then the tile specified by idst will be loaded from
  * the DST register buffer into SRCA. The binary operation will operate on SRCA & SRCB inputs, and the result will be
- * written back to the DST register buffer specified by idst. Similar to DST_TO_SRCA, if binary_reuse_dest =
- * EltwiseBinaryReuseDestType::DST_TO_SRCB, then tile specified by idst will be loaded from the DST into SRCB register
+ * written back to the DST register buffer specified by idst. Similar to DEST_TO_SRCA, if binary_reuse_dest =
+ * EltwiseBinaryReuseDestType::DEST_TO_SRCB, then tile specified by idst will be loaded from the DST into SRCB register
  * buffer.
  *
- * EltwiseBinaryReuseDestType::DST_TO_SRCA and EltwiseBinaryReuseDestType::DST_TO_SRCB assume that another operation has
+ * EltwiseBinaryReuseDestType::DEST_TO_SRCA and EltwiseBinaryReuseDestType::DEST_TO_SRCB assume that another operation has
  * populated the dest register, otherwise dest will contain zeroes.
  *
  * The DST register buffer must be in acquired state via *acquire_dst* call.

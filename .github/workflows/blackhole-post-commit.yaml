@@ -153,7 +153,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
@@ -161,6 +161,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
+      gtest_filter: ${{ contains(inputs.runner-label, 'P100') && '*' || '*-*NIGHTLY_*' }}
   models-unit-tests:
     needs: [build-artifact, generate-matrix]
     secrets: inherit
@@ -202,7 +203,6 @@ jobs:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
   metalium-smoke-tests:
@@ -243,7 +243,6 @@ jobs:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
   blackhole-20-cores-tests:
@@ -269,7 +268,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: [ "BH-LLMBox", "BH-LoudBox", "P300-viommu" ]
+        test-group: [ "BH-LLMBox", "BH-LoudBox", "P300-viommu", "BH-QB-GE" ]
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}

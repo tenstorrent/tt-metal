@@ -12,7 +12,7 @@
 #include "fabric_edm_packet_header_validate.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "fabric_stream_regs.hpp"
-#include "fabric_edm_types.hpp"
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "hostdevcommon/fabric_common.h"
 #include "edm_fabric_flow_control_helpers.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
@@ -264,19 +264,25 @@ struct WorkerToFabricEdmSenderImpl {
             noc_sem_addr, packed_val, 0xF, this->sync_noc_cmd_buf, EDM_TO_DOWNSTREAM_NOC, EDM_TO_DOWNSTREAM_NOC_VC);
     }
 
+    // templatized num_slots to let callers implement bubble flow control without runtime overheads.
+    template <size_t num_slots = 1>
     FORCE_INLINE bool edm_has_space_for_packet() const {
         invalidate_l1_cache();
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
-            return (this->buffer_slot_write_counter.counter - *this->edm_buffer_local_free_slots_read_ptr) <
-                   this->num_buffers_per_channel;
+            auto used_slots = this->buffer_slot_write_counter.counter - *this->edm_buffer_local_free_slots_read_ptr;
+            if constexpr (num_slots == 1) {
+                return used_slots < this->num_buffers_per_channel;
+            } else {
+                return used_slots <= this->num_buffers_per_channel - num_slots;
+            }
         } else {
-            return get_ptr_val(worker_credits_stream_id) != 0;
+            return get_ptr_val(worker_credits_stream_id) >= num_slots;
         }
     }
 
     FORCE_INLINE void wait_for_empty_write_slot() const {
         WAYPOINT("FWSW");
-        while (!this->edm_has_space_for_packet());
+        while (!this->edm_has_space_for_packet<1>());
         WAYPOINT("FWSD");
     }
 
