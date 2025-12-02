@@ -142,7 +142,7 @@ def test_pipeline_performance(
             profiler_iteration=0,
         )
 
-    logger.info(f"Warmup completed in {benchmark_profiler.get_duration('total', 0):.2f}s")
+    logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
 
     # Check output
     if hasattr(result, "frames"):
@@ -194,7 +194,7 @@ def test_pipeline_performance(
                 )
 
         # Collect timing data
-        logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('total', i):.2f}s")
+        logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
 
     # Calculate statistics
     text_encoder_times = [benchmark_profiler.get_duration("text_encoder", i) for i in range(num_perf_runs)]
