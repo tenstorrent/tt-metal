@@ -152,7 +152,23 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_power_iterative(const uint32_t exponent) {
     const float pow_scalar = Converter::as_float(exponent);
     const sfpi::vFloat pow = Converter::as_float(exponent);
-    if (pow_scalar >= 0.0f) {
+    if (pow_scalar == 0.0f || pow_scalar == 1.0f || pow_scalar == 2.0f || pow_scalar == 3.0f) {
+#pragma GCC unroll 8
+        for (int d = 0; d < 8; d++) {
+            uint exp = static_cast<uint>(pow_scalar);
+            sfpi::vFloat in = sfpi::dst_reg[0];
+            sfpi::vFloat result = 1.0f;
+            while (exp > 0) {
+                if (exp & 1) {
+                    result *= in;
+                }
+                in *= in;
+                exp >>= 1;
+            }
+            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg++;
+        }
+    } else if (pow_scalar >= 0.0f) {
 #pragma GCC unroll 8
         for (int d = 0; d < 8; d++) {
             sfpi::vFloat base = sfpi::dst_reg[0];
