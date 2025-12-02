@@ -1,9 +1,9 @@
 from functools import partial
 from functools import reduce
 from loguru import logger
-from models.utility_functions import comp_pcc
-from models.utility_functions import is_wormhole_b0
-from models.utility_functions import torch_random
+from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import is_wormhole_b0
+from models.common.utility_functions import torch_random
 from pathlib import Path
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal, comp_allclose
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -15,8 +15,9 @@ import sys
 import torch
 import ttnn
 
-
 # Test file to reproduce PCC ERROR. The required modules will be exported according to branch.
+
+
 @pytest.mark.parametrize(
     "shape",
     [
@@ -49,9 +50,8 @@ input_bcast_shape_pairs = [
     #  ((1), (2, 10)),
     #  ((1, 1, 1, 1), (1, 13, 1, 670)),
     #  ((1, 1, 1, 1), (1, 13, 670, 1)),
-    #  ((1, 1, 1, 1), (1, 13, 270, 270)),
+    ((1, 1, 1, 1), (1, 13, 270, 270)),
     #  ((1, 13, 270, 270), (1, 13, 270, 270)),
-    ((1, 1, 1, 1), (1, 1, 90, 90)),
 ]
 
 
@@ -145,11 +145,10 @@ class Complex:
 @pytest.mark.parametrize(
     "memcfg",
     (
-        # ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.DRAM_MEMORY_CONFIG,
         ttnn.L1_MEMORY_CONFIG,
     ),
-    # ids=["out_DRAM", "out_L1"],
-    ids=["out_L1"],
+    ids=["out_DRAM", "out_L1"],
 )
 @pytest.mark.parametrize("dtype", ((ttnn.bfloat16,)))
 # @pytest.mark.parametrize("bs", ((1, 1), (1, 2), (2, 2)))
