@@ -264,7 +264,8 @@ class Generator:
             empty_slots = list(range(batch_size))
 
         out_list = []
-        for idx, user_id in enumerate(empty_slots):
+        slots = self._mix_slots(empty_slots)
+        for idx, user_id in slots:
             # if model_id is not None, it means that prefill is called from warmup_prefill_traces
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
             group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
@@ -358,6 +359,12 @@ class Generator:
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         return output_logits
+
+    def _mix_slots(self, empty_slots):
+        max_batch_size_per_model = self.model_args[0].max_batch_size
+        slots = list(enumerate(empty_slots))
+        slots.sort(key=lambda x: x[1] % max_batch_size_per_model)
+        return slots
 
     def prefill_forward_single_user_text(
         self, tokens, page_table, user_id, last_token_idx, kv_cache=None, model_id=-1, **kwargs
