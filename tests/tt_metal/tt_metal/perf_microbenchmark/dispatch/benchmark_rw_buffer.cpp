@@ -56,8 +56,6 @@ using namespace tt::tt_metal::distributed;
  * https://docs.google.com/spreadsheets/d/1zy1teJtgf7hsMMdgy5uIOtcuI73AGVqy4lnyYwL7YFQ/edit
  */
 
-static constexpr auto num_test_repetitions = 11;
-
 static constexpr uint64_t KB = 1024;
 static constexpr uint64_t MB = 1024 * KB;
 static constexpr uint64_t GB = 1024 * MB;
@@ -180,7 +178,6 @@ static void BM_read_pinned_memory(benchmark::State& state, std::shared_ptr<MeshD
 
 int main(int argc, char** argv) {
     benchmark::Initialize(&argc, argv);
-
     // no need to initialize for bandwidth measurement, saves test initialization time
     std::vector<ElementType> host_buffer_max(max_transfer_size / ElementSize);
     auto available_device_ids = MetalContext::instance().get_cluster().all_chip_ids();
@@ -207,7 +204,6 @@ int main(int argc, char** argv) {
         benchmark::RegisterBenchmark("Write", BM_write, device, host_buffer_max)
             ->ArgsProduct(benchmark_args)
             ->UseRealTime()
-            ->Repetitions(num_test_repetitions)
             ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
             ->ComputeStatistics("min", compute_min)
             ->ComputeStatistics("max", compute_max);
@@ -215,7 +211,6 @@ int main(int argc, char** argv) {
         benchmark::RegisterBenchmark("Read", BM_read, device)
             ->ArgsProduct(benchmark_args)
             ->UseRealTime()
-            ->Repetitions(num_test_repetitions)
             ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
             ->ComputeStatistics("min", compute_min)
             ->ComputeStatistics("max", compute_max);
@@ -225,7 +220,6 @@ int main(int argc, char** argv) {
             benchmark::RegisterBenchmark("ReadPinnedMemory", BM_read_pinned_memory, device)
                 ->ArgsProduct(benchmark_args)
                 ->UseRealTime()
-                ->Repetitions(num_test_repetitions)
                 ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
                 ->ComputeStatistics("min", compute_min)
                 ->ComputeStatistics("max", compute_max);
