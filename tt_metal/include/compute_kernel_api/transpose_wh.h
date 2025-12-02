@@ -34,6 +34,7 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb) {
 
     if (is_int32) {
         UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, true>(icb, false)));
+        // TODO LP disable zero flags
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
             true, false, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(true, false, icb)));

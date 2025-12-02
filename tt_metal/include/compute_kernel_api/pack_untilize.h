@@ -61,7 +61,8 @@ template <
 ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4) {
 #ifdef ARCH_BLACKHOLE
     // Needed for setting swizzle_32b:
-    MATH((llk_math_hw_configure_disaggregated<true, true>(0, 0)));
+    MATH((llk_math_hw_configure_disaggregated(0, 0)));
+    // TODO LP, set swizzle here
 #endif
     // A workaround for tt-metal#17132. Should be addressed more systematically.
     PACK(

@@ -281,6 +281,7 @@ void MAIN {
                         MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
 #ifdef ARCH_BLACKHOLE
                         // need this on BH to set swizzle bit before pack untilize dest
+                        // TODO LP, set swizzle with specific function
                         MATH((llk_math_hw_configure_disaggregated<true, true>(0, 0)));
 #endif
                         PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, false, TILE_C_DIM>(

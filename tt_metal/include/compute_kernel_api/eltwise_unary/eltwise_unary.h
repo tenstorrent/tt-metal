@@ -16,6 +16,7 @@ namespace ckernel {
 
 ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, true>(icb)));
+    // TODO LP disable zero flags
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
 
@@ -38,6 +39,7 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
 // clang-format on
 ALWI void unary_op_init_common_no_pack(uint32_t icb) {
     UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, true>(icb)));
+    // TODO LP disable zero flags
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
 
