@@ -1544,7 +1544,8 @@ tt_metal::AsicTopology validate_connectivity(
     const std::string& fsd_path,
     const std::string& gsd_yaml_path,
     bool fail_on_warning,
-    PhysicalSystemDescriptor& physical_system_descriptor) {
+    PhysicalSystemDescriptor& physical_system_descriptor,
+    std::optional<uint32_t> min_connections) {
     log_output_rank0("Validating Factory System Descriptor (Golden Representation) against Global System Descriptor");
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     auto missing_physical_connections = tt::scaleout_tools::validate_fsd_against_gsd(
@@ -1552,7 +1553,8 @@ tt_metal::AsicTopology validate_connectivity(
         gsd_yaml_path,
         true /* strict_validation */,
         fail_on_warning,
-        *distributed_context.rank() == 0 /* log_output */);
+        *distributed_context.rank() == 0 /* log_output */,
+        min_connections);
     log_output_rank0("Factory System Descriptor (Golden Representation) Validation Complete");
     return generate_asic_topology_from_connections(missing_physical_connections, physical_system_descriptor);
 }

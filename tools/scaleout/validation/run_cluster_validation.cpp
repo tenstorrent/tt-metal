@@ -36,7 +36,8 @@ const std::unordered_map<std::string_view, std::string_view> VALIDATION_ARGS = {
     {"--num-iterations", "Number of iterations to send traffic"},
     {"--data-size", "Data size (bytes) sent across each link per iteration"},
     {"--packet-size-bytes", "Packet size (bytes) sent across each link"},
-    {"--sweep-traffic-configs", "Sweep pre-generated traffic configurations across detected links (stress testing)"}};
+    {"--sweep-traffic-configs", "Sweep pre-generated traffic configurations across detected links (stress testing)"},
+    {"--min-connections", "Minimum number of total connections required (relaxed validation mode)"}};
 
 // link_reset subcommand arguments and their descriptions
 const std::unordered_map<std::string_view, std::string_view> LINK_RETRAIN_ARGS = {
@@ -71,6 +72,7 @@ struct InputArgs {
     uint32_t num_iterations = 50;
     bool sweep_traffic_configs = false;
     bool validate_connectivity = true;
+    std::optional<uint32_t> min_connections = std::nullopt;  // Relaxed validation mode
 
     // link_reset subcommand args
     std::optional<std::string> reset_host = std::nullopt;
@@ -189,6 +191,13 @@ void parse_validation_args(const std::vector<std::string>& args_vec, InputArgs& 
     input_args.sweep_traffic_configs = test_args::has_command_option(args_vec, "--sweep-traffic-configs");
     input_args.validate_connectivity =
         input_args.cabling_descriptor_path.has_value() || input_args.fsd_path.has_value();
+
+    if (test_args::has_command_option(args_vec, "--min-connections")) {
+        input_args.min_connections = std::stoi(test_args::get_command_option(args_vec, "--min-connections"));
+        log_output_rank0(
+            "Relaxed validation mode enabled. Minimum connections required: " +
+            std::to_string(input_args.min_connections.value()));
+    }
 }
 
 InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
@@ -267,8 +276,8 @@ AsicTopology run_connectivity_validation(
         input_args.fsd_path,
         input_args.output_path.string(),
         physical_system_descriptor.get_all_hostnames());
-    auto missing_topology =
-        validate_connectivity(fsd_path, gsd_yaml_path, input_args.fail_on_warning, physical_system_descriptor);
+    auto missing_topology = validate_connectivity(
+        fsd_path, gsd_yaml_path, input_args.fail_on_warning, physical_system_descriptor, input_args.min_connections);
 
     // TODO (AS): We shouldn't need to dump files to disk for validation, once validate_fsd_against_gsd can support
     // comparing string representations of the FSD and GSD. For now, each rank dumps a file to disk, which gets deleted
