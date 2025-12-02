@@ -68,6 +68,8 @@ void kernel_main() {
     }
 
     // Notify all readers that data is ready
+    // Each provider writes to slot = provider_device_idx on all readers
+    // This way each reader can poll on different slots for each provider
     // Runtime args: for each reader: (noc_x, noc_y, dst_dev_id, dst_mesh_id)
     uint32_t arg_index = 0;
     uint32_t num_readers = num_devices - 1;  // All devices except self
@@ -78,7 +80,10 @@ void kernel_main() {
         uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_index++);
 
         uint32_t local_notification_buffer_addr = notification_mailbox_address;
-        uint32_t remote_notification_dest_addr = notification_mailbox_address;
+        // Send notification to slot = provider_device_idx on the reader
+        // Reader will poll on this slot to know data from this provider is ready
+        uint32_t remote_notification_dest_addr =
+            notification_mailbox_address + provider_device_idx * req_notification_size_bytes;
 
         notify_receiver(
             dst_dev_id,
