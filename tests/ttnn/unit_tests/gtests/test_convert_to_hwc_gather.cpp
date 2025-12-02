@@ -175,6 +175,7 @@ std::vector<std::vector<float>> gather_with_blocked_transfers(
 
     // Flatten input shards for C-style access
     std::vector<std::vector<float>> input_shards_flat;
+    input_shards_flat.reserve(input_shards.size());
     for (const auto& shard : input_shards) {
         input_shards_flat.push_back(shard);  // Already flattened in this implementation
     }
