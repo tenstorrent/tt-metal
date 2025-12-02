@@ -239,23 +239,6 @@ def test_scatter_normal_with_callback(
         ),
         ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.int32, ttnn.int32, ttnn.Layout.ROW_MAJOR, None, 2),
         (
-            [10, 10, 10, 10, 10],
-            2,
-            [10, 10, 10, 10, 10],
-            ttnn.int32,
-            ttnn.int32,
-            ttnn.Layout.ROW_MAJOR,
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 1)),
-                    ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 6)),
-                    ttnn.CoreRange(ttnn.CoreCoord(3, 4), ttnn.CoreCoord(3, 5)),
-                    ttnn.CoreRange(ttnn.CoreCoord(5, 2), ttnn.CoreCoord(6, 5)),
-                ]
-            ),
-            2,
-        ),
-        (
             [50, 200],
             0,
             [50, 200],
@@ -284,6 +267,23 @@ def test_scatter_normal_with_callback(
                 ]
             ),
             1,
+        ),
+        (
+            [10, 10, 10, 10, 10],
+            2,
+            [10, 10, 10, 10, 10],
+            ttnn.int32,
+            ttnn.int32,
+            ttnn.Layout.ROW_MAJOR,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(3, 4), ttnn.CoreCoord(3, 5)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 2), ttnn.CoreCoord(6, 5)),
+                ]
+            ),
+            2,
         ),
     ],
 )

@@ -187,6 +187,14 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
 
         stick_offset += sticks_per_core;
     }
+    if (args.sub_core_grid.has_value()) {
+        TT_FATAL(
+            (cores.size() == corerange_to_cores(*args.sub_core_grid).size()) && (cores.size() == num_cores),
+            "cores.size(): {}, corerange_to_cores(*args.sub_core_grid).size(): {}, num_cores: {},  should be equal",
+            cores.size(),
+            corerange_to_cores(*args.sub_core_grid).size(),
+            num_cores);
+    }
 
     return {std::move(program), {reader_kernel, writer_kernel, cores}};
 }
