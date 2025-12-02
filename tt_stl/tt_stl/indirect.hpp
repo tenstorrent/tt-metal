@@ -218,7 +218,7 @@ public:
     // [indirect.swap], swap
     constexpr void swap(indirect& other) noexcept { std::swap(this->p, other.p); }
 
-    friend constexpr void swap(indirect& lhs, indirect& rhs) noexcept { std::swap(lhs.p, rhs.p); }
+    friend constexpr void swap(indirect& lhs, indirect& rhs) noexcept { lhs.swap(rhs); }
 
     // [indirect.relops], relational operators
     template <class U>
