@@ -164,6 +164,11 @@ def ref_ResNet_MaxPool2d_COMPOSITE_589(var0):
     return var1
 
 
+def ref_ResNet_MaxPool2d_PERMUTE_COMPOSITE_589(var0):
+    var1 = torch.ops.aten.permute(var0, [0, 3, 1, 2])
+    return var1
+
+
 def ref_ResNet_Sequential_Bottleneck_Sequential_0_COMPOSITE_44(var0, *args):
     var1 = torch.ops.aten.convolution(var0, args[0], None, [1, 1], [0, 0], [1, 1], False, [0, 0], 1)
     var2 = torch.ops.aten.native_batch_norm(var1, args[1], args[2], args[3], args[4], False, 0.1, 1e-05)
@@ -678,6 +683,11 @@ def ttnn_ResNet_BatchNorm2d_relu_COMPOSITE_583(var0):
     return var1
 
 
+def ttnn_ResNet_MaxPool2d_PERMUTE_COMPOSITE_589(var0):
+    var1_nchw = ttnn.permute(var0, (0, 3, 1, 2))
+    return var1_nchw
+
+
 def ttnn_ResNet_MaxPool2d_COMPOSITE_589(var0):
     (batch_size, channels, input_h, input_w) = var0.shape
     kernel_size = [3, 3]
@@ -702,7 +712,7 @@ def ttnn_ResNet_MaxPool2d_COMPOSITE_589(var0):
     out_w = np.floor((input_w + pad_l + pad_r - kernel_w) / stride_w) + 1
     var1_reshaped_back = ttnn.reshape(var1, ttnn.Shape((batch_size, int(out_h), int(out_w), channels)))
     ### var1_reshaped_back is good.
-    var1_nchw = ttnn.permute(var1_reshaped_back, (0, 3, 1, 2))
+    var1_nchw = ttnn_ResNet_MaxPool2d_PERMUTE_COMPOSITE_589(var1_reshaped_back)
     ### var1_nchw contains Nans...
     return var1_nchw
 
@@ -8471,6 +8481,79 @@ def test_ResNet_BatchNorm2d_relu_COMPOSITE_583(device, input_specs):
     out_ref = ref_ResNet_BatchNorm2d_relu_COMPOSITE_583(*tensors)
     tensors_tt = [ttnn.from_torch(t, dtype=ttnn.bfloat16, device=device) for t in tensors]
     out_opt = ttnn_ResNet_BatchNorm2d_relu_COMPOSITE_583(*tensors_tt)
+    out_opt = ttnn.to_torch(out_opt)
+    diff = torch.abs(out_ref - out_opt)
+    print(diff.mean(), diff.std(), diff.max(), diff.min())
+    print(out_ref.mean(), out_ref.std(), out_ref.max(), out_ref.min())
+    print(out_opt.mean(), out_opt.std(), out_opt.max(), out_opt.min())
+    assert_with_pcc(out_ref, out_opt, 0.99)
+
+
+@pytest.mark.parametrize(
+    "input_specs",
+    [
+        [
+            (
+                [3, 64, 256, 256],
+                "torch.float32",
+                "dynamic_quantiles_stats",
+                [
+                    [
+                        7.404459029203281e-05,
+                        7.404459029203281e-05,
+                        7.404459029203281e-05,
+                        7.404459029203281e-05,
+                        7.404459029203281e-05,
+                        7.404459029203281e-05,
+                        7.404459029203281e-05,
+                        0.0020843481179326773,
+                        0.006606354843825102,
+                        0.007851355709135532,
+                        0.009144960902631283,
+                        0.012711720541119576,
+                        0.013354781083762646,
+                        0.013997845351696014,
+                        0.014386674389243126,
+                        0.014678295701742172,
+                        0.014954963698983192,
+                        0.015209197998046875,
+                        0.01574757508933544,
+                        0.016039196401834488,
+                        0.01623361185193062,
+                        0.016330819576978683,
+                        0.0164280254393816,
+                        0.01701126992702484,
+                        0.017302891239523888,
+                        0.017923524603247643,
+                        0.01808054931461811,
+                        0.018177757039666176,
+                        0.019052622839808464,
+                        0.019733073189854622,
+                        0.02099676802754402,
+                        0.021580010652542114,
+                        0.024084972217679024,
+                        0.028967762365937233,
+                        0.03616109862923622,
+                        0.047736238688230515,
+                        0.0576065257191658,
+                        0.06834417581558228,
+                        0.1112051010131836,
+                        0.12131465971469879,
+                    ],
+                    (0.2096817046403885, 0.23878128826618195, 10.046189308166504),
+                ],
+            )
+        ]
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_ResNet_MaxPool2d_PERMUTE_COMPOSITE_589(device, input_specs):
+    torch.manual_seed(0)
+    tensors = get_tensors_from_input_spec(input_specs, STATE_DICT)
+    tensors[0] += 0.0005 + 0.0007
+    out_ref = ref_ResNet_MaxPool2d_PERMUTE_COMPOSITE_589(*tensors)
+    tensors_tt = [ttnn.from_torch(t, dtype=ttnn.bfloat16, device=device) for t in tensors]
+    out_opt = ttnn_ResNet_MaxPool2d_PERMUTE_COMPOSITE_589(*tensors_tt)
     out_opt = ttnn.to_torch(out_opt)
     diff = torch.abs(out_ref - out_opt)
     print(diff.mean(), diff.std(), diff.max(), diff.min())
