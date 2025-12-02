@@ -8,114 +8,8 @@
 // #include "noc_functions.h"
 #include "noc_parameters.h"
 #include "tt-2xx/quasar/overlay/cmdbuff_api.hpp"
+#include "tt-2xx/quasar/noc_nonblocking_api.h"
 
-// const uint32_t NCRISC_WR_DEF_TRID = 0;
-// const uint32_t NCRISC_WR_LOCAL_TRID = 1;
-// const uint32_t NCRISC_RD_DEF_TRID = 2;
-// const uint32_t NCRISC_RD_END_TRID = 13;
-
-// bool cmd_buf_ok(uint32_t noc, uint32_t cmd_buf) {
-//     return (NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);
-// }
-
-// #define REG32(val) (*((volatile uint32_t*)(((uint64_t)(val)))))
-
-// uint32_t mx() {
-//     uint32_t local_id = REG32(NOC_NODE_ID);
-//     return local_id & NOC_NODE_ID_MASK;
-// }
-
-// uint32_t my() {
-//     uint32_t local_id = REG32(NOC_NODE_ID);
-//     return (local_id >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
-// }
-
-// void noc_read(
-//     uint32_t noc,
-//     uint64_t src_coordinate,
-//     uint64_t src_addr,
-//     uint64_t dest_coordinate,
-//     uint64_t dest_addr,
-//     uint64_t len_bytes,
-//     uint32_t transaction_id,
-//     uint32_t static_vc,
-//     uint32_t cmd_buf) {
-//     if (len_bytes > 0) {
-//         while (!cmd_buf_ok(noc, cmd_buf));
-
-//         // word offset noc cmd interface
-//         uint32_t noc_rd_cmd_field =
-//             NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_STATIC_VC(static_vc) | NOC_RESP_STATIC_VC(14);
-//         uint64_t offset = (cmd_buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT);
-//         volatile uint32_t* ptr = (volatile uint32_t*)offset;
-//         volatile uint64_t* ptr64 = (volatile uint64_t*)offset;
-
-//         ptr64[NOC_TARG_ADDR_LO >> 3] = src_addr;
-//         ptr64[NOC_TARG_ADDR_HI >> 3] = (((dest_addr & 0xFFFFFFFF) << 32) | src_coordinate);
-//         ptr64[NOC_RET_ADDR_MID >> 3] = ((dest_coordinate << 32) | (dest_addr >> 32));
-//         ptr64[NOC_AT_LEN >> 3] = len_bytes;
-//         ptr[NOC_CTRL_LO >> 2] = noc_rd_cmd_field;
-//         ptr[NOC_CTRL_HI >> 2] = NOC_CMD_PKT_TAG_ID(transaction_id);
-//         ptr[NOC_CMD_CTRL >> 2] = NOC_CTRL_SEND_REQ;
-//     }
-// }
-
-// bool all_noc_reads_flushed(uint32_t noc) {
-//     bool all_flushed = true;
-//     for (uint32_t id = NCRISC_RD_DEF_TRID; id <= NCRISC_RD_END_TRID; id++) {
-//         all_flushed &= NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(id)) == 0;
-//     }
-//     return all_flushed;
-// }
-
-// void noc_write(
-//     uint32_t noc,
-//     uint64_t src_coordinate,
-//     uint64_t src_addr,
-//     uint64_t dest_coordinate,
-//     uint64_t dest_addr,
-//     uint64_t len_bytes,
-//     uint32_t transaction_id,
-//     uint32_t vc,
-//     bool mcast,
-//     bool linked,
-//     uint32_t cmd_buf) {
-//     if (len_bytes > 0) {
-//         while (!cmd_buf_ok(noc, cmd_buf));
-
-//         uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_STATIC_VC(vc) | NOC_RESP_STATIC_VC(14) |
-//                                  (linked ? NOC_CMD_VC_LINKED : 0x0) |
-//                                  (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0) | NOC_CMD_RESP_MARKED;
-
-//         // word offset noc cmd interface
-//         uint64_t offset = (cmd_buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT);
-//         volatile uint32_t* ptr = (volatile uint32_t*)offset;
-//         volatile uint64_t* ptr64 = (volatile uint64_t*)offset;
-
-//         ptr64[NOC_TARG_ADDR_LO >> 3] = src_addr;
-//         ptr64[NOC_TARG_ADDR_HI >> 3] = (((dest_addr & 0xFFFFFFFF) << 32) | src_coordinate);
-//         ptr64[NOC_RET_ADDR_MID >> 3] = ((dest_coordinate << 32) | (dest_addr >> 32));
-//         ptr64[NOC_AT_LEN >> 3] = len_bytes;
-//         ptr[NOC_CTRL_LO >> 2] = noc_cmd_field;
-//         ptr[NOC_CTRL_HI >> 2] = NOC_CMD_PKT_TAG_ID(transaction_id);
-//         ptr[NOC_CMD_CTRL >> 2] = NOC_CTRL_SEND_REQ;
-//     }
-// }
-
-// bool all_noc_writes_sent(uint32_t noc) {
-//     bool all_sent = true;
-//     for (uint32_t id = NCRISC_WR_DEF_TRID; id <= NCRISC_WR_LOCAL_TRID; id++) {
-//         all_sent &= NOC_STATUS_READ_REG(noc, NIU_MST_WRITE_REQS_OUTGOING_ID(id)) == 0;
-//     }
-//     return all_sent;
-// }
-// bool all_noc_nonposted_writes_flushed(uint32_t noc) {
-//     bool all_flushed = true;
-//     for (uint32_t id = NCRISC_WR_DEF_TRID; id <= NCRISC_WR_LOCAL_TRID; id++) {
-//         all_flushed &= NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(id)) == 0;
-//     }
-//     return all_flushed;
-// }
 #define TT_CLUSTER_CTRL_REG_MAP_BASE_ADDR (0x03000000)
 #define TT_CLUSTER_CTRL_SCRATCH_0__REG_OFFSET (0x00000040)
 #define SCRATCH_0_OFFSET TT_CLUSTER_CTRL_SCRATCH_0__REG_OFFSET
@@ -167,6 +61,13 @@ void kernel_main() {
 
     DPRINT << "dprint test" << ENDL();
 
+    uint32_t noc_id_reg = MY_NOC_ENCODING(0);
+    DPRINT << "noc_id_reg : " << noc_id_reg << ENDL();
+
+    uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
+    uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+    DPRINT << "my_x : " << my_x << " my_y : " << my_y << ENDL();
+
     // noc_read(0, 0, 0, 0, 0, 0);
     // uint32_t noc,
     // uint64_t src_coordinate,
@@ -179,10 +80,10 @@ void kernel_main() {
     // uint32_t cmd_buf) {
     //     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dest_addr);
     //     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)src_addr);
-    //     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_addr >> 32) & NOC_PCIE_MASK);
-    //     NOC_CMD_BUF_WRITE_REG(
-    //         noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(src_addr >> NOC_ADDR_COORD_SHIFT) &
-    //         NOC_COORDINATE_MASK);
+    //     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_addr >> 32) &
+    //     NOC_PCIE_MASK); NOC_CMD_BUF_WRITE_REG(
+    //         noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(src_addr >>
+    //         NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     //     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, len_bytes);
     //     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 
@@ -223,7 +124,7 @@ void kernel_main() {
 
     // __builtin_riscv_ttrocc_cmdbuf_tr_ack(0);
 
-    DPRINT << __builtin_riscv_ttrocc_cmdbuf_tr_ack(0) << ENDL();
+    // DPRINT << __builtin_riscv_ttrocc_cmdbuf_tr_ack(0) << ENDL();
 
     noc_async_read_barrier();
     DPRINT << "Read is Done " << ENDL();
@@ -231,6 +132,13 @@ void kernel_main() {
     // DRAM NOC dst address
     // std::uint64_t dram_buffer_dst_noc_addr = get_noc_addr_from_bank_id<true>(dram_dst_bank_id, dram_buffer_dst_addr);
     noc_async_write(0x100000, dram_buffer_src_noc_addr, dram_buffer_size);
+
+    DPRINT << "Acks received : " << NOC_STATUS_READ_REG(0, NIU_MST_WR_ACK_RECEIVED) << ENDL();
+    DPRINT << "Writes sent : " << NOC_STATUS_READ_REG(0, NIU_MST_NONPOSTED_WR_REQ_SENT) << ENDL();
+    DPRINT << "Var : " << noc_nonposted_writes_acked[0] << ENDL();
+    DPRINT << "Var : " << noc_nonposted_writes_num_issued[0] << ENDL();
+    DPRINT << "Var : " << noc_reads_num_issued[0] << ENDL();
+
     noc_async_write_barrier();
     DPRINT << "write is Done " << ENDL();
 }

@@ -20,21 +20,19 @@ constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
     static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1);
 #endif
 
-// Helper functions to convert NoC coordinates to NoC-0 coordinates, used in metal as "physical" coordinates.
+// Helper functions to convert NoC coordinates to NoC-0 coordinates - Not needed for Quasar
 #define NOC_0_X(noc_index, noc_size_x, x) x
 #define NOC_0_Y(noc_index, noc_size_y, y) y
 #define NOC_0_X_PHYS_COORD(noc_index, noc_size_x, x) x  // ToDo : revisit this once the silicon is available
 #define NOC_0_Y_PHYS_COORD(noc_index, noc_size_y, y) y  // ToDo : revisit this once the silicon is available
-#define MY_NOC_ENCODING(noc_index) NOC_CMD_BUF_READ_REG(noc_index, 0, NOC_CFG(0))
-
-////
-// /*TODO: RT review this file, currently using wormhole b0 copy, check if any changes needed for BH*/
+#define MY_NOC_ENCODING(noc_index) NOC_CMD_BUF_READ_REG(noc_index, 0, NOC_NODE_ID)
 
 /* Every DM core has 3 command buffers, use 1 for writes, 1 for reads, and simple one for atomics */
 #define WR_CMD_BUF 0
 #define RD_CMD_BUF 1
 #define SIMPLE_CMD_BUF 2
 
+// ToDo : Add this once the silicon is available
 #define NOC_PCIE_MASK 0
 constexpr uint32_t DYNAMIC_NOC_NCRISC_WR_CMD_BUF = WR_CMD_BUF;  // all writes share cmd buf
 constexpr uint32_t DYNAMIC_NOC_NCRISC_WR_REG_CMD_BUF = WR_CMD_BUF;
@@ -69,10 +67,7 @@ constexpr uint32_t MCAST_RESP_VC = 14;
 /* Default transaction ID for both command buffers */
 constexpr uint32_t DEFAULT_TRID = 1;
 
-// BH has 64 bit address space but pipegen was not updated to support this so WH scheme of encoding addresses is used
-// (36 bits of address followed by coordinates) This means that lo and mid registers need to have the address portion
-// while the coordinates go into hi register Metal does not need to use more than 32 bits for addresses but the 60th bit
-// needs to be set to enable NoC transactions through PCIe (see get_pcie_base_addr_from_device)
+// Quasar has 64 bit address space, keep this same as Wormhole
 constexpr uint32_t NOC_ADDR_COORD_SHIFT = 36;
 const uint32_t NOC_TARG_ADDR_COORDINATE = NOC_TARG_ADDR_HI;
 const uint32_t NOC_RET_ADDR_COORDINATE = NOC_RET_ADDR_HI;
@@ -148,27 +143,16 @@ inline __attribute__((always_inline)) void NOC_CMD_BUF_WRITE_REG(
         watcher_msg->noc_linked_status[noc] = (val & NOC_CMD_VC_LINKED) != 0;
     }
 #endif
-    if (buf == WR_CMD_BUF) {
-        CMDBUF_WR_REG(WR_CMD_BUF, addr, val);
-    } else if (buf == RD_CMD_BUF) {
-        CMDBUF_WR_REG(RD_CMD_BUF, addr, val);
-    } else if (buf == SIMPLE_CMD_BUF) {
-        // SCMDBUF_WR_REG(addr, val);
-    } else {
-        ASSERT(0);
-    }
+
+    uint64_t offset = (buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT) + addr;
+    volatile uint32_t* ptr = (volatile uint32_t*)offset;
+    *ptr = val;
 }
 
 inline __attribute__((always_inline)) uint32_t NOC_CMD_BUF_READ_REG(uint32_t noc, uint32_t buf, uint32_t addr) {
-    // if (buf == WR_CMD_BUF) {
-    //     return CMDBUF_RD_REG(0, addr);
-    // } else if (buf == RD_CMD_BUF) {
-    //     return CMDBUF_RD_REG(RD_CMD_BUF, addr);
-    // } else if (buf == SIMPLE_CMD_BUF) {
-    //     return SCMDBUF_RD_REG(addr);
-    // } else {
-    return 0;
-    // }
+    uint64_t offset = (buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT) + addr;
+    volatile uint32_t* ptr = (volatile uint32_t*)offset;
+    return *ptr;
 }
 
 inline __attribute__((always_inline)) uint32_t NOC_STATUS_READ_REG(uint32_t noc, uint32_t reg_id) {
@@ -206,17 +190,12 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint32_t dest_addr,
     uint32_t len_bytes,
     uint32_t read_req_vc = 1) {
-    // DPRINT << " in this functions " << ENDL();
-
-    // ASSERT(noc == 0);
-    // ASSERT(cmd_buf > SIMPLE_CMD_BUF);
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         ASSERT(0);
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
     }
 
     uint32_t src_coord = (uint32_t)(src_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK;
-    // uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
     uint32_t my_x = mx();  // noc_id_reg & NOC_NODE_ID_MASK;
     uint32_t my_y = my();  //(noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
     uint32_t dest_coord = NOC_XY_COORD(0, 1);
@@ -285,9 +264,8 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     }
 
     uint32_t dest_coord = (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK;
-    // uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
-    uint32_t my_x = mx();  // noc_id_reg & NOC_NODE_ID_MASK;
-    uint32_t my_y = my();  // (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+    uint32_t my_x = mx();
+    uint32_t my_y = my();
     uint32_t src_coord = NOC_XY_COORD(my_x, my_y);
 
     if (cmd_buf == WR_CMD_BUF) {
@@ -367,7 +345,6 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(
         inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests);
     }
     uint32_t dest_coord = (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK;
-    // uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
     uint32_t my_x = mx();
     uint32_t my_y = my();
     uint32_t src_coord = NOC_XY_COORD(my_x, my_y);
@@ -739,10 +716,8 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     }
     uint64_t atomic_ret_addr;
     if constexpr (noc_mode == DM_DYNAMIC_NOC || program_ret_addr == true) {
-        // uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
         uint32_t my_x = mx();
         uint32_t my_y = my();
-        ;
         atomic_ret_addr = NOC_XY_ADDR(my_x, my_y, atomic_ret_val);
     }
 
@@ -869,7 +844,6 @@ inline __attribute__((always_inline)) void ncrisc_noc_set_transaction_id(
 template <uint8_t noc_mode = DM_DEDICATED_NOC, bool one_packet = false, bool use_vc = false>
 inline __attribute__((always_inline)) void ncrisc_noc_read_set_state(
     uint32_t noc, uint32_t cmd_buf, uint64_t src_noc_addr, uint32_t len_bytes = 0, const uint32_t vc = 0) {
-    // int32_t noc_id_reg = NOC_CMD_BUF_READ_REG(0, 0, NOC_NODE_ID);
     uint32_t my_x = mx();
     uint32_t my_y = my();
 
@@ -1061,10 +1035,9 @@ inline __attribute__((always_inline)) void ncrisc_noc_read_any_len_with_state(
 template <bool posted = false, bool one_packet = false>
 inline __attribute__((always_inline)) void ncrisc_noc_write_set_state(
     uint32_t noc, uint32_t cmd_buf, uint64_t dst_noc_addr, uint32_t len_bytes = 0, const uint32_t vc = 0) {
-    // int32_t noc_id_reg = NOC_CMD_BUF_READ_REG(0, 0, NOC_NODE_ID);
     uint32_t my_x = mx();
     uint32_t my_y = my();
-    ;
+
     if (cmd_buf == WR_CMD_BUF) {
         reset_cmdbuf_0();
         setup_as_copy_cmdbuf_0(true, false, {0}, false, posted);
