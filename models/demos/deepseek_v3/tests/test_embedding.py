@@ -10,7 +10,6 @@ from loguru import logger
 from torch.nn import Embedding as EmbeddingReference
 
 import ttnn
-from models.demos.deepseek_v3.tt.embedding.embedding1d import Embedding1D
 from models.demos.deepseek_v3.tt.embedding.embedding2d import Embedding2D
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
@@ -33,14 +32,9 @@ from models.demos.deepseek_v3.utils.test_utils import (
 @pytest.mark.parametrize(
     "EmbeddingClass,mode,batch_size_or_seq_len",
     [
-        (Embedding1D, "decode", 32),
         (Embedding2D, "decode", 128),
     ]
-    + [
-        (EmbeddingClass, "prefill", seq_len)
-        for seq_len in (128, 512, 2048)
-        for EmbeddingClass in (Embedding1D, Embedding2D)
-    ],
+    + [(EmbeddingClass, "prefill", seq_len) for seq_len in (128, 512, 2048) for EmbeddingClass in (Embedding2D,)],
 )
 @pytest.mark.parametrize(
     "generate_reference_io",
@@ -114,10 +108,7 @@ def test_embedding_forward_pass(
             mesh_shape=tuple(mesh_device.shape),
         ),
     )
-    if EmbeddingClass is Embedding1D:
-        tt_output_torch = tt_output_torch[:1]
-    else:
-        tt_output_torch = tt_output_torch.reshape(1, batch_size_or_seq_len, hf_config.hidden_size)
+    tt_output_torch = tt_output_torch.reshape(1, batch_size_or_seq_len, hf_config.hidden_size)
 
     # Cleanup
     ttnn.deallocate(tt_input_ids)
