@@ -6,6 +6,7 @@
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 
 namespace tt::tt_fabric {
@@ -71,7 +72,7 @@ void StaticSizedChannelConnectionWriterAdapter::add_local_tensix_connection(
 
     // Get relay-specific info from fabric context
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const auto& tensix_config = fabric_context.get_tensix_config();
+    const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
 
     // Store free slots stream ID
     constexpr uint32_t relay_channel_id = static_cast<uint32_t>(UdmRelayChannelId::ROUTER_CHANNEL);
@@ -140,7 +141,7 @@ void StaticSizedChannelConnectionWriterAdapter::pack_adaptor_to_relay_rt_args(st
     } else {
         // Query the fabric router config from fabric context
         const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-        const auto& fabric_router_config = fabric_context.get_fabric_router_config();
+        const auto& fabric_router_config = fabric_context.get_builder_context().get_fabric_router_config();
 
         // Pack full relay connection info
         // Query connection_buffer_index_id from fabric router config (consistent with other adapter connections)

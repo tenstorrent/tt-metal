@@ -35,6 +35,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_fabric {
@@ -210,7 +211,7 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
     CoreCoord receiver_logical_core = {1, 0};  // Data will be forwarded to this core on al chips in the mcast group
 
     const auto& fabric_context = control_plane.get_fabric_context();
-    const auto& edm_config = fabric_context.get_fabric_router_config();
+    const auto& edm_config = fabric_context.get_builder_context().get_fabric_router_config();
     uint32_t is_2d_fabric = edm_config.topology == Topology::Mesh;
 
     auto sender_device = fixture->get_device(sender_phys_id);

@@ -66,6 +66,7 @@ public:
     size_t get_fabric_channel_buffer_size_bytes() const;
 
     // ============ Builder Context Access ============
+    // For build-time operations (config selection, per-device state, router addresses)
     // Lazy initialization on first access
     FabricBuilderContext& get_builder_context();
     const FabricBuilderContext& get_builder_context() const;
@@ -74,27 +75,6 @@ public:
     // ============ Static Utilities ============
     static tt::tt_fabric::Topology get_topology_from_config(tt::tt_fabric::FabricConfig fabric_config);
     static bool is_2D_topology(tt::tt_fabric::Topology topology);
-
-    // ============ Legacy API (delegates to BuilderContext) ============
-    // These methods delegate to FabricBuilderContext for backward compatibility
-    // TODO: Update callers to use get_builder_context() directly
-    tt::tt_fabric::FabricEriscDatamoverConfig& get_fabric_router_config(
-        tt::tt_fabric::FabricTensixConfig fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED,
-        eth_chan_directions direction = eth_chan_directions::EAST) const;
-
-    tt::tt_fabric::FabricTensixDatamoverConfig& get_tensix_config() const;
-    void initialize_tensix_config();
-
-    void set_num_fabric_initialized_routers(ChipId chip_id, size_t num_routers);
-    uint32_t get_num_fabric_initialized_routers(ChipId chip_id) const;
-
-    void set_fabric_master_router_chan(ChipId chip_id, chan_id_t chan_id);
-    chan_id_t get_fabric_master_router_chan(ChipId chip_id) const;
-
-    std::vector<size_t> get_fabric_router_addresses_to_clear() const;
-    std::pair<uint32_t, uint32_t> get_fabric_router_sync_address_and_status() const;
-    std::optional<std::pair<uint32_t, tt::tt_fabric::EDMStatus>> get_fabric_router_ready_address_and_signal() const;
-    std::pair<uint32_t, uint32_t> get_fabric_router_termination_address_and_signal() const;
 
 private:
     std::unordered_map<MeshId, bool> check_for_wrap_around_mesh() const;

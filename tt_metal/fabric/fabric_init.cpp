@@ -10,6 +10,7 @@
 #include "erisc_datamover_builder.hpp"
 #include "tt_metal.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/fabric_router_builder.hpp"
 #include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
@@ -128,8 +129,7 @@ void build_tt_fabric_program(
             if (!is_dispatch_link) {
                 fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
             }
-            return fabric_context.get_fabric_router_config(
-                fabric_tensix_config, eth_direction);
+            return fabric_context.get_builder_context().get_fabric_router_config(fabric_tensix_config, eth_direction);
         };
 
         for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
@@ -241,7 +241,7 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
     auto& fabric_context = control_plane.get_fabric_context();
 
     build_tt_fabric_program(device, fabric_program_ptr.get(), router_builders);
-    fabric_context.set_num_fabric_initialized_routers(device->id(), router_builders.size());
+    fabric_context.get_builder_context().set_num_fabric_initialized_routers(device->id(), router_builders.size());
     if (router_builders.empty()) {
         return nullptr;
     }
@@ -258,7 +258,7 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
 
     // for now it doesnt matter which channel is the master, so just pick the 1st in the map
     auto master_router_chan = router_builders.begin()->first;
-    fabric_context.set_fabric_master_router_chan(device->id(), master_router_chan);
+    fabric_context.get_builder_context().set_fabric_master_router_chan(device->id(), master_router_chan);
 
     uint32_t router_channels_mask = 0;
     for (const auto& [router_chan, _] : router_builders) {
@@ -339,8 +339,9 @@ void configure_fabric_cores(tt::tt_metal::IDevice* device) {
     const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
     const auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
     const auto& fabric_context = control_plane.get_fabric_context();
-    const auto addresses_to_clear = fabric_context.get_fabric_router_addresses_to_clear();
-    const auto& router_config = fabric_context.get_fabric_router_config();
+    const auto& builder_context = fabric_context.get_builder_context();
+    const auto addresses_to_clear = builder_context.get_fabric_router_addresses_to_clear();
+    const auto& router_config = builder_context.get_fabric_router_config();
     std::vector<uint32_t> router_zero_buf(router_config.router_buffer_clear_size_words, 0);
     for (const auto& [router_chan, _] : router_chans_and_direction) {
         auto router_logical_core = soc_desc.get_eth_core_for_channel(router_chan, CoordSystem::LOGICAL);
