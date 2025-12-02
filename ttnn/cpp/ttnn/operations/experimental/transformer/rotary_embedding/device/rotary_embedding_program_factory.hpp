@@ -12,8 +12,8 @@ namespace ttnn::operations::experimental::transformer::rotary_embedding::program
 struct RotaryEmbeddingSharedVariables {
     tt::tt_metal::KernelHandle unary_reader_kernel_id = 0;
     tt::tt_metal::KernelHandle unary_writer_kernel_id = 0;
-    tt::tt_metal::CBHandle cb_input;
-    tt::tt_metal::CBHandle cb_output;
+    tt::tt_metal::CBHandle cb_input{};
+    tt::tt_metal::CBHandle cb_output{};
     std::vector<CoreCoord> cores;
     uint32_t g1_numcores = 0;
     uint32_t num_rows_per_core_group_1 = 0;
