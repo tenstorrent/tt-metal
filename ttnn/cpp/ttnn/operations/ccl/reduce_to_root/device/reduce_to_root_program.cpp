@@ -10,7 +10,11 @@
 #include <tt-metalium/work_split.hpp>
 #include "reduce_to_root_op.hpp"
 
-// ASSUMING ROOT ID ALWAYS DEVICE 1
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/core/core.hpp"
+
+// TODO ASSUMING ROOT ID ALWAYS DEVICE 1
 // CHANGE HARDCODED VALUES IF DEVICE 2 IS ROOT INSTEAD
 
 namespace ttnn::operations::ccl {
@@ -370,10 +374,9 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     // CreateCircularBuffer(program, all_cores, cb_sender_m_config);
 
     constexpr auto compute_cb_l = tt::CBIndex::c_3;
-    constexpr auto cb_compute_num_pages = 2 * input_num_tiles;  // Double-buffer for in-place operations
     tt::tt_metal::CircularBufferConfig cb_compute_l_config =
         tt::tt_metal::CircularBufferConfig(
-            cb_compute_num_pages * aligned_input_page_size_bytes, {{compute_cb_l, input_dataformat}})
+            1 * input_num_tiles * aligned_input_page_size_bytes, {{compute_cb_l, input_dataformat}})
             .set_page_size(compute_cb_l, aligned_input_page_size_bytes)
             .set_tile_dims(compute_cb_l, stats_tile);
     // CreateCircularBuffer(program, all_cores, cb_compute_l_config);
@@ -395,7 +398,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     constexpr auto compute_cb_2_l = tt::CBIndex::c_6;
     tt::tt_metal::CircularBufferConfig cb_compute_2_l_config =
         tt::tt_metal::CircularBufferConfig(
-            2 * input_num_tiles * aligned_input_page_size_bytes, {{compute_cb_2_l, input_dataformat}})
+            1 * input_num_tiles * aligned_input_page_size_bytes, {{compute_cb_2_l, input_dataformat}})
             .set_page_size(compute_cb_2_l, aligned_input_page_size_bytes)
             .set_tile_dims(compute_cb_2_l, stats_tile);
     // CreateCircularBuffer(program, all_cores, cb_compute_2_l_config);
@@ -408,10 +411,8 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     // CreateCircularBuffer(program, all_cores, cb_compute_2_s_config);
 
     constexpr auto compute_cb_2_m = tt::CBIndex::c_8;
-    uint32_t compute_cb_2_m_tiles = 2;  // Doubled for buffering
     tt::tt_metal::CircularBufferConfig cb_compute_2_m_config =
-        tt::tt_metal::CircularBufferConfig(
-            compute_cb_2_m_tiles * aligned_input_page_size_bytes, {{compute_cb_2_m, input_dataformat}})
+        tt::tt_metal::CircularBufferConfig(1 * aligned_input_page_size_bytes, {{compute_cb_2_m, input_dataformat}})
             .set_page_size(compute_cb_2_m, aligned_input_page_size_bytes)
             .set_tile_dims(compute_cb_2_m, stats_tile);
     // CreateCircularBuffer(program, all_cores, cb_compute_2_m_config);
@@ -485,7 +486,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     // CreateCircularBuffer(program, all_cores, cb_compute_out_m_config);
 
     constexpr auto cb_exp_max_diff_2 = tt::CBIndex::c_17;
-    constexpr auto cb_exp_num_pages = 2;
+    constexpr auto cb_exp_num_pages = 1;
     tt::tt_metal::CircularBufferConfig cb_exp_max_diff_2_config =
         tt::tt_metal::CircularBufferConfig(
             cb_exp_num_pages * aligned_input_page_size_bytes, {{cb_exp_max_diff_2, input_dataformat}})
@@ -554,14 +555,14 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     constexpr auto cb_l1_temp = tt::CBIndex::c_25;
     tt::tt_metal::CircularBufferConfig cb_l1_temp_config =
         tt::tt_metal::CircularBufferConfig(
-            input_num_tiles * aligned_input_page_size_bytes, {{cb_l1_temp, input_dataformat}})
+            1 * input_num_tiles * aligned_input_page_size_bytes, {{cb_l1_temp, input_dataformat}})
             .set_page_size(cb_l1_temp, aligned_input_page_size_bytes)
             .set_tile_dims(cb_l1_temp, stats_tile);
 
     constexpr auto cb_l2_temp = tt::CBIndex::c_26;
     tt::tt_metal::CircularBufferConfig cb_l2_temp_config =
         tt::tt_metal::CircularBufferConfig(
-            input_num_tiles * aligned_input_page_size_bytes, {{cb_l2_temp, input_dataformat}})
+            1 * input_num_tiles * aligned_input_page_size_bytes, {{cb_l2_temp, input_dataformat}})
             .set_page_size(cb_l2_temp, aligned_input_page_size_bytes)
             .set_tile_dims(cb_l2_temp, stats_tile);
 
@@ -798,8 +799,13 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
         // TODO: not sure of this value cause it will end up being 0, so I will set to 1 for now
         scale_fp32 = 1;
         uint32_t loop_size = is_root_device ? 2 : 1;
-        // FIXED: Swap l1/l2, s1/s2, m1/m2 to match what reader pushes
-        // Reader pushes: local data (l1,s1,m1) to compute_cb_2_*, received data (l2,s2,m2) to compute_cb_*
+
+        auto compute_kernel_configuration = ttnn::init_device_compute_kernel_config(
+            input_tensor_l.device()->arch(), std::nullopt, MathFidelity::HiFi2, true, false, false);
+
+        auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+            get_compute_kernel_config_args(input_tensor_l.device()->arch(), compute_kernel_configuration);
+
         compute_ct_args = {
             compute_out_cb_l, compute_cb_l,
             compute_cb_2_l,   compute_cb_s,
@@ -819,6 +825,9 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             "ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/compute_kernel2.cpp",
             all_cores,
             tt::tt_metal::ComputeConfig{
+                .math_fidelity = math_fidelity,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .math_approx_mode = math_approx_mode,
                 .compile_args = compute_ct_args,
             });
         printf("compute kernel end\n");
