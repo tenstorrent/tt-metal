@@ -190,11 +190,11 @@ def run_test_wan_attention(
     # Run torch model
     logger.info(f"Running torch model")
 
-    # torch_spatial_out = torch_model(
-    #     hidden_states=spatial_input,
-    #     encoder_hidden_states=prompt_input,
-    #     rotary_emb=rotary_emb,
-    # )
+    torch_spatial_out = torch_model(
+        hidden_states=spatial_input,
+        encoder_hidden_states=prompt_input,
+        rotary_emb=rotary_emb,
+    )
 
     # Run TT model
     logger.info(f"Running TT model")
@@ -217,8 +217,6 @@ def run_test_wan_attention(
         ),
     )
     tt_spatial_out = tt_spatial_out[:, :, :spatial_seq_len, :]
-
-    return
 
     logger.info(f"Checking spatial outputs for {attn_type} attention")
     assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC)

@@ -1229,6 +1229,24 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, ch
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_wan_decoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, real_weights, skip_check):
+    run_test_wan_decoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, real_weights, skip_check)
+
+
+def run_test_wan_decoder(
+    mesh_device,
+    B,
+    C,
+    T,
+    H,
+    W,
+    mean,
+    std,
+    h_axis,
+    w_axis,
+    num_links,
+    real_weights,
+    skip_check,
+):
     from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan as TorchAutoencoderKLWan
 
     torch_dtype = torch.float32

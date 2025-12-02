@@ -56,6 +56,7 @@ class CCLManager:
 
     def _init_semaphores(self):
         # Initialize semaphores for reduce scatter ping pong - separate for each mesh axis
+        ttnn.synchronize_device(self.mesh_device)
         rs_n_sems = 3 * 2  # 3 semaphores * 2 for ping pong
         self.rs_ping_pong_semaphores = {
             0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(rs_n_sems)],
@@ -89,6 +90,7 @@ class CCLManager:
             0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_n_sems)],
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_n_sems)],
         }
+        ttnn.synchronize_device(self.mesh_device)
 
     def get_rs_ping_pong_buffer(self, shape, dim, mesh_axis):
         """

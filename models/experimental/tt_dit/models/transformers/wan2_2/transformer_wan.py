@@ -14,7 +14,6 @@ from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import substate
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.tensor import bf16_tensor
-from loguru import logger
 
 from diffusers.models.transformers.transformer_wan import WanTimeTextImageEmbedding as TorchWanTimeTextImageEmbedding
 from diffusers.models.transformers.transformer_wan import WanRotaryPosEmbed as TorchWanRotaryPosEmbed
@@ -32,6 +31,7 @@ class WanTransformerBlock:
         ccl_manager=None,
         parallel_config=None,
         is_fsdp=False,
+        chunk_size=256,
     ):
         self.dim = dim
         self.ffn_dim = ffn_dim
@@ -62,6 +62,7 @@ class WanTransformerBlock:
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
+            chunk_size=chunk_size,
         )
 
         self.attn2 = WanAttention(
@@ -275,6 +276,7 @@ class WanTransformer3DModel:
         ccl_manager=None,
         parallel_config=None,
         is_fsdp=True,
+        chunk_size: int = 256,
     ):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
@@ -284,6 +286,8 @@ class WanTransformer3DModel:
 
         self.patch_size = patch_size
         self.dim = dim
+
+        self.chunk_size = chunk_size
 
         self.out_channels = out_channels
 
@@ -323,6 +327,7 @@ class WanTransformer3DModel:
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 is_fsdp=is_fsdp,
+                chunk_size=chunk_size,
             )
             for i in range(num_layers)
         ]
@@ -427,10 +432,10 @@ class WanTransformer3DModel:
         rope_sin_1HND = rope_sin.permute(0, 2, 1, 3)
 
         rope_cos_1HND = pad_vision_seq_parallel(
-            rope_cos_1HND, chunk_size_lcm=256, num_devices=self.parallel_config.sequence_parallel.factor
+            rope_cos_1HND, chunk_size_lcm=self.chunk_size, num_devices=self.parallel_config.sequence_parallel.factor
         )
         rope_sin_1HND = pad_vision_seq_parallel(
-            rope_sin_1HND, chunk_size_lcm=256, num_devices=self.parallel_config.sequence_parallel.factor
+            rope_sin_1HND, chunk_size_lcm=self.chunk_size, num_devices=self.parallel_config.sequence_parallel.factor
         )
 
         trans_mat = get_rot_transformation_mat()
@@ -449,9 +454,9 @@ class WanTransformer3DModel:
         )
         tt_trans_mat = bf16_tensor(trans_mat, device=self.mesh_device)
 
-        logger.info(f"TT rope cos shape: {tt_rope_cos_1HND.shape}")
-        logger.info(f"TT rope sin shape: {tt_rope_sin_1HND.shape}")
-        logger.info(f"TT trans mat shape: {tt_trans_mat.shape}")
+        # logger.info(f"TT rope cos shape: {tt_rope_cos_1HND.shape}")
+        # logger.info(f"TT rope sin shape: {tt_rope_sin_1HND.shape}")
+        # logger.info(f"TT trans mat shape: {tt_trans_mat.shape}")
 
         return tt_rope_cos_1HND, tt_rope_sin_1HND, tt_trans_mat
 
@@ -467,8 +472,8 @@ class WanTransformer3DModel:
         assert encoder_hidden_states_image is None, "Wan2.2-T2V does not support image conditioning"
 
         timestep_proj = timestep_proj.unflatten(1, (6, -1))
-        logger.info(f"temb shape: {temb.shape}")
-        logger.info(f"encoder_hidden_states shape: {encoder_hidden_states.shape}")
+        # logger.info(f"temb shape: {temb.shape}")
+        # logger.info(f"encoder_hidden_states shape: {encoder_hidden_states.shape}")
 
         tt_temb_11BD = bf16_tensor(temb.unsqueeze(0).unsqueeze(0), device=self.mesh_device)
         tt_timestep_proj_1BTD = bf16_tensor(
@@ -479,14 +484,14 @@ class WanTransformer3DModel:
         )
         tt_prompt_1BLP = bf16_tensor(encoder_hidden_states.unsqueeze(0), device=self.mesh_device)
 
-        logger.info(f"TT temb shape: {tt_temb_11BD.shape}")
-        logger.info(f"TT timestep proj shape: {tt_timestep_proj_1BTD.shape}")
-        logger.info(f"TT prompt shape: {tt_prompt_1BLP.shape}")
+        # logger.info(f"TT temb shape: {tt_temb_11BD.shape}")
+        # logger.info(f"TT timestep proj shape: {tt_timestep_proj_1BTD.shape}")
+        # logger.info(f"TT prompt shape: {tt_prompt_1BLP.shape}")
         return tt_temb_11BD, tt_timestep_proj_1BTD, tt_prompt_1BLP
 
     def preprocess_spatial_input(self, spatial):
         B, C, F, H, W = spatial.shape
-        logger.info(f"Preprocessing spatial input with shape {spatial.shape}")
+        # logger.info(f"Preprocessing spatial input with shape {spatial.shape}")
         assert B == 1, "Batch size must be 1"
         pF, pH, pW = self.patch_size
         patch_F, patch_H, patch_W = F // pF, H // pH, W // pW
@@ -495,17 +500,17 @@ class WanTransformer3DModel:
         # Patchify video input
         spatial = spatial.reshape(B, C, patch_F, pF, patch_H, pH, patch_W, pW)
         spatial = spatial.permute(0, 2, 4, 6, 3, 5, 7, 1).reshape(1, B, N, pF * pH * pW * C)
-        logger.info(f"spatial input after patchifying: {spatial.shape}")
+        # logger.info(f"spatial input after patchifying: {spatial.shape}")
 
         spatial = pad_vision_seq_parallel(
-            spatial, chunk_size_lcm=256, num_devices=self.parallel_config.sequence_parallel.factor
+            spatial, chunk_size_lcm=self.chunk_size, num_devices=self.parallel_config.sequence_parallel.factor
         )
-        logger.info(f"spatial input after padding: {spatial.shape}")
+        # logger.info(f"spatial input after padding: {spatial.shape}")
 
         spatial = bf16_tensor(
             spatial, device=self.mesh_device, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis, shard_dim=-2
         )
-        logger.info(f"TT spatial shape: {spatial.shape}")
+        # logger.info(f"TT spatial shape: {spatial.shape}")
         return spatial, N
 
     def postprocess_spatial_output(self, spatial_1BND, F, H, W, N):
@@ -519,24 +524,35 @@ class WanTransformer3DModel:
         B = spatial_1BND.shape[1]
         pF, pH, pW = self.patch_size
         patch_F, patch_H, patch_W = F // pF, H // pH, W // pW
-        logger.info(f"Postprocessing spatial output with shape {spatial_1BND.shape}")
+        # logger.info(f"Postprocessing spatial output with shape {spatial_1BND.shape}")
 
         # Gather sequence-parallel output
-        spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
-            spatial_1BND, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
-        )
+        # spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
+        #     spatial_1BND, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
+        # )
 
-        logger.info(f"Spatial output after gathering: {spatial_1BND.shape}")
-        spatial_BND = ttnn.to_torch(ttnn.get_device_tensors(spatial_1BND)[0]).squeeze(0)
+        # logger.info(f"Spatial output after gathering: {spatial_1BND.shape}")
+        # spatial_BND = ttnn.to_torch(ttnn.get_device_tensors(spatial_1BND)[0]).squeeze(0)
+
+        # On multi-host, we can't index into the device tensors, so we must use a mesh composer.
+        concat_axes = [None, None]
+        concat_axes[self.parallel_config.sequence_parallel.mesh_axis] = 2
+        concat_axes[self.parallel_config.tensor_parallel.mesh_axis] = 0
+        spatial_BND = ttnn.to_torch(
+            spatial_1BND,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                self.mesh_device, dims=concat_axes, mesh_shape=tuple(self.mesh_device.shape)
+            ),
+        )[0]
 
         spatial_BND = spatial_BND[:, :N]  # Slice out sequence-parallel padding tokens
-        logger.info(f"Spatial output after slicing: {spatial_BND.shape}")
+        # logger.info(f"Spatial output after slicing: {spatial_BND.shape}")
 
         spatial_patches = spatial_BND.reshape(B, patch_F, patch_H, patch_W, pF, pH, pW, self.out_channels)
-        logger.info(f"Spatial output after reshaping: {spatial_patches.shape}")
+        # logger.info(f"Spatial output after reshaping: {spatial_patches.shape}")
 
         spatial_BCFHW = spatial_patches.permute(0, 7, 1, 4, 2, 5, 3, 6).reshape(B, self.out_channels, F, H, W)
-        logger.info(f"Spatial output after permuting: {spatial_BCFHW.shape}")
+        # logger.info(f"Spatial output after permuting: {spatial_BCFHW.shape}")
         return spatial_BCFHW
 
     def __call__(self, spatial, prompt, timestep):

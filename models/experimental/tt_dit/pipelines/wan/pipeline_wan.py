@@ -127,6 +127,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         expand_timesteps: bool = False,  # Wan2.2 ti2v
         dynamic_load=False,
         topology: ttnn.Topology = ttnn.Topology.Linear,
+        chunk_size=256,
     ):
         super().__init__()
 
@@ -164,6 +165,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self.use_cache = use_cache
         self.mesh_device = mesh_device
         self.dynamic_load = dynamic_load
+        self.chunk_size = chunk_size
         if not self.dynamic_load:
             self._load_transformer1()
             self._load_transformer2()
@@ -210,6 +212,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             ccl_manager=self.dit_ccl_manager,
             parallel_config=self.parallel_config,
             is_fsdp=True,
+            chunk_size=self.chunk_size,
         )
 
         if self.use_cache:
@@ -252,6 +255,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             ccl_manager=self.dit_ccl_manager,
             parallel_config=self.parallel_config,
             is_fsdp=True,
+            chunk_size=self.chunk_size,
         )
 
         if self.use_cache:

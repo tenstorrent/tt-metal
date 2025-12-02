@@ -126,12 +126,18 @@ class WanAttentionBlock:
                 cluster_axis=self.parallel_config.height_parallel.mesh_axis,
             )
         if self.parallel_config.width_parallel.factor > 1:
-            x_BTHWC = ttnn.experimental.all_gather_async(
-                x_BTHWC,
+            # NOTE: This is a workaround for 4xGLX to ensure minimal AG is called. The composite AG hangs in this case.
+            x_BTWHC = ttnn.permute(x_BTHWC, (0, 1, 3, 2, 4))
+            x_NWHC = ttnn.reshape(
+                x_BTWHC, (x_BTWHC.shape[0] * x_BTWHC.shape[1], x_BTWHC.shape[2], x_BTWHC.shape[3], x_BTWHC.shape[4])
+            )
+            x_NWHC_tile = ttnn.to_layout(x_NWHC, ttnn.TILE_LAYOUT)
+            x_NWHC_tile = ttnn.experimental.all_gather_async(
+                x_NWHC_tile,
                 persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    x_BTHWC.shape, 3, self.parallel_config.width_parallel.mesh_axis
+                    x_NWHC_tile.shape, 1, self.parallel_config.width_parallel.mesh_axis
                 ),
-                dim=3,
+                dim=1,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
                     self.parallel_config.width_parallel.mesh_axis
                 ),
@@ -139,6 +145,11 @@ class WanAttentionBlock:
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.width_parallel.mesh_axis,
             )
+            x_NWHC = ttnn.to_layout(x_NWHC_tile, ttnn.ROW_MAJOR_LAYOUT)
+            x_BTWHC = ttnn.reshape(
+                x_NWHC, (x_BTWHC.shape[0], x_BTWHC.shape[1], x_NWHC.shape[1], x_BTWHC.shape[3], x_BTWHC.shape[4])
+            )
+            x_BTHWC = ttnn.permute(x_BTWHC, (0, 1, 3, 2, 4))
 
         if logical_h % self.parallel_config.height_parallel.factor != 0:
             """
