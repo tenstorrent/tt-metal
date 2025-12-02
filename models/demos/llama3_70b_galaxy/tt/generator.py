@@ -133,6 +133,7 @@ class Generator:
         empty_slots=None,
         tt_out_logits_all_users=None,
         start_pos: list[int] = None,  # Cached prefixes lengths, ignored for now
+        bitmask=None,  # TODO apply in prefill
     ):
         assert (start_pos is None) or all(
             x == 0 for x in start_pos
