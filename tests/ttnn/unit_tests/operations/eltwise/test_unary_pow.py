@@ -17,7 +17,7 @@ def test_pow(exponent, device):
     assert_with_ulp(torch_output, ttnn_output, 1)
 
 
-@pytest.mark.parametrize("exponent", [0.0, 1.0, 2.0, -1.0, -0.6484])
+@pytest.mark.parametrize("exponent", [0.0, 1.0, 2.0, 3.0, -1.0, -0.6484])
 def test_pow_arange_masking(exponent, device):
     # Generate all possible bit pattern for bf16
     fp32 = torch.arange(0, 2**16, dtype=torch.int32).to(torch.float32)
