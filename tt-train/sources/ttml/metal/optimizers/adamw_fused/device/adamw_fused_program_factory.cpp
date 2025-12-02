@@ -493,7 +493,7 @@ void AdamWFusedProgramFactory::override_runtime_arguments(
     // Generate seeds for stochastic rounding (0 if disabled)
     const auto& stochastic_rounding = operation_attributes.stochastic_rounding;
     std::vector<uint32_t> seeds(num_cores, 0);
-    if (false && stochastic_rounding) {
+    if (stochastic_rounding) {
         std::random_device rd;
         std::mt19937 gen(rd());
         std::uniform_int_distribution<uint32_t> dis(1, 0xFFFFFFFF);
