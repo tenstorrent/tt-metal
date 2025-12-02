@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,23 +7,41 @@
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/decorators.hpp"
+#include "nlp_kv_cache_load_slice_device_operation_types.hpp"
+#include "nlp_kv_cache_load_slice_program_factory.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(
-    const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end);
-
 struct NlpKVCacheLoadSliceDeviceOperation {
-    const ttnn::Shape output_tensor_start;
-    const ttnn::Shape output_tensor_end;
-    const ttnn::Shape output_shape;
-    const ttnn::Shape input_shape;
+    using operation_attributes_t = transformer::operation_attributes_t;
+    using tensor_args_t = transformer::tensor_args_t;
+    using spec_return_value_t = transformer::spec_return_value_t;
+    using tensor_return_value_t = transformer::tensor_return_value_t;
+    using program_factory_t = std::variant<program::NlpKVCacheLoadSliceProgramFactory>;
 
-    void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& operation_attributes, const tensor_args_t&);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        Tensor input_tensor,
+        uint32_t seq_len_start,
+        uint32_t seq_len_end,
+        std::optional<MemoryConfig> memory_config,
+        std::optional<Tensor> preallocated_output);
 };
 
 }  // namespace ttnn::operations::experimental::transformer
+
+namespace ttnn::prim {
+constexpr auto nlp_kv_cache_load_slice = ttnn::register_operation<
+    "ttnn::prim::nlp_kv_cache_load_slice",
+    ttnn::operations::experimental::transformer::NlpKVCacheLoadSliceDeviceOperation>();
+}  // namespace ttnn::prim
