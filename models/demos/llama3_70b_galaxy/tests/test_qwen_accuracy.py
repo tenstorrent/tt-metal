@@ -286,7 +286,7 @@ def test_qwen_model_acc(
     # Create initial tt_out_tok for sampling (matching demo_decode.py pattern)
     ref_token_for_tok = input_ids[0, 0].item()  # First token
     tt_out_tok = ttnn.from_torch(
-        torch.tensor([[ref_token_for_tok]]).reshape(1, 1, 1, batch_size),
+        torch.tensor([[ref_token_for_tok]]).repeat(1, 1, 1, batch_size).reshape(1, 1, 1, batch_size),
         device=mesh_device,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -306,7 +306,7 @@ def test_qwen_model_acc(
         )
 
         # Sampling
-        _ = tt_sampling(tt_out[0], seed, tt_out_tok=tt_out_tok)
+        tt_out_tok = tt_sampling(tt_out[0], seed)
 
         # Update the idxs
         ttnn.plus_one(
