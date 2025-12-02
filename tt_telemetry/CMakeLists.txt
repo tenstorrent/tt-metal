@@ -8,9 +8,10 @@ find_package(Threads REQUIRED)
 
 # Use gRPC and Protobuf from third_party (fetched via CPM)
 # Set up the variables expected by BuildTelemetryProto.cmake
+# Use grpc++_unsecure since telemetry server uses UNIX sockets with InsecureServerCredentials (no SSL needed)
 set(_PROTOBUF_LIBPROTOBUF protobuf::libprotobuf)
 set(_PROTOBUF_PROTOC $<TARGET_FILE:protobuf::protoc>)
-set(_GRPC_GRPCPP grpc++)
+set(_GRPC_GRPCPP grpc++_unsecure)
 set(_GRPC_CPP_PLUGIN_EXECUTABLE $<TARGET_FILE:grpc_cpp_plugin>)
 set(_REFLECTION grpc++_reflection)
 set(GRPC_FOUND_VIA_CMAKE TRUE)
