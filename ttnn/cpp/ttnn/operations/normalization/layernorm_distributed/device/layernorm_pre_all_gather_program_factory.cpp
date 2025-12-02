@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -66,13 +66,6 @@ LayerNormPreAllGatherProgramFactory::cached_program_t LayerNormPreAllGatherProgr
 
     uint32_t num_tile_rows = NC * Ht;
 
-    log_debug(tt::LogOp, "is_rmsnorm: {}", is_rmsnorm);
-    log_debug(tt::LogOp, "W: {}", W);
-    log_debug(tt::LogOp, "H: {}", H);
-    log_debug(tt::LogOp, "num_tile_rows: {}", num_tile_rows);
-    log_debug(tt::LogOp, "Wt: {}", Wt);
-    log_debug(tt::LogOp, "Ht: {}", Ht);
-
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
@@ -87,9 +80,6 @@ LayerNormPreAllGatherProgramFactory::cached_program_t LayerNormPreAllGatherProgr
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
     uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
 
-    log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
-    log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
-
     auto a_addr = a.buffer()->address();
     auto dst_addr = output.buffer()->address();
 
@@ -99,9 +89,6 @@ LayerNormPreAllGatherProgramFactory::cached_program_t LayerNormPreAllGatherProgr
 
     const uint32_t intermed0_tiles = Wt * double_buffer_constant;  // xˆ2
     uint32_t out0_tiles = 1;
-    if (!is_rmsnorm) {
-        out0_tiles = 2;
-    }
 
     TT_FATAL(
         W <= TILE_WIDTH * in0_tiles,
@@ -127,13 +114,6 @@ LayerNormPreAllGatherProgramFactory::cached_program_t LayerNormPreAllGatherProgr
          core_group_2,
          num_tile_rows_per_core_group_1,
          num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
-
-    log_debug(tt::LogOp, "num_cores: {}", num_cores);
-    log_debug(tt::LogOp, "grid_size: {}", grid_size);
-    log_debug(tt::LogOp, "core_group_1: {}", core_group_1.str());
-    log_debug(tt::LogOp, "num_tile_rows_per_core_group_1: {}", num_tile_rows_per_core_group_1);
-    log_debug(tt::LogOp, "core_group_2: {}", core_group_2.str());
-    log_debug(tt::LogOp, "num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
@@ -197,15 +177,6 @@ LayerNormPreAllGatherProgramFactory::cached_program_t LayerNormPreAllGatherProgr
         tt::tt_metal::CircularBufferConfig(out0_tiles * out_single_tile_size, {{tt::CBIndex::c_14, out_data_format}})
             .set_page_size(tt::CBIndex::c_14, out_single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_out0_config);
-
-    for (const auto& cb : program.circular_buffers()) {
-        for ([[maybe_unused]] const auto index : cb->buffer_indices()) {
-            log_debug(tt::LogOp, "cb_id {}", index);
-            log_debug(tt::LogOp, "page_size: {}", cb->page_size(index));
-            log_debug(tt::LogOp, "num_pages: {}", cb->num_pages(index));
-            log_debug(tt::LogOp, "data_format: {}", cb->data_format(index));
-        }
-    }
 
     uint32_t curr_row = 0;
     float winv = 1.0f;
@@ -359,7 +330,7 @@ LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DP
     std::vector<CoreRange> merge_core_ranges_vec;
     for (uint32_t x = 0; x < cores_x; ++x) {
         CoreCoord merge_core = {x, 0};
-        merge_core_ranges_vec.push_back(CoreRange(merge_core, merge_core));
+        merge_core_ranges_vec.emplace_back(CoreRange(merge_core, merge_core));
     }
     CoreRangeSet merge_cores(merge_core_ranges_vec);
 

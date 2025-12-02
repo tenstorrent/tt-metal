@@ -32,8 +32,6 @@ target_sources(
             layernorm/device/layernorm_types.hpp
             layernorm_distributed/device/layernorm_distributed_types.hpp
             layernorm_distributed/device/layernorm_pre_all_gather_device_operation.hpp
-            layernorm_distributed/device/layernorm_pre_all_gather_device_operation_types.hpp
-            layernorm_distributed/device/layernorm_pre_all_gather_program_factory.hpp
             rmsnorm/rmsnorm.hpp
             softmax/device/softmax_operation_types.hpp
             softmax/device/softmax_device_operation.hpp
