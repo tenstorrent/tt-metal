@@ -12,8 +12,8 @@ struct operation_attributes_t {
 };
 
 struct tensor_args_t {
-    const Tensor& input;
-    const Tensor& output;  // Note: output is passed as input (inplace pattern)
+    Tensor input;
+    Tensor output;  // Note: output is passed as input (inplace pattern)
 };
 
 using tensor_return_value_t = Tensor;

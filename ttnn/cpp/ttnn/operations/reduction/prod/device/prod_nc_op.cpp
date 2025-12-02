@@ -29,8 +29,6 @@ Tensor create_output_tensor(
         output_shape, input_tensor.dtype(), tt_metal::Layout::TILE, input_tensor.device(), mem_config);
 }
 
-}  // namespace
-
 // output as arg
 Tensor prod_(const Tensor& input, const Tensor& output, const int64_t& dim) {
     ttnn::prim::prod_nc(input, output, dim);
@@ -46,6 +44,8 @@ Tensor prod_(const Tensor& input, const int64_t& dim, const MemoryConfig& mem_co
     ttnn::prim::prod_nc(input, output, dim);
     return output;
 }
+
+}  // namespace
 
 Tensor prod_nc(
     const Tensor& input,
