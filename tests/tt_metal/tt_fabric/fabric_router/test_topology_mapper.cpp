@@ -870,7 +870,7 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTestFromPhysicalSystemDescriptor) {
 
     // Verify that the mesh graph was generated successfully
     const MeshId mesh_id{0};
-    EXPECT_TRUE(mesh_graph.get_mesh_ids().size() > 0) << "Mesh graph should have at least one mesh";
+    EXPECT_TRUE(!mesh_graph.get_mesh_ids().empty()) << "Mesh graph should have at least one mesh";
 
     // Verify that the mesh graph has chips
     auto chip_ids = mesh_graph.get_chip_ids(mesh_id);
