@@ -108,9 +108,11 @@ target_sources(
         rotary_embedding_llama_fused_qk/device/rotary_embedding_llama_fused_qk_program_factory.cpp
         rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk.cpp
         rotate_half/device/rotate_half_device_operation.cpp
-        rotate_half/device/single_core/rotate_half_program_factory.cpp
+        rotate_half/device/rotate_half_program_factory.cpp
         rotate_half/rotate_half.cpp
         split_query_key_value_and_split_heads/device/split_query_key_value_and_split_heads_device_operation.cpp
+        split_query_key_value_and_split_heads/device/split_query_key_value_and_split_heads_program_factory.cpp
+        split_query_key_value_and_split_heads/device/split_query_key_value_and_split_heads_sharded_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_transformer PRIVATE ${FixmeOpIncDirs})
