@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import os
 from pathlib import Path
 from typing import Any
 
@@ -72,13 +71,7 @@ def test_forward_pass(
     # Pad input to SEQ_LEN_CHUNK_SIZE if necessary
     torch_input = pad_or_trim_seq_len(torch_input, mode, seq_len)
 
-    weight_cache_path = (
-        cache_path
-        / "tests_cache"
-        / os.environ.get("PYTEST_CURRENT_TEST")
-        / f"{hf_config.num_hidden_layers}_layers"
-        / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
-    )
+    weight_cache_path = cache_path / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
 
     # Setup: Convert weights and get weight_config
     weight_config = LMHead.convert_weights(hf_config, (state_dict,), weight_cache_path, mesh_device)

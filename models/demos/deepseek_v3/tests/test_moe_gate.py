@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import os
-
 import pytest
 import torch
 from loguru import logger
@@ -51,13 +49,7 @@ def test_forward_pass(
     hf_state_dict = reference_model.state_dict()
 
     # Setup: Convert weights and get weight_config
-    weight_cache_path = (
-        cache_path
-        / "tests_cache"
-        / os.environ.get("PYTEST_CURRENT_TEST")
-        / f"{hf_config.num_hidden_layers}_layers"
-        / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
-    )
+    weight_cache_path = cache_path / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
 
     weight_config = MoEGate.convert_weights(hf_config, (hf_state_dict,), weight_cache_path, mesh_device)
     _check_weights_exist_and_convert(weight_cache_path, weight_config)
