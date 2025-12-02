@@ -131,7 +131,9 @@ def test_fold_with_permute_for_dram_tensor(device, nhw, channels, stride, paddin
         diff = torch.abs(torch_output_tensor - tt_output_tensor) / torch_output_tensor.abs().mean()
         assert torch.all(diff < threshold), f"Max diff: {diff.max()}, Threshold: {threshold} "
     else:
-        assert torch.equal(torch_output_tensor, tt_output_tensor)
+        assert torch.equal(
+            torch_output_tensor, tt_output_tensor
+        ), f"Expected: {torch_output_tensor}, Actual: {tt_output_tensor}"
 
 
 def pad_and_fold_with_permute_and_reshape_on_device(
