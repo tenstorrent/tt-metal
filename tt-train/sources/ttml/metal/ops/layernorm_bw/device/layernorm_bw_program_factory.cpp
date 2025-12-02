@@ -8,7 +8,7 @@
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include "metal/ops/common/program_utils.hpp"
+#include "metal/common/program_utils.hpp"
 
 namespace {
 
@@ -34,15 +34,15 @@ constexpr uint32_t kDgammaComponentsBufferIdx = 1U;
 constexpr uint32_t kDbetaComponentsBufferIdx = 2U;
 
 // CBs with input data
-constexpr auto kScalerCbIndex = tt::CBIndex::c_0;        // 1/N scaler
-constexpr auto kMaskWCbIndex = tt::CBIndex::c_1;         // mask for width dimension
-constexpr auto kGammaCbIndex = tt::CBIndex::c_2;         // gamma (scale parameter)
-constexpr auto kXHatCbIndex = tt::CBIndex::c_3;          // x_hat (computed as (input - mean) * rstd)
-constexpr auto kRstdCbIndex = tt::CBIndex::c_4;          // rstd from forward pass
-constexpr auto kDLoutCbIndex = tt::CBIndex::c_5;         // upstream gradient
-constexpr auto kInputCbIndex = tt::CBIndex::c_6;         // input tensor
-constexpr auto kMeanCbIndex = tt::CBIndex::c_7;          // mean from forward pass
-constexpr auto kMeanBcastCbIndex = tt::CBIndex::c_8;     // broadcasted mean (to avoid conflict with reader)
+constexpr auto kScalerCbIndex = tt::CBIndex::c_0;     // 1/N scaler
+constexpr auto kMaskWCbIndex = tt::CBIndex::c_1;      // mask for width dimension
+constexpr auto kGammaCbIndex = tt::CBIndex::c_2;      // gamma (scale parameter)
+constexpr auto kXHatCbIndex = tt::CBIndex::c_3;       // x_hat (computed as (input - mean) * rstd)
+constexpr auto kRstdCbIndex = tt::CBIndex::c_4;       // rstd from forward pass
+constexpr auto kDLoutCbIndex = tt::CBIndex::c_5;      // upstream gradient
+constexpr auto kInputCbIndex = tt::CBIndex::c_6;      // input tensor
+constexpr auto kMeanCbIndex = tt::CBIndex::c_7;       // mean from forward pass
+constexpr auto kMeanBcastCbIndex = tt::CBIndex::c_8;  // broadcasted mean (to avoid conflict with reader)
 
 // CBs with output data
 constexpr auto kDxCbIndex = tt::CBIndex::c_9;                 // dx (input gradient)
@@ -137,10 +137,10 @@ void assign_per_core_runtime_args(
     uint32_t num_cores_y,
     uint32_t num_rows_per_core_group_1,
     uint32_t num_rows_per_core_group_2,
-    const CoreRangeSet& core_group_1,
-    const CoreRangeSet& core_group_2) {
+    const tt::tt_metal::CoreRangeSet& core_group_1,
+    const tt::tt_metal::CoreRangeSet& core_group_2) {
     for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         // Determine how many rows this core will process
         uint32_t num_rows_per_core = 0;
@@ -460,7 +460,7 @@ void LayerNormBackwardProgramFactory::override_runtime_arguments(
     auto& reader_runtime_args = GetRuntimeArgs(program, layernorm_bw_reader_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, layernorm_bw_writer_kernel_id);
 
-    std::vector<CoreRange> all_ranges;
+    std::vector<tt::tt_metal::CoreRange> all_ranges;
     all_ranges.reserve(core_group_1.ranges().size() + core_group_2.ranges().size());
     all_ranges.insert(all_ranges.end(), core_group_1.ranges().begin(), core_group_1.ranges().end());
     all_ranges.insert(all_ranges.end(), core_group_2.ranges().begin(), core_group_2.ranges().end());
