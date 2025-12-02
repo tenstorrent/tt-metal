@@ -3,12 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/concat/device/concat_program_factory.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
-#include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/run_operation.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -341,15 +340,8 @@ Tensor concat_impl(
             if (input_tensor.layout() == target_layout) {
                 // Already in target layout
                 formatted_tensors.push_back(input_tensor);
-            } else if (target_layout == Layout::TILE) {
-                // Convert ROW_MAJOR → TILE
-                auto pad_value = is_floating_point(input_tensor.dtype()) ? PadValue(0.0f) : PadValue(0u);
-                auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
-                formatted_tensors.push_back(
-                    ttnn::tilize_with_val_padding(input_tensor, padded_shape, pad_value, input_tensor.memory_config()));
             } else {
-                // Convert TILE → ROW_MAJOR
-                formatted_tensors.push_back(ttnn::untilize(input_tensor, input_tensor.memory_config()));
+                formatted_tensors.push_back(ttnn::to_layout(input_tensor, target_layout));
             }
         }
 
