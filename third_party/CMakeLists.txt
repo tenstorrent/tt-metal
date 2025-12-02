@@ -160,6 +160,12 @@ CPMAddPackage(
 # gRPC : https://github.com/grpc/grpc
 ############################################################################################################################
 
+# Set root directories for gRPC to find our CPM-fetched dependencies when using "module" provider
+set(CARES_ROOT_DIR "${c-ares_SOURCE_DIR}" CACHE STRING "c-ares root directory")
+set(ABSL_ROOT_DIR "${abseil-cpp_SOURCE_DIR}" CACHE STRING "Abseil root directory")
+set(PROTOBUF_ROOT_DIR "${protobuf_SOURCE_DIR}" CACHE STRING "Protobuf root directory")
+set(RE2_ROOT_DIR "${re2_SOURCE_DIR}" CACHE STRING "RE2 root directory")
+
 CPMAddPackage(
     NAME gRPC
     GITHUB_REPOSITORY grpc/grpc
