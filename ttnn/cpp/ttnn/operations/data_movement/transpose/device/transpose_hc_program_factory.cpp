@@ -31,8 +31,8 @@ void set_runtime_args_hc_tiled(
     const CoreRangeSet& core_group_2,
     uint32_t num_tiles_per_core_group_2,
     bool is_create) {
-    auto input_buffer = input_tensor.buffer();
-    auto output_buffer = output_tensor.buffer();
+    auto* input_buffer = input_tensor.buffer();
+    auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1];
@@ -126,8 +126,8 @@ void set_runtime_args_hc_rm(
     const CoreRangeSet& core_group_2,
     uint32_t num_sticks_per_core_group_2,
     bool is_create) {
-    auto input_buffer = input_tensor.buffer();
-    auto output_buffer = output_tensor.buffer();
+    auto* input_buffer = input_tensor.buffer();
+    auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1];
@@ -221,8 +221,8 @@ void set_runtime_args_hc_tiled_interleaved(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     bool is_create) {
-    auto input_buffer = input_tensor.buffer();
-    auto output_buffer = output_tensor.buffer();
+    auto* input_buffer = input_tensor.buffer();
+    auto* output_buffer = output_tensor.buffer();
 
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     auto tile_hw = tile_shape[0] * tile_shape[1];
