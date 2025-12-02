@@ -227,7 +227,9 @@ Notes:
         (p.api_variant == AddrgenApiVariant::FusedAtomicIncWrite ||
          p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteWithState ||
          p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteSetState ||
-         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteRoute);
+         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteRoute ||
+         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteWithStateRoute ||
+         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteSetStateRoute);
 
     const std::string KDIR = "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/";
 
@@ -254,6 +256,10 @@ Notes:
                 return {OperationType::BasicWrite, ApiVariant::RouteSetState};
             case AddrgenApiVariant::FusedAtomicIncWriteRoute:
                 return {OperationType::FusedAtomicInc, ApiVariant::RouteBasic};
+            case AddrgenApiVariant::FusedAtomicIncWriteWithStateRoute:
+                return {OperationType::FusedAtomicInc, ApiVariant::RouteWithState};
+            case AddrgenApiVariant::FusedAtomicIncWriteSetStateRoute:
+                return {OperationType::FusedAtomicInc, ApiVariant::RouteSetState};
             default: TT_FATAL(false, "Unknown API variant"); return {OperationType::BasicWrite, ApiVariant::Basic};
         }
     };

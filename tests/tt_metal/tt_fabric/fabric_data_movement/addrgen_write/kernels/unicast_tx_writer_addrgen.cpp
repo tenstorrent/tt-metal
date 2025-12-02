@@ -225,8 +225,18 @@ void kernel_main() {
                 dst_acc,
                 0  // page_id for initial configuration
             );
+        } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
+            fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
+                connection_manager,
+                route_id,
+                dst_acc,
+                0,  // page_id for initial configuration
+                sem_noc,
+                1,    // val (increment by 1)
+                0,    // offset
+                true  // flush
+            );
         }
-        // Note: FusedAtomicInc doesn't have route variant SetState with addrgen
         // Note: Scatter doesn't have route variant, so no SetState for scatter route
     }
 
@@ -350,12 +360,23 @@ void kernel_main() {
                     0,    // offset
                     true  // flush
                 );
-            } else if constexpr (
-                api_variant == ApiVariant::RouteBasic || api_variant == ApiVariant::RouteWithState ||
-                api_variant == ApiVariant::RouteSetState) {
-                // Route variants - only RouteBasic exists with addrgen for FusedAtomicInc
-                // RouteWithState and RouteSetState fall back to RouteBasic behavior
+            } else if constexpr (api_variant == ApiVariant::RouteBasic) {
+                // Route variant Basic
                 fabric_unicast_noc_fused_unicast_with_atomic_inc(
+                    connection_manager,
+                    route_id,
+                    src_l1_addr,
+                    dst_acc,
+                    i,
+                    sem_noc,
+                    1,    // val (increment by 1)
+                    0,    // offset
+                    true  // flush
+                );
+            } else if constexpr (
+                api_variant == ApiVariant::RouteWithState || api_variant == ApiVariant::RouteSetState) {
+                // Route variant WithState/SetState
+                fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
                     connection_manager,
                     route_id,
                     src_l1_addr,
