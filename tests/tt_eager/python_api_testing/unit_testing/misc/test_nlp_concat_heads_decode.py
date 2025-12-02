@@ -104,8 +104,7 @@ def run_test_concat_head(
 
 @pytest.mark.parametrize(
     "n_local_heads, padded_local_heads, head_dim, batch_size",
-    # ((8, 32, 128, 32), (17, 32, 96, 32), (32, 32, 64, 32), (8, 32, 128, 16)),
-    ((17, 32, 96, 32),),
+    ((8, 32, 128, 32), (17, 32, 96, 32), (32, 32, 64, 32), (8, 32, 128, 16)),
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((1, 1), id="1x1_grid")], indirect=True)
 def test_concat_head(
