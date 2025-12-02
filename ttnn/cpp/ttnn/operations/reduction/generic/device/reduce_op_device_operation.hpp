@@ -17,10 +17,10 @@
 namespace ttnn::operations::reduction::generic {
 
 struct ReduceDeviceOperation {
-    using operation_attributes_t = operation_attributes_t;
-    using tensor_args_t = tensor_args_t;
-    using spec_return_value_t = ReduceSpecReturnValue;
-    using tensor_return_value_t = ReduceTensorReturnValue;
+    using operation_attributes_t = generic::operation_attributes_t;
+    using tensor_args_t = generic::tensor_args_t;
+    using spec_return_value_t = generic::spec_return_value_t;
+    using tensor_return_value_t = generic::tensor_return_value_t;
 
     using program_factory_t = std::variant<
         program::ReduceSingleCoreHwProgramFactory,
