@@ -243,7 +243,11 @@ ttml::autograd::TensorPtr Llama::operator()(const ttml::autograd::TensorPtr& x, 
     auto out = tok_emb_out;  // llama does positional embedding in the attention blocks
 
     if (m_config.inference && !m_kv_cache.empty()) {
-        if (m_cache_position == 0) {
+        // Inference mode with KV cache
+        const modules::InferenceMode mode =
+            (m_cache_position == 0) ? modules::InferenceMode::PREFILL : modules::InferenceMode::DECODE;
+
+        if (mode == modules::InferenceMode::PREFILL) {
             const uint32_t batch_size = x->get_value().logical_shape()[0];
             const uint32_t kv_cache_batch_size = m_kv_cache[0].first->get_value().logical_shape()[0];
             // If batch size mismatch, reinitialize KV cache
@@ -251,9 +255,7 @@ ttml::autograd::TensorPtr Llama::operator()(const ttml::autograd::TensorPtr& x, 
                 initialize_kv_cache(batch_size);
             }
         }
-        // Inference mode with KV cache
-        const modules::InferenceMode mode =
-            (m_cache_position == 0) ? modules::InferenceMode::PREFILL : modules::InferenceMode::DECODE;
+
         for (size_t block_idx = 0; block_idx < blocks.size(); ++block_idx) {
             auto& block = blocks[block_idx];
             auto& [k_cache, v_cache] = m_kv_cache[block_idx];
