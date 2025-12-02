@@ -384,8 +384,8 @@ void InterleavedToShardedProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto src_buffer = tensor_args.input_tensor.buffer();
-    auto dst_buffer = tensor_return_value.buffer();
+    auto* src_buffer = tensor_args.input_tensor.buffer();
+    auto* dst_buffer = tensor_return_value.buffer();
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 

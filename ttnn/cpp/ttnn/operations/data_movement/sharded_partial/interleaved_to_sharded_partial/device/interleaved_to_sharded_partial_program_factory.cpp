@@ -51,8 +51,8 @@ InterleavedToShardedPartialProgramFactory::cached_program_t InterleavedToSharded
     CoreCoord end_core = (*shard_spec.grid.ranges().rbegin()).end_coord;
 
     bool convert_df = input_cb_data_format != output_cb_data_format;
-    auto src_buffer = input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
@@ -381,8 +381,8 @@ void InterleavedToShardedPartialProgramFactory::override_runtime_arguments(
     const interleaved_to_sharded_partial::operation_attributes_t& operation_attributes,
     const interleaved_to_sharded_partial::tensor_args_t& tensor_args,
     interleaved_to_sharded_partial::tensor_return_value_t& tensor_return_value) {
-    auto src_buffer = tensor_args.input_tensor.buffer();
-    auto dst_buffer = tensor_return_value.buffer();
+    auto* src_buffer = tensor_args.input_tensor.buffer();
+    auto* dst_buffer = tensor_return_value.buffer();
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
