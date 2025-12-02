@@ -136,23 +136,51 @@ target_link_libraries(
         cxxopts::cxxopts
 )
 
-add_executable(generate_cluster_descriptor src/generate_cluster_descriptor.cpp)
+# Generate MGD library
+add_library(
+    generate_mgd_lib
+    OBJECT
+    generate_mgd/generate_mgd.cpp
+    ${CMAKE_BINARY_DIR}/tt_metal/fabric/protobuf/mesh_graph_descriptor.pb.cc
+)
+
+add_dependencies(generate_mgd_lib scaleout_generated_protos)
+
+target_include_directories(
+    generate_mgd_lib
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/generate_mgd
+)
+target_include_directories(
+    generate_mgd_lib
+    SYSTEM
+    PUBLIC
+        ${CMAKE_CURRENT_BINARY_DIR}
+        ${CMAKE_BINARY_DIR}/tt_metal/fabric
+)
+
+target_link_libraries(
+    generate_mgd_lib
+    PUBLIC
+        scaleout_tools
+        protobuf::libprotobuf
+)
+
+# Generate MGD CLI tool
+add_executable(generate_mgd generate_mgd/generate_mgd_main.cpp)
 
 set_target_properties(
-    generate_cluster_descriptor
+    generate_mgd
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
             ${CMAKE_BINARY_DIR}/tools/scaleout
 )
 
-add_dependencies(generate_cluster_descriptor scaleout_generated_protos)
-
-target_include_directories(generate_cluster_descriptor SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
-
 target_link_libraries(
-    generate_cluster_descriptor
+    generate_mgd
     PRIVATE
+        generate_mgd_lib
         scaleout_tools
-        protobuf::libprotobuf
-        cxxopts::cxxopts
+        cxxopts
 )
