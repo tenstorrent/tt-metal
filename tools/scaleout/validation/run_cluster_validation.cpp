@@ -193,7 +193,15 @@ void parse_validation_args(const std::vector<std::string>& args_vec, InputArgs& 
         input_args.cabling_descriptor_path.has_value() || input_args.fsd_path.has_value();
 
     if (test_args::has_command_option(args_vec, "--min-connections")) {
-        input_args.min_connections = std::stoi(test_args::get_command_option(args_vec, "--min-connections"));
+        std::string min_conn_str = test_args::get_command_option(args_vec, "--min-connections");
+        int min_conn_value = 0;
+        try {
+            min_conn_value = std::stoi(min_conn_str);
+        } catch (const std::exception& e) {
+            TT_FATAL(false, "Invalid value for --min-connections: must be a positive integer.");
+        }
+        TT_FATAL(min_conn_value > 0, "Minimum connections must be a positive integer.");
+        input_args.min_connections = static_cast<uint32_t>(min_conn_value);
         log_output_rank0(
             "Relaxed validation mode enabled. Minimum connections required: " +
             std::to_string(input_args.min_connections.value()));
