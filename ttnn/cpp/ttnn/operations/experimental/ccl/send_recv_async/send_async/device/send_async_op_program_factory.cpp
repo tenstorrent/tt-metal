@@ -270,8 +270,7 @@ void SendAsyncMeshWorkloadFactory::override_runtime_arguments(
         const auto& mesh_socket = operation_attributes.mesh_socket;
         const auto& input_tensor = tensor_args.input_tensor;
 
-        for (uint32_t core_idx = 0; core_idx < sender_core_coords.size(); ++core_idx) {
-            const auto& sender_core_coord = sender_core_coords[core_idx];
+        for (const auto& sender_core_coord : sender_core_coords) {
             auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, sender_core_coord);
             auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, sender_core_coord);
 
