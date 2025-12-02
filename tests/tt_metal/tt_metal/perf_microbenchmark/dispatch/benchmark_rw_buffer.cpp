@@ -133,7 +133,6 @@ static void BM_read_pinned_memory(benchmark::State& state, std::shared_ptr<MeshD
     auto transfer_size = state.range(1);
     auto buffer_type = BUFFER_TYPES[state.range(2)];
     [[maybe_unused]] auto device_id = state.range(3);
-    bool can_map_to_noc = experimental::GetMemoryPinningParameters(*mesh_device).can_map_to_noc;
 
     log_debug(
         LogTest,
@@ -160,9 +159,8 @@ static void BM_read_pinned_memory(benchmark::State& state, std::shared_ptr<MeshD
     // Pin the aligned host memory region for the shard
     auto coord = MeshCoordinate(0, 0);
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
-    auto pinned_unique = can_map_to_noc ? experimental::PinnedMemory::Create(
-                                              *mesh_device, coordinate_range_set, host_buffer, /*map_to_noc=*/true)
-                                        : nullptr;
+    auto pinned_unique =
+        experimental::PinnedMemory::Create(*mesh_device, coordinate_range_set, host_buffer, /*map_to_noc=*/true);
     std::shared_ptr<experimental::PinnedMemory> pinned_mem = std::move(pinned_unique);
 
     // Prepare the read transfer using pinned memory
@@ -199,8 +197,6 @@ int main(int argc, char** argv) {
 
     auto devices = MeshDevice::create_unit_meshes(device_ids);
 
-    log_info(
-        LogTest, "Can map memory to NOC: {}", experimental::GetMemoryPinningParameters(*devices[0]).can_map_to_noc);
     for (auto [device_id, device] : devices) {
         // Device ID embedded here for extraction
         auto benchmark_args = {PAGE_SIZE_ARGS, TRANSFER_SIZE_ARGS, BUFFER_TYPE_ARGS, {device_id}};
@@ -223,14 +219,17 @@ int main(int argc, char** argv) {
             ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
             ->ComputeStatistics("min", compute_min)
             ->ComputeStatistics("max", compute_max);
+        bool can_map_to_noc = experimental::GetMemoryPinningParameters(*devices[0]).can_map_to_noc;
 
-        benchmark::RegisterBenchmark("ReadPinnedMemory", BM_read_pinned_memory, device)
-            ->ArgsProduct(benchmark_args)
-            ->UseRealTime()
-            ->Repetitions(num_test_repetitions)
-            ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
-            ->ComputeStatistics("min", compute_min)
-            ->ComputeStatistics("max", compute_max);
+        if (can_map_to_noc) {
+            benchmark::RegisterBenchmark("ReadPinnedMemory", BM_read_pinned_memory, device)
+                ->ArgsProduct(benchmark_args)
+                ->UseRealTime()
+                ->Repetitions(num_test_repetitions)
+                ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
+                ->ComputeStatistics("min", compute_min)
+                ->ComputeStatistics("max", compute_max);
+        }
     }
 
     benchmark::RunSpecifiedBenchmarks();
