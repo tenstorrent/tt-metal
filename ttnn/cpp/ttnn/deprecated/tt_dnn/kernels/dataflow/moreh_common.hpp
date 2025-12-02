@@ -772,7 +772,7 @@ void read_value(
  *
  * | Argument                     | Description                             | Data type | Valid range                    | required |
  * |------------------------------|-----------------------------------------|-----------|--------------------------------|----------|
- * | cb_id                        | CB to read data from                    | uint32_t  | Any valid CB ID                | True     |
+ * | cb_id                        | Destination CB for the read data        | uint32_t  | Any valid CB ID                | True     |
  * | cb_scratch_id                | CB to use as scratch storage            | uint32_t  | Any valid CB ID                | True     |
  * | addrgen                      | Address generator object                | AddrGen   | N/A                            | True     |
  * | num_tiles                    | Number of tiles to read                 | uint32_t  | Any uint32_t number            | True     |
