@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "sfpu/ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
+#include "sfpu/ckernel_sfpu_converter.h"
 #include "ckernel_sfpu_conversions.h"
 #include "sfpi.h"
 
@@ -135,9 +136,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_61f_(sfpi::vFloat val) {
 
 // Utility function to round a float to a 32-bit integer while also calculating the
 // integer part of the rounded value
-sfpi_inline sfpi::vFloat _sfpu_round_int32_(sfpi::vFloat z, sfpi::vInt& k_int) {
-    // From Hacker's Delight
-    // sfpi::vFloat c231 = 12582912.f;  // 2^23 + 2^22
+sfpi_inline sfpi::vFloat _sfpu_round_nearest_int32_(sfpi::vFloat z, sfpi::vInt& k_int) {
+    // From Hacker's Delight: round-to-nearest-even method
     // float -> int32 (round to nearest even): n = (x + float(c231)) - int32(c231)
     // round-to-nearest-even: n = (x + float(c231)) - float(c231)
     // where c231 = 0x4B400000 (2^23 + 2^22)
@@ -152,10 +152,13 @@ sfpi_inline sfpi::vFloat _sfpu_round_int32_(sfpi::vFloat z, sfpi::vInt& k_int) {
 
 /*
  * This function implements exp(x) using Cody-Waite range reduction for improved accuracy.
+ * Target accuracy: < 1 ULP for float32.
+ *
+ * Algorithm:
  * 1. Handle special cases (overflow, underflow, NaN)
  * 2. Convert to base-2: exp(x) = 2^(x/ln2)
  * 3. Range reduction using Cody-Waite: compute k, then r = x - k*ln2_hi - k*ln2_lo
- * 4. Compute exp(r) using polynomial approximation
+ * 4. Compute exp(r) using polynomial approximation (Taylor series)
  * 5. Scale by 2^k: result = 2^k * exp(r)
  *
  * @param val The input value (sfpi::vFloat vector), can be any floating point number
@@ -190,16 +193,17 @@ sfpi_inline sfpi::vFloat _sfpu_exp_f32_accurate_(sfpi::vFloat val) {
         result = sfpi::vConst0;
     }
     v_else {
-        // Use floor(z + 0.5) for rounding to nearest integer
+        // Round z to nearest integer using round-to-nearest-even
         sfpi::vInt k_int;
-        sfpi::vFloat k = _sfpu_round_int32_(z, k_int);
+        sfpi::vFloat k = _sfpu_round_nearest_int32_(z, k_int);
 
         // Step 2: Cody-Waite range reduction
         // Compute r = x - k*ln(2) in extended precision
         // r = x - k*LN2_HI - k*LN2_LO
         // This provides better accuracy than simple r = x - k*ln(2)
-        // Cody-Waite constants: ln(2) split into high and low parts
-        // LN2_HI has lower 12 bits zeroed for exact multiplication
+        // Cody-Waite constants: ln(2) split into high and low parts for extended precision.
+        // LN2_HI is chosen so that k*LN2_HI can be computed exactly for integer k in the valid range.
+        // LN2_LO contains the remainder: LN2_HI + LN2_LO ≈ -ln(2)
 
         // We want to do:
         // 1) r_hi = val - k * LN2_HI
@@ -212,17 +216,15 @@ sfpi_inline sfpi::vFloat _sfpu_exp_f32_accurate_(sfpi::vFloat val) {
         constexpr float LN2_LO = -3.19461832987e-05f;   // Low bits of ln(2)
 
         // First subtract k * LN2_HI
-        // sfpi::vFloat temp1 = k * LN2_HI;
         sfpi::vFloat r_hi = k * LN2_HI + val;
 
         // Then subtract k * LN2_LO
-        // sfpi::vFloat temp2 = k * LN2_LO;
         sfpi::vFloat r = k * LN2_LO + r_hi;
 
-        // Step 3: Polynomial approximation for exp(r)
-        // exp(r) = 1 + r + r²/2! + r³/3! + r⁴/4! + r⁵/5! + r⁶/6! + r⁷/7!
-        // Use 7th order polynomial for better accuracy
-        // Coefficients in ascending order: c0, c1, c2, c3, c4, c5, c6, c7
+        // Step 3: Polynomial approximation for exp(r) using Taylor series
+        // exp(r) ~= 1 + r + r²/2! + r³/3! + r⁴/4! + r⁵/5! + r⁶/6! + r⁷/7!
+        // Use 7th order polynomial (Taylor series coefficients) for < 1 ULP accuracy
+        // Coefficients in ascending order of powers: c0, c1, c2, c3, c4, c5, c6, c7
         sfpi::vFloat p = PolynomialEvaluator::eval(
             r,
             sfpi::vConst1,  // c0 = 1
