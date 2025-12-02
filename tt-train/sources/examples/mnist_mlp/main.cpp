@@ -56,7 +56,7 @@ struct TrainingConfig {
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
     TrainingConfig config;
     auto training_config = yaml_config["training_config"];
-    auto model_config = YAML::LoadFile(training_config["model_config"].as<std::string>());
+    auto model_config = YAML::LoadFile(training_config["model_config"].as<std::string>())["mlp_config"];
 
     config.batch_size = training_config["batch_size"].as<uint32_t>();
     config.logging_interval = training_config["logging_interval"].as<int>();
