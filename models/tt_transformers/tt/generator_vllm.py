@@ -653,6 +653,7 @@ class GptOssForCausalLM(Generator):
 
         for submesh in submesh_devices:
             # Use the existing create_tt_model function
+            logger.warning("Creating GPT-OSS model with create_tt_model function")
             model_args_i, model_i, _, state_dict = create_tt_model(
                 mesh_device=submesh,
                 max_batch_size=max_batch_size // tt_data_parallel,
@@ -664,6 +665,7 @@ class GptOssForCausalLM(Generator):
                 mesh_config=None,
                 create_kv_cache=False,
             )
+            logger.warning(f"Created GPT-OSS model with create_tt_model function: {model_args_i}")
 
             model_args.append(model_args_i)
             model.append(model_i)
