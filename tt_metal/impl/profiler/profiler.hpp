@@ -78,6 +78,9 @@ private:
     // Device frequency
     int device_core_frequency{};
 
+    // Device max compute cores
+    uint32_t max_compute_cores;
+
     // Thread pool used for processing data when dumping results
     std::shared_ptr<ThreadPool> thread_pool;
 

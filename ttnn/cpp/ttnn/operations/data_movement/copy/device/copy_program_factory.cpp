@@ -76,8 +76,8 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
         tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
     }
 
-    auto src_buffer = input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
 
     std::vector<uint32_t> reader_compile_time_args, writer_compile_time_args;
     if (tilized) {
@@ -186,9 +186,9 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
+        auto* src_buffer = input_tensors.at(0).buffer();
 
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
 
         for (const auto& core : cores) {
             {

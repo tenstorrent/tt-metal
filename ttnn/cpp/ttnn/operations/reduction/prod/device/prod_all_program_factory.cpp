@@ -43,8 +43,8 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_single_core(
             .set_page_size(output_cb_index, single_tile_size);
     tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    auto src_buffer = a.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = a.buffer();
+    auto* dst_buffer = output.buffer();
 
     std::vector<uint32_t> reader_compile_time_args;
     tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
@@ -90,9 +90,9 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_single_core(
                                               const std::vector<tt::tt_metal::Tensor>& input_tensors,
                                               const std::vector<std::optional<const tt::tt_metal::Tensor>>&,
                                               const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
+        auto* src_buffer = input_tensors.at(0).buffer();
 
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
 
         CoreCoord core = {0, 0};
 

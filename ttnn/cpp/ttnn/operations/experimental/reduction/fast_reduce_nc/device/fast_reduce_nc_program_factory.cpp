@@ -173,9 +173,9 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     std::vector<uint32_t> writer_compile_time_args = {shard_factor, num_cores_to_be_used};
     TensorAccessorArgs(*tensor_return_value.buffer()).append_to(writer_compile_time_args);
 
-    const auto reader_kernel_file =
+    const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reader_reduce_nc.cpp";
-    const auto writer_kernel_file =
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/writer_reduce_nc.cpp";
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
@@ -193,7 +193,7 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto compute_kernel_file =
+    const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reduce_nc.cpp";
     tt_metal::CreateKernel(
         program,

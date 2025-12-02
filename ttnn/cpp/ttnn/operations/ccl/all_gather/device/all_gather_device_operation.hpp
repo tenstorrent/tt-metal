@@ -30,6 +30,7 @@ struct AllGatherDeviceOperation {
         const std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
         const tt::tt_fabric::Topology topology;
         const uint32_t num_links;
+        const std::optional<CoreRangeSet> sub_core_grid;
     };
 
     struct tensor_args_t {
@@ -91,7 +92,8 @@ struct AllGatherDeviceOperation {
         const ttnn::MemoryConfig& memory_config,
         const std::optional<ttnn::Tensor>& optional_output_tensor,
         uint32_t num_links,
-        tt::tt_fabric::Topology topology);
+        tt::tt_fabric::Topology topology,
+        const std::optional<CoreRangeSet>& sub_core_grid);
 };
 
 }  // namespace ttnn::operations::ccl

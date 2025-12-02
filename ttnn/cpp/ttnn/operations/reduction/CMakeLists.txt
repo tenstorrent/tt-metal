@@ -45,10 +45,10 @@ target_sources(
         accumulation/ema/ema_multicore.cpp
         accumulation/device/accumulation_device_operation.cpp
         accumulation/device/accumulation_program_factory.cpp
-        sampling/device/sampling_op.cpp
+        sampling/device/sampling_device_operation.cpp
         sampling/device/sampling_program_factory.cpp
         sampling/sampling.cpp
-        moe/device/moe_op.cpp
+        moe/device/moe_device_operation.cpp
         moe/device/moe_program_factory.cpp
         moe/moe.cpp
         prod/device/prod_all_program_factory.cpp
@@ -61,10 +61,11 @@ target_sources(
         prod/device/prod_nc_program_factory.cpp
         prod/device/prod_op_all.cpp
         prod/prod.cpp
-        topk/device/topk_op.cpp
+        topk/device/topk_device_operation.cpp
         topk/device/topk_utils.cpp
         topk/topk.cpp
-        topk/device/topk_program_factory.cpp
+        topk/device/topk_single_core_program_factory.cpp
+        topk/device/topk_multi_core_program_factory.cpp
         reduction_common/reduction_common.cpp
         manual_seed/manual_seed.cpp
         manual_seed/device/manual_seed_operation.cpp

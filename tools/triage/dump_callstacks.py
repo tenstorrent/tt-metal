@@ -24,7 +24,7 @@ Description:
 
 from dataclasses import dataclass
 
-from triage import ScriptConfig, TTTriageError, log_check, recurse_field, triage_field, hex_serializer, run_script
+from triage import ScriptConfig, TTTriageError, log_check_risc, recurse_field, triage_field, hex_serializer, run_script
 from ttexalens import util
 from ttexalens.hw.tensix.wormhole.wormhole import WormholeDevice
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
@@ -270,9 +270,11 @@ def dump_callstacks(
         )
 
     except Exception as e:
-        log_check(
+        log_check_risc(
+            risc_name,
+            location,
             False,
-            f"{ORANGE}Failed to dump callstacks for {risc_name} at {location} on device {location._device._id}: {e}{RST}",
+            f"{ORANGE}Failed to dump callstacks: {e}{RST}",
         )
         return result
 

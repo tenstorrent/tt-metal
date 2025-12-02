@@ -125,7 +125,7 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
     TT_FATAL(!logical_fabric_mux_cores_.empty(), "No logical fabric mux cores found for device {}", device_id);
 
     // Initialize translated mux cores (coordinates should be same across devices)
-    auto device = tt::DevicePool::instance().get_active_device(device_id);
+    auto* device = tt::DevicePool::instance().get_active_device(device_id);
     TT_FATAL(device != nullptr, "Device {} not found in DevicePool", device_id);
     for (const auto& logical_core : logical_fabric_mux_cores_) {
         CoreCoord translated_core = device->worker_core_from_logical_core(logical_core);
@@ -226,28 +226,7 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
     auto topology = fabric_context.get_fabric_topology();
     auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
 
-    // Determine num_channels_for_mux based on mode
-    if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
-        // UDM mode: MUX temporarily has 3 channels (one for worker, one for relay, one for forwarding channel between
-        // mux)
-        // TODO: later need to calculate the number of channels based on the number of worker served, plus one relay
-        // channel, plus one forwarding channel between mux. RELAY permanently has 1 channel (configured separately in
-        // its constructor)
-        num_channels_for_mux_ = static_cast<size_t>(UdmMuxChannelId::NUM_CHANNELS);
-    } else {
-        // MUX mode: use topology-based channel count
-        switch (topology) {
-            case tt::tt_fabric::Topology::Linear:
-            case tt::tt_fabric::Topology::Ring:
-                num_channels_for_mux_ = tt::tt_fabric::builder_config::num_sender_channels_1d_linear;
-                break;
-            case tt::tt_fabric::Topology::Mesh:
-            case tt::tt_fabric::Topology::Torus:
-                num_channels_for_mux_ = tt::tt_fabric::builder_config::num_sender_channels_2d_mesh;
-                break;
-            default: TT_THROW("unknown fabric topology: {}", topology); break;
-        }
-    }
+    num_channels_for_mux_ = builder_config::get_num_tensix_sender_channels(topology, fabric_tensix_config);
 
     // Calculate buffers per channel based on available space and max channels
     size_t space_needed_for_max_channels = num_channels_for_mux_ * buffer_size_bytes_full_size_channel_;
@@ -484,7 +463,8 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
     tt::tt_fabric::FabricNodeId local_fabric_node_id,
     tt::tt_fabric::FabricNodeId remote_fabric_node_id,
     uint32_t ethernet_channel_id,
-    eth_chan_directions direction) {
+    eth_chan_directions direction,
+    std::vector<bool>&& sender_channel_injection_flags) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto& tensix_config = fabric_context.get_tensix_config();
@@ -528,7 +508,7 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
             direction);
     }
 
-    return FabricTensixDatamoverBuilder(
+    auto builder = FabricTensixDatamoverBuilder(
         std::move(mux_builder),
         std::move(relay_builder),
         my_core_logical,
@@ -537,6 +517,11 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
         noc_x,
         noc_y,
         direction);
+
+    // Set injection flags on the builder's configs
+    builder.set_sender_channel_injection_flags_from_vector(std::move(sender_channel_injection_flags));
+
+    return builder;
 }
 
 void FabricTensixDatamoverBuilder::create_and_compile(tt::tt_metal::Program& program) {
@@ -580,6 +565,37 @@ void FabricTensixDatamoverBuilder::append_upstream_routers_noc_xy(uint32_t noc_x
 void FabricTensixDatamoverBuilder::append_relay_router_noc_xy(uint32_t noc_x, uint32_t noc_y) {
     TT_FATAL(relay_builder_ != nullptr, "Relay builder must not be null in UDM mode");
     relay_builder_->append_router_noc_xy(noc_x, noc_y);
+}
+
+void FabricTensixDatamoverBuilder::set_sender_channel_injection_flags_from_vector(std::vector<bool>&& flags) {
+    // Validate that input vector size matches the number of channels
+    if (mux_builder_ != nullptr) {
+        uint8_t num_full_size = mux_builder_->config_->get_num_channels(FabricMuxChannelType::FULL_SIZE_CHANNEL);
+        uint8_t num_header_only = mux_builder_->config_->get_num_channels(FabricMuxChannelType::HEADER_ONLY_CHANNEL);
+        uint8_t total_num_channels = num_full_size + num_header_only;
+
+        TT_FATAL(
+            flags.size() == total_num_channels,
+            "Internal error: injection flags vector size {} does not match total number of mux channels {}",
+            flags.size(),
+            total_num_channels);
+
+        // Move flags to mux config (transfers ownership via setter)
+        mux_builder_->set_sender_channel_injection_flags(std::move(flags));
+    } else if (relay_builder_ != nullptr) {
+        uint8_t num_full_size = relay_builder_->config_->get_num_channels(FabricMuxChannelType::FULL_SIZE_CHANNEL);
+        uint8_t num_header_only = relay_builder_->config_->get_num_channels(FabricMuxChannelType::HEADER_ONLY_CHANNEL);
+        uint8_t total_num_channels = num_full_size + num_header_only;
+
+        TT_FATAL(
+            flags.size() == total_num_channels,
+            "Internal error: injection flags vector size {} does not match total number of relay channels {}",
+            flags.size(),
+            total_num_channels);
+
+        // Move flags to relay config (transfers ownership via setter)
+        relay_builder_->set_sender_channel_injection_flags(std::move(flags));
+    }
 }
 
 }  // namespace tt::tt_fabric

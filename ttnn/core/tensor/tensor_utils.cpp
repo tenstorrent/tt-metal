@@ -26,7 +26,7 @@ tt::tt_metal::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<c
         if (shape[index] == -1) {
             if (index_of_negative_1 != -1) {
                 std::string error_msg = "Shape cannot have more than 1 elements that is set to -1! Shape used: (";
-                for (auto& s : shape) {
+                for (const auto& s : shape) {
                     error_msg += std::to_string(s) + ",";
                 }
                 error_msg += ")";
@@ -42,7 +42,7 @@ tt::tt_metal::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<c
     }
     if (has_zero && index_of_negative_1 != -1) {
         std::string error_msg = "cannot reshape tensor of 0 elements into shape (";
-        for (auto& s : shape) {
+        for (const auto& s : shape) {
             error_msg += std::to_string(s) + ",";
         }
         error_msg += ") because the unspecified dimension size -1 can be any value and is ambiguous";

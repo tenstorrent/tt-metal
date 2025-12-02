@@ -99,8 +99,8 @@ operation::ProgramWithCallbacks bcast_sharded_h(
             .set_page_size(src1_cb_index, input1_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
 
-    auto src1_buffer = b.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src1_buffer = b.buffer();
+    auto* dst_buffer = output.buffer();
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
     TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
@@ -188,8 +188,8 @@ operation::ProgramWithCallbacks bcast_sharded_h(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* src_buffer = input_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
         UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
         UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
         const auto& a = input_tensors.at(0);

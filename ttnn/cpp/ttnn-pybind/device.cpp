@@ -21,7 +21,7 @@
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/device.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
@@ -271,7 +271,7 @@ void device_module(py::module& m_device) {
 
     m_device.def(
         "SetDefaultDevice",
-        [](MeshDevice* device) { ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(device); },
+        [](MeshDevice* device) { ttnn::SetDefaultDevice(device); },
         R"doc(
             Sets the default device to use for operations when inputs are not on the device.
 
@@ -289,10 +289,7 @@ void device_module(py::module& m_device) {
 
     m_device.def(
         "GetDefaultDevice",
-        []() {
-            return dynamic_cast<MeshDevice*>(
-                ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice());
-        },
+        []() { return ttnn::GetDefaultDevice(); },
         R"doc(
             Gets the default device to use for ops when inputs aren't on device.
 
@@ -307,85 +304,9 @@ void device_module(py::module& m_device) {
         )doc");
 
     m_device.def(
-        "format_input_tensor",
-        [](const Tensor& input,
-           MeshDevice* device,
-           const ttnn::Shape& padded_shape,
-           float pad_value,
-           Layout target_layout,
-           std::optional<MemoryConfig> target_mem_config) {
-            return ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
-                input, device, padded_shape, pad_value, target_layout, std::move(target_mem_config));
-        },
-        py::arg("input").noconvert(),
-        py::arg("device").noconvert(),
-        py::arg("padded_shape"),
-        py::arg("pad_value"),
-        py::arg("target_layout").noconvert(),
-        py::arg("target_mem_config").noconvert() = std::nullopt,
-        R"doc(
-        Formats tensor to target layout and pads to padded shape.
-
-        Args:
-            input (ttnn.Tensor): Input tensor to format.
-            device (ttnn.device.Device): Device where the tensor will be moved.
-            padded_shape (ttnn.Shape): Desired shape of the tensor.
-            pad_value (float): Value to pad with.
-            target_layout (ttnn.Layout): Desired tensor layout.
-            target_mem_config (ttnn.MemoryConfig, optional): Desired memory config. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: Formatted tensor.
-
-        Note:
-            This functionality is planned for deprecation in the future.
-
-        Example:
-            >>> input_tensor = ttnn.ones([1, 2, 2, 2], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-            >>> padded_tensor = ttnn.format_input_tensor(input_tensor, device=device, padded_shape=[1, 2, 4, 4], pad_value=0.0, target_layout=ttnn.TILE_LAYOUT, output_mem_config)
-        )doc");
-
-    m_device.def(
-        "format_output_tensor",
-        [](const Tensor& output,
-           const ttnn::SmallVector<uint32_t>& shape,
-           MeshDevice* device,
-           Layout target_layout,
-           std::optional<MemoryConfig> target_mem_config) {
-            return operations::experimental::auto_format::AutoFormat::format_output_tensor(
-                output, ttnn::Shape(shape), device, target_layout, std::move(target_mem_config));
-        },
-        py::arg("output").noconvert(),
-        py::arg("shape"),
-        py::arg("device").noconvert(),
-        py::arg("target_layout").noconvert(),
-        py::arg("target_mem_config").noconvert() = std::nullopt,
-        R"doc(
-        Formats tensor to target layout and unpads to shape.
-
-        Args:
-            output (ttnn.Tensor): Output tensor to format.
-            shape (ttnn.Shape): Desired shape of the tensor.
-            device (ttnn.device.Device): Device where the tensor will be moved.
-            target_layout (ttnn.Layout): Desired tensor layout.
-            target_mem_config (ttnn.MemoryConfig, optional): Desired memory config. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: Formatted tensor.
-
-        Note:
-            This functionality is planned for deprecation in the future.
-
-        Example:
-            >>> # Assuming we have a padded tensor of shape [1, 2, 4, 4] with padding of [1, 1, 1, 1] of layout=ttnn.TILE_LAYOUT
-            >>> unpadded_tensor = ttnn.format_output_tensor(output_tensor, shape=[1, 2, 2, 2], device=device, target_layout=ttnn.ROW_MAJOR_LAYOUT, output_mem_config)
-        )doc");
-
-    m_device.def(
         "pad_to_tile_shape",
         [](const std::array<uint32_t, 4>& unpadded_shape) -> std::vector<uint32_t> {
-            auto result =
-                ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(ttnn::Shape(unpadded_shape));
+            auto result = ttnn::operations::data_movement::pad_to_tile_shape(ttnn::Shape(unpadded_shape));
             return std::vector<uint32_t>(result.cbegin(), result.cend());
         },
         py::arg("unpadded_shape"),

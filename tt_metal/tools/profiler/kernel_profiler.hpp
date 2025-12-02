@@ -592,6 +592,7 @@ __attribute__((noinline)) void trace_only_init() {
 }  // namespace kernel_profiler
 
 #include "noc_event_profiler.hpp"
+#include "perf_counters.hpp"
 
 // Not dispatch
 #if (!defined(DISPATCH_KERNEL))
@@ -714,5 +715,10 @@ __attribute__((noinline)) void trace_only_init() {
 #define RECORD_NOC_EVENT_WITH_ID(type, noc_id, addrgen, num_bytes, vc)
 #define RECORD_NOC_EVENT(type)
 #define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked)
+
+// null macros when perf counters are disabled
+#define StartPerfCounters()
+#define StopPerfCounters()
+#define RecordPerfCounters()
 
 #endif

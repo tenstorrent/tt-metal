@@ -106,7 +106,7 @@ MorehAdamWDeviceOperation::spec_return_value_t MorehAdamWDeviceOperation::comput
 MorehAdamWDeviceOperation::tensor_return_value_t MorehAdamWDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_specs = compute_output_specs(operation_attributes, tensor_args);
-    auto device = tensor_args.param_in.device();
+    auto* device = tensor_args.param_in.device();
 
     tensor_return_value_t result;
 

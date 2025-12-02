@@ -241,8 +241,6 @@ from ttnn.device import (
     ReadDeviceProfiler,
     SetDefaultDevice,
     GetDefaultDevice,
-    format_input_tensor,
-    format_output_tensor,
     pad_to_tile_shape,
     SubDevice,
     SubDeviceId,
@@ -383,11 +381,6 @@ from ttnn.operations.conv2d import (
     prepare_conv_transpose2d_weights,
     prepare_conv_transpose2d_bias,
     SlidingWindowParallelConfig,
-)
-from ttnn._ttnn.operations.conv import (
-    convert_conv_weight_tensor_to_tiled_layout,
-    convert_conv_weight_tensor_to_special_padding_tiled_layout,
-    convert_conv_weight_tensor_to_grouped_layout,
 )
 
 from ttnn.operations.pool import (

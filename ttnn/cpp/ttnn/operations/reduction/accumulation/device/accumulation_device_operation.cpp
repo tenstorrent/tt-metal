@@ -17,7 +17,7 @@ void AccumulationDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor{tensor_args.input_tensor};
     const auto& input_shape{input_tensor.logical_shape()};
-    auto& optional_out{tensor_args.opt_output};
+    const auto& optional_out{tensor_args.opt_output};
     auto out_memory_config{optional_out.has_value() ? optional_out->memory_config() : attributes.output_memory_config};
 
     if (optional_out.has_value()) {

@@ -430,7 +430,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceProgramReuseRtas) {
     std::array<uint32_t, 1> common_runtime_args = {201};
 
     for (size_t i = 0; i < k_num_iters; i++) {
-        for (auto& sub_device_manager : {sub_device_manager_1, sub_device_manager_2}) {
+        for (const auto& sub_device_manager : {sub_device_manager_1, sub_device_manager_2}) {
             mesh_device->load_sub_device_manager(sub_device_manager);
             unique_runtime_args[0] += 1;
             common_runtime_args[0] += 2;

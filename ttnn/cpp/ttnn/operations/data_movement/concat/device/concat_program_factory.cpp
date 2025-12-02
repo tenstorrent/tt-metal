@@ -654,7 +654,7 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
             const std::vector<std::optional<const Tensor>>&,
             const std::vector<Tensor>& output_tensors) {
             bool row_wise = input_tensors[0].shard_spec().value().orientation == ShardOrientation::ROW_MAJOR;
-            auto dst_buffer = output_tensors.at(0).buffer();
+            auto* dst_buffer = output_tensors.at(0).buffer();
             auto cores = corerange_to_cores(all_cores, std::nullopt, row_wise);
             auto input_cores = input_tensors[0].shard_spec().value().grid;
             uint32_t num_output_rows = output_tensors[0].padded_shape()[-1];
@@ -797,7 +797,7 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
 
     if (rm_layout) {
         for (uint32_t i = 0; i < num_input_tensors; ++i) {
-            auto buffer = input_tensors[i].buffer();
+            auto* buffer = input_tensors[i].buffer();
             src_addr[i] = buffer->address();
             page_size_per_tensor[i] = buffer->page_size();
             if (dim == num_dims - 1) {
@@ -813,7 +813,7 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         }
     } else {
         for (uint32_t i = 0; i < num_input_tensors; ++i) {
-            auto buffer = input_tensors[i].buffer();
+            auto* buffer = input_tensors[i].buffer();
             src_addr[i] = buffer->address();
             page_size_per_tensor[i] = buffer->page_size();
             uint32_t dim_pages = input_tensors[i].padded_shape()[dim] / scale_factor;
@@ -931,7 +931,7 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
             src_addrs[i] = input_tensors[i].buffer()->address();
         }
 
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
 
         for (const auto& core : cores) {
             {

@@ -95,8 +95,6 @@ private:
     // Tensix configuration channel counts
     static constexpr size_t num_sender_channels_with_tensix_config =
         builder_config::num_sender_channels_with_tensix_config;
-    static constexpr size_t num_sender_channels_with_tensix_config_deadlock_avoidance =
-        builder_config::num_sender_channels_with_tensix_config_deadlock_avoidance;
 
     // Dateline channel skip indices - from FabricEriscDatamoverConfig
     static constexpr size_t dateline_sender_channel_skip_idx = 2;

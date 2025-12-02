@@ -205,7 +205,7 @@ const core_descriptor_t& get_core_descriptor_config(
     }
 
     std::vector<RelativeCoreCoord> dispatch_cores;
-    auto dispatch_cores_string = "dispatch_cores";
+    const auto* dispatch_cores_string = "dispatch_cores";
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() and product_name == "nebula_x1") {
         dispatch_cores_string = "tg_dispatch_cores";
     }

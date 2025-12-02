@@ -135,10 +135,10 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             ? (program_config->exp_approx_mode.has_value() ? program_config->exp_approx_mode.value() : true)
             : true;
 
-    auto q_buffer = input_tensor_q.buffer();
-    auto k_buffer = input_tensor_k.buffer();
-    auto v_buffer = input_tensor_v.buffer();
-    auto out0_buffer = output_tensor.buffer();
+    auto* q_buffer = input_tensor_q.buffer();
+    auto* k_buffer = input_tensor_k.buffer();
+    auto* v_buffer = input_tensor_v.buffer();
+    auto* out0_buffer = output_tensor.buffer();
 
     bool use_cur_pos_tensor = cur_pos_tensor.has_value();
     bool use_attention_mask = attn_mask.has_value();
@@ -182,7 +182,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         B);
 
     // balance the number of cores to use based on batch
-    uint32_t max_num_cores_for_compute = program_config->max_cores_per_head_batch * B * num_kv_heads;
+    uint32_t max_num_cores_for_compute =
+        program_config.has_value() ? program_config->max_cores_per_head_batch * B * num_kv_heads : num_cores_available;
     uint32_t num_cores_per_batch = std::min(num_cores_available, max_num_cores_for_compute) / B;
     //// for core assignment, it is the same whether there's 1 core for head or 1 core for many heads
     uint32_t num_cores_per_head = std::max((uint32_t)1, num_cores_per_batch / num_kv_heads);
@@ -267,6 +268,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     log_debug(tt::LogOp, "num_output_cores: {}", num_output_cores);
     log_debug(tt::LogOp, "core_group: {}", core_group);
     log_debug(tt::LogOp, "core_group_idle: {}", core_group_idle);
+    log_debug(tt::LogOp, "max_num_cores_for_compute: {}", max_num_cores_for_compute);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
 
@@ -418,7 +420,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     bool is_cur_pos_tensor_sharded = false;
     CBHandle cb_in8_id = 0;
     if (use_cur_pos_tensor) {
-        auto pos_buffer = cur_pos_tensor.value().buffer();
+        auto* pos_buffer = cur_pos_tensor.value().buffer();
         tt::DataFormat pos_df = tt_metal::datatype_to_dataformat_converter(cur_pos_tensor.value().dtype());
         index_stick_size = pos_buffer->aligned_page_size();
 
@@ -437,7 +439,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     bool is_page_table_sharded = false;
     CBHandle cb_in9_id = 0;
     if (is_paged_attention) {
-        auto page_table_buffer = page_table_tensor.value().buffer();
+        auto* page_table_buffer = page_table_tensor.value().buffer();
         is_page_table_sharded = page_table_tensor.value().is_sharded();
         tt::DataFormat page_table_df = tt_metal::datatype_to_dataformat_converter(page_table_tensor.value().dtype());
         page_table_stick_size = page_table_buffer->aligned_page_size();
@@ -1033,11 +1035,11 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             const auto cur_pos_ids =
                 static_cast<const ttnn::operations::transformer::ScaledDotProductAttentionDecode*>(operation)->cur_pos;
 
-            auto q_buffer = input_tensors.at(0).buffer();
-            auto k_buffer = input_tensors.at(1).buffer();
-            auto v_buffer = use_mla ? input_tensors.at(1).buffer() : input_tensors.at(2).buffer();
+            auto* q_buffer = input_tensors.at(0).buffer();
+            auto* k_buffer = input_tensors.at(1).buffer();
+            auto* v_buffer = use_mla ? input_tensors.at(1).buffer() : input_tensors.at(2).buffer();
 
-            auto out0_buffer = output_tensors.at(0).buffer();
+            auto* out0_buffer = output_tensors.at(0).buffer();
 
             uint32_t q_addr = q_buffer->address();
             uint32_t k_addr = k_buffer->address();
@@ -1053,7 +1055,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             uint32_t attn_mask_addr = use_attention_mask ? optional_input_tensors.at(2).value().buffer()->address() : 0;
             uint32_t attention_sink_addr =
                 use_attention_sink ? optional_input_tensors.at(3).value().buffer()->address() : 0;
-            auto page_table_buffer = is_paged_attention ? optional_input_tensors.at(1).value().buffer() : nullptr;
+            auto* page_table_buffer = is_paged_attention ? optional_input_tensors.at(1).value().buffer() : nullptr;
             uint32_t page_table_stick_size = is_paged_attention ? page_table_buffer->aligned_page_size() : 0;
 
             auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);

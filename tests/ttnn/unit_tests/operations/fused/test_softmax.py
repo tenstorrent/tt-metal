@@ -480,7 +480,6 @@ def test_softmax_accuracy(device, shape, fp32_acc_en, math_approx_mode, expected
         ttnn_tensor, dim=-1, compute_kernel_config=compute_kernel_config, numeric_stable=numeric_stable
     )
 
-    ttnn_output = ttnn.to_layout(ttnn_output, ttnn.ROW_MAJOR_LAYOUT)
     output_torch = ttnn_output.cpu().to_torch()
 
     assert_with_ulp(torch_output, output_torch, expected_ulp)

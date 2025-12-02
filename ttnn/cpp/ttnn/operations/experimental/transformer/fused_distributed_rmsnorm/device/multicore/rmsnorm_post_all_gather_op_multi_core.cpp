@@ -351,7 +351,7 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
         fuse_rope,
         head_dim_tiles};
 
-    auto compute_kernel_file =
+    const auto* compute_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/kernels/compute/"
         "rmsnorm_post_allgather.cpp";
     auto compute_config = tt::tt_metal::ComputeConfig{
