@@ -36,7 +36,7 @@ from transformers.modeling_outputs import ModelOutput
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.demos.vit.tt import ttnn_optimized_vit_highres_gs as ttnn_optimized_vit_highres
+from models.demos.grayskull.vit.tt import ttnn_optimized_vit_highres_gs as ttnn_optimized_vit_highres
 from models.tt_transformers.demo.simple_text_demo import prepare_generator_args
 from models.tt_transformers.tt.common import (
     create_tt_model,
@@ -214,12 +214,17 @@ def get_LLama2OpenVLAArgs(state_dict):
     class LLama2OpenVLAArgs(ModelArgs):
         def __init__(self, *args, **kwargs):
             HF_MODEL = os.getenv("HF_MODEL")
-            assert (
-                HF_MODEL == "meta-llama/Llama-2-7b-hf"
-            ), f"When LLama2OpenVLAArgs is used, HF_MODEL must be meta-llama/Llama-2-7b-hf"
+            # Allow None for testing environments or CI where model weights aren't downloaded
+            if HF_MODEL is not None:
+                assert (
+                    HF_MODEL == "meta-llama/Llama-2-7b-hf"
+                ), f"When LLama2OpenVLAArgs is used, HF_MODEL must be meta-llama/Llama-2-7b-hf"
+            # For testing environments, use dummy weights
+            if HF_MODEL is None:
+                kwargs["dummy_weights"] = True
             super().__init__(*args, **kwargs)
 
-        def _set_params_from_dict(self, config, is_hf=False):
+        def _set_params_from_dict(self, config):
             new_config = {
                 "attention_bias": False,
                 "attention_dropout": 0.0,
@@ -250,10 +255,7 @@ def get_LLama2OpenVLAArgs(state_dict):
                 if key not in new_config:
                     new_config[key] = value
 
-            return super()._set_params_from_dict(
-                new_config,
-                is_hf,
-            )
+            return super()._set_params_from_dict(new_config)
 
         def load_state_dict(self):
             if state_dict is None:
@@ -276,12 +278,14 @@ class OpenVLALanguageModel(GenerationMixin):
             "max_seq_len": 1024,
             "page_params": {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},
             "paged_attention": True,
+            "num_layers": 32,  # Default number of layers for LLaMA model
         }
+
+        def model_factory_fn(*args, **kwargs):
+            return create_tt_model(*args, **kwargs, ModelArgsClass=get_LLama2OpenVLAArgs(local_state_dict))
+
         self.model_args, self.model, self.page_table, self.tt_kv_cache, self.tokenizer = prepare_generator_args(
-            **self.generator_args_config,
-            model_factory_fn=lambda *args, **kwargs: create_tt_model(
-                *args, **kwargs, ModelArgsClass=get_LLama2OpenVLAArgs(local_state_dict)
-            ),
+            **self.generator_args_config, model_factory_fn=model_factory_fn
         )
         self.generator = Generator(self.model, self.model_args, device, self.tokenizer)
         self.num_actions = 1
@@ -883,9 +887,9 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
         if config.use_fused_vision_backbone is None:
             raise ValueError("Missing config field `use_fused_vision_backbone`")
 
-        if timm.__version__ not in {"0.9.10", "0.9.11", "0.9.12", "0.9.16"}:
+        if timm.__version__ not in {"0.9.10", "0.9.11", "0.9.12", "0.9.16", "1.0.22"}:
             raise NotImplementedError(
-                "TIMM Version must be >= 0.9.10 and < 1.0.0 (breaking); please raise a GitHub Issue "
+                "TIMM Version must be >= 0.9.10 and < 1.0.0 or == 1.0.22 (breaking); please raise a GitHub Issue "
                 "if you urgently need support for latest TIMM versions."
             )
 
