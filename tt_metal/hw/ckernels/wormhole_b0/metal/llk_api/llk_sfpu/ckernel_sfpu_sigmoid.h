@@ -18,7 +18,16 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
     // Compute sigmoid as:
     // sigmoid(x) = 1 / (1 + exp(-x))
 
-    sfpi::vFloat denominator = sfpi::vConst1 + _sfpu_exp_21f_<true>(-x);
+    sfpi::vFloat exp_neg_x;
+    // If fp32 then use higher accuracy exp function
+    // Otherwise, use exp_21f (~1 ULP on bfloat16)
+    if constexpr (!is_fp32_acc_to_dest_mode) {
+        exp_neg_x = _sfpu_exp_21f_<true>(-x);
+    } else {
+        exp_neg_x = _sfpu_exp_improved_<true>(-x);
+    }
+
+    sfpi::vFloat denominator = sfpi::vConst1 + exp_neg_x;
 
     constexpr int recip_mode = is_fp32_acc_to_dest_mode ? 2 : 1;
     sfpi::vFloat result = _sfpu_reciprocal_<recip_mode>(denominator);
