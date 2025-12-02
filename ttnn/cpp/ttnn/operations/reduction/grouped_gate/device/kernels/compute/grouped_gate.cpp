@@ -233,7 +233,7 @@ void topk(
     bool largest = true;
     bool ascending = !largest;
     int end_phase = (tiles <= 2) ? log_tiles - 1 : 5;
-    UNPACK(DPRINT << "Tiles: " << tiles << " Log Tiles: " << log_tiles << " End Phase: " << end_phase << ENDL());
+    // UNPACK(DPRINT << "Tiles: " << tiles << " Log Tiles: " << log_tiles << " End Phase: " << end_phase << ENDL());
 
     topk_tile_init();
     // acquire_dst();
@@ -290,7 +290,7 @@ void topk(
     // PACK(print_tile(intermediate_local_sort_indices_cb_index, 1, true, 0, 32, 0, 1));
     cb_push_back(intermediate_local_sort_indices_cb_index, 1);
 
-    transpose_and_pack(intermediate_local_sort_cb_index, output_cb_index, 1);
+    // transpose_and_pack(intermediate_local_sort_cb_index, output_cb_index, 1);
     transpose_and_pack(intermediate_local_sort_indices_cb_index, output_indices_cb_index, 1);
 }
 

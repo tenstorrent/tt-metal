@@ -63,6 +63,7 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
     auto weights_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_weights.dtype());
     auto indices_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_indices.dtype());
 
+    uint32_t n_activated_expert_tiles = tt::div_up(operation_attributes.n_activated_experts, 32);
     tt::tt_metal::create_cb(
         scores_cb_index, program, all_cores, scores.buffer()->page_size(), 2 * width_tiles, scores_data_format);
     tt::tt_metal::create_cb(
@@ -72,14 +73,14 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         program,
         all_cores,
         output_weights.buffer()->page_size(),
-        2 * tt::div_up(operation_attributes.n_activated_experts, 32),
+        2 * n_activated_expert_tiles,
         weights_data_format);
     tt::tt_metal::create_cb(
         indices_cb_index,
         program,
         all_cores,
         output_indices.buffer()->page_size(),
-        2 * tt::div_up(operation_attributes.n_activated_experts, 32),
+        2 * n_activated_expert_tiles,
         indices_data_format);
 
     // sigmoid input + add bias block CBs
@@ -163,14 +164,14 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         program,
         all_cores,
         scores.buffer()->page_size(),
-        operation_attributes.topk_groups,
+        2 * n_activated_expert_tiles,
         scores_data_format);
     tt::tt_metal::create_cb(
         intermediate_local_sort_indices_cb_index,
         program,
         all_cores,
         output_indices.buffer()->page_size(),
-        operation_attributes.topk_groups,
+        2 * n_activated_expert_tiles,
         tt::DataFormat::UInt16);
 
     // Pre-normalized scores in the winning groups
@@ -180,7 +181,7 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         program,
         all_cores,
         output_weights.buffer()->page_size(),
-        tt::div_up(operation_attributes.n_activated_experts, 32),
+        n_activated_expert_tiles,
         scores_data_format);
 
     // Reader kernel compile time arguments
@@ -234,7 +235,7 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         {"winning_group_indices_cb_index", winning_group_indices_cb_index},
         {"num_group_tiles", num_group_tiles},
         {"n_activated_experts", operation_attributes.n_activated_experts},
-        {"n_activated_expert_tiles", tt::div_up(operation_attributes.n_activated_experts, 32)},
+        {"n_activated_expert_tiles", n_activated_expert_tiles},
         {"log_n_activated_experts", std::log2(operation_attributes.n_activated_experts)},
         {"intermediate_local_sort_cb_index", intermediate_local_sort_cb_index},
         {"intermediate_local_sort_indices_cb_index", intermediate_local_sort_indices_cb_index},
