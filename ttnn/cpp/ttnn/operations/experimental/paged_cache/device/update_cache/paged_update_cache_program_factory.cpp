@@ -112,7 +112,7 @@ PagedUpdateCacheProgramFactory::cached_program_t PagedUpdateCacheProgramFactory:
     CoreRangeSet all_cores = shard_spec.value().grid;
     uint32_t num_cores = all_cores.num_cores();
     uint32_t num_input_tiles = shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;
-    auto in1_buffer_address = shard_spec.has_value() ? input_tensor.buffer() : nullptr;
+    auto* in1_buffer_address = shard_spec.has_value() ? input_tensor.buffer() : nullptr;
 
     uint32_t num_cache_tiles = 2 * Wt;   // double buffered
     uint32_t num_interm_tiles = 2 * Wt;  // double buffered
