@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "interleaved_to_sharded_program_factory.hpp"
+#include "interleaved_to_sharded_partial_program_factory.hpp"
 
 #include <math.h>
 
@@ -20,22 +20,19 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::interleaved_to_sharded {
+namespace ttnn::operations::data_movement::detail {
 
-// Hardcoded for non-partial interleaved_to_sharded operation
-// to keep backward compatibility after migration to new infra
-// https://github.com/tenstorrent/tt-metal/issues/32752
-constexpr uint32_t num_slices = 1;
-constexpr uint32_t slice_index = 0;
-
-InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+InterleavedToShardedPartialProgramFactory::cached_program_t InterleavedToShardedPartialProgramFactory::create(
+    const interleaved_to_sharded_partial::operation_attributes_t& operation_attributes,
+    const interleaved_to_sharded_partial::tensor_args_t& tensor_args,
+    interleaved_to_sharded_partial::tensor_return_value_t& tensor_return_value) {
     const auto& input = tensor_args.input_tensor;
     const auto& output = tensor_return_value;
-    // Keep explicit bool init to match legacy behavior which forced it true
-    bool keep_l1_aligned = true;  // operation_attributes.keep_l1_aligned;
+    // Partial op behavior
+    bool keep_l1_aligned = false;
+
+    uint32_t num_slices = operation_attributes.num_slices;
+    uint32_t slice_index = operation_attributes.slice_index;
 
     tt::tt_metal::Program program{};
 
@@ -194,7 +191,7 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
             tt::tt_metal::ComputeConfig{});
     }
 
-    uint32_t starting_idx_h = detail::calculate_starting_idx_h(input, num_slices, slice_index);
+    uint32_t starting_idx_h = calculate_starting_idx_h(input, num_slices, slice_index);
     uint32_t curr_idx_h = 0;
     uint32_t curr_idx_w = 0;
 
@@ -379,15 +376,24 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
     return {std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, cb_output, cores, num_slices}};
 }
 
-void InterleavedToShardedProgramFactory::override_runtime_arguments(
+void InterleavedToShardedPartialProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const interleaved_to_sharded_partial::operation_attributes_t& operation_attributes,
+    const interleaved_to_sharded_partial::tensor_args_t& tensor_args,
+    interleaved_to_sharded_partial::tensor_return_value_t& tensor_return_value) {
     auto* src_buffer = tensor_args.input_tensor.buffer();
     auto* dst_buffer = tensor_return_value.buffer();
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+
+    uint32_t num_slices = operation_attributes.num_slices;
+    uint32_t slice_index = operation_attributes.slice_index;
+    bool partial_op = num_slices > 1;
+    uint32_t starting_idx_h = 0;
+    if (partial_op) {
+        uint32_t runtime_slice_index = slice_index;
+        starting_idx_h = calculate_starting_idx_h(tensor_args.input_tensor, num_slices, runtime_slice_index);
+    }
 
     auto& shared_variables = cached_program.shared_variables;
     auto& program = cached_program.program;
@@ -400,6 +406,9 @@ void InterleavedToShardedProgramFactory::override_runtime_arguments(
     for (const auto& core : cores) {
         auto& runtime_args = runtime_args_by_core[core.x][core.y];
         runtime_args[0] = src_buffer->address();
+        if (partial_op) {
+            runtime_args[7] = starting_idx_h;
+        }
     }
 
     if (dst_is_dram) {
@@ -413,4 +422,4 @@ void InterleavedToShardedProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::interleaved_to_sharded
+}  // namespace ttnn::operations::data_movement::detail
