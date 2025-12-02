@@ -1,17 +1,18 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <optional>
 #include <variant>
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include "reduce_op_device_operation_types.hpp"
-#include "reduce_op_program_factory.hpp"
+#include "reduce_op_single_core_hw_program_factory.hpp"
+#include "reduce_op_multi_core_h_program_factory.hpp"
+#include "reduce_op_multi_core_w_program_factory.hpp"
 
 namespace ttnn::operations::reduction::generic {
 
