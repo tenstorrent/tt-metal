@@ -85,26 +85,26 @@ class DecoderBlock2DBase(DecoderBlockBase):
         page_table: ttnn.Tensor,
     ) -> ttnn.Tensor:
         # MLA norm
-        mla_norm_out = DistributedRMSNorm.forward_prefill(x, cfg["mla_norm"])
+        # mla_norm_out = DistributedRMSNorm.forward_prefill(x, cfg["mla_norm"])
 
         # MLA
-        mla_out = MLA2D.forward_prefill(mla_norm_out, user_id, cfg["mla"], rope_tensors, page_table)
-        ttnn.deallocate(mla_norm_out)
+        mla_out = MLA2D.forward_prefill(x, user_id, cfg["mla"], rope_tensors, page_table)
+        # ttnn.deallocate(mla_norm_out)
 
         # MLA Residual
         x += mla_out
         ttnn.deallocate(mla_out)
 
         # MLP norm
-        mlp_norm_out = DistributedRMSNorm.forward_prefill(x, cfg["mlp_norm"])
+        # mlp_norm_out = DistributedRMSNorm.forward_prefill(x, cfg["mlp_norm"])
 
         # MLP
-        mlp_out = cls.forward_mlp_prefill(mlp_norm_out, cfg["mlp"])
-        ttnn.deallocate(mlp_norm_out)
+        # mlp_out = cls.forward_mlp_prefill(x, cfg["mlp"])
+        # ttnn.deallocate(mlp_norm_out)
 
-        # MLP Residual
-        x += mlp_out
-        ttnn.deallocate(mlp_out)
+        # # MLP Residual
+        # x += mlp_out
+        # ttnn.deallocate(mlp_out)
 
         return x
 
@@ -119,15 +119,16 @@ class DecoderBlock2DBase(DecoderBlockBase):
     ) -> ttnn.Tensor:
         # MLA norm
         # logger.info(f"decoder_block_2d_base forward_decode x shape: {x.shape}")
-        # mla_norm_in = ttnn.to_memory_config(x, **cfg["mla_norm_reshard"])
+        mla_norm_in = ttnn.to_memory_config(x, **cfg["mla_norm_reshard"])
         # mla_norm_out = DistributedRMSNorm.forward_decode(mla_norm_in, cfg["mla_norm"])
-        # ttnn.deallocate(mla_norm_in)
+        mla_norm_out = DistributedRMSNorm.forward_decode(mla_norm_in, cfg["mla_norm"])
+        ttnn.deallocate(mla_norm_in)
 
         # # MLA
-        # mla_norm_out = ttnn.to_memory_config(mla_norm_out, **cfg["mla_reshard"])
+        mla_norm_out = ttnn.to_memory_config(mla_norm_out, **cfg["mla_reshard"])
         # logger.info(f"decoder_block_2d_base forward_decode mla_norm_out shape: {mla_norm_out.shape}")
         mla_out = MLA2D.forward_decode(x, position_idxs, cfg["mla"], rope_tensors, page_table)
-        # ttnn.deallocate(mla_norm_out)
+        ttnn.deallocate(mla_norm_out)
 
         # MLA Residual
         x += mla_out

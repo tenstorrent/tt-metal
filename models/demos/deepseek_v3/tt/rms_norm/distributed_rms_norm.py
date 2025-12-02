@@ -134,7 +134,7 @@ class DistributedRMSNorm(RMSNormBase):
                 dim=3,
                 cluster_axis=1,
                 mesh_device=MeshDeviceStub(mesh_device.shape),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=rms_norm_stats_memory_config,
                 topology=ttnn.Topology.Linear,
             ),
             "rms_norm_post_all_gather": RMSNormPostAllGatherConfig(
@@ -177,14 +177,19 @@ class DistributedRMSNorm(RMSNormBase):
         program_config = cls._get_pc(x.memory_config())
         # Run distributed rmsnorm part 1
         tt_stats = ttnn.rms_norm_pre_all_gather(x, program_config=program_config, **cfg["rms_norm_pre_all_gather"])
-        tt_stats = ttnn.to_memory_config(tt_stats, ttnn.DRAM_MEMORY_CONFIG)
+        # tt_stats = ttnn.to_memory_config(tt_stats, ttnn.L1_MEMORY_CONFIG)
         # logger.info(f"distributed_rms_norm forward tt_stats shape: {tt_stats.shape}")
         # AllGather stats
         ccl = cfg["ccl"]
         tt_gathered_stats = ttnn.experimental.all_gather_async(
             tt_stats, **ccl.populate_all_gather_runtime_args(cfg["all_gather"])
         )
-        tt_gathered_stats = ttnn.to_memory_config(tt_gathered_stats, **cfg["rms_norm_stats_memory_config"])
+        # print(tt_stats.shape)
+        # print(tt_stats.memory_config())
+        # print(cfg["rms_norm_stats_memory_config"])
+        # tt_gathered_stats = ttnn.all_gather(tt_stats, 3, cluster_axis=1, num_links=1, memory_config=cfg["rms_norm_stats_memory_config"], topology=ttnn.Topology.Linear)
+
+        # tt_gathered_stats = ttnn.to_memory_config(tt_gathered_stats, cfg["rms_norm_stats_memory_config"])
         # logger.info(f"distributed_rms_norm forward tt_gathered_stats shape: {tt_gathered_stats.shape}")
         ttnn.deallocate(tt_stats)
 

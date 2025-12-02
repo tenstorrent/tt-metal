@@ -229,7 +229,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             x = BlockClass.forward_decode(x, position_idxs, block_cfg, rope_tensors, page_table)
 
         x = ttnn.to_memory_config(x, **cfg["norm_reshard"])
-        x = DistributedRMSNorm.forward_decode(x, cfg["norm"])
+        # x = DistributedRMSNorm.forward_decode(x, cfg["norm"])
 
         ccl = cfg["lm_head"]["ccl"]
 
@@ -260,7 +260,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         ):
             x = BlockClass.forward_prefill(x, user_id, block_cfg, rope_tensors, page_table)
 
-        x = DistributedRMSNorm.forward_prefill(x, cfg["norm"])  # no resharding needed for prefill
+        # x = DistributedRMSNorm.forward_prefill(x, cfg["norm"])  # no resharding needed for prefill
 
         ccl = cfg["lm_head"]["ccl"]
 
