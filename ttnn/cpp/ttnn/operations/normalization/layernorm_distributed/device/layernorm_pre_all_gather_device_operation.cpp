@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,6 @@
 
 #include <optional>
 
-using uint32_t = std::uint32_t;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
@@ -53,10 +52,7 @@ LayerNormPreAllGatherDeviceOperation::spec_return_value_t LayerNormPreAllGatherD
     const auto& input_tensor = tensor_args.input;
 
     auto output_shape = input_tensor.logical_shape();
-    uint32_t num_tiles_w = 1;
-    if (args.norm_type == LayerNormDistributedType::LAYERNORM) {
-        num_tiles_w = 2;
-    }
+    const uint32_t num_tiles_w = (args.norm_type == LayerNormDistributedType::LAYERNORM) ? 2 : 1;
     output_shape[3] = num_tiles_w * TILE_WIDTH;
 
     return TensorSpec(output_shape, TensorLayout(args.dtype, PageConfig(Layout::TILE), input_tensor.memory_config()));
