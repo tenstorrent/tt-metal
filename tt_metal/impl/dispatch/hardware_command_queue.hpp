@@ -80,14 +80,6 @@ public:
     // This function is temporarily needed since MeshCommandQueue relies on the CommandQueue object
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;
 
-    void enqueue_read_from_core(
-        const CoreCoord& virtual_core,
-        void* dst,
-        DeviceAddr address,
-        uint32_t size_bytes,
-        bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
-
     void enqueue_write_to_core(
         const CoreCoord& virtual_core,
         const void* src,

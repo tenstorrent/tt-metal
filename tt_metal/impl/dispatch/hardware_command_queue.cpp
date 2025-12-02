@@ -239,43 +239,6 @@ CoreType HWCommandQueue::get_dispatch_core_type() {
     return MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
 }
 
-void HWCommandQueue::enqueue_read_from_core(
-    const CoreCoord& virtual_core,
-    void* dst,
-    DeviceAddr address,
-    uint32_t size_bytes,
-    bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScopedN("HWCommandQueue_enqueue_read_from_core");
-
-    address = device_dispatch::add_bank_offset_to_address(this->device_, virtual_core, address);
-
-    device_dispatch::validate_core_read_write_bounds(this->device_, virtual_core, address, size_bytes);
-
-    sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
-
-    if (size_bytes > 0) {
-        device_dispatch::CoreReadDispatchParams dispatch_params{
-            virtual_core,
-            address,
-            size_bytes,
-            this->device_,
-            this->id_,
-            this->get_dispatch_core_type(),
-            this->expected_num_workers_completed_,
-            sub_device_ids};
-        device_dispatch::issue_core_read_command_sequence(dispatch_params);
-
-        this->issued_completion_q_reads_.push(
-            std::make_shared<CompletionReaderVariant>(std::in_place_type<ReadCoreDataDescriptor>, dst, size_bytes));
-        this->increment_num_entries_in_completion_q();
-    }
-
-    if (blocking) {
-        // this->finish(sub_device_ids);
-    }
-}
-
 void HWCommandQueue::enqueue_write_to_core(
     const CoreCoord& virtual_core,
     const void* src,
