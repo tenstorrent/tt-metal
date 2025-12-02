@@ -487,6 +487,10 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
                     std::cout << "Note: " << missing_in_gsd.size()
                               << " missing connections detected but ignored due to relaxed mode." << std::endl;
                 }
+                if (!extra_in_gsd.empty()) {
+                    std::cout << "Note: " << extra_in_gsd.size()
+                              << " extra connections detected but ignored due to relaxed mode." << std::endl;
+                }
             }
             // Return empty set since we're treating this as success in relaxed mode
             return {};

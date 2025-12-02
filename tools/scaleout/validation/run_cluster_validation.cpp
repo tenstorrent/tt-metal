@@ -219,6 +219,7 @@ void parse_validation_args(int argc, char* argv[], InputArgs& input_args) {
 
         log_output_rank0("Generating System Validation Logs in " + input_args.output_path.string());
 
+<<<<<<< HEAD
         // Parse boolean flags
         input_args.fail_on_warning = result["hard-fail"].as<bool>();
         input_args.log_ethernet_metrics = result["log-ethernet-metrics"].as<bool>();
