@@ -52,5 +52,5 @@ fi
 
 # MGD generation tests (tests that generate Mesh Graph Descriptors from cabling descriptors)
 echo "Running MGD generation tests..."
-./build/test/tools/scaleout/test_cabling_descriptor_mgd_generation
+./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=CablingDescriptorMGDGenerationTests.*
 echo "MGD generation tests finished"
