@@ -408,12 +408,28 @@ class Generator:
         reset_batch=True,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
+        bitmask=None,
     ):
         if sampling_params is None:
             return_logits = True
             reset_inputs = True
         else:
             return_logits = False
+
+        if bitmask is not None:
+            bitmask_tt = ttnn.from_torch(
+                bitmask,
+                device=None,
+                dtype=ttnn.int32,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, dims=(-1, None), mesh_shape=self.args.cluster_shape
+                ),
+            )
+            if self.model.bitmask is not None:
+                copy_host_to_device(bitmask_tt, self.model.bitmask)
+            else:
+                self.model.bitmask = copy_host_to_device(bitmask_tt, self.mesh_device)
 
         if self.prev_page_table is None:
             self.prev_page_table = (

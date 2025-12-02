@@ -48,6 +48,10 @@ class TtTransformer(LightweightModule):
         self.allocate_prefill_buffers = allocate_prefill_buffers
         self.paged_attention_config = paged_attention_config
         self.decode_mode_only = decode_mode_only
+        self.bitmask = None
+        self.bitmask_arange = ttnn.arange(
+            start=0, end=32, step=1, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
+        )
 
         self.embd = TtLlamaEmbedding(
             mesh_device=mesh_device,
@@ -524,6 +528,21 @@ class TtTransformer(LightweightModule):
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
 
+    def unpack_bitmask(self, bitmask):
+        batch_dim, vocab_dim = bitmask.shape
+        bitmask_to_broadcast = bitmask.reshape((batch_dim, vocab_dim, 1))
+        broadcast_unpacked = ttnn.bitwise_right_shift(bitmask_to_broadcast, self.bitmask_arange)
+        broadcast_unpacked = ttnn.bitwise_and(broadcast_unpacked, 1)
+        unpacked_bitmask = broadcast_unpacked.reshape((batch_dim, -1))
+        converted_bitmask = ttnn.to_layout(unpacked_bitmask, ttnn.TILE_LAYOUT)
+        converted_bitmask = ttnn.typecast(converted_bitmask, dtype=ttnn.float32)
+        padded_vocab_dim = 131072
+        unpadded_vocab_dim = self.vocab_size
+        padding_size = padded_vocab_dim - unpadded_vocab_dim
+        full_mask = ttnn.pad(converted_bitmask[:, :unpadded_vocab_dim], [(0, 0), (0, padding_size)], 1.0)
+        result = ttnn.where(full_mask, 0, float("-inf"))
+        return result
+
     def ttnn_decode_forward(
         self,
         x,
@@ -566,10 +585,18 @@ class TtTransformer(LightweightModule):
 
             return tt_logits
 
+        tt_logits = tt_logits[0]
+
+        # apply bit mask for stuctured outputs
+        if self.bitmask is not None:
+            bitmask_unpacked = self.unpack_bitmask(self.bitmask)
+            tt_logits = ttnn.add(tt_logits, bitmask_unpacked, output_tensor=tt_logits)
+            bitmask_unpacked.deallocate(True)
+
         # Save output logits to global python object
         if tt_out_logits_saved is not None:
             tt_out_logits = ttnn.to_torch(
-                tt_logits[0],
+                tt_logits,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
                     self.mesh_device, dims=(3, 1), mesh_shape=self.args.cluster_shape
                 ),
@@ -581,7 +608,7 @@ class TtTransformer(LightweightModule):
             return tt_logits
 
         tt_toks = self.sampling.sample(
-            tt_logits[0],
+            tt_logits,
             tt_out_tok=x,
             enable_trace=False,
         )
