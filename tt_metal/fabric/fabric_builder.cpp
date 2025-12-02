@@ -8,8 +8,6 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include "metal_soc_descriptor.h"
-#include "tt_metal.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include <set>
 
@@ -207,66 +205,22 @@ void FabricBuilder::compile_ancillary_kernels() {
 }
 
 void FabricBuilder::create_kernels() {
-    std::map<std::string, std::string> defines = {};
-    if (fabric_context_.is_2D_routing_enabled()) {
-        defines["FABRIC_2D"] = "";
-    }
-
-    auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_->id());
-    const auto num_enabled_eth_cores = routers_.size();
-    const auto num_enabled_risc_cores = routers_.begin()->second->get_configured_risc_count();
-
+    // Compute cluster-wide coordination info
     uint32_t router_channels_mask = 0;
     for (const auto& [router_chan, _] : routers_) {
-        router_channels_mask += 0x1 << static_cast<uint32_t>(router_chan);
+        router_channels_mask |= (1 << static_cast<uint32_t>(router_chan));
     }
 
-    size_t num_local_fabric_routers = num_enabled_eth_cores;
+    KernelCreationContext ctx{
+        .is_2D_routing = fabric_context_.is_2D_routing_enabled(),
+        .master_router_chan = master_router_chan_,
+        .num_local_fabric_routers = routers_.size(),
+        .router_channels_mask = router_channels_mask,
+    };
 
+    // Let each router create its own kernel
     for (auto& [eth_chan, router_builder] : routers_) {
-        auto& edm_builder = router_builder->get_erisc_builder();
-        edm_builder.set_wait_for_host_signal(true);
-        const std::vector<uint32_t> rt_args = edm_builder.get_runtime_args();
-
-        for (uint32_t risc_id = 0; risc_id < num_enabled_risc_cores; risc_id++) {
-            std::vector<uint32_t> ct_args = edm_builder.get_compile_time_args(risc_id);
-
-            const auto is_master_risc_core = eth_chan == master_router_chan_ && (risc_id == 0);
-            ct_args.push_back(is_master_risc_core);
-            ct_args.push_back(master_router_chan_);
-            ct_args.push_back(num_local_fabric_routers);
-            ct_args.push_back(router_channels_mask);
-
-            auto proc = static_cast<tt::tt_metal::DataMovementProcessor>(risc_id);
-            if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE &&
-                tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode() &&
-                num_enabled_risc_cores == 1) {
-                // Force fabric to run on erisc1 due to stack usage exceeded with MUX on erisc0
-                proc = tt::tt_metal::DataMovementProcessor::RISCV_1;
-            }
-
-            auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
-            auto kernel = tt::tt_metal::CreateKernel(
-                program_,
-                "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp",
-                eth_logical_core,
-                tt::tt_metal::EthernetConfig{
-                    .noc = edm_builder.config.risc_configs[risc_id].get_configured_noc(),
-                    .processor = proc,
-                    .compile_args = ct_args,
-                    .defines = defines,
-                    .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
-
-            tt::tt_metal::SetRuntimeArgs(program_, kernel, eth_logical_core, rt_args);
-        }
-
-        log_debug(
-            tt::LogMetal,
-            "Fabric router created for device {}: local_node={}, eth_chan={}, direction={}",
-            device_->id(),
-            local_node_.to_string(),
-            eth_chan,
-            edm_builder.get_direction());
+        router_builder->create_kernel(program_, ctx);
     }
 }
 

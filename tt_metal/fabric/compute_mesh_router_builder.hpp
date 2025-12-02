@@ -35,11 +35,13 @@ public:
      * @param erisc_builder The erisc datamover builder (always required)
      * @param tensix_builder Optional tensix datamover builder
      * @param channel_mapping The channel mapping object that defines logical to internal channel mappings
+     * @param eth_chan The ethernet channel ID for this router
      */
     ComputeMeshRouterBuilder(
         std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder,
         std::optional<FabricTensixDatamoverBuilder> tensix_builder,
-        FabricRouterChannelMapping channel_mapping);
+        FabricRouterChannelMapping channel_mapping,
+        chan_id_t eth_chan);
 
     /**
      * Build a ComputeMeshRouterBuilder with all necessary components
@@ -76,6 +78,8 @@ public:
         FabricRouterBuilder& peer, uint32_t link_idx, uint32_t num_links, Topology topology, bool is_galaxy) override;
 
     void compile_ancillary_kernels(tt::tt_metal::Program& program) override;
+
+    void create_kernel(tt::tt_metal::Program& program, const KernelCreationContext& ctx) override;
 
     SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc, uint32_t sender_channel_idx) override;
 
@@ -137,6 +141,7 @@ private:
     std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder_;
     std::optional<FabricTensixDatamoverBuilder> tensix_builder_;
     FabricRouterChannelMapping channel_mapping_;
+    chan_id_t eth_chan_;  // Cached for kernel creation (master router determination)
 };
 
 }  // namespace tt::tt_fabric

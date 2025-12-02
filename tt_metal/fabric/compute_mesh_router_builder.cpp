@@ -9,7 +9,10 @@
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/fabric_core_placement.hpp"
 #include "impl/context/metal_context.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/third_party/umd/device/api/umd/device/types/core_coordinates.hpp"
+#include "metal_soc_descriptor.h"
+#include "tt_metal.hpp"
 #include <tt_stl/assert.hpp>
 #include <algorithm>
 
@@ -18,10 +21,12 @@ namespace tt::tt_fabric {
 ComputeMeshRouterBuilder::ComputeMeshRouterBuilder(
     std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder,
     std::optional<FabricTensixDatamoverBuilder> tensix_builder,
-    FabricRouterChannelMapping channel_mapping) :
+    FabricRouterChannelMapping channel_mapping,
+    chan_id_t eth_chan) :
     erisc_builder_(std::move(erisc_builder)),
     tensix_builder_(std::move(tensix_builder)),
-    channel_mapping_(std::move(channel_mapping)) {
+    channel_mapping_(std::move(channel_mapping)),
+    eth_chan_(eth_chan) {
     TT_FATAL(erisc_builder_ != nullptr, "Erisc builder cannot be null");
 }
 
@@ -130,7 +135,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     }
 
     auto router_builder = std::make_unique<tt::tt_fabric::ComputeMeshRouterBuilder>(
-        std::move(edm_builder), std::move(tensix_builder_opt), std::move(channel_mapping));
+        std::move(edm_builder), std::move(tensix_builder_opt), std::move(channel_mapping), eth_chan);
 
     // Setup the local relay kernel connection if in UDM mode
     if (fabric_tensix_extension_udm_mode && router_builder->has_tensix_builder()) {
@@ -428,6 +433,69 @@ void ComputeMeshRouterBuilder::compile_ancillary_kernels(tt::tt_metal::Program& 
     if (tensix_builder_.has_value()) {
         tensix_builder_->create_and_compile(program);
     }
+}
+
+void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, const KernelCreationContext& ctx) {
+    // Build defines
+    std::map<std::string, std::string> defines = {};
+    if (ctx.is_2D_routing) {
+        defines["FABRIC_2D"] = "";
+    }
+
+    // Get SOC descriptor for eth core lookup
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto device_id = control_plane.get_physical_chip_id_from_fabric_node_id(erisc_builder_->local_fabric_node_id);
+    auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
+    auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan_, CoordSystem::LOGICAL);
+
+    // Configure for host signal wait
+    erisc_builder_->set_wait_for_host_signal(true);
+
+    // Get runtime args (same for all RISC cores)
+    const std::vector<uint32_t> rt_args = erisc_builder_->get_runtime_args();
+
+    const auto num_enabled_risc_cores = get_configured_risc_count();
+
+    for (uint32_t risc_id = 0; risc_id < num_enabled_risc_cores; risc_id++) {
+        // Get compile-time args and append cluster-wide coordination info
+        std::vector<uint32_t> ct_args = erisc_builder_->get_compile_time_args(risc_id);
+
+        const auto is_master_risc_core = (eth_chan_ == ctx.master_router_chan) && (risc_id == 0);
+        ct_args.push_back(is_master_risc_core);
+        ct_args.push_back(ctx.master_router_chan);
+        ct_args.push_back(ctx.num_local_fabric_routers);
+        ct_args.push_back(ctx.router_channels_mask);
+
+        // Determine processor
+        auto proc = static_cast<tt::tt_metal::DataMovementProcessor>(risc_id);
+        if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE &&
+            tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode() &&
+            num_enabled_risc_cores == 1) {
+            // Force fabric to run on erisc1 due to stack usage exceeded with MUX on erisc0
+            proc = tt::tt_metal::DataMovementProcessor::RISCV_1;
+        }
+
+        // Create the kernel
+        auto kernel = tt::tt_metal::CreateKernel(
+            program,
+            "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp",
+            eth_logical_core,
+            tt::tt_metal::EthernetConfig{
+                .noc = erisc_builder_->config.risc_configs[risc_id].get_configured_noc(),
+                .processor = proc,
+                .compile_args = ct_args,
+                .defines = defines,
+                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+
+        tt::tt_metal::SetRuntimeArgs(program, kernel, eth_logical_core, rt_args);
+    }
+
+    log_debug(
+        tt::LogMetal,
+        "Fabric router kernel created: eth_chan={}, direction={}, is_master={}",
+        eth_chan_,
+        erisc_builder_->get_direction(),
+        eth_chan_ == ctx.master_router_chan);
 }
 
 }  // namespace tt::tt_fabric

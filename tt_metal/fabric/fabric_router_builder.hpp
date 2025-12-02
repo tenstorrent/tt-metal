@@ -65,6 +65,21 @@ struct RouterBuildSpec {
     bool is_switch_mesh;                           // Determines which builder type to create
 };
 
+// ============ Kernel Creation Context ============
+
+/**
+ * KernelCreationContext
+ *
+ * Cluster-wide coordination info needed for kernel creation.
+ * Computed by FabricBuilder (which sees all routers), passed to each router.
+ */
+struct KernelCreationContext {
+    bool is_2D_routing;
+    chan_id_t master_router_chan;
+    size_t num_local_fabric_routers;
+    uint32_t router_channels_mask;
+};
+
 // ============ Router Builder Interface ============
 
 /**
@@ -169,6 +184,15 @@ public:
      * @param program The program to compile kernels into
      */
     virtual void compile_ancillary_kernels(tt::tt_metal::Program& program) = 0;
+
+    /**
+     * Create the main router kernel for this router.
+     * Each router type controls its own kernel source, compile args, runtime args, etc.
+     *
+     * @param program The program to create the kernel in
+     * @param ctx Cluster-wide coordination info (master router, channel mask, etc.)
+     */
+    virtual void create_kernel(tt::tt_metal::Program& program, const KernelCreationContext& ctx) = 0;
 
     // ============ Mesh Type Query ============
 
