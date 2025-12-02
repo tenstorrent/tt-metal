@@ -74,6 +74,13 @@ jobs:
         run: |
           # Zero out the stats so we can see how we did this build
           # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
+          echo "=== Initial ccache configuration ==="
+          ccache --show-config | head -20
+          echo ""
+          echo "=== Git commit info ==="
+          echo "Git commit: $(git rev-parse HEAD)"
+          echo "Git commit short: $(git rev-parse --short=10 HEAD)"
+          echo ""
           ccache -z
 
       - name: ⬇️  Setup Job
@@ -83,20 +90,170 @@ jobs:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           enable-watcher: false
 
-      - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: 45
+      - name: First test run - populate kernel ccache
+        timeout-minutes: 25
         run: |
+          echo "=== ccache Kernel Consistency Test ==="
+          echo "Testing JIT kernel compilation caching during TT-Train tests"
+
+          # Store initial stats
+          echo "=== Initial ccache stats ==="
+          ccache -s
+
+          echo ""
+          echo "=== First TT-Train test run (should compile and cache kernels) ==="
           cd /work/build/tt-train
           mkdir -p generated/test_reports
           ldd tests/ttml_tests || true
-          ${{ matrix.test-group.cmd }}
+
+          # Clear any existing JIT cache to start fresh
+          rm -rf /tmp/ttnn_cache/ /tmp/tt_metal_cache/ || true
+
+          # Run first test and capture debug output
+          echo "Running first test to populate JIT kernel cache..."
+          ${{ matrix.test-group.cmd }} 2>&1 | tee /tmp/first_run.log
+
+          echo ""
+          echo "=== ccache stats after first run ==="
+          ccache -s
+
+      - name: Second test run - test kernel cache hits
+        timeout-minutes: 25
+        run: |
+          echo "=== Second TT-Train test run (should hit JIT kernel cache) ==="
+
+          cd /work/build/tt-train
+
+          # Run the same tests again - JIT kernels should hit ccache now
+          echo "Running second test - should hit cached kernels..."
+          ${{ matrix.test-group.cmd }} 2>&1 | tee /tmp/second_run.log
+
+          echo ""
+          echo "=== ccache stats after second run ==="
+          ccache -s
+
+      - name: Third test run with cache analysis
+        timeout-minutes: 25
+        run: |
+          echo "=== Third TT-Train test run for additional cache analysis ==="
+
+          cd /work/build/tt-train
+
+          # Run tests a third time to gather more cache data
+          echo "Running third test for cache pattern analysis..."
+          ${{ matrix.test-group.cmd }} 2>&1 | tee /tmp/third_run.log
+
+          echo ""
+          echo "=== Final ccache stats ==="
+          ccache -s
+
+      - name: Analyze ccache and JIT debug output
+        run: |
+          echo "=== ccache and JIT Kernel Debug Analysis ==="
+
+          echo "=== JIT Build Debug Info from First Run ==="
+          if [ -f /tmp/first_run.log ]; then
+            echo "CCACHE_DEBUG lines from first run:"
+            grep "CCACHE_DEBUG:" /tmp/first_run.log | head -30 || echo "No CCACHE_DEBUG output found in first run"
+            echo ""
+            echo "JIT compilation evidence from first run:"
+            grep -E "(compiling|compile_one|g\+\+ compile cmd)" /tmp/first_run.log | head -10 || echo "No compilation output found"
+          else
+            echo "First run log not found"
+          fi
+
+          echo ""
+          echo "=== JIT Build Debug Info from Second Run ==="
+          if [ -f /tmp/second_run.log ]; then
+            echo "CCACHE_DEBUG lines from second run:"
+            grep "CCACHE_DEBUG:" /tmp/second_run.log | head -30 || echo "No CCACHE_DEBUG output found in second run"
+            echo ""
+            echo "JIT compilation evidence from second run:"
+            grep -E "(compiling|compile_one|g\+\+ compile cmd)" /tmp/second_run.log | head -10 || echo "No compilation output found"
+          else
+            echo "Second run log not found"
+          fi
+
+          echo ""
+          echo "=== JIT Build Debug Info from Third Run ==="
+          if [ -f /tmp/third_run.log ]; then
+            echo "CCACHE_DEBUG lines from third run:"
+            grep "CCACHE_DEBUG:" /tmp/third_run.log | head -30 || echo "No CCACHE_DEBUG output found in third run"
+          else
+            echo "Third run log not found"
+          fi
+
+          echo ""
+          echo "=== Comparing key debug values between runs ==="
+          if [ -f /tmp/first_run.log ] && [ -f /tmp/second_run.log ]; then
+            echo "Build key and hash differences:"
+            echo "--- First Run Build Keys ---"
+            grep -E "(build_key|git_hash|out_root)" /tmp/first_run.log | head -10 || echo "No build key info found"
+            echo "--- Second Run Build Keys ---"
+            grep -E "(build_key|git_hash|out_root)" /tmp/second_run.log | head -10 || echo "No build key info found"
+
+            echo ""
+            echo "Compile command differences:"
+            echo "--- First Run Commands ---"
+            grep "Full compile command" /tmp/first_run.log | head -5 || echo "No compile commands found"
+            echo "--- Second Run Commands ---"
+            grep "Full compile command" /tmp/second_run.log | head -5 || echo "No compile commands found"
+          else
+            echo "Cannot compare - missing log files"
+          fi
+        continue-on-error: true
 
       - name: Publish ccache summary
         run: |
-          echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
+          echo '## CCache Kernel Consistency Test Results' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo 'This test checks if ccache works consistently for JIT kernel compilation across rebuilds from the same commit.' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+
+          # Get final stats
+          STATS=$(ccache -s)
+          echo '### Final CCache Stats' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          ccache -s >> $GITHUB_STEP_SUMMARY
+          echo "$STATS" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+          # Parse and analyze the stats
+          CACHE_HITS=$(echo "$STATS" | grep -E "cache hit" | grep -oE "[0-9]+" | head -1 || echo "0")
+          CACHE_MISSES=$(echo "$STATS" | grep -E "cache miss" | grep -oE "[0-9]+" | head -1 || echo "0")
+          TOTAL=$((CACHE_HITS + CACHE_MISSES))
+
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '### Analysis' >> $GITHUB_STEP_SUMMARY
+          echo "- Cache hits: $CACHE_HITS" >> $GITHUB_STEP_SUMMARY
+          echo "- Cache misses: $CACHE_MISSES" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$TOTAL" -gt 0 ]; then
+            HIT_RATE=$((CACHE_HITS * 100 / TOTAL))
+            echo "- Hit rate: ${HIT_RATE}%" >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+
+            if [ "$HIT_RATE" -lt 30 ]; then
+              echo '🔴 **ISSUE CONFIRMED**: Very low cache hit rate indicates ccache is not working effectively for kernel compilation across rebuilds.' >> $GITHUB_STEP_SUMMARY
+              echo 'This confirms the suspected cache-busting issue in JIT kernel builds.' >> $GITHUB_STEP_SUMMARY
+            elif [ "$HIT_RATE" -lt 70 ]; then
+              echo '🟡 **PARTIAL ISSUE**: Moderate cache hit rate suggests some cache busting may be occurring.' >> $GITHUB_STEP_SUMMARY
+            else
+              echo '🟢 **GOOD**: High cache hit rate indicates ccache is working well for kernel compilation.' >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo '⚪ **NO DATA**: No cache activity detected.' >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload debug logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ccache-debug-logs-${{ github.run_id }}
+          path: |
+            /tmp/first_run.log
+            /tmp/second_run.log
+            /tmp/third_run.log
+          retention-days: 14
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}

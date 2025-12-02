@@ -99,18 +99,21 @@ void JitBuildEnv::init(
     log_info(tt::LogBuildKernels, "GIT_COMMIT_HASH not found");
 #else
     std::string git_hash(GIT_COMMIT_HASH);
+    log_info(tt::LogBuildKernels, "CCACHE_DEBUG: git_hash = '{}'", git_hash);
+    log_info(tt::LogBuildKernels, "CCACHE_DEBUG: out_root before = '{}'", this->out_root_);
 
     std::filesystem::path git_hash_path(this->out_root_ + git_hash);
     std::filesystem::path root_path(this->out_root_);
     if ((not rtoptions.get_skip_deleting_built_cache()) && std::filesystem::exists(root_path)) {
-        std::ranges::for_each(
-            std::filesystem::directory_iterator{root_path},
-            [&git_hash_path](const auto& dir_entry) { check_built_dir(dir_entry.path(), git_hash_path); });
+        std::ranges::for_each(std::filesystem::directory_iterator{root_path}, [&git_hash_path](const auto& dir_entry) {
+            check_built_dir(dir_entry.path(), git_hash_path);
+        });
     } else {
         log_info(tt::LogBuildKernels, "Skipping deleting built cache");
     }
 
-    this->out_root_ = this->out_root_  + git_hash + "/";
+    this->out_root_ = this->out_root_ + git_hash + "/";
+    log_info(tt::LogBuildKernels, "CCACHE_DEBUG: out_root after = '{}'", this->out_root_);
 #endif
 
     // Tools
@@ -124,10 +127,7 @@ void JitBuildEnv::init(
     // Use local sfpi for development
     // Use system sfpi for production to avoid packaging it
     // Ordered by precedence
-    const std::array<std::string, 2> sfpi_roots = {
-        this->root_ + "runtime/sfpi",
-        "/opt/tenstorrent/sfpi"
-    };
+    const std::array<std::string, 2> sfpi_roots = {this->root_ + "runtime/sfpi", "/opt/tenstorrent/sfpi"};
 
     bool sfpi_found = false;
     for (unsigned i = 0; i < 2; ++i) {
@@ -265,6 +265,12 @@ void JitBuildEnv::init(
     this->lflags_ += "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
 
     // Need to capture more info in build key to prevent stale binaries from being reused.
+    log_info(tt::LogBuildKernels, "CCACHE_DEBUG: input build_key = {}", build_key);
+    log_info(tt::LogBuildKernels, "CCACHE_DEBUG: arch = {}", enchantum::to_underlying(this->arch_));
+    log_info(tt::LogBuildKernels, "CCACHE_DEBUG: cflags = '{}'", this->cflags_);
+    log_info(tt::LogBuildKernels, "CCACHE_DEBUG: lflags = '{}'", this->lflags_);
+    log_info(tt::LogBuildKernels, "CCACHE_DEBUG: defines = '{}'", this->defines_);
+
     jit_build::utils::FNV1a hasher;
     hasher.update(build_key);
     hasher.update(enchantum::to_underlying(this->arch_));
@@ -273,11 +279,16 @@ void JitBuildEnv::init(
     hasher.update(defines_.begin(), defines_.end());
     build_key_ = hasher.digest();
 
+    log_info(tt::LogBuildKernels, "CCACHE_DEBUG: final build_key_ = {}", build_key_);
+
     // Firmware build path is a combination of build_key and fw_compile_hash
     // If either change, the firmware build path will change and FW will be rebuilt
     // if it's not already in MetalContext::firmware_built_keys_
+    log_info(tt::LogBuildKernels, "CCACHE_DEBUG: fw_compile_hash = {}", fw_compile_hash);
     this->out_firmware_root_ = fmt::format("{}{}/firmware/{}/", this->out_root_, build_key_, fw_compile_hash);
     this->out_kernel_root_ = fmt::format("{}{}/kernels/", this->out_root_, build_key_);
+    log_info(tt::LogBuildKernels, "CCACHE_DEBUG: out_firmware_root = '{}'", this->out_firmware_root_);
+    log_info(tt::LogBuildKernels, "CCACHE_DEBUG: out_kernel_root = '{}'", this->out_kernel_root_);
 }
 
 JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
@@ -442,6 +453,13 @@ void JitBuildState::compile_one(
         log_info(tt::LogBuildKernels, "    g++ compile cmd: {}", cmd);
     }
 
+    // CCACHE DEBUG: Always log the command when ccache is enabled to help debug cache misses
+    if (std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr) {
+        log_info(tt::LogBuildKernels, "CCACHE_DEBUG: Full compile command: {}", cmd);
+        log_info(tt::LogBuildKernels, "CCACHE_DEBUG: Working directory: {}", out_dir);
+        log_info(tt::LogBuildKernels, "CCACHE_DEBUG: Source: {} -> Object: {}", src, obj);
+    }
+
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() && settings) {
         log_kernel_defines_and_args(out_dir, settings->get_full_kernel_name(), defines);
     }
@@ -542,7 +560,7 @@ void JitBuildState::weaken(const string& out_dir) const {
 
     ll_api::ElfFile elf;
     elf.ReadImage(pathname_in);
-    static std::string_view const strong_names[] = {"__fw_export_*", "__global_pointer$"};
+    static const std::string_view strong_names[] = {"__fw_export_*", "__global_pointer$"};
     elf.WeakenDataSymbols(strong_names);
     elf.WriteImage(pathname_out);
 }
