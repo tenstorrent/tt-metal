@@ -10,9 +10,9 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
-using namespace tt::tt_metal;
-
 namespace ttnn::operations::reduction::program {
+
+using namespace tt::tt_metal;
 
 /**
  * @brief Distributes work across cores for argmax reduction operations

@@ -8,10 +8,9 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
-using namespace tt::tt_metal;
-
 namespace ttnn::operations::reduction::program {
 
+using namespace tt::tt_metal;
 using namespace tt::constants;
 
 static std::tuple<uint32_t, uint32_t> get_page_sizes_single_core(
