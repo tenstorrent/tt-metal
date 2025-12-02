@@ -200,7 +200,7 @@ def test_pipeline_performance(
     text_encoder_times = [benchmark_profiler.get_duration("text_encoder", i) for i in range(num_perf_runs)]
     denoising_times = [benchmark_profiler.get_duration("denoising", i) for i in range(num_perf_runs)]
     vae_times = [benchmark_profiler.get_duration("vae", i) for i in range(num_perf_runs)]
-    total_times = [benchmark_profiler.get_duration("total", i) for i in range(num_perf_runs)]
+    total_times = [benchmark_profiler.get_duration("run", i) for i in range(num_perf_runs)]
 
     # Report results
     print("\n" + "=" * 80)
@@ -237,21 +237,21 @@ def test_pipeline_performance(
         "text_encoder": statistics.mean(text_encoder_times),
         "denoising": statistics.mean(denoising_times),
         "vae": statistics.mean(vae_times),
-        "total": statistics.mean(total_times),
+        "run": statistics.mean(total_times),
     }
     if tuple(mesh_device.shape) == (2, 4) and height == 480:
         expected_metrics = {
             "text_encoder": 14.8,
             "denoising": 909.0,
             "vae": 64.6,
-            "total": 990.0,
+            "run": 990.0,
         }
     elif tuple(mesh_device.shape) == (4, 8) and height == 480:
         expected_metrics = {
             "text_encoder": 15.0,
             "denoising": 163.0,
             "vae": 18.2,
-            "total": 192.0,
+            "run": 192.0,
         }
     elif tuple(mesh_device.shape) == (4, 8) and height == 720:
         if is_blackhole():
@@ -259,30 +259,30 @@ def test_pipeline_performance(
                 "text_encoder": 15.0,
                 "denoising": 290.0,
                 "vae": 36.0,
-                "total": 341.0,
+                "run": 341.0,
             }
         else:
             expected_metrics = {
                 "text_encoder": 15.0,
                 "denoising": 440.0,
                 "vae": 42.0,
-                "total": 497.0,
+                "run": 497.0,
             }
     elif tuple(mesh_device.shape) == (1, 4) and height == 480:
         assert is_blackhole(), "1x4 is only supported for blackhole"
         expected_metrics = {
-            "text_encoding_time": 17.0,
-            "denoising_time": 680.0,
-            "vae_decoding_time": 60.0,
-            "total_time": 760.0,
+            "text_encoder": 17.0,
+            "denoising": 680.0,
+            "vae": 60.0,
+            "run": 760.0,
         }
     elif tuple(mesh_device.shape) == (1, 4) and height == 720:
         assert is_blackhole(), "1x4 is only supported for blackhole"
         expected_metrics = {
-            "text_encoding_time": 15.0,
-            "denoising_time": 3200.0,
-            "vae_decoding_time": 200.0,
-            "total_time": 3415.0,
+            "text_encoder": 15.0,
+            "denoising": 3200.0,
+            "vae": 200.0,
+            "run": 3415.0,
         }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
