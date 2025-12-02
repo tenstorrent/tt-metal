@@ -93,6 +93,8 @@ def check_noc_status(
             # Store name of register and variable where mismatch occurred along side their values
             message += f"    {reg} {var} {reg_val} {var_val}\n"
             passed = False
+    if not passed:
+        message = "Mismatched state: \n" + message
 
     log_check_location(location, passed, message)
 
