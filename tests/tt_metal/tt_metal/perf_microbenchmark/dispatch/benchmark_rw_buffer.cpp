@@ -133,20 +133,7 @@ static void BM_read_pinned_memory(benchmark::State& state, std::shared_ptr<MeshD
     auto transfer_size = state.range(1);
     auto buffer_type = BUFFER_TYPES[state.range(2)];
     [[maybe_unused]] auto device_id = state.range(3);
-
-    fmt::println(
-        stderr,
-        "Running ReadPinnedMemory Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Device ID: {}",
-        page_size,
-        transfer_size,
-        buffer_type == BufferType::DRAM ? "DRAM" : "L1",
-        device_id);
-    fmt::println(
-        "Running ReadPinnedMemory Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Device ID: {}",
-        page_size,
-        transfer_size,
-        buffer_type == BufferType::DRAM ? "DRAM" : "L1",
-        device_id);
+    bool can_map_to_noc = experimental::GetMemoryPinningParameters(*mesh_device).can_map_to_noc;
 
     log_debug(
         LogTest,
@@ -173,7 +160,7 @@ static void BM_read_pinned_memory(benchmark::State& state, std::shared_ptr<MeshD
     // Pin the aligned host memory region for the shard
     auto coord = MeshCoordinate(0, 0);
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
-    auto pinned_unique = experimental::PinnedMemory::Create(*mesh_device, coordinate_range_set, host_buffer, /*map_to_noc=*/true);
+    auto pinned_unique = can_map_to_noc ? experimental::PinnedMemory::Create(*mesh_device, coordinate_range_set, host_buffer, /*map_to_noc=*/true) : nullptr;
     std::shared_ptr<experimental::PinnedMemory> pinned_mem = std::move(pinned_unique);
 
     // Prepare the read transfer using pinned memory
@@ -183,7 +170,6 @@ static void BM_read_pinned_memory(benchmark::State& state, std::shared_ptr<MeshD
         .region = BufferRegion(0, static_cast<std::size_t>(transfer_size)),
         .pinned_memory = pinned_mem,
     };
-    fmt::println(stderr, "Before enqueue read shards");
 
     for (auto _ : state) {
         mesh_device->mesh_command_queue().enqueue_read_shards({read_transfer}, device_buffer, /*blocking=*/true);
@@ -210,6 +196,8 @@ int main(int argc, char** argv) {
     }
 
     auto devices = MeshDevice::create_unit_meshes(device_ids);
+
+    log_info(LogTest, "Can map memory to NOC: {}", experimental::GetMemoryPinningParameters(*devices[0]).can_map_to_noc);
     for (auto [device_id, device] : devices) {
         // Device ID embedded here for extraction
         auto benchmark_args = {PAGE_SIZE_ARGS, TRANSFER_SIZE_ARGS, BUFFER_TYPE_ARGS, {device_id}};
