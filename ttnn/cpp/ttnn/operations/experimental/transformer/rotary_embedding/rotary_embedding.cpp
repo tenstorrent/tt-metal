@@ -1,11 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "rotary_embedding.hpp"
+#include "ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding.hpp"
 
-#include "device/rotary_embedding_device_operation.hpp"
-#include "ttnn/operation.hpp"
+#include "ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 
@@ -82,11 +81,14 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
     Tensor formatted_sin =
         ttnn::tilize_with_val_padding(sin_cache, padded_shape_sin, PadValue(0.0f), sin_cache.memory_config());
 
-    return tt::tt_metal::operation::run(
-               tt::tt_metal::RotaryEmbedding{
-                   seq_len, token_index, memory_config.value_or(default_memory_config), kernel_config_val},
-               {formatted_input, formatted_cos, formatted_sin})
-        .at(0);
+    return ttnn::prim::rotary_embedding(
+        formatted_input,
+        formatted_cos,
+        formatted_sin,
+        seq_len,
+        token_index,
+        memory_config.value_or(default_memory_config),
+        kernel_config_val);
 }
 
 }  // namespace ttnn::operations::experimental::transformer
