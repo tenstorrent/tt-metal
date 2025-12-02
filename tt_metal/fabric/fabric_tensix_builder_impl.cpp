@@ -17,40 +17,13 @@
 #include "tt_metal/fabric/fabric_router_builder.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
+#include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_align.hpp"
 #include <bit>
 #include <algorithm>
 #include <utility>
 
 namespace tt::tt_fabric {
-
-// Helper function to determine perpendicular directions
-// E/W direction returns N/S as perpendicular; N/S direction returns E/W as perpendicular
-static std::pair<eth_chan_directions, eth_chan_directions> get_perpendicular_directions(eth_chan_directions direction) {
-    if (direction == eth_chan_directions::EAST || direction == eth_chan_directions::WEST) {
-        // E/W -> perpendicular are N/S
-        return {eth_chan_directions::NORTH, eth_chan_directions::SOUTH};
-    } else {
-        // N/S -> perpendicular are E/W
-        return {eth_chan_directions::EAST, eth_chan_directions::WEST};
-    }
-}
-
-// Helper function to get directions for inter-mux connections
-// Returns all directions except the current direction, in E,W,N,S order
-static std::vector<eth_chan_directions> get_all_other_directions(eth_chan_directions direction) {
-    std::vector<eth_chan_directions> all_directions = {
-        eth_chan_directions::EAST, eth_chan_directions::WEST, eth_chan_directions::NORTH, eth_chan_directions::SOUTH};
-
-    std::vector<eth_chan_directions> dirs;
-    for (auto dir : all_directions) {
-        if (dir != direction) {
-            dirs.push_back(dir);
-        }
-    }
-
-    return dirs;
-}
 
 static uint32_t get_downstream_mux_channel_id(eth_chan_directions direction, eth_chan_directions downstream_direction) {
     size_t channel_id;
@@ -450,7 +423,7 @@ std::vector<MuxConnectionInfo> FabricTensixDatamoverMuxConfig::get_all_mux_conne
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const auto& tensix_config = fabric_context.get_tensix_config();
 
-    auto downstream_dirs = get_all_other_directions(direction);
+    auto downstream_dirs = builder::get_all_other_directions(direction);
 
     std::vector<MuxConnectionInfo> mux_infos;
 
@@ -669,7 +642,7 @@ FabricTensixDatamoverRelayConfig::get_all_mux_connection_infos(
     const auto& tensix_config = fabric_context.get_tensix_config();
 
     // Determine directions to check: [0]=local, [1]=perp1, [2]=perp2
-    auto [perp_dir1, perp_dir2] = get_perpendicular_directions(direction);
+    auto [perp_dir1, perp_dir2] = builder::get_perpendicular_directions(direction);
     std::array<eth_chan_directions, NUM_MUX_CONNECTIONS> target_mux_dirs = {direction, perp_dir1, perp_dir2};
 
     std::array<MuxConnectionInfo, NUM_MUX_CONNECTIONS> mux_infos{};
@@ -1009,7 +982,7 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_persistent_channels_f
             is_persistent_channels[static_cast<uint32_t>(UdmMuxRelayToMuxChannelId::LOCAL_RELAY_CHANNEL)] = 1;
 
             // Channels 1-2: Upstream relays (perpendicular directions)
-            auto [upstream_relay_dir1, upstream_relay_dir2] = get_perpendicular_directions(direction_);
+            auto [upstream_relay_dir1, upstream_relay_dir2] = builder::get_perpendicular_directions(direction_);
             std::array<eth_chan_directions, 2> upstream_relay_dirs = {upstream_relay_dir1, upstream_relay_dir2};
             std::array<UdmMuxRelayToMuxChannelId, 2> upstream_relay_channels = {
                 UdmMuxRelayToMuxChannelId::EAST_OR_NORTH_RELAY_CHANNEL,
@@ -1028,7 +1001,7 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_persistent_channels_f
             // Mux-to-Mux channels: check if muxes exist in other directions (UDM mode only)
             TT_FATAL(num_channels == 3, "MUX_TO_MUX_CHANNEL should have exactly 3 channels (got {})", num_channels);
 
-            auto upstream_mux_dirs = get_all_other_directions(direction_);
+            auto upstream_mux_dirs = builder::get_all_other_directions(direction_);
             for (auto upstream_dir : upstream_mux_dirs) {
                 const auto* noc_coords =
                     tensix_config.get_router_noc_coords(local_fabric_node_id_, link_idx_, upstream_dir);

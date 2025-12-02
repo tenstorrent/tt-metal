@@ -26,6 +26,10 @@
 // NOLINTBEGIN(misc-unused-parameters)
 namespace tt::tt_fabric {
 
+// Helper for dependent static_assert that always evaluates to false
+template <class>
+inline constexpr bool always_false_v = false;
+
 enum TerminationSignal : uint32_t {
     KEEP_RUNNING = 0,
 
@@ -256,6 +260,9 @@ struct PacketHeaderBase {
 
     Derived& to_noc_unicast_read(const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#ifndef UDM_MODE
+        static_assert(always_false_v<Derived>, "to_noc_unicast_read requires UDM mode / relay extension to be enabled");
+#endif
         this->noc_send_type = NOC_UNICAST_READ;
         auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
         auto noc_addr = safe_get_noc_addr(
@@ -362,6 +369,9 @@ struct PacketHeaderBase {
     volatile Derived* to_noc_unicast_read(
         const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#ifndef UDM_MODE
+        static_assert(always_false_v<Derived>, "to_noc_unicast_read requires UDM mode / relay extension to be enabled");
+#endif
         this->noc_send_type = NOC_UNICAST_READ;
         auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
         auto noc_addr = safe_get_noc_addr(

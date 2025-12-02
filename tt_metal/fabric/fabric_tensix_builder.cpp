@@ -15,6 +15,7 @@
 #include <tt-metalium/device_pool.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "tt_align.hpp"
@@ -98,6 +99,65 @@ void FabricTensixDatamoverConfig::find_min_max_eth_channels(const std::vector<tt
     }
 }
 
+void FabricTensixDatamoverConfig::build_per_device_channel_mappings(
+    const std::vector<tt_metal::IDevice*>& all_active_devices) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // Create per-device channel mappings using real ethernet channel IDs
+    for (const auto& device : all_active_devices) {
+        auto dev_id = device->id();
+        auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev_id);
+
+        // Get all active ethernet channels for this device
+        auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+
+        // Initialize per-device mappings
+        eth_chan_to_core_index_[dev_id] = std::unordered_map<size_t, size_t>();
+        eth_chan_to_core_id_[dev_id] = std::unordered_map<size_t, FabricTensixCoreType>();
+
+        // Create round-robin mapping using the actual ethernet channel IDs from active_channels
+        size_t channel_index = 0;
+        for (auto [eth_chan_id, eth_chan_dir] : active_channels) {
+            size_t core_index = channel_index % logical_fabric_mux_cores_.size();
+            eth_chan_to_core_index_[dev_id][eth_chan_id] = core_index;
+
+            // Determine core type: In both MUX and UDM modes, all worker channels go to MUX (core type 0)
+            // The RELAY (core type 1) in UDM mode handles fabric-to-fabric routing, not worker channels
+            FabricTensixCoreType core_id = FabricTensixCoreType::MUX;  // Always assign to MUX
+            eth_chan_to_core_id_[dev_id][eth_chan_id] = core_id;
+
+            channel_index++;
+        }
+    }
+}
+
+void FabricTensixDatamoverConfig::build_fabric_router_noc_coords_map(
+    const std::vector<tt_metal::IDevice*>& all_active_devices) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // Build the fabric_router_noc_coords_map_ to track which routers/tensix exist in each direction
+    // for each fabric node and routing plane (link index)
+    for (const auto& device : all_active_devices) {
+        auto dev_id = device->id();
+        auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev_id);
+
+        // Get all active ethernet channels for this device
+        auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+
+        // For each active ethernet channel, record its direction info in the map
+        // By looping through all channels, we naturally cover all directions that have active routers
+        for (auto [eth_chan_id, eth_chan_dir] : active_channels) {
+            routing_plane_id_t routing_plane_id = control_plane.get_routing_plane_id(fabric_node_id, eth_chan_id);
+
+            // Get the tensix NOC coordinates for this channel
+            auto [noc_x, noc_y] = get_noc_xy(device, eth_chan_id);
+
+            // Record this direction's router/tensix NOC coordinates for this fabric node + routing plane
+            fabric_router_noc_coords_map_[fabric_node_id][routing_plane_id][eth_chan_dir] = {noc_x, noc_y};
+        }
+    }
+}
+
 FabricTensixDatamoverConfig::FabricTensixDatamoverConfig() {
     // Initialize channel mappings and configurations, skipping the rest initilization if there are no ethernet found
     if (!initialize_channel_mappings()) {
@@ -108,8 +168,6 @@ FabricTensixDatamoverConfig::FabricTensixDatamoverConfig() {
 }
 
 bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-
     // Get logical fabric mux cores from the first available device (same for all devices), except for TG
     const bool is_TG =
         (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG);
@@ -178,54 +236,11 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
         default: TT_THROW("Unsupported FabricTensixConfig mode: {}", static_cast<int>(fabric_tensix_config));
     }
 
-    // Second pass: create per-device channel mappings using real ethernet channel IDs
-    for (const auto& device : all_active_devices) {
-        auto dev_id = device->id();
-        auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev_id);
+    // Second pass: create per-device channel mappings
+    build_per_device_channel_mappings(all_active_devices);
 
-        // Get all active ethernet channels for this device
-        auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
-
-        // Initialize per-device mappings
-        eth_chan_to_core_index_[dev_id] = std::unordered_map<size_t, size_t>();
-        eth_chan_to_core_id_[dev_id] = std::unordered_map<size_t, FabricTensixCoreType>();
-
-        // Create round-robin mapping using the actual ethernet channel IDs from active_channels
-        size_t channel_index = 0;
-        for (auto [eth_chan_id, eth_chan_dir] : active_channels) {
-            size_t core_index = channel_index % logical_fabric_mux_cores_.size();
-            eth_chan_to_core_index_[dev_id][eth_chan_id] = core_index;
-
-            // Determine core type: In both MUX and UDM modes, all worker channels go to MUX (core type 0)
-            // The RELAY (core type 1) in UDM mode handles fabric-to-fabric routing, not worker channels
-            FabricTensixCoreType core_id = FabricTensixCoreType::MUX;  // Always assign to MUX
-            eth_chan_to_core_id_[dev_id][eth_chan_id] = core_id;
-
-            channel_index++;
-        }
-    }
-
-    // Third pass: Build the fabric_router_direction_map_ to track which routers/tensix exist in each direction
-    // for each fabric node and routing plane (link index)
-    for (const auto& device : all_active_devices) {
-        auto dev_id = device->id();
-        auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev_id);
-
-        // Get all active ethernet channels for this device
-        auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
-
-        // For each active ethernet channel, record its direction info in the map
-        // By looping through all channels, we naturally cover all directions that have active routers
-        for (auto [eth_chan_id, eth_chan_dir] : active_channels) {
-            routing_plane_id_t routing_plane_id = control_plane.get_routing_plane_id(fabric_node_id, eth_chan_id);
-
-            // Get the tensix NOC coordinates for this channel
-            auto [noc_x, noc_y] = get_noc_xy(device, eth_chan_id);
-
-            // Record this direction's router/tensix NOC coordinates for this fabric node + routing plane
-            fabric_router_noc_coords_map_[fabric_node_id][routing_plane_id][eth_chan_dir] = {noc_x, noc_y};
-        }
-    }
+    // Third pass: Build the fabric_router_noc_coords_map_
+    build_fabric_router_noc_coords_map(all_active_devices);
 
     return true;
 }
@@ -254,26 +269,11 @@ std::map<ChannelTypes, uint32_t> get_num_mux_channels() {
     } else {
         // Legacy MUX mode: use topology-based channel count
         // Legacy has ROUTER_CHANNEL and WORKER_CHANNEL
-
         const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-        auto topology = fabric_context.get_fabric_topology();
+        bool is_2D_routing = fabric_context.is_2D_routing_enabled();
 
-        uint32_t num_fabric_router_channels = 0;
-        switch (topology) {
-            case tt::tt_fabric::Topology::Linear:
-            case tt::tt_fabric::Topology::Ring:
-                // 1D: 1 fabric router channel + 1 worker channel = 2 total
-                num_fabric_router_channels = 1;
-                break;
-            case tt::tt_fabric::Topology::Mesh:
-            case tt::tt_fabric::Topology::Torus:
-                // 2D: 3 fabric router channels + 1 worker channel = 4 total
-                num_fabric_router_channels = 3;
-                break;
-            default: TT_THROW("unknown fabric topology: {}", topology); break;
-        }
-
-        channel_counts[ChannelTypes::ROUTER_CHANNEL] = num_fabric_router_channels;
+        // Router channel count: 1 for 1D topologies, 3 for 2D topologies
+        channel_counts[ChannelTypes::ROUTER_CHANNEL] = builder_config::get_vc0_downstream_edm_count(is_2D_routing);
         channel_counts[ChannelTypes::WORKER_CHANNEL] = 1;  // Always 1 worker channel in legacy mode
     }
 

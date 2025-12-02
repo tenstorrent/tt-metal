@@ -151,7 +151,39 @@ private:
     size_t max_eth_channels_ = 0;
 
     // Helper methods for initialization
+
+    /**
+     * Computes the minimum and maximum number of non-dispatch active ethernet channels
+     * across all active devices in the system.
+     *
+     * For each device, this function:
+     * 1. Gathers active fabric ethernet channels in each routing direction
+     * 2. Filters out channels reserved for dispatch tunnels
+     * 3. Counts the remaining non-dispatch channels
+     *
+     * The results are stored in min_eth_channels_ and max_eth_channels_ member variables,
+     * which are later used by calculate_buffer_allocations() to determine buffer sizing
+     * and channel configuration.
+     */
     void find_min_max_eth_channels(const std::vector<tt_metal::IDevice*>& all_active_devices);
+
+    /**
+     * Builds per-device channel mappings using real ethernet channel IDs.
+     *
+     * For each device, creates round-robin mapping of ethernet channels to tensix cores,
+     * populating eth_chan_to_core_index_ and eth_chan_to_core_id_ maps.
+     */
+    void build_per_device_channel_mappings(const std::vector<tt_metal::IDevice*>& all_active_devices);
+
+    /**
+     * Builds the fabric_router_noc_coords_map_ to track which routers/tensix exist in each direction
+     * for each fabric node and routing plane (link index).
+     *
+     * For each active device and its ethernet channels, this function records the tensix NOC
+     * coordinates in the map, keyed by fabric node ID, routing plane ID, and direction.
+     */
+    void build_fabric_router_noc_coords_map(const std::vector<tt_metal::IDevice*>& all_active_devices);
+
     bool initialize_channel_mappings();
     void calculate_buffer_allocations();
     void create_configs();  // Creates mode-aware configs based on FabricTensixConfig
