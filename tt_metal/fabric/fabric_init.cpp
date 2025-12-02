@@ -31,62 +31,6 @@ bool isFabricUnitTest() { return false; }
 
 namespace tt::tt_fabric {
 
-tt::tt_fabric::FabricEriscDatamoverAxis get_fabric_edm_type(
-    const tt::tt_fabric::ControlPlane& control_plane,
-    const tt::tt_fabric::RoutingDirection direction,
-    tt::tt_fabric::MeshId mesh_id0,
-    tt::tt_fabric::MeshId mesh_id1,
-    ChipId chip0,
-    ChipId chip1,
-    bool wrap_around_mesh) {
-    auto fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short;
-
-    const auto& fabric_context = control_plane.get_fabric_context();
-
-    const auto eth_chan_direction = control_plane.routing_direction_to_eth_direction(direction);
-    if (mesh_id0 != mesh_id1 || !fabric_context.need_deadlock_avoidance_support(eth_chan_direction)) {
-        return fabric_edm_axis;
-    }
-
-    // Need global mesh shape to determine dateline placement for multi-host setups
-    auto physical_mesh_shape = control_plane.get_physical_mesh_shape(mesh_id0, tt::tt_fabric::MeshScope::GLOBAL);
-    TT_FATAL(physical_mesh_shape.dims() == 2, "Dateline routing only supported for 2D mesh");
-
-    auto mesh_num_rows = physical_mesh_shape[0];
-    auto mesh_num_columns = physical_mesh_shape[1];
-
-    auto smaller_chip_id = std::min(chip0, chip1);
-    auto larger_chip_id = std::max(chip0, chip1);
-
-    // Refactor this once mesh_id0 has row/col control
-    // wrap_around_mesh is used to fold the edm connections on the corner chips of a 2D mesh to form an outer ring of
-    // devices on the mesh.
-    if (wrap_around_mesh) {
-        // check if edm is on the longer axis
-        if ((mesh_num_rows * mesh_num_columns) >=
-            tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD) {
-            fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Long;
-        }
-    } else {
-        bool is_edm_along_row = ((larger_chip_id - smaller_chip_id) == mesh_num_columns) ||
-                                (smaller_chip_id == larger_chip_id % mesh_num_columns);
-
-        // check if edm is on the longer axis
-        if ((mesh_num_columns >= tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD &&
-             !is_edm_along_row) ||
-            (mesh_num_rows >= tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD &&
-             is_edm_along_row)) {
-            fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Long;
-        }
-    }
-
-    if (fabric_context.is_2D_routing_enabled()) {
-        fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short;
-    }
-
-    return fabric_edm_axis;
-}
-
 void build_tt_fabric_program(
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program* fabric_program_ptr,
