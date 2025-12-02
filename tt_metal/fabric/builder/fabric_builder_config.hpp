@@ -32,24 +32,8 @@ struct MemoryRegion {
     bool contains(size_t address) const { return address >= start_address && address < get_end_address(); }
 };
 
-enum class FabricEriscDatamoverAxis : std::size_t {
-    Short = 0,
-    Long = 1,
-    Invalid = 2,
-};
-
-struct FabricRouterBufferConfig {
-    bool enable_dateline_sender_extra_buffer_slots = false;
-    bool enable_dateline_receiver_extra_buffer_slots = false;
-    bool enable_dateline_upstream_sender_extra_buffer_slots = false;
-    bool enable_dateline_upstream_receiver_extra_buffer_slots = false;
-    bool enable_dateline_upstream_adjacent_sender_extra_buffer_slots = false;
-};
-
 // enable extra buffer slots configuration based on sender/receiver channel and EDM type.
 struct FabricEriscDatamoverOptions {
-    FabricEriscDatamoverAxis edm_axis = FabricEriscDatamoverAxis::Short;
-    FabricRouterBufferConfig edm_buffer_config = FabricRouterBufferConfig{};
     FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED;
     eth_chan_directions direction = eth_chan_directions::EAST;  // only used by 2D to get the correct router direction
 };

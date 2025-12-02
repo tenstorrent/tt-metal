@@ -17,7 +17,7 @@ FabricRouterChannelMapping::FabricRouterChannelMapping(
 
 void FabricRouterChannelMapping::initialize_mappings() {
     initialize_vc0_mappings();
-    initialize_vc2_mappings();
+    initialize_vc1_mappings();
 }
 
 void FabricRouterChannelMapping::initialize_vc0_mappings() {
@@ -31,7 +31,6 @@ void FabricRouterChannelMapping::initialize_vc0_mappings() {
         constexpr size_t max_2d_vc0_channels = 4;
         for (uint32_t i = 0; i < max_2d_vc0_channels; ++i) {
             // When mux extension is enabled, ALL VC0 channels go to TENSIX mux
-            // because ERISC only has buffers for worker channel (used by VC1) and VC1 channel
             BuilderType builder_type = downstream_is_tensix_builder_ ? BuilderType::TENSIX : BuilderType::ERISC;
             sender_channel_map_[LogicalSenderChannelKey{0, i}] =
                 InternalSenderChannelMapping{builder_type, i};
@@ -57,10 +56,10 @@ void FabricRouterChannelMapping::initialize_vc0_mappings() {
     }
 }
 
-void FabricRouterChannelMapping::initialize_vc2_mappings() {
+void FabricRouterChannelMapping::initialize_vc1_mappings() {
     const bool is_2d = is_2d_topology();
     if (!is_2d) {
-        // VC2 (intermesh) only exists for 2D topologies
+        // VC1 (intermesh) only exists for 2D topologies
         return;
     }
 
@@ -68,9 +67,9 @@ void FabricRouterChannelMapping::initialize_vc2_mappings() {
     // For now, we'll map to erisc/tensix builder channels
     // The exact mapping depends on intermesh implementation details
     // This is a placeholder - actual implementation may vary
-    uint32_t num_vc2_channels = 3;  // Default for 2D, could be 4 for 2D+Z
+    uint32_t num_vc1_channels = 3;  // Default for 2D, could be 4 for 2D+Z
 
-    for (uint32_t i = 0; i < num_vc2_channels; ++i) {
+    for (uint32_t i = 0; i < num_vc1_channels; ++i) {
         // Map to erisc builder for now - tensix mapping would be added if needed
         sender_channel_map_[LogicalSenderChannelKey{2, i}] =
             InternalSenderChannelMapping{BuilderType::ERISC, i};  // VC2 is externally-facing (intermesh)

@@ -89,20 +89,8 @@ size_t FabricContext::get_max_payload_size_bytes() const {
 }
 
 std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> FabricContext::get_edm_config_options(
-    tt::tt_fabric::FabricEriscDatamoverAxis edm_axis,
-    tt::tt_fabric::FabricTensixConfig fabric_tensix_config,
-    eth_chan_directions direction) {
-    auto edm_buffer_config = tt::tt_fabric::FabricRouterBufferConfig{
-        .enable_dateline_sender_extra_buffer_slots = true,
-        .enable_dateline_receiver_extra_buffer_slots = true,
-        .enable_dateline_upstream_sender_extra_buffer_slots = true,
-        .enable_dateline_upstream_receiver_extra_buffer_slots = true,
-        .enable_dateline_upstream_adjacent_sender_extra_buffer_slots =
-            edm_axis != tt::tt_fabric::FabricEriscDatamoverAxis::Short,
-    };
+    tt::tt_fabric::FabricTensixConfig fabric_tensix_config, eth_chan_directions direction) {
     auto edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
-        .edm_axis = edm_axis,
-        .edm_buffer_config = edm_buffer_config,
         .fabric_tensix_config = fabric_tensix_config,
         .direction = direction,
     };
@@ -126,36 +114,14 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     this->max_payload_size_bytes_ = this->get_max_payload_size_bytes();
     this->channel_buffer_size_bytes_ = this->packet_header_size_bytes_ + this->max_payload_size_bytes_;
 
-    auto short_axis = static_cast<std::size_t>(tt::tt_fabric::FabricEriscDatamoverAxis::Short);
-    auto long_axis = static_cast<std::size_t>(tt::tt_fabric::FabricEriscDatamoverAxis::Long);
-
     // default router config don't care about the axis, since there's no optimization to it.
-    this->router_config_ = get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverAxis::Short);
+    this->router_config_ = get_edm_config_options();
 
-    // dateline edm router
-    this->dateline_router_config_[short_axis] = get_edm_config_options(tt::tt_fabric::FabricEriscDatamoverAxis::Short);
-    this->dateline_router_config_[long_axis] = get_edm_config_options(tt::tt_fabric::FabricEriscDatamoverAxis::Long);
-
-    // dateline upstream edm router
-    this->dateline_upstream_router_config_[short_axis] =
-        get_edm_config_options(tt::tt_fabric::FabricEriscDatamoverAxis::Short);
-    this->dateline_upstream_router_config_[long_axis] =
-        get_edm_config_options(tt::tt_fabric::FabricEriscDatamoverAxis::Long);
-
-    // dateline upstream adjacent edm router
-    this->dateline_upstream_adjcent_router_config_[short_axis] =
-        get_edm_config_options(tt::tt_fabric::FabricEriscDatamoverAxis::Short);
-    this->dateline_upstream_adjcent_router_config_[long_axis] =
-        get_edm_config_options(tt::tt_fabric::FabricEriscDatamoverAxis::Long);
-
-    // default router config with mux extension, for now no need to differentiate dateline, dateline-upstream, etc.
+    // default router config with mux extension
     // Initialize for all directions: EAST, WEST, NORTH, SOUTH
     for (size_t direction = 0; direction < eth_chan_directions::COUNT; direction++) {
-        this->router_with_mux_config_[direction] = get_edm_config_options(
-            tt::tt_fabric::FabricEriscDatamoverAxis::Short,
-            tt::tt_fabric::FabricTensixConfig::MUX,
-            static_cast<eth_chan_directions>(direction));
+        this->router_with_mux_config_[direction] =
+            get_edm_config_options(tt::tt_fabric::FabricTensixConfig::MUX, static_cast<eth_chan_directions>(direction));
     }
 
     // Tensix config will be initialized later after routing tables are configured
