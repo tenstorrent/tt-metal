@@ -6,15 +6,9 @@
 
 #include <vector>
 #include <llrt/rtoptions.hpp>
-#include <impl/dispatch/dispatch_core_manager.hpp>
-#include <impl/dispatch/dispatch_mem_map.hpp>
-#include <impl/dispatch/dispatch_query_manager.hpp>
-#include <impl/debug/dprint_server.hpp>
-#include <impl/debug/watcher_server.hpp>
 #include <impl/allocator/allocator_types.hpp>
 #include "tt-metalium/experimental/fabric/routing_table_generator.hpp"
 #include "llrt/hal/generated/dev_msgs.hpp"
-#include "tt_metal/hostdevcommon/api/hostdevcommon/common_values.hpp"
 
 namespace tt::tt_fabric {
 class ControlPlane;
@@ -37,6 +31,13 @@ class Data;
 
 class DataCollector;
 class DeviceManager;
+class Hal;
+class dispatch_core_manager;
+class DispatchQueryManager;
+class DPrintServer;
+class WatcherServer;
+class DispatchMemMap;
+
 // A class to manage one-time initialization and teardown (FW, dispatch, fabric, cluster) and access to related state.
 // Dispatch-independent state (Cluster) is initialized with the creation of MetalContext and accessible right after.
 // Dispatch-dependent state (FW, dispatch, fabric) is initialized explicitly with a MetalContext::initialize() call, and
