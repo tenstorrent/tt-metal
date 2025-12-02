@@ -1061,9 +1061,9 @@ uint32_t process_stall(uint32_t cmd_ptr) {
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
 
-// This function reads data from the DRAM and populate the cmddat_q l1 buffer.
-// It starts by fetching initial chunk of 16KB from DRAM and then prefetch
-// the rest and return to have the initial cmddat_q to be processed.
+// This function reads data from the DRAM and populates the cmddat_q l1 buffer.
+// It starts by fetching initial chunk of 16KB from DRAM and then prefetches
+// the rest and returns to have the initial cmddat_q to be processed.
 // All fetching from DRAM stops at the end of cmddat_q until the cmddat_q are
 // processed.  Then it repeats again.
 // Note:
