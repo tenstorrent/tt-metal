@@ -362,11 +362,6 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
         release_dst();
         DPRINT << "after release dst\n";
     }
-
-    cb_wait_front(in0_cb, num_tiles);
-    DPRINT << "after wait in0 again\n";
-    cb_wait_front(in1_cb, num_tiles);
-    DPRINT << "END OF MUL\n";
 }
 
 #ifdef TRISC_MATH

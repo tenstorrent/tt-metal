@@ -53,7 +53,7 @@ inline void read_from_local(
     // DPRINT << "read addr l: " << (uint64_t)read_addr << "\n";
     noc_async_read(read_addr, l1_write_addr, input_num_tiles * page_bytes);
     noc_async_read_barrier();
-    // DPRINT << "printing local l from compute cb l\n";
+    DPRINT << "printing local l from compute cb l\n";
     print_full_tile(cb_id_in_l, 3, false);
     cb_push_back(cb_id_in_l, input_num_tiles);
 
@@ -64,7 +64,7 @@ inline void read_from_local(
     // DPRINT << "read addr s: " << (uint64_t)read_addr << "\n";
     noc_async_read(read_addr, l1_write_addr, onetile * page_bytes);
     noc_async_read_barrier();
-    // DPRINT << "printing local s from compute cb s\n";
+    DPRINT << "printing local s from compute cb s\n";
     print_full_tile(cb_id_in_s, 0, false);
     cb_push_back(cb_id_in_s, onetile);
 
@@ -75,7 +75,7 @@ inline void read_from_local(
     // DPRINT << "read addr m: " << (uint64_t)read_addr << "\n";
     noc_async_read(read_addr, l1_write_addr, onetile * page_bytes);
     noc_async_read_barrier();
-    // DPRINT << "printing local m from compute cb m\n";
+    DPRINT << "printing local m from compute cb m\n";
     print_full_tile(cb_id_in_m, 0, false);
     cb_push_back(cb_id_in_m, onetile);
 }
@@ -239,6 +239,10 @@ void kernel_main() {
     // DPRINT << "after termination sync\n";
 
     const uint32_t aligned_page_size_bytes = align(page_size_bytes, alignment);
+    DPRINT << "aligned page size bytes: " << (uint32_t)aligned_page_size_bytes << "\n";
+    DPRINT << "PAGE SIZE BYTES: " << (uint32_t)page_size_bytes << "\n";
+    DPRINT << "packet size bytes: " << (uint32_t)packet_size_bytes << "\n";
+    DPRINT << "aligned packet size bytes: " << (uint32_t)align(packet_size_bytes, alignment) << "\n";
     uint32_t curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx_start);
     uint32_t packet_idx = page_idx_start / max_pages_per_packet;
 
@@ -253,7 +257,7 @@ void kernel_main() {
     noc_async_read_barrier();
 
     tt_memmove<false, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
-    // DPRINT << "print received l from receiver cb l\n";
+    DPRINT << "print received l from receiver cb l\n";
     print_full_tile(receiver_cb_id_l, 2, false);
     cb_push_back(receiver_cb_id_l, chunk_size);
 
@@ -271,10 +275,10 @@ void kernel_main() {
     tt_memmove<false, false, false, 0>(
         dest_page_base_addr_m, packet_l1_addr + packet_size_bytes + aligned_page_size_bytes, aligned_page_size_bytes);
 
-    // DPRINT << "print received m from receiver cb m\n";
-    print_full_tile(receiver_cb_id_m, 0, false);
-    // DPRINT << "print received s from receiver cb s\n";
+    DPRINT << "print received s from receiver cb s\n";
     print_full_tile(receiver_cb_id_s, 0, false);
+    DPRINT << "print received m from receiver cb m\n";
+    print_full_tile(receiver_cb_id_m, 0, false);
 
     cb_push_back(receiver_cb_id_s, 1);
     cb_push_back(receiver_cb_id_m, 1);
