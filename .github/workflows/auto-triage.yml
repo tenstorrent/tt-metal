@@ -49,9 +49,9 @@ jobs:
           job-name: ${{ inputs.job_name }}
           model: ${{ inputs.model }}
           filter-model: ${{ inputs.filter-model }}
+          wilder-pat: ${{ secrets.WILDER_PAT }}
         env:
           OPENCODE_API_KEY: ${{ secrets.AUTO_TRIAGE_FREE_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          GH_TOKEN: ${{ github.token }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_TESTING_CHANNEL }}
