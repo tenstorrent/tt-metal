@@ -4,7 +4,13 @@
 
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
+#include <set>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <vector>
 
 #include <cabling_generator/cabling_generator.hpp>
 #include "protobuf/cluster_config.pb.h"
