@@ -19,7 +19,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks tilize_single_core(
-    const Tensor& a, Tensor& output, const bool use_low_perf, const std::optional<CoreRangeSet>& sub_core_grids) {
+    const Tensor& a, Tensor& output, bool use_low_perf, const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::tt_metal::Program program{};
 
     CoreRange default_core({0, 0}, {0, 0});
