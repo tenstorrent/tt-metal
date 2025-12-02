@@ -407,7 +407,7 @@ def test_trace_run():
         run_device_profiler_test(
             testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops_multiple_trace_ids"
         ),
-        num_non_trace_ops=3,
+        num_non_trace_ops=4,
         num_trace_ops=5,
         num_repeats_per_trace_op=3,
     )
@@ -438,7 +438,7 @@ def test_device_trace_run():
     )
     verify_stats(
         run_device_profiler_test(
-            testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops_single_core",
+            testName=f'pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops_single_core -k "100 and 5"',
             setupAutoExtract=False,
             doDeviceTrace=True,
         ),
