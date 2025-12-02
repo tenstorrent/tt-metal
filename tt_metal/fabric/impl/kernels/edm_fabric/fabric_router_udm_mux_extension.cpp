@@ -265,7 +265,11 @@ void forward_data(
 
         noc_async_writes_flushed();
 
-        worker_interface.notify_worker_of_read_counter_update();
+        if (is_persistent_channel) {
+            worker_interface.notify_worker_of_read_counter_update();
+        } else if (channel_connection_established) {
+            worker_interface.notify_worker_of_read_counter_update();
+        }
     }
 
     if (!is_persistent_channel) {
