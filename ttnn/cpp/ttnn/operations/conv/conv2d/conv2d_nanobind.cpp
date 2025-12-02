@@ -421,7 +421,13 @@ void bind_conv2d(nb::module_& mod) {
         "shard_layout",
         /*getter*/ [](Conv2dConfig& conv) { return conv.shard_layout; },
         /*setter*/
-        [](Conv2dConfig& conv, decltype(Conv2dConfig::shard_layout) new_layout) { conv.shard_layout = new_layout; },
+        [](Conv2dConfig& conv, nb::handle new_layout) {
+            if (new_layout.is_none()) {
+                conv.shard_layout = std::nullopt;
+            } else {
+                conv.shard_layout = nb::cast<decltype(Conv2dConfig::shard_layout)>(new_layout);
+            }
+        },
         R"doc(
         Optional argument that determines the TensorMemoryLayout to be used for the input and output tensor.
         If this is not specified, the op will try to determine the optimal layout based on it's own heuristics.
