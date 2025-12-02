@@ -182,15 +182,6 @@ public:
      */
     virtual bool is_switch_mesh() const = 0;
 
-    // ============ Static Utilities ============
-
-    /**
-     * Determine if bubble flow control should be enabled based on topology
-     */
-    static bool is_bubble_flow_control_enabled(Topology topology) {
-        return topology == Topology::Ring || topology == Topology::Torus;
-    }
-
 protected:
     // Protected constructor - only derived classes can construct
     FabricRouterBuilder(FabricNodeId local_node, const RouterLocation& location) :

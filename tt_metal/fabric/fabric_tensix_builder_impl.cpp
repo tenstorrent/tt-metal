@@ -252,13 +252,9 @@ std::vector<uint32_t> FabricTensixDatamoverBaseConfig::get_run_time_args(
         args.push_back(static_cast<uint32_t>(size));
     }
 
-    // Get fabric router config to check bubble flow control status
+    // Check bubble flow control status from fabric context
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const auto& fabric_tensix_config_enum = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
-    const auto& fabric_router_config =
-        fabric_context.get_builder_context().get_fabric_router_config(fabric_tensix_config_enum);
-
-    if (tt::tt_fabric::FabricRouterBuilder::is_bubble_flow_control_enabled(fabric_router_config.topology)) {
+    if (fabric_context.is_bubble_flow_control_enabled()) {
         for (uint8_t i = 0; i < num_full_size_channels_; i++) {
             args.push_back(sender_channel_is_traffic_injection_channel_array[i]);
         }
@@ -622,8 +618,7 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args() c
     ct_args.push_back(static_cast<uint32_t>(upstream_routers_noc_x_.size()));
     ct_args.push_back(fabric_router_config.edm_local_tensix_sync_address);
 
-    ct_args.push_back(
-        tt::tt_fabric::FabricRouterBuilder::is_bubble_flow_control_enabled(fabric_router_config.topology));
+    ct_args.push_back(fabric_context.is_bubble_flow_control_enabled());
 
     // Get stream IDs and persistent channels flags
     uint8_t num_full_size_channels = config_->get_num_channels(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL);

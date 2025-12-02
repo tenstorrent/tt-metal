@@ -46,8 +46,9 @@ public:
 
     // ============ Topology Queries ============
     bool is_wrap_around_mesh(MeshId mesh_id) const;
-    tt::tt_fabric::Topology get_fabric_topology() const;
-    bool is_2D_routing_enabled() const;
+    tt::tt_fabric::Topology get_fabric_topology() const { return topology_; }
+    bool is_2D_routing_enabled() const { return is_2D_routing_enabled_; }
+    bool is_bubble_flow_control_enabled() const { return bubble_flow_control_enabled_; }
     bool need_deadlock_avoidance_support(eth_chan_directions direction) const;
 
     // ============ Mesh Type Queries ============
@@ -61,9 +62,9 @@ public:
     bool is_tensix_enabled() const { return tensix_enabled_; }
 
     // ============ Packet Specs ============
-    size_t get_fabric_packet_header_size_bytes() const;
-    size_t get_fabric_max_payload_size_bytes() const;
-    size_t get_fabric_channel_buffer_size_bytes() const;
+    size_t get_fabric_packet_header_size_bytes() const { return packet_header_size_bytes_; }
+    size_t get_fabric_max_payload_size_bytes() const { return max_payload_size_bytes_; }
+    size_t get_fabric_channel_buffer_size_bytes() const { return channel_buffer_size_bytes_; }
 
     // ============ Builder Context Access ============
     // For build-time operations (config selection, per-device state, router addresses)
@@ -85,6 +86,7 @@ private:
     tt::tt_fabric::Topology topology_{};
 
     bool is_2D_routing_enabled_ = false;
+    bool bubble_flow_control_enabled_ = false;
     bool tensix_enabled_ = false;
 
     std::unordered_map<MeshId, bool> wrap_around_mesh_;

@@ -93,6 +93,7 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     this->topology_ = this->get_topology_from_config(fabric_config);
 
     this->is_2D_routing_enabled_ = this->is_2D_topology(this->topology_);
+    this->bubble_flow_control_enabled_ = (this->topology_ == Topology::Ring || this->topology_ == Topology::Torus);
 
     this->packet_header_size_bytes_ = this->compute_packet_header_size_bytes();
     this->max_payload_size_bytes_ = this->compute_max_payload_size_bytes();
@@ -123,10 +124,6 @@ bool FabricContext::is_switch_mesh(MeshId mesh_id) const {
     (void)mesh_id;  // Unused for now
     return false;
 }
-
-tt::tt_fabric::Topology FabricContext::get_fabric_topology() const { return this->topology_; }
-
-bool FabricContext::is_2D_routing_enabled() const { return this->is_2D_routing_enabled_; }
 
 // ============ Builder Context Access ============
 
@@ -162,11 +159,5 @@ bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions directio
 
     return false;
 }
-
-size_t FabricContext::get_fabric_packet_header_size_bytes() const { return this->packet_header_size_bytes_; }
-
-size_t FabricContext::get_fabric_max_payload_size_bytes() const { return this->max_payload_size_bytes_; }
-
-size_t FabricContext::get_fabric_channel_buffer_size_bytes() const { return this->channel_buffer_size_bytes_; }
 
 }  // namespace tt::tt_fabric
