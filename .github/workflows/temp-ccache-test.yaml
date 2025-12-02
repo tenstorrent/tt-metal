@@ -155,6 +155,8 @@ jobs:
           # Clear any existing JIT cache to start fresh and force recompilation
           echo "Clearing all caches to force JIT kernel compilation..."
           rm -rf /tmp/ttnn_cache/ /tmp/tt_metal_cache/ || true
+          rm -rf ~/.cache/tt-metal-cache/ /tmp/tt-metal-cache/ || true
+          # Also clear any kernels in work directory
           find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
           find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
 
@@ -172,11 +174,24 @@ jobs:
           strings /work/build/lib/libtt_metal.so | grep "CCACHE_DEBUG" || echo "CCACHE_DEBUG strings not found in library"
           echo "Checking for git hash in library..."
           strings /work/build/lib/libtt_metal.so | grep -E "[0-9a-f]{10}" | head -3 || echo "No git hashes found"
+          echo ""
+          echo "Checking cache directory structure before test..."
+          echo "HOME/.cache/tt-metal-cache/:"
+          ls -la ~/.cache/tt-metal-cache/ 2>/dev/null || echo "~/.cache/tt-metal-cache/ does not exist"
+          echo "/tmp/tt-metal-cache/:"
+          ls -la /tmp/tt-metal-cache/ 2>/dev/null || echo "/tmp/tt-metal-cache/ does not exist"
           ${{ matrix.test-group.cmd }} 2>&1 | tee /tmp/first_run.log
 
           echo ""
           echo "=== ccache stats after first run ==="
           ccache -s
+
+          echo ""
+          echo "=== Cache directory structure after first run ==="
+          echo "HOME/.cache/tt-metal-cache/:"
+          find ~/.cache/tt-metal-cache/ -type f -name "*.elf" -o -name "*.bin" 2>/dev/null | head -10 || echo "No kernel files in ~/.cache/tt-metal-cache/"
+          echo "/tmp/tt-metal-cache/:"
+          find /tmp/tt-metal-cache/ -type f -name "*.elf" -o -name "*.bin" 2>/dev/null | head -10 || echo "No kernel files in /tmp/tt-metal-cache/"
 
       - name: Second test run - test kernel cache hits
         timeout-minutes: 25
@@ -187,6 +202,8 @@ jobs:
 
           # Force another compilation by clearing just the kernel binaries but keeping ccache
           echo "Clearing kernel binaries to force recompilation (but keeping ccache)..."
+          # Clear from the actual JIT cache locations
+          rm -rf ~/.cache/tt-metal-cache/*/*/kernels/ /tmp/tt-metal-cache/*/*/kernels/ || true
           find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
           find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
 
@@ -203,6 +220,11 @@ jobs:
           echo "=== ccache stats after second run ==="
           ccache -s
 
+          echo ""
+          echo "=== Cache directory structure after second run ==="
+          echo "Kernel files generated:"
+          find ~/.cache/tt-metal-cache/ /tmp/tt-metal-cache/ -type f -name "*.elf" -o -name "*.bin" 2>/dev/null | head -10 || echo "No kernel files found"
+
       - name: Third test run with cache analysis
         timeout-minutes: 25
         run: |
@@ -212,6 +234,8 @@ jobs:
 
           # Force compilation one more time
           echo "Clearing kernel binaries again for third test..."
+          # Clear from the actual JIT cache locations
+          rm -rf ~/.cache/tt-metal-cache/*/*/kernels/ /tmp/tt-metal-cache/*/*/kernels/ || true
           find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
           find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
 
