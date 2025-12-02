@@ -19,8 +19,15 @@ void MAIN {
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_dim = get_compile_time_arg_val(1);
 
+    // Marker to show up in waveform
+    for (int i = 0; i < 10; i++) {
+        TTI_NOP;
+    }
+
     init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_2);
+
     // asm volatile ("ebreak");
+
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         cb_reserve_back(tt::CBIndex::c_2, per_core_block_dim);
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {

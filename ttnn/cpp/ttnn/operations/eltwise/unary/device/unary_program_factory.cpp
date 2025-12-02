@@ -12,6 +12,8 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
+#define DEBUG
+
 namespace ttnn::operations::unary::program {
 
 static const std::string compute_root = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/";
@@ -161,6 +163,10 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     }
     const auto packed_scalar1 = utils::pack_scalar_runtime_arg(value1, input.dtype());
     const auto packed_scalar2 = utils::pack_scalar_runtime_arg(value2, input.dtype());
+
+#ifdef DEBUG
+    std::cout << "num_cores " << num_cores << " " << __FILE_NAME__ << std::endl;
+#endif
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
