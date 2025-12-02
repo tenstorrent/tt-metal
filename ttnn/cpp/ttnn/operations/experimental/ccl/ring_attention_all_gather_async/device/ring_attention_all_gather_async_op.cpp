@@ -128,39 +128,21 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks RingAttentionAllGatherAsync::
 tt::tt_metal::operation::ProgramWithCallbacks RingAttentionAllGatherAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
-    auto *mesh_device = input_tensors[0].device();
-    const auto& mesh_view = mesh_device->get_view();
-    const auto target_fabric_node_id = mesh_view.get_fabric_node_id(coord);
-    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids = {};
-    // User specified the cluster-axis. Derive devices based on the current coordinate
-    // and the cluster-axis.
-    fabric_node_ids = (this->cluster_axis.value() == 0) ? mesh_view.get_fabric_node_ids_on_column(coord[1])
-                                                        : mesh_view.get_fabric_node_ids_on_row(coord[0]);
 
-    std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
-    std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
-    uint32_t device_index = 0;  // Initialize device index
-    for (uint32_t i = 0; i < this->ring_size; ++i) {
-        if (fabric_node_ids.at(i) == target_fabric_node_id) {
-            device_index = i;
-            if (i != 0) {
-                backward_fabric_node_id = fabric_node_ids.at(i - 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                backward_fabric_node_id = fabric_node_ids.at(this->ring_size - 1);
-            }
-            if (i != this->ring_size - 1) {
-                forward_fabric_node_id = fabric_node_ids.at(i + 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                forward_fabric_node_id = fabric_node_ids.at(0);
-            }
-        }
-    }
+    uint32_t device_index = ccl::get_linearized_index_from_physical_coord(
+        input_tensors[0], coord, this->cluster_axis.value_or(0) /*why is cluster axis optional?*/);
+
+    std::optional<MeshCoordinate> forward_coord = ccl::get_physical_neighbor_from_physical_coord(
+        input_tensors[0], coord, 1, this->topology, this->cluster_axis.value_or(0));
+
+    std::optional<MeshCoordinate> backward_coord = ccl::get_physical_neighbor_from_physical_coord(
+        input_tensors[0], coord, -1, this->topology, this->cluster_axis.value_or(0));
 
     return ring_attention_all_gather_async_multi_core_with_workers(
         input_tensors,
-        target_fabric_node_id,
-        forward_fabric_node_id,
-        backward_fabric_node_id,
+        coord,
+        forward_coord,
+        backward_coord,
         output_tensors,
         this->dim,
         this->num_links,
