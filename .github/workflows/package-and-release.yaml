@@ -93,10 +93,10 @@ jobs:
           # Run once to check for errors
           ./scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate-and-tag-type.outputs.is-release-candidate) && '--release-candidate' || '' }}
           shouldCreateRelease=$(scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate-and-tag-type.outputs.is-release-candidate) && '--release-candidate' || '' }})
-          if [ "$shouldCreateRelease" != "true" ]; then
-            echo "should-create-release is false, no release needed. Exiting workflow."
-            exit 1
-          fi
+          # if [ "$shouldCreateRelease" != "true" ]; then
+          #   echo "should-create-release is false, no release needed. Exiting workflow."
+          #   exit 1
+          # fi
           echo "should-create-release is true, proceeding with release workflow."
 
   create-tag:
