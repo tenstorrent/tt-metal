@@ -15,7 +15,8 @@ struct InterleavedToShardedOperation {
         const ttnn::Tensor& input_tensor,
         const MemoryConfig& sharded_memory_config,
         const std::optional<DataType>& data_type_arg,
-        const std::optional<bool>& keep_l1_aligned = std::nullopt);
+        const std::optional<bool>& keep_l1_aligned = std::nullopt,
+        std::optional<Tensor> preallocated_output = std::nullopt);
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const std::variant<CoreCoord, CoreRangeSet>& grid,

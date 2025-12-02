@@ -18,7 +18,6 @@
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
-#include "ttnn/tensor/to_string.hpp"
 
 class CrossEntropyForwardTest : public ::testing::Test {
 protected:
@@ -60,24 +59,15 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Small_Forward) {
 
     xt::xarray<float> input_tensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
-    std::cout << "Input Logits:\n";
-    std::cout << ttnn::to_string(input) << "\n";
 
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
     target_tensor(0, 0) = 1U;
     auto target = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
-    std::cout << "Input Target Indexes:\n";
-    std::cout << ttnn::to_string(target) << "\n";
 
     auto result = ttml::metal::cross_entropy_fw(input, target);
-    std::cout << "CrossEntropyForward_Test:\nResult:\n";
-    std::cout << ttnn::to_string(result) << "\n";
 
     auto expected_result = calculate_cross_entropy_loss(input_tensor, target_tensor);
-    auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
-    std::cout << "Expected Result:\n";
-    std::cout << ttnn::to_string(expected_result_print) << "\n";
 
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
@@ -92,25 +82,16 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Negetive_Values) {
 
     xt::xarray<float> input_tensor = {{{{-100.F, -101.F, -102.F, -103.F}, {-5.01F, -5.02F, -0.3F, -7.F}}}};
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
-    std::cout << "Input Logits:\n";
-    std::cout << ttnn::to_string(input) << "\n";
 
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
     target_tensor(0, 0) = 0;
     target_tensor(0, 1) = 2U;
     auto target = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
-    std::cout << "Input Target Indexes:\n";
-    std::cout << ttnn::to_string(target) << "\n";
 
     auto result = ttml::metal::cross_entropy_fw(input, target);
-    std::cout << "CrossEntropyForward_Test:\nResult:\n";
-    std::cout << ttnn::to_string(result) << "\n";
 
     auto expected_result = calculate_cross_entropy_loss(input_tensor, target_tensor);
-    auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
-    std::cout << "Expected Result:\n";
-    std::cout << ttnn::to_string(expected_result_print) << "\n";
 
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
@@ -143,23 +124,13 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Batch) {
     }
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
-    std::cout << "Input Logits:\n";
-    std::cout << ttnn::to_string(input) << "\n";
 
     auto target = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
-    std::cout << "Input Target Indexes:\n";
-    std::cout << ttnn::to_string(target) << "\n";
 
     auto result = ttml::metal::cross_entropy_fw(input, target);
-    std::cout << "CrossEntropyForward_Test:\nResult:\n";
-    std::cout << ttnn::to_string(result) << "\n";
 
     auto expected_result = calculate_cross_entropy_loss(input_tensor, target_tensor);
-
-    auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
-    std::cout << "Expected Result:\n";
-    std::cout << ttnn::to_string(expected_result_print) << "\n";
 
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
@@ -192,22 +163,13 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Batch) {
     }
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
-    std::cout << "Input Logits:\n";
-    std::cout << ttnn::to_string(input) << "\n";
 
     auto target = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
-    std::cout << "Input Target Indexes:\n";
-    std::cout << ttnn::to_string(target) << "\n";
 
     auto result = ttml::metal::cross_entropy_fw(input, target);
-    std::cout << "CrossEntropyForward_Test:\nResult:\n";
-    std::cout << ttnn::to_string(result) << "\n";
 
     auto expected_result = calculate_cross_entropy_loss(input_tensor, target_tensor);
-    auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
-    std::cout << "Expected Result:\n";
-    std::cout << ttnn::to_string(expected_result_print) << "\n";
 
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
@@ -240,22 +202,13 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Forward) {
     }
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
-    std::cout << "Input Logits:\n";
-    std::cout << ttnn::to_string(input) << "\n";
 
     auto target = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
-    std::cout << "Input Target Indexes:\n";
-    std::cout << ttnn::to_string(target) << "\n";
 
     auto result = ttml::metal::cross_entropy_fw(input, target);
-    std::cout << "CrossEntropyForward_Test:\nResult:\n";
-    std::cout << ttnn::to_string(result) << "\n";
 
     auto expected_result = calculate_cross_entropy_loss(input_tensor, target_tensor);
-    auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
-    std::cout << "Expected Result:\n";
-    std::cout << ttnn::to_string(expected_result_print) << "\n";
 
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
@@ -292,22 +245,13 @@ TEST_F(CrossEntropyForwardTest, NIGHTLY_CrossEntropyForward_Huge_Forward) {
     }
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
-    std::cout << "Input Logits:\n";
-    std::cout << ttnn::to_string(input) << "\n";
 
     auto target = core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
-    std::cout << "Input Target Indexes:\n";
-    std::cout << ttnn::to_string(target) << "\n";
 
     auto result = ttml::metal::cross_entropy_fw(input, target);
-    std::cout << "CrossEntropyForward_Test:\nResult:\n";
-    std::cout << ttnn::to_string(result) << "\n";
 
     auto expected_result = calculate_cross_entropy_loss(input_tensor, target_tensor);
-    auto expected_result_print = core::from_xtensor(expected_result, &autograd::ctx().get_device());
-    std::cout << "Expected Result:\n";
-    std::cout << ttnn::to_string(expected_result_print) << "\n";
 
     // Check if the result is close to the expected result
     auto result_xtensor = core::to_xtensor(result);
