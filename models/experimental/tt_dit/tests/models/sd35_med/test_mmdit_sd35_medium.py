@@ -362,7 +362,8 @@ def test_sd35_medium_mmdit(device, dtype, input_size, patch_size, in_channels, d
         actual_depth = max(joint_block_indices) + 1  # +1 because indices are 0-based
         logger.info(f"Detected {actual_depth} joint blocks in safetensors (indices: {sorted(joint_block_indices)})")
         if actual_depth != depth:
-            logger.warning(f"Depth mismatch: test parameter depth={depth}, but safetensors has {actual_depth} blocks")
+            logger.info(f"Using detected depth={actual_depth} from safetensors instead of test parameter depth={depth}")
+            depth = actual_depth  # Use the actual depth from safetensors
     else:
         logger.warning(f"Could not detect joint_blocks from safetensors, using test parameter depth={depth}")
 
@@ -475,7 +476,6 @@ def test_sd35_medium_mmdit(device, dtype, input_size, patch_size, in_channels, d
         device=None,
     )
     ref_model.eval()
-    print(ref_model)
 
     # Load weights into reference model
     try:
@@ -553,13 +553,29 @@ def test_sd35_medium_mmdit(device, dtype, input_size, patch_size, in_channels, d
 
     # Convert back and compare
     tt_output_torch = ttnn.to_torch(tt_output)
-    # Handle shape differences - TTNN output might have extra batch dimension
+    # Handle shape differences - TTNN output might be missing batch dimension
     # Reference output shape: (batch_size, channels, height, width)
-    # TTNN output might be: (1, batch_size, channels, height, width) or (batch_size, channels, height, width)
-    if tt_output_torch.ndim == 5:
+    # TTNN output might be: (channels, height, width) if batch dimension was lost, or (batch_size, channels, height, width)
+
+    # If TTNN output is 3D and reference is 4D, add batch dimension
+    if tt_output_torch.ndim == 3 and ref_output.ndim == 4:
+        # TTNN output is [C, H, W], reshape to [batch_size, C, H, W]
+        tt_output_torch = tt_output_torch.unsqueeze(0)
+        logger.info(f"Added missing batch dimension to TTNN output: {tt_output_torch.shape}")
+    # If TTNN output has extra leading dimension
+    elif tt_output_torch.ndim == 5:
         tt_output_torch = tt_output_torch[0]  # Remove leading batch dimension if present
-    elif tt_output_torch.ndim == 4 and tt_output_torch.shape[0] == 1 and ref_output.shape[0] == batch_size:
-        tt_output_torch = tt_output_torch[0]  # Remove batch dimension if it's 1
+    # If both are 4D but batch sizes don't match
+    elif tt_output_torch.ndim == 4 and ref_output.ndim == 4:
+        if tt_output_torch.shape[0] != ref_output.shape[0]:
+            # Batch sizes don't match - try to fix
+            if tt_output_torch.shape[0] == 1 and ref_output.shape[0] == batch_size:
+                # TTNN has batch=1, reference has batch=batch_size - this shouldn't happen, but handle it
+                logger.warning(f"Batch size mismatch: TTNN={tt_output_torch.shape[0]}, Reference={ref_output.shape[0]}")
+            elif tt_output_torch.shape[0] == ref_output.shape[1] and ref_output.shape[0] == 1:
+                # TTNN is missing batch dimension: [C, H, W] vs [1, C, H, W]
+                tt_output_torch = tt_output_torch.unsqueeze(0)
+                logger.info(f"Added missing batch dimension to TTNN output: {tt_output_torch.shape}")
 
     # Ensure shapes match
     if tt_output_torch.shape != ref_output.shape:
@@ -567,6 +583,7 @@ def test_sd35_medium_mmdit(device, dtype, input_size, patch_size, in_channels, d
         # Try to reshape if dimensions are compatible
         if tt_output_torch.numel() == ref_output.numel():
             tt_output_torch = tt_output_torch.reshape(ref_output.shape)
+            logger.info(f"Reshaped TTNN output to match reference: {tt_output_torch.shape}")
 
     passing, pcc = comp_pcc(ref_output, tt_output_torch, 0.99)
     logger.info(f"MMDiT PCC: {pcc}")

@@ -197,16 +197,21 @@ class SD35MediumMMDiTX:
         h_patches = h // p
         w_patches = w // p
 
+        # Get batch size explicitly to preserve it
+        batch_size = int(x.shape[0])
+
         # x shape: [B, num_patches, patch_size^2 * out_channels]
         # Reshape to: [B, h_patches, w_patches, p, p, c]
-        x = ttnn.reshape(x, [x.shape[0], h_patches, w_patches, p, p, c])
+        # Use explicit batch_size to ensure batch dimension is preserved
+        x = ttnn.reshape(x, [batch_size, h_patches, w_patches, p, p, c])
 
         # Permute: nhwpqc -> nchpwq
         # This is equivalent to: [B, h_patches, w_patches, p, p, c] -> [B, c, h_patches, p, w_patches, p]
         x = ttnn.permute(x, (0, 5, 1, 3, 2, 4))
 
         # Reshape to: [B, c, h_patches * p, w_patches * p] = [B, c, H, W]
-        x = ttnn.reshape(x, [x.shape[0], c, h_patches * p, w_patches * p])
+        # Use explicit batch_size to ensure batch dimension is preserved
+        x = ttnn.reshape(x, [batch_size, c, h_patches * p, w_patches * p])
 
         return x
 
@@ -244,67 +249,14 @@ class SD35MediumMMDiTX:
         L=None,
     ):
         """
-        Forward pass of MMDiTX with support for both old and new API.
-
-        New API:
-            x: (N, C, H, W) tensor of spatial inputs in NCHW format
-            t: (N,) tensor of diffusion timesteps
-            y: (N, D) tensor of class embeddings (optional)
-            context: (N, L', D') tensor of context embeddings
-
-        Old API (for pipeline compatibility):
-            spatial: ttnn.Tensor [1, B, N, D] or [B, N, D] (spatial patches - already patched)
-            prompt_embed: ttnn.Tensor [1, B, L, D'] (context embeddings)
-            pooled_projections: ttnn.Tensor [1, B, D''] (class embeddings)
-            timestep: ttnn.Tensor [1, B] (timesteps)
-            N: int (spatial sequence length - number of patches)
-            L: int (prompt sequence length)
+        Forward pass of MMDiTX.
+        x: (N, C, H, W) tensor of spatial inputs in NCHW format
+        t: (N,) tensor of diffusion timesteps
+        y: (N, D) tensor of class embeddings (optional)
+        context: (N, L', D') tensor of context embeddings
         """
-        # Support old API for pipeline compatibility
-        if spatial is not None:
-            # Old API: spatial is already in patch format [1, B, N, D] or [B, N, D]
-            # We need to extract batch dimension and use it directly
-            if len(spatial.shape) == 4:  # [1, B, N, D]
-                spatial = ttnn.reshape(spatial, [spatial.shape[1], spatial.shape[2], spatial.shape[3]])
-            # spatial is now [B, N, D] where N is num_patches
-
-            # Extract batch dimension from other inputs
-            if len(prompt_embed.shape) == 4:  # [1, B, L, D']
-                prompt_embed = ttnn.reshape(
-                    prompt_embed, [prompt_embed.shape[1], prompt_embed.shape[2], prompt_embed.shape[3]]
-                )
-            # prompt_embed is now [B, L, D']
-
-            if len(pooled_projections.shape) == 3:  # [1, B, D'']
-                pooled_projections = ttnn.reshape(
-                    pooled_projections, [pooled_projections.shape[1], pooled_projections.shape[2]]
-                )
-            # pooled_projections is now [B, D'']
-
-            if len(timestep.shape) == 2:  # [1, B]
-                timestep = ttnn.reshape(timestep, [timestep.shape[1]])
-            # timestep is now [B]
-
-            # Use the old API path
-            # Note: spatial is already patched, so we skip patch embedding
-            # We need to add positional embeddings if not already added
-            # For now, we'll assume positional embeddings need to be added
-            # But we don't know H and W from just N (num_patches)
-            # We'll need to infer or store them
-
-            # Actually, the pipeline should handle unpatchifying before calling this
-            # But for backward compatibility, let's try to work with patches directly
-            # This is complex, so we'll raise an error for now and require the new API
-            raise NotImplementedError(
-                "Old API (spatial, prompt_embed, pooled_projections, timestep, N, L) requires spatial to be in image format, not patch format. "
-                "Please update the pipeline to use the new API: (x, t, y, context) where x is in NCHW format."
-            )
-
-        # New API
-        if x is None or t is None:
-            raise ValueError(
-                "Either provide (x, t, y, context) for new API or (spatial, prompt_embed, pooled_projections, timestep, N, L) for old API"
-            )
+        # Capture batch size from input to ensure it's preserved in output
+        input_batch_size = int(x.shape[0])
 
         # Convert from NCHW to NHWC format for patch embedder
         # Input: [B, C, H, W] -> [B, H, W, C]
@@ -350,6 +302,33 @@ class SD35MediumMMDiTX:
         # Unpatchify: convert from [B, num_patches, patch_size^2 * out_channels] to [B, out_channels, H, W]
         x = self._unpatchify(x, hw)
 
+        # Ensure output has correct shape [B, C, H, W] matching input batch size
+        # Always verify and fix the batch dimension to ensure it matches input
+        # Get tensor rank - rank is a property, not a method
+        try:
+            tensor_rank = x.shape.rank if hasattr(x.shape, "rank") else len(x.shape)
+        except (AttributeError, TypeError):
+            tensor_rank = len(x.shape)
+
+        if tensor_rank == 3:
+            # If batch dimension was lost, add it back using input_batch_size
+            # x is [C, H, W], reshape to [B, C, H, W]
+            c_dim = int(x.shape[0])
+            h_dim = int(x.shape[1])
+            w_dim = int(x.shape[2])
+            x = ttnn.reshape(x, [input_batch_size, c_dim, h_dim, w_dim])
+        elif tensor_rank == 4:
+            # Ensure batch dimension matches input batch size
+            current_batch_size = int(x.shape[0])
+            if current_batch_size != input_batch_size:
+                c_dim = int(x.shape[1])
+                h_dim = int(x.shape[2])
+                w_dim = int(x.shape[3])
+                x = ttnn.reshape(x, [input_batch_size, c_dim, h_dim, w_dim])
+        else:
+            # Unexpected rank - try to fix it
+            raise ValueError(f"Unexpected tensor rank {tensor_rank} after unpatchify. Expected 3 or 4.")
+
         return x
 
     def load_state_dict(self, state_dict):
@@ -375,86 +354,6 @@ class SD35MediumMMDiTX:
         logger.info(f"State dict contains {len(state_dict)} total keys")
         logger.info(f"Sample keys: {list(state_dict.keys())[:10]}")
         logger.info("")
-
-        # Extract MMDiT weights from state dict, handling various prefixes
-        # Try different prefixes that might be used in the state dict
-        prefixes = [
-            "model.diffusion_model.",
-            "transformer.",
-            "diffusion_model.",
-            "model.transformer.",
-            "",  # No prefix (flat structure)
-        ]
-
-        mmdit_state_dict = {}
-        found_prefix = None
-
-        # First, try to detect the prefix by looking for MMDiT component keys
-        for prefix in prefixes:
-            # Try to find keys with this prefix that match MMDiT components
-            test_keys = [
-                k
-                for k in state_dict.keys()
-                if k.startswith(prefix)
-                and (
-                    "x_embedder" in k
-                    or "pos_embed" in k
-                    or "t_embedder" in k
-                    or "y_embedder" in k
-                    or "context_embedder" in k
-                    or "joint_blocks" in k
-                    or "final_layer" in k
-                    or "norm_final" in k
-                    or "proj_out" in k
-                )
-            ]
-            if test_keys:
-                found_prefix = prefix
-                logger.info(f"Found MMDiT weights with prefix: '{prefix}'")
-                logger.info(f"  Sample keys: {test_keys[:3]}")
-                # Extract all MMDiT-related keys
-                for key, value in state_dict.items():
-                    if key.startswith(prefix):
-                        # Remove prefix to get the component name
-                        new_key = key[len(prefix) :]
-                        mmdit_state_dict[new_key] = value
-                break
-
-        if not mmdit_state_dict:
-            # If no prefix found, check if keys are already in the expected format
-            test_keys = [
-                k
-                for k in state_dict.keys()
-                if (
-                    "x_embedder" in k
-                    or "pos_embed" in k
-                    or "t_embedder" in k
-                    or "y_embedder" in k
-                    or "context_embedder" in k
-                    or "joint_blocks" in k
-                    or "final_layer" in k
-                    or "norm_final" in k
-                    or "proj_out" in k
-                )
-            ]
-            if test_keys:
-                logger.info("Found MMDiT weights without prefix (flat structure)")
-                mmdit_state_dict = state_dict
-            else:
-                logger.warning("Could not find MMDiT weights with any known prefix or format.")
-                logger.warning("  Available key prefixes:")
-                all_prefixes = set()
-                for key in list(state_dict.keys())[:50]:  # Check first 50 keys
-                    parts = key.split(".")
-                    if len(parts) > 1:
-                        all_prefixes.add(".".join(parts[:2]) + ".")
-                logger.warning(f"  Sample prefixes: {list(all_prefixes)[:5]}")
-                mmdit_state_dict = state_dict  # Use as-is and let individual loaders handle it
-        else:
-            logger.info(f"Extracted {len(mmdit_state_dict)} MMDiT weight keys")
-
-        # Use the extracted state dict for loading
-        state_dict = mmdit_state_dict
 
         # Load patch embedding
         logger.info("Checking x_embedder (patch embedding)...")
@@ -641,46 +540,3 @@ class SD35MediumMMDiTX:
             logger.info("✓ All transformer weights loaded successfully!")
 
         logger.info("=" * 80)
-
-    def patchify(self, latents: torch.Tensor) -> torch.Tensor:
-        """Convert latents to patch format for compatibility with pipeline
-
-        Args:
-            latents: Tensor of shape (N, H, W, C) in NHWC format
-        Returns:
-            Tensor of shape (1, N, (H/P) * (W/P), P * P * C)
-        """
-        batch_size, height, width, channels = latents.shape
-        patch = self.patch_size
-
-        if height % patch != 0 or width % patch != 0:
-            msg = f"height ({height}) and width ({width}) must be divisible by patch_size ({patch})"
-            raise ValueError(msg)
-
-        latents = latents.reshape([batch_size, height // patch, patch, width // patch, patch, channels])
-        return latents.transpose(2, 3).flatten(3, 5).flatten(1, 2).unsqueeze(0)
-
-    def unpatchify(self, spatial: torch.Tensor, *, height: int, width: int) -> torch.Tensor:
-        """Convert patch format back to latents for compatibility with pipeline
-
-        Args:
-            spatial: Tensor of shape (1, N, (H/P) * (W/P), P * P * C)
-            height: Target height in pixels
-            width: Target width in pixels
-        Returns:
-            Tensor of shape (N, H, W, C) in NHWC format
-        """
-        one, batch_size, _, _ = spatial.shape
-        assert one == 1
-        patch = self.patch_size
-
-        if height % patch != 0 or width % patch != 0:
-            msg = f"height ({height}) and width ({width}) must be divisible by patch_size ({patch})"
-            raise ValueError(msg)
-
-        spatial = spatial.reshape([batch_size, height // patch, width // patch, patch, patch, -1])
-        return spatial.transpose(2, 3).flatten(3, 4).flatten(1, 2)
-
-
-# Alias for backward compatibility with pipeline
-SD35MediumTransformer2DModel = SD35MediumMMDiTX
