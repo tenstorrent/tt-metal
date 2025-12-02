@@ -204,18 +204,41 @@ FORCE_INLINE
             const auto& scatter = header.command_fields.unicast_scatter_write;
             const uint8_t chunk_count = scatter.chunk_count;
 
+            // NOTE: when chunk_count < 4, chunk_size[n-2] can be used without calculating final_chunk_size.
+            //       However the perf (n == 2) is much worse than implementation below.
+            //       Need to check perf with 2 <= n <= 4
             size_t offset = 0;
             const uint8_t last_chunk_index = chunk_count - 1;
-            for (uint8_t i = 0; i < last_chunk_index; ++i) {
-                const uint16_t chunk_size = scatter.chunk_size[i];
+            uint16_t chunk_size = scatter.chunk_size[0];
+            noc_async_write_one_packet_with_trid<update_counter, false>(
+                payload_start_address + offset,
+                scatter.noc_address[0],
+                chunk_size,
+                transaction_id,
+                tt::tt_fabric::local_chip_data_cmd_buf,
+                tt::tt_fabric::edm_to_local_chip_noc);
+            offset += chunk_size;
+            if (chunk_count > 2) {
+                chunk_size = scatter.chunk_size[1];
                 noc_async_write_one_packet_with_trid<update_counter, false>(
                     payload_start_address + offset,
-                    scatter.noc_address[i],
+                    scatter.noc_address[1],
                     chunk_size,
                     transaction_id,
                     tt::tt_fabric::local_chip_data_cmd_buf,
                     tt::tt_fabric::edm_to_local_chip_noc);
                 offset += chunk_size;
+                if (chunk_count == 4) [[likely]] {
+                    chunk_size = scatter.chunk_size[2];
+                    noc_async_write_one_packet_with_trid<update_counter, false>(
+                        payload_start_address + offset,
+                        scatter.noc_address[2],
+                        chunk_size,
+                        transaction_id,
+                        tt::tt_fabric::local_chip_data_cmd_buf,
+                        tt::tt_fabric::edm_to_local_chip_noc);
+                    offset += chunk_size;
+                }
             }
 
             const uint16_t final_chunk_size = static_cast<uint16_t>(payload_size_bytes - offset);
