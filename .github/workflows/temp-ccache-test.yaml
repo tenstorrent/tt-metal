@@ -42,6 +42,11 @@ jobs:
         # CCACHE_REMOTE_ONLY: "true"
         CCACHE_DIR: /tmp/ccache
         TT_METAL_CCACHE_KERNEL_SUPPORT: 1
+        # Force JIT compilation and enable debug logging
+        TT_METAL_LOGGER_LEVEL: Debug
+        TT_METAL_LOGGER_TYPES: BuildKernels
+        TT_METAL_SKIP_KERNELS_CACHE: 1
+        TT_METAL_LOG_KERNELS_COMPILATION_COMMANDS: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -90,6 +95,47 @@ jobs:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           enable-watcher: false
 
+      - name: Force a simple kernel compilation test
+        timeout-minutes: 5
+        run: |
+          echo "=== Testing basic kernel compilation to trigger JIT ==="
+          cd /work
+
+          # Create a simple test to force kernel compilation
+          cat > /tmp/test_kernel_compile.py << 'EOF'
+          import os
+          import sys
+          import torch
+
+          print("Testing basic kernel compilation...")
+
+          try:
+              # Import tt-metal libraries
+              import tt_lib as ttl
+              import ttnn
+
+              # Simple test that should trigger kernel compilation
+              device = ttl.device.open_device(device_id=0)
+
+              # Create a simple tensor operation
+              x = torch.randn(1, 1, 32, 32)
+              x_tt = ttl.tensor.Tensor(x, device)
+              y_tt = ttl.operations.unary.relu(x_tt)
+
+              ttl.device.close_device(device)
+              print("SUCCESS: Basic kernel compilation test completed")
+
+          except Exception as e:
+              print(f"Kernel compilation test failed: {e}")
+              print("This may be expected - continuing with main tests...")
+          EOF
+
+          # Run the simple test
+          python /tmp/test_kernel_compile.py 2>&1 | tee /tmp/kernel_test.log || true
+
+          echo "Kernel compilation test completed. Checking for JIT activity:"
+          grep -E "(CCACHE_DEBUG|compile|JIT)" /tmp/kernel_test.log || echo "No JIT compilation detected"
+
       - name: First test run - populate kernel ccache
         timeout-minutes: 25
         run: |
@@ -106,11 +152,26 @@ jobs:
           mkdir -p generated/test_reports
           ldd tests/ttml_tests || true
 
-          # Clear any existing JIT cache to start fresh
+          # Clear any existing JIT cache to start fresh and force recompilation
+          echo "Clearing all caches to force JIT kernel compilation..."
           rm -rf /tmp/ttnn_cache/ /tmp/tt_metal_cache/ || true
+          find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
+          find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
+
+          # Set environment to force debug output
+          export TT_METAL_LOGGER_LEVEL=Debug
+          export TT_METAL_LOGGER_TYPES=BuildKernels
+          export TT_METAL_LOG_KERNELS_COMPILATION_COMMANDS=1
 
           # Run first test and capture debug output
           echo "Running first test to populate JIT kernel cache..."
+          echo "Environment check:"
+          echo "TT_METAL_CCACHE_KERNEL_SUPPORT=$TT_METAL_CCACHE_KERNEL_SUPPORT"
+          echo "TT_METAL_LOGGER_LEVEL=$TT_METAL_LOGGER_LEVEL"
+          echo "Checking if debug logging is compiled in..."
+          strings /work/build/lib/libtt_metal.so | grep "CCACHE_DEBUG" || echo "CCACHE_DEBUG strings not found in library"
+          echo "Checking for git hash in library..."
+          strings /work/build/lib/libtt_metal.so | grep -E "[0-9a-f]{10}" | head -3 || echo "No git hashes found"
           ${{ matrix.test-group.cmd }} 2>&1 | tee /tmp/first_run.log
 
           echo ""
@@ -124,11 +185,19 @@ jobs:
 
           cd /work/build/tt-train
 
+          # Force another compilation by clearing just the kernel binaries but keeping ccache
+          echo "Clearing kernel binaries to force recompilation (but keeping ccache)..."
+          find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
+          find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
+
+          # Set environment again
+          export TT_METAL_LOGGER_LEVEL=Debug
+          export TT_METAL_LOGGER_TYPES=BuildKernels
+          export TT_METAL_LOG_KERNELS_COMPILATION_COMMANDS=1
+
           # Run the same tests again - JIT kernels should hit ccache now
           echo "Running second test - should hit cached kernels..."
-          ${{ matrix.test-group.cmd }} 2>&1 | tee /tmp/second_run.log
-
-          echo ""
+          ${{ matrix.test-group.cmd }} 2>&1 | tee /tmp/second_run.log          echo ""
           echo "=== ccache stats after second run ==="
           ccache -s
 
@@ -139,11 +208,19 @@ jobs:
 
           cd /work/build/tt-train
 
+          # Force compilation one more time
+          echo "Clearing kernel binaries again for third test..."
+          find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
+          find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
+
+          # Set environment again
+          export TT_METAL_LOGGER_LEVEL=Debug
+          export TT_METAL_LOGGER_TYPES=BuildKernels
+          export TT_METAL_LOG_KERNELS_COMPILATION_COMMANDS=1
+
           # Run tests a third time to gather more cache data
           echo "Running third test for cache pattern analysis..."
-          ${{ matrix.test-group.cmd }} 2>&1 | tee /tmp/third_run.log
-
-          echo ""
+          ${{ matrix.test-group.cmd }} 2>&1 | tee /tmp/third_run.log          echo ""
           echo "=== Final ccache stats ==="
           ccache -s
 
@@ -157,7 +234,10 @@ jobs:
             grep "CCACHE_DEBUG:" /tmp/first_run.log | head -30 || echo "No CCACHE_DEBUG output found in first run"
             echo ""
             echo "JIT compilation evidence from first run:"
-            grep -E "(compiling|compile_one|g\+\+ compile cmd)" /tmp/first_run.log | head -10 || echo "No compilation output found"
+            grep -iE "(compiling|compile_one|g\+\+ compile cmd|jit|build|kernel)" /tmp/first_run.log | head -20 || echo "No compilation output found"
+            echo ""
+            echo "Debug/Build log lines from first run:"
+            grep -iE "(debug|build|info.*build)" /tmp/first_run.log | head -15 || echo "No debug build lines found"
           else
             echo "First run log not found"
           fi
@@ -169,12 +249,13 @@ jobs:
             grep "CCACHE_DEBUG:" /tmp/second_run.log | head -30 || echo "No CCACHE_DEBUG output found in second run"
             echo ""
             echo "JIT compilation evidence from second run:"
-            grep -E "(compiling|compile_one|g\+\+ compile cmd)" /tmp/second_run.log | head -10 || echo "No compilation output found"
+            grep -iE "(compiling|compile_one|g\+\+ compile cmd|jit|build|kernel)" /tmp/second_run.log | head -20 || echo "No compilation output found"
+            echo ""
+            echo "Debug/Build log lines from second run:"
+            grep -iE "(debug|build|info.*build)" /tmp/second_run.log | head -15 || echo "No debug build lines found"
           else
             echo "Second run log not found"
-          fi
-
-          echo ""
+          fi          echo ""
           echo "=== JIT Build Debug Info from Third Run ==="
           if [ -f /tmp/third_run.log ]; then
             echo "CCACHE_DEBUG lines from third run:"
