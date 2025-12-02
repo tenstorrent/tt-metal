@@ -8,8 +8,6 @@
 #include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -57,6 +55,8 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power(sfpi::vFloat base, sfpi::vFloat pow) 
 
     // Convert exponent to float
     sfpi::vInt exp = sfpi::exexp(base);
+    // sfpi::exexp returns signed-integer but sfpi::int32_to_float() takes sign-magnitude integers
+    // These types differ on negative inputs, which is why we explicitly convert signed -> sign-magnitude
     v_if(exp < 0) { exp = sfpi::setsgn(~exp + 1, 1); }
     v_endif;
     sfpi::vFloat exp_f32 = sfpi::int32_to_float(exp, 0);
