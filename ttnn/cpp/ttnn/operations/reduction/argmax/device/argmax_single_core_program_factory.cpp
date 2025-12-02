@@ -14,27 +14,32 @@ using namespace tt::constants;
 
 static std::tuple<uint32_t, uint32_t> get_page_sizes_single_core(
     const Tensor& input, const Tensor& output, bool keepdim, bool reduce_all) {
-    TT_FATAL(
-        input.layout() == Layout::ROW_MAJOR || input.layout() == Layout::TILE,
-        "Only ROW_MAJOR and TILE layouts are supported for argmax single-core");
-
     const auto& input_shape = input.padded_shape();
     const uint32_t rank = input_shape.size();
 
-    if (input.layout() == Layout::ROW_MAJOR) {
-        const uint32_t red_dim_units = input_shape[rank - 1];
-        const uint32_t input_unit_size = input.element_size();
-        const uint32_t output_unit_size = output.element_size();
-        const uint32_t output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
+    switch (input.layout()) {
+        case Layout::ROW_MAJOR: {
+            const uint32_t red_dim_units = input_shape[rank - 1];
+            const uint32_t input_unit_size = input.element_size();
+            const uint32_t output_unit_size = output.element_size();
+            const uint32_t output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
 
-        return {red_dim_units * input_unit_size, output_last_dim * output_unit_size};
+            return {red_dim_units * input_unit_size, output_last_dim * output_unit_size};
+        }
+        case Layout::TILE: {
+            TT_FATAL(
+                output.layout() == Layout::ROW_MAJOR,
+                "For TILE input layout, only ROW_MAJOR output is supported, got output layout: {}",
+                output.layout());
+
+            return {input.tensor_spec().compute_page_size_bytes(), output.tensor_spec().compute_page_size_bytes()};
+        }
+        default:
+            TT_FATAL(
+                false,
+                "Unsupported input layout {} for argmax single-core. Supported: ROW_MAJOR, TILE",
+                input.layout());
     }
-
-    // TILE layout
-    TT_FATAL(
-        output.layout() == Layout::ROW_MAJOR, "For input tensor with TILE layout only ROW_MAJOR output is supported");
-
-    return {input.tensor_spec().compute_page_size_bytes(), output.tensor_spec().compute_page_size_bytes()};
 }
 
 static void create_circular_buffers_single_core(
@@ -66,54 +71,57 @@ static std::vector<uint32_t> get_ctime_args_single_core(
     uint32_t dst_cb_index,
     bool keepdim,
     bool reduce_all) {
-    TT_FATAL(
-        input.layout() == Layout::ROW_MAJOR || input.layout() == Layout::TILE,
-        "Only ROW_MAJOR and TILE layouts are supported for argmax single-core");
-
     const auto& input_shape = input.padded_shape();
     const uint32_t rank = input_shape.size();
 
-    if (input.layout() == Layout::ROW_MAJOR) {
-        const uint32_t red_dim_units = input_shape[rank - 1];
-        const uint32_t output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
-        const uint32_t inner_dim_units = output_last_dim;
-        const uint32_t outer_dim_units = input.logical_volume() / inner_dim_units / red_dim_units;
+    switch (input.layout()) {
+        case Layout::ROW_MAJOR: {
+            const uint32_t red_dim_units = input_shape[rank - 1];
+            const uint32_t output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
+            const uint32_t inner_dim_units = output_last_dim;
+            const uint32_t outer_dim_units = input.logical_volume() / inner_dim_units / red_dim_units;
 
-        return {
-            src_cb_index,
-            dst_cb_index,
-            src_page_size,
-            dst_page_size,
-            outer_dim_units,
-            inner_dim_units,
-            red_dim_units,
-            (uint32_t)(reduce_all),
-        };
+            return {
+                src_cb_index,
+                dst_cb_index,
+                src_page_size,
+                dst_page_size,
+                outer_dim_units,
+                inner_dim_units,
+                red_dim_units,
+                (uint32_t)(reduce_all),
+            };
+        }
+        case Layout::TILE: {
+            const uint32_t logical_rank = input.logical_shape().size();
+            const uint32_t w_tiles = input_shape[rank - 1] / TILE_WIDTH;
+            const uint32_t h_tiles = input_shape[rank - 2] / TILE_HEIGHT;
+            const uint32_t w_logical = input.logical_shape()[logical_rank - 1];
+            const uint32_t h_logical = logical_rank > 1 ? input.logical_shape()[logical_rank - 2] : 1;
+            const uint32_t outer_dim_units = input.logical_volume() / (h_logical * w_logical);
+
+            return {
+                src_cb_index,
+                dst_cb_index,
+                src_page_size,
+                dst_page_size,
+                TILE_HEIGHT,
+                TILE_WIDTH,
+                h_tiles,
+                w_tiles,
+                h_logical,
+                w_logical,
+                outer_dim_units,
+                (uint32_t)(reduce_all),
+                (uint32_t)(keepdim),
+            };
+        }
+        default:
+            TT_FATAL(
+                false,
+                "Unsupported input layout {} for argmax single-core. Supported: ROW_MAJOR, TILE",
+                input.layout());
     }
-
-    // TILE layout
-    const uint32_t logical_rank = input.logical_shape().size();
-    const uint32_t w_tiles = input_shape[rank - 1] / TILE_WIDTH;
-    const uint32_t h_tiles = input_shape[rank - 2] / TILE_HEIGHT;
-    const uint32_t w_logical = input.logical_shape()[logical_rank - 1];
-    const uint32_t h_logical = logical_rank > 1 ? input.logical_shape()[logical_rank - 2] : 1;
-    const uint32_t outer_dim_units = input.logical_volume() / (h_logical * w_logical);
-
-    return {
-        src_cb_index,
-        dst_cb_index,
-        src_page_size,
-        dst_page_size,
-        TILE_HEIGHT,
-        TILE_WIDTH,
-        h_tiles,
-        w_tiles,
-        h_logical,
-        w_logical,
-        outer_dim_units,
-        (uint32_t)(reduce_all),
-        (uint32_t)(keepdim),
-    };
 }
 
 ArgMaxSingleCoreProgramFactory::cached_program_t ArgMaxSingleCoreProgramFactory::create(
