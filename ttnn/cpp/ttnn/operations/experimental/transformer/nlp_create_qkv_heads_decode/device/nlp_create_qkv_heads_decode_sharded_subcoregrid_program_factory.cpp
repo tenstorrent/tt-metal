@@ -140,8 +140,8 @@ NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory::create(
     // We parallelize the reader on risc0 and risc1, where each risc reads a sub-tile of the input (phase1 and phase2
     // of a tile respectively)
     std::vector<uint32_t> q_reader_compile_time_args = {
-        (std::uint32_t)element_size,
-        (std::uint32_t)sub_tile_line_bytes,
+        element_size,
+        sub_tile_line_bytes,
         q_output_cb_index,
         k_output_cb_index,
         v_output_cb_index,

@@ -74,8 +74,8 @@ NLPCreateQKVHeadsDecodeInterleavedProgramFactory::create(
     // We parallelize the reader on risc0 and risc1, where each risc reads a sub-tile of the input (phase1 and phase2
     // of a tile respectively)
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)element_size,
-        (std::uint32_t)sub_tile_line_bytes,
+        element_size,
+        sub_tile_line_bytes,
         q_output_cb_index,
         k_output_cb_index,
         v_output_cb_index,
@@ -110,12 +110,7 @@ NLPCreateQKVHeadsDecodeInterleavedProgramFactory::create(
             i < 16 ? i * sub_tile_line_bytes : ((i - 16) * sub_tile_line_bytes) + (512 * element_size);
 
         const auto& core = cores[i];
-        std::vector<uint32_t> reader_runtime_args;
-        reader_runtime_args.reserve(2);
-        reader_runtime_args = {
-            in_tile_offset_by_batch,
-            q_base_addr,
-        };
+        std::vector<uint32_t> reader_runtime_args = {in_tile_offset_by_batch, q_base_addr};
 
         SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
         SetRuntimeArgs(program, writer_kernel_id, core, reader_runtime_args);
