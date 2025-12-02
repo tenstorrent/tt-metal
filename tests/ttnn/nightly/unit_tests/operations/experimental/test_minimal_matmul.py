@@ -625,3 +625,63 @@ def test_create_perf_table(fidelity, dtype, fp32_acc):
             util_str = f"{math_util:.1f}"
 
         print(f"| ({M}, {K}, {N}) | {util_str} | {measured_ms_str} | {attrs_str} |")
+
+
+@pytest.mark.parametrize(
+    "dtype, math_fidelity, fp32_acc, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [
+        (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, False, 8, 16, 8, 2, 4),
+        (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False, 8, 16, 4, 2, 4),
+        (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False, 8, 16, 16, 2, 4),
+        (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False, 8, 16, 16, 2, 4),
+    ],
+    ids=["bf16_HiFi2", "bf8b_HiFi2", "bf8b_LoFi", "bf4b_LoFi"],
+)
+def test_minimal_matmul_worst_case_config(
+    device, dtype, math_fidelity, fp32_acc, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w
+):
+    M, K, N = 16384, 16384, 16384
+    torch_execution_dtype = torch.float32
+    torch_dtype = torch.bfloat16
+
+    torch_input = torch.randn((M, K), dtype=torch_dtype).to(torch_execution_dtype)
+    weight_input = torch.randn((K, N), dtype=torch_dtype).to(torch_execution_dtype)
+
+    # Prepare TT tensors
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight_input, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
+
+    with torch.no_grad():
+        torch_output = torch_input @ weight_input
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_acc,
+        packer_l1_acc=True,
+    )
+
+    core_grid = device.compute_with_storage_grid_size()
+
+    logger.info(
+        f"Running minimal_matmul with M_block_size={M_block_size}, K_block_size={K_block_size}, N_block_size={N_block_size}, subblock_h={subblock_h}, subblock_w={subblock_w}, core_grid={core_grid}"
+    )
+
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=M_block_size,
+        K_block_size=K_block_size,
+        N_block_size=N_block_size,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+        compute_with_storage_grid_size=core_grid,
+    )
+    tt_output = ttnn.experimental.minimal_matmul(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        bias_tensor=None,
+        compute_kernel_config=compute_config,
+        config=matmul_config,
+    )
+    tt_output = ttnn.to_torch(tt_output)
+    check_result = assert_quality(torch_output, tt_output)
