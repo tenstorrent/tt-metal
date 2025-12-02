@@ -11,7 +11,7 @@
 #include "core_coord.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "fd_kernel.hpp"
-#include "mesh_graph.hpp"
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include <umd/device/types/xy_pair.hpp>

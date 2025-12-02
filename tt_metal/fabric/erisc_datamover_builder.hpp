@@ -11,10 +11,10 @@
 #include <tt-metalium/tt_align.hpp>
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "fabric/fabric_edm_packet_header.hpp"
-#include <tt-metalium/edm_fabric_counters.hpp>
-#include <tt-metalium/routing_table_generator.hpp>  // for FabricNodeId
+#include <tt-metalium/experimental/fabric/edm_fabric_counters.hpp>
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>  // for FabricNodeId
 #include <hostdevcommon/fabric_common.h>
 #include <optional>
 #include <cstdint>
@@ -169,6 +169,8 @@ struct StreamRegAssignments {
     static constexpr uint32_t reserved_lite_fabric_3_stream_id = 26;
     static constexpr uint32_t reserved_lite_fabric_4_stream_id = 27;
     static constexpr uint32_t reserved_lite_fabric_5_stream_id = 28;
+    // Local tensix relay free slots stream ID (UDM mode only)
+    static constexpr uint32_t tensix_relay_local_free_slots_stream_id = 29;
     // Multi-RISC teardown synchronization stream ID
     static constexpr uint32_t multi_risc_teardown_sync_stream_id = 31;
 
@@ -194,6 +196,7 @@ struct StreamRegAssignments {
             sender_channel_2_free_slots_stream_id,
             sender_channel_3_free_slots_stream_id,
             sender_channel_4_free_slots_stream_id,
+            tensix_relay_local_free_slots_stream_id,
             multi_risc_teardown_sync_stream_id};
         return stream_ids;
     }
@@ -227,9 +230,8 @@ struct FabricEriscDatamoverConfig {
 
     static constexpr std::size_t num_downstream_edms_vc0 = 1;
     static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;
-    static constexpr std::size_t num_downstream_edms_vc1 = 1;
-    static constexpr std::size_t num_downstream_edms = num_downstream_edms_vc0 + num_downstream_edms_vc1;
-    static constexpr std::size_t num_downstream_edms_2d = num_downstream_edms_2d_vc0 + num_downstream_edms_vc1;
+    static constexpr std::size_t num_downstream_edms = num_downstream_edms_vc0;
+    static constexpr std::size_t num_downstream_edms_2d = num_downstream_edms_2d_vc0;
     static constexpr std::size_t max_downstream_edms = std::max(num_downstream_edms, num_downstream_edms_2d);
     static constexpr uint32_t num_virtual_channels = 2;
 
@@ -238,8 +240,6 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t eth_word_l1_alignment = 16;
     static constexpr uint32_t default_iterations_between_ctx_switch_and_teardown_checks = 32;
     static_assert(((buffer_alignment - 1) & buffer_alignment) == 0);
-    static constexpr bool enable_fabric_counters = false;
-    static constexpr bool enable_fabric_pkt_header_recording = false;
 
     // Global
     static constexpr std::size_t eth_channel_sync_size = 16;
@@ -256,25 +256,6 @@ struct FabricEriscDatamoverConfig {
 
     // Code profiling buffer address (16B aligned)
     std::size_t code_profiling_buffer_address = 0;
-
-    // Debug and Counters
-    static constexpr std::size_t receiver_channel_counters_size_bytes =
-        (((tt::tt_fabric::receiver_channel_counters_l1_size - 1) / field_size) + 1) * field_size;
-    static constexpr std::size_t sender_channel_counters_size_bytes =
-        (((tt::tt_fabric::sender_channel_counters_l1_size - 1) / field_size) + 1) * field_size;
-
-    std::array<std::size_t, builder_config::num_receiver_channels> receiver_channels_counters_address = {};
-    std::array<std::size_t, builder_config::num_sender_channels> sender_channels_counters_address = {};
-
-    // Packet header history buffer(s)
-    static constexpr std::size_t receiver_completed_packet_header_cb_size_headers = 32;
-    static constexpr std::size_t receiver_completed_packet_header_cb_size_bytes =
-        sizeof(tt::tt_fabric::PacketHeader) * receiver_completed_packet_header_cb_size_headers;
-    static constexpr std::size_t sender_completed_packet_header_cb_size_headers = 32;
-    static constexpr std::size_t sender_completed_packet_header_cb_size_bytes =
-        sizeof(tt::tt_fabric::PacketHeader) * sender_completed_packet_header_cb_size_headers;
-    std::array<std::size_t, builder_config::num_receiver_channels> receivers_completed_packet_header_cb_address = {};
-    std::array<std::size_t, builder_config::num_sender_channels> senders_completed_packet_header_cb_address = {};
 
     std::vector<FabricRiscConfig> risc_configs;
     // ----------- Sender Channels
@@ -309,6 +290,10 @@ struct FabricEriscDatamoverConfig {
     size_t receiver_channel_remote_ack_counters_base_addr = 0;
     size_t receiver_channel_remote_completion_counters_base_addr = 0;
 
+    // ----------- Local Tensix Relay Connection (UDM mode only)
+    // Connection buffer index for the local tensix relay interface
+    size_t tensix_relay_connection_buffer_index_id = 0;
+
     // Channel Allocations
     std::size_t max_l1_loading_size = 0;
     std::vector<MemoryRegion> available_buffer_memory_regions;
@@ -339,11 +324,6 @@ struct FabricEriscDatamoverConfig {
     std::array<std::size_t, builder_config::num_sender_channels> sender_channel_ack_noc_ids = {};
     std::array<std::size_t, builder_config::num_sender_channels> sender_channel_ack_cmd_buf_ids = {};
 
-    // // Dateline Upstream EDM skip connection flag
-    bool skip_sender_channel_1_connection = false;
-    bool skip_receiver_channel_1_connection = false;
-    bool skip_sender_vc1_channel_connection = false;
-
     // emd vcs
     std::size_t edm_noc_vc = 0;
 
@@ -364,8 +344,6 @@ struct FabricEriscDatamoverConfig {
     std::shared_ptr<FabricRemoteChannelsAllocator> remote_channels_allocator;
 
 private:
-    void configure_skip_connection_flags(Topology topology, FabricEriscDatamoverOptions const& options);
-
     FabricEriscDatamoverConfig(Topology topology = Topology::Linear);
 };
 
@@ -467,8 +445,8 @@ public:
 
         const FabricEriscDatamoverConfig& config,
         eth_chan_directions direction,
+        std::vector<bool>&& sender_channel_injection_flags,
         bool build_in_worker_connection_mode = false,
-        FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default,
         bool has_tensix_extension = false);
 
     static FabricEriscDatamoverBuilder build(
@@ -478,8 +456,8 @@ public:
         const FabricNodeId& local_fabric_node_id,
         const FabricNodeId& peer_fabric_node_id,
         const FabricEriscDatamoverConfig& config,
+        std::vector<bool>&& sender_channel_injection_flags,
         bool build_in_worker_connection_mode = false,
-        FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default,
         eth_chan_directions direction = eth_chan_directions::EAST,
         bool has_tensix_extension = false);
 
@@ -490,8 +468,8 @@ public:
         ChipId local_physical_chip_id,
         ChipId peer_physical_chip_id,
         const FabricEriscDatamoverConfig& config,
+        std::vector<bool>&& sender_channel_injection_flags,
         bool build_in_worker_connection_mode = false,
-        FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default,
         eth_chan_directions direction = eth_chan_directions::EAST,
         bool has_tensix_extension = false);
 
@@ -506,7 +484,8 @@ public:
     [[nodiscard]] std::vector<uint32_t> get_runtime_args() const;
 
     void connect_to_downstream_edm(FabricDatamoverBuilderBase* downstream_builder);
-    void connect_to_downstream_edm(FabricDatamoverBuilderBase* downstream_builder, FabricDatamoverBuilderBase* vc1_edm_builder);
+    void connect_to_downstream_edm(
+        FabricDatamoverBuilderBase* downstream_builder, FabricDatamoverBuilderBase* vc1_edm_builder);
 
     size_t get_configured_risc_count() const;
 
@@ -522,6 +501,8 @@ public:
     void set_firmware_context_switch_interval(size_t interval);
     void set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType type);
     void set_wait_for_host_signal(bool wait_for_host_signal);
+
+    bool is_first_level_ack_enabled() const { return this->enable_first_level_ack; }
 
     //    protected:
     friend class EdmLineFabricOpInterface;
@@ -566,17 +547,26 @@ public:
 
     mutable std::array<bool, builder_config::num_sender_channels> sender_channel_connection_liveness_check_disable_array = {};
 
+    mutable std::vector<bool> sender_channel_is_traffic_injection_channel_array;
+
     bool build_in_worker_connection_mode = false;
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
     FabricEriscDatamoverContextSwitchType firmware_context_switch_type = default_firmware_context_switch_type;
     bool fuse_receiver_flush_and_completion_ptr = true;
-    FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default;
-    bool dateline_connection = false;
     bool wait_for_host_signal = false;
     bool has_tensix_extension = false;
     uint32_t num_downstream_tensix_connections = 0;
+    bool udm_mode = false;  // UDM mode: router connects to local tensix relay
+    uint32_t local_tensix_relay_num_buffers = 0;  // Number of buffers in the local relay channel
 
 private:
+    // first level acks are acknowledgement credits sent from receiver to sender channels on receipt of packets
+    // and can be used to know when the sender is able to recover a buffer slot in the channel, for new data from
+    // its producer(s).
+    // First level acks are required for any topologies that are using bubble flow control (e.g. ring/torus topologies)
+    // it is optional for other topologies and usually hurts performance in those other cases due to added CPU overheads
+    bool enable_first_level_ack = false;
+
     // Shared helper for setting up VC connections
     void setup_downstream_vc_connection(
         FabricDatamoverBuilderBase* downstream_builder, uint32_t vc_idx, uint32_t channel_id, bool is_vc1);

@@ -6,7 +6,7 @@
 #include "ttnn/operations/ccl/all_broadcast/device/all_broadcast_op.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <deque>
 
 namespace ttnn::operations::ccl {
@@ -41,7 +41,7 @@ std::vector<ttnn::Tensor> ExecuteAllBroadcast::invoke(
             return std::vector<ttnn::Tensor>(tensors.begin(), tensors.end());
         }
     }
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required for all_broadcast operation");
     tt::tt_fabric::Topology topology_ = topology.value_or(
         ::ttnn::ccl::get_usable_topology(input_tensor, tt::tt_fabric::get_fabric_topology(), cluster_axis));

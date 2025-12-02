@@ -4,9 +4,9 @@
 
 #include <unordered_map>
 #include <vector>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <enchantum/enchantum.hpp>
@@ -89,7 +89,6 @@ size_t FabricContext::get_max_payload_size_bytes() const {
 }
 
 std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> FabricContext::get_edm_config_options(
-    tt::tt_fabric::FabricEriscDatamoverType edm_type,
     tt::tt_fabric::FabricEriscDatamoverAxis edm_axis,
     tt::tt_fabric::FabricTensixConfig fabric_tensix_config,
     eth_chan_directions direction) {
@@ -102,7 +101,6 @@ std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> FabricContext::get_ed
             edm_axis != tt::tt_fabric::FabricEriscDatamoverAxis::Short,
     };
     auto edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
-        .edm_type = edm_type,
         .edm_axis = edm_axis,
         .edm_buffer_config = edm_buffer_config,
         .fabric_tensix_config = fabric_tensix_config,
@@ -133,33 +131,28 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
 
     // default router config don't care about the axis, since there's no optimization to it.
     this->router_config_ = get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType::Default, tt::tt_fabric::FabricEriscDatamoverAxis::Short);
+        tt::tt_fabric::FabricEriscDatamoverAxis::Short);
 
     // dateline edm router
-    this->dateline_router_config_[short_axis] = get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType::Dateline, tt::tt_fabric::FabricEriscDatamoverAxis::Short);
-    this->dateline_router_config_[long_axis] = get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType::Dateline, tt::tt_fabric::FabricEriscDatamoverAxis::Long);
+    this->dateline_router_config_[short_axis] = get_edm_config_options(tt::tt_fabric::FabricEriscDatamoverAxis::Short);
+    this->dateline_router_config_[long_axis] = get_edm_config_options(tt::tt_fabric::FabricEriscDatamoverAxis::Long);
 
     // dateline upstream edm router
-    this->dateline_upstream_router_config_[short_axis] = get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream, tt::tt_fabric::FabricEriscDatamoverAxis::Short);
-    this->dateline_upstream_router_config_[long_axis] = get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream, tt::tt_fabric::FabricEriscDatamoverAxis::Long);
+    this->dateline_upstream_router_config_[short_axis] =
+        get_edm_config_options(tt::tt_fabric::FabricEriscDatamoverAxis::Short);
+    this->dateline_upstream_router_config_[long_axis] =
+        get_edm_config_options(tt::tt_fabric::FabricEriscDatamoverAxis::Long);
 
     // dateline upstream adjacent edm router
-    this->dateline_upstream_adjcent_router_config_[short_axis] = get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice,
-        tt::tt_fabric::FabricEriscDatamoverAxis::Short);
-    this->dateline_upstream_adjcent_router_config_[long_axis] = get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice,
-        tt::tt_fabric::FabricEriscDatamoverAxis::Long);
+    this->dateline_upstream_adjcent_router_config_[short_axis] =
+        get_edm_config_options(tt::tt_fabric::FabricEriscDatamoverAxis::Short);
+    this->dateline_upstream_adjcent_router_config_[long_axis] =
+        get_edm_config_options(tt::tt_fabric::FabricEriscDatamoverAxis::Long);
 
     // default router config with mux extension, for now no need to differentiate dateline, dateline-upstream, etc.
     // Initialize for all directions: EAST, WEST, NORTH, SOUTH
     for (size_t direction = 0; direction < eth_chan_directions::COUNT; direction++) {
         this->router_with_mux_config_[direction] = get_edm_config_options(
-            tt::tt_fabric::FabricEriscDatamoverType::Default,
             tt::tt_fabric::FabricEriscDatamoverAxis::Short,
             tt::tt_fabric::FabricTensixConfig::MUX,
             static_cast<eth_chan_directions>(direction));
@@ -216,46 +209,18 @@ size_t FabricContext::get_fabric_max_payload_size_bytes() const { return this->m
 size_t FabricContext::get_fabric_channel_buffer_size_bytes() const { return this->channel_buffer_size_bytes_; }
 
 tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_config(
-    tt::tt_fabric::FabricEriscDatamoverType fabric_edm_type,
-    tt::tt_fabric::FabricEriscDatamoverAxis fabric_edm_axis,
-    tt::tt_fabric::FabricTensixConfig fabric_tensix_config,
-    eth_chan_directions direction) const {
-    auto axis_index = static_cast<std::size_t>(fabric_edm_axis);
+    tt::tt_fabric::FabricTensixConfig fabric_tensix_config, eth_chan_directions direction) const {
     switch (fabric_tensix_config) {
         case tt::tt_fabric::FabricTensixConfig::DISABLED:
-            switch (fabric_edm_type) {
-                case tt::tt_fabric::FabricEriscDatamoverType::Default:
-                    TT_FATAL(this->router_config_ != nullptr, "Error, fabric router config is uninitialized");
-                    return *this->router_config_;
-                    break;
-                case tt::tt_fabric::FabricEriscDatamoverType::Dateline:
-                    TT_FATAL(
-                        this->dateline_router_config_[axis_index] != nullptr,
-                        "Error, fabric dateline router config is uninitialized");
-                    return *this->dateline_router_config_[axis_index].get();
-                    break;
-                case tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream:
-                    TT_FATAL(
-                        this->dateline_upstream_router_config_[axis_index] != nullptr,
-                        "Error, fabric dateline upstream router config is uninitialized");
-                    return *this->dateline_upstream_router_config_[axis_index].get();
-                    break;
-                case tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice:
-                    TT_FATAL(
-                        this->dateline_upstream_adjcent_router_config_[axis_index] != nullptr,
-                        "Error, fabric dateline upstream adjacent device router config is uninitialized");
-                    return *this->dateline_upstream_adjcent_router_config_[axis_index].get();
-                    break;
-                default: TT_FATAL(false, "Error, invalid fabric edm type");
-            }
-            break;
+        case tt::tt_fabric::FabricTensixConfig::UDM:
+            TT_FATAL(this->router_config_ != nullptr, "Error, fabric router config is uninitialized");
+            return *this->router_config_;
         case tt::tt_fabric::FabricTensixConfig::MUX:
             TT_FATAL(
                 this->router_with_mux_config_[direction] != nullptr,
                 "Error, fabric router config with mux extension is uninitialized for direction {}",
                 direction);
             return *this->router_with_mux_config_[direction].get();
-            break;
         default: TT_FATAL(false, "Error, invalid fabric_tensix_config: {}", fabric_tensix_config);
     }
 };
