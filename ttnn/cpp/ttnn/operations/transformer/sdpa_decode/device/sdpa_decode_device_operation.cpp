@@ -39,7 +39,7 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
     if (tensor_args.v.has_value()) {
         input_tensors.emplace_back(tensor_args.v.value());
     }
-    for (auto& input_tensor : input_tensors) {
+    for (const auto& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device!");
         TT_FATAL(input_tensor.buffer() != nullptr, "Operands to SDPA need to be allocated in buffers on device!");
         TT_FATAL(
@@ -336,7 +336,7 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
 
 spec_return_value_t SdpaDecodeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto& input = tensor_args.q;
+    const auto& input = tensor_args.q;
     Layout output_layout = Layout::TILE;
     ttnn::Shape output_shape = input.logical_shape();
     if (input.layout() == Layout::ROW_MAJOR) {

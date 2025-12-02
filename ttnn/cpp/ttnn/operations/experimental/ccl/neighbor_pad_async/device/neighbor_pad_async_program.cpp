@@ -9,7 +9,7 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/experimental/ccl/neighbor_pad_async/device/neighbor_pad_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/neighbor_pad_async/device/neighbor_pad_async_program.hpp"
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -61,7 +61,7 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
     tt::tt_metal::Buffer* input_buffer = input_tensor.buffer();
     tt::tt_metal::Buffer* output_buffer = output_tensor.buffer();
 
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
 
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();

@@ -28,12 +28,12 @@ MorehClipGradNormStep3Operation::ProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& inputs) {
-    auto& clip_coef_clamped = tensor_args.clip_coef_clamped;
+    const auto& clip_coef_clamped = tensor_args.clip_coef_clamped;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto device = inputs.at(0).device();
+    auto* device = inputs.at(0).device();
     auto program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -82,10 +82,10 @@ MorehClipGradNormStep3Operation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto reader_kernel_file =
+    const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step3/device/kernels/"
         "reader_moreh_clip_grad_norm_step3.cpp";
-    const auto writer_kernel_file =
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step3/device/kernels/"
         "writer_moreh_clip_grad_norm_step3.cpp";
 
@@ -100,7 +100,7 @@ MorehClipGradNormStep3Operation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto compute_kernel_file =
+    const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step3/device/kernels/"
         "moreh_clip_grad_norm_step3_kernel.cpp";
 
@@ -146,7 +146,7 @@ void MorehClipGradNormStep3Operation::ProgramFactory::override_runtime_arguments
     auto num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
     auto num_cores_y = cached_program.shared_variables.num_cores_y;
 
-    auto clip_coef_clamped_buffer = tensor_args.clip_coef_clamped.buffer();
+    auto* clip_coef_clamped_buffer = tensor_args.clip_coef_clamped.buffer();
     const auto clip_coef_clamped_address = clip_coef_clamped_buffer->address();
 
     for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {

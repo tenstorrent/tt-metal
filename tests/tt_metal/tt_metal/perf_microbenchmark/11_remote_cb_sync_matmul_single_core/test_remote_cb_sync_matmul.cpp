@@ -110,7 +110,7 @@ std::tuple<uint32_t, uint32_t> get_out_subblock_params(
     }};
 
     uint32_t index = 0;
-    for (auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
+    for (const auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
         auto subblock_h = std::get<0>(subblock_hw);
         auto subblock_w = std::get<1>(subblock_hw);
         if (per_core_Mt % subblock_h == 0 and per_core_Nt % subblock_w == 0) {
