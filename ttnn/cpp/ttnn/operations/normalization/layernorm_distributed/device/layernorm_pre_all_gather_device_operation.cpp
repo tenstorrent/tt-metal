@@ -8,6 +8,7 @@
 #include "ttnn/operations/math.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/logger.hpp>
 
 #include <optional>
 
@@ -20,8 +21,10 @@ LayerNormPreAllGatherDeviceOperation::program_factory_t LayerNormPreAllGatherDev
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // Use 2D factory if use_2d_core_grid is set to true
     if (args.use_2d_core_grid.has_value() && args.use_2d_core_grid.value()) {
+        tt::log_debug(tt::LogOp, "LayerNormPreAllGather: Using 2D program factory");
         return program::LayerNormPreAllGather2DProgramFactory{};
     } else {
+        tt::log_debug(tt::LogOp, "LayerNormPreAllGather: Using 1D program factory");
         return program::LayerNormPreAllGatherProgramFactory{};
     }
 }
