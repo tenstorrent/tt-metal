@@ -181,14 +181,14 @@ jobs:
           echo "Release type: $release_type"
 
           if [[ "$release_type" == "dev" ]]; then
-            # For dev releases, find the second latest dev tag (contains -dev) - skip the current one
-            previous_tag=$(git tag -l --sort=-version:refname | grep -E ".*-dev.*" | sed -n '2p' || echo "")
+            # For dev releases, find the second latest dev tag (v*.*.0-dev followed by date) - skip the current one
+            previous_tag=$(git tag -l --sort=-version:refname | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+-dev[0-9]{8}$" | sed -n '2p' || echo "")
           elif [[ "$release_type" == "rc" ]]; then
-            # For rc releases, find the second latest rc tag (contains -rc) - skip the current one
-            previous_tag=$(git tag -l --sort=-version:refname | grep -E ".*-rc.*" | sed -n '2p' || echo "")
+            # For rc releases, find the second latest rc tag (v*.*.0-rc followed by number) - skip the current one
+            previous_tag=$(git tag -l --sort=-version:refname | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+$" | sed -n '2p' || echo "")
           else
-            # For prod releases, find the second latest stable release (no -dev or -rc suffix) - skip the current one
-            previous_tag=$(git tag -l --sort=-version:refname | grep -v -E ".*(dev|rc).*" | sed -n '2p' || echo "")
+            # For prod releases, find the second latest stable release (v*.*.* with no suffix) - skip the current one
+            previous_tag=$(git tag -l --sort=-version:refname | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+$" | sed -n '2p' || echo "")
           fi
 
           if [[ -z "$previous_tag" ]]; then
