@@ -99,6 +99,20 @@ def main():
         default=False,
     )
     parser.add_option(
+        "--disable-device-data-dump-to-files",
+        dest="disable_device_data_dump_to_files",
+        action="store_true",
+        help="Disable dumping collected device data to files",
+        default=False,
+    )
+    parser.add_option(
+        "--disable-device-data-push-to-tracy",
+        dest="disable_device_data_push_to_tracy",
+        action="store_true",
+        help="Disable pushing collected device data to Tracy GUI",
+        default=False,
+    )
+    parser.add_option(
         "--collect-noc-traces",
         dest="collect_noc_traces",
         action="store_true",
@@ -186,6 +200,12 @@ def main():
 
     if options.mid_run_device_data:
         os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
+
+    if options.disable_device_data_dump_to_files:
+        os.environ["TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES"] = "1"
+
+    if options.disable_device_data_push_to_tracy:
+        os.environ["TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY"] = "1"
 
     if options.sync_host_device:
         os.environ["TT_METAL_PROFILER_SYNC"] = "1"
