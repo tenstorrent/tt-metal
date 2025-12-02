@@ -248,16 +248,16 @@ tests/sweep_framework/sweep_utils/conv_transpose2d_common.py @tenstorrent/metali
 tests/sweep_framework/sweep_utils/max_pool2d_with_indices_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 
 # OP docs examples
-tests/ttnn/docs_examples/test_backward_examples.py @patrickroberts @sjameelTT @ntarafdar @dchenTT @tenstorrent/codeowner-bypass
-tests/ttnn/docs_examples/test_complex_unary_examples.py @patrickroberts @sjameelTT @ntarafdar @dchenTT @tenstorrent/codeowner-bypass
+tests/ttnn/docs_examples/test_backward_examples.py @tenstorrent/metalium-developers-eltwise @tenstorrent/codeowner-bypass
+tests/ttnn/docs_examples/test_complex_unary_examples.py @tenstorrent/metalium-developers-eltwise @tenstorrent/codeowner-bypass
 tests/ttnn/docs_examples/test_core_examples.py @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
 tests/ttnn/docs_examples/test_data_movement_examples.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
-tests/ttnn/docs_examples/test_eltwise_*_examples.py @patrickroberts @sjameelTT @ntarafdar @dchenTT @tenstorrent/codeowner-bypass
+tests/ttnn/docs_examples/test_eltwise_*_examples.py @tenstorrent/metalium-developers-eltwise @tenstorrent/codeowner-bypass
 tests/ttnn/docs_examples/test_embedding_examples.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
-tests/ttnn/docs_examples/test_losses_examples.py @patrickroberts @sjameelTT @ntarafdar @dchenTT @tenstorrent/codeowner-bypass
+tests/ttnn/docs_examples/test_losses_examples.py @tenstorrent/metalium-developers-eltwise @tenstorrent/codeowner-bypass
 tests/ttnn/docs_examples/test_matrix_multiplication_examples.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 tests/ttnn/docs_examples/test_normalization_examples.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
-tests/ttnn/docs_examples/test_pointwise_*_examples.py @patrickroberts @sjameelTT @ntarafdar @dchenTT @tenstorrent/codeowner-bypass
+tests/ttnn/docs_examples/test_pointwise_*_examples.py @tenstorrent/metalium-developers-eltwise @tenstorrent/codeowner-bypass
 tests/ttnn/docs_examples/test_pooling_examples.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 tests/ttnn/docs_examples/test_reduction_examples.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 tests/ttnn/docs_examples/test_tensor_creation_examples.py @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
