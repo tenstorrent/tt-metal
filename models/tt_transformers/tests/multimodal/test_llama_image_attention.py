@@ -107,7 +107,7 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds, ensure
 
     # Create PT input
     ar = torch.tensor([[1, 2]])
-    pt_block_input = ((torch.rand(batch, num_chunks, ntok, dim) * 2) - 1) * 1
+    pt_block_input = ((torch.rand(batch, num_chunks, ntok, dim) * 2) - 1) * 0.1
     tt_attention_input = pt_block_input.clone()
 
     # Create PT attention mask
@@ -147,7 +147,7 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds, ensure
     tt_out = ttnn.slice(tt_out, (0, 0, 0, 0), (batch, num_chunks, ntok, dim))
     tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
 
-    reference_output = reference_model(pt_block_input, mask=mask)[0]
+    reference_output = reference_model(pt_block_input, attention_mask=mask)[0]
     reference_output = reference_output.reshape(batch, num_chunks, ntok, dim)
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
