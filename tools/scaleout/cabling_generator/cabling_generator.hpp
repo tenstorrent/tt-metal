@@ -18,6 +18,14 @@ namespace tt::scaleout_tools::fsd::proto {
     class FactorySystemDescriptor;
 }
 
+namespace tt::scaleout_tools::cabling_generator::proto {
+class ClusterDescriptor;
+}
+
+namespace tt::scaleout_tools::deployment::proto {
+class DeploymentDescriptor;
+}
+
 namespace tt::scaleout_tools {
 
 // Strong types to prevent mixing with other uint32_t values
@@ -105,6 +113,11 @@ public:
     // Constructor with just hostnames (no physical location info)
     CablingGenerator(const std::string& cluster_descriptor_path, const std::vector<std::string>& hostnames);
 
+    // Constructor with ClusterDescriptor protobuf and hostnames (no file I/O required)
+    CablingGenerator(
+        const cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
+        const std::vector<std::string>& hostnames);
+
     CablingGenerator() = default;
 
     // Getters for all data
@@ -121,6 +134,11 @@ public:
     void emit_cabling_guide_csv(const std::string& output_path, bool loc_info = true) const;
 
 private:
+    // Common initialization logic for all constructors
+    void initialize_cluster(
+        const cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
+        const deployment::proto::DeploymentDescriptor* deployment_descriptor = nullptr);
+
     // Validate that each host_id is assigned to exactly one node
     void validate_host_id_uniqueness();
 
