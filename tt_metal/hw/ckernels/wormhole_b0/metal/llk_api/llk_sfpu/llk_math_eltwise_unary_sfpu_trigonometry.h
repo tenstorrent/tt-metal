@@ -16,10 +16,12 @@ inline void llk_math_eltwise_unary_sfpu_sine_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::sine, APPROXIMATE>();
 }
 
-template <bool APPROXIMATE>
+template <bool APPROXIMATE, bool fp32_acc_to_dest_mode = true>
 inline void llk_math_eltwise_unary_sfpu_sine_op(uint dst_index) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_sfpu_trig<SfpuType::sine, APPROXIMATE>, dst_index, (int)VectorMode::RC);
+        ckernel::sfpu::calculate_sfpu_trig<SfpuType::sine, APPROXIMATE, fp32_acc_to_dest_mode>,
+        dst_index,
+        (int)VectorMode::RC);
 }
 
 // cosine
@@ -28,10 +30,12 @@ inline void llk_math_eltwise_unary_sfpu_cosine_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::cosine, APPROXIMATE>();
 }
 
-template <bool APPROXIMATE>
+template <bool APPROXIMATE, bool fp32_acc_to_dest_mode = true>
 inline void llk_math_eltwise_unary_sfpu_cosine_op(uint dst_index) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_sfpu_trig<SfpuType::cosine, APPROXIMATE>, dst_index, (int)VectorMode::RC);
+        ckernel::sfpu::calculate_sfpu_trig<SfpuType::cosine, APPROXIMATE, fp32_acc_to_dest_mode>,
+        dst_index,
+        (int)VectorMode::RC);
 }
 
 // tangent
