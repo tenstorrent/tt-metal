@@ -600,11 +600,13 @@ def test_demo_for_conditional_generation(
     if is_ci_env and model_repo == "distil-whisper/distil-large-v3" and param_mesh == 1:
         if is_blackhole():
             if mesh_device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
-                expected_perf_metrics = {"prefill_t/s": 7.85, "decode_t/s/u": 87.0}
+                expected_perf_metrics = {"prefill_t/s": 7.85, "decode_t/s/u": 87.0}  # TODO: update for nanobind
             else:
-                expected_perf_metrics = {"prefill_t/s": 8.40, "decode_t/s/u": 94.0}
+                # expected_perf_metrics = {"prefill_t/s": 8.40, "decode_t/s/u": 94.0} #pybind
+                expected_perf_metrics = {"prefill_t/s": 9.0, "decode_t/s/u": 160.0}  # nanobind
         else:  # wormhole_b0
-            expected_perf_metrics = {"prefill_t/s": 3.85, "decode_t/s/u": 51.8}
+            # expected_perf_metrics = {"prefill_t/s": 3.85, "decode_t/s/u": 51.8} # pybind
+            expected_perf_metrics = {"prefill_t/s": 4.45, "decode_t/s/u": 95.4}  # nanobind
         total_batch = mesh_device.get_num_devices() * batch_size_per_device
         expected_perf_metrics["decode_t/s"] = expected_perf_metrics["decode_t/s/u"] * total_batch
         measurements = {
