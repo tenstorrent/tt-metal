@@ -402,8 +402,8 @@ void TransposeHCShardedProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
 
-    const auto src_buffer = tensor_args.input.buffer();
-    const auto dst_buffer = tensor_return_value.buffer();
+    auto* const src_buffer = tensor_args.input.buffer();
+    auto* const dst_buffer = tensor_return_value.buffer();
 
     UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src0, *src_buffer);
     UpdateDynamicCircularBufferAddress(program, shared_variables.cb_output, *dst_buffer);

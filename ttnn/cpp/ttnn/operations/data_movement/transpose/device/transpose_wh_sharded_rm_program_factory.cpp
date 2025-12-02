@@ -218,8 +218,8 @@ void TransposeWHShardedRMProgramFactory::override_runtime_arguments(
     const auto& src_tensor = tensor_args.input;
     auto& dst_tensor = tensor_return_value;
 
-    const auto src_buffer = src_tensor.buffer();
-    const auto dst_buffer = dst_tensor.buffer();
+    auto* const src_buffer = src_tensor.buffer();
+    auto* const dst_buffer = dst_tensor.buffer();
 
     UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src0, *src_buffer);
     UpdateDynamicCircularBufferAddress(program, shared_variables.cb_output, *dst_buffer);
