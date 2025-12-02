@@ -125,19 +125,19 @@ SplitFusedQKVAndSplitHeadsShardedProgramFactory::create(
     auto c_out0_config = CircularBufferConfig(out_CB_size, {{CBIndex::c_16, cb_data_format}})
                              .set_page_size(CBIndex::c_16, single_tile_size)
                              .set_globally_allocated_address(*output[0].buffer());
-    ;
+
     auto cb_out0_id = CreateCircularBuffer(program, all_cores, c_out0_config);
     // k sharded
     auto c_out1_config = CircularBufferConfig(out_CB_size, {{CBIndex::c_17, cb_data_format}})
                              .set_page_size(CBIndex::c_17, single_tile_size)
                              .set_globally_allocated_address(*output[1].buffer());
-    ;
+
     auto cb_out1_id = CreateCircularBuffer(program, all_cores, c_out1_config);
     // v sharded
     auto c_out2_config = CircularBufferConfig(out_CB_size, {{CBIndex::c_18, cb_data_format}})
                              .set_page_size(CBIndex::c_18, single_tile_size)
                              .set_globally_allocated_address(*output[2].buffer());
-    ;
+
     auto cb_out2_id = CreateCircularBuffer(program, all_cores, c_out2_config);
 
     return {std::move(program), {cb_in0_id, cb_out0_id, cb_out1_id, cb_out2_id}};
