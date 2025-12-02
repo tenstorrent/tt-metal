@@ -43,7 +43,7 @@ AllToAllAsyncGenericProgram::cached_mesh_workload_t AllToAllAsyncGenericProgram:
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    auto mesh_device = tensor_args.input_tensor.device();
+    auto* mesh_device = tensor_args.input_tensor.device();
     auto sub_device_id = operation_attributes.sub_device_id;
     auto subdevice = sub_device_id.has_value() ? *sub_device_id : mesh_device->get_sub_device_ids().at(0);
     const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice);
@@ -100,7 +100,7 @@ AllToAllAsyncGenericProgram::create_at(
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, operation_attributes.topology);
 
     const size_t num_senders_per_link = 1;
-    auto topology_type = operation_attributes.topology == ttnn::ccl::Topology::Ring ? "RING" : "LINEAR";
+    const auto* topology_type = operation_attributes.topology == ttnn::ccl::Topology::Ring ? "RING" : "LINEAR";
 
     const auto [sender_worker_core_range, sender_worker_cores] = ttnn::ccl::choose_worker_cores(
         operation_attributes.num_links, num_senders_per_link, device, operation_attributes.sub_device_id);
