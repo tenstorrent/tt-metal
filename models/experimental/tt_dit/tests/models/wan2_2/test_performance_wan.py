@@ -167,7 +167,6 @@ def test_pipeline_performance(
 
     # Performance measurement runs
     logger.info("Running performance measurement iterations...")
-    all_timings = []
     num_perf_runs = 1  # For now use 1 prompt to minimize test time.
 
     for i in range(num_perf_runs):
@@ -175,28 +174,28 @@ def test_pipeline_performance(
 
         # Run pipeline with different prompt
         prompt_idx = (i + 1) % len(prompts)
-        with benchmark_profiler("run", iteration=i):
-            with torch.no_grad():
-                pipeline(
-                    prompt=prompts[prompt_idx],
-                    negative_prompt=negative_prompt,
-                    height=height,
-                    width=width,
-                    num_frames=num_frames,
-                    num_inference_steps=num_inference_steps,
-                    guidance_scale=guidance_scale,
-                    guidance_scale_2=guidance_scale_2,
-                )
+        with torch.no_grad():
+            pipeline(
+                prompt=prompts[prompt_idx],
+                negative_prompt=negative_prompt,
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=guidance_scale,
+                guidance_scale_2=guidance_scale_2,
+                profiler=benchmark_profiler,
+                profiler_iteration=i,
+            )
 
         # Collect timing data
-        all_timings.append(pipeline.timing_data)
-        logger.info(f"  Run {i+1} completed in {pipeline.timing_data['total']:.2f}s")
+        logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('total', i):.2f}s")
 
     # Calculate statistics
-    text_encoder_times = [t["text_encoder"] for t in all_timings]
-    denoising_times = [t["denoising"] for t in all_timings]
-    vae_times = [t["vae"] for t in all_timings]
-    total_times = [t["total"] for t in all_timings]
+    text_encoder_times = [benchmark_profiler.get_duration("text_encoder", i) for i in range(num_perf_runs)]
+    denoising_times = [benchmark_profiler.get_duration("denoising", i) for i in range(num_perf_runs)]
+    vae_times = [benchmark_profiler.get_duration("vae", i) for i in range(num_perf_runs)]
+    total_times = [benchmark_profiler.get_duration("total", i) for i in range(num_perf_runs)]
 
     # Report results
     print("\n" + "=" * 80)
@@ -228,57 +227,63 @@ def test_pipeline_performance(
     print_stats("Total Pipeline", total_times)
     print("-" * 80)
 
-    # Validate that we got reasonable results
-    assert len(all_timings) == num_perf_runs, f"Expected {num_perf_runs} timing results, got {len(all_timings)}"
-    assert all(t["total"] > 0 for t in all_timings), "All runs should have positive total time"
-
     # Validate performance
     measurements = {
-        "text_encoding_time": statistics.mean(text_encoder_times),
-        "denoising_time": statistics.mean(denoising_times),
-        "vae_decoding_time": statistics.mean(vae_times),
-        "total_time": statistics.mean(total_times),
+        "text_encoder": statistics.mean(text_encoder_times),
+        "denoising": statistics.mean(denoising_times),
+        "vae": statistics.mean(vae_times),
+        "total": statistics.mean(total_times),
     }
     if tuple(mesh_device.shape) == (2, 4) and height == 480:
         expected_metrics = {
-            "text_encoding_time": 14.8,
-            "denoising_time": 909.0,
-            "vae_decoding_time": 64.6,
-            "total_time": 990.0,
+            "text_encoder": 14.8,
+            "denoising": 909.0,
+            "vae": 64.6,
+            "total": 990.0,
         }
     elif tuple(mesh_device.shape) == (4, 8) and height == 480:
         expected_metrics = {
-            "text_encoding_time": 15.0,
-            "denoising_time": 163.0,
-            "vae_decoding_time": 18.2,
-            "total_time": 192.0,
+            "text_encoder": 15.0,
+            "denoising": 163.0,
+            "vae": 18.2,
+            "total": 192.0,
         }
     elif tuple(mesh_device.shape) == (4, 8) and height == 720:
         if is_blackhole():
             expected_metrics = {
-                "text_encoding_time": 15.0,
-                "denoising_time": 290.0,
-                "vae_decoding_time": 36.0,
-                "total_time": 341.0,
+                "text_encoder": 15.0,
+                "denoising": 290.0,
+                "vae": 36.0,
+                "total": 341.0,
             }
         else:
             expected_metrics = {
-                "text_encoding_time": 15.0,
-                "denoising_time": 440.0,
-                "vae_decoding_time": 42.0,
-                "total_time": 497.0,
+                "text_encoder": 15.0,
+                "denoising": 440.0,
+                "vae": 42.0,
+                "total": 497.0,
             }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
 
     if is_ci_env:
         # In CI, dump a performance report
-        profiler_model_name = f"wan_{'t3k' if tuple(mesh_device.shape) == (2, 4) else 'tg'}_sp{sp_factor}_tp{tp_factor}"
         benchmark_data = BenchmarkData()
+        for iteration in range(num_perf_runs):
+            for step_name in ["text_encoder", "denoising", "vae", "total"]:
+                benchmark_data.add_measurement(
+                    profiler=benchmark_profiler,
+                    iteration=iteration,
+                    step_name=step_name,
+                    name=step_name,
+                    value=measurements[step_name],
+                    target=expected_metrics[step_name],
+                )
+        run_type = f"wan_{'t3k' if tuple(mesh_device.shape) == (2, 4) else 'tg'}_{'bh' if is_blackhole() else 'wh'}"
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
-            run_type="wan_traced",
-            ml_model_name=profiler_model_name,
+            run_type=run_type,
+            ml_model_name="wan",
         )
 
     pass_perf_check = True
