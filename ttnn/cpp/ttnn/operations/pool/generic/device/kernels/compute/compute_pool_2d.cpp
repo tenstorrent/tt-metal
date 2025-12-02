@@ -12,7 +12,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/add_int_sfpu.h"
 
-#define DEBUG_PRINT 1
+#define DEBUG_PRINT 0
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -144,9 +144,6 @@ void MAIN {
     uint32_t num_out_sticks_this_core = get_arg_val<uint32_t>(0);
     uint32_t last_tile_height =
         num_out_sticks_this_core % TILE_HEIGHT == 0 ? TILE_HEIGHT : num_out_sticks_this_core % TILE_HEIGHT;
-    DPRINT << "num_out_sticks_this_core: " << num_out_sticks_this_core
-           << ", max_out_sticks_per_core: " << max_out_sticks_per_core << ", last_tile_height: " << last_tile_height
-           << "\n";
 
     uint32_t tilize_stick_counter = 0;
     uint32_t tilize_stick_total = 0;
@@ -260,9 +257,6 @@ void MAIN {
                     tile_regs_release();
 
                     bool last_tile = num_out_sticks_this_core - tilize_stick_total < last_tile_height;
-                    PACK(
-                        DPRINT << "tilize_stick_counter: " << tilize_stick_counter << ", tilize_stick_total: "
-                               << tilize_stick_total << ", last_tile: " << (uint32_t)last_tile << "\n");
                     if (tilize_stick_counter == TILE_HEIGHT ||
                         (last_tile && tilize_stick_counter == last_tile_height)) {
                         if (last_tile && last_tile_height != TILE_HEIGHT) {
@@ -274,10 +268,8 @@ void MAIN {
                                 (TILE_HEIGHT - last_tile_height) *
                                 ((in_nblocks_c - 1) * max_tiles_per_iter + partial_iter_output_tiles);
                             cb_push_back(pre_tilize_cb_id, filler_stick_tiles);
-                            PACK(DPRINT << "Pushing filler sticks: " << filler_stick_tiles << "\n");
                         }
                         cb_wait_front(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
-                        PACK(DPRINT << "PACKING TILE\n");
                         PACK((pack_untilize_uninit(pre_tilize_cb_id)));
 
                         // Workaround until #27504 is not closed
@@ -290,9 +282,9 @@ void MAIN {
                         tensix_sync();
                         pack_reconfig_data_format(out_cb_id);
 
-                        tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
-                        tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
-                        tilize_uninit(pre_tilize_cb_id, out_cb_id);
+                        fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
+                        fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
+                        fast_tilize_uninit(pre_tilize_cb_id, out_cb_id);
 
                         cb_push_back(out_cb_id, in_ntiles_c);
                         cb_pop_front(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);

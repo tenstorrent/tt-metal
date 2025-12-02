@@ -724,7 +724,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         }
         uint32_t out_nhw_this_core = std::min(out_nhw_per_core, total_out_nhw - total_out_nhw_processed);
         std::vector<uint32_t> args = {out_nhw_this_core};
-        printf("core (%d, %d) will process %d out_nhw\n", core_x_i, core_y_i, out_nhw_this_core);
+
         if (return_indices) {
             TT_FATAL(core_starting_indices.size() == ncores, "core starting indices size should match number of cores");
             const uint32_t start_index = core_starting_indices[core_i];
