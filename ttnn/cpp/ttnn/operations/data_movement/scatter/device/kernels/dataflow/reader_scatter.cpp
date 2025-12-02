@@ -204,11 +204,6 @@ FORCE_INLINE void scatter_along_chunk(
         if (index_value < input_offset || index_value >= input_offset + input_chunk_size) {
             continue;
         }
-        ASSERT(
-            index_value < input_stick_size,
-            "Index value {} is bigger than input's dimension size {}.",
-            index_value,
-            input_stick_size);
         if (index_value >= input_stick_size) {
             continue;
         }

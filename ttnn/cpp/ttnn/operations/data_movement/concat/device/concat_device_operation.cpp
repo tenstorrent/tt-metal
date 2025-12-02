@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/concat/device/concat_program_factory.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/run_operation.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -317,14 +317,13 @@ Tensor concat_impl(
                     "Current concat implementation requires aligned last dim when concatting on last dim");
             }
         }
-        // Determine target layout based on whether all inputs can be tiled
-        // Note: validate() ensures all inputs have the same layout
-        Layout input_layout = input_tensors[0].layout();
-        Layout target_layout = input_layout;
+        // Determine target layout by checking all inputs
+        // Start with first input's layout, but may need to fall back to ROW_MAJOR
+        Layout target_layout = input_tensors[0].layout();
 
-        // If inputs are ROW_MAJOR, check if they can all be converted to TILE
-        if (input_layout == Layout::ROW_MAJOR) {
-            for (const auto& input_tensor : input_tensors) {
+        // Check all inputs - if any ROW_MAJOR input cannot be tiled, use ROW_MAJOR for all
+        for (const auto& input_tensor : input_tensors) {
+            if (input_tensor.layout() == Layout::ROW_MAJOR) {
                 const auto& input_shape = input_tensor.padded_shape();
                 if (input_shape.rank() < 2 || input_shape[-2] % TILE_HEIGHT != 0 || input_shape[-1] % TILE_WIDTH != 0) {
                     target_layout = Layout::ROW_MAJOR;
@@ -333,24 +332,18 @@ Tensor concat_impl(
             }
         }
 
-        // Format inputs if layout conversion is needed
-        std::vector<Tensor> formatted_tensors = [&]() {
-            if (input_layout == target_layout) {
-                // No formatting needed - inputs already in target layout
-                return input_tensors;
+        // Format all inputs to target layout
+        std::vector<Tensor> formatted_tensors;
+        formatted_tensors.reserve(input_tensors.size());
+
+        for (const auto& input_tensor : input_tensors) {
+            if (input_tensor.layout() == target_layout) {
+                // Already in target layout
+                formatted_tensors.push_back(input_tensor);
             } else {
-                // Must be ROW_MAJOR → TILE conversion
-                std::vector<Tensor> formatted_tensors;
-                formatted_tensors.reserve(input_tensors.size());
-                for (const auto& input_tensor : input_tensors) {
-                    auto pad_value = is_floating_point(input_tensor.dtype()) ? PadValue(0.0f) : PadValue(0u);
-                    auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
-                    formatted_tensors.push_back(ttnn::tilize_with_val_padding(
-                        input_tensor, padded_shape, pad_value, input_tensor.memory_config()));
-                }
-                return formatted_tensors;
+                formatted_tensors.push_back(ttnn::to_layout(input_tensor, target_layout));
             }
-        }();
+        }
 
         return operation::run(ConcatDeviceOperation{normalized_dim, groups, output_mem_config}, {formatted_tensors})
             .at(0);

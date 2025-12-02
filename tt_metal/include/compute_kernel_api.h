@@ -87,7 +87,7 @@ ALWI void sigmoid_tile(uint32_t idst) {
  */
 template <bool fast_and_approx = false>
 ALWI void log_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_log_init<APPROX, fast_and_approx>()));  // TODO(AP): move out init
+    MATH((llk_math_eltwise_unary_sfpu_log_init<APPROX, fast_and_approx, DST_ACCUM_MODE>()));  // TODO(AP): move out init
 }
 
 // clang-format off
@@ -97,16 +97,19 @@ ALWI void log_tile_init() {
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
+ * Note: The base scale is the bit representation of the inverse of the log base.
+ * e.g. 1/ln(2) for log2(x) is 0x3fb8aa3b.
+ *
  * Return value: None
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
- // clang-format on
+// clang-format on
 template <bool fast_and_approx = false>
 ALWI void log_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_log<APPROX, fast_and_approx>(idst)));
+    MATH((llk_math_eltwise_unary_sfpu_log<APPROX, fast_and_approx, DST_ACCUM_MODE>(idst)));
 }
 
 /**
@@ -114,7 +117,8 @@ ALWI void log_tile(uint32_t idst) {
  */
 template <bool fast_and_approx = false>
 ALWI void log_with_base_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_log_with_base_init<APPROX, fast_and_approx>()));  // TODO(AP): move out init
+    MATH((llk_math_eltwise_unary_sfpu_log_with_base_init<APPROX, fast_and_approx, DST_ACCUM_MODE>()));  // TODO(AP):
+                                                                                                        // move out init
 }
 
 // clang-format off
@@ -129,12 +133,12 @@ ALWI void log_with_base_tile_init() {
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | base_scale      | The log base                                                               | uint32_t | Postive integers                                      | True     |
+ * | base_scale      | Bit representation of Inverse of log base e.g. 1/ln(2) to compute log2(x)  | uint32_t | Postive integers                                      | True     |
  */
 // clang-format on
 template <bool fast_and_approx = false>
 ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
-    MATH((llk_math_eltwise_unary_sfpu_log_with_base<APPROX, fast_and_approx>(idst, base_scale)));
+    MATH((llk_math_eltwise_unary_sfpu_log_with_base<APPROX, fast_and_approx, DST_ACCUM_MODE>(idst, base_scale)));
 }
 
 // TODO: Move to trigonometry.h

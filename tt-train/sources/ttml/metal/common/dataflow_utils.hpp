@@ -156,6 +156,142 @@ inline float uint32_to_float(uint32_t bits) {
     return value;
 }
 
+// ----- Dataflow tile transfer utilities -----
+
+/**
+ * Utility: read contiguous tiles in row-major order from DRAM to CB.
+ *
+ * @param cb_idx Circular buffer index to write to
+ * @param addr_gen Address generator for DRAM access
+ * @param start_idx Starting tile index in DRAM
+ * @param num_tiles_to_read Number of tiles to actually read (may be less than num_tiles_to_push for tail blocks)
+ * @param tile_bytes Size of each tile in bytes
+ * @param num_tiles_to_push Number of tiles to reserve/push in CB (buffer capacity)
+ * @param UseBarrier Whether to call noc_async_read_barrier() (compile-time)
+ */
+template <bool UseBarrier = true, typename AddrGen>
+inline void read_tiles_by_row(
+    const uint32_t cb_idx,
+    const AddrGen& addr_gen,
+    const uint32_t start_idx,
+    const uint32_t num_tiles_to_read,
+    const uint32_t tile_bytes,
+    const uint32_t num_tiles_to_push) {
+    cb_reserve_back(cb_idx, num_tiles_to_push);
+    uint32_t l1_addr = get_write_ptr(cb_idx);
+    for (uint32_t t = 0; t < num_tiles_to_read; ++t) {
+        noc_async_read_page(start_idx + t, addr_gen, l1_addr);
+        l1_addr += tile_bytes;
+    }
+    // Note: If UseBarrier is false, caller must ensure noc_async_read_barrier() is called later as well as
+    // cb_push_back()
+    if constexpr (UseBarrier) {
+        noc_async_read_barrier();
+        cb_push_back(cb_idx, num_tiles_to_push);
+    }
+}
+
+/**
+ * Utility: read contiguous tiles in column-major order from DRAM to CB.
+ *
+ * @param cb_idx Circular buffer index to write to
+ * @param addr_gen Address generator for DRAM access
+ * @param start_idx Starting tile index in DRAM
+ * @param num_tiles_to_read Number of tiles to actually read (may be less than num_tiles_to_push for tail blocks)
+ * @param tile_bytes Size of each tile in bytes
+ * @param stride Stride between consecutive tiles in column-major order
+ * @param num_tiles_to_push Number of tiles to reserve/push in CB (buffer capacity)
+ * @param UseBarrier Whether to call noc_async_read_barrier() (compile-time)
+ */
+template <bool UseBarrier = true, typename AddrGen>
+inline void read_tiles_by_col(
+    const uint32_t cb_idx,
+    const AddrGen& addr_gen,
+    const uint32_t start_idx,
+    const uint32_t num_tiles_to_read,
+    const uint32_t tile_bytes,
+    const uint32_t stride,
+    const uint32_t num_tiles_to_push) {
+    cb_reserve_back(cb_idx, num_tiles_to_push);
+    uint32_t l1_addr = get_write_ptr(cb_idx);
+    for (uint32_t t = 0; t < num_tiles_to_read; ++t) {
+        uint32_t tile_idx = start_idx + t * stride;
+        noc_async_read_page(tile_idx, addr_gen, l1_addr);
+        l1_addr += tile_bytes;
+    }
+    // Note: If UseBarrier is false, caller must ensure noc_async_read_barrier() is called later as well as
+    // cb_push_back()
+    if constexpr (UseBarrier) {
+        noc_async_read_barrier();
+        cb_push_back(cb_idx, num_tiles_to_push);
+    }
+}
+
+/**
+ * Utility: write a block of tiles from CB to DRAM in row-major order.
+ *
+ * @param cb_idx Circular buffer index to read from
+ * @param addr_gen Address generator for DRAM access
+ * @param start_idx Starting tile index in DRAM
+ * @param num_tiles_to_write Number of tiles to actually write (may be less than num_tiles_to_pop for tail blocks)
+ * @param tile_bytes Size of each tile in bytes
+ * @param num_tiles_to_pop Number of tiles to wait/pop from CB (buffer capacity)
+ * @param UseBarrier Whether to call noc_async_write_barrier() (compile-time)
+ */
+template <bool UseBarrier = true, typename AddrGen>
+inline void write_tiles_by_row(
+    const uint32_t cb_idx,
+    const AddrGen& addr_gen,
+    const uint32_t start_idx,
+    const uint32_t num_tiles_to_write,
+    const uint32_t tile_bytes,
+    const uint32_t num_tiles_to_pop) {
+    cb_wait_front(cb_idx, num_tiles_to_pop);
+    uint32_t l1_read_addr = get_read_ptr(cb_idx);
+    for (uint32_t t = 0; t < num_tiles_to_write; ++t) {
+        noc_async_write_page(start_idx + t, addr_gen, l1_read_addr);
+        l1_read_addr += tile_bytes;
+    }
+    // Note: If UseBarrier is false, caller must ensure noc_async_write_barrier() is called later as well as
+    // cb_pop_front()
+    if constexpr (UseBarrier) {
+        noc_async_write_barrier();
+        cb_pop_front(cb_idx, num_tiles_to_pop);
+    }
+}
+
+// ----- Higher-level utility functions -----
+
+// Read a full row of tiles by blocks, commonly used pattern across kernels
+template <typename AddrGen>
+inline void read_full_row_tiles(
+    const uint32_t cb_idx,
+    const AddrGen& addr_gen,
+    const uint32_t Wt,
+    const uint32_t block_size,
+    const uint32_t tile_bytes,
+    const uint32_t row_start_idx) {
+    for (uint32_t j = 0; j < Wt; j += block_size) {
+        uint32_t current_block_size = (j + block_size <= Wt) ? block_size : (Wt - j);
+        read_tiles_by_row(cb_idx, addr_gen, row_start_idx + j, current_block_size, tile_bytes, block_size);
+    }
+}
+
+// Write a full row of tiles by blocks, commonly used pattern across kernels
+template <typename AddrGen>
+inline void write_full_row_tiles(
+    const uint32_t cb_idx,
+    const AddrGen& addr_gen,
+    const uint32_t Wt,
+    const uint32_t block_size,
+    const uint32_t tile_bytes,
+    const uint32_t row_start_idx) {
+    for (uint32_t j = 0; j < Wt; j += block_size) {
+        uint32_t current_block_size = (j + block_size <= Wt) ? block_size : (Wt - j);
+        write_tiles_by_row(cb_idx, addr_gen, row_start_idx + j, current_block_size, tile_bytes, block_size);
+    }
+}
+
 // ----- Printing helper functions -----
 
 void print_tile(uint32_t cb_idx, uint32_t tile_idx, bool untilize = false) {

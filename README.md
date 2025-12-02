@@ -202,7 +202,8 @@ Inspector provides insights into host runtime. It logs necessary data for invest
 
 | Release | Release Date |
 |---------|--------------|
-| 0.64.5 | ETA Dec 1, 2025 |
+| 0.65.0 | ETA Dec 15, 2025 |
+| [0.64.5](https://github.com/tenstorrent/tt-metal/releases/tag/v0.64.5) | Dec  1, 2025 |
 | [0.64.4](https://github.com/tenstorrent/tt-metal/releases/tag/v0.64.4) | Nov 24, 2025 |
 | [0.64.3](https://github.com/tenstorrent/tt-metal/releases/tag/v0.64.3) | Nov 14, 2025 |
 | [0.64.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.64.0) | Oct 29, 2025 |

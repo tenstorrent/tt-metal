@@ -4,9 +4,9 @@
 
 #include "rmsnorm_fw_device_operation.hpp"
 
-#include "rmsnorm_fw_program_factory.hpp"
-
 #include <enchantum/enchantum.hpp>
+
+#include "rmsnorm_fw_program_factory.hpp"
 
 namespace ttml::metal::ops::rmsnorm_fw::device {
 
@@ -27,7 +27,7 @@ void RMSNormForwardDeviceOperation::validate_on_program_cache_miss(
             tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
             "RMSNormForward operation requires {} to be on Device. Input storage type: {}",
             name,
-            static_cast<int>(tensor.storage_type()));
+            enchantum::to_string(tensor.storage_type()));
 
         TT_FATAL(
             tensor.buffer() != nullptr,
@@ -38,20 +38,20 @@ void RMSNormForwardDeviceOperation::validate_on_program_cache_miss(
             tensor.layout() == tt::tt_metal::Layout::TILE,
             "RMSNormForward operation requires tensor to be in Tile layout. {} tensor layout: {}",
             name,
-            static_cast<int>(tensor.layout()));
+            enchantum::to_string(tensor.layout()));
 
         TT_FATAL(
             tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
             "RMSNormForward operation requires tensor to be of BFLOAT16 data type. {} tensor data type: {}",
             name,
-            static_cast<int>(tensor.dtype()));
+            enchantum::to_string(tensor.dtype()));
 
         TT_FATAL(
             tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
             "RMSNormForward operation requires Interleaved memory layout. {} "
             "memory layout: `{}`",
             name,
-            static_cast<int>(tensor.memory_config().memory_layout()));
+            enchantum::to_string(tensor.memory_config().memory_layout()));
     };
 
     const auto& input_tensor = tensor_args.input;

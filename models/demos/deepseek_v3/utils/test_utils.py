@@ -3,13 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
-import json
 import os
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
-import safetensors.torch
 import torch
 from loguru import logger
 from transformers import DynamicCache
@@ -26,23 +24,14 @@ from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
 def load_state_dict(model_path: Path, module_path: str):
+    # Lazily load HF weights: only access tensors when keys are used.
+    from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
+
+    lazy = LazyStateDict(model_path)
     if module_path:
-        module_path += "."  # So that the later matches include the separating dot
-
-    weight_paths = json.load(open(model_path / "model.safetensors.index.json", "r"))["weight_map"]
-    per_safetensor_weights = {}
-
-    for weight_name in weight_paths.keys():
-        if not weight_name.startswith(module_path):
-            continue
-        per_safetensor_weights.setdefault(weight_paths[weight_name], []).append(weight_name)
-
-    return {
-        weight_name[len(module_path) :]: safetensor_state_dict[weight_name]
-        for safetensor_file_path, weight_names in per_safetensor_weights.items()
-        for safetensor_state_dict in [safetensors.torch.load_file(model_path / safetensor_file_path)]
-        for weight_name in weight_names
-    }
+        # Ensure dot suffix so that keys are trimmed properly in the view
+        return lazy.view_with_prefix(module_path + ".")
+    return lazy
 
 
 def get_quant_scale(tensor: torch.Tensor, block_shape: Sequence[int]) -> torch.Tensor:
