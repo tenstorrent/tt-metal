@@ -81,15 +81,9 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds, ensure
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = "vision_model.vision_encoder.transformer.resblocks.0.attn."
-    # partial_state_dict = {
-    #     k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-    # }
 
     dim = model_args.vision_dim
-    # heads = model_args.vision_attn_n_heads
     ntok = model_args.vision_chunk_ntok
-    # reference_model = llama_reference_mod.ImageAttention(dim=dim, head_dim=dim // heads, n_heads=heads)
-    # reference_model.load_state_dict(partial_state_dict)
 
     # config contains paramters for the whole multimodal network the subeset of vision branch is chosen instead
     config = AutoConfig.from_pretrained(os.getenv("HF_MODEL"))
