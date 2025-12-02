@@ -12,7 +12,7 @@ from models.experimental.tt_dit.models.transformers.sd35_med.dismantled_block_sd
     SD35MediumDismantledBlock,
 )
 from models.experimental.tt_dit.tests.models.sd35_med.test_attention_sd35_medium import SelfAttention, RMSNorm
-from models.experimental.tt_dit.tests.models.sd35_med.test_mlp import Mlp
+from models.experimental.tt_dit.tests.models.sd35_med.test_mlp_sd35_medium import Mlp
 from models.experimental.tt_dit.tests.models.sd35_med.test_swiglu import SwiGLUFeedForward
 
 # from models.experimental.tt_dit.tests.models.sd35_med.test_attention_sd35_medium import attention
