@@ -22,6 +22,10 @@ public:
     eth_chan_directions get_direction() const { return direction_; }
     virtual SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t channel_id) const = 0;
 
+    void set_sender_channel_injection_flags(std::vector<bool>&& flags) {
+        this->sender_channel_is_traffic_injection_channel_array = std::move(flags);
+    }
+
 protected:
     FabricDatamoverBuilderBase(size_t noc_x, size_t noc_y, eth_chan_directions direction)
         : noc_x_(noc_x), noc_y_(noc_y), direction_(direction) {}
@@ -29,6 +33,7 @@ protected:
     size_t noc_x_;
     size_t noc_y_;
     eth_chan_directions direction_;
+    std::vector<bool> sender_channel_is_traffic_injection_channel_array;
 };
 
 }  // namespace tt::tt_fabric

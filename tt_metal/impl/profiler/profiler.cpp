@@ -886,7 +886,7 @@ void dumpJsonNocTraces(
         return;
     }
 
-    for (auto& [runtime_id, events] : noc_trace_data) {
+    for (const auto& [runtime_id, events] : noc_trace_data) {
         // dump events to a json file inside directory output_dir named after the op_name
         std::filesystem::path rpt_path = output_dir;
         const std::string op_name = events.front().value("op_name", "UnknownOP");
@@ -1988,7 +1988,8 @@ bool isSyncInfoNewer(const SyncInfo& old_info, const SyncInfo& new_info) {
 void DeviceProfiler::writeDeviceResultsToFiles() const {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
-    if (!getDeviceProfilerState()) {
+    if (!getDeviceProfilerState() ||
+        tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_disable_dump_to_files()) {
         return;
     }
 
@@ -2015,10 +2016,11 @@ void DeviceProfiler::writeDeviceResultsToFiles() const {
 void DeviceProfiler::pushTracyDeviceResults(
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec) {
 #if defined(TRACY_ENABLE)
-    if (!getDeviceProfilerState()) {
+    ZoneScoped;
+    if (!getDeviceProfilerState() ||
+        tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_disable_push_to_tracy()) {
         return;
     }
-    ZoneScoped;
 
     // If this device is root, it may have new sync info updated with syncDeviceHost
     for (auto& [core, info] : device_core_sync_info) {
