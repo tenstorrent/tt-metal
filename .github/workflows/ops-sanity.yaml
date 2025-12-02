@@ -120,7 +120,7 @@ jobs:
         run: |
           git config --global --add safe.directory $GITHUB_WORKSPACE
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@3bff0b099b2124dafd84f618268c1c58eeb5dc28
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name || needs.build-artifact.outputs.wheel-artifact-name }}
