@@ -47,7 +47,6 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb) {
 
 template <BroadcastType bcast_type>
 ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_index) {
-    state_configure<Operation::UNARY>(icb);
     // Pass through uses A2D and potentially direct unpack to dest.
     const auto data_copy_type = (bcast_type == BroadcastType::NONE) ? A2D : B2D;
     const bool enable_unpack_to_dest = data_copy_type == A2D;
@@ -97,7 +96,6 @@ void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_oc
  * Shorthand template instantiation of sub_tiles_bcast.
  */
 ALWI void sub_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
-    state_configure<Operation::BINARY>(icb0, icb1, idst);
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWSUB,
           BroadcastType::COL,
@@ -111,7 +109,6 @@ ALWI void sub_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
  * Shorthand template instantiation of sub_tiles_bcast.
  */
 ALWI void sub_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
-    state_configure<Operation::BINARY>(icb0, icb1, idst);
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWSUB,
           BroadcastType::SCALAR,
@@ -125,7 +122,6 @@ ALWI void sub_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
  * Shorthand template instantiation of mul_tiles_bcast.
  */
 ALWI void mul_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
-    state_configure<Operation::BINARY>(icb0, icb1, idst);
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWMUL,
           BroadcastType::COL,
@@ -139,7 +135,6 @@ ALWI void mul_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
  * Shorthand template instantiation of mul_tiles_bcast.
  */
 ALWI void mul_tiles_bcast_rows(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
-    state_configure<Operation::BINARY>(icb0, icb1, idst);
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWMUL,
           BroadcastType::ROW,
@@ -153,7 +148,6 @@ ALWI void mul_tiles_bcast_rows(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
  * Please refer to documentation for sub_tiles_bcast
  */
 ALWI void add_tiles_bcast_rows(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
-    state_configure<Operation::BINARY>(icb0, icb1, idst);
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWADD,
           BroadcastType::ROW,
@@ -167,7 +161,6 @@ ALWI void add_tiles_bcast_rows(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
  * Please refer to documentation for sub_tiles_bcast
  */
 ALWI void add_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
-    state_configure<Operation::BINARY>(icb0, icb1, idst);
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWADD,
           BroadcastType::COL,
@@ -181,7 +174,6 @@ ALWI void add_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
  * Please refer to documentation for add_tiles_bcast
  */
 ALWI void add_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
-    state_configure<Operation::BINARY>(icb0, icb1, idst);
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWADD,
           BroadcastType::SCALAR,
@@ -235,7 +227,6 @@ Internal helper function for all broadcast ops
 */
 template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim>
 ALWI void any_tiles_bcast(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
-    state_configure<Operation::BINARY>(icb0, icb1, idst);
     MATH((llk_math_eltwise_binary<tBcastOp, tBcastDim, DST_ACCUM_MODE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
         icb0, icb1, idst, true)));
     UNPACK((llk_unpack_AB<tBcastDim>(icb0, icb1, itile0, itile1)));

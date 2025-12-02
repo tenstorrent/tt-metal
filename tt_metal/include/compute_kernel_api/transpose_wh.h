@@ -96,7 +96,6 @@ ALWI void transpose_wh_init_short(uint32_t icb) {
  */
 // clang-format on
 ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
-    state_configure<Operation::TRANSPOSE>(icb);
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t src_format = get_operand_src_format(icb);
     const bool is_int32 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;

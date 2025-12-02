@@ -61,7 +61,6 @@ ALWI void untilize_init(uint32_t icb) {
 // clang-format on
 template <uint32_t block_ct_dim = 1>
 ALWI void untilize_block(uint32_t icb, uint32_t full_ct_dim, uint32_t ocb) {
-    state_configure<Operation::UNTILIZE>(icb, ocb);
     UNPACK((llk_unpack_untilize(icb, full_ct_dim)));
 
     for (uint32_t t = 0; t < full_ct_dim / block_ct_dim; t++) {

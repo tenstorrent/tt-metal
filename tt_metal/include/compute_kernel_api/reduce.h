@@ -116,7 +116,6 @@ ALWI void reduce_uninit() {
 // clang-format on
 template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool enforce_fp32_accumulation = false>
 ALWI void reduce_tile(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_t itile_scaler, uint32_t idst) {
-    state_configure<Operation::REDUCE>(icb, icb_scaler);
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, enforce_fp32_accumulation>(
         icb, icb_scaler, idst)));
     UNPACK((llk_unpack_AB(icb, icb_scaler, itile, itile_scaler)));

@@ -204,7 +204,6 @@ ALWI void tilize_init_short_with_dt_no_pack(uint32_t old_icb, uint32_t new_icb, 
 // clang-format on
 ALWI void tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
-    state_configure<Operation::TILIZE>(icb, ocb);
     UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));
 
     for (uint32_t t = 0; t < block; t++) {
@@ -241,7 +240,6 @@ ALWI void tilize_block(
  */
 // clang-format on
 ALWI void tilize_block_no_pack(uint32_t icb, uint32_t block, uint32_t dst_idx, uint32_t input_tile_index = 0) {
-    state_configure<Operation::TILIZE>(icb);
     UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));
 
     for (uint32_t t = 0; t < block; t++) {
@@ -411,7 +409,6 @@ ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb) {
 
 ALWI void fast_tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
-    state_configure<Operation::TILIZE>(icb, ocb);
 #ifdef ARCH_BLACKHOLE
     // Blackhole fallback
     tilize_block(icb, block, ocb, input_tile_index, output_tile_index);

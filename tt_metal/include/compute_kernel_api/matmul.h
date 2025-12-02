@@ -70,7 +70,6 @@ ALWI void matmul_tiles(
     uint32_t in1_tile_index,
     uint32_t idst,
     const uint32_t transpose) {
-    state_configure<Operation::MATMUL>(in0_cb_id, in1_cb_id);
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index)));
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, transpose)));
 }
@@ -131,7 +130,6 @@ ALWI void mm_init_short(uint32_t in0_cb_id, uint32_t in1_cb_id, const uint32_t t
 // clang-format on
 ALWI void mm_init_short_with_dt(
     uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t c_in_old_srca, const uint32_t transpose = 0) {
-    state_configure<Operation::MATMUL>(in0_cb_id, in1_cb_id);
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(c_in_old_srca, in1_cb_id)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(c_in_old_srca, in1_cb_id)));
     mm_init_short(in0_cb_id, in1_cb_id, transpose);
@@ -266,7 +264,6 @@ ALWI void mm_block_init_short_with_dt(
     uint32_t ct_dim = 1,
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
-    // state_configure<Operation::MATMUL>(in0_cb_id, in1_cb_id);
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id)));
     mm_block_init_short(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
@@ -299,7 +296,6 @@ ALWI void mm_block_init_short_with_both_dt(
     uint32_t ct_dim = 1,
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
-    // state_configure<Operation::MATMUL>(in0_cb_id, in1_cb_id);
     UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id, old_in0_cb_id, in0_cb_id)));
     MATH((llk_math_reconfig_data_format<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id, old_in0_cb_id, in0_cb_id)));
     mm_block_init_short(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
