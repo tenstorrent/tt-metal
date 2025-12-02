@@ -4,12 +4,13 @@
 
 import ttnn
 import warnings
+import os
 from models.experimental.vadv2.tt.tt_utils import multi_scale_deformable_attn
 
 try:
     from tracy import signpost
 
-    use_signpost = True
+    use_signpost = os.getenv("USE_SIGNPOST", "False").lower() in ("true", "1", "yes")
 except ModuleNotFoundError:
     use_signpost = False
 
@@ -189,31 +190,107 @@ class TtTemporalSelfAttention:
         ttnn.deallocate(sampling_offsets)
         ttnn.deallocate(value)
 
-        # Track and deallocate intermediate tensors to prevent memory accumulation
-        tmp = output
-        output = ttnn.permute(tmp, (1, 2, 0))
-        ttnn.deallocate(tmp)
+        # Optimization for bs=1: eliminate expensive reshape by averaging directly
+        # output shape from multi_scale_deformable_attn: [bs*num_bev_queue, num_query, embed_dims]
+        if bs == 1:
+            # Fast path for bs=1: mean directly without reshape
+            # Shape: [bs*num_bev_queue, num_query, embed_dims] = [2, 10000, 256]
+            output = ttnn.permute(output, (1, 2, 0))  # [num_query, embed_dims, num_bev_queue]
+            # Shape: [10000, 256, 2]
 
-        tmp = output
-        output = ttnn.reshape(tmp, (num_query, embed_dims, bs, self.num_bev_queue))
-        ttnn.deallocate(tmp)
-        # output = ttnn.permute(output, (1, 2, 0))
-        # output = ttnn.reshape(output, (num_query, embed_dims, bs, self.num_bev_queue))
+            output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
 
-        # Optimization: swap dims 1 and 2 for more efficient tiled layout (32x smaller, 32x faster)
-        output = ttnn.permute(output, (0, 2, 1, 3))  # [num_query, bs, embed_dims, num_bev_queue]
-        output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
+            # Chunked mean to fit in L1 memory (avoid L1 allocation bug for large tensors)
+            # Process in chunks to keep intermediate tensors small
+            chunk_size = 1024  # Process 1024 queries at a time
+            num_chunks = (num_query + chunk_size - 1) // chunk_size
+            mean_output = None
 
-        # BUG WORKAROUND: ttnn.mean with L1_MEMORY_CONFIG has a bug that causes it to
-        # allocate 512-1024x more memory than needed (tries to allocate 5GB for 10MB tensor).
-        # Using DRAM or default memory config works correctly.
-        # See test_ttnn_mean_isolated.py for reproduction.
-        output = ttnn.mean(
-            output, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )  # mean over num_bev_queue -> [num_query, bs, embed_dims]
-        output = ttnn.permute(output, (0, 2, 1))  # swap back -> [num_query, embed_dims, bs]
+            for chunk_idx in range(num_chunks):
+                chunk_start = chunk_idx * chunk_size
+                chunk_end = min(chunk_start + chunk_size, num_query)
 
-        output = ttnn.permute(output, (2, 0, 1))
+                # Slice chunk: [chunk_len, embed_dims, num_bev_queue]
+                output_chunk = ttnn.slice(
+                    output,
+                    [chunk_start, 0, 0],
+                    [chunk_end, embed_dims, self.num_bev_queue],
+                )
+
+                # Mean over temporal dimension with L1 memory
+                output_chunk = ttnn.mean(output_chunk, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+                # Shape: [chunk_len, embed_dims]
+
+                # Move to DRAM for accumulation
+                output_chunk = ttnn.to_memory_config(output_chunk, ttnn.DRAM_MEMORY_CONFIG)
+
+                # Accumulate chunks
+                if chunk_idx == 0:
+                    mean_output = output_chunk
+                else:
+                    mean_output = ttnn.concat([mean_output, output_chunk], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    ttnn.deallocate(output_chunk)
+
+            ttnn.deallocate(output)
+            output = mean_output
+            # Shape: [num_query, embed_dims] = [10000, 256]
+
+            # Expand to include bs dimension for compatibility with downstream code
+            output = ttnn.unsqueeze(output, 0)  # [bs, num_query, embed_dims]
+            # Shape: [1, 10000, 256]
+        else:
+            # General path for bs > 1: need reshape to separate batch and temporal dimensions
+            tmp = output
+            output = ttnn.permute(tmp, (1, 2, 0))
+            ttnn.deallocate(tmp)
+            # Shape: [num_query, embed_dims, bs*num_bev_queue]
+
+            tmp = output
+            output = ttnn.reshape(tmp, (num_query, embed_dims, bs, self.num_bev_queue))
+            ttnn.deallocate(tmp)
+            # Shape: [num_query, embed_dims, bs, num_bev_queue]
+
+            # Swap dims 1 and 2 for more efficient tiled layout
+            output = ttnn.permute(output, (0, 2, 1, 3))  # [num_query, bs, embed_dims, num_bev_queue]
+            output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
+
+            # Chunked mean to fit in L1 memory (workaround for L1 allocation bug)
+            # Process in chunks along num_query dimension
+            chunk_size = 1024  # Process 1024 queries at a time
+            num_chunks = (num_query + chunk_size - 1) // chunk_size
+            mean_output = None
+
+            for chunk_idx in range(num_chunks):
+                chunk_start = chunk_idx * chunk_size
+                chunk_end = min(chunk_start + chunk_size, num_query)
+
+                # Slice chunk: [chunk_len, bs, embed_dims, num_bev_queue]
+                output_chunk = ttnn.slice(
+                    output,
+                    [chunk_start, 0, 0, 0],
+                    [chunk_end, bs, embed_dims, self.num_bev_queue],
+                )
+
+                # Mean over temporal dimension with L1 memory
+                output_chunk = ttnn.mean(output_chunk, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+                # Shape: [chunk_len, bs, embed_dims]
+
+                # Move to DRAM for accumulation
+                output_chunk = ttnn.to_memory_config(output_chunk, ttnn.DRAM_MEMORY_CONFIG)
+
+                # Accumulate chunks
+                if chunk_idx == 0:
+                    mean_output = output_chunk
+                else:
+                    mean_output = ttnn.concat([mean_output, output_chunk], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    ttnn.deallocate(output_chunk)
+
+            ttnn.deallocate(output)
+            output = mean_output
+            # Shape: [num_query, bs, embed_dims]
+
+            output = ttnn.permute(output, (1, 0, 2))  # [bs, num_query, embed_dims]
+
         output = ttnn.linear(output, params.output_proj.weight, bias=params.output_proj.bias)
         # Don't deallocate model weights - they need to persist across iterations
         # ttnn.deallocate(params.output_proj.weight)
