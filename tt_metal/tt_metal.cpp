@@ -7,7 +7,6 @@
 #include <circular_buffer_constants.h>
 #include <tt_stl/assert.hpp>
 #include <cstdint>
-#include <device_pool.hpp>
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
@@ -56,6 +55,8 @@
 #include <tt_stl/overloaded.hpp>
 #include "get_platform_architecture.hpp"
 #include "common/tt_backend_api_types.hpp"
+#include "tt_metal/impl/device/device_manager.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 
 namespace tt {
 
@@ -361,8 +362,8 @@ std::string get_platform_architecture_name() {
 
 IDevice* GetActiveDevice(ChipId device_id) {
     IDevice* device = nullptr;
-    if (tt::DevicePool::instance().is_device_active(device_id)) {
-        device = tt::DevicePool::instance().get_active_device(device_id);
+    if (tt::tt_metal::MetalContext::instance().device_manager()->is_device_active(device_id)) {
+        device = tt::tt_metal::MetalContext::instance().device_manager()->get_active_device(device_id);
     }
     return device;
 }
@@ -382,7 +383,7 @@ std::map<ChipId, IDevice*> CreateDevices(
     // to allow TT-Mesh Workload dispatch to target active ethernet cores.
     ZoneScoped;
     bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
-    tt::DevicePool::initialize(
+    tt::tt_metal::MetalContext::instance().initialize_device_manager(
         device_ids,
         num_hw_cqs,
         l1_small_size,
@@ -394,7 +395,7 @@ std::map<ChipId, IDevice*> CreateDevices(
         use_max_eth_core_count_on_all_devices,
         initialize_fabric_and_dispatch_fw);
 
-    const auto devices = tt::DevicePool::instance().get_all_active_devices();
+    const auto devices = tt::tt_metal::MetalContext::instance().device_manager()->get_all_active_devices();
     std::map<ChipId, IDevice*> ret_devices;
     // Only include the mmio device in the active devices set returned to the caller if we are not running
     // on a Galaxy cluster.
@@ -416,7 +417,7 @@ void CloseDevices(const std::map<ChipId, IDevice*>& devices) {
     for (const auto& [id, device] : devices) {
         devices_to_close.push_back(device);
     }
-    tt::DevicePool::instance().close_devices(devices_to_close);
+    tt::tt_metal::MetalContext::instance().device_manager()->close_devices(devices_to_close);
 }
 
 void print_page(
@@ -702,7 +703,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         if (!force_slow_dispatch) {
             detail::DispatchStateCheck(false);
         } else {
-            TT_ASSERT(!tt::DevicePool::instance().is_dispatch_firmware_active());
+            TT_ASSERT(!tt::tt_metal::MetalContext::instance().device_manager()->is_dispatch_firmware_active());
         }
 
         detail::CompileProgram(device, program);
@@ -975,9 +976,9 @@ IDevice* CreateDevice(
         "CreateDevices().",
         device_id);
 
-    tt::DevicePool::initialize(
+    tt::tt_metal::MetalContext::instance().initialize_device_manager(
         {device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config, l1_bank_remap, worker_l1_size);
-    auto* dev = tt::DevicePool::instance().get_active_device(device_id);
+    auto* dev = tt::tt_metal::MetalContext::instance().device_manager()->get_active_device(device_id);
     return dev;
 }
 
@@ -1004,7 +1005,7 @@ bool CloseDevice(IDevice* device) {
         "CloseDevices().",
         device_id);
 
-    return tt::DevicePool::instance().close_device(device_id);
+    return tt::tt_metal::MetalContext::instance().device_manager()->close_device(device_id);
 }
 
 Program CreateProgram() { return Program(); }

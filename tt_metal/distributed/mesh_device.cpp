@@ -38,7 +38,7 @@
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
 #include "tt_metal/common/thread_pool.hpp"
-#include <tt-metalium/device_pool.hpp>
+#include "tt_metal/impl/device/device_manager.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
@@ -58,7 +58,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/system_memory_manager.hpp"
-
+#include <llrt/tt_cluster.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <llrt/tt_cluster.hpp>
 
@@ -174,7 +174,8 @@ MeshDevice::ScopedDevices::~ScopedDevices() {
         for (auto& [id, device] : opened_local_devices_) {
             devices_to_close.push_back(device);
         }
-        tt::DevicePool::instance().close_devices(devices_to_close, /*skip_synchronize=*/true);
+        tt::tt_metal::MetalContext::instance().device_manager()->close_devices(
+            devices_to_close, /*skip_synchronize=*/true);
     }
 }
 
@@ -290,8 +291,8 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
         dynamic_cast<Device*>(device)->set_mesh_device(mesh_device);
     }
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
-    DevicePool::instance().init_profiler();
-    DevicePool::instance().initialize_fabric_and_dispatch_fw();
+    tt::tt_metal::MetalContext::instance().device_manager()->init_profiler();
+    tt::tt_metal::MetalContext::instance().device_manager()->initialize_fabric_and_dispatch_fw();
     return mesh_device;
 }
 
@@ -339,8 +340,8 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
         result[device_ids[i]] = submeshes[i];
     }
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
-    DevicePool::instance().init_profiler();
-    DevicePool::instance().initialize_fabric_and_dispatch_fw();
+    tt::tt_metal::MetalContext::instance().device_manager()->init_profiler();
+    tt::tt_metal::MetalContext::instance().device_manager()->initialize_fabric_and_dispatch_fw();
     return result;
 }
 
@@ -983,7 +984,8 @@ bool MeshDevice::initialize(
         this, std::make_unique<L1BankingAllocator>(allocator->get_config()), sub_devices);
     // Issue #19729: Store the maximum number of active ethernet cores across opened physical devices in the Mesh
     // as the number of virtual ethernet cores seen by the MeshDevice
-    num_virtual_eth_cores_ = DevicePool::instance().get_max_num_eth_cores_across_all_devices();
+    num_virtual_eth_cores_ =
+        tt::tt_metal::MetalContext::instance().device_manager()->get_max_num_eth_cores_across_all_devices();
     mesh_command_queues_.reserve(this->num_hw_cqs());
     if (MetalContext::instance().rtoptions().get_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {

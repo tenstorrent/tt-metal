@@ -46,7 +46,7 @@
 #include "profiler_types.hpp"
 #include "profiler_state_manager.hpp"
 #include "tt-metalium/program.hpp"
-#include <tt-metalium/device_pool.hpp>
+#include "tt_metal/impl/device/device_manager.hpp"
 #include "rtoptions.hpp"
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyTTDevice.hpp"
@@ -347,16 +347,8 @@ void syncDeviceDevice(ChipId device_id_sender, ChipId device_id_receiver) {
         return;
     }
 
-    IDevice* device_sender = nullptr;
-    IDevice* device_receiver = nullptr;
-
-    if (tt::DevicePool::instance().is_device_active(device_id_receiver)) {
-        device_receiver = tt::DevicePool::instance().get_active_device(device_id_receiver);
-    }
-
-    if (tt::DevicePool::instance().is_device_active(device_id_sender)) {
-        device_sender = tt::DevicePool::instance().get_active_device(device_id_sender);
-    }
+    IDevice* device_sender = tt::tt_metal::detail::GetActiveDevice(device_id_sender);
+    IDevice* device_receiver = tt::tt_metal::detail::GetActiveDevice(device_id_receiver);
 
     if (device_sender != nullptr and device_receiver != nullptr) {
         constexpr std::uint16_t sample_count = 240;
@@ -590,7 +582,7 @@ void ProfilerSync(ProfilerSyncState state) {
     }
 
     TT_ASSERT(
-        !tt::DevicePool::instance().is_dispatch_firmware_active(),
+        !tt::tt_metal::MetalContext::instance().device_manager()->is_dispatch_firmware_active(),
         "Profiler sync is not supported with fast dispatch enabled!");
 
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
@@ -602,7 +594,7 @@ void ProfilerSync(ProfilerSyncState state) {
         constexpr int TOTAL_DEVICE_COUNT = 36;
         std::map<ChipId, bool> visited;
         for (int i = 0; i < TOTAL_DEVICE_COUNT; i++) {
-            if (tt::DevicePool::instance().is_device_active(i)) {
+            if (tt::tt_metal::MetalContext::instance().device_manager()->is_device_active(i)) {
                 visited[i] = false;
             }
         }
@@ -621,10 +613,11 @@ void ProfilerSync(ProfilerSyncState state) {
                 ChipId sender_device_id = device_queue.front();
                 device_queue.pop();
 
-                if (!tt::DevicePool::instance().is_device_active(sender_device_id)) {
+                if (!tt::tt_metal::MetalContext::instance().device_manager()->is_device_active(sender_device_id)) {
                     continue;
                 }
-                auto* sender_device = tt::DevicePool::instance().get_active_device(sender_device_id);
+                auto* sender_device =
+                    tt::tt_metal::MetalContext::instance().device_manager()->get_active_device(sender_device_id);
                 const auto& active_eth_cores = sender_device->get_active_ethernet_cores(false);
 
                 ChipId receiver_device_id;
@@ -659,7 +652,8 @@ void ProfilerSync(ProfilerSyncState state) {
     // something to sync with)
     if (state == ProfilerSyncState::INIT) {
         for (auto [root_device_id, num_devices] : num_connected_devices) {
-            auto* root_device = tt::DevicePool::instance().get_active_device(root_device_id);
+            auto* root_device =
+                tt::tt_metal::MetalContext::instance().device_manager()->get_active_device(root_device_id);
             syncDeviceHost(root_device, ProfilerStateManager::SYNC_CORE, true);
             if (num_devices > 1) {
                 syncAllDevices(root_device->id());
@@ -669,7 +663,8 @@ void ProfilerSync(ProfilerSyncState state) {
     if (state == ProfilerSyncState::CLOSE_DEVICE and profiler_state_manager->do_sync_on_close) {
         profiler_state_manager->do_sync_on_close = false;
         for (auto [root_device_id, num_devices] : num_connected_devices) {
-            auto* root_device = tt::DevicePool::instance().get_active_device(root_device_id);
+            auto* root_device =
+                tt::tt_metal::MetalContext::instance().device_manager()->get_active_device(root_device_id);
             syncDeviceHost(root_device, ProfilerStateManager::SYNC_CORE, false);
             if (num_devices > 1) {
                 syncAllDevices(root_device->id());

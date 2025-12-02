@@ -36,7 +36,7 @@ namespace detail {
 bool DispatchStateCheck(bool isFastDispatch);
 
 std::map<ChipId, IDevice*> CreateDevices(
-    // TODO: delete this in favour of DevicePool
+    // TODO: delete this in favour of DeviceManager
     const std::vector<ChipId>& device_ids,
     uint8_t num_hw_cqs = 1,
     size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,

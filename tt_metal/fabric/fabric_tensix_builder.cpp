@@ -12,7 +12,7 @@
 
 #include "impl/context/metal_context.hpp"
 #include "llrt/core_descriptor.hpp"
-#include <tt-metalium/device_pool.hpp>
+#include "tt_metal/impl/device/device_manager.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
@@ -110,7 +110,7 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
         (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG);
     TT_FATAL(!is_TG, "Fabric with tensix extension is not supported for TG");
 
-    const auto& all_active_devices = tt::DevicePool::instance().get_all_active_devices();
+    const auto& all_active_devices = tt::tt_metal::MetalContext::instance().device_manager()->get_all_active_devices();
     TT_FATAL(!all_active_devices.empty(), "No active devices found in DevicePool");
 
     auto device_id = all_active_devices.front()->id();
@@ -125,7 +125,7 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
     TT_FATAL(!logical_fabric_mux_cores_.empty(), "No logical fabric mux cores found for device {}", device_id);
 
     // Initialize translated mux cores (coordinates should be same across devices)
-    auto* device = tt::DevicePool::instance().get_active_device(device_id);
+    auto* device = tt::tt_metal::MetalContext::instance().device_manager()->get_active_device(device_id);
     TT_FATAL(device != nullptr, "Device {} not found in DevicePool", device_id);
     for (const auto& logical_core : logical_fabric_mux_cores_) {
         CoreCoord translated_core = device->worker_core_from_logical_core(logical_core);
