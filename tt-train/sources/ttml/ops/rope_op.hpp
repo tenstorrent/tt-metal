@@ -30,9 +30,7 @@ struct RotaryEmbeddingParams {
 };
 
 autograd::TensorPtr rope(
-    const autograd::TensorPtr& input,
-    const RotaryEmbeddingParams& rope_params,
-    std::optional<uint32_t> token_position = std::nullopt);
+    const autograd::TensorPtr& input, const RotaryEmbeddingParams& rope_params, const uint32_t token_position);
 
 std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(
     uint32_t head_dim, uint32_t sequence_length, float theta, const RopeScalingParams& rope_scaling_params);

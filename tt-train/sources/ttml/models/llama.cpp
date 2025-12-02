@@ -252,21 +252,19 @@ ttml::autograd::TensorPtr Llama::operator()(const ttml::autograd::TensorPtr& x, 
             }
         }
         // Inference mode with KV cache
+        const modules::InferenceMode mode =
+            (m_cache_position == 0) ? modules::InferenceMode::PREFILL : modules::InferenceMode::DECODE;
         for (size_t block_idx = 0; block_idx < blocks.size(); ++block_idx) {
             auto& block = blocks[block_idx];
             auto& [k_cache, v_cache] = m_kv_cache[block_idx];
             // Cast block to LlamaBlock to access the cache-aware operator
             auto llama_block = std::dynamic_pointer_cast<ttml::modules::LlamaBlock>(block);
-            out = (*llama_block)(out, mask, k_cache, v_cache, m_cache_position);
+            out = (*llama_block)(out, mask, k_cache, v_cache, mode, m_cache_position);
         }
 
-        // Update cache position based on mask
-        // Prefill (cache_position == 0): increment by actual sequence length from mask
-        // Decode (cache_position > 0): increment by 1 (single token)
-        if (m_cache_position == 0) {
-            // Prefill mode - extract actual sequence length from mask
-            // Mask shape: [1, 1, padded_prompt_seq_len, padded_prompt_seq_len]
-            // Count non-zero rows to get actual query sequence length
+        // Update cache position based on mode
+        if (mode == modules::InferenceMode::PREFILL) {
+            // Extract actual sequence length from mask shape: [1, 1, padded_prompt_seq_len, padded_prompt_seq_len]
             auto mask_tensor = mask->get_value();
             auto mask_host = mask_tensor.to_vector<float>();
             auto mask_shape = mask_tensor.logical_shape();
@@ -274,12 +272,10 @@ ttml::autograd::TensorPtr Llama::operator()(const ttml::autograd::TensorPtr& x, 
             const uint32_t padded_key_seq_len = mask_shape[-1];
             const uint32_t padded_query_seq_len = mask_shape[-2];
 
-            // Count rows with at least one non-zero value (valid positions)
             while (m_cache_position < padded_query_seq_len && mask_host[m_cache_position * padded_key_seq_len] > 0.0f) {
                 m_cache_position++;
             }
         } else {
-            // Decode: always increment by 1 (single token)
             m_cache_position += 1;
         }
 
