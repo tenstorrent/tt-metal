@@ -2522,19 +2522,6 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
 
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
 
-    // Get compute grid size from first device
-    auto grid_size = devices[0]->get_devices()[0]->compute_with_storage_grid_size();
-
-    // Split grid into top half (senders) and bottom half (receivers)
-    uint32_t receiver_y_start = grid_size.y / 2;
-
-    if (receiver_y_start == 0 || receiver_y_start >= grid_size.y) {
-        GTEST_SKIP() << "Compute grid too small to split into sender/receiver halves";
-    }
-
-    // Receiver core at (0, receiver_y_start) - single receiver core per device
-    CoreCoord receiver_logical_core = {0, receiver_y_start};
-
     uint32_t num_packets = 10;
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
@@ -2563,8 +2550,12 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
     const uint32_t num_other_devices = static_cast<uint32_t>(num_active_devices - 1);
 
     // Calculate number of sender/receiver cores per device (all cores in top/bottom half)
+    // Split grid into top half (senders) and bottom half (receivers)
+    auto grid_size = devices[0]->get_devices()[0]->compute_with_storage_grid_size();
+    uint32_t receiver_y_start = grid_size.y / 2;
+    uint32_t receiver_y_end = grid_size.y;
     uint32_t sender_rows = receiver_y_start;                  // Number of rows in top half
-    uint32_t receiver_rows = grid_size.y - receiver_y_start;  // Number of rows in bottom half
+    uint32_t receiver_rows = receiver_y_end - receiver_y_start;  // Number of rows in bottom half
     uint32_t num_sender_cores = sender_rows * grid_size.x;
     uint32_t num_receiver_cores = receiver_rows * grid_size.x;
     // Use the minimum as the number of sender-receiver pairs
@@ -2763,26 +2754,18 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
         }
     }
 
-    // Run all receiver programs first (non-blocking)
-    for (size_t dev_idx = 0; dev_idx < num_active_devices; dev_idx++) {
-        fixture->RunProgramNonblocking(device_ptrs[dev_idx], receiver_programs[dev_idx]);
-    }
-
-    // Run all sender programs (non-blocking)
+    log_info(tt::LogTest, "All-to-all test starting");
     for (size_t dev_idx = 0; dev_idx < num_active_devices; dev_idx++) {
         fixture->RunProgramNonblocking(device_ptrs[dev_idx], sender_programs[dev_idx]);
+        fixture->RunProgramNonblocking(device_ptrs[dev_idx], receiver_programs[dev_idx]);
     }
-
-    // Wait for all senders to complete
+    log_info(tt::LogTest, "All-to-all test waiting for finish");
+    // Wait for all devices to complete
     for (size_t dev_idx = 0; dev_idx < num_active_devices; dev_idx++) {
         fixture->WaitForSingleProgramDone(device_ptrs[dev_idx], sender_programs[dev_idx]);
-    }
-
-    // Wait for all receivers to complete
-    for (size_t dev_idx = 0; dev_idx < num_active_devices; dev_idx++) {
         fixture->WaitForSingleProgramDone(device_ptrs[dev_idx], receiver_programs[dev_idx]);
     }
-
+    log_info(tt::LogTest, "All-to-all test done");
     // Validate results for all devices
     for (size_t dev_idx = 0; dev_idx < num_active_devices; dev_idx++) {
         const auto& device_ptr = device_ptrs[dev_idx];
