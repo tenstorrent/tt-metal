@@ -366,6 +366,304 @@ class FastOperation:
     def __hash__(self):
         return hash(self.python_fully_qualified_name)
 
+    def _enhance_type_error_message(self, original_error, function_args, function_kwargs):
+        """
+        Parse pybind11 TypeError and create a more readable error message that clearly
+        shows expected vs received types for each argument.
+        """
+        import re
+
+        lines = original_error.split("\n")
+
+        # Extract the expected signature
+        expected_signature = None
+        for i, line in enumerate(lines):
+            if line.strip().startswith("1. (self:"):
+                # Found the expected signature, combine lines until we find the closing parenthesis
+                sig_lines = []
+                j = i
+                while j < len(lines):
+                    sig_lines.append(lines[j].strip())
+                    if "-> " in lines[j]:  # Found the return type, signature is complete
+                        break
+                    j += 1
+                expected_signature = " ".join(sig_lines)
+                break
+
+        # Extract the invoked arguments
+        invoked_args = []
+        invoked_section_started = False
+        for line in lines:
+            if line.strip().startswith("Invoked with:"):
+                invoked_section_started = True
+                # Extract arguments from this line if they exist
+                after_colon = line.split("Invoked with:", 1)[1].strip()
+                if after_colon:
+                    invoked_args.append(after_colon)
+            elif invoked_section_started:
+                # Continue collecting invoked arguments from subsequent lines
+                stripped = line.strip()
+                if stripped and not stripped.startswith("kwargs:"):
+                    invoked_args.append(stripped)
+                elif "kwargs:" in stripped:
+                    # Capture kwargs
+                    invoked_args.append(stripped)
+                    break
+
+        # Parse expected parameters from signature
+        positional_params = []
+        keyword_params = []
+        if expected_signature:
+            # Extract parameter list from signature
+            # Format: "1. (self: ..., param1: type1, param2: type2, *, kwarg: type3 = default, ...) -> return_type"
+            match = re.search(r"\(self:[^,]+,\s*(.+?)\)\s*->", expected_signature)
+            if match:
+                params_str = match.group(1)
+                # Split by comma, but be careful with nested types
+                depth = 0
+                current_param = []
+                is_keyword_only = False
+
+                for char in params_str:
+                    if char in "<[(":
+                        depth += 1
+                    elif char in ">])":
+                        depth -= 1
+                    elif char == "," and depth == 0:
+                        param = "".join(current_param).strip()
+                        if param == "*":
+                            is_keyword_only = True
+                        elif param:
+                            if is_keyword_only:
+                                keyword_params.append(param)
+                            else:
+                                positional_params.append(param)
+                        current_param = []
+                        continue
+                    current_param.append(char)
+
+                # Don't forget the last parameter
+                param = "".join(current_param).strip()
+                if param and param != "*":
+                    if is_keyword_only:
+                        keyword_params.append(param)
+                    else:
+                        positional_params.append(param)
+
+        # Build enhanced error message
+        enhanced_lines = [
+            f"\n{self.python_fully_qualified_name}(): incompatible function arguments.",
+            "",
+            "Expected signature:",
+        ]
+
+        # Add positional parameters
+        if positional_params:
+            enhanced_lines.append("  Positional arguments:")
+            for i, param in enumerate(positional_params, 1):
+                # Split parameter into name and type
+                if ":" in param:
+                    parts = param.split(":", 1)
+                    param_name = parts[0].strip()
+                    param_type_and_default = parts[1].strip()
+
+                    # Check if it has a default value
+                    if "=" in param_type_and_default:
+                        param_type, default_val = param_type_and_default.split("=", 1)
+                        enhanced_lines.append(
+                            f"    {i}. {param_name}: {param_type.strip()} (default: {default_val.strip()})"
+                        )
+                    else:
+                        enhanced_lines.append(f"    {i}. {param_name}: {param_type_and_default}")
+                else:
+                    enhanced_lines.append(f"    {i}. {param}")
+
+        # Add keyword-only parameters
+        if keyword_params:
+            enhanced_lines.append("  Keyword-only arguments:")
+            for i, param in enumerate(keyword_params, 1):
+                # Split parameter into name and type
+                if ":" in param:
+                    parts = param.split(":", 1)
+                    param_name = parts[0].strip()
+                    param_type_and_default = parts[1].strip()
+
+                    # Check if it has a default value
+                    if "=" in param_type_and_default:
+                        param_type, default_val = param_type_and_default.split("=", 1)
+                        enhanced_lines.append(
+                            f"    {i}. {param_name}: {param_type.strip()} (default: {default_val.strip()})"
+                        )
+                    else:
+                        enhanced_lines.append(f"    {i}. {param_name}: {param_type_and_default}")
+                else:
+                    enhanced_lines.append(f"    {i}. {param}")
+
+        enhanced_lines.append("")
+        enhanced_lines.append("Received arguments:")
+
+        # Format received arguments and collect type info for diagnostics
+        received_arg_types = []
+        arg_num = 1
+        for i, arg in enumerate(function_args):
+            arg_type = type(arg).__name__
+            if hasattr(arg, "__module__"):
+                module = arg.__module__
+                if module and module != "builtins":
+                    arg_type = f"{module}.{arg_type}"
+
+            received_arg_types.append(arg_type)
+
+            # Show a preview of the value for tensors
+            if "Tensor" in arg_type:
+                preview = str(arg).split("\n")[0][:80] + "..."
+                enhanced_lines.append(f"  {arg_num}. {arg_type}: {preview}")
+            else:
+                preview = str(arg)[:50]
+                if len(str(arg)) > 50:
+                    preview += "..."
+                enhanced_lines.append(f"  {arg_num}. {arg_type} = {preview}")
+            arg_num += 1
+
+        received_kwargs_types = {}
+        if function_kwargs:
+            enhanced_lines.append("")
+            enhanced_lines.append("Received keyword arguments:")
+            for key, value in function_kwargs.items():
+                value_type = type(value).__name__
+                if hasattr(value, "__module__"):
+                    module = value.__module__
+                    if module and module != "builtins":
+                        value_type = f"{module}.{value_type}"
+
+                received_kwargs_types[key] = value_type
+
+                if "Tensor" in value_type:
+                    preview = str(value).split("\n")[0][:60] + "..."
+                    enhanced_lines.append(f"  {key}: {value_type} = {preview}")
+                else:
+                    preview = str(value)[:50]
+                    if len(str(value)) > 50:
+                        preview += "..."
+                    enhanced_lines.append(f"  {key}: {value_type} = {preview}")
+
+        # Add specific diagnostics by comparing expected vs received types
+        mismatches = []
+
+        # Check positional arguments
+        for i, expected_param in enumerate(positional_params):
+            if i < len(received_arg_types):
+                # Parse expected type
+                if ":" in expected_param:
+                    parts = expected_param.split(":", 1)
+                    param_name = parts[0].strip()
+                    param_type = parts[1].strip().split("=")[0].strip()  # Remove default value if present
+
+                    received_type = received_arg_types[i]
+
+                    # Check for common type mismatches
+                    is_mismatch = False
+                    diagnostic_msg = ""
+
+                    # Check if expected scalar but got Tensor
+                    if ("float" in param_type.lower() or "int" in param_type.lower()) and "Tensor" in received_type:
+                        is_mismatch = True
+                        diagnostic_msg = (
+                            f"Argument {i+1} ('{param_name}'): expected {param_type} but got {received_type}"
+                        )
+                    # Check if expected ttnn.Tensor but got torch.Tensor
+                    elif "ttnn" in param_type and "Tensor" in param_type and "torch.Tensor" in received_type:
+                        is_mismatch = True
+                        diagnostic_msg = (
+                            f"Argument {i+1} ('{param_name}'): expected {param_type} but got {received_type}"
+                        )
+                    # Check if expected Tensor but got scalar
+                    elif "Tensor" in param_type and "Tensor" not in received_type:
+                        is_mismatch = True
+                        diagnostic_msg = (
+                            f"Argument {i+1} ('{param_name}'): expected {param_type} but got {received_type}"
+                        )
+                    # Check if specific tensor types don't match (ttnn vs torch)
+                    elif "ttnn" in param_type.lower() and "torch" in received_type.lower():
+                        is_mismatch = True
+                        diagnostic_msg = (
+                            f"Argument {i+1} ('{param_name}'): expected {param_type} but got {received_type}"
+                        )
+                    elif "torch" in param_type.lower() and "ttnn" in received_type.lower():
+                        is_mismatch = True
+                        diagnostic_msg = (
+                            f"Argument {i+1} ('{param_name}'): expected {param_type} but got {received_type}"
+                        )
+
+                    if is_mismatch:
+                        mismatches.append(diagnostic_msg)
+
+        # Check keyword arguments
+        for key, received_type in received_kwargs_types.items():
+            # Find the expected type for this kwarg
+            for param in keyword_params:
+                if ":" in param:
+                    parts = param.split(":", 1)
+                    param_name = parts[0].strip()
+                    if param_name == key:
+                        param_type = parts[1].strip().split("=")[0].strip()
+
+                        # Extract base type from Optional[Type] if present
+                        base_param_type = param_type
+                        if "Optional[" in param_type:
+                            # Extract type from Optional[type]
+                            match = re.search(r"Optional\[(.*?)\]", param_type)
+                            if match:
+                                base_param_type = match.group(1).strip()
+
+                        # Skip if received type is NoneType and parameter is Optional
+                        if "Optional" in param_type and "NoneType" in received_type:
+                            continue
+
+                        # Check for type mismatches
+                        is_mismatch = False
+                        if (
+                            "float" in base_param_type.lower() or "int" in base_param_type.lower()
+                        ) and "Tensor" in received_type:
+                            is_mismatch = True
+                        elif (
+                            "ttnn" in base_param_type
+                            and "Tensor" in base_param_type
+                            and "torch.Tensor" in received_type
+                        ):
+                            is_mismatch = True
+                        elif (
+                            "Tensor" in base_param_type
+                            and "Tensor" not in received_type
+                            and "NoneType" not in received_type
+                        ):
+                            is_mismatch = True
+                        elif "ttnn" in base_param_type.lower() and "torch" in received_type.lower():
+                            is_mismatch = True
+                        elif "torch" in base_param_type.lower() and "ttnn" in received_type.lower():
+                            is_mismatch = True
+
+                        if is_mismatch:
+                            mismatches.append(
+                                f"Keyword argument '{key}': expected {param_type} but got {received_type}"
+                            )
+                        break  # Found the parameter, no need to continue
+
+        # Add diagnostics section
+        if mismatches:
+            enhanced_lines.append("")
+            enhanced_lines.append("Type mismatch detected:")
+            for mismatch in mismatches:
+                enhanced_lines.append(f"  ❌ {mismatch}")
+        else:
+            # If no specific mismatch detected, show generic message
+            enhanced_lines.append("")
+            enhanced_lines.append("Hint:")
+            enhanced_lines.append("  - Check that argument types match the expected signature")
+            enhanced_lines.append("  - Check that the number of arguments is correct")
+
+        return "\n".join(enhanced_lines)
+
     def __call__(self, *function_args, **function_kwargs):
         cq_id = None
         if "queue_id" in function_kwargs:
@@ -373,11 +671,20 @@ class FastOperation:
         elif "cq_id" in function_kwargs:
             cq_id = function_kwargs.pop("cq_id")
 
-        if cq_id is None:
-            result = self.function(*function_args, **function_kwargs)
-        else:
-            with command_queue(cq_id):
+        try:
+            if cq_id is None:
                 result = self.function(*function_args, **function_kwargs)
+            else:
+                with command_queue(cq_id):
+                    result = self.function(*function_args, **function_kwargs)
+        except TypeError as e:
+            # Enhance pybind11 error messages to make argument type mismatches clearer
+            error_msg = str(e)
+            if "incompatible function arguments" in error_msg and "Invoked with:" in error_msg:
+                enhanced_msg = self._enhance_type_error_message(error_msg, function_args, function_kwargs)
+                raise TypeError(enhanced_msg) from e
+            else:
+                raise
 
         return result
 
