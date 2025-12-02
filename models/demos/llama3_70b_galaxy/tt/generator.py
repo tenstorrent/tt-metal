@@ -132,6 +132,7 @@ class Generator:
         sampling_params=None,
         empty_slots=None,
         tt_out_logits_all_users=None,
+        bitmask=None,  # TODO apply in prefill
     ):
         if self.prefill_traces_warmup is False:
             self.warmup_prefill_traces(
