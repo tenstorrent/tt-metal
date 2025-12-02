@@ -649,6 +649,30 @@ class FastOperation:
                             )
                         break  # Found the parameter, no need to continue
 
+        # Check for extra positional arguments
+        if len(received_arg_types) > len(positional_params):
+            num_extra = len(received_arg_types) - len(positional_params)
+            for i in range(len(positional_params), len(received_arg_types)):
+                arg_type = received_arg_types[i]
+                preview = str(function_args[i])[:30]
+                if len(str(function_args[i])) > 30:
+                    preview += "..."
+                mismatches.append(
+                    f"Extra positional argument {i+1}: {arg_type} = {preview} (function only accepts {len(positional_params)} positional arguments)"
+                )
+
+        # Check for invalid keyword arguments
+        expected_kwarg_names = set()
+        for param in keyword_params:
+            if ":" in param:
+                param_name = param.split(":", 1)[0].strip()
+                expected_kwarg_names.add(param_name)
+
+        for key in received_kwargs_types.keys():
+            if key not in expected_kwarg_names:
+                received_type = received_kwargs_types[key]
+                mismatches.append(f"Invalid keyword argument '{key}': {received_type} (not in function signature)")
+
         # Add diagnostics section
         if mismatches:
             enhanced_lines.append("")
