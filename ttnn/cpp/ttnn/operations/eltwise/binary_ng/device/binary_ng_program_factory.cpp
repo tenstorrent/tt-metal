@@ -12,6 +12,8 @@
 #include <algorithm>
 using namespace tt::tt_metal;
 
+#define DEBUG
+
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
@@ -315,11 +317,21 @@ void set_or_update_runtime_arguments(
             num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2) =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid, c_num_tiles, row_major);
         cores = grid_to_cores(num_cores_total, compute_with_storage_grid.x, compute_with_storage_grid.y, row_major);
+
+#ifdef DEBUG
+        std::cout << "num_cores " << num_cores << " num_cores_total " << num_cores_total << " " << __FILE_NAME__
+                  << std::endl;
+#endif
     } else {
         std::tie(
             num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2) =
             tt::tt_metal::split_work_to_cores(all_device_cores, c_num_tiles, row_major);
         cores = corerange_to_cores(all_device_cores, {}, row_major);
+
+#ifdef DEBUG
+        std::cout << "num_cores " << num_cores << " num_cores_total " << num_cores_total << " " << __FILE_NAME__
+                  << std::endl;
+#endif
     }
 
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
