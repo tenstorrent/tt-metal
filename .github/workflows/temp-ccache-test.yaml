@@ -24,7 +24,8 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          {name: tt-train, cmd: ctest -E NIGHTLY --no-tests=error --output-on-failure  --output-junit generated/test_reports/ctest_report.xml},
+          {name: tt-train, cmd: "ctest -E NIGHTLY --no-tests=error --output-on-failure  --output-junit generated/test_reports/ctest_report.xml"},
+          {name: ttnn-simple, cmd: "python -m pytest /work/tests/ttnn/unit_tests/test_tensor.py::test_tensor_creation_and_memory_config -v"},
         ]
     name: ${{ matrix.test-group.name }} wormhole_b0 N150
     # tt-train in N300 is timing out on CIv2-viommu: https://github.com/tenstorrent/tt-metal/issues/29443
@@ -95,46 +96,65 @@ jobs:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           enable-watcher: false
 
-      - name: Force a simple kernel compilation test
+      - name: Force kernel compilation to trigger JIT and test debug logging
         timeout-minutes: 5
         run: |
-          echo "=== Testing basic kernel compilation to trigger JIT ==="
+          echo "=== Testing kernel compilation to trigger JIT and verify debug logging ==="
           cd /work
 
-          # Create a simple test to force kernel compilation
+          # Set debug environment
+          export TT_METAL_LOGGER_LEVEL=Debug
+          export TT_METAL_LOGGER_TYPES=BuildKernels
+          export TT_METAL_LOG_KERNELS_COMPILATION_COMMANDS=1
+
+          # Create a test that forces kernel compilation
           cat > /tmp/test_kernel_compile.py << 'EOF'
           import os
           import sys
           import torch
+          import ttnn
 
-          print("Testing basic kernel compilation...")
+          print("Testing kernel compilation with debug logging...")
 
           try:
-              # Import tt-metal libraries
-              import tt_lib as ttl
-              import ttnn
+              # Initialize device
+              device_id = 0
+              device = ttnn.open_device(device_id=device_id)
 
-              # Simple test that should trigger kernel compilation
-              device = ttl.device.open_device(device_id=0)
+              # Create tensors that will trigger kernel compilation
+              shape = [1, 1, 32, 32]
+              torch_tensor = torch.randn(shape)
 
-              # Create a simple tensor operation
-              x = torch.randn(1, 1, 32, 32)
-              x_tt = ttl.tensor.Tensor(x, device)
-              y_tt = ttl.operations.unary.relu(x_tt)
+              # Convert to ttnn tensor (should trigger some kernel compilation)
+              ttnn_tensor = ttnn.from_torch(torch_tensor, device=device, dtype=ttnn.bfloat16)
 
-              ttl.device.close_device(device)
-              print("SUCCESS: Basic kernel compilation test completed")
+              # Perform operations that definitely require kernel compilation
+              result = ttnn.relu(ttnn_tensor)
+              result = ttnn.add(result, ttnn_tensor)
+              result = ttnn.mul(result, 2.0)
+
+              # Convert back to check result
+              output = ttnn.to_torch(result)
+
+              ttnn.close_device(device)
+              print(f"SUCCESS: Kernel compilation test completed. Output shape: {output.shape}")
 
           except Exception as e:
               print(f"Kernel compilation test failed: {e}")
-              print("This may be expected - continuing with main tests...")
+              import traceback
+              traceback.print_exc()
+              print("This may indicate missing debug logging or other issues...")
           EOF
 
-          # Run the simple test
+          # Run the test and capture all output
           python /tmp/test_kernel_compile.py 2>&1 | tee /tmp/kernel_test.log || true
 
-          echo "Kernel compilation test completed. Checking for JIT activity:"
-          grep -E "(CCACHE_DEBUG|compile|JIT)" /tmp/kernel_test.log || echo "No JIT compilation detected"
+          echo "=== Kernel Test Analysis ==="
+          echo "Checking for JIT/compilation activity:"
+          grep -iE "(compiling|compile|jit|build.*kernel|CCACHE_DEBUG)" /tmp/kernel_test.log || echo "No JIT compilation detected in kernel test"
+
+          echo "Checking for ttnn operations:"
+          grep -iE "(ttnn|tensor|relu|add|mul)" /tmp/kernel_test.log || echo "No ttnn operations logged"
 
       - name: First test run - populate kernel ccache
         timeout-minutes: 25
@@ -156,6 +176,7 @@ jobs:
           echo "Clearing all caches to force JIT kernel compilation..."
           rm -rf /tmp/ttnn_cache/ /tmp/tt_metal_cache/ || true
           rm -rf ~/.cache/tt-metal-cache/ /tmp/tt-metal-cache/ || true
+          rm -rf /work/.cpmcache/ || true
           # Also clear any kernels in work directory
           find /work -name "*.elf" -path "*/kernels/*" -delete 2>/dev/null || true
           find /work -name "*.bin" -path "*/kernels/*" -delete 2>/dev/null || true
@@ -167,19 +188,45 @@ jobs:
 
           # Run first test and capture debug output
           echo "Running first test to populate JIT kernel cache..."
+          echo "Test command: ${{ matrix.test-group.cmd }}"
+          echo "Test name: ${{ matrix.test-group.name }}"
           echo "Environment check:"
           echo "TT_METAL_CCACHE_KERNEL_SUPPORT=$TT_METAL_CCACHE_KERNEL_SUPPORT"
           echo "TT_METAL_LOGGER_LEVEL=$TT_METAL_LOGGER_LEVEL"
+          echo "TT_METAL_LOGGER_TYPES=$TT_METAL_LOGGER_TYPES"
+
           echo "Checking if debug logging is compiled in..."
-          strings /work/build/lib/libtt_metal.so | grep "CCACHE_DEBUG" || echo "CCACHE_DEBUG strings not found in library"
+          # Look for our debug strings
+          strings /work/build/lib/libtt_metal.so | grep -E "(CCACHE_DEBUG|Full compile command|build_key)" || echo "Debug strings not found in library"
+
           echo "Checking for git hash in library..."
           strings /work/build/lib/libtt_metal.so | grep -E "[0-9a-f]{10}" | head -3 || echo "No git hashes found"
+
+          echo "Checking if JIT build is enabled..."
+          # Check if the JIT build symbols are present
+          nm -D /work/build/lib/libtt_metal.so | grep -i jit || objdump -t /work/build/lib/libtt_metal.so | grep -i jit || echo "No JIT symbols found"
           echo ""
           echo "Checking cache directory structure before test..."
           echo "HOME/.cache/tt-metal-cache/:"
           ls -la ~/.cache/tt-metal-cache/ 2>/dev/null || echo "~/.cache/tt-metal-cache/ does not exist"
           echo "/tmp/tt-metal-cache/:"
           ls -la /tmp/tt-metal-cache/ 2>/dev/null || echo "/tmp/tt-metal-cache/ does not exist"
+
+          echo "Running manual TTNN test to force JIT compilation..."
+          # Run a simple TTNN operation that should trigger JIT
+          python3 -c "
+          import ttnn
+          device = ttnn.open_device(0)
+          x = ttnn.ones((32, 32), device=device, dtype=ttnn.bfloat16)
+          y = ttnn.relu(x)
+          ttnn.close_device(device)
+          print('Manual JIT test completed')
+          " 2>&1 | tee -a /tmp/manual_jit.log || echo "Manual JIT test failed"
+
+          echo "Manual JIT test output analysis:"
+          grep -iE "(CCACHE_DEBUG|compiling|compile|jit|build.*kernel)" /tmp/manual_jit.log || echo "No JIT activity in manual test"
+
+          echo "Running main test..."
           ${{ matrix.test-group.cmd }} 2>&1 | tee /tmp/first_run.log
 
           echo ""
@@ -258,14 +305,21 @@ jobs:
 
           echo "=== JIT Build Debug Info from First Run ==="
           if [ -f /tmp/first_run.log ]; then
+            echo "Log file size: $(wc -l /tmp/first_run.log)"
             echo "CCACHE_DEBUG lines from first run:"
             grep "CCACHE_DEBUG:" /tmp/first_run.log | head -30 || echo "No CCACHE_DEBUG output found in first run"
             echo ""
             echo "JIT compilation evidence from first run:"
-            grep -iE "(compiling|compile_one|g\+\+ compile cmd|jit|build|kernel)" /tmp/first_run.log | head -20 || echo "No compilation output found"
+            grep -iE "(compiling|compile_one|g\+\+ compile cmd|jit|build.*kernel)" /tmp/first_run.log | head -20 || echo "No compilation output found"
             echo ""
-            echo "Debug/Build log lines from first run:"
-            grep -iE "(debug|build|info.*build)" /tmp/first_run.log | head -15 || echo "No debug build lines found"
+            echo "Python/TTNN activity from first run:"
+            grep -iE "(python|ttnn|tt_lib|tensor|device)" /tmp/first_run.log | head -10 || echo "No Python/TTNN activity found"
+            echo ""
+            echo "Any error messages:"
+            grep -iE "(error|exception|failed|traceback)" /tmp/first_run.log | head -10 || echo "No errors found"
+            echo ""
+            echo "Test execution pattern:"
+            grep -E "(Test project|Running|Executing|START|PASS|FAIL)" /tmp/first_run.log | head -20 || echo "No test execution pattern found"
           else
             echo "First run log not found"
           fi
