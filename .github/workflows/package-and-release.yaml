@@ -200,6 +200,7 @@ jobs:
           echo "Previous tag: $previous_tag"
           echo "previous-tag=$previous_tag" >> "$GITHUB_OUTPUT"
       - name: Create changelog
+        if: ${{ !inputs.dry-run }}
         id: create-changelog
         uses: mikepenz/release-changelog-builder-action@v4
         with:
@@ -208,9 +209,14 @@ jobs:
           toTag: ${{ needs.create-tag.outputs.version }}
           failOnError: true
           outputFile: CHANGELOG.txt
+      - name: Create empty changelog for dry run
+        if: ${{ inputs.dry-run }}
+        run: echo "Changelog generation skipped for dry run" > CHANGELOG.txt
       - name: Output changelog
+        if: ${{ !inputs.dry-run }}
         run: cat CHANGELOG.txt
       - name: Upload changelog as artifact
+        if: ${{ !inputs.dry-run }}
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
