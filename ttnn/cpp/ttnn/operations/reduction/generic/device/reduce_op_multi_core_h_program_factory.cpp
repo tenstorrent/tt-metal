@@ -61,6 +61,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_cols);
     }
 
+    // Current sharding only supports width, and that input and output are sharded
     if (use_width_sharding) {
         all_cores = a.shard_spec().value().grid;
         num_cores = all_cores.num_cores();
