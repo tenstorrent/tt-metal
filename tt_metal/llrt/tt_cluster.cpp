@@ -260,7 +260,7 @@ bool Cluster::is_base_routing_fw_enabled() const { return Cluster::is_base_routi
 void Cluster::generate_cluster_descriptor() {
     this->cluster_desc_ = this->driver_->get_cluster_description();
     this->cluster_type_ = Cluster::get_cluster_type_from_cluster_desc(this->rtoptions_, this->cluster_desc_);
-    if (this->target_type_ == TargetDevice::Simulator) {
+    if (this->target_type_ == TargetDevice::Simulator || this->target_type_ == TargetDevice::Mock) {
         return;
     }
 
