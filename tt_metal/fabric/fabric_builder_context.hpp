@@ -9,7 +9,6 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include "erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
-#include "tt_metal/fabric/fabric_router_builder.hpp"  // RouterLocation, RouterBuildSpec
 #include <vector>
 #include <memory>
 #include <array>
@@ -30,7 +29,7 @@ class FabricContext;
  * - Pre-built EDM config templates
  * - Per-device build state (master router channels, initialized router counts)
  * - Tensix config (lazy init after routing tables configured)
- * - Config selection logic (get_router_build_spec)
+ * - Config selection via get_fabric_router_config()
  * - Router address information
  */
 class FabricBuilderContext {
@@ -47,20 +46,7 @@ public:
     // ============ Access to Parent Context ============
     const FabricContext& get_fabric_context() const { return fabric_context_; }
 
-    // ============ Config Selection (Main Interface) ============
-    /**
-     * Get the router build specification for a given location.
-     * Encapsulates all config selection logic including:
-     * - Tensix extension enablement
-     * - Switch mesh detection
-     *
-     * @param location The router location (eth_chan, remote_node, direction, is_dispatch_link)
-     * @param local_node The local fabric node ID (same for all routers in a build run)
-     * @return RouterBuildSpec with all configuration needed to create the router builder
-     */
-    RouterBuildSpec get_router_build_spec(const RouterLocation& location, FabricNodeId local_node) const;
-
-    // ============ Legacy Config Selection ============
+    // ============ Config Selection ============
     // Returns the appropriate EDM config based on tensix config and direction
     FabricEriscDatamoverConfig& get_fabric_router_config(
         FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,

@@ -11,41 +11,6 @@
 
 namespace tt::tt_fabric {
 
-// ============ Config Selection (Main Interface) ============
-
-RouterBuildSpec FabricBuilderContext::get_router_build_spec(
-    const RouterLocation& location, FabricNodeId local_node) const {
-    bool is_switch_mesh = fabric_context_.is_switch_mesh(local_node.mesh_id);
-
-    if (is_switch_mesh) {
-        // Simple path - switch mesh has uniform config
-        return RouterBuildSpec{
-            .edm_config = router_config_.get(),
-            .topology = fabric_context_.get_fabric_topology(),
-            .tensix_extension_enabled = false,
-            .is_switch_mesh = true,
-        };
-    }
-
-    // Compute mesh path
-    // Tensix: switch mesh = never, compute mesh = from fabric config (cached in FabricContext)
-    bool tensix_enabled = fabric_context_.is_tensix_enabled() && !location.is_dispatch_link;
-
-    // Convert RoutingDirection to eth_chan_directions for config lookup
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    auto eth_direction = control_plane.routing_direction_to_eth_direction(location.direction);
-
-    const auto& config = get_fabric_router_config(
-        tensix_enabled ? FabricTensixConfig::MUX : FabricTensixConfig::DISABLED, eth_direction);
-
-    return RouterBuildSpec{
-        .edm_config = &config,
-        .topology = fabric_context_.get_fabric_topology(),
-        .tensix_extension_enabled = tensix_enabled,
-        .is_switch_mesh = false,
-    };
-}
-
 // ============ Constructor ============
 
 FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) : fabric_context_(fabric_context) {

@@ -6,6 +6,7 @@
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/fabric_core_placement.hpp"
 #include "impl/context/metal_context.hpp"
@@ -19,42 +20,52 @@
 namespace tt::tt_fabric {
 
 ComputeMeshRouterBuilder::ComputeMeshRouterBuilder(
+    FabricNodeId local_node,
+    const RouterLocation& location,
     std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder,
     std::optional<FabricTensixDatamoverBuilder> tensix_builder,
-    FabricRouterChannelMapping channel_mapping,
-    chan_id_t eth_chan) :
+    FabricRouterChannelMapping channel_mapping) :
+    FabricRouterBuilder(local_node, location),
     erisc_builder_(std::move(erisc_builder)),
     tensix_builder_(std::move(tensix_builder)),
-    channel_mapping_(std::move(channel_mapping)),
-    eth_chan_(eth_chan) {
+    channel_mapping_(std::move(channel_mapping)) {
     TT_FATAL(erisc_builder_ != nullptr, "Erisc builder cannot be null");
 }
 
 std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     tt::tt_metal::IDevice* device,
-    tt::tt_metal::Program& fabric_program,
-    umd::CoreCoord eth_logical_core,
-    FabricNodeId fabric_node_id,
-    FabricNodeId remote_fabric_node_id,
-    const tt::tt_fabric::FabricEriscDatamoverConfig& edm_config,
-    tt::tt_fabric::eth_chan_directions eth_direction,
-    bool dispatch_link,
-    tt::tt_fabric::chan_id_t eth_chan,
-    tt::tt_fabric::Topology topology) {
-    bool fabric_tensix_extension_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
-                                           tt::tt_fabric::FabricTensixConfig::DISABLED;
-    bool fabric_tensix_extension_mux_mode =
-        tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() == tt::tt_fabric::FabricTensixConfig::MUX;
-    bool fabric_tensix_extension_udm_mode =
-        tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() == tt::tt_fabric::FabricTensixConfig::UDM;
+    tt::tt_metal::Program& program,
+    FabricNodeId local_node,
+    const RouterLocation& location) {
+    // Get fabric context and config
+    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const auto& builder_context = fabric_context.get_builder_context();
+    const auto topology = fabric_context.get_fabric_topology();
+
+    // Convert RoutingDirection to eth_chan_directions
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto eth_direction = control_plane.routing_direction_to_eth_direction(location.direction);
+
+    // Get SOC descriptor for eth core lookup
+    const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
+    auto eth_logical_core = soc_desc.get_eth_core_for_channel(location.eth_chan, CoordSystem::LOGICAL);
+
+    // Determine tensix config
+    auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    bool fabric_tensix_extension_enabled = fabric_tensix_config != FabricTensixConfig::DISABLED;
+    bool fabric_tensix_extension_mux_mode = fabric_tensix_config == FabricTensixConfig::MUX;
+    bool fabric_tensix_extension_udm_mode = fabric_tensix_config == FabricTensixConfig::UDM;
 
     // Determine if tensix builder will be created (reusable condition)
-    bool will_create_tensix_builder = fabric_tensix_extension_enabled && !dispatch_link;
+    bool will_create_tensix_builder = fabric_tensix_extension_enabled && !location.is_dispatch_link;
     bool downstream_is_tensix_builder = will_create_tensix_builder && fabric_tensix_extension_mux_mode;
 
+    // Get the appropriate EDM config from builder context
+    auto tensix_config_for_lookup = will_create_tensix_builder ? FabricTensixConfig::MUX : FabricTensixConfig::DISABLED;
+    const auto& edm_config = builder_context.get_fabric_router_config(tensix_config_for_lookup, eth_direction);
+
     // Create channel mapping EARLY (needed for computing injection flags)
-    auto channel_mapping =
-        tt::tt_fabric::FabricRouterChannelMapping(topology, eth_direction, downstream_is_tensix_builder);
+    auto channel_mapping = FabricRouterChannelMapping(topology, eth_direction, downstream_is_tensix_builder);
     // Compute injection channel flags at router level BEFORE creating builders
     // Injection semantics are per-VC, so compute for each VC and flatten into router-level vector
     // Injection channel status flags are used by sender channels to understand if that channel must
@@ -91,8 +102,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
 
     std::vector<bool> tensix_injection_flags;
     if (will_create_tensix_builder) {
-        size_t tensix_num_channels = builder_config::get_num_tensix_sender_channels(
-            topology, tt::tt_metal::MetalContext::instance().get_fabric_tensix_config());
+        size_t tensix_num_channels = builder_config::get_num_tensix_sender_channels(topology, fabric_tensix_config);
         auto tensix_to_router_channel_map =
             get_variant_to_router_channel_map(channel_mapping, BuilderType::TENSIX, tensix_num_channels);
         tensix_injection_flags = get_child_builder_variant_sender_channel_injection_flags(
@@ -100,18 +110,17 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     }
 
     // NOW create erisc builder with computed injection flags
-    auto edm_builder =
-        std::make_unique<tt::tt_fabric::FabricEriscDatamoverBuilder>(tt::tt_fabric::FabricEriscDatamoverBuilder::build(
-            device,
-            fabric_program,
-            eth_logical_core,
-            fabric_node_id,
-            remote_fabric_node_id,
-            edm_config,
-            std::move(erisc_injection_flags),
-            false, /* build_in_worker_connection_mode */
-            eth_direction,
-            downstream_is_tensix_builder));
+    auto edm_builder = std::make_unique<FabricEriscDatamoverBuilder>(FabricEriscDatamoverBuilder::build(
+        device,
+        program,
+        eth_logical_core,
+        local_node,
+        location.remote_node,
+        edm_config,
+        std::move(erisc_injection_flags),
+        false, /* build_in_worker_connection_mode */
+        eth_direction,
+        downstream_is_tensix_builder));
 
     if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE &&
         tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
@@ -122,20 +131,21 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     }
 
     // Create tensix builder if needed
-    std::optional<tt::tt_fabric::FabricTensixDatamoverBuilder> tensix_builder_opt;
+    std::optional<FabricTensixDatamoverBuilder> tensix_builder_opt;
     if (will_create_tensix_builder) {
-        tensix_builder_opt = tt::tt_fabric::FabricTensixDatamoverBuilder::build(
+        tensix_builder_opt = FabricTensixDatamoverBuilder::build(
             device,
-            fabric_program,
-            fabric_node_id,
-            remote_fabric_node_id,
-            eth_chan,
+            program,
+            local_node,
+            location.remote_node,
+            location.eth_chan,
             eth_direction,
             std::move(tensix_injection_flags));
     }
 
-    auto router_builder = std::make_unique<tt::tt_fabric::ComputeMeshRouterBuilder>(
-        std::move(edm_builder), std::move(tensix_builder_opt), std::move(channel_mapping), eth_chan);
+    // Use unique_ptr constructor directly since ComputeMeshRouterBuilder constructor is private
+    auto router_builder = std::unique_ptr<ComputeMeshRouterBuilder>(new ComputeMeshRouterBuilder(
+        local_node, location, std::move(edm_builder), std::move(tensix_builder_opt), std::move(channel_mapping)));
 
     // Setup the local relay kernel connection if in UDM mode
     if (fabric_tensix_extension_udm_mode && router_builder->has_tensix_builder()) {
@@ -159,10 +169,10 @@ void ComputeMeshRouterBuilder::connect_to_downstream_router_over_noc(
             tt::LogTest,
             "Router at x={}, y={}, Direction={}, FabricNodeId={} :: Connecting VC{} to downstream router at x={}, "
             "y={}, Direction={}",
-            erisc_builder_->get_noc_x(),
-            erisc_builder_->get_noc_y(),
-            erisc_builder_->get_direction(),
-            erisc_builder_->local_fabric_node_id,
+            get_noc_x(),
+            get_noc_y(),
+            get_eth_direction(),
+            local_node_,
             vc_index,
             downstream_builder->get_noc_x(),
             downstream_builder->get_noc_y(),
@@ -206,7 +216,7 @@ void ComputeMeshRouterBuilder::connect_to_downstream_router_over_noc(
             "Tried to connect router to downstream in worker connection mode");
 
         // Helper to get the downstream builder for a specific VC based on channel mapping
-        uint32_t sender_channel_idx = get_downstream_sender_channel(is_2D_routing, other.get_direction());
+        uint32_t sender_channel_idx = get_downstream_sender_channel(is_2D_routing, other.get_eth_direction());
         // Connect VC0
         connect_vc(0, get_downstream_builder_for_vc(0, sender_channel_idx), sender_channel_idx);
     }
@@ -265,18 +275,19 @@ uint32_t ComputeMeshRouterBuilder::get_downstream_sender_channel(
     size_t downstream_compact_index_for_upstream;
     if (downstream_direction == eth_chan_directions::EAST) {
         // EAST downstream: WEST(1)→0, NORTH(2)→1, SOUTH(3)→2
-        downstream_compact_index_for_upstream = this->get_direction() - 1;
+        downstream_compact_index_for_upstream = this->get_eth_direction() - 1;
     } else {
         // For other downstream directions: if upstream < downstream, use as-is; else subtract 1
-        downstream_compact_index_for_upstream =
-            (this->get_direction() < downstream_direction) ? this->get_direction() : (this->get_direction() - 1);
+        downstream_compact_index_for_upstream = (this->get_eth_direction() < downstream_direction)
+                                                    ? this->get_eth_direction()
+                                                    : (this->get_eth_direction() - 1);
     }
 
     // Sender channel = 1 + compact index (since channel 0 is for local worker)
     return 1 + downstream_compact_index_for_upstream;
 }
 
-eth_chan_directions ComputeMeshRouterBuilder::get_direction() const { return erisc_builder_->get_direction(); }
+eth_chan_directions ComputeMeshRouterBuilder::get_eth_direction() const { return erisc_builder_->get_direction(); }
 
 size_t ComputeMeshRouterBuilder::get_noc_x() const { return erisc_builder_->get_noc_x(); }
 
@@ -285,10 +296,6 @@ size_t ComputeMeshRouterBuilder::get_noc_y() const { return erisc_builder_->get_
 size_t ComputeMeshRouterBuilder::get_configured_risc_count() const {
     return erisc_builder_->get_configured_risc_count();
 }
-
-FabricNodeId ComputeMeshRouterBuilder::get_local_fabric_node_id() const { return erisc_builder_->local_fabric_node_id; }
-
-FabricNodeId ComputeMeshRouterBuilder::get_peer_fabric_node_id() const { return erisc_builder_->peer_fabric_node_id; }
 
 std::vector<bool> ComputeMeshRouterBuilder::compute_sender_channel_injection_flags_for_vc(
     Topology topology, eth_chan_directions direction, uint32_t /*vc*/, uint32_t num_channels) {
@@ -451,9 +458,10 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
 
     // Get SOC descriptor for eth core lookup
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto device_id = control_plane.get_physical_chip_id_from_fabric_node_id(erisc_builder_->local_fabric_node_id);
-    auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
-    auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan_, CoordSystem::LOGICAL);
+    const auto device_id = control_plane.get_physical_chip_id_from_fabric_node_id(local_node_);
+    const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
+    const auto eth_chan = location_.eth_chan;
+    auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
 
     // Configure for host signal wait
     erisc_builder_->set_wait_for_host_signal(true);
@@ -467,7 +475,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         // Get compile-time args and append cluster-wide coordination info
         std::vector<uint32_t> ct_args = erisc_builder_->get_compile_time_args(risc_id);
 
-        const auto is_master_risc_core = (eth_chan_ == ctx.master_router_chan) && (risc_id == 0);
+        const auto is_master_risc_core = (eth_chan == ctx.master_router_chan) && (risc_id == 0);
         ct_args.push_back(is_master_risc_core);
         ct_args.push_back(ctx.master_router_chan);
         ct_args.push_back(ctx.num_local_fabric_routers);
@@ -500,9 +508,9 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
     log_debug(
         tt::LogMetal,
         "Fabric router kernel created: eth_chan={}, direction={}, is_master={}",
-        eth_chan_,
-        erisc_builder_->get_direction(),
-        eth_chan_ == ctx.master_router_chan);
+        eth_chan,
+        get_eth_direction(),
+        eth_chan == ctx.master_router_chan);
 }
 
 }  // namespace tt::tt_fabric

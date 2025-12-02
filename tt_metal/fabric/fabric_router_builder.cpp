@@ -4,7 +4,6 @@
 
 #include "fabric_router_builder.hpp"
 #include "tt_metal/fabric/compute_mesh_router_builder.hpp"
-#include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -15,34 +14,18 @@ std::unique_ptr<FabricRouterBuilder> FabricRouterBuilder::create(
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program,
     FabricNodeId local_node,
-    const RouterLocation& location,
-    const RouterBuildSpec& spec) {
-    // Get SOC descriptor for eth core lookup
-    const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
-    auto eth_logical_core = soc_desc.get_eth_core_for_channel(location.eth_chan, CoordSystem::LOGICAL);
+    const RouterLocation& location) {
+    // Query fabric context to determine router type
+    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    bool is_switch_mesh = fabric_context.is_switch_mesh(local_node.mesh_id);
 
-    // Convert RoutingDirection to eth_chan_directions
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    auto eth_direction = control_plane.routing_direction_to_eth_direction(location.direction);
-
-    if (spec.is_switch_mesh) {
-        // TODO: Phase 6 - Create SwitchMeshRouterBuilder
-        // For now, fall through to compute mesh (shouldn't reach here until switch mesh is enabled)
+    if (is_switch_mesh) {
+        // TODO: Create SwitchMeshRouterBuilder when implemented
         TT_FATAL(false, "Switch mesh router builder not yet implemented");
     }
 
-    // Create compute mesh router using ComputeMeshRouterBuilder::build()
-    return ComputeMeshRouterBuilder::build(
-        device,
-        program,
-        eth_logical_core,
-        local_node,
-        location.remote_node,
-        *spec.edm_config,
-        eth_direction,
-        location.is_dispatch_link,
-        location.eth_chan,
-        spec.topology);
+    // Create compute mesh router - it handles its own config lookup
+    return ComputeMeshRouterBuilder::build(device, program, local_node, location);
 }
 
 }  // namespace tt::tt_fabric

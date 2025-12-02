@@ -5,9 +5,10 @@
 #pragma once
 
 #include <memory>
-#include <tt-metalium/experimental/fabric/mesh_graph.hpp>  // RoutingDirection
-#include "tt_metal/fabric/erisc_datamover_builder.hpp"
-#include "tt_metal/fabric/fabric_tensix_builder.hpp"
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>               // RoutingDirection
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>  // FabricNodeId
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>         // Topology
+#include <hostdevcommon/fabric_common.h>                                // chan_id_t, eth_chan_directions
 
 namespace tt::tt_metal {
 class IDevice;
@@ -16,53 +17,24 @@ class Program;
 
 namespace tt::tt_fabric {
 
-class FabricBuilderContext;
+// Forward declarations - avoid heavyweight includes in interface header
+struct FabricEriscDatamoverConfig;
+struct SenderWorkerAdapterSpec;
 
-// ============ Router Location + Build Spec ============
+// ============ Router Location ============
 
 /**
  * RouterLocation
  *
  * Minimal per-router topological info - "where is this router?"
  * Common state (device, program, local_node) is cached at FabricBuilder level.
+ * Use aggregate initialization directly.
  */
 struct RouterLocation {
     chan_id_t eth_chan;
     FabricNodeId remote_node;
     RoutingDirection direction;  // Use RoutingDirection, convert to eth_chan_directions when needed
     bool is_dispatch_link;
-
-    /**
-     * Factory method to create a RouterLocation
-     *
-     * @param eth_chan The ethernet channel ID
-     * @param remote_node The remote fabric node ID
-     * @param direction The routing direction (N/S/E/W)
-     * @param is_dispatch_link Whether this is a dispatch link
-     * @return RouterLocation instance
-     */
-    static RouterLocation create(
-        chan_id_t eth_chan, FabricNodeId remote_node, RoutingDirection direction, bool is_dispatch_link) {
-        return RouterLocation{
-            .eth_chan = eth_chan,
-            .remote_node = remote_node,
-            .direction = direction,
-            .is_dispatch_link = is_dispatch_link,
-        };
-    }
-};
-
-/**
- * RouterBuildSpec
- *
- * Computed configuration for a router - "how should it behave?"
- * Output of FabricBuilderContext::get_router_build_spec()
- */
-struct RouterBuildSpec {
-    const FabricEriscDatamoverConfig* edm_config;  // Pointer to config template
-    Topology topology;                             // Linear/Ring/Mesh/Torus
-    bool tensix_extension_enabled;                 // For compute mesh MUX mode
-    bool is_switch_mesh;                           // Determines which builder type to create
 };
 
 // ============ Kernel Creation Context ============
@@ -80,20 +52,22 @@ struct KernelCreationContext {
     uint32_t router_channels_mask;
 };
 
-// ============ Router Builder Interface ============
+// ============ Router Builder Abstract Base Class ============
 
 /**
- * FabricRouterBuilder - Abstract interface for fabric router builders
+ * FabricRouterBuilder - Abstract base class for fabric router builders
  *
- * This interface abstracts the differences between compute mesh and switch mesh
- * router builders, allowing polymorphic behavior while maintaining a consistent API.
+ * This base class provides:
+ * - Common state shared by all router types (local node, location info)
+ * - Non-virtual getters for common properties
+ * - Pure virtual methods for derived-specific behavior
  *
  * Implementations:
  * - ComputeMeshRouterBuilder: For compute mesh routers (with tensix support)
  * - SwitchMeshRouterBuilder: For switch mesh routers (future, routing-only)
  *
  * Usage:
- *   auto router = FabricRouterBuilder::create(device, program, local_node, location, spec);
+ *   auto router = FabricRouterBuilder::create(device, program, local_node, location);
  *   router->connect_to_downstream_router_over_noc(*other_router, vc);
  */
 class FabricRouterBuilder {
@@ -101,21 +75,20 @@ public:
     virtual ~FabricRouterBuilder() = default;
 
     /**
-     * Factory method to create the appropriate router builder based on spec
+     * Factory method to create the appropriate router builder.
+     * Determines router type (compute mesh vs switch mesh) internally based on fabric context.
      *
      * @param device The device to build on
      * @param program The fabric program
      * @param local_node The local fabric node ID
      * @param location Router location (eth_chan, remote_node, direction, is_dispatch)
-     * @param spec Router build specification (determines builder type)
      * @return A unique_ptr to the appropriate FabricRouterBuilder implementation
      */
     static std::unique_ptr<FabricRouterBuilder> create(
         tt::tt_metal::IDevice* device,
         tt::tt_metal::Program& program,
         FabricNodeId local_node,
-        const RouterLocation& location,
-        const RouterBuildSpec& spec);
+        const RouterLocation& location);
 
     // ============ Connection Methods ============
 
@@ -166,14 +139,21 @@ public:
     virtual uint32_t get_downstream_sender_channel(
         bool is_2D_routing, eth_chan_directions downstream_direction) const = 0;
 
-    // ============ Property Getters ============
+    // ============ Common Property Getters (non-virtual) ============
 
-    virtual eth_chan_directions get_direction() const = 0;
+    FabricNodeId get_local_fabric_node_id() const { return local_node_; }
+    FabricNodeId get_peer_fabric_node_id() const { return location_.remote_node; }
+    chan_id_t get_eth_channel() const { return location_.eth_chan; }
+    RoutingDirection get_routing_direction() const { return location_.direction; }
+    bool is_dispatch_link() const { return location_.is_dispatch_link; }
+    const RouterLocation& get_location() const { return location_; }
+
+    // ============ Derived-Specific Property Getters ============
+
+    virtual eth_chan_directions get_eth_direction() const = 0;
     virtual size_t get_noc_x() const = 0;
     virtual size_t get_noc_y() const = 0;
     virtual size_t get_configured_risc_count() const = 0;
-    virtual FabricNodeId get_local_fabric_node_id() const = 0;
-    virtual FabricNodeId get_peer_fabric_node_id() const = 0;
 
     // ============ Build Methods ============
 
@@ -210,6 +190,15 @@ public:
     static bool is_bubble_flow_control_enabled(Topology topology) {
         return topology == Topology::Ring || topology == Topology::Torus;
     }
+
+protected:
+    // Protected constructor - only derived classes can construct
+    FabricRouterBuilder(FabricNodeId local_node, const RouterLocation& location) :
+        local_node_(local_node), location_(location) {}
+
+    // Common state shared by all router types
+    FabricNodeId local_node_;  // Same for all routers on a device
+    RouterLocation location_;  // Per-router topological info (eth_chan, remote_node, direction, is_dispatch)
 };
 
 }  // namespace tt::tt_fabric

@@ -30,45 +30,20 @@ namespace tt::tt_fabric {
 class ComputeMeshRouterBuilder : public FabricRouterBuilder {
 public:
     /**
-     * Constructor
-     *
-     * @param erisc_builder The erisc datamover builder (always required)
-     * @param tensix_builder Optional tensix datamover builder
-     * @param channel_mapping The channel mapping object that defines logical to internal channel mappings
-     * @param eth_chan The ethernet channel ID for this router
-     */
-    ComputeMeshRouterBuilder(
-        std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder,
-        std::optional<FabricTensixDatamoverBuilder> tensix_builder,
-        FabricRouterChannelMapping channel_mapping,
-        chan_id_t eth_chan);
-
-    /**
-     * Build a ComputeMeshRouterBuilder with all necessary components
+     * Build a ComputeMeshRouterBuilder with all necessary components.
+     * Handles its own config lookup based on location and fabric context.
      *
      * @param device The device to build on
-     * @param fabric_program The fabric program
-     * @param eth_logical_core The ethernet logical core
-     * @param fabric_node_id The local fabric node ID
-     * @param remote_fabric_node_id The remote fabric node ID
-     * @param edm_config The EDM configuration
-     * @param eth_direction The ethernet direction
-     * @param dispatch_link Whether this is a dispatch link
-     * @param eth_chan The ethernet channel (for tensix builder)
-     * @param topology The fabric topology
+     * @param program The fabric program
+     * @param local_node The local fabric node ID
+     * @param location Router location (eth_chan, remote_node, direction, is_dispatch)
      * @return A unique_ptr to the constructed ComputeMeshRouterBuilder
      */
     static std::unique_ptr<ComputeMeshRouterBuilder> build(
         tt::tt_metal::IDevice* device,
-        tt::tt_metal::Program& fabric_program,
-        umd::CoreCoord eth_logical_core,
-        FabricNodeId fabric_node_id,
-        FabricNodeId remote_fabric_node_id,
-        const tt::tt_fabric::FabricEriscDatamoverConfig& edm_config,
-        tt::tt_fabric::eth_chan_directions eth_direction,
-        bool dispatch_link,
-        tt::tt_fabric::chan_id_t eth_chan,
-        tt::tt_fabric::Topology topology);
+        tt::tt_metal::Program& program,
+        FabricNodeId local_node,
+        const RouterLocation& location);
 
     // ============ FabricRouterBuilder Interface Implementation ============
 
@@ -87,19 +62,20 @@ public:
 
     uint32_t get_downstream_sender_channel(bool is_2D_routing, eth_chan_directions downstream_direction) const override;
 
-    // Property getters
-    eth_chan_directions get_direction() const override;
+    // Derived-specific property getters
+    eth_chan_directions get_eth_direction() const override;
     size_t get_noc_x() const override;
     size_t get_noc_y() const override;
     size_t get_configured_risc_count() const override;
-    FabricNodeId get_local_fabric_node_id() const override;
-    FabricNodeId get_peer_fabric_node_id() const override;
 
-    // Builder access - compute mesh specific, not in interface
+    // Mesh type query
+    bool is_switch_mesh() const override { return false; }  // This is compute mesh
+
+    // ============ Compute-Mesh Specific Accessors ============
+
     FabricEriscDatamoverBuilder& get_erisc_builder() { return *erisc_builder_; }
     const FabricEriscDatamoverBuilder& get_erisc_builder() const { return *erisc_builder_; }
 
-    // Tensix builder access - compute mesh specific, not in interface
     bool has_tensix_builder() const { return tensix_builder_.has_value(); }
     FabricTensixDatamoverBuilder& get_tensix_builder() {
         TT_FATAL(tensix_builder_.has_value(), "Tensix builder not available");
@@ -110,10 +86,15 @@ public:
         return tensix_builder_.value();
     }
 
-    // Mesh type query
-    bool is_switch_mesh() const override { return false; }  // This is compute mesh
-
 private:
+    // Private constructor - use build() factory method
+    ComputeMeshRouterBuilder(
+        FabricNodeId local_node,
+        const RouterLocation& location,
+        std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder,
+        std::optional<FabricTensixDatamoverBuilder> tensix_builder,
+        FabricRouterChannelMapping channel_mapping);
+
     /**
      * Compute which sender channels are traffic injection channels for a specific VC.
      */
@@ -140,10 +121,10 @@ private:
      */
     void connect_to_local_tensix_builder(FabricTensixDatamoverBuilder& tensix_builder);
 
+    // Compute-mesh specific state
     std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder_;
     std::optional<FabricTensixDatamoverBuilder> tensix_builder_;
     FabricRouterChannelMapping channel_mapping_;
-    chan_id_t eth_chan_;  // Cached for kernel creation (master router determination)
 };
 
 }  // namespace tt::tt_fabric

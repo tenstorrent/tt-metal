@@ -91,12 +91,16 @@ void FabricBuilder::create_routers() {
         for (const auto& eth_chan : eth_channels) {
             bool is_dispatch = dispatch_links_.count(eth_chan) > 0;
 
-            // Use RouterLocation + RouterBuildSpec abstractions
-            auto location = RouterLocation::create(eth_chan, neighbor_node, direction, is_dispatch);
-            auto spec = builder_context_.get_router_build_spec(location, local_node_);
+            // Use RouterLocation with aggregate initialization
+            RouterLocation location{
+                .eth_chan = eth_chan,
+                .remote_node = neighbor_node,
+                .direction = direction,
+                .is_dispatch_link = is_dispatch,
+            };
 
-            // Use factory method - will route to ComputeMeshRouterBuilder or SwitchMeshRouterBuilder
-            auto router_builder = FabricRouterBuilder::create(device_, program_, local_node_, location, spec);
+            // Use factory method - determines router type internally based on fabric context
+            auto router_builder = FabricRouterBuilder::create(device_, program_, local_node_, location);
             routers_.insert({eth_chan, std::move(router_builder)});
         }
     }
