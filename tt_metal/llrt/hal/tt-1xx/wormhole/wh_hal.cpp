@@ -202,6 +202,8 @@ public:
             enchantum::to_string(params.processor_class),
             enchantum::to_string(params.core_type));
     }
+
+    bool firmware_is_kernel_object(const Params&) const override { return false; }
 };
 
 void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
