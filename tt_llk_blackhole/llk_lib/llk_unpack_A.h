@@ -25,17 +25,19 @@ template <
 inline void _llk_unpack_A_mop_config_(
     const bool transpose_of_faces, const std::uint32_t num_faces, const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format = 0)
 {
-    static_assert(
-        !((BType != BroadcastType::NONE) && acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)), "Not supported configuration!");
-    static_assert(
-        (((BType == BroadcastType::NONE) && (!acc_to_dest) && (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE)) || (!unpack_to_dest)),
-        "Not supported configuration when unpacking to dest!");
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    // static_assert(
+    //     !((BType != BroadcastType::NONE) && acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)), "Not supported configuration!");
+    // static_assert(
+    //     (((BType == BroadcastType::NONE) && (!acc_to_dest) && (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE)) || (!unpack_to_dest)),
+    //     "Not supported configuration when unpacking to dest!");
+    // LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
     static constexpr uint unpack_srca =
         TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr uint unpack_srca_to_dest =
         TT_OP_UNPACR(SrcA, 0b00010001 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // ch0/ch1 z_inc
+    // static constexpr uint unpack_srca_to_dest_bcast_row =
+    //     TT_OP_UNPACR(SrcA, 0b00010000 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 0);
     static constexpr uint unpack_srca_to_dest_transpose_of_faces =
         TT_OP_UNPACR(SrcA, 0b00010010, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // inc srcA ch1_z+=1, ch0_z+=2
     static constexpr uint unpack_srca_set_dvalid = TT_OP_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
@@ -58,6 +60,14 @@ inline void _llk_unpack_A_mop_config_(
             tmp.set_end_op(TT_OP_SETADCZW(p_setadc::UNP_A, 0, 2, 0, 1, 0b0101));
             tmp.program();
         }
+        // else if (BType == BroadcastType::ROW)
+        // {
+        //     const uint32_t outerloop     = 1;
+        //     constexpr uint32_t innerloop = 2;
+        //     ckernel_template tmp(outerloop, innerloop, unpack_srca_to_dest);
+        //     tmp.set_end_op(unpack_srca_set_dvalid);
+        //     tmp.program();
+        // }
         else
         {
             const uint32_t outerloop     = num_faces;
@@ -90,7 +100,7 @@ inline void _llk_unpack_A_mop_config_(
     else if constexpr (BType == BroadcastType::ROW)
     {
         constexpr uint32_t innerloop = 2;
-        constexpr uint32_t outerloop = 2; // TODO: add support for num_faces
+        constexpr uint32_t outerloop = unpack_to_dest ? 1 : 2; // TODO: add support for num_faces
         if constexpr (acc_to_dest)
         {
             ckernel_template tmp(outerloop, innerloop, unpack_srcb, unpack_srca_set_dvalid);
@@ -194,7 +204,7 @@ inline void _llk_unpack_A_init_(
     // bool disable_src_zero_flag_val = disable_src_zero_flag || (static_cast<uint>(unpack_dst_format) == static_cast<uint>(DataFormat::UInt16));
     // cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable_src_zero_flag_val ? 1 : 0);
 
-    constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE) ? p_setadc::UNP_A : p_setadc::UNP_B;
+    constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE || unpack_to_dest) ? p_setadc::UNP_A : p_setadc::UNP_B;
     config_unpacker_x_end<UNP_SEL>(face_r_dim);
 
     _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(transpose_of_faces > 0, num_faces, unpack_src_format, unpack_dst_format);
@@ -216,36 +226,16 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     // Wait for free context
     wait_for_next_context(2);
 
-    // Get tile address
-    if (0 == unp_cfg_context)
+    // Set upk0/1 L1 read addr
+    if constexpr (((BType == BroadcastType::NONE) && (!acc_to_dest)) || binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB || unpack_to_dest)
     {
-        if constexpr ((BType == BroadcastType::NONE) && (!acc_to_dest))
-        {
-            cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address;
-        }
-        else
-        {
-            if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)
-            {
-                cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address;
-            }
-            cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address;
-        }
+        const uint32_t upk0_reg = (unp_cfg_context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
+        cfg[upk0_reg]           = address;
     }
     else
     {
-        if constexpr ((BType == BroadcastType::NONE) && (!acc_to_dest))
-        {
-            cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
-        }
-        else
-        {
-            if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)
-            {
-                cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
-            }
-            cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = address;
-        }
+        const uint32_t upk1_reg = (unp_cfg_context == 0) ? THCON_SEC1_REG3_Base_address_ADDR32 : THCON_SEC1_REG3_Base_cntx1_address_ADDR32;
+        cfg[upk1_reg]           = address;
     }
 
     // Trisc::SEMPOST for context acquire
