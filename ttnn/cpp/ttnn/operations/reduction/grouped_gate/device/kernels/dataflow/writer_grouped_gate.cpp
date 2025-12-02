@@ -322,10 +322,10 @@ FORCE_INLINE void generate_winning_group_tiles(
 
     noc_async_read_barrier();
     // DPRINT << ENDL() << ENDL();
-    for (uint32_t i = 0; i < topk_groups; i++) {
-        DPRINT << "Winning group scores cb " << i << ENDL();
-        print_tile(winning_group_scores_cb_index, i, true, 0, 1);
-    }
+    // for (uint32_t i = 0; i < topk_groups; i++) {
+    //     DPRINT << "Winning group scores cb " << i << ENDL();
+    //     print_tile(winning_group_scores_cb_index, i, true, 0, 1);
+    // }
     cb_push_back(winning_group_scores_cb_index, topk_groups);
     cb_push_back(winning_group_indices_cb_index, topk_groups);
 
