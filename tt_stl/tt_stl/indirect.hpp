@@ -173,7 +173,7 @@ public:
             return *this;
         }
 
-        this->p = *std::move(other);
+        this->p = std::move(other).p;
         return *this;
     }
 
