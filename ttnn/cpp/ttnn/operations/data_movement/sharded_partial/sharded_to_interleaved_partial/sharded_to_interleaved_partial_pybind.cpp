@@ -47,7 +47,7 @@ void py_bind_sharded_to_interleaved_partial(pybind11::module& module) {
     detail::bind_sharded_to_interleaved_partial(
         module,
         ttnn::sharded_to_interleaved_partial,
-        R"doc(sharded_to_interleaved_partial(input_tensor: ttnn.Tensor, cache_tensor: ttnn.Tensor,  num_slices: int, slice_index: int, *, output_dtype: Optional[ttnn.dtype] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
 
         Converts a partial tensor from sharded_to_interleaved memory layout
 

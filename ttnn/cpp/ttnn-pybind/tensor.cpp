@@ -153,13 +153,13 @@ void tensor_mem_config_module(py::module& m_tensor) {
             [](const Tile& self) {
                 return fmt::format("Tile with shape: [{}, {}]", self.get_tile_shape()[0], self.get_tile_shape()[1]);
             })
-        .def_readonly("tile_shape", &Tile::tile_shape)
-        .def_readonly("face_shape", &Tile::face_shape)
-        .def_readonly("num_faces", &Tile::num_faces)
-        .def_readonly("partial_face", &Tile::partial_face)
-        .def_readonly("narrow_tile", &Tile::narrow_tile)
-        .def_readonly("transpose_within_face", &Tile::transpose_within_face)
-        .def_readonly("transpose_of_faces", &Tile::transpose_of_faces);
+        .def_property_readonly("tile_shape", &Tile::get_tile_shape)
+        .def_property_readonly("face_shape", &Tile::get_face_shape)
+        .def_property_readonly("num_faces", &Tile::get_num_faces)
+        .def_property_readonly("partial_face", &Tile::get_partial_face)
+        .def_property_readonly("narrow_tile", &Tile::get_narrow_tile)
+        .def_property_readonly("transpose_within_face", &Tile::get_transpose_within_face)
+        .def_property_readonly("transpose_of_faces", &Tile::get_transpose_of_faces);
 
     auto pyTensorSpec = static_cast<py::class_<TensorSpec>>(m_tensor.attr("TensorSpec"));
     pyTensorSpec

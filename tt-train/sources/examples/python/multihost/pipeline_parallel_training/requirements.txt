@@ -3,3 +3,4 @@ transformers
 tqdm
 numpy
 loguru
+ml_dtypes

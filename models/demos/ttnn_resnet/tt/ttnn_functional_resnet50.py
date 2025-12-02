@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 from typing import List
 
 import torch
@@ -9,10 +10,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import _nearest_y, is_blackhole, is_wormhole_b0, nearest_32
-from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_model_utils import (
-    get_conv_input_memory_config,
-    is_blackhole_p100,
-)
+from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_model_utils import is_blackhole_p100
 
 
 def ResnetLinear(
@@ -125,7 +123,7 @@ class resnet50Bottleneck:
                     deallocate_activation=True,
                     reallocate_halo_output=False,
                     reshard_if_not_optimal=reshard_if_not_optimal,
-                    enable_act_double_buffer=True,
+                    enable_act_double_buffer=True if not (is_blackhole_p100(device) and batch_size > 16) else False,
                     enable_weights_double_buffer=True if input_width < 56 else False,
                     full_inner_dim=True,
                     enable_activation_reuse=True if height_sharding and self.stride == 1 else False,
@@ -246,7 +244,11 @@ class resnet50Bottleneck:
             if layer_module == "layer1_module3":
                 conv_kwargs_2["conv_config"].act_block_h_override = 16 * 32
             if batch_size == 32 and is_blackhole_p100(device):
-                if layer_module == "layer1_module3" or layer_module == "layer2_module1":
+                if (
+                    layer_module == "layer1_module2"
+                    or layer_module == "layer1_module3"
+                    or layer_module == "layer2_module1"
+                ):
                     conv_kwargs_2["conv_config"].act_block_h_override = 32
 
         if is_wormhole_b0():
@@ -517,17 +519,45 @@ class resnet50:
         conv_dummy_tensor = torch.rand((self.fold_output_shape), dtype=torch.bfloat16)
         conv_dummy_tensor = ttnn.from_torch(conv_dummy_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-        self.override_fold_mem_config = get_conv_input_memory_config(
-            self.batch_size,
-            self.conv1_input_channels,
-            self.conv1_input_height,
-            self.conv1_input_width,
-            self.conv1_output_channels,
-            self.conv1_output_height,
-            self.conv1_output_width,
-            device.compute_with_storage_grid_size(),
-            input_channels_alignment=8,
-            override_num_cores=is_blackhole(),
+        # Create sharded memory config for fold operation
+        compute_grid = device.compute_with_storage_grid_size()
+
+        # Calculate core grid
+        if is_blackhole():
+            # Override num cores to avoid padding issues
+            nhw_ntiles = math.ceil(self.batch_size * self.conv1_output_height * self.conv1_output_width / 32)
+            # Find closest largest divisor
+            num_cores_target = compute_grid.x * compute_grid.y
+            while nhw_ntiles % num_cores_target != 0:
+                num_cores_target -= 1
+            core_grid = ttnn.num_cores_to_corerangeset(num_cores_target, compute_grid, row_wise=True)
+        else:
+            # Use full grid
+            core_grid = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))}
+            )
+
+        # Calculate shard dimensions
+        input_channels_padded = (
+            nearest_32(self.conv1_input_channels) if self.conv1_input_channels % 8 != 0 else self.conv1_input_channels
+        )
+        if input_channels_padded % 8 != 0:
+            input_channels_padded = ((input_channels_padded + 7) // 8) * 8
+
+        tensor_height = self.conv1_input_width * self.conv1_input_height * self.batch_size
+        tensor_width = input_channels_padded
+
+        # Calculate shard shape for HEIGHT sharding
+        num_cores = core_grid.num_cores()
+        shard_height = math.ceil(tensor_height / num_cores)
+        shard_width = tensor_width
+
+        self.override_fold_mem_config = ttnn.create_sharded_memory_config(
+            shape=(1, 1, shard_height, shard_width),
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
         )
 
     def __del__(self):

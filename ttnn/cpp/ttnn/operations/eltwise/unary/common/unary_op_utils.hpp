@@ -14,8 +14,6 @@ namespace ttnn::operations::unary::utils {
 
 UnaryWithParam string_to_unary_with_param(const std::string& name);
 
-std::string unary_with_param_to_string(const UnaryWithParam& unary_op);
-
 bool get_op_approx_mode(UnaryOpType op_type);
 using DataType = tt::tt_metal::DataType;
 
@@ -52,6 +50,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::ELU:
         case UnaryOpType::GELU:
         case UnaryOpType::RSQRT:
+        case UnaryOpType::SQRT:
         case UnaryOpType::HEAVISIDE:
         case UnaryOpType::ERF:
         case UnaryOpType::ERFC:
@@ -87,6 +86,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::LOG10:
         case UnaryOpType::LOG2:
         case UnaryOpType::LOG1P:
+        case UnaryOpType::TANH:
         case UnaryOpType::SOFTSHRINK:
         case UnaryOpType::HARDSHRINK:
         case UnaryOpType::WHERE_TSS:
@@ -106,6 +106,5 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
 std::string get_compute_kernel_path(
     UnaryOpType op_type, const std::string& compute_root, std::optional<DataType> input_dtype = std::nullopt);
 
-uint32_t pack_scalar_runtime_arg(float scalar, DataType dtype);
-
+uint32_t pack_scalar_runtime_arg(const EltwiseUnaryWithParam& op, size_t index, DataType dtype);
 }  // namespace ttnn::operations::unary::utils

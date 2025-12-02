@@ -122,7 +122,7 @@ class TTOftNet:
         """Normalize input tensor by mean and std-dev"""
         # Normalize by mean and std-dev
         input_tensor = input_tensor - self.mean
-        input_tensor = ttnn.div(input_tensor, self.std)
+        input_tensor = ttnn.divide(input_tensor, self.std, fast_and_approximate_mode=True)
         return input_tensor
 
     def forward_lateral_layers(self, device, feats8, feats16, feats32):

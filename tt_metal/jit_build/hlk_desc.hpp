@@ -12,6 +12,7 @@
 #include <hostdevcommon/kernel_structs.h>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/base_types.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt_stl/reflection.hpp>
@@ -41,7 +42,7 @@ public:
     uint32_t buf_tile_size_arr[NUM_CIRCULAR_BUFFERS]{};
 
     tt_hlk_desc() :
-        math_fidelity(MathFidelity::Invalid), hlk_args(nullptr), hlk_args_size(0), approximation_mode(true) {
+        math_fidelity(MathFidelity::Invalid), approximation_mode(true), hlk_args(nullptr), hlk_args_size(0) {
         for (int i = 0; i < NUM_CIRCULAR_BUFFERS; ++i) {
             buf_dataformat_arr[i] = DataFormat::Invalid;
             buf_num_faces_arr[i] = constants::TILE_HW / constants::FACE_HW;

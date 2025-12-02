@@ -16,9 +16,8 @@ namespace ttnn::operations::experimental::transformer::detail {
 namespace py = pybind11;
 
 void bind_concatenate_heads(py::module& module) {
-    auto concatenate_heads_doc =
-        R"doc(concatenate_heads(input_tensor: ttnn.Tensor, compute_with_storage_grid_size: ttnn.CoreCoord: *, memory_config: Optional[MemoryConfig] = None) -> ttnn.Tensor
-
+    const auto* concatenate_heads_doc =
+        R"doc(
             Reshuffles a [9, 16, 384, 64] ttnn.Layout.TILE BFLOAT8_B tensor into a tensor with shape [9, 1, 384, 1024].
 
             Args:

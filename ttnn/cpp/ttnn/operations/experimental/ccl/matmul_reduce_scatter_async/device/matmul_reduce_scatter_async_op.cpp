@@ -34,8 +34,8 @@ void MatmulReduceScatterAsync::validate_with_output_tensors(
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_ASSERT(input_tensors.size() == 2, "MatmulReduceScatterAsync requires 2 input tensors: [input, weight]");
-    auto& input_tensor = input_tensors[0];
-    auto& weight_tensor = input_tensors[1];
+    const auto& input_tensor = input_tensors[0];
+    const auto& weight_tensor = input_tensors[1];
     // // Reduce Scatter validate
     // this->reduce_scatter_minimal_async_struct.validate_with_output_tensors(
     //     {}, {intermediate_tensor, reduce_scatter_output_tensor});
@@ -79,8 +79,8 @@ std::vector<Tensor> MatmulReduceScatterAsync::create_output_tensors(
         this->matmul_struct.create_output_tensors({input_tensors[0], input_tensors[1]})[0];
 
     // Reduce Scatter output tensor
-    auto& intermediate_tensor = optional_output_tensors.at(0).value();
-    auto& reduce_scatter_output_tensor = optional_output_tensors.at(1).value();
+    const auto& intermediate_tensor = optional_output_tensors.at(0).value();
+    const auto& reduce_scatter_output_tensor = optional_output_tensors.at(1).value();
 
     return {matmul_output_tensor, intermediate_tensor, reduce_scatter_output_tensor};
 }
@@ -210,10 +210,6 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     const std::optional<const std::string>& activation,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::CoreGrid> core_grid) {
-    TT_FATAL(
-        std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
-        "MatmulReduceScatterAsync is only supported for Fast Dispatch");
-
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     std::vector<Tensor> output_tensors;
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);

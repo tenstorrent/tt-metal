@@ -21,15 +21,16 @@
 
 #include "tests/tt_metal/test_utils/test_common.hpp"
 
-#include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
 #include <tt-metalium/hal.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_fabric {
 namespace fabric_tests {
@@ -96,11 +97,6 @@ static const StringEnumMapper<Topology> topology_mapper({
     {"Torus", Topology::Torus},
 });
 
-static const StringEnumMapper<RoutingType> routing_type_mapper({
-    {"LowLatency", RoutingType::LowLatency},
-    {"Dynamic", RoutingType::Dynamic},
-});
-
 static const StringEnumMapper<FabricTensixConfig> fabric_tensix_type_mapper({
     {"Default", FabricTensixConfig::DISABLED},
     {"Mux", FabricTensixConfig::MUX},
@@ -127,6 +123,8 @@ static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_patter
     {"full_ring", HighLevelTrafficPattern::FullRing},
     {"half_ring", HighLevelTrafficPattern::HalfRing},
     {"all_devices_uniform_pattern", HighLevelTrafficPattern::AllDevicesUniformPattern},
+    {"neighbor_exchange", HighLevelTrafficPattern::NeighborExchange},
+    {"sequential_all_to_all", HighLevelTrafficPattern::SequentialAllToAll},
 });
 // Optimized string concatenation utility to avoid multiple allocations
 template <typename... Args>
@@ -407,10 +405,8 @@ public:
 
         return built_tests;
     }
-    // Helper function to check if a test should be skipped based on:
-    // 1. topology and device count
-    // 2. architecture or cluster type
-    bool should_skip_test(const ParsedTestConfig& test_config) const {
+    // Helper function to check if a test should be skipped based on architecture or cluster type.
+    bool should_skip_test_on_platform(const ParsedTestConfig& test_config) const {
         // Skip if the test declares platforms to skip and this platform matches
         if (test_config.skip.has_value()) {
             // Determine current platform identifiers
@@ -424,6 +420,11 @@ public:
                 }
             }
         }
+        return false;
+    }
+
+    // Helper function to check if a test should be skipped based on topology incompatibilities.
+    bool should_skip_test_on_topology(const ParsedTestConfig& test_config) const {
         if (test_config.fabric_setup.topology == Topology::Ring) {
             uint32_t num_devices = device_info_provider_.get_local_node_ids().size();
             if (num_devices < MIN_RING_TOPOLOGY_DEVICES) {
@@ -455,7 +456,7 @@ private:
         resolved_test.bw_calc_func = parsed_test.bw_calc_func;
         resolved_test.seed = parsed_test.seed;
         resolved_test.global_sync_configs = parsed_test.global_sync_configs;
-        resolved_test.benchmark_mode = parsed_test.benchmark_mode;
+        resolved_test.performance_test_mode = parsed_test.performance_test_mode;
         resolved_test.global_sync = parsed_test.global_sync;
         resolved_test.global_sync_val = parsed_test.global_sync_val;
         resolved_test.enable_flow_control = parsed_test.enable_flow_control;
@@ -547,6 +548,16 @@ private:
                         LogTest,
                         "Auto-detected {} iterations for all_to_one pattern in test '{}'",
                         num_devices,
+                        p_config.name);
+                } else if (p.type == "sequential_all_to_all") {
+                    // Dynamically calculate iterations for sequential_all_to_all patterns based on all device pairs
+                    auto all_pairs = this->route_manager_.get_all_to_all_unicast_pairs();
+                    uint32_t num_pairs = static_cast<uint32_t>(all_pairs.size());
+                    max_iterations = std::max(max_iterations, num_pairs);
+                    log_info(
+                        LogTest,
+                        "Auto-detected {} iterations for sequential_all_to_all pattern in test '{}'",
+                        num_pairs,
                         p_config.name);
                 }
             }
@@ -647,8 +658,8 @@ private:
                         for (const auto& value : values) {
                             next_level_configs.emplace_back(current_config);
                             auto& next_config = next_level_configs.back();
-                            // Explicitly preserve benchmark_mode
-                            next_config.benchmark_mode = current_config.benchmark_mode;
+                            // Explicitly preserve performance_test_mode
+                            next_config.performance_test_mode = current_config.performance_test_mode;
 
                             // Initialize parametrized_name with original name if empty
                             if (next_config.parametrized_name.empty()) {
@@ -673,8 +684,8 @@ private:
                         for (const auto& value : values) {
                             next_level_configs.emplace_back(current_config);
                             auto& next_config = next_level_configs.back();
-                            // Explicitly preserve benchmark_mode
-                            next_config.benchmark_mode = current_config.benchmark_mode;
+                            // Explicitly preserve performance_test_mode
+                            next_config.performance_test_mode = current_config.performance_test_mode;
 
                             // Initialize parametrized_name with original name if empty
                             if (next_config.parametrized_name.empty()) {
@@ -881,6 +892,10 @@ private:
                 expand_full_or_half_ring_unicast_or_multicast(test, defaults, pattern_type);
             } else if (pattern.type == "all_devices_uniform_pattern") {
                 expand_all_devices_uniform_pattern(test, defaults);
+            } else if (pattern.type == "neighbor_exchange") {
+                expand_neighbor_exchange(test, defaults);
+            } else if (pattern.type == "sequential_all_to_all") {
+                expand_sequential_all_to_all_unicast(test, defaults, iteration_idx);
             } else {
                 TT_THROW("Unsupported pattern type: {}", pattern.type);
             }
@@ -937,6 +952,33 @@ private:
         log_debug(LogTest, "Expanding full_device_random_pairing pattern for test: {}", test.name);
         auto random_pairs = this->route_manager_.get_full_device_random_pairs(this->gen_);
         add_senders_from_pairs(test, random_pairs, base_pattern);
+    }
+
+    void expand_sequential_all_to_all_unicast(
+        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx) {
+        log_debug(
+            LogTest,
+            "Expanding sequential_all_to_all_unicast pattern for test: {} (iteration {})",
+            test.name,
+            iteration_idx);
+
+        auto all_pairs = this->route_manager_.get_all_to_all_unicast_pairs();
+
+        if (all_pairs.empty()) {
+            log_warning(LogTest, "No valid pairs found for sequential_all_to_all pattern");
+            return;
+        }
+
+        // Select only the pair for this iteration
+        if (iteration_idx < all_pairs.size()) {
+            std::vector<std::pair<FabricNodeId, FabricNodeId>> single_pair = {all_pairs[iteration_idx]};
+            add_senders_from_pairs(test, single_pair, base_pattern);
+        } else {
+            TT_THROW(
+                "Iteration index {} exceeds number of available device pairs {} for sequential_all_to_all pattern",
+                iteration_idx,
+                all_pairs.size());
+        }
     }
 
     void expand_all_devices_uniform_pattern(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
@@ -1012,6 +1054,14 @@ private:
                 auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
                 test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
             }
+        }
+    }
+
+    void expand_neighbor_exchange(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
+        log_debug(LogTest, "Expanding neighbor_exchange pattern for test: {}", test.name);
+        auto neighbor_pairs = this->route_manager_.get_neighbor_exchange_pairs();
+        if (!neighbor_pairs.empty()) {
+            add_senders_from_pairs(test, neighbor_pairs, base_pattern);
         }
     }
 
@@ -1435,10 +1485,6 @@ private:
         return detail::routing_direction_mapper.to_string(dir, "RoutingDirection");
     }
 
-    static std::string to_string(RoutingType rtype) {
-        return detail::routing_type_mapper.to_string(rtype, "RoutingType");
-    }
-
     static std::string to_string(FabricTensixConfig ftype) {
         return detail::fabric_tensix_type_mapper.to_string(ftype, "FabricTensixConfig");
     }
@@ -1528,9 +1574,12 @@ private:
             out << YAML::Value << config.seed;
         }
 
-        if (config.benchmark_mode) {
+        if (config.performance_test_mode == PerformanceTestMode::BANDWIDTH) {
             out << YAML::Key << "benchmark_mode";
-            out << YAML::Value << config.benchmark_mode;
+            out << YAML::Value << true;
+        } else if (config.performance_test_mode == PerformanceTestMode::LATENCY) {
+            out << YAML::Key << "latency_test_mode";
+            out << YAML::Value << true;
         }
 
         if (config.global_sync) {
@@ -1611,10 +1660,6 @@ private:
         out << YAML::BeginMap;
         out << YAML::Key << "topology";
         out << YAML::Value << to_string(config.topology);
-        if (config.routing_type.has_value()) {
-            out << YAML::Key << "routing_type";
-            out << YAML::Value << to_string(config.routing_type.value());
-        }
         if (config.fabric_tensix_config.has_value()) {
             out << YAML::Key << "fabric_tensix_config";
             out << YAML::Value << to_string(config.fabric_tensix_config.value());

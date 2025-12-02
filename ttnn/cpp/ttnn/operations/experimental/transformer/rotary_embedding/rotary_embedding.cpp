@@ -1,12 +1,12 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "rotary_embedding.hpp"
+#include "ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding.hpp"
 
-#include "device/rotary_embedding_device_operation.hpp"
-#include "ttnn/operation.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_device_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -17,15 +17,19 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
     const std::optional<uint32_t> token_index,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    using namespace tt::constants;
+
+    using tt::tt_metal::PadValue;
     TT_FATAL(
-        input_tensor.padded_shape()[-1] % (tt::constants::TILE_WIDTH * 2) == 0,
+        input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0,
         "Input X dimension ({}) must be divisible by {} for tiling.",
         input_tensor.padded_shape()[-1],
-        tt::constants::TILE_WIDTH * 2);
+        TILE_WIDTH * 2);
 
     uint32_t seq_len = input_tensor.padded_shape()[-2];
     uint32_t X = input_tensor.padded_shape()[-1];
 
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
     TT_FATAL(
         cos_cache.padded_shape() == sin_cache.padded_shape(),
         "Cosine and Sine cache dimensions must match. Cos cache dimensions: {}, Sin cache dimensions: {}.",
@@ -58,9 +62,7 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
             cos_cache.padded_shape()[-2]);
     }
 
-    auto arch = input_tensor.storage_type() == StorageType::DEVICE
-                    ? input_tensor.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = input_tensor.device()->arch();
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
 
@@ -69,28 +71,24 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
         default_memory_config = input_tensor.memory_config();
     }
 
-    ttnn::Shape input_pad_shape =
-        ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.padded_shape());
-    ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
-        .pad_shape = input_pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
+    auto padded_shape_input = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
+    auto padded_shape_cos = ttnn::operations::data_movement::pad_to_tile_shape(cos_cache.padded_shape());
+    auto padded_shape_sin = ttnn::operations::data_movement::pad_to_tile_shape(sin_cache.padded_shape());
+    Tensor formatted_input =
+        ttnn::tilize_with_val_padding(input_tensor, padded_shape_input, PadValue(0.0f), input_tensor.memory_config());
+    Tensor formatted_cos =
+        ttnn::tilize_with_val_padding(cos_cache, padded_shape_cos, PadValue(0.0f), cos_cache.memory_config());
+    Tensor formatted_sin =
+        ttnn::tilize_with_val_padding(sin_cache, padded_shape_sin, PadValue(0.0f), sin_cache.memory_config());
 
-    ttnn::Shape cos_pad_shape =
-        ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(cos_cache.padded_shape());
-    ttnn::operations::experimental::auto_format::FormatParams cos_format_params = {
-        .pad_shape = cos_pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
-
-    ttnn::Shape sin_pad_shape =
-        ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(sin_cache.padded_shape());
-    ttnn::operations::experimental::auto_format::FormatParams sin_format_params = {
-        .pad_shape = sin_pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
-
-    return tt::tt_metal::operation::run_with_autoformat(
-               tt::tt_metal::RotaryEmbedding{
-                   seq_len, token_index, memory_config.value_or(default_memory_config), kernel_config_val},
-               {input_tensor, cos_cache, sin_cache},
-               {input_format_params, cos_format_params, sin_format_params},
-               {Layout::TILE})
-        .at(0);
+    return ttnn::prim::rotary_embedding(
+        formatted_input,
+        formatted_cos,
+        formatted_sin,
+        seq_len,
+        token_index,
+        memory_config.value_or(default_memory_config),
+        kernel_config_val);
 }
 
 }  // namespace ttnn::operations::experimental::transformer

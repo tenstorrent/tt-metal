@@ -18,8 +18,7 @@ from elfs_cache import run as get_elfs_cache, ElfsCache
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
-from ttexalens.firmware import ELF
-from ttexalens.parse_elf import mem_access
+from ttexalens.elf import MemoryAccess
 
 
 script_config = ScriptConfig(
@@ -31,14 +30,6 @@ script_config = ScriptConfig(
 class DumpRingBufferData:
     proc: str = triage_field("Proc")
     debug_ring_buffer: list[str] | None = triage_field("debug_ring_buffer")
-
-
-def _get_mem_reader(location: OnChipCoordinate, risc_name: str):
-    """Get a mem_reader for the given RISC at the location, falling back to default if needed."""
-    try:
-        return ELF.get_mem_reader(location, risc_name)
-    except Exception:
-        return ELF.get_mem_reader(location)
 
 
 def read_ring_buffer(
@@ -55,22 +46,23 @@ def read_ring_buffer(
         return None
 
     fw_elf = elf_cache[fw_path]
-    mem_reader = _get_mem_reader(location, risc_name)
-    mailboxes = fw_elf.read_global("mailboxes", mem_reader)
+    loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
+    mailboxes = fw_elf.read_global("mailboxes", loc_mem_access)
 
-    current_ptr = mailboxes.watcher.debug_ring_buf.current_ptr.value()
+    current_ptr = mailboxes.watcher.debug_ring_buf.current_ptr
     if current_ptr == 65535:
         # Nothing pushed
         return None
 
-    wrapped = mailboxes.watcher.debug_ring_buf.wrapped.value()
+    wrapped = mailboxes.watcher.debug_ring_buf.wrapped
 
     ring_elements = fw_elf.get_constant("DEBUG_RING_BUFFER_ELEMENTS")
+    assert isinstance(ring_elements, int)
 
     values: list[str] = []
-    idx = int(current_ptr)
+    idx = current_ptr
     for _ in range(ring_elements):
-        val = mailboxes.watcher.debug_ring_buf.data[idx].value()
+        val = mailboxes.watcher.debug_ring_buf.data[idx]
         values.append(f"0x{val:08X}")
         if idx == 0:
             if wrapped == 0:

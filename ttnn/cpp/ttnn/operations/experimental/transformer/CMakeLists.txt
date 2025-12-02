@@ -17,6 +17,7 @@ file(
     concatenate_heads/device/kernels/*
     create_qkv_heads/device/kernels/*
     create_qkv_heads_from_separate_tensors/device/kernels/*
+    fused_distributed_rmsnorm/device/kernels/*
     nlp_concat_heads/device/kernels/*
     nlp_concat_heads_boltz/device/kernels/*
     nlp_concat_heads_decode/device/kernels/*
@@ -53,6 +54,7 @@ target_sources(
         all_reduce_create_qkv_heads/device/all_reduce_create_qkv_heads_op.cpp
         all_reduce_create_qkv_heads/device/all_reduce_create_qkv_heads_program_factory.cpp
         concatenate_heads/device/concatenate_heads_device_operation.cpp
+        concatenate_heads/device/concatenate_heads_program_factory.cpp
         create_qkv_heads/create_qkv_heads.cpp
         create_qkv_heads/device/create_qkv_heads_device_operation.cpp
         create_qkv_heads/device/create_qkv_heads_program_factory.cpp
@@ -89,17 +91,24 @@ target_sources(
         nlp_kv_cache_load_slice/device/nlp_kv_cache_load_slice_device_operation.cpp
         nlp_kv_cache_load_slice/device/nlp_kv_cache_load_slice_program_factory.cpp
         nlp_kv_cache_load_slice/nlp_kv_cache_load_slice.cpp
+        fused_distributed_rmsnorm/rmsnorm_pre_all_gather.cpp
+        fused_distributed_rmsnorm/rmsnorm_post_all_gather.cpp
+        fused_distributed_rmsnorm/device/rmsnorm_pre_all_gather_op.cpp
+        fused_distributed_rmsnorm/device/rmsnorm_post_all_gather_op.cpp
+        fused_distributed_rmsnorm/device/multicore/rmsnorm_pre_all_gather_op_multi_core.cpp
+        fused_distributed_rmsnorm/device/multicore/rmsnorm_post_all_gather_op_multi_core.cpp
         rotary_embedding/device/rotary_embedding_device_operation.cpp
         rotary_embedding/device/rotary_embedding_program_factory.cpp
         rotary_embedding/rotary_embedding.cpp
         rotary_embedding_llama/device/rotary_embedding_llama_device_operation.cpp
-        rotary_embedding_llama/device/rotary_embedding_llama_program_factory.cpp
+        rotary_embedding_llama/device/rotary_embedding_llama_multi_core_program_factory.cpp
+        rotary_embedding_llama/device/rotary_embedding_llama_sharded_program_factory.cpp
         rotary_embedding_llama/rotary_embedding_llama.cpp
         rotary_embedding_llama_fused_qk/device/rotary_embedding_llama_fused_qk_device_operation.cpp
         rotary_embedding_llama_fused_qk/device/rotary_embedding_llama_fused_qk_program_factory.cpp
         rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk.cpp
         rotate_half/device/rotate_half_device_operation.cpp
-        rotate_half/device/single_core/rotate_half_program_factory.cpp
+        rotate_half/device/rotate_half_program_factory.cpp
         rotate_half/rotate_half.cpp
         split_query_key_value_and_split_heads/device/split_query_key_value_and_split_heads_device_operation.cpp
 )

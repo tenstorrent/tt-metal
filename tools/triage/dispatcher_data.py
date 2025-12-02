@@ -16,10 +16,11 @@ from dataclasses import dataclass
 import os
 
 from inspector_data import run as get_inspector_data, InspectorData
+from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 from elfs_cache import run as get_elfs_cache, ElfsCache
-from triage import triage_singleton, ScriptConfig, run_script, log_check
+from triage import triage_singleton, ScriptConfig, run_script, log_check_location
 from ttexalens.coordinate import OnChipCoordinate
-from ttexalens.firmware import ELF
+from ttexalens.elf import MemoryAccess
 from ttexalens.context import Context
 from triage import TTTriageError, triage_field, hex_serializer
 from run_checks import run as get_run_checks
@@ -27,7 +28,7 @@ from run_checks import RunChecks
 
 script_config = ScriptConfig(
     data_provider=True,
-    depends=["inspector_data", "elfs_cache", "run_checks"],
+    depends=["inspector_data", "elfs_cache", "run_checks", "metal_device_id_mapping"],
 )
 
 
@@ -53,16 +54,25 @@ class DispatcherCoreData:
     launch_msg_rd_ptr: int = triage_field("RD PTR", verbose=2)
     kernel_config_base: int = triage_field("Base", hex_serializer, verbose=2)
     kernel_text_offset: int = triage_field("Offset", hex_serializer, verbose=2)
+    kernel_xip_path: str | None = triage_field("Kernel XIP Path", verbose=2)
 
 
 class DispatcherData:
-    def __init__(self, inspector_data: InspectorData, context: Context, elfs_cache: ElfsCache, run_checks: RunChecks):
+    def __init__(
+        self,
+        inspector_data: InspectorData,
+        context: Context,
+        elfs_cache: ElfsCache,
+        run_checks: RunChecks,
+        metal_device_id_mapping: MetalDeviceIdMapping,
+    ):
         self.inspector_data = inspector_data
         self.programs = inspector_data.getPrograms().programs
         self.kernels = {kernel.watcherKernelId: kernel for program in self.programs for kernel in program.kernels}
         self.use_rpc_kernel_find = True
         # Cache build_env per device to avoid multiple RPC calls
         # Each device needs to have its own build_env to get the correct firmware path
+        # Cache is keyed by unique_id for consistency
         self._build_env_cache = {}
 
         # Get the firmware paths from Inspector RPC build environment instead of relative paths
@@ -71,7 +81,9 @@ class DispatcherData:
         try:
             all_build_envs = inspector_data.getAllBuildEnvs().buildEnvs
             for build_env in all_build_envs:
-                self._build_env_cache[build_env.deviceId] = build_env.buildInfo
+                # build_env.metalDeviceId is logical - remap to unique_id for cache key
+                unique_id = metal_device_id_mapping.get_unique_id(build_env.metalDeviceId)
+                self._build_env_cache[unique_id] = build_env.buildInfo
         except Exception:
             pass
 
@@ -79,9 +91,10 @@ class DispatcherData:
         try:
             if not (run_checks and getattr(run_checks, "devices", None)):
                 raise TTTriageError("RunChecks.devices not available. Ensure run_checks is a dependency or pass --dev.")
-            device_id = run_checks.devices[0]._id
+            # Use unique_id for device lookup
+            device_unique_id = run_checks.devices[0].unique_id
 
-            build_env = self._build_env_cache[device_id]
+            build_env = self._build_env_cache[device_unique_id]
             # Use build_env for initial firmware paths
             brisc_elf_path = os.path.join(build_env.firmwarePath, "brisc", "brisc.elf")
             idle_erisc_elf_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
@@ -156,15 +169,15 @@ class DispatcherData:
         }
         self._launch_msg_buffer_num_entries = get_const_value("launch_msg_buffer_num_entries")
 
-    def _get_build_env_for_device(self, device_id: int):
+    def _get_build_env_for_device(self, device_unique_id: int):
         """Get build_env for a specific device, with caching"""
-        if device_id not in self._build_env_cache:
+        if device_unique_id not in self._build_env_cache:
             raise TTTriageError(
                 "Failed to get firmware path from Inspector RPC. "
                 "Make sure Inspector RPC is available or serialized RPC data exists. "
                 "Set TT_METAL_INSPECTOR_RPC=1 when running your Metal application."
             )
-        return self._build_env_cache[device_id]
+        return self._build_env_cache[device_unique_id]
 
     def find_kernel(self, watcher_kernel_id):
         # Try to get kernel from RPC inspector data first, then fallback to cached kernels
@@ -180,39 +193,40 @@ class DispatcherData:
         raise TTTriageError(f"Kernel {watcher_kernel_id} not found in inspector data.")
 
     def get_core_data(self, location: OnChipCoordinate, risc_name: str) -> DispatcherCoreData:
-        loc_mem_reader = ELF.get_mem_reader(location)
-        if location._device.get_block_type(location) == "functional_workers":
+        loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
+        if location.device.get_block_type(location) == "functional_workers":
             # For tensix, use the brisc elf
             fw_elf = self._brisc_elf
             programmable_core_type = self._ProgrammableCoreTypes_TENSIX
             enum_values = self._enum_values_tenisx
-        elif location in location._device.idle_eth_block_locations:
+        elif location in location.device.idle_eth_block_locations:
             # For idle eth, use the idle erisc elf
             fw_elf = self._idle_erisc_elf
             programmable_core_type = self._ProgrammableCoreTypes_IDLE_ETH
             enum_values = self._enum_values_eth
-        elif location in location._device.active_eth_block_locations:
+        elif location in location.device.active_eth_block_locations:
             # For active eth, use the active erisc elf
             fw_elf = self._active_erisc_elf
             programmable_core_type = self._ProgrammableCoreTypes_ACTIVE_ETH
             enum_values = self._enum_values_eth
         else:
-            raise TTTriageError(f"Unsupported block type: {location._device.get_block_type(location)}")
+            raise TTTriageError(f"Unsupported block type: {location.device.get_block_type(location)}")
 
         # Get the build_env for the device to get the correct firmware path
         # Each device may have different firmware paths based on its build configuration
-        device_id = location._device._id
-        build_env = self._get_build_env_for_device(device_id)
+        device_unique_id = location._device.unique_id
+        build_env = self._get_build_env_for_device(device_unique_id)
         proc_name = risc_name.upper()
         proc_type = enum_values["ProcessorTypes"][proc_name]
-        mailboxes = fw_elf.read_global("mailboxes", loc_mem_reader)
+        mailboxes = fw_elf.read_global("mailboxes", loc_mem_access)
 
         # Refer to tt_metal/api/tt-metalium/dev_msgs.h for struct kernel_config_msg_t
-        launch_msg_rd_ptr = mailboxes.launch_msg_rd_ptr.value()
+        launch_msg_rd_ptr = mailboxes.launch_msg_rd_ptr
 
-        log_check(
+        log_check_location(
+            location,
             launch_msg_rd_ptr < self._launch_msg_buffer_num_entries,
-            f"On device {location._device._id} at {location.to_user_str()}, launch message read pointer {launch_msg_rd_ptr} >= {self._launch_msg_buffer_num_entries}.",
+            f"launch message read pointer {launch_msg_rd_ptr} >= {self._launch_msg_buffer_num_entries}.",
         )
 
         previous_launch_msg_rd_ptr = (launch_msg_rd_ptr - 1) % self._launch_msg_buffer_num_entries
@@ -230,25 +244,25 @@ class DispatcherData:
         host_assigned_id = None
         try:
             # Indexed with enum ProgrammableCoreType - tt_metal/hw/inc/*/core_config.h
-            kernel_config_base = (
-                mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_config_base[programmable_core_type].value()
-            )
+            kernel_config_base = mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_config_base[
+                programmable_core_type
+            ]
         except:
             pass
         try:
             # Size 5 (NUM_PROCESSORS_PER_CORE_TYPE) - seems to be DM0,DM1,MATH0,MATH1,MATH2
-            kernel_text_offset = mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_text_offset[proc_type].value()
+            kernel_text_offset = mailboxes.launch[launch_msg_rd_ptr].kernel_config.kernel_text_offset[proc_type]
         except:
             pass
         try:
             # enum dispatch_core_processor_classes
-            watcher_kernel_id = mailboxes.launch[launch_msg_rd_ptr].kernel_config.watcher_kernel_ids[proc_type].value()
+            watcher_kernel_id = mailboxes.launch[launch_msg_rd_ptr].kernel_config.watcher_kernel_ids[proc_type]
         except:
             pass
         try:
-            watcher_previous_kernel_id = (
-                mailboxes.launch[previous_launch_msg_rd_ptr].kernel_config.watcher_kernel_ids[proc_type].value()
-            )
+            watcher_previous_kernel_id = mailboxes.launch[previous_launch_msg_rd_ptr].kernel_config.watcher_kernel_ids[
+                proc_type
+            ]
         except:
             pass
         try:
@@ -260,33 +274,27 @@ class DispatcherData:
         except:
             pass
         try:
-            go_message_index = mailboxes.go_message_index.value()
-            go_data = mailboxes.go_messages[go_message_index].signal.value()
+            go_message_index = mailboxes.go_message_index
+            go_data = mailboxes.go_messages[go_message_index].signal
         except:
             pass
         try:
-            preload = mailboxes.launch[launch_msg_rd_ptr].kernel_config.preload.value() != 0
+            preload = mailboxes.launch[launch_msg_rd_ptr].kernel_config.preload != 0
         except:
             pass
         try:
-            host_assigned_id = mailboxes.launch[launch_msg_rd_ptr].kernel_config.host_assigned_id.value()
+            host_assigned_id = mailboxes.launch[launch_msg_rd_ptr].kernel_config.host_assigned_id
         except:
             pass
         try:
-            waypoint_var = mailboxes.watcher.debug_waypoint[proc_type].waypoint
-            waypoint = bytearray()
-            for i in range(len(waypoint_var)):
-                val = waypoint_var[i].value()
-                if val == 0:
-                    break
-                waypoint.append(val)
-            waypoint = waypoint.decode("utf-8", errors="replace")
+            waypoint_bytes = mailboxes.watcher.debug_waypoint[proc_type].waypoint.read_bytes()
+            waypoint = waypoint_bytes.rstrip(b"\x00").decode("utf-8", errors="replace")
         except:
             pass
 
         # Construct the firmware path from the build_env instead of relative paths
         # This ensures we get the correct firmware path for this device and build config
-        if location in location._device.active_eth_block_locations:
+        if location in location.device.active_eth_block_locations:
             if proc_name.lower() == "erisc":
                 firmware_path = os.path.join(build_env.firmwarePath, "erisc", "erisc.elf")
             elif proc_name.lower() == "erisc0":
@@ -310,7 +318,7 @@ class DispatcherData:
         firmware_path = os.path.realpath(firmware_path)
 
         if kernel:
-            if location in location._device.active_eth_block_locations:
+            if location in location.device.active_eth_block_locations:
                 if proc_name.lower() == "erisc":
                     kernel_path = kernel.path + "/erisc/erisc.elf"
                 elif proc_name.lower() == "erisc0":
@@ -329,15 +337,20 @@ class DispatcherData:
                 else:
                     kernel_path = kernel.path + f"/{proc_name.lower()}/{proc_name.lower()}.elf"
             kernel_path = os.path.realpath(kernel_path)
-            if proc_name == "NCRISC" and location._device.is_wormhole():
+            # For NCRISC we don't have XIP ELF file
+            kernel_xip_path = (
+                kernel_path + ".xip.elf" if not (proc_name == "NCRISC" and location.device.is_wormhole()) else None
+            )
+            if proc_name == "NCRISC" and location.device.is_wormhole():
                 kernel_offset = 0xFFC00000
             # In wormhole we only use text offset to calculate the kernel offset for active ETH
-            elif location in location._device.active_eth_block_locations and location._device.is_wormhole():
+            elif location in location.device.active_eth_block_locations and location.device.is_wormhole():
                 kernel_offset = kernel_text_offset
             else:
                 kernel_offset = kernel_config_base + kernel_text_offset
         else:
             kernel_path = None
+            kernel_xip_path = None
             kernel_offset = None
         go_state = go_data
         go_data_state = self._go_message_states.get(go_state, str(go_state))
@@ -345,6 +358,7 @@ class DispatcherData:
         return DispatcherCoreData(
             firmware_path=firmware_path,
             kernel_path=kernel_path,
+            kernel_xip_path=kernel_xip_path,
             host_assigned_id=host_assigned_id,
             previous_kernel_name=previous_kernel.name if previous_kernel else None,
             kernel_offset=kernel_offset,
@@ -366,7 +380,8 @@ def run(args, context: Context):
     inspector_data = get_inspector_data(args, context)
     elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)
-    return DispatcherData(inspector_data, context, elfs_cache, run_checks)
+    metal_device_id_mapping = get_metal_device_id_mapping(args, context)
+    return DispatcherData(inspector_data, context, elfs_cache, run_checks, metal_device_id_mapping)
 
 
 if __name__ == "__main__":

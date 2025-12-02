@@ -288,3 +288,52 @@ def check_device_perf_results(fname, expected_cols, check_cols):
         assert (
             len(fast_measured[col]) == 0
         ), f"Some model(s) {col} are faster than expected, see above for details on fast models: {slow_measured[col]}"
+
+
+def run_model_device_perf_test(
+    command: str,
+    expected_device_perf_ns_per_iteration: float,
+    subdir: str,
+    model_name: str,
+    num_iterations: int = 1,
+    batch_size: int = 1,
+    margin: float = 0.015,
+    comments: str = "",
+):
+    """
+    Run device performance test for a model and validate results against expected performance.
+
+    This function executes a model performance test, collects device-level metrics,
+    and validates the results against expected performance thresholds. It also
+    generates a performance report for tracking and analysis.
+
+    Args:
+        command (str): The command to execute for running the model.
+        expected_device_perf_ns_per_iteration (float): Expected device kernel duration in nanoseconds.
+        subdir (str): Subdirectory where performance logs will be stored.
+        model_name (str): Name of the model being tested.
+        num_iterations (int, optional): Number of iterations to run. Defaults to 1.
+        batch_size (int, optional): Batch size for the model. Defaults to 1.
+        margin (float, optional): Acceptable performance margin as a percentage (e.g., 0.015 = 1.5%). Defaults to 0.015.
+        comments (str, optional): Additional comments or settings description for the report. Defaults to "".
+
+    Raises:
+        AssertionError: If the measured performance is outside the acceptable margin from expected performance.
+    """
+    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
+
+    inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
+    post_processed_results = run_device_perf(
+        command, subdir=subdir, num_iterations=num_iterations, cols=cols, batch_size=batch_size
+    )
+    expected_perf_cols = {inference_time_key: expected_device_perf_ns_per_iteration}
+    expected_results = check_device_perf(
+        post_processed_results, margin=margin, expected_perf_cols=expected_perf_cols, assert_on_fail=True
+    )
+    prep_device_perf_report(
+        model_name=model_name,
+        batch_size=batch_size,
+        post_processed_results=post_processed_results,
+        expected_results=expected_results,
+        comments=comments,
+    )

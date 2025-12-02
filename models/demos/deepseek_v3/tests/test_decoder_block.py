@@ -327,7 +327,6 @@ def test_forward_pass(
     seq_len,
     batch_size_per_row,
     hf_config_short,
-    tmp_path,
     cache_path,
     mesh_device,
     model_path,
@@ -337,10 +336,6 @@ def test_forward_pass(
     set_deterministic_env,
     state_dict,
 ):
-    if module_path is None:  # Do not cache random weights
-        cache_path = tmp_path
-        force_recalculate_weight_config = True
-
     test_closure(
         DecoderBlockClass,
         module_path,

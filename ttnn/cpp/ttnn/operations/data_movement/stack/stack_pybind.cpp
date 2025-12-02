@@ -34,8 +34,7 @@ void py_bind_stack(pybind11::module& module) {
     detail::bind_stack(
         module,
         ttnn::stack,
-        R"doc(stack(input_tensors: List[ttnn.Tensor], dim: int) -> ttnn.Tensor
-
+        R"doc(
         Stacks tensors along a new dimension.
 
         Args:

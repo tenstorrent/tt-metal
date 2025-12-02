@@ -20,16 +20,19 @@
 #include <ostream>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_types.hpp>
+#include <umd/device/utils/semver.hpp>
 #include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
 
 #include "tt_memory.h"
-#include "hal/generated/dev_msgs.hpp"  // IWYU pragma: export
+#include "hal/generated/dev_msgs.hpp"          // IWYU pragma: export
+#include "hal/generated/fabric_telemetry.hpp"  // IWYU pragma: export
 
 #include <tt_stl/overloaded.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/arch.hpp>
 
 enum class AddressableCoreType : uint8_t;
 
@@ -141,12 +144,15 @@ private:
     CoreType core_type_;
     // indices represents processor class and type positions, value is build configuration params
     std::vector<std::vector<HalJitBuildConfig>> processor_classes_;
+    // indices represents processor class and type positions, values are abbreviated name and full name pairs
+    std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names_;
     std::vector<DeviceAddr> mem_map_bases_;
     std::vector<uint32_t> mem_map_sizes_;
     std::vector<uint32_t> eth_fw_mailbox_msgs_;
     bool supports_cbs_ = false;
     bool supports_receiving_multicast_cmds_ = false;
     dev_msgs::Factory dev_msgs_factory_;
+    tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory_;
 
 public:
     HalCoreInfoType(
@@ -156,18 +162,22 @@ public:
         std::vector<DeviceAddr> mem_map_bases,
         std::vector<uint32_t> mem_map_sizes,
         std::vector<uint32_t> eth_fw_mailbox_msgs,
+        std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names,
         bool supports_cbs,
         bool supports_receiving_multicast_cmds,
-        dev_msgs::Factory dev_msgs_factory) :
+        dev_msgs::Factory dev_msgs_factory,
+        tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory) :
         programmable_core_type_(programmable_core_type),
         core_type_(core_type),
         processor_classes_(std::move(processor_classes)),
+        processor_classes_names_(std::move(processor_classes_names)),
         mem_map_bases_(std::move(mem_map_bases)),
         mem_map_sizes_(std::move(mem_map_sizes)),
         eth_fw_mailbox_msgs_{std::move(eth_fw_mailbox_msgs)},
         supports_cbs_(supports_cbs),
         supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds),
-        dev_msgs_factory_(dev_msgs_factory) {}
+        dev_msgs_factory_(dev_msgs_factory),
+        fabric_telemetry_factory_(fabric_telemetry_factory) {}
 
     DeviceAddr get_dev_addr(HalL1MemAddrType addr_type) const;
     uint32_t get_dev_size(HalL1MemAddrType addr_type) const;
@@ -176,7 +186,9 @@ public:
     uint32_t get_processor_index(HalProcessorClassType processor_class, uint32_t processor_type_idx) const;
     std::pair<HalProcessorClassType, uint32_t> get_processor_class_and_type_from_index(uint32_t processor_index) const;
     const HalJitBuildConfig& get_jit_build_config(uint32_t processor_class_idx, uint32_t processor_type_idx) const;
+    const std::string& get_processor_class_name(uint32_t processor_index, bool is_abbreviated) const;
     const dev_msgs::Factory& get_dev_msgs_factory() const;
+    const tt::tt_fabric::fabric_telemetry::Factory& get_fabric_telemetry_factory() const;
 };
 
 inline DeviceAddr HalCoreInfoType::get_dev_addr(HalL1MemAddrType addr_type) const {
@@ -208,6 +220,10 @@ inline const HalJitBuildConfig& HalCoreInfoType::get_jit_build_config(
 }
 
 inline const dev_msgs::Factory& HalCoreInfoType::get_dev_msgs_factory() const { return this->dev_msgs_factory_; }
+
+inline const tt::tt_fabric::fabric_telemetry::Factory& HalCoreInfoType::get_fabric_telemetry_factory() const {
+    return this->fabric_telemetry_factory_;
+}
 
 // HalJitBuildQueryInterface is an interface for querying arch-specific build options.
 // These are generated on demand instead of stored in HalJitBuildConfig,
@@ -255,7 +271,7 @@ public:
     using DispatchFeatureQueryFunc = std::function<bool(DispatchFeature)>;
     using SetIRAMTextSizeFunc = std::function<void(
         dev_msgs::launch_msg_t::View, HalProgrammableCoreType, HalProcessorClassType, uint32_t, uint32_t)>;
-    using VerifyFwVersionFunc = std::function<void(tt::umd::tt_version)>;
+    using VerifyFwVersionFunc = std::function<bool(tt::umd::semver_t)>;
 
 private:
     tt::ARCH arch_;
@@ -285,18 +301,21 @@ private:
     std::vector<uint32_t> noc_x_id_translate_table_;
     std::vector<uint32_t> noc_y_id_translate_table_;
     bool coordinate_virtualization_enabled_{};
+    bool supports_64_bit_pcie_addressing_{};
     uint32_t virtual_worker_start_x_{};
     uint32_t virtual_worker_start_y_{};
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
     std::unordered_set<dev_msgs::AddressableCoreType> virtualized_core_types_;
     HalTensixHarvestAxis tensix_harvest_axis_{HalTensixHarvestAxis::ROW};
+    size_t max_pinned_memory_count_{};
+    size_t total_pinned_memory_size_{};
 
     float eps_ = 0.0f;
     float nan_ = 0.0f;
     float inf_ = 0.0f;
 
     void initialize_wh(bool is_base_routing_fw_enabled);
-    void initialize_bh();
+    void initialize_bh(bool enable_2_erisc_mode);
     void initialize_qa();
 
     // Functions where implementation varies by architecture
@@ -304,6 +323,7 @@ private:
     IramRelocateFunc erisc_iram_relocate_func_;
     ValidRegAddrFunc valid_reg_addr_func_;
     NOCXYEncodingFunc noc_xy_encoding_func_;
+    NOCXYEncodingFunc noc_xy_pcie64_encoding_func_;
     NOCMulticastEncodingFunc noc_multicast_encoding_func_;
     NOCAddrFunc noc_mcast_addr_start_x_func_;
     NOCAddrFunc noc_mcast_addr_start_y_func_;
@@ -319,7 +339,7 @@ private:
     VerifyFwVersionFunc verify_eth_fw_version_func_;
 
 public:
-    Hal(tt::ARCH arch, bool is_base_routing_fw_enabled);
+    Hal(tt::ARCH arch, bool is_base_routing_fw_enabled, bool enable_2_erisc_mode);
 
     tt::ARCH get_arch() const { return arch_; }
 
@@ -354,6 +374,8 @@ public:
         return noc_index == 0 ? coord : (noc_size - 1 - coord);
     }
 
+    // Returns the NOC addr to be used with 64 bit PCIe address space.
+    uint32_t noc_xy_pcie64_encoding(uint32_t x, uint32_t y) const { return noc_xy_pcie64_encoding_func_(x, y); }
     uint32_t noc_xy_encoding(uint32_t x, uint32_t y) const { return noc_xy_encoding_func_(x, y); }
     uint32_t noc_multicast_encoding(uint32_t x_start, uint32_t y_start, uint32_t x_end, uint32_t y_end) const {
         return noc_multicast_encoding_func_(x_start, y_start, x_end, y_end);
@@ -434,6 +456,9 @@ public:
     const HalJitBuildConfig& get_jit_build_config(
         uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
 
+    const std::string& get_processor_class_name(
+        HalProgrammableCoreType programmable_core_type, uint32_t processor_index, bool is_abbreviated) const;
+
     uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0, bool has_shared_local_mem = false) const {
         return relocate_func_(addr, local_init_addr, has_shared_local_mem);
     }
@@ -454,6 +479,13 @@ public:
         auto index = get_programmable_core_type_index(programmable_core_type);
         TT_ASSERT(index < this->core_info_.size());
         return this->core_info_[index].get_dev_msgs_factory();
+    }
+
+    const tt::tt_fabric::fabric_telemetry::Factory& get_fabric_telemetry_factory(
+        HalProgrammableCoreType programmable_core_type) const {
+        TT_ASSERT(programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH);
+        auto index = get_programmable_core_type_index(programmable_core_type);
+        return this->core_info_[index].get_fabric_telemetry_factory();
     }
 
     // This interface guarantees that go_msg_t is 4B and has the same layout for all core types.
@@ -478,12 +510,16 @@ public:
     uint64_t get_pcie_addr_lower_bound() const;
     // Inclusive upper bound
     uint64_t get_pcie_addr_upper_bound() const;
+    bool get_supports_64_bit_pcie_addressing() const { return supports_64_bit_pcie_addressing_; }
 
     // Verify that the eth version is compatible with the HAL capabilities. Throws an exception if version is
     // not compatible.
-    void verify_eth_fw_version(tt::umd::tt_version eth_fw_version) const {
-        this->verify_eth_fw_version_func_(eth_fw_version);
+    bool verify_eth_fw_version(tt::umd::semver_t eth_fw_version) const {
+        return this->verify_eth_fw_version_func_(eth_fw_version);
     }
+
+    size_t get_max_pinned_memory_count() const { return max_pinned_memory_count_; }
+    size_t get_total_pinned_memory_size() const { return total_pinned_memory_size_; }
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }
@@ -608,6 +644,12 @@ inline const HalJitBuildConfig& Hal::get_jit_build_config(
     uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const {
     TT_ASSERT(programmable_core_type_index < this->core_info_.size());
     return this->core_info_[programmable_core_type_index].get_jit_build_config(processor_class_idx, processor_type_idx);
+}
+
+inline const std::string& Hal::get_processor_class_name(
+    HalProgrammableCoreType programmable_core_type, uint32_t processor_index, bool is_abbreviated) const {
+    auto idx = get_programmable_core_type_index(programmable_core_type);
+    return this->core_info_[idx].get_processor_class_name(processor_index, is_abbreviated);
 }
 
 uint32_t generate_risc_startup_addr(uint32_t firmware_base);  // used by Tensix initializers to build HalJitBuildConfig

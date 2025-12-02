@@ -24,7 +24,7 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
     // Basic validations
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in buffer on device!");
-    TT_FATAL(input_tensor.logical_shape().rank() > 2, "AllGather requires tensor of rank 3 or greater");
+    TT_FATAL(input_tensor.logical_shape().rank() >= 2, "AllGather requires tensor of rank 2 or greater");
 
     uint32_t target_ring_size = ::ttnn::ccl::get_topological_dimension(input_tensor, operation_attributes.cluster_axis);
     TT_FATAL(target_ring_size > 1, "all_gather op will only work for num_devices > 1, but has {}", target_ring_size);
@@ -121,13 +121,38 @@ AllGatherDeviceOperation::tensor_return_value_t AllGatherDeviceOperation::create
     return create_device_tensor(output_specs, tensor_args.input_tensor.device());
 }
 
+AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& input_topology = input_tensor.tensor_topology();
+    auto output_placements = input_topology.placements();
+
+    // For each distribution dimension, if sharded on the gather dim, make it replicated
+    for (size_t i = 0; i < output_placements.size(); i++) {
+        if (auto* shard = std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&output_placements[i])) {
+            if (shard->dim == static_cast<int>(operation_attributes.dim)) {
+                output_placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+            }
+        }
+    }
+
+    return {tt::tt_metal::TensorTopology(
+        input_topology.distribution_shape(), output_placements, input_topology.mesh_coords())};
+}
+
 ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto input_tensor = tensor_args.input_tensor;
     auto subdevice_id = operation_attributes.subdevice_id;
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    if (operation_attributes.sub_core_grid.has_value()) {
+        subdevice_core_range_set = subdevice_core_range_set.intersection(operation_attributes.sub_core_grid.value());
+    }
+    TT_FATAL(
+        subdevice_core_range_set.num_cores() != 0,
+        "There are no cores available to run ALL Gather after considering sub device and sub core grid");
     return tt::tt_metal::operation::hash_operation<AllGatherDeviceOperation>(
         operation_attributes.dim,
         operation_attributes.num_links,
@@ -147,7 +172,8 @@ AllGatherDeviceOperation::invoke(
     const ttnn::MemoryConfig& memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     uint32_t num_links,
-    tt::tt_fabric::Topology topology) {
+    tt::tt_fabric::Topology topology,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     return {
         operation_attributes_t{
             .memory_config = memory_config,
@@ -155,7 +181,8 @@ AllGatherDeviceOperation::invoke(
             .cluster_axis = cluster_axis,
             .subdevice_id = subdevice_id,
             .topology = topology,
-            .num_links = num_links},
+            .num_links = num_links,
+            .sub_core_grid = sub_core_grid},
         tensor_args_t{.input_tensor = input_tensor, .optional_output_tensor = optional_output_tensor}};
 }
 

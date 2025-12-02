@@ -1,4 +1,4 @@
-name: "[internal] Galaxy APC fast tests"
+name: "[internal] Galaxy fast tests"
 
 on:
   workflow_call:

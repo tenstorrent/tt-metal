@@ -29,4 +29,5 @@ void run_telemetry_collector(
     const std::vector<std::string>& aggregate_endpoints,
     const tt::llrt::RunTimeOptions& rtoptions,
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd,
-    int watchdog_timeout_seconds);
+    int watchdog_timeout_seconds,
+    int failure_exposure_duration_seconds);

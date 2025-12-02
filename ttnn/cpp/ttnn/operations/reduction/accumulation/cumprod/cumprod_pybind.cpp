@@ -16,10 +16,8 @@
 
 namespace ttnn::operations::reduction::accumulation::detail {
 void bind_reduction_cumprod_operation(py::module& module) {
-    auto docstring =
+    const auto* docstring =
         R"doc(
-        ``ttnn.cumprod(input: ttnn.Tensor, dim: int, dtype: Optional[ttnn.DataType] = None, reverse_order: bool = False, out: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor``
-
         Returns cumulative product of `input` along dimension `dim`
         For a given `input` of size N, the `output` will also contain N elements and be such that:
 
@@ -66,21 +64,6 @@ void bind_reduction_cumprod_operation(py::module& module) {
         Limitations:
             - Preallocated output must have the same shape as the input
             - Preallocated output for integer types is not supported
-
-        Example:
-            .. code-block:: python
-
-                # Create tensor
-                tensor_input = ttnn.rand((2,3,4), device=device)
-
-                # Apply ttnn.cumprod() on dim=0
-                tensor_output = ttnn.cumprod(tensor_input, dim=0)
-
-                # With preallocated output and dtype
-                preallocated_output = ttnn.rand([2, 3, 4], dtype=ttnn.bfloat16, device=device)
-
-                tensor_output = ttnn.cumprod(tensor_input, dim=0, dtype=ttnn.bfloat16, out=preallocated_output)
-
         )doc";
 
     using OperationType = decltype(ttnn::cumprod);

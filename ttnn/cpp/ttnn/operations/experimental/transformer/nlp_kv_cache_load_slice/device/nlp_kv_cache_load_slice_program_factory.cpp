@@ -7,7 +7,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "nlp_kv_cache_load_slice_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -21,7 +21,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_r
     uint32_t num_cores_total,
     uint32_t num_cores_x,
     uint32_t num_tiles_per_core) {
-    auto input_buffer = input_tensor.buffer();
+    auto* input_buffer = input_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
 
     std::vector<uint32_t> common_reader_kernel_args = {input_buffer->address(), 0};
@@ -32,8 +32,6 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_r
     const uint32_t num_tiles_shifted_per_core = input_shape[-2] * input_shape[-1] / TILE_HW;
 
     for (uint32_t i = 0; i < num_cores_total; i++) {
-        CoreCoord core = {i % num_cores_x, i / num_cores_x};
-
         // reader and writer kernel args
         std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
         reader_kernel_args[1] = start_id;
@@ -133,7 +131,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice
                                               const std::vector<Tensor>& output_tensors) {
         const auto& src_tensor = input_tensors.at(0);
         auto dst_tensor = output_tensors.at(0);
-        auto dst_tensor_buffer = dst_tensor.buffer();
+        auto* dst_tensor_buffer = dst_tensor.buffer();
 
         UpdateDynamicCircularBufferAddress(program, cb_src0, *dst_tensor_buffer);
 
@@ -147,7 +145,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice
         auto num_tiles_per_core = num_units_per_shard_height * num_units_per_shard_width;
 
         const auto tensor_start =
-            static_cast<const ttnn::operations::data_movement::SliceDeviceOperation*>(operation)->slice_start;
+            static_cast<const ttnn::operations::experimental::transformer::NlpKVCacheLoadSliceDeviceOperation*>(
+                operation)
+                ->output_tensor_start;
         auto all_runtime_args = get_unpad_runtime_args_tile_sharded(
             src_tensor, dst_tensor, tensor_start, num_cores_total, num_cores_x, num_tiles_per_core);
 

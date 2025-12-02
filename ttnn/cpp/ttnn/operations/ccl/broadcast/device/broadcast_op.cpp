@@ -49,7 +49,7 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks Broadcast::create_mesh_worklo
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto mesh_device = input_tensors[0].device();
+    auto* mesh_device = input_tensors[0].device();
     auto sub_device_id = this->sub_device_id;
 
     auto subdevice = sub_device_id.has_value() ? *sub_device_id : mesh_device->get_sub_device_ids().at(0);
@@ -144,7 +144,6 @@ Tensor broadcast_impl(
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
     const auto& tensor_topology = input_tensor.tensor_topology();
     const auto& tensor_topology_shape = tensor_topology.distribution_shape();
-    TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "broadcast op is only supported for Fast Dispatch");
 
     if (!cluster_axis.has_value()) {
         TT_FATAL(

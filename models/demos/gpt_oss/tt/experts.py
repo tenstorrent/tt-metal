@@ -6,7 +6,7 @@ import math
 import torch
 
 import ttnn
-from models.demos.gpt_oss.config import MeshConfig
+from models.demos.gpt_oss.config import MeshConfig, Mode, ModeConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
 
@@ -29,18 +29,24 @@ class Experts:
         self.mesh_device = mesh_device
         self.num_experts_per_tok = hf_config.num_experts_per_tok
 
-        # Use MeshConfig for clean parallelization
+        # Use mode-aware MeshConfig for clean parallelization
+        # Decode: EP=rows for expert parallelism, SP=1
+        # Prefill: EP=1, SP=rows for sequence parallelism (auto-defaults from MeshConfig)
         self.mesh_config = mesh_config or MeshConfig(
-            mesh_device.shape, tp=mesh_device.shape[1], ep=mesh_device.shape[0]
+            mesh_device.shape,
+            decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0], sp=1)
+            # prefill auto-defaults to: ModeConfig(tp=cols, sp=rows, ep=1)
         )
-        self.intermediate_size_per_device = self.mesh_config.shard_size(self.intermediate_size)
+
+        # Use decode config for weight loading (conservative choice)
+        self.intermediate_size_per_device = self.mesh_config.shard_size(self.intermediate_size, mode=Mode.DECODE)
 
         gate_proj = state_dict["gate_up_proj"][..., ::2].reshape(1, self.num_experts, self.hidden_size, self.expert_dim)
         up_proj = state_dict["gate_up_proj"][..., 1::2].reshape(1, self.num_experts, self.hidden_size, self.expert_dim)
         gate_proj_bias = state_dict["gate_up_proj_bias"][..., ::2].reshape(1, self.num_experts, 1, self.expert_dim)
         up_proj_bias = state_dict["gate_up_proj_bias"][..., 1::2].reshape(1, self.num_experts, 1, self.expert_dim)
 
-        # Clean mesh mapping using MeshConfig
+        # Clean mesh mapping using MeshConfig (use decode config for weights)
         col_mesh_mapper = self.mesh_config.column_parallel(mesh_device)
         row_mesh_mapper = self.mesh_config.row_parallel(mesh_device)
         dtype = ttnn.bfloat4_b
@@ -93,9 +99,9 @@ class Experts:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # Row-parallel bias must not be replicated. Extend it with zeros for TP devices.
-        if self.mesh_config.tp > 1:
+        if self.mesh_config.decode.tp > 1:
             down_proj_bias = torch.cat(
-                [down_proj_bias] + [torch.zeros_like(down_proj_bias)] * (self.mesh_config.tp - 1), dim=-1
+                [down_proj_bias] + [torch.zeros_like(down_proj_bias)] * (self.mesh_config.decode.tp - 1), dim=-1
             )
         self.down_proj_bias = ttnn.as_tensor(
             down_proj_bias,
@@ -109,9 +115,11 @@ class Experts:
         self.alpha = 1.702  # from https://github.com/huggingface/transformers/blob/b4067472aee9b566237091dbcd3659dd2ce92004/src/transformers/models/gpt_oss/modular_gpt_oss.py#L77
         self.limit = hf_config.swiglu_limit
 
-        tokens_per_ep = self.num_experts // self.mesh_config.ep
-        sparsity = torch.zeros(1, 1, self.mesh_config.ep, self.num_experts)
-        for i in range(self.mesh_config.ep):
+        # Prefill sparsity setup uses prefill config (for ep dimension)
+        prefill_ep = self.mesh_config.prefill.ep
+        tokens_per_ep = self.num_experts // prefill_ep
+        sparsity = torch.zeros(1, 1, prefill_ep, self.num_experts)
+        for i in range(prefill_ep):
             sparsity[:, :, i, i * tokens_per_ep : (i + 1) * tokens_per_ep] = torch.ones(1, 1, 1, tokens_per_ep)
         self.prefill_sparsity = ttnn.from_torch(
             sparsity,
@@ -119,7 +127,9 @@ class Experts:
             dtype=ttnn.bfloat16,
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(
-                dims=(-2, None), mesh_shape=self.mesh_device.shape, mesh_device=self.mesh_device
+                dims=(-2, None) if prefill_ep > 1 else (None, None),
+                mesh_shape=self.mesh_device.shape,
+                mesh_device=self.mesh_device,
             ),
         )
 
@@ -155,130 +165,230 @@ class Experts:
         )
 
     def __call__(self, hidden_states, routing_weights):
-        batch_size = hidden_states.shape[0]
-        assert batch_size == 1, "batch_size must be 1, we only support batch size 1 for now"
-        seq_len = hidden_states.shape[1]
-        hidden_states_4D = ttnn.unsqueeze_to_4D(hidden_states)
-        if seq_len > 1:
-            TILE_SIZE = 32
-            hidden_states_4D = ttnn.reshape(hidden_states_4D, (1, seq_len // TILE_SIZE, TILE_SIZE, self.hidden_size))
-            group_size = seq_len // TILE_SIZE
-        sparsity = ttnn.to_layout(ttnn.unsqueeze_to_4D(routing_weights), ttnn.ROW_MAJOR_LAYOUT)
-        output_tile = ttnn.Tile([32, 32])
+        # Select the appropriate mode based on sequence length
+        is_prefill = hidden_states.shape[-2] > 32
+        mode = Mode.PREFILL if is_prefill else Mode.DECODE
 
-        if seq_len > 1:
-            sparsity = ttnn.repeat(self.prefill_sparsity, (1, 1, group_size, 1))
+        # Get mode-specific config
+        config = self.mesh_config.get_config(mode)
+        ep, sp, tp = config.ep, config.sp, config.tp
 
-        if self.mesh_config.ep > 1 and seq_len == 1:
-            routing_weights_rm_torch = ttnn.to_torch(ttnn.get_device_tensors(sparsity)[0]).reshape(-1)
-            # find the indices of the non-zero values in routing_weights_rm_torch
-            non_zero_indices = torch.nonzero(routing_weights_rm_torch)
-            # create tnsirs which contain only 1 of the non-zero values
-            non_zero_indices = non_zero_indices.reshape(-1)
-            routing_weights_rm_torch_list = []
-            for i in range(non_zero_indices.shape[0]):
-                routing_weights_rm_torch_0 = torch.zeros_like(routing_weights_rm_torch)
-                routing_weights_rm_torch_0[non_zero_indices[i]] = routing_weights_rm_torch[non_zero_indices[i]]
-                routing_weights_rm_torch_list.append(routing_weights_rm_torch_0.reshape(1, 1, 1, self.num_experts))
-            routing_weights_rm_torch = torch.cat(routing_weights_rm_torch_list, dim=2)
-            sparsity = ttnn.from_torch(
-                routing_weights_rm_torch,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    dims=(-2, None), mesh_shape=self.mesh_device.shape, mesh_device=self.mesh_device
-                ),
-            )
+        seq_len_global = hidden_states.shape[1]
+
+        if sp > 1:
+            hidden_states_torch = ttnn.to_torch(ttnn.get_device_tensors(hidden_states)[0])
+            routing_weights_torch = ttnn.to_torch(ttnn.get_device_tensors(routing_weights)[0])
+            hidden_states.deallocate(True)
+            routing_weights.deallocate(True)
             routing_weights = ttnn.from_torch(
-                routing_weights_rm_torch.reshape(4, -1),
-                layout=ttnn.TILE_LAYOUT,
+                routing_weights_torch,
                 device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     dims=(-2, None), mesh_shape=self.mesh_device.shape, mesh_device=self.mesh_device
                 ),
             )
+            hidden_states = ttnn.from_torch(
+                hidden_states_torch,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    dims=(-2, None), mesh_shape=self.mesh_device.shape, mesh_device=self.mesh_device
+                ),
+            )
+        CHUNK_SIZE = 4 * 1024  # TODO: Make this a parameter
 
-        num_experts_per_tok = (
-            (self.num_experts // self.mesh_config.ep) * group_size
-            if seq_len > 1
-            else self.num_experts_per_tok // self.mesh_config.ep
-        )
-        program_config = self.sparse_matmul_program_config(3, 4, hidden_states_4D.shape[2], self.gate_proj.shape[3])
+        if hidden_states.shape[1] > CHUNK_SIZE:
+            hidden_states_chunks_list = ttnn.split(hidden_states, CHUNK_SIZE, dim=1)
+            hidden_states.deallocate(True)
+            routing_weights_chunks_list = ttnn.split(routing_weights, CHUNK_SIZE, dim=0)
+            routing_weights.deallocate(True)
 
-        gate = ttnn.sparse_matmul(
-            hidden_states_4D,
-            self.gate_proj,
-            sparsity=sparsity,
-            nnz=num_experts_per_tok,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            output_tile=output_tile,
-            program_config=program_config,
-        )
+        else:
+            hidden_states_chunks_list = [hidden_states]
+            routing_weights_chunks_list = [routing_weights]
 
-        if seq_len > 1:
-            gate = ttnn.transpose(gate, 1, 3)
+        next_states_list = []
+        for j in range(len(hidden_states_chunks_list)):
+            hidden_states = hidden_states_chunks_list[j]
+            routing_weights = routing_weights_chunks_list[j]
+            batch_size = hidden_states.shape[0]
+            assert batch_size == 1, "batch_size must be 1, we only support batch size 1 for now"
+            seq_len = hidden_states.shape[1]
+            hidden_states_4D = ttnn.unsqueeze_to_4D(hidden_states)
+            sparsity = ttnn.to_layout(ttnn.unsqueeze_to_4D(routing_weights), ttnn.ROW_MAJOR_LAYOUT)
+            output_tile = ttnn.Tile([32, 32])
+            if seq_len > 1:
+                TILE_SIZE = 32
+                hidden_states_4D = ttnn.reshape(
+                    hidden_states_4D, (1, seq_len // TILE_SIZE, TILE_SIZE, self.hidden_size)
+                )
+                group_size = seq_len // TILE_SIZE
+                sparsity = ttnn.repeat(self.prefill_sparsity, (1, 1, group_size, 1))
 
-        gate = ttnn.reshape(gate, (batch_size, self.num_experts, seq_len, self.intermediate_size_per_device))
-        gate = ttnn.add(gate, self.gate_proj_bias, output_tensor=gate)
-        gate = ttnn.clamp(gate, min=None, max=self.limit)
+            if ep > 1 and seq_len == 1:
+                sparsity = ttnn.moe_routing_remap(ttnn.reshape(sparsity, (1, sparsity.shape[-1])), 4, 4, 0)
+                routing_weights = ttnn.tilize_with_zero_padding(sparsity, use_multicore=True)
 
-        up = ttnn.sparse_matmul(
-            hidden_states_4D,
-            self.up_proj,
-            sparsity=sparsity,
-            nnz=num_experts_per_tok,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            output_tile=output_tile,
-            program_config=program_config,
-        )
-        if seq_len > 1:
-            up = ttnn.transpose(up, 1, 3)
-        up = ttnn.reshape(up, (batch_size, self.num_experts, seq_len, self.intermediate_size_per_device))
-        up = ttnn.add(up, self.up_proj_bias, output_tensor=up)
-        up = ttnn.clamp(up, min=-self.limit, max=self.limit)
+            num_experts_per_tok = (
+                (self.num_experts // ep) * group_size if seq_len > 1 else self.num_experts_per_tok // ep
+            )
+            program_config = self.sparse_matmul_program_config(3, 4, hidden_states_4D.shape[2], self.gate_proj.shape[3])
 
-        glu = gate * ttnn.sigmoid(gate * self.alpha)
-        down_in0 = (up + 1) * glu
-        ttnn.deallocate(glu)
-        ttnn.deallocate(up)
-        ttnn.deallocate(gate)
-        down_in0 = ttnn.reshape(down_in0, (1, self.num_experts, seq_len, self.intermediate_size_per_device))
-        if seq_len > 1:
-            # down_in0 = ttnn.reshape(down_in0, (1, self.num_experts, group_size, seq_len//group_size, self.intermediate_size_per_device))
-            # down_in0 = ttnn.transpose(down_in0, 1, 3)
-            # down_in0 = ttnn.reshape(down_in0, (1, self.num_experts, seq_len, self.intermediate_size_per_device))
-            sparsity = self.prefill_sparsity
-            num_experts_per_tok = self.num_experts // self.mesh_config.ep
+            gate = ttnn.sparse_matmul(
+                hidden_states_4D,
+                self.gate_proj,
+                sparsity=sparsity,
+                nnz=num_experts_per_tok,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                output_tile=output_tile,
+                program_config=program_config,
+                dtype=ttnn.bfloat8_b,
+            )
 
-        down = ttnn.sparse_matmul(
-            down_in0,
-            self.down_proj,
-            sparsity=sparsity,
-            nnz=num_experts_per_tok,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            output_tile=output_tile,
-            is_input_a_sparse=True,
-            program_config=self.batched_sparse_matmul_program_config(5, 6, down_in0.shape[2], self.down_proj.shape[-1]),
-        )
-        next_states = (
-            ttnn.reshape(down, (batch_size, self.num_experts, seq_len, self.hidden_size)) + self.down_proj_bias
-        )
-        if seq_len > 1:
-            routing_weights = routing_weights * ttnn.reshape(self.prefill_sparsity, (1, self.num_experts))
-        routing_weights = ttnn.permute(routing_weights, (1, 0))
-        routing_weights = ttnn.reshape(routing_weights, (batch_size, self.num_experts, seq_len, 1))
-        next_states = ttnn.mul(next_states, routing_weights, output_tensor=next_states)
-        next_states = ttnn.sum(next_states, dim=1, keepdim=True)
-        # EP communication
-        if self.mesh_config.ep > 1:
-            next_states = self.mesh_config.allreduce(next_states, self.ccl_manager, axis=self.mesh_config.ep_axis)
+            if seq_len > 1:
+                gate_transposed = ttnn.transpose(gate, 1, 3)
+                gate.deallocate(True)
+                gate = gate_transposed
 
-        # TP communication
-        next_states = self.mesh_config.allreduce(
+            gate = ttnn.reshape(gate, (batch_size, self.num_experts, seq_len, self.intermediate_size_per_device))
+            gate = ttnn.add(gate, self.gate_proj_bias, output_tensor=gate)
+            gate_clamped = ttnn.clamp(gate, min=None, max=self.limit)
+            gate.deallocate(True)
+            gate = gate_clamped
+
+            up = ttnn.sparse_matmul(
+                hidden_states_4D,
+                self.up_proj,
+                sparsity=sparsity,
+                nnz=num_experts_per_tok,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                output_tile=output_tile,
+                program_config=program_config,
+                dtype=ttnn.bfloat8_b,
+            )
+
+            hidden_states_4D.deallocate(True)
+
+            if seq_len > 1:
+                up_transposed = ttnn.transpose(up, 1, 3)
+                up.deallocate(True)
+                up = up_transposed
+
+            up = ttnn.reshape(up, (batch_size, self.num_experts, seq_len, self.intermediate_size_per_device))
+            up = ttnn.add(up, self.up_proj_bias, output_tensor=up)
+            up_clamped = ttnn.clamp(up, min=-self.limit, max=self.limit)
+            up.deallocate(True)
+            up = up_clamped
+
+            gate_alpha = ttnn.mul(gate, self.alpha)
+            gate_sigmoid = ttnn.sigmoid(gate_alpha)
+            gate_alpha.deallocate(True)
+            glu = ttnn.mul(gate, gate_sigmoid, output_tensor=gate)
+            gate_sigmoid.deallocate(True)
+            up = ttnn.add(up, 1, output_tensor=up)
+            down_in0 = ttnn.mul(up, glu, output_tensor=up)
+            ttnn.deallocate(glu)
+            down_in0 = ttnn.reshape(down_in0, (1, self.num_experts, seq_len, self.intermediate_size_per_device))
+
+            if seq_len > 1:
+                # down_in0 = ttnn.reshape(down_in0, (1, self.num_experts, group_size, seq_len//group_size, self.intermediate_size_per_device))
+                # down_in0 = ttnn.transpose(down_in0, 1, 3)
+                # down_in0 = ttnn.reshape(down_in0, (1, self.num_experts, seq_len, self.intermediate_size_per_device))
+                sparsity = self.prefill_sparsity
+                num_experts_per_tok = self.num_experts // ep
+                routing_weights = ttnn.mul(
+                    routing_weights,
+                    ttnn.reshape(self.prefill_sparsity, (1, self.num_experts)),
+                    output_tensor=routing_weights,
+                )
+
+            routing_weights_transposed = ttnn.permute(routing_weights, (1, 0))
+            routing_weights.deallocate(True)
+            routing_weights = routing_weights_transposed
+            routing_weights = ttnn.reshape(routing_weights, (batch_size, self.num_experts, seq_len, 1))
+
+            SPLIT_SIZE = 1024
+            if seq_len > SPLIT_SIZE:
+                down_in0_list = ttnn.split(down_in0, SPLIT_SIZE, dim=2)
+                down_in0.deallocate(True)
+                routing_weights_list = ttnn.split(routing_weights, SPLIT_SIZE, dim=2)
+                routing_weights.deallocate(True)
+            else:
+                down_in0_list = [down_in0]
+                routing_weights_list = [routing_weights]
+
+            next_states_reduced_list = []
+            for i, down_in0 in enumerate(down_in0_list):
+                down = ttnn.sparse_matmul(
+                    down_in0,
+                    self.down_proj,
+                    sparsity=sparsity,
+                    nnz=num_experts_per_tok,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    output_tile=output_tile,
+                    is_input_a_sparse=True,
+                    program_config=self.batched_sparse_matmul_program_config(
+                        5, 6, down_in0.shape[2], self.down_proj.shape[-1]
+                    ),
+                    dtype=ttnn.bfloat8_b,
+                )
+
+                down_in0.deallocate(True)
+                next_states = ttnn.reshape(
+                    down,
+                    (batch_size, self.num_experts, (seq_len if seq_len < SPLIT_SIZE else SPLIT_SIZE), self.hidden_size),
+                )
+                next_states = ttnn.add(next_states, self.down_proj_bias, output_tensor=next_states)
+
+                next_states = ttnn.mul(next_states, routing_weights_list[i], output_tensor=next_states)
+                next_states_reduced = ttnn.unsqueeze_to_4D(ttnn.experimental.fast_reduce_nc(next_states, dims=[1]))
+                next_states.deallocate(True)
+                next_states_reduced_list.append(next_states_reduced)
+                routing_weights_list[i].deallocate(True)
+
+            next_states = ttnn.concat(next_states_reduced_list, dim=2)
+
+            # EP communication (expert parallel allreduce)
+            if ep > 1:
+                next_states = self.mesh_config.allreduce(next_states, self.ccl_manager, axis=self.mesh_config.ep_axis)
+
+            # TP communication (tensor parallel allreduce)
+            if tp > 1:
+                if next_states.dtype != ttnn.bfloat16:
+                    next_states_16 = ttnn.typecast(next_states, ttnn.bfloat16)
+                    ttnn.deallocate(next_states)
+                else:
+                    next_states_16 = next_states
+                if seq_len > 1:
+                    ttnn.synchronize_device(self.mesh_device)
+                next_states = self.mesh_config.allreduce(
+                    next_states_16,
+                    self.ccl_manager,
+                    pad_size=192 if tp == 8 else 0,
+                    axis=self.mesh_config.tp_axis,
+                )
+                next_states_16.deallocate(True)
+                if next_states.dtype == ttnn.bfloat16:
+                    next_states_bf8 = ttnn.typecast(next_states, ttnn.bfloat8_b)
+                    next_states.deallocate(True)
+                    next_states = next_states_bf8
+
+            next_states_list.append(next_states)
+
+        next_states = ttnn.concat(next_states_list, dim=2)
+
+        # SP communication (sequence parallel all-gather)
+        if sp > 1:
+            next_states_allgathered = self.mesh_config.allgather(
+                next_states, self.ccl_manager, axis=self.mesh_config.sp_axis, dim=-2
+            )
+            next_states.deallocate(True)
+            next_states = next_states_allgathered
+        next_states = ttnn.reshape(
             next_states,
-            self.ccl_manager,
-            pad_size=192 if self.mesh_config.tp == 8 else 0,
-            axis=self.mesh_config.tp_axis,
+            (batch_size, seq_len_global, self.hidden_size),
+            (batch_size, max(32, seq_len_global), self.hidden_size),
         )
-        next_states = ttnn.reshape(next_states, (batch_size, seq_len, self.hidden_size))
+
         return next_states

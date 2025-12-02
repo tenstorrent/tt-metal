@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <type_traits>
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 
 namespace tt::tt_fabric::common::experimental {
 
@@ -21,12 +22,14 @@ enum class UnicastWriteUpdateMask : uint32_t {
     None = 0,
     DstAddr = 1u << 0,
     PayloadSize = 1u << 1,
+    All = static_cast<uint32_t>(DstAddr) | static_cast<uint32_t>(PayloadSize),
 };
 
 enum class UnicastInlineWriteUpdateMask : uint32_t {
     None = 0,
     DstAddr = 1u << 0,
     Value = 1u << 1,
+    All = static_cast<uint32_t>(DstAddr) | static_cast<uint32_t>(Value),
 };
 
 enum class UnicastAtomicIncUpdateMask : uint32_t {
@@ -34,6 +37,8 @@ enum class UnicastAtomicIncUpdateMask : uint32_t {
     DstAddr = 1u << 0,
     Val = 1u << 1,
     Flush = 1u << 2,
+    All = static_cast<uint32_t>(DstAddr) | static_cast<uint32_t>(Val) |
+          static_cast<uint32_t>(Flush),
 };
 
 // Scatter write dynamic mask (coarse-grained)
@@ -42,6 +47,7 @@ enum class UnicastScatterWriteUpdateMask : uint32_t {
     DstAddrs = 1u << 0,    // update all noc_address[i]
     ChunkSizes = 1u << 1,  // update all chunk_size[i]
     PayloadSize = 1u << 2,
+    All = static_cast<uint32_t>(DstAddrs) | static_cast<uint32_t>(ChunkSizes) | static_cast<uint32_t>(PayloadSize),
 };
 
 // Fused write+atomic inc dynamic mask
@@ -52,6 +58,8 @@ enum class UnicastFusedAtomicIncUpdateMask : uint32_t {
     Val = 1u << 2,
     Flush = 1u << 3,
     PayloadSize = 1u << 4,
+    All = static_cast<uint32_t>(WriteDstAddr) | static_cast<uint32_t>(SemaphoreAddr) |
+          static_cast<uint32_t>(Val) | static_cast<uint32_t>(Flush) | static_cast<uint32_t>(PayloadSize),
 };
 
 // Bitwise helpers for enum class flags
@@ -149,6 +157,11 @@ struct CheckFabricSenderType {
 template <UnicastWriteUpdateMask UpdateMask, typename CommandHeaderT>
 static FORCE_INLINE void populate_unicast_write_fields(
     volatile PACKET_HEADER_TYPE* packet_header, uint16_t packet_size_bytes, const CommandHeaderT& command_header) {
+    if constexpr (std::is_same_v<CommandHeaderT, std::nullptr_t>) {
+        static_assert(
+            !has_flag(UpdateMask, UnicastWriteUpdateMask::DstAddr),
+            "UnicastWriteUpdateMask requires command_header but std::nullptr_t was provided");
+    }
     if constexpr (has_flag(UpdateMask, UnicastWriteUpdateMask::DstAddr)) {
         auto comps = get_noc_address_components(command_header.noc_address);
         auto noc_addr = safe_get_noc_addr(comps.first.x, comps.first.y, comps.second, edm_to_local_chip_noc);
@@ -162,6 +175,12 @@ static FORCE_INLINE void populate_unicast_write_fields(
 template <UnicastInlineWriteUpdateMask UpdateMask, typename CommandHeaderT>
 static FORCE_INLINE void populate_unicast_inline_fields(
     volatile PACKET_HEADER_TYPE* packet_header, const CommandHeaderT& command_header) {
+    if constexpr (std::is_same_v<CommandHeaderT, std::nullptr_t>) {
+        static_assert(
+            !has_flag(UpdateMask, UnicastInlineWriteUpdateMask::DstAddr) &&
+                !has_flag(UpdateMask, UnicastInlineWriteUpdateMask::Value),
+            "UnicastInlineWriteUpdateMask requires command_header but std::nullptr_t was provided");
+    }
     if constexpr (has_flag(UpdateMask, UnicastInlineWriteUpdateMask::DstAddr)) {
         auto comps = get_noc_address_components(command_header.noc_address);
         auto noc_addr = safe_get_noc_addr(comps.first.x, comps.first.y, comps.second, edm_to_local_chip_noc);
@@ -175,6 +194,13 @@ static FORCE_INLINE void populate_unicast_inline_fields(
 template <UnicastAtomicIncUpdateMask UpdateMask, typename CommandHeaderT>
 static FORCE_INLINE void populate_unicast_atomic_inc_fields(
     volatile PACKET_HEADER_TYPE* packet_header, const CommandHeaderT& command_header) {
+    if constexpr (std::is_same_v<CommandHeaderT, std::nullptr_t>) {
+        static_assert(
+            !has_flag(UpdateMask, UnicastAtomicIncUpdateMask::DstAddr) &&
+                !has_flag(UpdateMask, UnicastAtomicIncUpdateMask::Val) &&
+                !has_flag(UpdateMask, UnicastAtomicIncUpdateMask::Flush),
+            "UnicastAtomicIncUpdateMask requires command_header but std::nullptr_t was provided");
+    }
     if constexpr (has_flag(UpdateMask, UnicastAtomicIncUpdateMask::DstAddr)) {
         auto comps = get_noc_address_components(command_header.noc_address);
         auto noc_addr = safe_get_noc_addr(comps.first.x, comps.first.y, comps.second, edm_to_local_chip_noc);
@@ -191,6 +217,12 @@ static FORCE_INLINE void populate_unicast_atomic_inc_fields(
 template <UnicastScatterWriteUpdateMask UpdateMask, typename CommandHeaderT>
 static FORCE_INLINE void populate_unicast_scatter_write_fields(
     volatile PACKET_HEADER_TYPE* packet_header, uint16_t packet_size_bytes, const CommandHeaderT& command_header) {
+    if constexpr (std::is_same_v<CommandHeaderT, std::nullptr_t>) {
+        static_assert(
+            !has_flag(UpdateMask, UnicastScatterWriteUpdateMask::DstAddrs) &&
+                !has_flag(UpdateMask, UnicastScatterWriteUpdateMask::ChunkSizes),
+            "UnicastScatterWriteUpdateMask requires command_header but std::nullptr_t was provided");
+    }
     if constexpr (has_flag(UpdateMask, UnicastScatterWriteUpdateMask::DstAddrs)) {
         for (int i = 0; i < NOC_SCATTER_WRITE_MAX_CHUNKS; i++) {
             auto comps = get_noc_address_components(command_header.noc_address[i]);
@@ -211,6 +243,14 @@ static FORCE_INLINE void populate_unicast_scatter_write_fields(
 template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename CommandHeaderT>
 static FORCE_INLINE void populate_unicast_fused_atomic_inc_fields(
     volatile PACKET_HEADER_TYPE* packet_header, uint16_t packet_size_bytes, const CommandHeaderT& command_header) {
+    if constexpr (std::is_same_v<CommandHeaderT, std::nullptr_t>) {
+        static_assert(
+            !has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::WriteDstAddr) &&
+                !has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::SemaphoreAddr) &&
+                !has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::Val) &&
+                !has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::Flush),
+            "UnicastFusedAtomicIncUpdateMask requires command_header but std::nullptr_t was provided");
+    }
     if constexpr (has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::WriteDstAddr)) {
         auto comps = get_noc_address_components(command_header.noc_address);
         auto noc_addr = safe_get_noc_addr(comps.first.x, comps.first.y, comps.second, edm_to_local_chip_noc);

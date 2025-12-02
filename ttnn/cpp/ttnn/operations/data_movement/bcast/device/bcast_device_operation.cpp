@@ -269,7 +269,7 @@ BcastOpParallelizationStrategy EltwiseBinaryBroadcast::get_parallelization_strat
     if (this->dim == BcastOpDim::H) {
         if (input_tensor_a.is_sharded()) {
             if (input_tensor_a.padded_shape()[0] == input_tensor_b.padded_shape()[0] ||
-                input_tensor_a.padded_shape()[0] > 1 and input_tensor_b.padded_shape()[0] == 1) {
+                (input_tensor_a.padded_shape()[0] > 1 && input_tensor_b.padded_shape()[0] == 1)) {
                 return BcastOpParallelizationStrategy::MULTI_CORE_H_SHARDED_OPTIMISED;
             } else {
                 return BcastOpParallelizationStrategy::MULTI_CORE_H_SHARDED;

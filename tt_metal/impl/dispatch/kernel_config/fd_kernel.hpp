@@ -17,6 +17,8 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <tt_stl/tt_stl/reflection.hpp>
+#include <impl/dispatch/dispatch_core_manager.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -82,9 +84,9 @@ static std::vector<std::string> dispatch_kernel_file_names = {
 class FDKernel {
 public:
     FDKernel(int node_id, ChipId device_id, ChipId servicing_device_id, uint8_t cq_id, noc_selection_t noc_selection) :
-        node_id_(node_id),
         device_id_(device_id),
         servicing_device_id_(servicing_device_id),
+        node_id_(node_id),
         cq_id_(cq_id),
         noc_selection_(noc_selection) {}
     virtual ~FDKernel() = default;

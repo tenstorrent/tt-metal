@@ -43,6 +43,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;

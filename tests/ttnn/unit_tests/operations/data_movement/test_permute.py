@@ -637,3 +637,42 @@ def test_permute_5d_wyh(device, shape, perm, dtype):
         assert_with_pcc(torch_output, output_tensor, 0.9999)
     else:
         assert_equal(torch_output, output_tensor)
+
+
+# TODO: Fix sharded permute bugs for width and block shard strategies
+@pytest.mark.parametrize("shape", [[16, 8, 224, 224]])
+@pytest.mark.parametrize("perm", [[0, 2, 3, 1], [0, 3, 2, 1], [1, 2, 3, 0], [1, 3, 2, 0]])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("input_sharding", [None, ttnn.ShardStrategy.HEIGHT])
+@pytest.mark.parametrize("output_sharding", [ttnn.ShardStrategy.HEIGHT])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_permute_sharded(device, shape, perm, dtype, layout, input_sharding, output_sharding):
+    torch.manual_seed(2005)
+    if input_sharding is None and output_sharding is None:
+        pytest.skip("both sharding strategies are None")
+
+    output_shape = [shape[dim] for dim in perm]
+    if input_sharding:
+        input_shard_memory_config = ttnn.create_sharded_memory_config(
+            shape, core_grid=ttnn.CoreGrid(x=8, y=8), strategy=input_sharding
+        )
+    else:
+        input_shard_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
+    if output_sharding:
+        output_shard_memory_config = ttnn.create_sharded_memory_config(
+            output_shape, core_grid=ttnn.CoreGrid(x=8, y=8), strategy=output_sharding
+        )
+    else:
+        output_shard_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
+    torch_tensor = random_torch_tensor(dtype, shape)
+    input_tensor = ttnn.from_torch(
+        torch_tensor, layout=layout, dtype=dtype, device=device, memory_config=input_shard_memory_config
+    )
+    output_tensor = ttnn.permute(input_tensor, perm, memory_config=output_shard_memory_config)
+
+    output_tensor = ttnn.from_device(output_tensor).to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    torch_output = torch.permute(torch_tensor, perm)
+
+    assert_equal(torch_output, output_tensor)

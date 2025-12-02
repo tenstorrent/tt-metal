@@ -14,12 +14,13 @@
 
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/mesh_partition/mesh_partition.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "ttnn/operations/experimental/ccl/all_broadcast_async/device/all_broadcast_async_op.hpp"
+#include "ttnn/operations/ccl/all_broadcast/device/all_broadcast_op.hpp"
 #include "ttnn/distributed/types.hpp"
 
 namespace composite_common {
@@ -40,6 +41,7 @@ ttnn::Tensor composite_reduce_scatter(
     ttnn::Tensor input_tensor,
     int32_t dim,
     uint32_t num_links,
+    tt::tt_fabric::Topology topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis);
@@ -67,7 +69,5 @@ ttnn::Tensor composite_all_to_all(
     uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id);
-
-bool is_fabric_2d();
 
 }  // namespace composite_common

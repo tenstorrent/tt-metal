@@ -13,16 +13,15 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
     SDXL_TRACE_REGION_SIZE,
     SDXL_FABRIC_CONFIG,
+    MAX_SEQUENCE_LENGTH,
+    TEXT_ENCODER_2_PROJECTION_DIM,
+    CONCATENATED_TEXT_EMBEDINGS_SIZE,
 )
 import os
 from models.common.utility_functions import profiler
 from conftest import is_galaxy
 
 from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtSDXLPipeline, TtSDXLPipelineConfig
-
-MAX_SEQUENCE_LENGTH = 77
-TEXT_ENCODER_2_PROJECTION_DIM = 1280
-CONCATENATED_TEXT_EMBEDINGS_SIZE = 2048  # text_encoder_1_hidden_size + text_encoder_2_hidden_size (768 + 1280)
 
 
 @torch.no_grad()
@@ -191,7 +190,8 @@ def run_demo_inference(
             img = img.unsqueeze(0)
             img = pipeline.image_processor.postprocess(img, output_type="pil")[0]
             images.append(img)
-            if is_ci_env:
+            skip_saving = os.getenv("TT_SDXL_SKIP_CHECK_AND_SAVE", "0") == "1"
+            if is_ci_env or skip_saving:
                 logger.info(f"Image {len(images)}/{len(prompts) // batch_size} generated successfully")
             else:
                 img.save(f"output/output{len(images) + start_from}.png")

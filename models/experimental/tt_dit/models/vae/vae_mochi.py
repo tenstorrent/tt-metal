@@ -262,7 +262,6 @@ class ResBlock:
             dim_2_1,
             use_multicore=True,
         )
-        ttnn.deallocate(dim_2_1)
         assert not (C % 32)
         if not (H * W * (C // 32) % 32):
             output = ttnn.reshape(residual, [N * T, 1, H * W * (C // 32), 32])
@@ -270,6 +269,7 @@ class ResBlock:
         else:
             output = ttnn.reshape(residual, [1, 1, N * T, H * W * C])
             gather_dim = 3
+        ttnn.deallocate(dim_2_1)
         return gather_dim, residual, output
 
     def pre_all_gather_reshape_norm_2(self, x, shape):
@@ -343,7 +343,8 @@ class ResBlock:
 
         x_norm_tiled_NTHWC = self.norm1(x_tiled_NTHWC, num_out_blocks)
 
-        ttnn.deallocate(x_tiled_NTHWC)
+        if self.parallel_config.w_parallel.factor > 1:
+            ttnn.deallocate(x_tiled_NTHWC)
         x_norm_tiled_NTHWC = ttnn.silu(x_norm_tiled_NTHWC, output_tensor=x_norm_tiled_NTHWC)  # in-place
         x_NTHWC = self.untilize_reshape(x_norm_tiled_NTHWC, gathered_shapes)
         ttnn.deallocate(x_norm_tiled_NTHWC)
@@ -373,18 +374,24 @@ class ResBlock:
                 secondary_cluster_axis=1,
                 secondary_mesh_shape=(self.parallel_config.h_parallel.factor, self.parallel_config.w_parallel.factor),
             )
-            x_NTHWC = vae_neighbor_pad(
-                self.ccl_manager,
-                x_NTHWC,
-                cluster_axis=self.parallel_config.h_parallel.mesh_axis,
-                dim=1,
-                padding_left=1,
-                padding_right=1,
-                padding_mode="replicate",
-                secondary_cluster_axis=0,
-                secondary_mesh_shape=(self.parallel_config.h_parallel.factor, self.parallel_config.w_parallel.factor),
-            )
+            if self.parallel_config.h_parallel.factor > 1:
+                x_NTHWC = vae_neighbor_pad(
+                    self.ccl_manager,
+                    x_NTHWC,
+                    cluster_axis=self.parallel_config.h_parallel.mesh_axis,
+                    dim=1,
+                    padding_left=1,
+                    padding_right=1,
+                    padding_mode="replicate",
+                    secondary_cluster_axis=0,
+                    secondary_mesh_shape=(
+                        self.parallel_config.h_parallel.factor,
+                        self.parallel_config.w_parallel.factor,
+                    ),
+                )
             x_NTHWC = ttnn.unsqueeze(x_NTHWC, 0)
+        elif self.parallel_config.h_parallel.factor > 1:
+            raise NotImplementedError()
 
         x_conv1_NTHWC = self.conv1(x_NTHWC)
         ttnn.deallocate(x_NTHWC)
@@ -443,18 +450,24 @@ class ResBlock:
                 secondary_cluster_axis=1,
                 secondary_mesh_shape=(self.parallel_config.h_parallel.factor, self.parallel_config.w_parallel.factor),
             )
-            x_NTHWC = vae_neighbor_pad(
-                self.ccl_manager,
-                x_NTHWC,
-                cluster_axis=self.parallel_config.h_parallel.mesh_axis,
-                dim=1,
-                padding_left=1,
-                padding_right=1,
-                padding_mode="replicate",
-                secondary_cluster_axis=0,
-                secondary_mesh_shape=(self.parallel_config.h_parallel.factor, self.parallel_config.w_parallel.factor),
-            )
+            if self.parallel_config.h_parallel.factor > 1:
+                x_NTHWC = vae_neighbor_pad(
+                    self.ccl_manager,
+                    x_NTHWC,
+                    cluster_axis=self.parallel_config.h_parallel.mesh_axis,
+                    dim=1,
+                    padding_left=1,
+                    padding_right=1,
+                    padding_mode="replicate",
+                    secondary_cluster_axis=0,
+                    secondary_mesh_shape=(
+                        self.parallel_config.h_parallel.factor,
+                        self.parallel_config.w_parallel.factor,
+                    ),
+                )
             x_NTHWC = ttnn.unsqueeze(x_NTHWC, 0)
+        elif self.parallel_config.h_parallel.factor > 1:
+            raise NotImplementedError()
 
         x_conv2_NTHWC = self.conv2(x_NTHWC)
         ttnn.deallocate(x_NTHWC)
@@ -521,6 +534,12 @@ class CausalUpsampleBlock:
             packer_l1_acc=False,
         )
 
+        self.reshard_time_map = {
+            120 * 212: 84,
+            240 * 424: 168,
+            480 * 848: 168,
+        }
+
         # Swizzle conv1x1 weights
         def swizzle_weight(w):
             # X (C texp sexp sexp) -> X (texp sexp sexp C)
@@ -563,12 +582,16 @@ class CausalUpsampleBlock:
 
             return x_NTHWC
 
-    def reshard_output(self, x_NTHWC, input_T):
-        if self.parallel_config.time_parallel.factor > 1 and self.temporal_expansion > 1 and self.temporal_offset > 0:
-            HW = x_NTHWC.shape[2] * x_NTHWC.shape[3]
-            C = x_NTHWC.shape[4]
-            num_devices = self.parallel_config.time_parallel.factor
-            expected_T = input_T * self.temporal_expansion - self.temporal_offset
+    def reshard_output(self, x_NTHWC):
+        N, T, H, W, C = x_NTHWC.shape
+        num_devices = self.parallel_config.time_parallel.factor
+        expected_T = self.reshard_time_map[
+            H * W * self.parallel_config.h_parallel.factor * self.parallel_config.w_parallel.factor
+        ]
+        input_is_padded = T * num_devices != expected_T
+        if (self.temporal_offset > 0 or input_is_padded) and (
+            self.parallel_config.time_parallel.factor > 1 and self.temporal_expansion > 1
+        ):
             padded_T = ((expected_T + num_devices - 1) // num_devices) * num_devices
             x_NTHWC = ttnn.squeeze(x_NTHWC, 0)
             x_NTHWC = vae_slice_reshard(
@@ -589,7 +612,7 @@ class CausalUpsampleBlock:
         x_NTHWO = self.proj(x_NTHWC)
         x_NTHWC = self.depth_to_spacetime(x_NTHWO)
         ttnn.deallocate(x_NTHWO)
-        x_NTHWC = self.reshard_output(x_NTHWC, T)
+        x_NTHWC = self.reshard_output(x_NTHWC)
         return x_NTHWC
 
 
@@ -761,13 +784,17 @@ class MochiVAEDecoder:
             (N, padded_T, num_devices_H * num_devices_W, padded_H // num_devices_H, padded_W // num_devices_W, C),
         )
 
+        dims = [0, 0]
+        dims[self.parallel_config.time_parallel.mesh_axis] = 1
+        dims[self.parallel_config.w_parallel.mesh_axis] = 2
+
         tt_x_NTHWC = ttnn.from_torch(
             x_NTHWC,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[1, 2]),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=dims),
         )
 
         tt_x_NTHWC = ttnn.squeeze(tt_x_NTHWC, 2)
@@ -777,11 +804,15 @@ class MochiVAEDecoder:
         N, C, T, H, W = input_shape
         tt_x_NTHWC = ttnn.unsqueeze(tt_x_NTHWC, 2)
 
+        dims = [0, 0]
+        dims[self.parallel_config.time_parallel.mesh_axis] = 1
+        dims[self.parallel_config.w_parallel.mesh_axis] = 2
+
         # Convert TT output to torch tensor
         x_NTHWC_torch = ttnn.to_torch(
             tt_x_NTHWC,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
-                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[1, 2]
+                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=dims
             ),
         )
         ttnn.deallocate(tt_x_NTHWC)

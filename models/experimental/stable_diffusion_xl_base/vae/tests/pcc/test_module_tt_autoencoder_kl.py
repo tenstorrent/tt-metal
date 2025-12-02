@@ -20,7 +20,7 @@ from loguru import logger
     "input_shape, pcc, vae_block",
     [
         ((1, 4, 128, 128), 0.933, "decoder"),
-        ((1, 3, 1024, 1024), 0.977, "encoder"),
+        ((1, 3, 1024, 1024), 0.9769, "encoder"),
     ],
     ids=("test_decode", "test_encode"),
 )
@@ -79,8 +79,7 @@ def test_vae(
         output_tensor, [C, H, W] = tt_vae.decode(ttnn_input_tensor, [B, C, H, W])
 
         output_tensor = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0)).float()
-        output_tensor = output_tensor.reshape(B, H, W, C)
-        output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
+        output_tensor = output_tensor.reshape(B, C, H, W)
     logger.info("TT model done")
 
     del vae

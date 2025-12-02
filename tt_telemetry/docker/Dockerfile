@@ -10,16 +10,15 @@ FROM ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest 
 
 FROM base AS release
 
-# Set up TT_METAL_HOME
-# (PYTHON_ENV_DIR is already set in the base image)
-ENV TT_METAL_HOME=/tt-metal
+# Set working directory
+WORKDIR /tt-metal
 
 # Clone tt-metal
 RUN /bin/bash -c "git clone --filter=blob:none --recurse-submodules --tags \
-    https://github.com/tenstorrent/tt-metal.git ${TT_METAL_HOME} \
-    && cd ${TT_METAL_HOME}"
+    https://github.com/tenstorrent/tt-metal.git /tt-metal"
 
-WORKDIR /tt-metal
+# Set TT_METAL_RUNTIME_ROOT, required by Metal run-time options to be set to tt_metal/ base
+ENV TT_METAL_RUNTIME_ROOT=/tt-metal
 
 # Build tt_telemetry then clear cache
 RUN /bin/bash -c "./build_metal.sh --build-telemetry \
@@ -38,19 +37,19 @@ ENTRYPOINT ["./build/tt_telemetry/tt_telemetry_server"]
 
 FROM base AS dev
 
-# Set up TT_METAL_HOME environment
-ENV TT_METAL_HOME=/tt-metal
+# Set working directory
+WORKDIR /tt-metal
 
-# Set working directory to TT_METAL_HOME
-WORKDIR ${TT_METAL_HOME}
+# Set TT_METAL_RUNTIME_ROOT, required by Metal run-time options to be set to tt_metal/ base
+ENV TT_METAL_RUNTIME_ROOT=/tt-metal
 
-# Copy the pre-built telemetry server binary
-COPY build/tt_telemetry/tt_telemetry_server ./build/tt_telemetry/tt_telemetry_server
+# Copy the pre-built telemetry server binary and frontend files
+COPY build/tt_telemetry/ ./build/tt_telemetry/
 
 # Copy libs
 COPY build_Release/lib ./build_Release/lib
 
-# Copy the entire tt_telemetry directory (contains frontend files, etc.)
+# Copy the entire tt_telemetry directory (provides fallback path for frontend files and source tree access)
 COPY tt_telemetry/ ./tt_telemetry/
 
 # Set library search path to find the copied libraries

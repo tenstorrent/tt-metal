@@ -59,6 +59,19 @@ run_tg_llama_70b_prefill_model_perf_tests() {
   fi
 }
 
+run_tg_mochi_model_perf_tests() {
+
+  echo "LOG_METAL: Running run_tg_mochi_model_perf_tests"
+
+  export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+  pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k "4x8sp1tp0 and yes_use_cache" --timeout=1500; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    echo "LOG_METAL: run_tg_mochi_model_perf_tests failed"
+    exit 1
+  fi
+}
+
 main() {
   # Parse the arguments
   while [[ $# -gt 0 ]]; do

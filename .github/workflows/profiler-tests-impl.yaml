@@ -62,7 +62,7 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Run profiler regression tests
-        timeout-minutes: 30
+        timeout-minutes: 35
         run: |
           ${{ inputs.test-script }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main

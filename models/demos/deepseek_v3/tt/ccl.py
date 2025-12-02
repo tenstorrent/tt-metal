@@ -187,3 +187,9 @@ class CCL:
 
         # Merge static config with runtime CCL parameters
         return {**ccl_config, **ccl_params}
+
+    def reset_sem_counters(self):
+        """Reset the semaphore counters for all axes."""
+        self.gather_sem_cnt = [0 for _ in range(self.num_axes)]
+        self.reduce_scatter_sem_cnt = [0 for _ in range(self.num_axes)]
+        self.barrier_sem_cnt = [0 for _ in range(self.num_axes)]

@@ -120,7 +120,8 @@ autograd::TensorPtr rmsnorm_composite(
         none,
         none,
         none,
-        false);  // [B,1,S,C] x [B,1,S,C] -> [B,1,S,C]
+        false,
+        /*fast_and_approximate*/ true);  // [B,1,S,C] x [B,1,S,C] -> [B,1,S,C]
 
     auto out = autograd::create_tensor(out_tensor);
 

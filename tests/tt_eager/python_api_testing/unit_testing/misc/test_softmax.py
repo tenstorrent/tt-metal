@@ -17,7 +17,6 @@ from tt_lib.utils import (
 )
 from models.common.utility_functions import print_diff_argmax, comp_pcc
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
-from models.common.utility_functions import is_grayskull, is_blackhole, skip_for_blackhole
 
 
 @pytest.mark.parametrize(
@@ -27,9 +26,6 @@ from models.common.utility_functions import is_grayskull, is_blackhole, skip_for
 )
 @pytest.mark.parametrize("inplace", [True, False])
 def test_softmax(device, inplace, dtype):
-    if is_grayskull() and dtype == ttnn.float32:
-        pytest.skip("Skipping float32 tests on Grayskull and Blackhole. For Blackhole see #12349")
-
     torch.manual_seed(0)
     sm_op = ttnn.softmax_in_place if inplace else ttnn.softmax
 
@@ -40,23 +36,22 @@ def test_softmax(device, inplace, dtype):
 
         tt_input_tensor = ttnn.from_torch(input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-        if not is_grayskull():
-            if dtype == ttnn.float32:
-                compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                    math_fidelity=ttnn.MathFidelity.HiFi4,
-                    math_approx_mode=False,
-                    fp32_dest_acc_en=True,
-                )
-            else:
-                compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                    math_fidelity=ttnn.MathFidelity.HiFi4,
-                    math_approx_mode=False,
-                    fp32_dest_acc_en=False,
-                )
+        if dtype == ttnn.float32:
+            compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+            )
+        else:
+            compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+            )
 
-        tt_output_tensor_on_device = sm_op(
-            tt_input_tensor, compute_kernel_config=compute_kernel_config if not is_grayskull() else None
-        )
+        tt_output_tensor_on_device = sm_op(tt_input_tensor, compute_kernel_config=compute_kernel_config)
         tt_output_tensor = ttnn.to_layout(tt_output_tensor_on_device, ttnn.ROW_MAJOR_LAYOUT)
         tt_output_tensor = ttnn.from_device(tt_output_tensor)
         tt_output_tensor = ttnn.to_torch(tt_output_tensor)
@@ -147,9 +142,6 @@ def test_softmax_mix_precision(device, inplace, in_dtype):
     ids=["float32", "bfloat16", "bfloat8_b"],
 )
 def test_scale_mask_softmax_inplace(device, in_dtype, in0_mem_config, causal_mask, seq_len):
-    if is_grayskull() and in_dtype == ttnn.float32:
-        pytest.skip("Skipping float32 tests on Grayskull")
-
     torch.manual_seed(0)
     fuse_head = 2
 
@@ -183,26 +175,23 @@ def test_scale_mask_softmax_inplace(device, in_dtype, in0_mem_config, causal_mas
         input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in0_mem_config
     )
 
-    if not is_grayskull():
-        if in_dtype == ttnn.float32:
-            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=True,
-            )
-        else:
-            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=False,
-            )
+    if in_dtype == ttnn.float32:
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+        )
+    else:
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+        )
 
     tt_output = ttnn.scale_mask_softmax_in_place(
-        in1_t,
-        scale,
-        attention_mask_t,
-        is_causal_mask=causal_mask,
-        compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+        in1_t, scale, attention_mask_t, is_causal_mask=causal_mask, compute_kernel_config=compute_kernel_config
     )
 
     tt_output_tensor = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)

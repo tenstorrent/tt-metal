@@ -21,6 +21,22 @@
 namespace ttnn::graph {
 
 namespace detail {
+// Helper to temporarily change logger level
+class LogLevelGuard {
+public:
+    explicit LogLevelGuard(spdlog::level::level_enum new_level)
+        : saved_level_(tt::LoggerRegistry::instance().get(tt::LogOp)->level()) {
+        tt::LoggerRegistry::instance().set_level(new_level);
+    }
+    ~LogLevelGuard() {
+        tt::LoggerRegistry::instance().set_level(saved_level_);
+    }
+    LogLevelGuard(const LogLevelGuard&) = delete;
+    LogLevelGuard& operator=(const LogLevelGuard&) = delete;
+
+private:
+    spdlog::level::level_enum saved_level_;
+};
 
 // These overloaded extract_output_tensor functions abstract the return type of an arbitrary op from the rest of the
 // constraints query function. An overload resolution failure means the return type for the op in that query is not yet
@@ -77,6 +93,7 @@ struct ConstraintQueryResponse {
  */
 template <typename Op, typename... Args>
 auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, Args&&... args) {
+    detail::LogLevelGuard log_guard(spdlog::level::level_enum::off);
     nlohmann::json op_trace;
     Tensor output;
     // outer graph capture is to avoid dispatching/allocating dummy input tensors
@@ -105,14 +122,19 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
         try {
             auto capture_inner = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
             output = detail::extract_output_tensor(std::apply(op, transformed_args));
-            op_trace = capture_inner.end_graph_capture();
         }  // end of inner graph capture
         catch (const std::exception& e) {
             log_debug(tt::LogOp, "Error during graph capture: {}", e.what());
             return ConstraintQueryResponse{
-                ExecutionStatus::Error, {0, 0, 0}, /* output_tensor_spec= */ std::nullopt, e.what()};
+                ExecutionStatus::Error,
+                {.cb_peak_size_per_core = 0,
+                 .l1_buffers_peak_per_core = 0,
+                 .peak_memory_usage_per_core = 0,
+                 .l1_output_buffer_per_core = 0},
+                /* output_tensor_spec= */ std::nullopt,
+                e.what()};
         }
-
+        op_trace = capture_outer.end_graph_capture();
     }  // end of outer graph capture
 
     // extract memory footprint from the trace
