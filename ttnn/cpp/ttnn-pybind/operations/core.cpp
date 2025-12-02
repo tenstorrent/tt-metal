@@ -354,6 +354,7 @@ void py_module(py::module& module) {
                 - core_group_2 (CoreRangeSet): Cores doing less work (empty if evenly divisible)
                 - units_per_core_group_1 (int): Work units per core in group 1
                 - units_per_core_group_2 (int): Work units per core in group 2
+
         )doc");
 
     module.def(
@@ -382,6 +383,7 @@ void py_module(py::module& module) {
                 - core_group_2 (CoreRangeSet): Cores doing less work (empty if evenly divisible)
                 - units_per_core_group_1 (int): Work units per core in group 1
                 - units_per_core_group_2 (int): Work units per core in group 2
+
         )doc");
 }
 
