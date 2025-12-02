@@ -112,10 +112,6 @@ PagedUpdateCacheProgramFactory::cached_program_t PagedUpdateCacheProgramFactory:
     CoreRangeSet all_cores = shard_spec.value().grid;
     uint32_t num_cores = all_cores.num_cores();
     uint32_t num_input_tiles = shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;
-    auto bbox = all_cores.bounding_box();
-    uint32_t num_cores_x = bbox.end_coord.x + 1;
-    uint32_t num_cores_y = bbox.end_coord.y + 1;
-
     auto* in1_buffer_address = shard_spec.has_value() ? input_tensor.buffer() : nullptr;
 
     uint32_t num_cache_tiles = 2 * Wt;   // double buffered
@@ -244,9 +240,8 @@ PagedUpdateCacheProgramFactory::cached_program_t PagedUpdateCacheProgramFactory:
         all_cores,
         tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_kernel_args});
 
-    const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
-
-    for (uint32_t i = 0; i < num_cores; ++i) {
+    const auto& cores = corerange_to_cores(all_cores, num_cores, row_major);
+    for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores.at(i);
         const uint32_t update_idx = use_index_tensor ? 0 : operation_attributes.update_idxs.at(i);
         // Cache tile info
