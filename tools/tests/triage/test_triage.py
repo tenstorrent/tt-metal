@@ -32,6 +32,10 @@ from ttexalens.tt_exalens_init import init_ttexalens
 def cause_hang_with_app(request):
     global metal_home
 
+    # Reset the device state after the hang if set in environment
+    if os.environ.get("TT_METAL_RESET_DEVICE_AFTER_HANG", "0") == "1":
+        subprocess.run(["tt-smi", "-r"], check=True)
+
     app, args, app_configuration, timeout = request.param
     build_dir = os.path.join(metal_home, "build")
     app_path_str = os.path.join(build_dir, app)
