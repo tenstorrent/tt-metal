@@ -2,13 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import pytest
 import torch
 from helpers.device import (
     collect_results,
     write_stimuli_to_l1,
 )
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     UnarySFPUGolden,
     get_golden_generator,
@@ -39,6 +38,15 @@ dimension_combinations = [
 ]
 
 
+def get_format_input_bounds(formats: InputOutputFormat) -> list[tuple[int, int]]:
+    """Get valid stimuli bounds based on data format.
+    - range needs to be cut off at 1000 for Sum reduction kernels with UInt16 input format to avoid overflow.
+    """
+    if formats.input_format in [DataFormat.UInt32, DataFormat.UInt16]:
+        return [(0, 1000)]
+    return [(-1000, 1000), (0, 1000), (-1000, 0)]
+
+
 @parametrize(
     test_name="sfpu_reduce_test",
     formats=input_output_formats(
@@ -53,8 +61,8 @@ dimension_combinations = [
     ),
     mathop=[MathOperation.ReduceColumn],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    negative_number=[False, True],
-    reduce_pool=[ReducePool.Max, ReducePool.Average, ReducePool.Sum],
+    input_bounds=lambda formats: get_format_input_bounds(formats),
+    reduce_pool=[ReducePool.Min, ReducePool.Max, ReducePool.Sum, ReducePool.Average],
     dimension_combinations=dimension_combinations,
 )
 def test_sfpu_reduce(
@@ -63,39 +71,24 @@ def test_sfpu_reduce(
     dest_acc,
     mathop,
     reduce_pool,
-    negative_number,
+    input_bounds,
     dimension_combinations,
 ):
-    if negative_number and (
-        formats.input_format in [DataFormat.UInt32, DataFormat.UInt16]
-        or reduce_pool == ReducePool.Max
-    ):
-        pytest.skip(
-            f"Skipping negative_numbers=True for unsigned format {formats.input_format}"
-        )
-
+    min_value, max_value = input_bounds
     input_dimensions = dimension_combinations
     torch_format = format_dict[formats.input_format]
 
     # STIMULI GENERATION
-    ELEMENTS_PER_TILE = 1024  # 32 * 32
+    ELEMENTS_PER_TILE = 1024
     tile_cnt = input_dimensions[0] * input_dimensions[1] // ELEMENTS_PER_TILE
-    max, min = 1000, (
-        0 if formats.input_format in [DataFormat.UInt32, DataFormat.UInt16] else -1000
-    )
     src_A = torch.randint(
-        low=min, high=max, size=(tile_cnt * 1024,), dtype=torch_format
+        low=min_value, high=max_value, size=(tile_cnt * 1024,), dtype=torch_format
     )
     src_B = torch.zeros_like(src_A)
 
-    sign = -1 if negative_number else 1
-    src_A *= sign
-
     # Max Reduction can do block and single tile reduction whereas Sum/Avg only do single tile reduction, convert Sum/Avg golden to do block reduction by retilizing input to src_A
     # Dimensions for Max reduction work column wise, for Sum/Avg processing tiles independently is same as column reduction on dst block dimension [32, num_tiles * 32] where num rows is 32 i.e RT_DIM=1 (same as a single tile)
-    dst_dim = input_dimensions
-    if reduce_pool != ReducePool.Max:
-        dst_dim = [32, tile_cnt * 32]
+    dst_dim = [32, tile_cnt * 32]
     src_A = tilize_block(
         src_A, dst_dim, stimuli_format=formats.input_format
     ).flatten()  # Input tensor is tilized in dst register
@@ -124,7 +117,6 @@ def test_sfpu_reduce(
         "unpack_to_dest": True,
         "tile_cnt": tile_cnt,
         "disable_format_inference": True,
-        "unpack_to_dest": True,
     }
 
     res_address = write_stimuli_to_l1(

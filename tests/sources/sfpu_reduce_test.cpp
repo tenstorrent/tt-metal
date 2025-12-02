@@ -68,25 +68,11 @@ void run_kernel()
 
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>();
 
-    if constexpr (POOL_TYPE == ckernel::PoolType::MAX)
+    ckernel::sfpu::_init_reduce_<POOL_TYPE, static_cast<DataFormat>(formats.math)>();
+    for (uint32_t i = 0; i < TILE_CNT; i++)
     {
-        // Multiple tile reduction implemented for block dimensions,dependent on ct_dim and rt_dim
-        ckernel::sfpu::_init_reduce_<POOL_TYPE, static_cast<DataFormat>(formats.math)>(BLOCK_CT_DIM);
-        for (uint32_t i = 0; i < BLOCK_CT_DIM; i++)
-        {
-            // we have multiple tiles in dest, so we need to calculate the reduce for each tile
-            _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(i); // set dst offset for current tile in dest register
-            ckernel::sfpu::_calculate_reduce_<POOL_TYPE, REDUCE_DIM, static_cast<DataFormat>(formats.math)>(BLOCK_RT_DIM);
-        }
-    }
-    else
-    {
-        ckernel::sfpu::_init_reduce_<POOL_TYPE, static_cast<DataFormat>(formats.math)>();
-        for (uint32_t i = 0; i < TILE_CNT; i++)
-        {
-            _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(i);
-            ckernel::sfpu::_calculate_reduce_<POOL_TYPE, REDUCE_DIM, static_cast<DataFormat>(formats.math)>();
-        }
+        _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(i);
+        ckernel::sfpu::_calculate_reduce_<POOL_TYPE, REDUCE_DIM, static_cast<DataFormat>(formats.math)>();
     }
 
     _llk_math_eltwise_unary_sfpu_done_();

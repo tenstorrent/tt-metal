@@ -162,6 +162,7 @@ class ReduceDimension(Enum):
 
 class ReducePool(Enum):
     Max = "MAX"
+    Min = "MIN"
     Sum = "SUM"
     Average = "AVG"
 
