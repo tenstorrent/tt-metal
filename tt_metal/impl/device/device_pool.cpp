@@ -363,8 +363,10 @@ void DevicePool::initialize_fabric_and_dispatch_fw() const {
     }
     this->initialize_active_devices();
 
-    this->wait_for_fabric_router_sync(
-        tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled() ? 15000 : 10000);
+    if (!tt::tt_metal::MetalContext::instance().get_use_fabric_manager()) {
+        this->wait_for_fabric_router_sync(
+            tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled() ? 15000 : 10000);
+    }
     log_trace(tt::LogMetal, "Fabric and Dispatch Firmware initialized");
 }
 
@@ -908,6 +910,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip
     // Terminate fabric routers
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
+        log_debug(tt::LogMetal, "Terminating fabric routers");
         const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
         const auto& fabric_context = control_plane.get_fabric_context();
         auto [termination_signal_address, signal] = fabric_context.get_fabric_router_termination_address_and_signal();

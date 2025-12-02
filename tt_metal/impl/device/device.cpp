@@ -309,9 +309,15 @@ void Device::init_command_queue_device() {
         }
     }
     for (const auto& logical_core : this->get_active_ethernet_cores()) {
+        if (MetalContext::instance().get_use_fabric_manager()) {
+            continue;
+        }
         reset_launch_message_rd_ptr(logical_core, CoreType::ETH);
     }
     for (const auto& logical_core : this->get_inactive_ethernet_cores()) {
+        if (MetalContext::instance().get_use_fabric_manager()) {
+            continue;
+        }
         reset_launch_message_rd_ptr(logical_core, CoreType::ETH);
     }
     if (watcher_lock) {
@@ -345,6 +351,10 @@ void Device::init_command_queue_device() {
 }
 
 bool Device::compile_fabric() {
+    if (MetalContext::instance().get_use_fabric_manager()) {
+        log_info(tt::LogMetal, " Using fabric manager");
+        return true;
+    }
     fabric_program_ = tt::tt_fabric::create_and_compile_fabric_program(this);
     return fabric_program_ != nullptr;
 }
@@ -354,6 +364,10 @@ void Device::configure_fabric() {
         return;
     }
 
+    if (MetalContext::instance().get_use_fabric_manager()) {
+        TT_FATAL(fabric_program_ == nullptr, "Expected fabric program to be null when using fabric manager");
+        return;
+    }
     tt::tt_fabric::configure_fabric_cores(this);
 
     fabric_program_->impl().finalize_offsets(this);
