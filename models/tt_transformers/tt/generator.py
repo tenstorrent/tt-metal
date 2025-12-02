@@ -362,8 +362,11 @@ class Generator:
                 )
             if use_batched_prefill:
                 ## TODO: Fix logits batch!!
+                assert enable_trace_current_prompt, "Batched prefill currently only supported with trace"
                 for i in range(batch_size):
-                    _logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx[i])
+                    _logits = self.model[model_id].process_logits_after_prefill_trace(
+                        logits[:, :, i * seq_len[i] : (i + 1) * seq_len[i], :], last_token_idx[i]
+                    )
                     output_logits[i] = self.model[model_id].process_output_prefill(
                         _logits, last_token_idx=(last_token_idx[i] % 32)
                     )

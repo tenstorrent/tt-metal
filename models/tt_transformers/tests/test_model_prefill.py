@@ -68,6 +68,7 @@ from models.tt_transformers.tt.model_config import CheckpointType, DecodersPreci
     (1, None),
     ids=["1layer", "all_layers"],
 )
+@pytest.mark.parametrize("batch_size", [1], ids=["batch1"])
 @pytest.mark.parametrize("device_params", [{"fabric_config": True, "trace_region_size": 17000000}], indirect=True)
 def test_model_inference(
     paged_attention,
@@ -76,6 +77,7 @@ def test_model_inference(
     seq_len,
     max_seq_len,
     num_layers,
+    batch_size,
     mesh_device,
     reset_seeds,
     ensure_gc,
@@ -99,7 +101,7 @@ def test_model_inference(
 
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     dtype = ttnn.bfloat8_b
-    batch_size = 1  # For prefill we only support batch_size = 1
+    # batch_size = 1  # For prefill we only support batch_size = 1
 
     # Use instruct weights instead of general weights
     instruct = True
@@ -228,9 +230,9 @@ def test_model_inference(
         logger.info("Finished loading reference model.")
 
     # Select the first token from the prompt for initial decoding
-    encoded_prompt_tensor = torch.tensor(encoded_prompt)  # [:,0]
-    tt_prefill_input = encoded_prompt_tensor.unsqueeze(0)
-    prompt_lens = [seq_len]
+    encoded_prompt_tensor = torch.tensor(encoded_prompt).unsqueeze(0).repeat([batch_size, 1])  # [:,0]
+    tt_prefill_input = encoded_prompt_tensor
+    prompt_lens = [seq_len for i in range(batch_size)]
     start_pos = 0
 
     # Run TT model

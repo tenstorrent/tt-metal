@@ -187,7 +187,7 @@ class Transformer(LightweightModule):
         device = None if trace_enabled else self.mesh_device
 
         assert tokens.dim() == 2, "tokens must be a 2D tensor"
-        tokens = tokens.reshape(1, 1, batch_size, -1)
+        tokens = tokens.reshape(batch_size, 1, 1, -1)
         S = tokens.shape[-1]
         tokens = ttnn.from_torch(
             tokens,
@@ -233,16 +233,13 @@ class Transformer(LightweightModule):
                 batch_size_per_device = batch_size // devices
                 page_table_padded = torch.ones((devices, page_table.shape[1] * batch_size), dtype=torch.int32) * -1
                 for i in range(devices):
-                    try:
-                        page_table_padded[
-                            i,
-                            (i * batch_size_per_device)
-                            * page_table.shape[1] : (i + 1)
-                            * batch_size_per_device
-                            * page_table.shape[1],
-                        ] = page_table[i * batch_size_per_device : (i + 1) * batch_size_per_device, :].reshape(1, -1)
-                    except:
-                        breakpoint()
+                    page_table_padded[
+                        i,
+                        (i * batch_size_per_device)
+                        * page_table.shape[1] : (i + 1)
+                        * batch_size_per_device
+                        * page_table.shape[1],
+                    ] = page_table[i * batch_size_per_device : (i + 1) * batch_size_per_device, :].reshape(1, -1)
 
             else:
                 # we only want to update the kv cache on the 8 devices (every fourth device starting at user_id//8 ) for a given user_id

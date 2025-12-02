@@ -669,8 +669,6 @@ class Attention(LightweightModule):
         kv_cache=None,
         batch_size=1,
     ):
-        if batch_size != x_11SH.shape[-3] and batch_size > 1:
-            breakpoint()
         if batch_size > 1:
             x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
 
