@@ -207,7 +207,8 @@ void topk(
     UNPACK(DPRINT << "Tiles: " << tiles << " Log Tiles: " << log_tiles << " End Phase: " << end_phase << ENDL());
 
     topk_tile_init();
-    acquire_dst();
+    // acquire_dst();
+    tile_regs_acquire();
     cb_wait_front(winning_group_scores_cb_index, tiles);
     cb_wait_front(winning_group_indices_cb_index, tiles);
     // local sort first two tiles:
@@ -233,31 +234,34 @@ void topk(
         transpose_wh_init_short(winning_group_scores_cb_index);
         transpose_wh_tile(winning_group_scores_cb_index, j, 1);
 
-        reconfig_data_format_srca(intermediate_local_sort_cb_index);
-        transpose_wh_init_short(intermediate_local_sort_cb_index);
-        transpose_wh_tile(intermediate_local_sort_cb_index, j, 1);
+        reconfig_data_format_srca(winning_group_indices_cb_index);
+        transpose_wh_init_short(winning_group_indices_cb_index);
+        transpose_wh_tile(winning_group_indices_cb_index, j, 3);
 
         ckernel::topk_local_sort(0, (int)ascending, end_phase);
     }
+    tile_regs_commit();
 
-    pack_reconfig_data_format(intermediate_local_sort_cb_index);
-    pack_tile(0, intermediate_local_sort_cb_index);
-    // pack_tile(1, intermediate_local_sort_cb_index);
+    tile_regs_wait();
+    pack_reconfig_data_format(output_cb_index);
+    pack_tile(0, output_cb_index);
+    // pack_tile(1, output_cb_index);
 
-    PACK(print_tile(intermediate_local_sort_cb_index, 0, true, 0, 32, 0, 1));
-    // PACK(print_tile(intermediate_local_sort_cb_index, 1, true, 0, 32, 0, 1));
+    PACK(print_tile(output_cb_index, 0, true, 0, 32, 0, 1));
+    // PACK(print_tile(output_cb_index, 1, true, 0, 32, 0, 1));
 
-    cb_push_back(intermediate_local_sort_cb_index, 0);
+    cb_push_back(output_cb_index, 0);
 
-    pack_reconfig_data_format(intermediate_local_sort_indices_cb_index);
-    pack_tile(2, intermediate_local_sort_indices_cb_index);
-    // pack_tile(3, intermediate_local_sort_indices_cb_index);
+    pack_reconfig_data_format(output_indices_cb_index);
+    pack_tile(2, output_indices_cb_index);
+    // pack_tile(3, output_indices_cb_index);
 
-    PACK(print_tile(intermediate_local_sort_indices_cb_index, 0, true, 0, 32, 0, 1));
-    // PACK(print_tile(intermediate_local_sort_indices_cb_index, 1, true, 0, 32, 0, 1));
-    cb_push_back(intermediate_local_sort_indices_cb_index, 1);
+    PACK(print_tile(output_indices_cb_index, 0, true, 0, 32, 0, 1));
+    // PACK(print_tile(output_indices_cb_index, 1, true, 0, 32, 0, 1));
+    cb_push_back(output_indices_cb_index, 1);
 
-    release_dst();
+    tile_regs_release();
+    // release_dst();
 }
 
 }  // namespace blocks
