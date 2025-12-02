@@ -23,7 +23,7 @@ namespace experimental {
 class PinnedMemory;
 void HostBufferSetPinnedMemory(HostBuffer& host_buffer, std::shared_ptr<experimental::PinnedMemory> pinned_memory);
 std::shared_ptr<experimental::PinnedMemory> HostBufferGetPinnedMemory(HostBuffer& host_buffer);
-}
+}  // namespace experimental
 
 // HostBuffer is a wrapper around contiguous data, which can either be owned or borrowed from external sources (Python
 // objects, mmap-ed regions, etc).
@@ -73,8 +73,10 @@ public:
     MemoryPin pin() const { return pin_; }
 
 private:
-    friend void tt::tt_metal::experimental::HostBufferSetPinnedMemory(HostBuffer& host_buffer, std::shared_ptr<experimental::PinnedMemory> pinned_memory);
-    friend std::shared_ptr<experimental::PinnedMemory> tt::tt_metal::experimental::HostBufferGetPinnedMemory(HostBuffer& host_buffer);
+    friend void tt::tt_metal::experimental::HostBufferSetPinnedMemory(
+        HostBuffer& host_buffer, std::shared_ptr<experimental::PinnedMemory> pinned_memory);
+    friend std::shared_ptr<experimental::PinnedMemory> tt::tt_metal::experimental::HostBufferGetPinnedMemory(
+        HostBuffer& host_buffer);
     MemoryPin pin_;
     tt::stl::Span<std::byte> view_;
     const std::type_info* type_info_ = nullptr;
