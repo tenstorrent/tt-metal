@@ -36,10 +36,8 @@ void build_tt_fabric_program(
     tt::tt_metal::Program* fabric_program_ptr,
     std::unordered_map<tt::tt_fabric::chan_id_t, std::unique_ptr<tt::tt_fabric::FabricRouterBuilder>>& router_builders) {
     using namespace tt_fabric;
-    const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
-    const bool is_TG =
-        (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG);
     auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
 
     const auto& fabric_context = control_plane.get_fabric_context();
@@ -90,17 +88,10 @@ void build_tt_fabric_program(
             std::set<ChipId>(neighbors.begin()->second.begin(), neighbors.begin()->second.end()).size() == 1,
             "Multiple neighbors per direction is currently unsupported");
 
-        // 1D fabric only supports intramesh connections apart from TG gateways
+        // 1D fabric only supports intramesh connections
         if (!is_2D_routing) {
-            uint32_t has_inter_mesh_connections = intra_chip_neighbors == neighbors.end();
-            if (is_TG && has_inter_mesh_connections) {
-                // if active eth channels are found but no neighbor on the same mesh, then the neighbor should be the
-                // gateway
-                TT_FATAL(
-                    active_eth_chans.size() == 1, "Found more than one active eth link b/w mmio and remote chip on TG");
-            } else {
-                TT_FATAL(!has_inter_mesh_connections, "1D routing does not support intermesh connections");
-            }
+            bool has_inter_mesh_connections = (intra_chip_neighbors == neighbors.end());
+            TT_FATAL(!has_inter_mesh_connections, "1D routing does not support intermesh connections");
         }
 
         FabricNodeId neighbor_fabric_node_id = FabricNodeId(neighbors.begin()->first, neighbors.begin()->second[0]);
@@ -187,18 +178,10 @@ void build_tt_fabric_program(
         bool can_connect =
             (chip_neighbors.find(dir1) != chip_neighbors.end()) && (chip_neighbors.find(dir2) != chip_neighbors.end());
         if (can_connect) {
-            auto eth_chans_dir1 = active_fabric_eth_channels.at(dir1);
-            auto eth_chans_dir2 = active_fabric_eth_channels.at(dir2);
+            const auto& eth_chans_dir1 = active_fabric_eth_channels.at(dir1);
+            const auto& eth_chans_dir2 = active_fabric_eth_channels.at(dir2);
 
-            // Hack for TG to connect the last routing plane correctly for dispatch
-            // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
-            if (is_TG && (eth_chans_dir1.size() != eth_chans_dir2.size())) {
-                log_trace(tt::LogMetal, "applying hack for chip: {}", device->id());
-                std::reverse(eth_chans_dir1.begin(), eth_chans_dir1.end());
-                std::reverse(eth_chans_dir2.begin(), eth_chans_dir2.end());
-            }
-
-            // since tunneling cores are not guaraneteed to be reserved on the same routing plane, iterate through
+            // Since tunneling cores are not guaranteed to be reserved on the same routing plane, iterate through
             // the ordered eth channels in both directions
             uint32_t num_links = std::min(eth_chans_dir1.size(), eth_chans_dir2.size());
             for (uint32_t link = 0; link < num_links; link++) {

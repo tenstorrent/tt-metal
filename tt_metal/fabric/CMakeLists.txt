@@ -53,6 +53,7 @@ target_sources(
         fabric_host_utils.cpp
         fabric_telemetry_reader.cpp
         fabric_context.cpp
+        fabric_builder_context.cpp
         fabric_mux_config.cpp
         fabric_tensix_builder.cpp
         fabric_tensix_builder_impl.cpp
