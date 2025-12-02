@@ -49,7 +49,7 @@ jobs:
           job-name: ${{ inputs.job_name }}
           model: ${{ inputs.model }}
           filter-model: ${{ inputs.filter-model }}
-          wilder-pat: ${{ secrets.WILDER_PAT }}
+          copilot-pat: ${{ secrets.TESTING_COPILOT_PAT }}
         env:
           OPENCODE_API_KEY: ${{ secrets.AUTO_TRIAGE_FREE_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
