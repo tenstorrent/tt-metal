@@ -274,34 +274,21 @@ tt::tt_metal::operation::Hash RingJointScaledDotProductAttention::compute_progra
 operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
-    auto *mesh_device = input_tensors[0].device();
-    const auto& mesh_view = mesh_device->get_view();
-    const auto target_fabric_node_id = mesh_view.get_fabric_node_id(coord);
-    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids = {};
-    // User specified the cluster-axis. Derive devices based on the current coordinate
-    // and the cluster-axis.
-    fabric_node_ids = (this->all_gather_struct.cluster_axis.value() == 0)
-                          ? mesh_view.get_fabric_node_ids_on_column(coord[1])
-                          : mesh_view.get_fabric_node_ids_on_row(coord[0]);
 
-    std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
-    std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
-    uint32_t device_index = 0;  // Initialize device index
-    for (uint32_t i = 0; i < this->all_gather_struct.ring_size; ++i) {
-        if (fabric_node_ids.at(i) == target_fabric_node_id) {
-            device_index = i;
-            if (i != 0) {
-                backward_fabric_node_id = fabric_node_ids.at(i - 1);
-            } else if (this->all_gather_struct.topology == ttnn::ccl::Topology::Ring) {
-                backward_fabric_node_id = fabric_node_ids.at(this->all_gather_struct.ring_size - 1);
-            }
-            if (i != this->all_gather_struct.ring_size - 1) {
-                forward_fabric_node_id = fabric_node_ids.at(i + 1);
-            } else if (this->all_gather_struct.topology == ttnn::ccl::Topology::Ring) {
-                forward_fabric_node_id = fabric_node_ids.at(0);
-            }
-        }
-    }
+    uint32_t device_index = ccl::get_linearized_index_from_physical_coord(
+        input_tensors[0], coord, this->all_gather_struct.cluster_axis.value_or(0) /*why is cluster axis optional?*/);
+
+    std::optional<MeshCoordinate> forward_coord = ccl::get_physical_neighbor_from_physical_coord(
+        input_tensors[0], coord, 1, this->all_gather_struct.topology, this->all_gather_struct.cluster_axis.value_or(0));
+
+    std::optional<MeshCoordinate> backward_coord = ccl::get_physical_neighbor_from_physical_coord(
+        input_tensors[0],
+        coord,
+        -1,
+        this->all_gather_struct.topology,
+        this->all_gather_struct.cluster_axis.value_or(0));
+
+    TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
 
     const auto& input_tensor_q = input_tensors.at(0);
     const auto& input_tensor_k = input_tensors.at(1);
@@ -386,9 +373,9 @@ operation::ProgramWithCallbacks RingJointScaledDotProductAttention::create_progr
     auto all_gather_program = ring_attention_all_gather_async_multi_core_with_workers_helper(
         ring_joint_sdpa_program.program,  // Must pass ring_joint_sdpa's program
         all_gather_input_tensors,
-        target_fabric_node_id,
-        forward_fabric_node_id,
-        backward_fabric_node_id,
+        coord,
+        forward_coord,
+        backward_coord,
         all_gather_output_tensors,
         this->all_gather_struct.dim,
         this->all_gather_struct.num_links,
