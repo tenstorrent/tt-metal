@@ -75,8 +75,6 @@ public:
 
     SystemMemoryManager& sysmem_manager() override;
 
-    void terminate() override;
-
     // This function is temporarily needed since MeshCommandQueue relies on the CommandQueue object
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;
 

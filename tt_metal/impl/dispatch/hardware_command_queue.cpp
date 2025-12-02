@@ -227,14 +227,6 @@ void HWCommandQueue::set_exit_condition() {
 
 IDevice* HWCommandQueue::device() { return this->device_; }
 
-template <typename T>
-void HWCommandQueue::enqueue_command(T& command, bool blocking, tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) {
-    command.process();
-    if (blocking) {
-        // this->finish(sub_device_ids);
-    }
-}
-
 CoreType HWCommandQueue::get_dispatch_core_type() {
     return MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
 }
@@ -511,6 +503,7 @@ void HWCommandQueue::record_end() {
     swap(this->dummy_prefetcher_cache_manager_, this->prefetcher_cache_manager_);
 }
 
+/*
 void HWCommandQueue::terminate() {
     ZoneScopedN("HWCommandQueue_terminate");
     TT_FATAL(!this->manager_.get_bypass_mode(), "Terminate cannot be used with tracing");
@@ -518,6 +511,7 @@ void HWCommandQueue::terminate() {
     auto command = EnqueueTerminateCommand(this->id_, this->device_, this->manager_);
     this->enqueue_command(command, false, {});
 }
+*/
 
 WorkerConfigBufferMgr& HWCommandQueue::get_config_buffer_mgr(uint32_t index) { return config_buffer_mgr_[index]; }
 
