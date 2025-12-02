@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
-#include "device/groupnorm_types.hpp"
+#include "device/groupnorm_device_operation_types.hpp"
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 

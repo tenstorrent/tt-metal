@@ -140,6 +140,8 @@ class RunTimeOptions {
     bool profiler_noc_events_enabled = false;
     uint32_t profiler_perf_counter_mode = 0;
     std::string profiler_noc_events_report_path;
+    bool profiler_disable_dump_to_files = false;
+    bool profiler_disable_push_to_tracy = false;
 
     bool null_kernels = false;
     // Kernels should return early, skipping the rest of the kernel. Kernels
@@ -456,6 +458,8 @@ public:
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
     uint32_t get_profiler_perf_counter_mode() const { return profiler_perf_counter_mode; }
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
+    bool get_profiler_disable_dump_to_files() const { return profiler_disable_dump_to_files; }
+    bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }
 
     void set_kernels_nullified(bool v) { null_kernels = v; }
     bool get_kernels_nullified() const { return null_kernels; }
