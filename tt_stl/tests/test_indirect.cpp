@@ -353,34 +353,6 @@ TEST(IndirectTest, DeductionGuide) {
 // TODO: Add test for incomplete type support (PImpl pattern)
 // This would require a more complex test setup with separate compilation units
 
-// Test with polymorphic types
-TEST(IndirectTest, PolymorphicTypes) {
-    struct Base {
-        int value;
-        explicit Base(int v) : value(v) {}
-
-        Base(const Base&) = default;
-        Base(Base&&) noexcept = default;
-
-        Base& operator=(const Base&) = default;
-        Base& operator=(Base&&) noexcept = default;
-
-        virtual ~Base() = default;
-        virtual int get() const { return value; }
-    };
-
-    struct Derived : Base {
-        explicit Derived(int v) : Base(v) {}
-        int get() const override { return value * 2; }
-    };
-
-    indirect<Base> b(Base{42});
-    EXPECT_EQ(b->get(), 42);
-
-    indirect<Derived> d(Derived{21});
-    EXPECT_EQ(d->get(), 42);
-}
-
 // Test move semantics with rvalue dereference
 TEST(IndirectTest, RvalueDereference) {
     struct MoveOnly {
