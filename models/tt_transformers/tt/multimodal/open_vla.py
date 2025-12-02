@@ -214,14 +214,9 @@ def get_LLama2OpenVLAArgs(state_dict):
     class LLama2OpenVLAArgs(ModelArgs):
         def __init__(self, *args, **kwargs):
             HF_MODEL = os.getenv("HF_MODEL")
-            # Allow None for testing environments or CI where model weights aren't downloaded
-            if HF_MODEL is not None:
-                assert (
-                    HF_MODEL == "meta-llama/Llama-2-7b-hf"
-                ), f"When LLama2OpenVLAArgs is used, HF_MODEL must be meta-llama/Llama-2-7b-hf"
-            # For testing environments, use dummy weights
-            if HF_MODEL is None:
-                kwargs["dummy_weights"] = True
+            assert (
+                HF_MODEL == "meta-llama/Llama-2-7b-hf"
+            ), f"When LLama2OpenVLAArgs is used, HF_MODEL must be meta-llama/Llama-2-7b-hf"
             super().__init__(*args, **kwargs)
 
         def _set_params_from_dict(self, config):
@@ -274,9 +269,9 @@ class OpenVLALanguageModel(GenerationMixin):
             "mesh_device": device,
             "instruct": False,
             "global_batch_size": 1,
-            "optimizations": None,
-            "max_seq_len": 1024,
-            "page_params": {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},
+            "optimizations": "performance",  # Use performance optimizations to reduce memory usage
+            "max_seq_len": 512,  # Reduced from 1024 to fit in memory
+            "page_params": {"page_block_size": 32, "page_max_num_blocks_per_dp": 512},  # Reduced blocks
             "paged_attention": True,
             "num_layers": 32,  # Default number of layers for LLaMA model
         }
@@ -1361,7 +1356,8 @@ class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration):
 )
 def test_language_model(mesh_device, prompt):
     language_model = OpenVLALanguageModel(mesh_device)
-    predicted_text = language_model.predict_text([prompt])
+    # Reduce max_generated_tokens to fit within memory constraints (max_seq_len=512)
+    predicted_text = language_model.predict_text([prompt], max_generated_tokens=50)
     print("Prompt -> ", prompt)
     print("Final Result -> ", predicted_text)
     print("DONE")
