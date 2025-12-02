@@ -12,24 +12,24 @@
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_metal.hpp>
-#include "common/executor.hpp"
-#include "context/metal_context.hpp"
+#include "tt_metal/common/executor.hpp"
+#include "impl/context/metal_context.hpp"
 
-#include <experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/topology.hpp"
 #include "dispatch/system_memory_manager.hpp"
 
-#include <tt_metal_profiler.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include "profiler/profiler_state.hpp"
 #include "profiler/profiler_state_manager.hpp"
 
-#include <experimental/fabric/fabric_types.hpp>
-#include <experimental/fabric/fabric.hpp>
-#include "fabric/fabric_context.hpp"
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include "tt_metal/fabric/fabric_context.hpp"
 
-#include <device.hpp>
+#include <tt-metalium/device.hpp>
 #include "device_impl.hpp"
 
 using namespace tt::tt_metal;
@@ -227,6 +227,7 @@ DeviceManager::DeviceManager(
     tt::stl::Span<const std::uint32_t> a_l1_bank_remap,
     size_t worker_l1_size,
     bool init_profiler,
+    bool use_max_eth_core_count_on_all_devices,
     bool initialize_fabric_and_dispatch_fw) :
     num_hw_cqs(num_hw_cqs),
     l1_small_size(l1_small_size),
@@ -234,7 +235,8 @@ DeviceManager::DeviceManager(
     worker_l1_size(worker_l1_size),
     using_fast_dispatch_(tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()),
     init_profiler_(init_profiler),
-    initialize_fabric_and_dispatch_fw_(initialize_fabric_and_dispatch_fw) {
+    initialize_fabric_and_dispatch_fw_(initialize_fabric_and_dispatch_fw),
+    use_max_eth_core_count_on_all_devices_(use_max_eth_core_count_on_all_devices) {
     ZoneScoped;
     log_debug(tt::LogMetal, "DeviceManager constructor");
 
