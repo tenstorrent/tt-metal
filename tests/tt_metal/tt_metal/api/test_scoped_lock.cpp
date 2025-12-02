@@ -23,7 +23,8 @@
 namespace tt::tt_metal {
 
 // Test two cores: one locks and writes, another writes to the same region
-// This tests the profiler's ability to track overlapping memory accesses
+// Both kernels synchronize using semaphores at start and end to ensure
+// locks are held concurrently for the profiler to capture overlapping accesses
 TEST_F(UnitMeshCQSingleCardProgramFixture, TensixScopedLockConcurrentAccess) {
     for (auto& mesh_device : devices_) {
         auto grid_size = mesh_device->compute_with_storage_grid_size();
@@ -47,21 +48,24 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixScopedLockConcurrentAccess) {
         uint32_t locker_buffer_addr = unreserved_addr;
         uint32_t writer_buffer_addr = unreserved_addr + alignment * 32;  // Separate local buffer for writer
         uint32_t num_elements = 8;
-        uint32_t locker_write_value = 0x11110000;
-        uint32_t writer_write_value = 0x22220000;
 
         auto locker_virtual_core = mesh_device->worker_core_from_logical_core(locker_core);
+        auto writer_virtual_core = mesh_device->worker_core_from_logical_core(writer_core);
 
-        // Locker kernel: locks its region and writes to it
+        // Create semaphores for handshaking between kernels
+        // Each core has its own semaphore that the other core will increment
+        uint32_t locker_sem_id = CreateSemaphore(program, locker_core, 0);
+        uint32_t writer_sem_id = CreateSemaphore(program, writer_core, 0);
+
+        // Locker kernel args:
+        // l1_buffer_addr, num_elements, my_sem_id, other_sem_id, other_noc_x, other_noc_y
         std::vector<uint32_t> locker_args = {
             locker_buffer_addr,
             num_elements,
-            locker_write_value,
-            0,
-            0,
-            0,  // Not using NoC write
-            0   // do_noc_write = false
-        };
+            locker_sem_id,
+            writer_sem_id,
+            writer_virtual_core.x,
+            writer_virtual_core.y};
 
         KernelHandle locker_kernel = CreateKernel(
             program,
@@ -71,15 +75,19 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixScopedLockConcurrentAccess) {
 
         SetRuntimeArgs(program, locker_kernel, locker_core, locker_args);
 
-        // Writer kernel: writes to the locker core's "locked" region
+        // Writer kernel args:
+        // local_buffer_addr, num_elements, target_noc_x, target_noc_y, target_addr,
+        // my_sem_id, other_sem_id, other_noc_x, other_noc_y
         std::vector<uint32_t> writer_args = {
             writer_buffer_addr,
             num_elements,
-            writer_write_value,
             locker_virtual_core.x,
             locker_virtual_core.y,
-            locker_buffer_addr  // Target the locker's buffer
-        };
+            locker_buffer_addr,  // Target the locker's buffer
+            writer_sem_id,
+            locker_sem_id,
+            locker_virtual_core.x,
+            locker_virtual_core.y};
 
         KernelHandle writer_kernel = CreateKernel(
             program,
@@ -93,8 +101,9 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixScopedLockConcurrentAccess) {
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, true);
 
         // The final data on locker core depends on execution order
+        // Locker writes: 0, 1, 2, ...
+        // Writer writes: 0x1000, 0x1001, 0x1002, ... via NoC
         // Since there's no actual mutex, the data could be from either kernel
-        // The important thing is that the profiler can track both accesses
         auto* device = mesh_device->get_devices()[0];
         std::vector<uint32_t> final_data(num_elements, 0);
         detail::ReadFromDeviceL1(device, locker_core, locker_buffer_addr, num_elements * sizeof(uint32_t), final_data);
@@ -104,10 +113,10 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixScopedLockConcurrentAccess) {
         bool has_locker_data = false;
         bool has_writer_data = false;
         for (uint32_t i = 0; i < num_elements; i++) {
-            if (final_data[i] == locker_write_value + i) {
+            if (final_data[i] == i) {
                 has_locker_data = true;
             }
-            if (final_data[i] == writer_write_value + i) {
+            if (final_data[i] == 0x1000 + i) {
                 has_writer_data = true;
             }
         }
