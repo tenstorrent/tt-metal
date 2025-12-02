@@ -240,26 +240,3 @@ def boolean_indexing(tensor, mask):
         indices_expanded = _ensure_uint32(indices_expanded)  # repeat may change dtype
         indices_expanded = ttnn.to_layout(indices_expanded, ttnn.TILE_LAYOUT)
         result = ttnn.gather(tensor, dim=0, index=indices_expanded)
-
-    # Reshape back to 3D if input was 3D
-    if is_3d and original_shape[0] == 1:
-        # Convert to ROW_MAJOR to check actual shape
-        result = ttnn.to_layout(result, ttnn.ROW_MAJOR_LAYOUT)
-        result_shape = result.shape
-
-        if len(result_shape) == 4:
-            # Some operations may return 4D [1, 1, M, C], flatten to [1, M, C]
-            result = ttnn.reshape(result, (1, result_shape[2], result_shape[3]))
-        elif len(result_shape) == 2:
-            # Result is [M, C], add batch dimension to get [1, M, C]
-            result = ttnn.reshape(result, (1, result_shape[0], result_shape[1]))
-
-        # Convert back to original layout
-        if original_layout == ttnn.TILE_LAYOUT:
-            result = ttnn.to_layout(result, ttnn.TILE_LAYOUT)
-    else:
-        # Restore original layout for non-3D
-        if original_layout != ttnn.TILE_LAYOUT:
-            result = ttnn.to_layout(result, original_layout)
-
-    return result
