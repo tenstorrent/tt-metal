@@ -99,18 +99,12 @@ void FabricBuilder::create_routers() {
             auto router_builder = FabricRouterBuilder::create(device_, program_, local_node_, location, spec);
             routers_.insert({eth_chan, std::move(router_builder)});
         }
+    }
 
-        // Configure dispatch links for this direction
-        // Dispatch requires higher context switching frequency to service slow dispatch / UMD / debug tools
-        if (device_has_dispatch_tunnel_) {
-            for (const auto& eth_chan : eth_channels) {
-                if (dispatch_links_.count(eth_chan) > 0) {
-                    constexpr uint32_t k_DispatchFabricRouterContextSwitchInterval = 16;
-                    auto& edm_builder = routers_.at(eth_chan)->get_erisc_builder();
-                    edm_builder.set_firmware_context_switch_interval(k_DispatchFabricRouterContextSwitchInterval);
-                    edm_builder.set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType::INTERVAL);
-                }
-            }
+    // Configure dispatch links - let each router decide how to configure for dispatch
+    if (device_has_dispatch_tunnel_) {
+        for (const auto& dispatch_chan : dispatch_links_) {
+            routers_.at(dispatch_chan)->configure_for_dispatch();
         }
     }
 
@@ -192,8 +186,8 @@ void FabricBuilder::connect_routers() {
         router1->connect_to_downstream_router_over_noc(*router2, 0);
         router2->connect_to_downstream_router_over_noc(*router1, 0);
 
-        // Configure link (NOC VC + core placement) - router handles internally
-        router1->configure_link(*router2, pair.link_idx, pair.num_links, topology, is_galaxy);
+        // Configure connection (NOC VC + core placement) - router handles internally
+        router1->configure_connection(*router2, pair.link_idx, pair.num_links, topology, is_galaxy);
     }
 }
 

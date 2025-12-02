@@ -408,11 +408,11 @@ void ComputeMeshRouterBuilder::connect_to_local_tensix_builder(FabricTensixDatam
     tensix_builder.append_relay_router_noc_xy(erisc_builder_->get_noc_x(), erisc_builder_->get_noc_y());
 }
 
-void ComputeMeshRouterBuilder::configure_link(
+void ComputeMeshRouterBuilder::configure_connection(
     FabricRouterBuilder& peer, uint32_t link_idx, uint32_t num_links, Topology topology, bool is_galaxy) {
     // Cast to concrete type to access erisc builder
     auto* peer_ptr = dynamic_cast<ComputeMeshRouterBuilder*>(&peer);
-    TT_FATAL(peer_ptr != nullptr, "configure_link requires ComputeMeshRouterBuilder peer");
+    TT_FATAL(peer_ptr != nullptr, "configure_connection requires ComputeMeshRouterBuilder peer");
 
     // Configure NOC VC based on link index
     auto edm_noc_vc = erisc_builder_->config.DEFAULT_NOC_VC + (link_idx % erisc_builder_->config.NUM_EDM_NOC_VCS);
@@ -426,6 +426,13 @@ void ComputeMeshRouterBuilder::configure_link(
         .num_links = num_links,
     };
     core_placement::apply_core_placement_optimizations(cctx, *erisc_builder_, *peer_ptr->erisc_builder_, link_idx);
+}
+
+void ComputeMeshRouterBuilder::configure_for_dispatch() {
+    // Dispatch requires higher context switching frequency to service slow dispatch / UMD / debug tools
+    constexpr uint32_t k_DispatchFabricRouterContextSwitchInterval = 16;
+    erisc_builder_->set_firmware_context_switch_interval(k_DispatchFabricRouterContextSwitchInterval);
+    erisc_builder_->set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType::INTERVAL);
 }
 
 void ComputeMeshRouterBuilder::compile_ancillary_kernels(tt::tt_metal::Program& program) {

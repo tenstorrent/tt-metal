@@ -74,8 +74,10 @@ public:
 
     void connect_to_downstream_router_over_noc(FabricRouterBuilder& other, uint32_t vc) override;
 
-    void configure_link(
+    void configure_connection(
         FabricRouterBuilder& peer, uint32_t link_idx, uint32_t num_links, Topology topology, bool is_galaxy) override;
+
+    void configure_for_dispatch() override;
 
     void compile_ancillary_kernels(tt::tt_metal::Program& program) override;
 
@@ -93,9 +95,9 @@ public:
     FabricNodeId get_local_fabric_node_id() const override;
     FabricNodeId get_peer_fabric_node_id() const override;
 
-    // Builder access (erisc_builder is in interface, tensix is compute-mesh specific)
-    FabricEriscDatamoverBuilder& get_erisc_builder() override { return *erisc_builder_; }
-    const FabricEriscDatamoverBuilder& get_erisc_builder() const override { return *erisc_builder_; }
+    // Builder access - compute mesh specific, not in interface
+    FabricEriscDatamoverBuilder& get_erisc_builder() { return *erisc_builder_; }
+    const FabricEriscDatamoverBuilder& get_erisc_builder() const { return *erisc_builder_; }
 
     // Tensix builder access - compute mesh specific, not in interface
     bool has_tensix_builder() const { return tensix_builder_.has_value(); }

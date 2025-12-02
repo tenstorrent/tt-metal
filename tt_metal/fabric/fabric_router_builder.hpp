@@ -128,8 +128,8 @@ public:
     virtual void connect_to_downstream_router_over_noc(FabricRouterBuilder& other, uint32_t vc) = 0;
 
     /**
-     * Configure link between this router and a peer router.
-     * Handles NOC VC configuration and core placement optimizations.
+     * Configure connection between this router and a peer router.
+     * Handles NOC VC configuration and core placement optimizations for both routers.
      *
      * @param peer The peer router builder
      * @param link_idx The link index within the direction
@@ -137,8 +137,15 @@ public:
      * @param topology The fabric topology
      * @param is_galaxy Whether this is a galaxy cluster
      */
-    virtual void configure_link(
+    virtual void configure_connection(
         FabricRouterBuilder& peer, uint32_t link_idx, uint32_t num_links, Topology topology, bool is_galaxy) = 0;
+
+    /**
+     * Configure this router for dispatch link operation.
+     * Dispatch links require specific settings (e.g., higher context switching frequency).
+     * Each router type decides how (or if) to configure for dispatch.
+     */
+    virtual void configure_for_dispatch() = 0;
 
     /**
      * Build connection to fabric channel (for sender channels)
@@ -167,13 +174,6 @@ public:
     virtual size_t get_configured_risc_count() const = 0;
     virtual FabricNodeId get_local_fabric_node_id() const = 0;
     virtual FabricNodeId get_peer_fabric_node_id() const = 0;
-
-    // ============ Builder Access ============
-    // These provide access to underlying builders for operations that haven't
-    // been fully abstracted yet. Goal is to eventually remove these.
-
-    virtual FabricEriscDatamoverBuilder& get_erisc_builder() = 0;
-    virtual const FabricEriscDatamoverBuilder& get_erisc_builder() const = 0;
 
     // ============ Build Methods ============
 
