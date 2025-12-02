@@ -30,7 +30,7 @@ void ConvertToHWCDeviceOperation::validate_on_program_cache_miss(
     const auto& C = shape[-2];
 
     TT_FATAL(shape.size() == 4, "Input shape must be rank 4 (was rank {})", shape.size());
-    TT_FATAL(shape[0] == 1 && shape[1] == 1, "Expected input tensor to be shape [1, 1, C, HW] (shape was {})", shape);
+    TT_FATAL(shape[0] == 1, "Expected input tensor to be shape [1, B, C, HW] (shape was {})", shape);
     TT_FATAL(C <= TILE_HEIGHT, "C must be less than or equal to 32 (was {})", C);
 
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Input tensor must be in row-major layout");
@@ -48,7 +48,7 @@ void ConvertToHWCDeviceOperation::validate_on_program_cache_miss(
 spec_return_value_t ConvertToHWCDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& shape = tensor_args.input.logical_shape();
-    const int B = shape[0];
+    const int B = shape[1];
     const int C = shape[2];
     const int HW = shape[3];
 
@@ -57,7 +57,7 @@ spec_return_value_t ConvertToHWCDeviceOperation::compute_output_specs(
     const auto output_channels = tt::round_up(C, alignment_elements);
 
     return TensorSpec(
-        Shape({B, 1, HW, output_channels}),
+        Shape({1, 1, B * HW, output_channels}),
         TensorLayout(args.dtype, PageConfig(Layout::ROW_MAJOR), args.memory_config));
 }
 
