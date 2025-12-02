@@ -1032,13 +1032,7 @@ void writeToCoreControlBuffer(IDevice* device, const CoreCoord& virtual_core, co
             mesh_cq.enqueue_write_shard_to_core(
                 address, data.data(), kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, true);
         } else {
-            dynamic_cast<HWCommandQueue&>(device->command_queue())
-                .enqueue_write_to_core(
-                    virtual_core,
-                    data.data(),
-                    control_vector_addr,
-                    kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-                    true);
+            TT_FATAL(false, "Fast dispatch write to control buffer requires mesh device support");
         }
     } else {
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
