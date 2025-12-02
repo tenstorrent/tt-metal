@@ -50,6 +50,7 @@ public:
         const autograd::TensorPtr& mask,
         const autograd::TensorPtr& k_cache,
         const autograd::TensorPtr& v_cache,
+        const modules::InferenceMode mode,
         uint32_t cache_position);
 };
 

@@ -105,7 +105,7 @@ E apply_rope_scaling(const E& freqs, const RopeScalingParams& p) {
 // trans_mat, sin_cache, cos_cache are all precomputed and stored somewhere in
 // the module hierarchy and passed to the operation.
 autograd::TensorPtr rope(
-    const autograd::TensorPtr& input, const RotaryEmbeddingParams& params, std::optional<uint32_t> token_position) {
+    const autograd::TensorPtr& input, const RotaryEmbeddingParams& params, const uint32_t token_position) {
     validate_rope_input_and_params(input, params);
 
     auto input_logical_shape = input->get_value().logical_shape();
@@ -133,8 +133,8 @@ autograd::TensorPtr rope(
     ttnn::Tensor neg_cos_cache_to_use = params.neg_cos_cache;
     ttnn::Tensor neg_sin_cache_to_use = params.neg_sin_cache;
 
-    if (token_position.has_value()) {
-        auto pos = token_position.value();
+    if (token_position > 0U) {
+        auto pos = token_position;
         ttnn::SmallVector<uint32_t> start = {0, 0, pos, 0};
         ttnn::SmallVector<uint32_t> end = {1, 1, pos + seq_len, head_dim};
         ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
@@ -182,7 +182,7 @@ autograd::TensorPtr rope(
     out->set_node(autograd::ctx().add_backward_node(std::move(grad_fn), links));
 
     // Deallocate temporary sliced caches if they were created
-    if (token_position.has_value()) {
+    if (token_position > 0U) {
         ttnn::deallocate(cos_cache_to_use);
         ttnn::deallocate(sin_cache_to_use);
         ttnn::deallocate(neg_cos_cache_to_use);
