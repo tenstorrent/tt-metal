@@ -240,34 +240,6 @@ CoreType HWCommandQueue::get_dispatch_core_type() {
     return MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
 }
 
-void HWCommandQueue::enqueue_write_to_core(
-    const CoreCoord& virtual_core,
-    const void* src,
-    DeviceAddr address,
-    uint32_t size_bytes,
-    bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScopedN("HWCommandQueue_enqueue_write_to_core");
-
-    address = device_dispatch::add_bank_offset_to_address(this->device_, virtual_core, address);
-
-    sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
-
-    device_dispatch::write_to_core(
-        this->device_,
-        virtual_core,
-        src,
-        address,
-        size_bytes,
-        this->id_,
-        this->expected_num_workers_completed_,
-        sub_device_ids);
-
-    if (blocking) {
-        // this->finish(sub_device_ids);
-    }
-}
-
 void HWCommandQueue::read_completion_queue() {
     ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_->id());
