@@ -6,8 +6,9 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # Find required packages
 find_package(Threads REQUIRED)
 
-# Find gRPC and Protobuf (handles both modern and older systems)
-include(FindSystemgRPC)
+# Fetch gRPC (hermetic build)
+# This module sets up gRPC and Protobuf variables expected by BuildTelemetryProto.cmake
+include(FetchgRPC)
 
 # Fetch cpp-httplib using CPM (consistent with third_party dependencies)
 CPMAddPackage(
@@ -76,6 +77,33 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/tt_telemetry")
 # Build the telemetry gRPC proto library
 include(BuildTelemetryProto)
 
+# Separate library for gRPC server implementation to isolate include paths
+# IMPORTANT: This library must NOT link telemetry_libs because it brings in
+# TT::Metalium includes which contain old Protobuf headers that conflict with
+# the new Protobuf from our ExternalProject gRPC build.
+add_library(grpc_service_lib STATIC server/grpc_telemetry_server.cpp)
+target_link_libraries(
+    grpc_service_lib
+    PRIVATE
+        telemetry_grpc_proto
+        ${_GRPC_GRPCPP}
+        ${_PROTOBUF_LIBPROTOBUF} # Uses new protobuf from external project
+        # Only link what we actually need from telemetry_libs dependencies:
+        Threads::Threads
+        nlohmann_json::nlohmann_json
+        fmt::fmt-header-only
+)
+target_include_directories(
+    grpc_service_lib
+    PRIVATE
+        include
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
+        # Add UMD includes needed by metric.hpp (but NOT the protobuf paths)
+        ${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/device/api
+        ${PROJECT_SOURCE_DIR}/tt_metal
+    # Do NOT include ${CMAKE_BINARY_DIR}/tools/scaleout - that has old protobuf generated headers
+)
+
 add_executable(tt_telemetry_server)
 target_sources(
     tt_telemetry_server
@@ -89,7 +117,6 @@ target_sources(
         server/prom_formatter.cpp
         server/collection_endpoint.cpp
         server/collection_clients.cpp
-        server/grpc_telemetry_server.cpp
         topology/topology.cpp
         telemetry/ethernet/ethernet_helpers.cpp
         telemetry/ethernet/ethernet_metrics.cpp
@@ -115,9 +142,7 @@ target_link_libraries(
         websocketpp # Link websocketpp for WebSocket functionality
         asio # Standalone asio for websocketpp
         cxxopts::cxxopts
-        ${_PROTOBUF_LIBPROTOBUF} # Add protobuf library for compatibility
-        telemetry_grpc_proto # Link the generated gRPC proto library
-        ${_GRPC_GRPCPP}
+        grpc_service_lib # Link our isolated library
 )
 
 # Copy frontend files to build directory so they're accessible relative to the executable

@@ -1,9 +1,5 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-//
-// SPDX-License-Identifier: Apache-2.0
-
-// TODO: check for timestamp should be unnecessary and can be assumed to be present if metric is.
-//       eventually, we should refactor TelemetrySnapshot() to provide a getter that validates all this.
+// PIMPL implementation for GrpcTelemetryServer
+// This hides gRPC includes from the header file to prevent conflicts
 
 #include <server/grpc_telemetry_server.hpp>
 
@@ -26,6 +22,22 @@ using grpc::ServerBuilder;
 using grpc::ServerContext;
 using grpc::ServerWriter;
 using grpc::Status;
+
+// Forward declaration of the service impl
+namespace tt {
+namespace telemetry {
+class TelemetryServiceImpl;
+}
+}  // namespace tt
+
+// Define the PIMPL struct
+struct GrpcTelemetryServer::Impl {
+    std::string socket_path;
+    std::unique_ptr<grpc::Server> server;
+    std::unique_ptr<tt::telemetry::TelemetryServiceImpl> service_impl;
+
+    Impl(const std::string& path) : socket_path(path) {}
+};
 
 /**************************************************************************************************
  Telemetry Service
@@ -319,12 +331,6 @@ private:
 
 /**************************************************************************************************
  Socket Cleanup
-
- We attempt to clean up the UNIX socket if the application crashes, is terminated, or prematurely
- exits (e.g. via a call to exit() from the watchdog thread). We cannot handle *all* cases, namely
- SIGKILL, so the startup code attempts to initially unlink the socket as well.
-
- We enforce the condition that the gRPC server can only be run once per program session.
 **************************************************************************************************/
 
 // Tracks whether the gRPC server has been started (enforces single instance, no restart)
@@ -382,31 +388,29 @@ static void install_cleanup_handlers(const std::string& socket_path) {
 
 /**************************************************************************************************
  Telemetry Subscriber
-
- Starts the gRPC telemetry service and forwards metric updates to it.
 **************************************************************************************************/
 
 GrpcTelemetryServer::GrpcTelemetryServer(const std::string& socket_path) :
-    TelemetrySubscriber(),
-    socket_path_(socket_path),
-    service_impl_(std::make_unique<tt::telemetry::TelemetryServiceImpl>(telemetry_state_, state_mutex_)) {}
+    TelemetrySubscriber(), pimpl_(std::make_unique<Impl>(socket_path)) {
+    pimpl_->service_impl = std::make_unique<tt::telemetry::TelemetryServiceImpl>(telemetry_state_, state_mutex_);
+}
 
 GrpcTelemetryServer::~GrpcTelemetryServer() { stop(); }
 
 void GrpcTelemetryServer::start() {
     // Install signal and atexit handlers (enforces single instance, no restart)
-    install_cleanup_handlers(socket_path_);
+    install_cleanup_handlers(pimpl_->socket_path);
 
     // Remove existing socket file if it exists
-    if (unlink(socket_path_.c_str()) == 0) {
-        log_info(tt::LogAlways, "[gRPC] Removed stale UNIX socket: {}", socket_path_);
+    if (unlink(pimpl_->socket_path.c_str()) == 0) {
+        log_info(tt::LogAlways, "[gRPC] Removed stale UNIX socket: {}", pimpl_->socket_path);
     } else if (errno != ENOENT) {
         // ENOENT is expected (file doesn't exist), but other errors are problems
         log_warning(
             tt::LogAlways,
             "[gRPC] Failed to unlink socket {} (errno={}). This may indicate a permission issue from a previous "
             "run with elevated privileges. The socket creation may fail.",
-            socket_path_,
+            pimpl_->socket_path,
             errno);
     }
 
@@ -414,45 +418,45 @@ void GrpcTelemetryServer::start() {
 
     // Configure to listen on UNIX socket
     // Format: unix:///path/to/socket.sock (note the triple slash for absolute path)
-    std::string server_address = std::string("unix://") + socket_path_;
+    std::string server_address = std::string("unix://") + pimpl_->socket_path;
 
     // Add listening port (no authentication for UNIX sockets)
     builder.AddListeningPort(server_address, grpc::InsecureServerCredentials());
 
     // Register the service
-    builder.RegisterService(service_impl_.get());
+    builder.RegisterService(pimpl_->service_impl.get());
 
     // Assemble and start the server
-    server_ = builder.BuildAndStart();
+    pimpl_->server = builder.BuildAndStart();
 
-    if (!server_) {
-        log_error(tt::LogAlways, "[gRPC] Failed to start gRPC server on UNIX socket: {}", socket_path_);
+    if (!pimpl_->server) {
+        log_error(tt::LogAlways, "[gRPC] Failed to start gRPC server on UNIX socket: {}", pimpl_->socket_path);
         return;
     }
 
-    log_info(tt::LogAlways, "[gRPC] Server listening on UNIX socket: {}", socket_path_);
+    log_info(tt::LogAlways, "[gRPC] Server listening on UNIX socket: {}", pimpl_->socket_path);
 
     // Set permissions so other processes can access it
     // 0666 = read/write for owner, group, and others
-    if (chmod(socket_path_.c_str(), 0666) != 0) {
-        log_warning(tt::LogAlways, "[gRPC] Failed to set permissions on socket: {}", socket_path_);
+    if (chmod(pimpl_->socket_path.c_str(), 0666) != 0) {
+        log_warning(tt::LogAlways, "[gRPC] Failed to set permissions on socket: {}", pimpl_->socket_path);
     }
 }
 
 void GrpcTelemetryServer::stop() {
-    if (server_) {
+    if (pimpl_->server) {
         log_info(tt::LogAlways, "[gRPC] Shutting down gRPC telemetry server");
 
         // Shutdown the server with a deadline
-        server_->Shutdown(std::chrono::system_clock::now() + std::chrono::seconds(5));
+        pimpl_->server->Shutdown(std::chrono::system_clock::now() + std::chrono::seconds(5));
 
         // Wait for all pending RPCs to complete
-        server_->Wait();
+        pimpl_->server->Wait();
 
-        server_.reset();
+        pimpl_->server.reset();
 
         // Clean up socket file (idempotent - safe even if signal handler already called it)
-        unlink(socket_path_.c_str());
+        unlink(pimpl_->socket_path.c_str());
 
         log_info(tt::LogAlways, "[gRPC] Server stopped and socket cleaned up");
     }
@@ -460,8 +464,7 @@ void GrpcTelemetryServer::stop() {
 
 void GrpcTelemetryServer::on_telemetry_updated(const std::shared_ptr<TelemetrySnapshot>& delta) {
     // Enqueue the update for all streaming clients
-    auto* service = dynamic_cast<tt::telemetry::TelemetryServiceImpl*>(service_impl_.get());
-    if (service) {
-        service->enqueue_update_for_all_clients(delta);
+    if (pimpl_->service_impl) {
+        pimpl_->service_impl->enqueue_update_for_all_clients(delta);
     }
 }

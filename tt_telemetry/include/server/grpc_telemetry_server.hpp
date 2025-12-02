@@ -14,12 +14,13 @@
 #include <memory>
 #include <string>
 #include <thread>
-#include <grpcpp/grpcpp.h>
+// #include <grpcpp/grpcpp.h> // Hidden to avoid polluting main app with gRPC headers
 
 #include <telemetry/telemetry_subscriber.hpp>
 
 // Forward declaration - we use grpc::Service as the base type
 namespace grpc {
+class Server;  // Forward declare
 class Service;
 }
 
@@ -42,9 +43,7 @@ private:
     // UNIX domain socket path
     std::string socket_path_;
 
-    // gRPC server instance
-    std::unique_ptr<grpc::Server> server_;
-
-    // Service implementation instance (stored as base grpc::Service pointer)
-    std::unique_ptr<grpc::Service> service_impl_;
+    // gRPC server instance (using forward declared pointer)
+    struct Impl;  // PIMPL idiom to hide gRPC details
+    std::unique_ptr<Impl> pimpl_;
 };
