@@ -6,7 +6,6 @@
 #include "tt_metal/fabric/fabric_router_builder.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
-#include "tt_metal/fabric/builder/fabric_core_placement.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "metal_soc_descriptor.h"
@@ -195,34 +194,15 @@ void FabricBuilder::connect_routers() {
         router1->connect_to_downstream_router_over_noc(*router2, 0);
         router2->connect_to_downstream_router_over_noc(*router1, 0);
 
-        // Configure NOC VC based on link index
-        auto& edm_builder1 = router1->get_erisc_builder();
-        auto& edm_builder2 = router2->get_erisc_builder();
-        auto edm_noc_vc = edm_builder1.config.DEFAULT_NOC_VC + (pair.link_idx % edm_builder1.config.NUM_EDM_NOC_VCS);
-        edm_builder1.config.edm_noc_vc = edm_noc_vc;
-        edm_builder2.config.edm_noc_vc = edm_noc_vc;
-
-        // Apply core placement optimizations
-        tt::tt_fabric::core_placement::CorePlacementContext cctx{
-            .topology = topology,
-            .is_galaxy = is_galaxy,
-            .num_links = pair.num_links,
-        };
-        tt::tt_fabric::core_placement::apply_core_placement_optimizations(
-            cctx, edm_builder1, edm_builder2, pair.link_idx);
+        // Configure link (NOC VC + core placement) - router handles internally
+        router1->configure_link(*router2, pair.link_idx, pair.num_links, topology, is_galaxy);
     }
 }
 
 void FabricBuilder::compile_ancillary_kernels() {
-    if (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() ==
-        tt::tt_fabric::FabricTensixConfig::DISABLED) {
-        return;
-    }
-
+    // Let each router compile its own ancillary kernels
     for (auto& [eth_chan, router_builder] : routers_) {
-        if (router_builder->has_tensix_builder()) {
-            router_builder->get_tensix_builder().create_and_compile(program_);
-        }
+        router_builder->compile_ancillary_kernels(program_);
     }
 }
 

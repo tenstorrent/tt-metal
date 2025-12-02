@@ -72,6 +72,11 @@ public:
 
     void connect_to_downstream_router_over_noc(FabricRouterBuilder& other, uint32_t vc) override;
 
+    void configure_link(
+        FabricRouterBuilder& peer, uint32_t link_idx, uint32_t num_links, Topology topology, bool is_galaxy) override;
+
+    void compile_ancillary_kernels(tt::tt_metal::Program& program) override;
+
     SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc, uint32_t sender_channel_idx) override;
 
     uint32_t get_downstream_sender_channel(bool is_2D_routing, eth_chan_directions downstream_direction) const override;
@@ -84,15 +89,17 @@ public:
     FabricNodeId get_local_fabric_node_id() const override;
     FabricNodeId get_peer_fabric_node_id() const override;
 
-    // Builder access
+    // Builder access (erisc_builder is in interface, tensix is compute-mesh specific)
     FabricEriscDatamoverBuilder& get_erisc_builder() override { return *erisc_builder_; }
     const FabricEriscDatamoverBuilder& get_erisc_builder() const override { return *erisc_builder_; }
-    bool has_tensix_builder() const override { return tensix_builder_.has_value(); }
-    FabricTensixDatamoverBuilder& get_tensix_builder() override {
+
+    // Tensix builder access - compute mesh specific, not in interface
+    bool has_tensix_builder() const { return tensix_builder_.has_value(); }
+    FabricTensixDatamoverBuilder& get_tensix_builder() {
         TT_FATAL(tensix_builder_.has_value(), "Tensix builder not available");
         return tensix_builder_.value();
     }
-    const FabricTensixDatamoverBuilder& get_tensix_builder() const override {
+    const FabricTensixDatamoverBuilder& get_tensix_builder() const {
         TT_FATAL(tensix_builder_.has_value(), "Tensix builder not available");
         return tensix_builder_.value();
     }

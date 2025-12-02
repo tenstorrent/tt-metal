@@ -7,6 +7,7 @@
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
+#include "tt_metal/fabric/builder/fabric_core_placement.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/third_party/umd/device/api/umd/device/types/core_coordinates.hpp"
 #include <tt_stl/assert.hpp>
@@ -400,6 +401,33 @@ void ComputeMeshRouterBuilder::connect_to_local_tensix_builder(FabricTensixDatam
 
     // Provide router NOC coordinates to relay kernel for sending packets back to router
     tensix_builder.append_relay_router_noc_xy(erisc_builder_->get_noc_x(), erisc_builder_->get_noc_y());
+}
+
+void ComputeMeshRouterBuilder::configure_link(
+    FabricRouterBuilder& peer, uint32_t link_idx, uint32_t num_links, Topology topology, bool is_galaxy) {
+    // Cast to concrete type to access erisc builder
+    auto* peer_ptr = dynamic_cast<ComputeMeshRouterBuilder*>(&peer);
+    TT_FATAL(peer_ptr != nullptr, "configure_link requires ComputeMeshRouterBuilder peer");
+
+    // Configure NOC VC based on link index
+    auto edm_noc_vc = erisc_builder_->config.DEFAULT_NOC_VC + (link_idx % erisc_builder_->config.NUM_EDM_NOC_VCS);
+    erisc_builder_->config.edm_noc_vc = edm_noc_vc;
+    peer_ptr->erisc_builder_->config.edm_noc_vc = edm_noc_vc;
+
+    // Apply core placement optimizations
+    core_placement::CorePlacementContext cctx{
+        .topology = topology,
+        .is_galaxy = is_galaxy,
+        .num_links = num_links,
+    };
+    core_placement::apply_core_placement_optimizations(cctx, *erisc_builder_, *peer_ptr->erisc_builder_, link_idx);
+}
+
+void ComputeMeshRouterBuilder::compile_ancillary_kernels(tt::tt_metal::Program& program) {
+    // Compile tensix builder if present
+    if (tensix_builder_.has_value()) {
+        tensix_builder_->create_and_compile(program);
+    }
 }
 
 }  // namespace tt::tt_fabric

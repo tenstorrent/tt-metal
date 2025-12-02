@@ -113,6 +113,19 @@ public:
     virtual void connect_to_downstream_router_over_noc(FabricRouterBuilder& other, uint32_t vc) = 0;
 
     /**
+     * Configure link between this router and a peer router.
+     * Handles NOC VC configuration and core placement optimizations.
+     *
+     * @param peer The peer router builder
+     * @param link_idx The link index within the direction
+     * @param num_links Total number of links in this direction
+     * @param topology The fabric topology
+     * @param is_galaxy Whether this is a galaxy cluster
+     */
+    virtual void configure_link(
+        FabricRouterBuilder& peer, uint32_t link_idx, uint32_t num_links, Topology topology, bool is_galaxy) = 0;
+
+    /**
      * Build connection to fabric channel (for sender channels)
      *
      * @param vc Virtual channel ID
@@ -142,14 +155,20 @@ public:
 
     // ============ Builder Access ============
     // These provide access to underlying builders for operations that haven't
-    // been abstracted yet. Phase 4 will move more logic into the interface.
+    // been fully abstracted yet. Goal is to eventually remove these.
 
     virtual FabricEriscDatamoverBuilder& get_erisc_builder() = 0;
     virtual const FabricEriscDatamoverBuilder& get_erisc_builder() const = 0;
 
-    virtual bool has_tensix_builder() const = 0;
-    virtual FabricTensixDatamoverBuilder& get_tensix_builder() = 0;
-    virtual const FabricTensixDatamoverBuilder& get_tensix_builder() const = 0;
+    // ============ Build Methods ============
+
+    /**
+     * Compile any ancillary kernels this router needs (e.g., tensix mux).
+     * Each router type decides what ancillary kernels it requires.
+     *
+     * @param program The program to compile kernels into
+     */
+    virtual void compile_ancillary_kernels(tt::tt_metal::Program& program) = 0;
 
     // ============ Mesh Type Query ============
 
