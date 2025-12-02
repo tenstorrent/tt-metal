@@ -22,6 +22,8 @@
 
 using namespace ttnn::operations::experimental::broadcast_to;
 
+#define DEBUG
+
 namespace ttnn::operations::experimental::broadcast_to {
 using namespace tt::tt_metal;
 
@@ -59,6 +61,12 @@ void set_or_update_runtime_arguments(
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles, row_major);
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
+
+#ifdef DEBUG
+    std::cout << "num_cores " << num_cores << " num_cores_total " << num_cores_total << " " << __FILE_NAME__
+              << std::endl;
+#endif
+
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
         const auto& core = cores[i];
 
