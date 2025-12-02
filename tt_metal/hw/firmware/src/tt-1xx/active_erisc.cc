@@ -22,7 +22,6 @@
 #include "ethernet/dataflow_api.h"
 #include "ethernet/tunneling.h"
 #include "dev_mem_map.h"
-#include "tt_metal/lite_fabric/hw/inc/kernel_api.hpp"
 #include "eth_fw_api.h"
 #include "erisc.h"
 

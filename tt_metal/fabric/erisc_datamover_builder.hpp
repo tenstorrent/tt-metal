@@ -161,14 +161,6 @@ struct StreamRegAssignments {
     static constexpr uint32_t sender_channel_2_free_slots_stream_id = 19;  // for upstream edge on: 1D->VC1, 2D->VC0
     static constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;  // for upstream edge on: 2D->VC0
     static constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;  // for upstream edge on: 2D->VC1
-    // Used by Lite Fabric
-    // Consult tt_metal/lite_fabric/hw/inc/constants.hpp to ensure no conflicts
-    static constexpr uint32_t reserved_lite_fabric_0_stream_id = 23;
-    static constexpr uint32_t reserved_lite_fabric_1_stream_id = 24;
-    static constexpr uint32_t reserved_lite_fabric_2_stream_id = 25;
-    static constexpr uint32_t reserved_lite_fabric_3_stream_id = 26;
-    static constexpr uint32_t reserved_lite_fabric_4_stream_id = 27;
-    static constexpr uint32_t reserved_lite_fabric_5_stream_id = 28;
     // Local tensix relay free slots stream ID (UDM mode only)
     static constexpr uint32_t tensix_relay_local_free_slots_stream_id = 29;
     // Multi-RISC teardown synchronization stream ID
