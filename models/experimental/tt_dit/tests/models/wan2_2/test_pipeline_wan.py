@@ -90,7 +90,6 @@ def test_pipeline_inference(
         dynamic_load=dynamic_load,
         topology=topology,
         is_fsdp=is_fsdp,
-        quantization_config=None,
     )
 
     # Run inference
