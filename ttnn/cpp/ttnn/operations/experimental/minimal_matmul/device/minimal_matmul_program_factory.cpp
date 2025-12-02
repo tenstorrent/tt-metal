@@ -137,11 +137,15 @@ static inline void append_accessors(
     std::vector<uint32_t>& args,
     const Tensor& main_tensor,
     const Tensor& output_tensor,
-    const std::optional<const Tensor>& bias_tensor) {
+    const std::optional<const Tensor>& bias_tensor,
+    const std::optional<const Tensor>& ag_input_tensor = std::nullopt) {
     tt::tt_metal::TensorAccessorArgs(*main_tensor.buffer()).append_to(args);
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(args);
     if (bias_tensor.has_value()) {
         tt::tt_metal::TensorAccessorArgs(*bias_tensor.value().buffer()).append_to(args);
+    }
+    if (ag_input_tensor.has_value()) {
+        tt::tt_metal::TensorAccessorArgs(*ag_input_tensor.value().buffer()).append_to(args);
     }
 }
 
@@ -399,6 +403,7 @@ ttnn::operations::experimental::minimal_matmul::minimal_matmul_override_variable
     log_debug(tt::LogOp, "interm_cb_num_tiles: {}", interm_cb_num_tiles);
 
     std::map<std::string, std::string> defines;
+    std::map<std::string, std::string> in0_injector_defines;
     if (use_bias) {
         defines["FUSE_BIAS"] = "1";
     }
@@ -407,12 +412,23 @@ ttnn::operations::experimental::minimal_matmul::minimal_matmul_override_variable
         // Create semaphores
         fused_op_signaler->init_fused_op(program, device, in0_sender_cores);
         defines["FUSE_AG"] = "1";
+        if (fused_op_signaler->read_local_slice_from_input) {
+            in0_injector_defines = defines;
+            in0_injector_defines["READ_FROM_LOCAL_INPUT"] = "1";
+        }
     }
 
     uint32_t in0_addr = input_tensor.buffer()->address();
     uint32_t in1_addr = weight_tensor.buffer()->address();
     uint32_t in2_addr = use_bias ? bias_tensor.value().buffer()->address() : 0;
     uint32_t out_addr = output_tensor.buffer()->address();
+    uint32_t in3_addr =
+        fused_op_signaler->read_local_slice_from_input ? fused_op_signaler->ag_input.value().buffer()->address() : 0;
+    auto in3_data_format =
+        fused_op_signaler->read_local_slice_from_input
+            ? tt::tt_metal::datatype_to_dataformat_converter(fused_op_signaler->ag_input.value().dtype())
+            : in1_data_format;
+    auto in3_tile_size = tt::tile_size(in3_data_format);
 
     /**
      * Create kernels
@@ -441,15 +457,24 @@ ttnn::operations::experimental::minimal_matmul::minimal_matmul_override_variable
         in0_valid_semaphore_id,
         in0_is_output_writer,
         true,  // is_injector_core
+        in3_tile_size,
     };
-    append_accessors(in0_sender_compile_time_args, input_tensor, output_tensor, bias_tensor);
+    append_accessors(
+        in0_sender_compile_time_args,
+        input_tensor,
+        output_tensor,
+        bias_tensor,
+        (fuse_op && fused_op_signaler->read_local_slice_from_input) ? fused_op_signaler->ag_input : std::nullopt);
 
     auto in0_sender_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
         in0_sender_cores,
         tt::tt_metal::DataMovementConfig{
-            .processor = in0_risc, .noc = in0_noc, .compile_args = in0_sender_compile_time_args, .defines = defines});
+            .processor = in0_risc,
+            .noc = in0_noc,
+            .compile_args = in0_sender_compile_time_args,
+            .defines = (fuse_op && fused_op_signaler->read_local_slice_from_input) ? in0_injector_defines : defines});
 
     std::vector<uint32_t> in0_receiver_compile_time_args = {
         M_tiles,
@@ -471,6 +496,7 @@ ttnn::operations::experimental::minimal_matmul::minimal_matmul_override_variable
         in0_valid_semaphore_id,
         in0_is_output_writer,
         false,  // is_injector_core
+        in3_tile_size,
     };
     append_accessors(in0_receiver_compile_time_args, input_tensor, output_tensor, bias_tensor);
 
@@ -647,6 +673,7 @@ ttnn::operations::experimental::minimal_matmul::minimal_matmul_override_variable
             in0_addr,
             out_addr,
             in2_addr,
+            in3_addr,
             is_in0_sink,
             (std::uint32_t)in0_next_core_physical.x,  // in0_dest_noc_x
             (std::uint32_t)in0_next_core_physical.y,  // in0_dest_noc_y

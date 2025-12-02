@@ -251,6 +251,14 @@ from models.common.utility_functions import skip_for_blackhole
     ids=["separate", "fused"],
 )
 @pytest.mark.parametrize(
+    "read_local_slice_from_input",
+    [
+        True,
+        False,
+    ],
+    ids=["read_local", "copy_local"],
+)
+@pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
@@ -285,6 +293,7 @@ def test_strided_all_gather_minimal_matmul_async(
     use_non_fused,
     shard_weights,
     ag_offset,
+    read_local_slice_from_input,
 ):
     run_strided_all_gather_minimal_matmul_impl(
         mesh_device,
@@ -313,4 +322,5 @@ def test_strided_all_gather_minimal_matmul_async(
         use_non_fused=use_non_fused,
         shard_weights=shard_weights,
         ag_core_grid_offset=ag_offset,
+        read_local_slice_from_input=read_local_slice_from_input,
     )

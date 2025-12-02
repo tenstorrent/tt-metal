@@ -56,6 +56,7 @@ def run_strided_all_gather_minimal_matmul_impl(
     use_non_fused=True,
     shard_weights=False,
     ag_core_grid_offset=(0, 6),
+    read_local_slice_from_input=False,
 ):
     torch.manual_seed(0)
 
@@ -242,6 +243,7 @@ def run_strided_all_gather_minimal_matmul_impl(
                 compute_kernel_config=compute_config,
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
+                read_local_slice_from_input=read_local_slice_from_input,
             )
         return tt_all_gather_out_tensor, tt_matmul_out_tensor
 
@@ -286,20 +288,21 @@ def run_strided_all_gather_minimal_matmul_impl(
             torch_ag_out_tensor = ag_output_tensor_goldens_list[i if not enable_trace else 0]
 
             concat_dims = [other_dim, 0]
-            tt_ag_out = ttnn.from_device(tt_ag_out_tensor)
-            tt_ag_out = ttnn.to_torch(
-                tt_ag_out,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims
-                ),
-            )
+            if not read_local_slice_from_input:
+                tt_ag_out = ttnn.from_device(tt_ag_out_tensor)
+                tt_ag_out = ttnn.to_torch(
+                    tt_ag_out,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims
+                    ),
+                )
 
-            for d in range(mesh_device.shape[1]):
-                tt_ag_out_slice = tt_ag_out[d : d + 1, :, :, :]
-                eq, output = comp_pcc(tt_ag_out_slice, torch_ag_out_tensor, allowed_pcc)
+                for d in range(mesh_device.shape[1]):
+                    tt_ag_out_slice = tt_ag_out[d : d + 1, :, :, :]
+                    eq, output = comp_pcc(tt_ag_out_slice, torch_ag_out_tensor, allowed_pcc)
 
-            logger.info(f"{output}, iteration {i}")
-            assert eq, f"{i} AG FAILED ag: {output}"
+                logger.info(f"{output}, iteration {i}")
+                assert eq, f"{i} AG FAILED ag: {output}"
 
             tt_mm_out_tensor = tt_matmul_out_tensor_list[i]
             torch_mm_out_tensor = torch_matmul_output_list[i if not enable_trace else 0]
@@ -395,6 +398,14 @@ def run_strided_all_gather_minimal_matmul_impl(
     ids=["separate", "fused"],
 )
 @pytest.mark.parametrize(
+    "read_local_slice_from_input",
+    [
+        True,
+        False,
+    ],
+    ids=["read_local", "copy_local"],
+)
+@pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
@@ -428,6 +439,7 @@ def test_strided_all_gather_minimal_matmul_async(
     mm_core_grid,
     use_non_fused,
     shard_weights,
+    read_local_slice_from_input,
 ):
     TILE_SIZE = 32
     assert not ((M // TILE_SIZE) % num_workers_per_link), f"worker must be divisible by num workers per link"
@@ -467,4 +479,5 @@ def test_strided_all_gather_minimal_matmul_async(
         mm_core_grid=mm_core_grid,
         use_non_fused=use_non_fused,
         shard_weights=shard_weights,
+        read_local_slice_from_input=read_local_slice_from_input,
     )
