@@ -7,9 +7,8 @@
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/split/split.hpp"
-#include "ttnn/operations/data_movement/split/device/split_op.hpp"
+#include "ttnn/operations/data_movement/split/device/split_device_operation.hpp"
 #include "ttnn/operations/data_movement/view/view.hpp"
-#include "ttnn/run_operation.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -19,7 +18,7 @@ constexpr auto TWO_CHUNKS = 2;
 constexpr auto RANK_FOUR = 4;
 
 std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor& input_tensor, const MemoryConfig& mem_config) {
-    return tt::tt_metal::operation::run(SplitDeviceOperation{2, 3, mem_config}, {input_tensor});
+    return ttnn::prim::split(input_tensor, 2, 3, mem_config);
 }
 
 std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor& input_tensor, const MemoryConfig& mem_config) {

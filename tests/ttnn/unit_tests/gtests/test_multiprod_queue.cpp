@@ -42,7 +42,7 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
     // Spawn 2 application level threads intefacing with the same device through the async engine.
     // This leads to shared access of the work_executor and host side worker queue.
     // Test thread safety.
-    auto device = this->device_;
+    auto* device = this->device_;
 
     const ttnn::Shape tensor_shape{1, 1, 1024, 1024};
     const MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
@@ -89,7 +89,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
     // Reader cannot read until writer has correctly updated a memory location.
     // Writer cannot update location until reader has picked up data.
     // Use write_event to stall reader and read_event to stall writer.
-    auto device = this->device_;
+    auto* device = this->device_;
 
     const ttnn::Shape tensor_shape{1, 1, 1024, 1024};
     const MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
