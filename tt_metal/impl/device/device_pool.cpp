@@ -832,7 +832,7 @@ void DevicePool::teardown_fd(const std::unordered_set<ChipId>& devices_to_close)
             if (cq.sysmem_manager().get_bypass_mode()) {
                 cq.record_end();
             }
-            cq.terminate();
+            //cq.terminate();
         }
     }
 }

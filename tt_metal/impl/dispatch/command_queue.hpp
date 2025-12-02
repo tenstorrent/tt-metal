@@ -48,8 +48,6 @@ public:
 
     virtual SystemMemoryManager& sysmem_manager() = 0;
 
-    virtual void terminate() = 0;
-
     virtual IDevice* device() = 0;
 
     // This function is temporarily needed since MeshCommandQueue relies on the CommandQueue object
