@@ -481,11 +481,9 @@ FORCE_INLINE void multicast_data(
     uint32_t src_l1_addr,         // SRC address in L1
     uint32_t dst_l1_addr,         // DST address in L1
     uint64_t multicast_noc_addr,  // Multicast NOC address
-    uint32_t total_bytes,         // Total bytes to send
-    uint32_t cb_offset = 0)       // Offset for both read and write in CB (default 0 for compatibility)
+    uint32_t total_bytes          // Total bytes to send
+    )                             // Offset for both read and write in CB (default 0 for compatibility)
 {
-    src_l1_addr += cb_offset;
-    dst_l1_addr += cb_offset;
     uint64_t multicast_write_addr = multicast_noc_addr | dst_l1_addr;
 
     if (is_receiver_core) {
@@ -524,7 +522,8 @@ FORCE_INLINE void mcast_block_chunked(
     uint32_t src_cb,
     uint32_t dst_cb,
     uint64_t multicast_noc_addr,
-    uint32_t cb_offset = 0,         // Offset for both read and write in CB
+    uint32_t cb_read_offset = 0,
+    uint32_t cb_write_offset = 0,
     uint32_t tile_wait_offset = 0)  // Offset for tile wait (starts waiting from this tile number)
 {
     // number of full bursts
@@ -545,17 +544,16 @@ FORCE_INLINE void mcast_block_chunked(
     // number of times we need to increase the wait_tile_curr for the full burst iterations
     constexpr uint32_t wait_tile_full_iter_cnt = (wait_tile_full_done / wait_tile_full_cnt) - 1;
 
-    uint32_t src_l1_addr = get_read_ptr(src_cb);
-    uint32_t dst_l1_addr = get_write_ptr(dst_cb);
+    uint32_t src_l1_addr = get_read_ptr(src_cb) + cb_read_offset;
+    uint32_t dst_l1_addr = get_write_ptr(dst_cb) + cb_write_offset;
 
     constexpr uint32_t wait_tile_start_cnt = std::min(block_tile_count, wait_tile_full_cnt);
     uint32_t wait_tile_curr = wait_tile_start_cnt + tile_wait_offset;  // Apply tile wait offset
 
     for (uint32_t i = 0; i < mcast_full_burst_cnt; i++) {
-        DPRINT << "cb: " << src_cb << " wait for tiles: " << wait_tile_curr << ENDL();
         cb_wait_front(src_cb, wait_tile_curr);
         multicast_data<act_mcast_num_dest_cores>(
-            is_receiver_core, src_l1_addr, dst_l1_addr, multicast_noc_addr, mcast_noc_burst_size, cb_offset);
+            is_receiver_core, src_l1_addr, dst_l1_addr, multicast_noc_addr, mcast_noc_burst_size);
         src_l1_addr += mcast_noc_burst_size;
         dst_l1_addr += mcast_noc_burst_size;
 
@@ -572,10 +570,9 @@ FORCE_INLINE void mcast_block_chunked(
     }
 
     if constexpr (mcast_leftover_burst_size > 0) {
-        DPRINT << "cb: " << src_cb << " wait for tiles: " << (block_tile_count + tile_wait_offset) << ENDL();
         cb_wait_front(src_cb, block_tile_count + tile_wait_offset);
         multicast_data<act_mcast_num_dest_cores>(
-            is_receiver_core, src_l1_addr, dst_l1_addr, multicast_noc_addr, mcast_leftover_burst_size, cb_offset);
+            is_receiver_core, src_l1_addr, dst_l1_addr, multicast_noc_addr, mcast_leftover_burst_size);
     }
 
     // In case we only do local l1 writes, we need to wait for the barrier to complete

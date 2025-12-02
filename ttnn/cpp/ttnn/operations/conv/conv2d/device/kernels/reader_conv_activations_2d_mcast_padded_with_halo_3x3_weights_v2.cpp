@@ -182,7 +182,6 @@ void kernel_main() {
                 }
             }
             cb_push_back(cb_id_act_row_major_bfloat16, img2col_tiles);
-            DPRINT << "PUSH BACK ACT ROW MAJOR BFLOAT16 TILES: " << img2col_tiles << ENDL();
 
 #ifndef SKIP_MCAST
             // Round robin self-mcast and receive tilized act matrix in cb_id_act
@@ -199,7 +198,6 @@ void kernel_main() {
                     noc_semaphore_set(act_mcast_sender_semaphore_addr_ptr, 0);
 
                     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
-
                     if constexpr (act_mcast_split) {
                         noc_semaphore_set(act_mcast_receiver_second_semaphore_addr_ptr, INVALID);
                         noc_semaphore_set(act_mcast_reserve_done_semaphore_addr_ptr, VALID);
@@ -212,7 +210,6 @@ void kernel_main() {
                         tiles_to_multicast,
                         act_mcast_tile_size_bytes>(
                         is_receiver_core, tilized_in0_cb_id, cb_id_act, act_multicast_noc_addr);
-                    DPRINT << "MCAST CHUNKED: " << tiles_to_multicast << ENDL();
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id and
                     // same vc even though cmd bufs are different Also, this only works because we are setting VCs
                     // statically (using NOC_CMD_STATIC_VC).
@@ -247,7 +244,6 @@ void kernel_main() {
                     if constexpr (act_mcast_split) {
                         noc_semaphore_set(act_mcast_receiver_second_semaphore_addr_ptr, INVALID);
                     }
-
                     // Atomic increment source core counter
                     uint64_t act_mcast_sender_semaphore_noc_addr;
                     if constexpr (transpose_mcast) {
@@ -262,7 +258,6 @@ void kernel_main() {
                             act_mcast_sender_semaphore_addr);
                     }
                     noc_semaphore_inc(act_mcast_sender_semaphore_noc_addr, 1);
-
                     // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
                     noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
                     if constexpr (act_mcast_split) {
@@ -273,7 +268,6 @@ void kernel_main() {
             }  // act_w_num_outer
 
             cb_pop_front(tilized_in0_cb_id, tilize_pop_tiles);
-            DPRINT << "POP FRONT TILIZED IN0 CB: " << tilize_pop_tiles << ENDL();
 #endif
         }
         start_reader_idx = reader_idx;

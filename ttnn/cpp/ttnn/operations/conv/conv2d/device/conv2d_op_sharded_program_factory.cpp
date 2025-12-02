@@ -1026,7 +1026,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
             const uint32_t act_mcast_write_offset =
                 act_block_h_nsubblocks_split * act_block_w_ntiles * tilized_act_tile_size;
             const uint32_t act_mcast_write_offset_last =
-                enable_act_double_buffer ? (act_block_h_nsubblocks_split_last + act_block_h_nsubblocks_split) *
+                enable_act_double_buffer ? (act_block_h_nsubblocks_split_last + 2 * act_block_h_nsubblocks_split) *
                                                act_block_w_ntiles * tilized_act_tile_size
                                          : act_mcast_write_offset;
             const uint32_t act_mcast_num_cores_for_split = transpose_mcast ? num_cores_y - 1 : num_cores_x - 1;
@@ -1039,7 +1039,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
             writer_compile_time_args.push_back(act_mcast_write_offset);                                     // arg 43
             writer_compile_time_args.push_back(act_mcast_write_offset_last);                                // arg 44
             writer_compile_time_args.push_back(act_mcast_num_cores_for_split);                              // arg 45
-            writer_compile_time_args.push_back(tilized_act_tile_size);  // arg 46 - act_mcast_sender_size_bytes
+            writer_compile_time_args.push_back(tilized_act_tile_size);                                      // arg 46
         } else {
             // Add dummy args to maintain consistent indexing for block sharded (args 38-46)
             writer_compile_time_args.insert(writer_compile_time_args.end(), 10, 0);
@@ -1247,7 +1247,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                 args[12] =
                     static_cast<uint32_t>(true);  // is_sender_core, is always true for cores that belong to input_cores
                 args[13] = static_cast<uint32_t>(
-                    false);  // is_receiver_core, is always false for cores that belong to input_cores
+                    false);  // is_receiver_core, is always false for cores that don't belong to output_cores
                 args[14] = static_cast<uint32_t>(true);  //  skip work
                 if (act_mcast_split) {
                     std::vector<uint32_t> sender_rt_args;
@@ -1317,7 +1317,20 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                          weights_mcast_sender_semaphore_id,
                          weights_mcast_receiver_semaphore_id,
                          static_cast<uint32_t>(is_sender_core),
+                         static_cast<uint32_t>(is_receiver_core),
                          static_cast<uint32_t>(false)});  // skip_work
+                    if (act_mcast_split) {
+                        CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)num_cores_y - 1};
+                        CoreCoord bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+                        std::vector<uint32_t> mcast_coords = setup_mcast_args(
+                            writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
+                            bottom_core_physical.x,
+                            top_left_core_physical.y,
+                            bottom_core_physical.x,
+                            bottom_core_physical.y);
+                        sender_rt_args.insert(sender_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
+                        sender_rt_args.push_back(core.y);  // act_mcast_sender_id
+                    }
                     SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
                 } else {
                     CoreCoord top_core = {(std::size_t)core.x, 0};
@@ -1342,25 +1355,18 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                             static_cast<uint32_t>(is_receiver_core),
                             static_cast<uint32_t>(false)  // skip_work
                         });
-                    // Add act_mcast runtime args if enabled
+
                     if (act_mcast_split) {
-                        if (transpose_mcast) {
-                            CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)num_cores_y - 1};
-                            CoreCoord bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
-                            sender_rt_args.push_back(bottom_core_physical.x);    // act_mcast_dest_noc_start_x
-                            sender_rt_args.push_back(top_left_core_physical.y);  // act_mcast_dest_noc_start_y
-                            sender_rt_args.push_back(bottom_core_physical.x);    // act_mcast_dest_noc_end_x
-                            sender_rt_args.push_back(bottom_core_physical.y);    // act_mcast_dest_noc_end_y
-                            sender_rt_args.push_back(core.y);                    // act_mcast_sender_id
-                        } else {
-                            CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
-                            CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
-                            sender_rt_args.push_back(top_left_core_physical.x);  // act_mcast_dest_noc_start_x
-                            sender_rt_args.push_back(right_core_physical.y);     // act_mcast_dest_noc_start_y
-                            sender_rt_args.push_back(right_core_physical.x);     // act_mcast_dest_noc_end_x
-                            sender_rt_args.push_back(right_core_physical.y);     // act_mcast_dest_noc_end_y
-                            sender_rt_args.push_back(core.x);                    // act_mcast_sender_id
-                        }
+                        CoreCoord core_physical = device->worker_core_from_logical_core(core);
+
+                        std::vector<uint32_t> mcast_coords = setup_mcast_args(
+                            writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
+                            top_left_core_physical.x,
+                            core_physical.y,
+                            out_bottom_right_core_physical.x,
+                            core_physical.y);
+                        sender_rt_args.insert(sender_rt_args.end(), mcast_coords.begin(), mcast_coords.end());
+                        sender_rt_args.push_back(core.x);  // act_mcast_sender_id
                     }
                     SetRuntimeArgs(program, writer_mcast_sender_id, core, sender_rt_args);
                 }
@@ -1416,28 +1422,34 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                     receiver_args = create_receiver_args(top_core_physical.x, top_left_core_physical.y);
                 }
                 const bool is_sender_core = input_cores.contains(core);
+
                 receiver_args.push_back(static_cast<uint32_t>(is_sender_core));
-                // Add act_mcast runtime args if enabled
                 if (act_mcast_split) {
                     const bool is_receiver_core = output_cores.contains(core);
+                    receiver_args.push_back(static_cast<uint32_t>(is_receiver_core));
                     if (transpose_mcast) {
                         CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)num_cores_y - 1};
                         CoreCoord bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
-                        receiver_args.push_back(bottom_core_physical.x);    // act_mcast_dest_noc_start_x
-                        receiver_args.push_back(top_left_core_physical.y);  // act_mcast_dest_noc_start_y
-                        receiver_args.push_back(bottom_core_physical.x);    // act_mcast_dest_noc_end_x
-                        receiver_args.push_back(bottom_core_physical.y);    // act_mcast_dest_noc_end_y
-                        receiver_args.push_back(core.y);                    // act_mcast_sender_id
+                        std::vector<uint32_t> mcast_coords = setup_mcast_args(
+                            writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
+                            bottom_core_physical.x,
+                            top_left_core_physical.y,
+                            bottom_core_physical.x,
+                            bottom_core_physical.y);
+                        receiver_args.insert(receiver_args.end(), mcast_coords.begin(), mcast_coords.end());
+                        receiver_args.push_back(core.y);  // act_mcast_sender_id
                     } else {
-                        CoreCoord right_core = {(std::size_t)num_cores_x - 1, (std::size_t)core.y};
-                        CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
-                        receiver_args.push_back(top_left_core_physical.x);  // act_mcast_dest_noc_start_x
-                        receiver_args.push_back(right_core_physical.y);     // act_mcast_dest_noc_start_y
-                        receiver_args.push_back(right_core_physical.x);     // act_mcast_dest_noc_end_x
-                        receiver_args.push_back(right_core_physical.y);     // act_mcast_dest_noc_end_y
-                        receiver_args.push_back(core.x);                    // act_mcast_sender_id
+                        CoreCoord core_physical = device->worker_core_from_logical_core(core);
+
+                        std::vector<uint32_t> mcast_coords = setup_mcast_args(
+                            writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
+                            top_left_core_physical.x,
+                            core_physical.y,
+                            out_bottom_right_core_physical.x,
+                            core_physical.y);
+                        receiver_args.insert(receiver_args.end(), mcast_coords.begin(), mcast_coords.end());
+                        receiver_args.push_back(core.x);  // act_mcast_sender_id
                     }
-                    receiver_args.push_back(static_cast<uint32_t>(is_receiver_core));
                 }
             } else {
                 bool is_no_op_core = !input_cores.contains(core);

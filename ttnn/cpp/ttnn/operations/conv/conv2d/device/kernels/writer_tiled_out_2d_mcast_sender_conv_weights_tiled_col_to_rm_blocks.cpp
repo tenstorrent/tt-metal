@@ -85,7 +85,6 @@ void kernel_main() {
     const uint32_t act_mcast_reserve_done_semaphore_addr =
         (act_mcast_split) ? get_semaphore(act_mcast_reserve_done_semaphore_id) : 0;
     constexpr uint32_t act_mcast_receiver_second_semaphore_id = get_compile_time_arg_val(39);
-    DPRINT << "act_mcast_receiver_second_semaphore_id: " << act_mcast_receiver_second_semaphore_id << ENDL();
     const uint32_t act_mcast_receiver_semaphore_addr =
         (act_mcast_split) ? get_semaphore(act_mcast_receiver_second_semaphore_id) : 0;
     constexpr uint32_t act_cb_id = get_compile_time_arg_val(40);
@@ -98,7 +97,7 @@ void kernel_main() {
     // written to by the main reader, when double buffering is enabled)
     constexpr uint32_t act_mcast_write_offset_last = get_compile_time_arg_val(44);
     constexpr uint32_t act_mcast_num_cores = get_compile_time_arg_val(45);
-    constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(46);
+    constexpr uint32_t act_mcast_tile_size = get_compile_time_arg_val(46);
 
     volatile tt_l1_ptr uint32_t* act_mcast_reserve_done_semaphore_addr_ptr =
         (act_mcast_split) ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_mcast_reserve_done_semaphore_addr)
@@ -106,8 +105,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* act_mcast_receiver_semaphore_addr_ptr =
         (act_mcast_split) ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_mcast_receiver_semaphore_addr) : nullptr;
 
-    DPRINT << "act_mcast_split: " << (act_mcast_split ? "true" : "false") << ENDL();
-    DPRINT << "split_reader_cb_shared: " << (split_reader_cb_shared ? "true" : "false") << ENDL();
     // L1 array for semaphore values
     volatile tt_l1_ptr uint32_t* l1_array =
         (act_mcast_split) ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_l1_array)) : nullptr;
@@ -227,8 +224,6 @@ void kernel_main() {
     uint32_t l1_write_addr_act = split_reader_cb_write_addr;
     uint32_t prev_addr = 0;
     uint64_t act_write_offset_current = act_mcast_write_offset;
-    DPRINT << "split_reader_cb_shared: " << (split_reader_cb_shared ? "true" : "false") << ENDL();
-    DPRINT << "skip_work: " << (skip_work ? "true" : "false") << ENDL();
     for (uint32_t bw = 0; bw < out_num_blocks_w; bw++) {
         for (uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
             if constexpr (split_reader_enabled) {
@@ -274,7 +269,6 @@ void kernel_main() {
                     }
                     if constexpr (!split_reader_cb_shared) {
                         cb_push_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
-                        DPRINT << "PUSH BACK ACT SECOND READER TILES: " << act_block_num_tiles_split_last << ENDL();
                     } else {
                         act_write_offset_current = act_mcast_write_offset_sum - act_write_offset_current;
                     }
@@ -343,7 +337,7 @@ void kernel_main() {
 #endif
                         cb_push_back(cb_id_weight, weight_block_num_tiles);
                     }
-                    // Add activation multicast for second reader when split is enabled
+
                     if constexpr (act_mcast_split) {
                         if (weight_tile_h_outer_i == act_mcast_sender_id) {
                             // Wait for reserve done from main reader
@@ -352,7 +346,8 @@ void kernel_main() {
                             // Calculate offsets for the second reader's portion
                             // Second reader waits for first reader's tiles (act_block_num_tiles_split)
                             uint32_t tile_wait_offset = act_block_num_tiles_split;
-                            uint32_t cb_offset = act_write_offset_current;
+                            uint32_t src_cb_read_offset = act_mcast_write_offset;
+                            uint32_t dst_cb_write_offset = act_write_offset_current;
 
                             // Multicast the second reader's portion with offsets
                             // mcast_block_chunked will wait for the tiles internally using tile_wait_offset
@@ -360,14 +355,14 @@ void kernel_main() {
                                 act_mcast_num_cores,
                                 NOC_MAX_BURST_SIZE,
                                 act_block_num_tiles_split_last,
-                                act_mcast_sender_size_bytes>(
+                                act_mcast_tile_size>(
                                 is_receiver_core,
                                 act_tilized_cb,
                                 act_cb_id,
                                 act_multicast_noc_addr,
-                                cb_offset,
+                                src_cb_read_offset,
+                                dst_cb_write_offset,
                                 tile_wait_offset);
-                            DPRINT << "MCAST CHUNKED: " << act_block_num_tiles_split_last << ENDL();
 
                             // Multicast the semaphore to receivers
                             // Note: Second reader doesn't wait for receiver semaphore - only the main reader
@@ -389,9 +384,6 @@ void kernel_main() {
                         act_write_offset_current = act_mcast_write_offset_sum - act_write_offset_current;
                     }
                 }  // for weight_block_height_num_outer
-                if constexpr (act_mcast_split) {
-                    cb_pop_front(act_tilized_cb, act_block_num_tiles_split_last);
-                }
             }
             if constexpr (split_reader_enabled) {
                 // Update reader index for next iteration (split reader increment)
