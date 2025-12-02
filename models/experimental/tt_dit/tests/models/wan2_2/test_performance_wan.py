@@ -176,19 +176,20 @@ def test_pipeline_performance(
 
         # Run pipeline with different prompt
         prompt_idx = (i + 1) % len(prompts)
-        with torch.no_grad():
-            pipeline(
-                prompt=prompts[prompt_idx],
-                negative_prompt=negative_prompt,
-                height=height,
-                width=width,
-                num_frames=num_frames,
-                num_inference_steps=num_inference_steps,
-                guidance_scale=guidance_scale,
-                guidance_scale_2=guidance_scale_2,
-                profiler=benchmark_profiler,
-                profiler_iteration=i,
-            )
+        with benchmark_profiler("run", iteration=i):
+            with torch.no_grad():
+                pipeline(
+                    prompt=prompts[prompt_idx],
+                    negative_prompt=negative_prompt,
+                    height=height,
+                    width=width,
+                    num_frames=num_frames,
+                    num_inference_steps=num_inference_steps,
+                    guidance_scale=guidance_scale,
+                    guidance_scale_2=guidance_scale_2,
+                    profiler=benchmark_profiler,
+                    profiler_iteration=i,
+                )
 
         # Collect timing data
         logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('total', i):.2f}s")
@@ -272,7 +273,7 @@ def test_pipeline_performance(
         # In CI, dump a performance report
         benchmark_data = BenchmarkData()
         for iteration in range(num_perf_runs):
-            for step_name in ["text_encoder", "denoising", "vae", "total"]:
+            for step_name in ["text_encoder", "denoising", "vae", "run"]:
                 benchmark_data.add_measurement(
                     profiler=benchmark_profiler,
                     iteration=iteration,

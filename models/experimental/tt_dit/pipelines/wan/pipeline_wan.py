@@ -601,9 +601,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 indicating whether the corresponding generated image contains "not-safe-for-work" (nsfw) content.
         """
 
-        if profiler:
-            profiler.start("total", profiler_iteration)
-
         if isinstance(callback_on_step_end, (PipelineCallback, MultiPipelineCallbacks)):
             callback_on_step_end_tensor_inputs = callback_on_step_end.tensor_inputs
 
@@ -842,7 +839,4 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         if not return_dict:
             return (video,)
 
-        pipeline_output = WanPipelineOutput(frames=video)
-        if profiler:
-            profiler.end("total", profiler_iteration)
-        return pipeline_output
+        return WanPipelineOutput(frames=video)
