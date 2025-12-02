@@ -28,8 +28,8 @@ void set_or_update_runtime_arguments(
     const CoreRangeSet& core_group_2,
     uint32_t num_tiles_per_core_group_2,
     bool is_create) {
-    auto input_buffer = input_tensor.buffer();
-    auto output_buffer = output_tensor.buffer();
+    auto* input_buffer = input_tensor.buffer();
+    auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
