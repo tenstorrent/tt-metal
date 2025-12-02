@@ -8,7 +8,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>               // RoutingDirection
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>  // FabricNodeId
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>         // Topology
-#include <hostdevcommon/fabric_common.h>                                // chan_id_t, eth_chan_directions
+#include <hostdevcommon/fabric_common.h>                                // chan_id_t
 
 namespace tt::tt_metal {
 class IDevice;
@@ -16,10 +16,6 @@ class Program;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_fabric {
-
-// Forward declarations - avoid heavyweight includes in interface header
-struct FabricEriscDatamoverConfig;
-struct SenderWorkerAdapterSpec;
 
 // ============ Router Location ============
 
@@ -120,25 +116,6 @@ public:
      */
     virtual void configure_for_dispatch() = 0;
 
-    /**
-     * Build connection to fabric channel (for sender channels)
-     *
-     * @param vc Virtual channel ID
-     * @param sender_channel_idx Logical sender channel index within the VC
-     * @return SenderWorkerAdapterSpec for external connections
-     */
-    virtual SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc, uint32_t sender_channel_idx) = 0;
-
-    /**
-     * Get downstream sender channel index
-     *
-     * @param is_2D_routing Whether 2D routing is enabled
-     * @param downstream_direction The downstream direction
-     * @return The sender channel index for downstream connections
-     */
-    virtual uint32_t get_downstream_sender_channel(
-        bool is_2D_routing, eth_chan_directions downstream_direction) const = 0;
-
     // ============ Common Property Getters (non-virtual) ============
 
     FabricNodeId get_local_fabric_node_id() const { return local_node_; }
@@ -147,13 +124,6 @@ public:
     RoutingDirection get_routing_direction() const { return location_.direction; }
     bool is_dispatch_link() const { return location_.is_dispatch_link; }
     const RouterLocation& get_location() const { return location_; }
-
-    // ============ Derived-Specific Property Getters ============
-
-    virtual eth_chan_directions get_eth_direction() const = 0;
-    virtual size_t get_noc_x() const = 0;
-    virtual size_t get_noc_y() const = 0;
-    virtual size_t get_configured_risc_count() const = 0;
 
     // ============ Build Methods ============
 
@@ -173,14 +143,6 @@ public:
      * @param ctx Cluster-wide coordination info (master router, channel mask, etc.)
      */
     virtual void create_kernel(tt::tt_metal::Program& program, const KernelCreationContext& ctx) = 0;
-
-    // ============ Mesh Type Query ============
-
-    /**
-     * Check if this is a switch mesh router
-     * @return true if this is a switch mesh router, false for compute mesh
-     */
-    virtual bool is_switch_mesh() const = 0;
 
 protected:
     // Protected constructor - only derived classes can construct

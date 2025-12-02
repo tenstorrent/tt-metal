@@ -58,18 +58,16 @@ public:
 
     void create_kernel(tt::tt_metal::Program& program, const KernelCreationContext& ctx) override;
 
-    SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc, uint32_t sender_channel_idx) override;
+    // ============ Compute-Mesh Specific Methods ============
 
-    uint32_t get_downstream_sender_channel(bool is_2D_routing, eth_chan_directions downstream_direction) const override;
+    SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc, uint32_t sender_channel_idx);
 
-    // Derived-specific property getters
-    eth_chan_directions get_eth_direction() const override;
-    size_t get_noc_x() const override;
-    size_t get_noc_y() const override;
-    size_t get_configured_risc_count() const override;
+    uint32_t get_downstream_sender_channel(bool is_2D_routing, eth_chan_directions downstream_direction) const;
 
-    // Mesh type query
-    bool is_switch_mesh() const override { return false; }  // This is compute mesh
+    eth_chan_directions get_eth_direction() const;
+    size_t get_noc_x() const;
+    size_t get_noc_y() const;
+    size_t get_configured_risc_count() const;
 
     // ============ Compute-Mesh Specific Accessors ============
 
