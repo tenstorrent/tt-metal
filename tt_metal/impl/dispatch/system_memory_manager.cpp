@@ -585,7 +585,13 @@ void SystemMemoryManager::on_timeout_detected() const {
     std::string command = rtoptions.get_dispatch_timeout_command_to_execute();
     if (!command.empty()) {
         log_info(LogAlways, "Timeout detected - executing command: {}", command);
-        std::system(command.c_str());
+
+        int result = std::system(command.c_str());
+
+        if (result != 0) {
+            log_warning(
+                LogAlways, "Timeout command '{}' returned non-zero exit code: {}", command, WEXITSTATUS(result));
+        }
     }
 }
 
