@@ -7,6 +7,7 @@ import pytest
 import ttnn
 from loguru import logger
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
+from models.common.utility_functions import is_blackhole
 from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline
 from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import TimingCollector
 
@@ -21,10 +22,14 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 @pytest.mark.parametrize(
     "mesh_device, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
+        [(1, 2), (1, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2],
+        [(2, 2), (2, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2],
         [(2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
         [(4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 4],
     ],
     ids=[
+        "1x2sp0tp1",
+        "2x2sp0tp1",
         "2x4sp0tp1",
         "4x8sp0tp1",
     ],
@@ -32,7 +37,7 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 34000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
     indirect=True,
 )
 def test_flux1_pipeline_performance(
@@ -261,14 +266,38 @@ def test_flux1_pipeline_performance(
             "vae_decoding_time": 1.4,
             "total_time": 9.0,
         }
+    elif tuple(mesh_device.shape) == (2, 2):
+        assert is_blackhole(), "2x2 is only supported for blackhole"
+        expected_metrics = {
+            "clip_encoding_time": 0.05,
+            "t5_encoding_time": 0.25,
+            "total_encoding_time": 0.3,
+            "denoising_steps_time": 0.55 * num_inference_steps,
+            "vae_decoding_time": 1.8,
+            "total_time": 17.5,
+        }
+    elif tuple(mesh_device.shape) == (1, 2):
+        assert is_blackhole(), "1x2 is only supported for blackhole"
+        expected_metrics = {
+            "clip_encoding_time": 0.1,
+            "t5_encoding_time": 0.25,
+            "total_encoding_time": 0.3,
+            "denoising_steps_time": 1.1 * num_inference_steps,
+            "vae_decoding_time": 1.6,
+            "total_time": 29.0,
+        }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
 
     if is_ci_env:
         # In CI, dump a performance report
-        profiler_model_name = (
-            f"flux1_dev_{'t3k' if tuple(mesh_device.shape) == (2, 4) else 'tg'}_sp{sp_factor}_tp{tp_factor}"
-        )
+        device_name_map = {
+            (1, 2): "bh_p300",
+            (2, 2): "bh_qb",
+            (2, 4): "wh_t3k",
+            (4, 8): "wh_glx",
+        }
+        profiler_model_name = f"flux1_dev_{device_name_map[tuple(mesh_device.shape)]}_sp{sp_factor}_tp{tp_factor}"
         benchmark_data = BenchmarkData()
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
