@@ -187,6 +187,35 @@ void topk_group_scores(
     cb_push_back(sorted_group_indices_cb_index, 1);
 }
 
+void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_index, const uint32_t tiles) {
+    UNPACK(DPRINT << "Transpose and pack tiles: " << tiles << ENDL());
+    reconfig_data_format_srca(input_cb_index);
+    transpose_wh_init_short(input_cb_index);
+    pack_reconfig_data_format(input_cb_index);
+    for (uint32_t i = 0; i < tiles; i++) {
+        cb_wait_front(input_cb_index, 1);
+        UNPACK(DPRINT << "Waiting for input cb DONE" << ENDL());
+
+        cb_reserve_back(output_cb_index, 1);
+
+        tile_regs_acquire();
+        transpose_wh_tile(input_cb_index, 0, 0);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile(0, output_cb_index);
+        tile_regs_release();
+        // PACK(print_tile(output_cb_index, i, true, 0, 8, 0, 1));
+        cb_push_back(output_cb_index, 1);
+
+        cb_pop_front(input_cb_index, 1);
+        UNPACK(DPRINT << "Popped input cb DONE" << ENDL());
+    }
+    UNPACK(DPRINT << "Transpose and pack done" << ENDL());
+
+    UNPACK(DPRINT << "Popped input cb" << ENDL());
+}
+
 void topk(
     const uint32_t winning_group_scores_cb_index,
     const uint32_t winning_group_indices_cb_index,
@@ -243,25 +272,26 @@ void topk(
     tile_regs_commit();
 
     tile_regs_wait();
-    pack_reconfig_data_format(output_cb_index);
-    pack_tile(0, output_cb_index);
-    // pack_tile(1, output_cb_index);
+    pack_reconfig_data_format(intermediate_local_sort_cb_index);
+    pack_tile(0, intermediate_local_sort_cb_index);
+    // pack_tile(1, intermediate_local_sort_cb_index);
 
-    PACK(print_tile(output_cb_index, 0, true, 0, 32, 0, 1));
-    // PACK(print_tile(output_cb_index, 1, true, 0, 32, 0, 1));
+    // PACK(print_tile(intermediate_local_sort_cb_index, 0, true, 0, 32, 0, 1));
+    // PACK(print_tile(intermediate_local_sort_cb_index, 1, true, 0, 32, 0, 1));
 
-    cb_push_back(output_cb_index, 0);
+    cb_push_back(intermediate_local_sort_cb_index, 1);
 
-    pack_reconfig_data_format(output_indices_cb_index);
-    pack_tile(2, output_indices_cb_index);
-    // pack_tile(3, output_indices_cb_index);
-
-    PACK(print_tile(output_indices_cb_index, 0, true, 0, 32, 0, 1));
-    // PACK(print_tile(output_indices_cb_index, 1, true, 0, 32, 0, 1));
-    cb_push_back(output_indices_cb_index, 1);
-
+    pack_reconfig_data_format(intermediate_local_sort_indices_cb_index);
+    pack_tile(2, intermediate_local_sort_indices_cb_index);
     tile_regs_release();
-    // release_dst();
+    // pack_tile(3, intermediate_local_sort_indices_cb_index);
+
+    // PACK(print_tile(intermediate_local_sort_indices_cb_index, 0, true, 0, 32, 0, 1));
+    // PACK(print_tile(intermediate_local_sort_indices_cb_index, 1, true, 0, 32, 0, 1));
+    cb_push_back(intermediate_local_sort_indices_cb_index, 1);
+
+    transpose_and_pack(intermediate_local_sort_cb_index, output_cb_index, 1);
+    transpose_and_pack(intermediate_local_sort_indices_cb_index, output_indices_cb_index, 1);
 }
 
 }  // namespace blocks

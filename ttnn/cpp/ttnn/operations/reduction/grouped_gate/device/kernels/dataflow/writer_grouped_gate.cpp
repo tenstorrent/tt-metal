@@ -391,5 +391,12 @@ void kernel_main() {
             topk_groups,
             num_group_tiles,
             tokens_per_tile);
+
+        cb_wait_front(indices_cb_index, 1);
+        DPRINT << "Page size: " << indices_page_size << ENDL();
+        noc_async_write_page(height_tile, indices_accessor, get_write_ptr(indices_cb_index));
+        noc_async_writes_flushed();
+        cb_pop_front(indices_cb_index, 1);
     }
+    noc_async_write_barrier();
 }
