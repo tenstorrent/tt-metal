@@ -128,19 +128,18 @@ def test_pipeline_performance(
     # Warmup run (not timed)
     logger.info("Running warmup iteration...")
 
-    with torch.no_grad():
-        result = pipeline(
-            prompt=prompts[0],
-            negative_prompt=negative_prompt,
-            height=height,
-            width=width,
-            num_frames=num_frames,
-            num_inference_steps=2,  # Small number of steps to reduce test time.
-            guidance_scale=guidance_scale,
-            guidance_scale_2=guidance_scale_2,
-            profiler=benchmark_profiler,
-            profiler_iteration=0,
-        )
+    with benchmark_profiler("run", iteration=0):
+        with torch.no_grad():
+            result = pipeline(
+                prompt=prompts[0],
+                negative_prompt=negative_prompt,
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                num_inference_steps=2,  # Small number of steps to reduce test time.
+                guidance_scale=guidance_scale,
+                guidance_scale_2=guidance_scale_2,
+            )
 
     logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
 

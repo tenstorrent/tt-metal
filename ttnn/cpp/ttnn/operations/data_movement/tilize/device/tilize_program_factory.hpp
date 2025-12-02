@@ -8,12 +8,9 @@
 
 namespace ttnn::operations::data_movement::detail {
 
-tt::tt_metal::operation::ProgramWithCallbacks tilize_single_core(
-    const Tensor& a, Tensor& output, bool use_low_perf, const std::optional<CoreRangeSet>& sub_core_grids);
-tt::tt_metal::operation::ProgramWithCallbacks tilize_multi_core_interleaved(
-    const Tensor& a, Tensor& output, const std::optional<CoreRangeSet>& sub_core_grids);
+tt::tt_metal::operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& output);
+tt::tt_metal::operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, Tensor& output);
 tt::tt_metal::operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& a, Tensor& output);
-tt::tt_metal::operation::ProgramWithCallbacks tilize_multi_core_block(
-    const Tensor& a, Tensor& output, const std::optional<CoreRangeSet>& sub_core_grids);
+tt::tt_metal::operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor& output);
 
 }  // namespace ttnn::operations::data_movement::detail

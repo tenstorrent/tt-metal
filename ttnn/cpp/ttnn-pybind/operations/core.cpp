@@ -309,15 +309,13 @@ void py_module(py::module& module) {
                const ttnn::Tensor& tensor,
                const ttnn::Layout layout,
                const std::optional<ttnn::DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
-                return self(tensor, layout, dtype, memory_config, sub_core_grids);
+               const std::optional<ttnn::MemoryConfig>& memory_config) -> ttnn::Tensor {
+                return self(tensor, layout, dtype, memory_config);
             },
             py::arg("tensor"),
             py::arg("layout"),
             py::arg("dtype") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("sub_core_grids") = std::nullopt});
+            py::arg("memory_config") = std::nullopt});
 
     module.def(
         "num_cores_to_corerangeset",
