@@ -19,9 +19,6 @@ on:
       build-artifact-name:
         required: true
         type: string
-      wheel-artifact-name:
-        required: true
-        type: string
       enable-watcher:
         description: 'Enable watcher'
         default: false
@@ -33,6 +30,10 @@ on:
         description: "Filter for gtest"
       nightly-run:
         description: 'Is this a nightly run'
+        required: false
+        type: boolean
+        default: false
+      merge-gate-call:
         required: false
         type: boolean
         default: false
@@ -78,6 +79,12 @@ jobs:
           requested_cpp_tests=$(jq --argjson nightly_run "${{ inputs.nightly-run }}" '[.[] | select(.nightly == $nightly_run)]' <<< "$requested_cpp_tests")
           echo "[info] after filtering for requested workflow tests: $requested_cpp_tests"
 
+          # Filter for merge-gate-call: only keep CCL and tools tests
+          if [[ "${{ inputs.merge-gate-call }}" == "true" ]]; then
+            requested_cpp_tests=$(jq '[.[] | select(.name == "CCL" or .name == "tools" or .name == "eth, misc, and user kernel path" or .name == "distributed")]' <<< "$requested_cpp_tests")
+            echo "[info] after filtering for merge-gate-call (CCL and tools only): $requested_cpp_tests"
+          fi
+
           # Check that we have a valid test list that's not empty
           echo "$requested_cpp_tests" | jq -e 'if type != "array" then error("Not a valid JSON array") elif length == 0 then error("Test list is empty") else . end' && echo "Valid test configs"
           echo "cpp-tests=$(echo $requested_cpp_tests | tr -d '\n')" >> "$GITHUB_OUTPUT"
@@ -121,9 +128,6 @@ jobs:
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
-          # Unsure why these C++ tests need the wheel...  a cleanup to do separately
-          # https://github.com/tenstorrent/tt-metal/issues/20166
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
       - name: ${{ matrix.test-group.name }} tests
         #GH Issue 16167
