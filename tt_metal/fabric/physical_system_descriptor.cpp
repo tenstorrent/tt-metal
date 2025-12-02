@@ -308,12 +308,7 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
         std::unordered_map<AsicID, size_t> visited_dst;
         for (const auto& [eth_chan, remote_info] : eth_link_info) {
             auto dst_unique_id = AsicID{std::get<0>(remote_info)};
-            // auto dst_chan = std::get<1>(remote_info);
-            auto dst_chan = eth_chan;  // std::get<1>(remote_info);
-            if (eth_chan == 8 || eth_chan == 9 || eth_chan == 2 || eth_chan == 3) {
-                // Skip Z Links for now
-                continue;
-            }
+            auto dst_chan = std::get<1>(remote_info);
             if (visited_dst.find(dst_unique_id) == visited_dst.end()) {
                 asic_graph[local_unique_id].push_back({dst_unique_id, {EthConnection(eth_chan, dst_chan, false)}});
                 visited_dst[dst_unique_id] = asic_graph[local_unique_id].size() - 1;
