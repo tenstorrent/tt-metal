@@ -469,17 +469,17 @@ void ControlPlane::init_control_plane(
     } else {
         std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
 
-        // Pin the start of the mesh to match the Galaxy Topology, ensuring that external QSFP links align with the corner node IDs of the fabric mesh.
+        // Pin the top left and bottom right corners of the mesh to match the Galaxy Topology, ensuring that external QSFP links align with the corner node IDs of the fabric mesh.
         // This is a performance optimization to ensure that MGD mapping does not bisect a device.
 
-        // * * o o < Pinned corners marked with *
-        // * o o o
+        // * o o o < Top left corner pinned with *
         // o o o o
         // o o o o
         // o o o o
         // o o o o
         // o o o o
         // o o o o
+        // o o o * < Bottom right corner pinned with *
         const bool is_1d = this->mesh_graph_->get_mesh_shape(MeshId{0})[0] == 1 ||
                            this->mesh_graph_->get_mesh_shape(MeshId{0})[1] == 1;
         const size_t board_size = cluster.get_unique_chip_ids().size();
@@ -489,12 +489,11 @@ void ControlPlane::init_control_plane(
         // multi-host machines should be limited via rank bindings so should be ok
         if (cluster.is_ubb_galaxy() && !is_1d && board_size == 32 &&
             distributed_size == 1) {  // Using full board size for UBB Galaxy
-            int y_size = this->mesh_graph_->get_mesh_shape(MeshId{0})[1];
+            // Top left corner: index 0
             fixed_asic_position_pinnings.push_back({AsicPosition{1, 1}, FabricNodeId(MeshId{0}, 0)});
-            fixed_asic_position_pinnings.push_back({AsicPosition{1, 5}, FabricNodeId(MeshId{0}, 1)});
-            fixed_asic_position_pinnings.push_back({AsicPosition{1, 2}, FabricNodeId(MeshId{0}, y_size)});
+            // Bottom right corner: last device index
+            fixed_asic_position_pinnings.push_back({AsicPosition{4, 1}, FabricNodeId(MeshId{0}, board_size - 1)});
         }
-
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
             *this->mesh_graph_,
             *this->physical_system_descriptor_,
