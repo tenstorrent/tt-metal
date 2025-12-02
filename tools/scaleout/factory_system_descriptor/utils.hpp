@@ -6,6 +6,7 @@
 
 #include <string>
 #include <set>
+#include <optional>
 #include <cabling_generator/cabling_generator.hpp>
 #include <vector>
 
@@ -24,12 +25,15 @@ namespace tt::scaleout_tools {
 //                        If false, only checks that GSD connections exist in FSD
 //   - assert_on_connection_mismatch: If true, throws an error if there are connection mismatches
 //                                    If false, missing connections are logged without an error being thrown
+//   - min_connections: If specified, enables relaxed validation mode where missing connections
+//                      are not reported as errors if the total discovered connections >= this value
 std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
     const std::string& fsd_filename,
     const std::string& gsd_filename,
     bool strict_validation = true,
     bool assert_on_connection_mismatch = true,
-    bool log_output = true);
+    bool log_output = true,
+    std::optional<uint32_t> min_connections = std::nullopt);
 
 // In-memory overload for validating FSD against GSD without disk I/O
 // Validates that the Factory System Descriptor (FSD) protobuf matches the Global System Descriptor (GSD) YAML node

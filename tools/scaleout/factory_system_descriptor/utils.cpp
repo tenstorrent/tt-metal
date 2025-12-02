@@ -37,7 +37,8 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
     const YAML::Node& discovered_gsd,
     bool strict_validation,
     bool assert_on_connection_mismatch,
-    bool log_output) {
+    bool log_output,
+    std::optional<uint32_t> min_connections = std::nullopt) {
 
     const auto& hosts = generated_fsd.hosts();
 
@@ -430,15 +431,15 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
     if (!missing_in_gsd.empty()) {
         auto missing_port_info = extract_port_info(missing_in_gsd);
         std::ostringstream oss;
-        oss << "Channel Connections found in FSD but missing in GSD (" << std::to_string(missing_in_gsd.size())
-            << " connections):\n";
+        oss << "Physical Discovery found " << missing_in_gsd.size()
+            << " missing channel connections:\n";
         for (const auto& conn : missing_in_gsd) {
             oss << "  - " << conn.first << " <-> " << conn.second << "\n";
         }
         oss << "\n";
 
-        oss << "Port Connections found in FSD but missing in GSD ("
-            << std::to_string(missing_port_info.size()) + " connections):\n";
+        oss << "Physical Discovery found " << missing_port_info.size()
+            << " missing port/cable connections:\n";
         for (const auto& conn : missing_port_info) {
             oss << "  - " << conn.first << " <-> " << conn.second << "\n";
         }
@@ -452,15 +453,15 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
         auto extra_port_info = extract_port_info(extra_in_gsd);
 
         std::ostringstream oss;
-        oss << "Channel Connections found in GSD but missing in FSD (" << std::to_string(extra_in_gsd.size())
-            << " connections):\n";
+        oss << "Physical Discovery found " << extra_in_gsd.size()
+            << " extra channel connections:\n";
         for (const auto& conn : extra_in_gsd) {
             oss << "  - " << conn.first << " <-> " << conn.second << "\n";
         }
         oss << "\n";
 
-        oss << "Port Connections found in GSD but missing in FSD ("
-            << std::to_string(extra_port_info.size()) + " connections):\n";
+        oss << "Physical Discovery found " << extra_port_info.size()
+            << " extra port/cable connections:\n";
         for (const auto& conn : extra_port_info) {
             oss << "  - " << conn.first << " <-> " << conn.second << "\n";
         }
@@ -470,8 +471,27 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
     }
 
     // Handle validation results
+    bool relaxed_mode_satisfied = min_connections.has_value() &&
+                                  discovered_connections.size() >= min_connections.value();
+
     if (!missing_in_gsd.empty() || !extra_in_gsd.empty()) {
         std::string mode_text = strict_validation ? "" : " in non-strict validation";
+
+        // In relaxed mode, skip throwing errors if we have enough connections
+        if (relaxed_mode_satisfied) {
+            if (log_output) {
+                std::cout << "Relaxed validation mode: " << discovered_connections.size()
+                          << " connections discovered (minimum required: " << min_connections.value() << ")"
+                          << std::endl;
+                if (!missing_in_gsd.empty()) {
+                    std::cout << "Note: " << missing_in_gsd.size()
+                              << " missing connections detected but ignored due to relaxed mode." << std::endl;
+                }
+            }
+            // Return empty set since we're treating this as success in relaxed mode
+            return {};
+        }
+
         if (assert_on_connection_mismatch) {
             throw std::runtime_error(
                 "Connection mismatch detected" + mode_text + ". Check console output for details.");
@@ -496,7 +516,8 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
     const std::string& gsd_filename,
     bool strict_validation,
     bool assert_on_connection_mismatch,
-    bool log_output) {
+    bool log_output,
+    std::optional<uint32_t> min_connections) {
     // Read the generated FSD using protobuf
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor generated_fsd;
     std::ifstream fsd_file(fsd_filename);
@@ -515,7 +536,7 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
     YAML::Node discovered_gsd = YAML::LoadFile(gsd_filename);
 
     // Call a shared validation function that does the actual work
-    return validate_fsd_against_gsd_impl(generated_fsd, discovered_gsd, strict_validation, assert_on_connection_mismatch, log_output);
+    return validate_fsd_against_gsd_impl(generated_fsd, discovered_gsd, strict_validation, assert_on_connection_mismatch, log_output, min_connections);
 }
 
 std::set<PhysicalChannelConnection> validate_fsd_against_gsd(

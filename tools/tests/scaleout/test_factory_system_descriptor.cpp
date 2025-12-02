@@ -207,4 +207,95 @@ TEST(Cluster, TestGenerateMultiHostClusterDescriptorFromFSD) {
     EXPECT_GT(std::filesystem::file_size(result_file), 0);
 }
 
+TEST(Cluster, TestMinConnectionsRelaxedModePassesWhenEnoughConnections) {
+    CablingGenerator cabling_generator(
+        "tools/tests/scaleout/cabling_descriptors/5_wh_galaxy_y_torus_superpod.textproto",
+        "tools/tests/scaleout/deployment_descriptors/5_wh_galaxy_y_torus_deployment.textproto");
+
+    const std::string fsd_file =
+        root_output_dir + "fsd/factory_system_descriptor_5_wh_galaxy_y_torus_min_conn_test.textproto";
+    cabling_generator.emit_factory_system_descriptor(fsd_file);
+
+    // With min_connections = 1 (very low threshold), relaxed mode should pass
+    // even though there are missing connections, because we have at least 1 discovered connection
+    auto missing_connections = validate_fsd_against_gsd(
+        fsd_file,
+        "tools/tests/scaleout/global_system_descriptors/5_wh_galaxy_y_torus_physical_desc.yaml",
+        true,   // strict_validation
+        true,   // assert_on_connection_mismatch
+        false,  // log_output
+        1);     // min_connections - relaxed mode with very low threshold
+
+    // In relaxed mode with enough connections, should return empty set (no errors)
+    EXPECT_TRUE(missing_connections.empty());
+}
+
+TEST(Cluster, TestMinConnectionsRelaxedModeFailsWhenNotEnoughConnections) {
+    CablingGenerator cabling_generator(
+        "tools/tests/scaleout/cabling_descriptors/5_wh_galaxy_y_torus_superpod.textproto",
+        "tools/tests/scaleout/deployment_descriptors/5_wh_galaxy_y_torus_deployment.textproto");
+
+    const std::string fsd_file =
+        root_output_dir + "fsd/factory_system_descriptor_5_wh_galaxy_y_torus_min_conn_fail_test.textproto";
+    cabling_generator.emit_factory_system_descriptor(fsd_file);
+
+    // With min_connections set to an impossibly high value (e.g., 999999),
+    // the relaxed mode should NOT be satisfied and should throw
+    EXPECT_THROW(
+        {
+            validate_fsd_against_gsd(
+                fsd_file,
+                "tools/tests/scaleout/global_system_descriptors/5_wh_galaxy_y_torus_physical_desc.yaml",
+                true,    // strict_validation
+                true,    // assert_on_connection_mismatch
+                false,   // log_output
+                999999); // min_connections - impossibly high threshold
+        },
+        std::runtime_error);
+}
+
+TEST(Cluster, TestMinConnectionsNotSpecifiedUsesStrictMode) {
+    CablingGenerator cabling_generator(
+        "tools/tests/scaleout/cabling_descriptors/5_wh_galaxy_y_torus_superpod.textproto",
+        "tools/tests/scaleout/deployment_descriptors/5_wh_galaxy_y_torus_deployment.textproto");
+
+    const std::string fsd_file =
+        root_output_dir + "fsd/factory_system_descriptor_5_wh_galaxy_y_torus_strict_test.textproto";
+    cabling_generator.emit_factory_system_descriptor(fsd_file);
+
+    // Without min_connections (std::nullopt), strict validation should throw on mismatch
+    EXPECT_THROW(
+        {
+            validate_fsd_against_gsd(
+                fsd_file,
+                "tools/tests/scaleout/global_system_descriptors/5_wh_galaxy_y_torus_physical_desc.yaml",
+                true,        // strict_validation
+                true,        // assert_on_connection_mismatch
+                false,       // log_output
+                std::nullopt); // min_connections - not specified, use strict mode
+        },
+        std::runtime_error);
+}
+
+TEST(Cluster, TestMinConnectionsWithMatchingConnectionsStillPasses) {
+    CablingGenerator cabling_generator(
+        "tools/tests/scaleout/cabling_descriptors/16_n300_lb_cluster.textproto",
+        "tools/tests/scaleout/deployment_descriptors/16_lb_deployment.textproto");
+
+    const std::string fsd_file =
+        root_output_dir + "fsd/factory_system_descriptor_16_n300_lb_min_conn_test.textproto";
+    cabling_generator.emit_factory_system_descriptor(fsd_file);
+
+    // With matching connections, both strict mode and relaxed mode should pass
+    auto missing_connections = validate_fsd_against_gsd(
+        fsd_file,
+        "tools/tests/scaleout/global_system_descriptors/16_lb_physical_desc.yaml",
+        true,  // strict_validation
+        true,  // assert_on_connection_mismatch
+        false, // log_output
+        1);    // min_connections - relaxed mode
+
+    EXPECT_TRUE(missing_connections.empty());
+}
+
 }  // namespace tt::scaleout_tools
