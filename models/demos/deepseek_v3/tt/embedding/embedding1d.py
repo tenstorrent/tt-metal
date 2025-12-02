@@ -122,7 +122,7 @@ class Embedding1D(AbstractModule):
             use_height_and_width_as_shard_shape=True,
         )
 
-        return cls._embedding_config(hf_config, mesh_device, memory_config, ttnn.float32)
+        return cls._embedding_config(hf_config, mesh_device, memory_config, ttnn.bfloat16)
 
     @classmethod
     def _embedding_config(

@@ -119,34 +119,34 @@ class DecoderBlock2DBase(DecoderBlockBase):
     ) -> ttnn.Tensor:
         # MLA norm
         # logger.info(f"decoder_block_2d_base forward_decode x shape: {x.shape}")
-        mla_norm_in = ttnn.to_memory_config(x, **cfg["mla_norm_reshard"])
-        mla_norm_out = DistributedRMSNorm.forward_decode(mla_norm_in, cfg["mla_norm"])
-        ttnn.deallocate(mla_norm_in)
+        # mla_norm_in = ttnn.to_memory_config(x, **cfg["mla_norm_reshard"])
+        # mla_norm_out = DistributedRMSNorm.forward_decode(mla_norm_in, cfg["mla_norm"])
+        # ttnn.deallocate(mla_norm_in)
 
-        # MLA
-        mla_norm_out = ttnn.to_memory_config(mla_norm_out, **cfg["mla_reshard"])
+        # # MLA
+        # mla_norm_out = ttnn.to_memory_config(mla_norm_out, **cfg["mla_reshard"])
         # logger.info(f"decoder_block_2d_base forward_decode mla_norm_out shape: {mla_norm_out.shape}")
-        mla_out = MLA2D.forward_decode(mla_norm_out, position_idxs, cfg["mla"], rope_tensors, page_table)
-        ttnn.deallocate(mla_norm_out)
+        mla_out = MLA2D.forward_decode(x, position_idxs, cfg["mla"], rope_tensors, page_table)
+        # ttnn.deallocate(mla_norm_out)
 
         # MLA Residual
         x += mla_out
         ttnn.deallocate(mla_out)
 
-        # MLP norm
-        mlp_norm_in = ttnn.to_memory_config(x, **cfg["mlp_norm_reshard"])
-        mlp_norm_out = DistributedRMSNorm.forward_decode(mlp_norm_in, cfg["mlp_norm"])
-        ttnn.deallocate(mlp_norm_in)
+        # # MLP norm
+        # mlp_norm_in = ttnn.to_memory_config(x, **cfg["mlp_norm_reshard"])
+        # mlp_norm_out = DistributedRMSNorm.forward_decode(mlp_norm_in, cfg["mlp_norm"])
+        # ttnn.deallocate(mlp_norm_in)
 
-        # MLP
-        # logger.info(f"decoder_block_2d_base forward_decode mlp_norm_out shape: {mlp_norm_out.shape}")
-        mlp_norm_out = ttnn.to_memory_config(mlp_norm_out, **cfg["mlp_reshard"])
-        mlp_out = cls.forward_mlp_decode(mlp_norm_out, cfg["mlp"])
-        ttnn.deallocate(mlp_norm_out)
+        # # MLP
+        # # logger.info(f"decoder_block_2d_base forward_decode mlp_norm_out shape: {mlp_norm_out.shape}")
+        # mlp_norm_out = ttnn.to_memory_config(mlp_norm_out, **cfg["mlp_reshard"])
+        # mlp_out = cls.forward_mlp_decode(mlp_norm_out, cfg["mlp"])
+        # ttnn.deallocate(mlp_norm_out)
 
-        # MLP Residual
-        x += mlp_out
-        ttnn.deallocate(mlp_out)
+        # # MLP Residual
+        # x += mlp_out
+        # ttnn.deallocate(mlp_out)
 
         # logger.info(f"decoder_block_2d_base forward_decode return x shape: {x.shape}")
         return x
