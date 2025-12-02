@@ -10,19 +10,18 @@
 
 namespace ttnn::operations::normalization::layernorm::program {
 
-// Shared variables for 1D program factory
-struct LayerNormPreAllGatherSharedVariables {
+// Shared variables for 2D program factory
+struct LayerNormPreAllGather2DSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id = {};
     tt::tt_metal::KernelHandle writer_kernel_id = {};
     tt::tt_metal::KernelHandle compute_kernel_id = {};
-    uint32_t num_cores = 0;
-    uint32_t grid_size_x = 0;
-    uint32_t grid_size_y = 0;
+    uint32_t cores_x = 0;
+    uint32_t cores_y = 0;
 };
 
-// 1D program factory
-struct LayerNormPreAllGatherProgramFactory {
-    using shared_variables_t = LayerNormPreAllGatherSharedVariables;
+// 2D program factory
+struct LayerNormPreAllGather2DProgramFactory {
+    using shared_variables_t = LayerNormPreAllGather2DSharedVariables;
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(

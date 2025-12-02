@@ -8,19 +8,20 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "layernorm_pre_all_gather_program_factory.hpp"
+#include "layernorm_pre_all_gather_2d_program_factory.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
 
 #include "layernorm_pre_all_gather_device_operation_types.hpp"
 
-namespace ttnn::operations::normalization {
+namespace ttnn::operations::normalization::layernorm {
 
 struct LayerNormPreAllGatherDeviceOperation {
-    using operation_attributes_t = normalization::operation_attributes_t;
-    using tensor_args_t = normalization::tensor_args_t;
-    using spec_return_value_t = normalization::spec_return_value_t;
-    using tensor_return_value_t = normalization::tensor_return_value_t;
+    using operation_attributes_t = layernorm::operation_attributes_t;
+    using tensor_args_t = layernorm::tensor_args_t;
+    using spec_return_value_t = layernorm::spec_return_value_t;
+    using tensor_return_value_t = layernorm::tensor_return_value_t;
     using program_factory_t =
         std::variant<program::LayerNormPreAllGatherProgramFactory, program::LayerNormPreAllGather2DProgramFactory>;
 
@@ -44,10 +45,10 @@ struct LayerNormPreAllGatherDeviceOperation {
         const std::optional<Tensor>& preallocated_output = std::nullopt);
 };
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::operations::normalization::layernorm
 
 namespace ttnn::prim {
 constexpr auto layernorm_pre_all_gather = ttnn::register_operation<
     "ttnn::prim::layernorm_pre_all_gather",
-    ttnn::operations::normalization::LayerNormPreAllGatherDeviceOperation>();
+    ttnn::operations::normalization::layernorm::LayerNormPreAllGatherDeviceOperation>();
 }  // namespace ttnn::prim

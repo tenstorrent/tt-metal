@@ -8,7 +8,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "layernorm_distributed_types.hpp"
 
-namespace ttnn::operations::normalization {
+namespace ttnn::operations::normalization::layernorm {
 
 struct operation_attributes_t {
     LayerNormDistributedType norm_type = LayerNormDistributedType::LAYERNORM;
@@ -27,4 +27,4 @@ using tensor_return_value_t = Tensor;
 
 using spec_return_value_t = TensorSpec;
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::operations::normalization::layernorm

@@ -14,7 +14,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::normalization {
+namespace ttnn::operations::normalization::layernorm {
 
 LayerNormPreAllGatherDeviceOperation::program_factory_t LayerNormPreAllGatherDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -87,4 +87,4 @@ LayerNormPreAllGatherDeviceOperation::invoke(
         tensor_args_t{.input = input, .preallocated_output = preallocated_output}};
 }
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::operations::normalization::layernorm
