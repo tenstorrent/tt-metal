@@ -31,7 +31,10 @@ ALWI void sin_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(sine, APPROX)); }
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void sin_tile(uint32_t idst) { MATH(SFPU_UNARY_NO_PARAM_KERNEL_WITH_TYPE(sfpu_trig, sine, RC, APPROX, idst)); }
+ALWI void sin_tile(uint32_t idst) {
+    MATH(SFPU_UNARY_NO_PARAM_KERNEL_WITH_TYPE_AND_ITERATIONS_FP32_FIRST(
+        calculate_sfpu_trig, sine, RC, APPROX, DST_ACCUM_MODE, idst, 8));
+}
 
 /**
  * Please refer to documentation for any_init.
@@ -52,7 +55,10 @@ ALWI void cos_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(cosine, APPROX)); }
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void cos_tile(uint32_t idst) { MATH(SFPU_UNARY_NO_PARAM_KERNEL_WITH_TYPE(sfpu_trig, cosine, RC, APPROX, idst)); }
+ALWI void cos_tile(uint32_t idst) {
+    MATH(SFPU_UNARY_NO_PARAM_KERNEL_WITH_TYPE_AND_ITERATIONS_FP32_FIRST(
+        calculate_sfpu_trig, cosine, RC, APPROX, DST_ACCUM_MODE, idst, 8));
+}
 
 /**
  * Please refer to documentation for any_init.
@@ -96,7 +102,10 @@ ALWI void tan_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(tan, APPROX)); }
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void tan_tile(uint32_t idst) { MATH(SFPU_UNARY_NO_PARAM_KERNEL_WITH_TYPE(sfpu_trig, tan, RC, APPROX, idst)); }
+ALWI void tan_tile(uint32_t idst) {
+    MATH(SFPU_UNARY_NO_PARAM_KERNEL_WITH_TYPE_AND_ITERATIONS_FP32_FIRST(
+        calculate_sfpu_trig, tan, RC, APPROX, DST_ACCUM_MODE, idst, 8));
+}
 
 /**
  * Please refer to documentation for any_init.
