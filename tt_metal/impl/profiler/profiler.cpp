@@ -1564,7 +1564,7 @@ void DeviceProfiler::readDeviceMarkerData(
     const kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
     const auto [trace_id, trace_id_count] = getTraceIdAndCount(run_host_id, device_trace_counter);
 
-    const auto& [_, new_marker_inserted] = device_markers.emplace(
+    const auto& [inserted_marker_it, new_marker_inserted] = device_markers.emplace(
         run_host_id,
         trace_id,
         trace_id_count,
