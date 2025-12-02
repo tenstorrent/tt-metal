@@ -116,6 +116,7 @@ enum class EnvVarID {
     TT_METAL_GTEST_NUM_HW_CQS,                     // Number of HW command queues in tests
     TT_METAL_ARC_DEBUG_BUFFER_SIZE,                // ARC processor debug buffer size
     TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
+    TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,  // Terminal command to execute on dispatch timeout.
 
     // ========================================
     // WATCHER SYSTEM
@@ -141,13 +142,14 @@ enum class EnvVarID {
     // ========================================
     // INSPECTOR
     // ========================================
-    TT_METAL_INSPECTOR,                              // Enable/disable inspector
-    TT_METAL_INSPECTOR_LOG_PATH,                     // Inspector log output path
-    TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT,  // Track initialization closely
-    TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS,     // Warn on write exceptions
-    TT_METAL_RISCV_DEBUG_INFO,                       // Enable RISC-V debug info
-    TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS,           // Inspector RPC server address (host:port)
-    TT_METAL_INSPECTOR_RPC,                          // Enable/disable inspector RPC server
+    TT_METAL_INSPECTOR,                                // Enable/disable inspector
+    TT_METAL_INSPECTOR_LOG_PATH,                       // Inspector log output path
+    TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT,    // Track initialization closely
+    TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS,       // Warn on write exceptions
+    TT_METAL_RISCV_DEBUG_INFO,                         // Enable RISC-V debug info
+    TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS,             // Inspector RPC server address (host:port)
+    TT_METAL_INSPECTOR_RPC,                            // Enable/disable inspector RPC server
+    TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT,  // Serialize inspector data on dispatch timeout
 
     // ========================================
     // DEBUG PRINTING (DPRINT)
@@ -791,6 +793,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
         }
 
+        // TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE
+        // Terminal command to execute on dispatch timeout.
+        // Default: "" (no command)
+        // Usage: export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=./tools/tt-triage.py
+        case EnvVarID::TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE:
+            this->dispatch_timeout_command_to_execute = std::string(value);
+            break;
+
         // ========================================
         // WATCHER SYSTEM
         // ========================================
@@ -1022,6 +1032,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->inspector_settings.rpc_server_enabled = true;
             if (std::strncmp(value, "0", 1) == 0) {
                 this->inspector_settings.rpc_server_enabled = false;
+            }
+            break;
+
+        // TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT
+        // Enables serialization of inspector state on dispatch timeout. Set to '0' to disable.
+        // Default: true (enabled)
+        // Usage: export TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT=1
+        case EnvVarID::TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT:
+            this->inspector_settings.serialize_on_dispatch_timeout = true;
+            if (std::strncmp(value, "0", 1) == 0) {
+                this->inspector_settings.serialize_on_dispatch_timeout = false;
             }
             break;
 
