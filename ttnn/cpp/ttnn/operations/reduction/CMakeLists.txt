@@ -57,6 +57,7 @@ target_sources(
         generic/device/reduce_op_multi_core_h_program_factory.cpp
         generic/device/reduce_op_multi_core_w_program_factory.cpp
         generic/device/reduce_op.cpp
+        generic/device/common.cpp
         generic/generic_reductions.cpp
         prod/device/prod_nc_op.cpp
         prod/device/prod_nc_program_factory.cpp

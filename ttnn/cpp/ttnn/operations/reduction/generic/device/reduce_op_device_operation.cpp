@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reduce_op_device_operation.hpp"
+#include "ttnn/operations/reduction/generic/device/common.hpp"
 
 namespace ttnn::operations::reduction::generic {
 
@@ -30,37 +31,16 @@ ReduceDeviceOperation::invoke(
 
 ReduceDeviceOperation::program_factory_t ReduceDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    using namespace tt::tt_metal;
     const auto& input_tensor = tensor_args.input_tensor;
-    uint32_t num_tiles = input_tensor.physical_volume() / tt::constants::TILE_HW;
+    auto parallelization_strategy = detail::get_parallelization_strategy(input_tensor, operation_attributes.dim);
 
-    if (operation_attributes.dim == tt::tt_metal::ReduceOpDim::H) {
-        return program::ReduceMultiCoreHProgramFactory{};
-    } else if (operation_attributes.dim == tt::tt_metal::ReduceOpDim::W) {
-        return program::ReduceMultiCoreWProgramFactory{};
-    } else if (operation_attributes.dim == tt::tt_metal::ReduceOpDim::HW) {
-        if (num_tiles > 1) {
-            // MultiCoreHW is mapped to SingleCoreHW in the legacy code switch case
-            // case ReduceOpParallelizationStrategy::MULTI_CORE_HW:
-            // case ReduceOpParallelizationStrategy::SINGLE_CORE_HW:
-            //    return reduce_single_core_hw(...)
-            // Wait, get_parallelization_strategy returns MULTI_CORE_HW if num_tiles > 1.
-            // But create_program calls reduce_single_core_hw for both.
-            // So we should return ReduceSingleCoreHwProgramFactory for both?
-            // But the factories are named differently?
-            // No, I created ReduceSingleCoreHwProgramFactory.
-            // I did NOT create ReduceMultiCoreHwProgramFactory.
-            // The legacy code used reduce_single_core_hw for MULTI_CORE_HW as well?
-            // Let's check reduce_op.cpp:
-            // case ReduceOpParallelizationStrategy::MULTI_CORE_HW:
-            // case ReduceOpParallelizationStrategy::SINGLE_CORE_HW:
-            //    return reduce_single_core_hw(...)
-            // Yes.
-            return program::ReduceSingleCoreHwProgramFactory{};
-        } else {
-            return program::ReduceSingleCoreHwProgramFactory{};
-        }
-    } else {
-        TT_THROW("Unsupported reduce dim");
+    switch (parallelization_strategy) {
+        case ReduceOpParallelizationStrategy::MULTI_CORE_H: return program::ReduceMultiCoreHProgramFactory{};
+        case ReduceOpParallelizationStrategy::MULTI_CORE_W: return program::ReduceMultiCoreWProgramFactory{};
+        case ReduceOpParallelizationStrategy::MULTI_CORE_HW:
+        case ReduceOpParallelizationStrategy::SINGLE_CORE_HW: return program::ReduceSingleCoreHwProgramFactory{};
+        default: TT_THROW("Unsupported parallelization strategy");
     }
 }
 

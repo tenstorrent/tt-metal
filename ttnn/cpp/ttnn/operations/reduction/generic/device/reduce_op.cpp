@@ -79,10 +79,8 @@ Tensor reduce(
         return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config);
     }
 
-    // Determine parallelization strategy to see if we need multi-step reduction for HW
-    uint32_t num_tiles = input_tensor.physical_volume() / TILE_HW;
-    bool is_multicore_hw = (reduce_dim == tt::tt_metal::ReduceOpDim::HW && num_tiles > 1);
-
+    auto parallelization_strategy = detail::get_parallelization_strategy(input_tensor, reduce_dim);
+    auto is_multicore_hw = parallelization_strategy == tt::tt_metal::ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     float pad_value = reduce_math == tt::tt_metal::ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : 0;
 
     TT_FATAL(input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "Expected input tensor to be on device");
