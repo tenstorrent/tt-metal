@@ -57,25 +57,29 @@ inline void write_intermediate_data(
 
     // for tensor s
     cb_wait_front(cb_int_s, onetile);
+    DPRINT << "printing  s before moving it\n";
+    print_full_tile(cb_int_s, 0, false);
     DPRINT << "waiting front for s tensor\n";
     l1_read_addr = get_read_ptr(cb_int_s);
     cb_reserve_back(compute_cb_s, onetile);
     l1_write_addr = get_write_ptr(compute_cb_s);
     tt_memmove<false, false, false, 0>(l1_write_addr, l1_read_addr, onetile * page_bytes);
     DPRINT << "printing moved s from compute cb s\n";
-    print_full_tile(compute_cb_s, 1, false);
+    print_full_tile(compute_cb_s, 0, false);
     cb_push_back(compute_cb_s, onetile);
     cb_pop_front(cb_int_s, onetile);
 
     // for tensor m
     cb_wait_front(cb_int_m, onetile);
+    DPRINT << "printing m before moving it\n";
+    print_full_tile(cb_int_m, 0, false);
     DPRINT << "waiting front for m tensor\n";
     l1_read_addr = get_read_ptr(cb_int_m);
     cb_reserve_back(compute_cb_m, onetile);
     l1_write_addr = get_write_ptr(compute_cb_m);
     tt_memmove<false, false, false, 0>(l1_write_addr, l1_read_addr, onetile * page_bytes);
     DPRINT << "printing moved m from compute cb m\n";
-    print_full_tile(compute_cb_m, 1, false);
+    print_full_tile(compute_cb_m, 0, false);
     cb_push_back(compute_cb_m, onetile);
     cb_pop_front(cb_int_m, onetile);
 }
@@ -96,6 +100,8 @@ inline void write_data(
     DPRINT << "start writing data\n";
 
     cb_wait_front(cb_int_cb_l, input_num_tiles);
+    DPRINT << "printing final l tensor\n";
+    print_full_tile(cb_int_cb_l, 10, false);
     DPRINT << "waiting front for s tensor\n";
     uint32_t l1_read_addr = get_read_ptr(cb_int_cb_l);
     uint64_t dst_noc_addr = get_noc_addr(core_noc_x, core_noc_y, dst_addr_l, 0);
@@ -107,6 +113,8 @@ inline void write_data(
     DPRINT << "finished writing l tensor\n";
     // for tensor s
     cb_wait_front(cb_int_cb_s, onetile);
+    DPRINT << "printing final s tensor\n";
+    print_full_tile(cb_int_cb_s, 0, false);
     DPRINT << "waiting front for s tensor\n";
     l1_read_addr = get_read_ptr(cb_int_cb_s);
     dst_noc_addr = get_noc_addr(core_noc_x, core_noc_y, dst_addr_s, 0);
@@ -119,6 +127,8 @@ inline void write_data(
 
     // for tensor m
     cb_wait_front(cb_int_cb_m, onetile);
+    DPRINT << "printing final m tensor\n";
+    print_full_tile(cb_int_cb_m, 0, false);
     l1_read_addr = get_read_ptr(cb_int_cb_m);
     dst_noc_addr = get_noc_addr(core_noc_x, core_noc_y, dst_addr_m, 0);
     noc_async_write(l1_read_addr, dst_noc_addr, onetile * page_bytes);

@@ -21,6 +21,17 @@
 using tt::data_movement::common::round_up;
 using tt::data_movement::common::tt_memmove;
 
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "======" << ENDL();
+    for (uint8_t r = 0; r < 8; ++r) {
+        SliceRange sr_left = SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
+        SliceRange sr_right =
+            SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
+        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
+               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
 // device 2 writer receives data from compute kernel and sends it to device 1
 void kernel_main() {
     DPRINT << "root2 writer kernel started\n";
@@ -171,17 +182,23 @@ void kernel_main() {
     DPRINT << "cb id s: " << (uint32_t)cb_id_s << "\n";
     DPRINT << "cb id m: " << (uint32_t)cb_id_m << "\n";
     cb_wait_front(cb_id_l, chunk_size);
+    DPRINT << "printing output of compute from cb_id_l\n";
+    print_full_tile(cb_id_l, 10, false);
     uint32_t src_page_base_addr = get_read_ptr(cb_id_l);
     tt_memmove<false, false, false, 0>(packet_base_addr, src_page_base_addr, payload_size_bytes);
     cb_pop_front(cb_id_l, chunk_size);
 
     cb_wait_front(cb_id_s, 1);
+    DPRINT << "printing output of compute from cb_id_s\n";
+    print_full_tile(cb_id_s, 0, false);
     const uint32_t src_page_base_addr_s = get_read_ptr(cb_id_s);
     tt_memmove<false, false, false, 0>(
         packet_base_addr + payload_size_bytes, src_page_base_addr_s, aligned_page_size_bytes);
     cb_pop_front(cb_id_s, 1);
 
     cb_wait_front(cb_id_m, 1);
+    DPRINT << "printing output of compute from cb_id_m\n";
+    print_full_tile(cb_id_m, 0, false);
     const uint32_t src_page_base_addr_m = get_read_ptr(cb_id_m);
     tt_memmove<false, false, false, 0>(
         packet_base_addr + payload_size_bytes + aligned_page_size_bytes, src_page_base_addr_m, aligned_page_size_bytes);

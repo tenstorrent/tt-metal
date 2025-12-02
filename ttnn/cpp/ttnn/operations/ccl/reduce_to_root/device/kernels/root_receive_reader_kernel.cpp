@@ -57,8 +57,8 @@ inline void read_from_local(
     noc_async_read(read_addr, l1_write_addr, input_num_tiles * page_bytes);
     DPRINT << "after noc read l\n";
     noc_async_read_barrier();
-    DPRINT << "printing local l from compute cb l\n";
-    print_full_tile(cb_id_in_l, 3, false);
+    // DPRINT << "printing local l from compute cb l\n";
+    // print_full_tile(cb_id_in_l, 3, false);
     cb_push_back(cb_id_in_l, input_num_tiles);
 
     // for tensor s
@@ -67,8 +67,8 @@ inline void read_from_local(
     read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_s);
     noc_async_read(read_addr, l1_write_addr, onetile * page_bytes);
     noc_async_read_barrier();
-    DPRINT << "printing local S from compute cb l\n";
-    print_full_tile(cb_id_in_s, 0, false);
+    // DPRINT << "printing local S from compute cb l\n";
+    // print_full_tile(cb_id_in_s, 0, false);
     cb_push_back(cb_id_in_s, onetile);
 
     // for tensor m
@@ -77,8 +77,8 @@ inline void read_from_local(
     read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_m);
     noc_async_read(read_addr, l1_write_addr, onetile * page_bytes);
     noc_async_read_barrier();
-    DPRINT << "printing local M from compute cb l\n";
-    print_full_tile(cb_id_in_m, 0, false);
+    // DPRINT << "printing local M from compute cb l\n";
+    // print_full_tile(cb_id_in_m, 0, false);
     cb_push_back(cb_id_in_m, onetile);
     DPRINT << "completed reading from local\n";
 }
@@ -103,7 +103,7 @@ inline void read_from_int(
     uint32_t l1_write_addr = get_write_ptr(compute_cb_l);
     tt_memmove<false, false, false, 0>(l1_write_addr, l1_read_addr, input_num_tiles * page_bytes);
     DPRINT << "printing moved l from compute cb l\n";
-    // print_full_tile(compute_cb_l, 1, false);
+    print_full_tile(compute_cb_l, 1, false);
     cb_push_back(compute_cb_l, input_num_tiles);
     cb_pop_front(cb_int_l, input_num_tiles);
 
@@ -115,7 +115,7 @@ inline void read_from_int(
     l1_write_addr = get_write_ptr(compute_cb_s);
     tt_memmove<false, false, false, 0>(l1_write_addr, l1_read_addr, onetile * page_bytes);
     DPRINT << "printing moved s from compute cb s\n";
-    // print_full_tile(compute_cb_s, 1, false);
+    print_full_tile(compute_cb_s, 0, false);
     cb_push_back(compute_cb_s, onetile);
     cb_pop_front(cb_int_s, onetile);
 
@@ -127,7 +127,7 @@ inline void read_from_int(
     l1_write_addr = get_write_ptr(compute_cb_m);
     tt_memmove<false, false, false, 0>(l1_write_addr, l1_read_addr, onetile * page_bytes);
     DPRINT << "printing moved m from compute cb m\n";
-    // print_full_tile(compute_cb_m, 1, false);
+    print_full_tile(compute_cb_m, 0, false);
     cb_push_back(compute_cb_m, onetile);
     cb_pop_front(cb_int_m, onetile);
 }
@@ -289,8 +289,8 @@ void kernel_main() {
     noc_async_read_barrier();
 
     tt_memmove<false, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
-    DPRINT << "printing received L from packet l1\n";
-    print_full_tile(receiver_cb_id_l, 14, false);
+    // DPRINT << "printing received L from packet l1\n";
+    // print_full_tile(receiver_cb_id_l, 14, false);
     cb_push_back(receiver_cb_id_l, chunk_size);
 
     DPRINT << "pushing second set of inputs for compute to cbs " << (uint32_t)receiver_cb_id_l << ", "
@@ -302,15 +302,15 @@ void kernel_main() {
     uint32_t dest_page_base_addr_s = get_write_ptr(receiver_cb_id_s);
     tt_memmove<false, false, false, 0>(
         dest_page_base_addr_s, packet_l1_addr + packet_size_bytes, aligned_page_size_bytes);
-    DPRINT << "printing received S from packet l1\n";
-    print_full_tile(receiver_cb_id_s, 0, false);
+    // DPRINT << "printing received S from packet l1\n";
+    // print_full_tile(receiver_cb_id_s, 0, false);
     cb_push_back(receiver_cb_id_s, 1);
 
     uint32_t dest_page_base_addr_m = get_write_ptr(receiver_cb_id_m);
     tt_memmove<false, false, false, 0>(
         dest_page_base_addr_m, packet_l1_addr + packet_size_bytes + aligned_page_size_bytes, aligned_page_size_bytes);
-    DPRINT << "printing received M from packet l1\n";
-    print_full_tile(receiver_cb_id_m, 0, false);
+    // DPRINT << "printing received M from packet l1\n";
+    // print_full_tile(receiver_cb_id_m, 0, false);
     cb_push_back(receiver_cb_id_m, 1);
 
     cb_push_back(packet_cb_id, 1);
@@ -432,6 +432,8 @@ void kernel_main() {
     DPRINT << "after reading packet from device 2\n";
 
     tt_memmove<false, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
+    DPRINT << "printing received l from packet 2\n";
+    print_full_tile(receiver_cb_id_l, 15, false);
     cb_push_back(receiver_cb_id_l, chunk_size);
 
     cb_reserve_back(receiver_cb_id_s, 1);
@@ -446,7 +448,11 @@ void kernel_main() {
         dest_page_base_addr_m, packet_l1_addr + packet_size_bytes + aligned_page_size_bytes, aligned_page_size_bytes);
 
     DPRINT << "after memmove for s and m\n";
+    DPRINT << "printing received s from packet l1\n";
+    print_full_tile(receiver_cb_id_s, 0, false);
     cb_push_back(receiver_cb_id_s, 1);
+    DPRINT << "printing received M from packet l1\n";
+    print_full_tile(receiver_cb_id_m, 0, false);
     cb_push_back(receiver_cb_id_m, 1);
 
     cb_push_back(packet_cb_id, 1);
