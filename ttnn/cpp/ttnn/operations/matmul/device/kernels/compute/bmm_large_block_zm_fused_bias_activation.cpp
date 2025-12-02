@@ -242,6 +242,9 @@ void MAIN {
                     if constexpr (in0_transpose_tile) {
                         transpose_wh_init_short(in0_transpose_cb_id);
                         PACK((pack_reconfig_data_format(in0_cb_id)));
+#ifdef PACKER_L1_ACC
+                        PACK((llk_pack_reconfig_l1_acc(0)));
+#endif
                         transpose_tile_block<in0_block_num_tiles>(in0_transpose_cb_id, in0_cb_id);
                         mm_block_init_short(
                             in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
@@ -347,6 +350,10 @@ void MAIN {
                                 if (block == 0) {  // no accumulation for first iteration
                                     PACK((llk_pack_reconfig_l1_acc(0)));
                                 } else if (block == 1) {
+                                    PACK((llk_pack_reconfig_l1_acc(1)));
+                                } else if (in0_transpose_tile) {
+                                    // For each block, l1_acc would have been enabled during the
+                                    // transpose stage. So let us put it back here.
                                     PACK((llk_pack_reconfig_l1_acc(1)));
                                 }
 #endif
