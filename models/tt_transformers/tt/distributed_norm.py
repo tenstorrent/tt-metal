@@ -78,14 +78,19 @@ class DistributedNorm(LightweightModule):
                 persistent_output_buffer=None,
                 dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=1,
+                num_links=4,
                 topology=self.args.ccl_topology(),
                 memory_config=input_mem_cfg,
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 chunks_per_sync=10,
-                num_workers_per_link=2,
+                num_workers_per_link=1,
                 num_buffers_per_channel=2,
             )
+            # 2 faktora
+            # 4096 optimalna velicina paketa, tad je maks troughput (a. i  razlog), inace mozda/uvek opadne
+            # 16 tiles po 2kb = 32kb. workload se deli ravnomerno medju workerima. Jednacina: nr_of_tiles(input per device)*size_of_tile / nr_workers == 4096
+            # vise workers je losije zbog razloga gore i zbog multiplexing overheaad
+            # a. slika ona druga i sta je tu round robin. nr_workers=1 je special case jer iz dram ide a ne cache, a inace cita iz cache. Kod nr_workers_per_link=1 imas prednost da nemas LATENCY ovo da se prebacuje
         else:
             x = ttnn.to_memory_config(x, input_mem_cfg)
 
