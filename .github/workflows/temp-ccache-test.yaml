@@ -197,7 +197,9 @@ jobs:
 
           # Run the same tests again - JIT kernels should hit ccache now
           echo "Running second test - should hit cached kernels..."
-          ${{ matrix.test-group.cmd }} 2>&1 | tee /tmp/second_run.log          echo ""
+          ${{ matrix.test-group.cmd }} 2>&1 | tee /tmp/second_run.log
+
+          echo ""
           echo "=== ccache stats after second run ==="
           ccache -s
 
@@ -220,7 +222,9 @@ jobs:
 
           # Run tests a third time to gather more cache data
           echo "Running third test for cache pattern analysis..."
-          ${{ matrix.test-group.cmd }} 2>&1 | tee /tmp/third_run.log          echo ""
+          ${{ matrix.test-group.cmd }} 2>&1 | tee /tmp/third_run.log
+
+          echo ""
           echo "=== Final ccache stats ==="
           ccache -s
 
@@ -255,7 +259,9 @@ jobs:
             grep -iE "(debug|build|info.*build)" /tmp/second_run.log | head -15 || echo "No debug build lines found"
           else
             echo "Second run log not found"
-          fi          echo ""
+          fi
+
+          echo ""
           echo "=== JIT Build Debug Info from Third Run ==="
           if [ -f /tmp/third_run.log ]; then
             echo "CCACHE_DEBUG lines from third run:"
