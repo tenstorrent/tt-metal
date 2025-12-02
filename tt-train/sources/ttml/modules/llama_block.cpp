@@ -86,10 +86,11 @@ autograd::TensorPtr LlamaBlock::operator()(
     const autograd::TensorPtr& mask,
     const autograd::TensorPtr& k_cache,
     const autograd::TensorPtr& v_cache,
+    const modules::InferenceMode mode,
     uint32_t cache_position) {
     auto residual = input;
     auto h = (*m_attention_norm)(input);
-    h = (*m_attention)(h, mask, k_cache, v_cache, cache_position);
+    h = (*m_attention)(h, mask, k_cache, v_cache, mode, cache_position);
     h = ops::add(h, residual);
 
     residual = h;
