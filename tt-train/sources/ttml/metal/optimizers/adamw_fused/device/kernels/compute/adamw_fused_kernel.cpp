@@ -71,8 +71,7 @@ void MAIN {
 
     init_sfpu(cb_param_idx, cb_output_idx);
 #if STOCH_ROUND
-    // If this is enabled, it tends to round up much more for whatever reason
-    // init_prng_seed(seed);
+    init_prng_seed(seed);
 #endif
 
     for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_core; tile_idx += block_size) {
