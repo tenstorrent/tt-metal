@@ -1,29 +1,44 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sdpa_decode_op.hpp"
+#include "sdpa_decode_device_operation.hpp"
 
-#include "sdpa_decode_program_factory.hpp"
-#include "ttnn/run_operation.hpp"
+#include <cmath>
+
+#include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::transformer {
+namespace ttnn::operations::transformer::sdpa_decode {
 
-void ScaledDotProductAttentionDecode::validate(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    bool use_mla = this->use_mla.value_or(false);
+SdpaDecodeDeviceOperation::program_factory_t SdpaDecodeDeviceOperation::select_program_factory(
+    const operation_attributes_t&, const tensor_args_t&) {
+    return program::SdpaDecodeProgramFactory{};
+}
+
+void SdpaDecodeDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(operation_attributes, tensor_args);
+}
+
+void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    bool use_mla = operation_attributes.use_mla.value_or(false);
 
     if (use_mla) {
-        TT_FATAL(input_tensors.size() == 2, "Must have 2 input tensors and mask");
-        TT_FATAL(this->head_dim_v.has_value(), "Must provide head_dim_v for multi-latent attention decode");
-        TT_FATAL(this->is_causal, "Multi-latent attention decode only tested for causal!");
+        TT_FATAL(
+            operation_attributes.head_dim_v.has_value(), "Must provide head_dim_v for multi-latent attention decode");
+        TT_FATAL(operation_attributes.is_causal, "Multi-latent attention decode only tested for causal!");
     } else {
-        TT_FATAL(input_tensors.size() == 3, "Must have 3 input tensors and mask");
+        TT_FATAL(tensor_args.v.has_value(), "Must have 3 input tensors and mask");
     }
 
+    std::vector<Tensor> input_tensors{{tensor_args.q}, {tensor_args.k}};
+    if (tensor_args.v.has_value()) {
+        input_tensors.emplace_back(tensor_args.v.value());
+    }
     for (const auto& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device!");
         TT_FATAL(input_tensor.buffer() != nullptr, "Operands to SDPA need to be allocated in buffers on device!");
@@ -54,9 +69,9 @@ void ScaledDotProductAttentionDecode::validate(
             q_shape[3],
             k_shape[3]);
         TT_FATAL(
-            this->head_dim_v.value() <= q_shape[3],
+            operation_attributes.head_dim_v.value() <= q_shape[3],
             "Head dimension of V must be less than or equal to head dim of Q, got {} and {}",
-            head_dim_v,
+            operation_attributes.head_dim_v.value(),
             q_shape[3]);
     }
 
@@ -82,17 +97,17 @@ void ScaledDotProductAttentionDecode::validate(
             input_tensors.at(i).buffer()->buffer_type());
     }
     // Output memconfig must be height sharded or DRAM
-    if (this->output_mem_config.is_sharded()) {
+    if (operation_attributes.output_mem_config.is_sharded()) {
         TT_FATAL(
-            this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+            operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
             "Output memory config layout must be HEIGHT_SHARDED when sharded but got {}",
-            this->output_mem_config.memory_layout());
+            operation_attributes.output_mem_config.memory_layout());
     }
 
-    if (!this->is_causal) {
-        if (optional_input_tensors.at(2).has_value()) {
+    if (!operation_attributes.is_causal) {
+        if (tensor_args.attn_mask.has_value()) {
             // Causal attention verification
-            const auto& mask_tensor = optional_input_tensors.at(2).value();
+            const auto& mask_tensor = tensor_args.attn_mask.value();
             const auto mask_shape = mask_tensor.padded_shape();
             const auto mask_shape_unpadded = mask_tensor.logical_shape();
 
@@ -106,7 +121,7 @@ void ScaledDotProductAttentionDecode::validate(
                 "Expect same number of heads in mask as in Q, got {} and {}",
                 mask_shape_unpadded[2],
                 q_shape_unpadded[2]);
-            if (!this->paged_attention) {
+            if (!operation_attributes.paged_attention) {
                 TT_FATAL(
                     mask_shape[3] == k_shape[2],
                     "Expect same sequence length in mask as in K, got {} and {}",
@@ -114,12 +129,12 @@ void ScaledDotProductAttentionDecode::validate(
                     k_shape[2]);
             }
 
-            TT_FATAL(k_chunk_size > 0, "Must provide k_chunk_size if using attention mask!");
+            TT_FATAL(operation_attributes.k_chunk_size > 0, "Must provide k_chunk_size if using attention mask!");
             TT_FATAL(
-                mask_shape[3] % k_chunk_size == 0,
+                mask_shape[3] % operation_attributes.k_chunk_size == 0,
                 "Mask sequence length must be multiple of chunk size, got: {} and {}",
                 mask_shape[3],
-                k_chunk_size);
+                operation_attributes.k_chunk_size);
 
             TT_FATAL(
                 mask_tensor.dtype() == DataType::BFLOAT16 || mask_tensor.dtype() == DataType::BFLOAT8_B ||
@@ -129,21 +144,20 @@ void ScaledDotProductAttentionDecode::validate(
         }
     } else {
         // Uncausal attention verification
-        TT_FATAL(
-            not optional_input_tensors.at(2).has_value(), "Must not have attn_mask tensor for non-causal attention");
+        TT_FATAL(not tensor_args.attn_mask.has_value(), "Must not have attn_mask tensor for non-causal attention");
     }
 
-    if (this->paged_attention) {
+    if (operation_attributes.paged_attention) {
         // Paged attention verification
-        TT_FATAL(!this->share_cache.value_or(false), "Share cache feature not supported for paged attention");
+        TT_FATAL(
+            !operation_attributes.share_cache.value_or(false), "Share cache feature not supported for paged attention");
         const auto B = q_shape[1];
 
-        if (this->is_causal) {
+        if (operation_attributes.is_causal) {
             // Check cur pos tensor for causal mode
             TT_FATAL(
-                optional_input_tensors.at(0).has_value(),
-                "Must have cur_pos tensor for paged attention in causal mode");
-            const auto& cur_pos_tensor = optional_input_tensors.at(0).value();
+                tensor_args.cur_pos_tensor.has_value(), "Must have cur_pos tensor for paged attention in causal mode");
+            const auto& cur_pos_tensor = tensor_args.cur_pos_tensor.value();
             TT_FATAL(
                 cur_pos_tensor.dtype() == DataType::INT32,
                 "Expect cur_pos to be INT32, got {}",
@@ -163,8 +177,8 @@ void ScaledDotProductAttentionDecode::validate(
             }
         }
 
-        TT_FATAL(optional_input_tensors.at(1).has_value(), "Must have page_table tensor for paged attention");
-        const auto& page_table_tensor = optional_input_tensors.at(1).value();
+        TT_FATAL(tensor_args.page_table_tensor.has_value(), "Must have page_table tensor for paged attention");
+        const auto& page_table_tensor = tensor_args.page_table_tensor.value();
 
         if (page_table_tensor.is_sharded()) {
             TT_FATAL(
@@ -198,18 +212,22 @@ void ScaledDotProductAttentionDecode::validate(
 
         // Validate chunk size for paged version
         // k_chunk_size can also be zero; if k_chunk_size = 0, figure it out in kernels
-        TT_FATAL(k_chunk_size % 32 == 0, "Chunk size must be multiple of 32, got: {}", k_chunk_size);
-        if (!this->is_causal) {
-            TT_FATAL(k_chunk_size > 0, "Must provide k_chunk_size if paged and non-causal!");
+        TT_FATAL(
+            operation_attributes.k_chunk_size % 32 == 0,
+            "Chunk size must be multiple of 32, got: {}",
+            operation_attributes.k_chunk_size);
+        if (!operation_attributes.is_causal) {
+            TT_FATAL(operation_attributes.k_chunk_size > 0, "Must provide k_chunk_size if paged and non-causal!");
             TT_FATAL(
-                (page_table_shape[1] * k_shape[2]) % k_chunk_size == 0,
+                (page_table_shape[1] * k_shape[2]) % operation_attributes.k_chunk_size == 0,
                 "K sequence length must be multiple of chunk size, got: {} and {}",
                 page_table_shape[1] * k_shape[2],
-                k_chunk_size);
+                operation_attributes.k_chunk_size);
         }
     } else {
         // Unpaged attention verification
-        TT_FATAL(not optional_input_tensors.at(1).has_value(), "Must not have page_table tensor for unpaged attention");
+        TT_FATAL(
+            not tensor_args.page_table_tensor.has_value(), "Must not have page_table tensor for unpaged attention");
         // Assert we are in decode mode if not causal
         // Q: [1, B, NH, D]
         // K: [1, B, S, D]
@@ -217,7 +235,7 @@ void ScaledDotProductAttentionDecode::validate(
 
         // Batch must match
         const auto B = q_shape[1];
-        if (this->share_cache.value_or(false)) {
+        if (operation_attributes.share_cache.value_or(false)) {
             TT_FATAL(k_shape[0] == 1, "Share cache expects K to have batch size of 1, but got {}", k_shape[0]);
             TT_FATAL(v_shape[0] == 1, "Share cache expects V to have batch size of 1, but got {}", v_shape[0]);
         } else {
@@ -237,13 +255,16 @@ void ScaledDotProductAttentionDecode::validate(
             v_shape[-2]);
 
         // Validate chunk size for unpaged version
-        TT_FATAL(k_chunk_size > 0, "Must provide k_chunk_size if non-causal!");
-        TT_FATAL(k_chunk_size % 32 == 0, "Chunk size must be multiple of 32, got: {}", k_chunk_size);
+        TT_FATAL(operation_attributes.k_chunk_size > 0, "Must provide k_chunk_size if non-causal!");
         TT_FATAL(
-            k_shape[2] % k_chunk_size == 0,
+            operation_attributes.k_chunk_size % 32 == 0,
+            "Chunk size must be multiple of 32, got: {}",
+            operation_attributes.k_chunk_size);
+        TT_FATAL(
+            k_shape[2] % operation_attributes.k_chunk_size == 0,
             "K sequence length must be multiple of chunk size, got: {} and {}",
             k_shape[2],
-            k_chunk_size);
+            operation_attributes.k_chunk_size);
 
         // Check hidden size
         const auto D = q_shape[-1];
@@ -259,8 +280,8 @@ void ScaledDotProductAttentionDecode::validate(
             D);
 
         // Check valid seqlen
-        for (int i = 0; i < this->cur_pos.size(); i++) {
-            TT_FATAL(this->cur_pos[i] < k_shape[-2], "cur_pos must be <= K sequence dim");
+        for (int i = 0; i < operation_attributes.cur_pos.size(); i++) {
+            TT_FATAL(operation_attributes.cur_pos[i] < k_shape[-2], "cur_pos must be <= K sequence dim");
         }
     }
 
@@ -272,7 +293,7 @@ void ScaledDotProductAttentionDecode::validate(
         v_shape[1]);
     bool is_gqa = (k_shape[1] > 1);
     if (is_gqa) {
-        TT_FATAL(!output_mem_config.is_sharded(), "Sharded output not supported for GQA");
+        TT_FATAL(!operation_attributes.output_mem_config.is_sharded(), "Sharded output not supported for GQA");
         TT_FATAL(
             input_tensors.at(0).dtype() == DataType::BFLOAT16,
             "GQA expects BFLOAT16 input tensor, but got {}",
@@ -285,8 +306,8 @@ void ScaledDotProductAttentionDecode::validate(
     }
 
     // Check attention sink
-    if (optional_input_tensors.at(3).has_value()) {
-        const auto& attention_sink = optional_input_tensors.at(3).value();
+    if (tensor_args.attention_sink.has_value()) {
+        const auto& attention_sink = tensor_args.attention_sink.value();
 
         const auto& sink_shape = attention_sink.padded_shape();
         TT_FATAL(sink_shape.size() == 2, "Attention sink must have 2 dimensions");
@@ -313,89 +334,100 @@ void ScaledDotProductAttentionDecode::validate(
     }
 }
 
-std::vector<TensorSpec> ScaledDotProductAttentionDecode::compute_output_specs(
-    const std::vector<Tensor>& input_tensors) const {
-    const auto& input = input_tensors.at(0);
+spec_return_value_t SdpaDecodeDeviceOperation::compute_output_specs(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.q;
     Layout output_layout = Layout::TILE;
     ttnn::Shape output_shape = input.logical_shape();
     if (input.layout() == Layout::ROW_MAJOR) {
         output_shape[2] = round_up_to_tile(output_shape[2], tt::constants::TILE_HEIGHT);
         output_layout = Layout::ROW_MAJOR;
     }
-    if (this->use_mla.value_or(false)) {
-        // Multi Latent Attention
-        output_shape[3] = this->head_dim_v.value();
+    bool use_mla = operation_attributes.use_mla.value_or(false);
+    if (use_mla) {
+        output_shape[3] = operation_attributes.head_dim_v.value();
     }
-    return {TensorSpec(output_shape, TensorLayout(input.dtype(), PageConfig(output_layout), output_mem_config))};
+    return TensorSpec(
+        output_shape, TensorLayout(input.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));
 }
 
-operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors) const {
-    const auto& input_tensor_q = input_tensors.at(0);
-    const auto& input_tensor_k = input_tensors.at(1);
-    const auto& input_tensor_v = this->use_mla.value_or(false) ? input_tensors.at(1) : input_tensors.at(2);
-
-    const auto& cur_pos_tensor = optional_input_tensors.at(0);
-    const auto& page_table_tensor = optional_input_tensors.at(1);
-    const auto& attn_mask = optional_input_tensors.at(2);
-    const auto& attention_sink = optional_input_tensors.at(3);
-
-    auto& output_tensor = output_tensors.at(0);
-
-    auto scale = this->scale;
-    if (not scale.has_value()) {
-        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1]));
-    }
-    auto sliding_window_size = this->sliding_window_size;
-    if (not sliding_window_size.has_value()) {
-        sliding_window_size = 0;
-    }
-
-    return detail::sdpa_decode_multi_core(
-        input_tensor_q,
-        input_tensor_k,
-        input_tensor_v,
-        cur_pos_tensor,
-        page_table_tensor,
-        attn_mask,
-        attention_sink,
-        output_tensor,
-        this->is_causal,
-        this->cur_pos,
-        scale,
-        this->compute_kernel_config,
-        this->program_config,
-        this->k_chunk_size,
-        this->share_cache,
-        this->use_mla.value_or(false),
-        this->head_dim_v.value_or(0),
-        sliding_window_size);
+tensor_return_value_t SdpaDecodeDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.q.device());
 }
 
-operation::Hash ScaledDotProductAttentionDecode::compute_program_hash(
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    bool has_cur_pos = optional_input_tensors.at(0).has_value();
-    bool has_attn_mask = optional_input_tensors.at(2).has_value();
-    return operation::hash_operation<ScaledDotProductAttentionDecode>(
-        this->scale,
-        this->output_mem_config,
-        this->program_config,
-        this->compute_kernel_config,
-        this->k_chunk_size,
-        this->paged_attention,
-        this->is_causal,
-        this->use_mla,
-        this->head_dim_v,
-        this->sliding_window_size,
+tt::stl::hash::hash_t SdpaDecodeDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    bool has_cur_pos = tensor_args.cur_pos_tensor.has_value();
+    bool has_attn_mask = tensor_args.attn_mask.has_value();
+
+    return operation::hash_operation<SdpaDecodeDeviceOperation>(
+        operation_attributes.scale,
+        operation_attributes.output_mem_config,
+        operation_attributes.program_config,
+        operation_attributes.compute_kernel_config,
+        operation_attributes.k_chunk_size,
+        operation_attributes.paged_attention,
+        operation_attributes.is_causal,
+        operation_attributes.use_mla,
+        operation_attributes.head_dim_v,
+        operation_attributes.sliding_window_size,
         has_attn_mask,
         has_cur_pos,
-        input_tensors,
+        tensor_args.q,
+        tensor_args.k,
+        tensor_args.v,
         // Hash on page_table_tensor to properly size page table CB
-        optional_input_tensors.at(1),
-        optional_input_tensors.at(3));
+        tensor_args.page_table_tensor,
+        tensor_args.attention_sink);
 }
 
-}  // namespace ttnn::operations::transformer
+std::tuple<operation_attributes_t, tensor_args_t> SdpaDecodeDeviceOperation::invoke(
+    const Tensor& input_tensor_q,
+    const Tensor& input_tensor_k,
+    const std::optional<const Tensor>& input_tensor_v,
+    const std::optional<const Tensor>& cur_pos_tensor,
+    const std::optional<const Tensor>& page_table_tensor,
+    const std::optional<const Tensor>& attn_mask,
+    const std::optional<const Tensor>& attention_sink,
+    bool is_causal,
+    bool paged_attention,
+    const std::vector<uint32_t>& cur_pos,
+    std::optional<float> scale,
+    std::optional<uint32_t> sliding_window_size,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<SDPAProgramConfig>& program_config,
+    DeviceComputeKernelConfig compute_kernel_config,
+    uint32_t k_chunk_size,
+    std::optional<bool> share_cache,
+    std::optional<bool> use_mla,
+    std::optional<uint32_t> head_dim_v) {
+    operation_attributes_t attrs{
+        .is_causal = is_causal,
+        .paged_attention = paged_attention,
+        .cur_pos = cur_pos,
+        .scale = scale,
+        .sliding_window_size = sliding_window_size,
+        .output_mem_config = output_mem_config,
+        .program_config = program_config,
+        .compute_kernel_config = compute_kernel_config,
+        .k_chunk_size = k_chunk_size,
+        .share_cache = share_cache,
+        .use_mla = use_mla,
+        .head_dim_v = head_dim_v,
+    };
+
+    tensor_args_t tensors{
+        .q = input_tensor_q,
+        .k = input_tensor_k,
+        .v = input_tensor_v,
+        .cur_pos_tensor = cur_pos_tensor,
+        .page_table_tensor = page_table_tensor,
+        .attn_mask = attn_mask,
+        .attention_sink = attention_sink,
+    };
+
+    return {attrs, tensors};
+}
+
+}  // namespace ttnn::operations::transformer::sdpa_decode
