@@ -24,7 +24,6 @@
 namespace ttnn {
 
 struct NeighborPadAsync {
-    std::vector<IDevice*> devices;
     const uint32_t dim;
     const uint32_t padding_left;
     const uint32_t padding_right;
@@ -40,7 +39,6 @@ struct NeighborPadAsync {
     std::optional<std::vector<uint32_t>> secondary_mesh_shape;
 
     NeighborPadAsync(
-        std::vector<IDevice*> devices,
         uint32_t dim,
         uint32_t padding_left,
         uint32_t padding_right,
@@ -54,7 +52,6 @@ struct NeighborPadAsync {
         uint32_t ring_size,
         std::optional<uint32_t> secondary_cluster_axis,
         std::optional<std::vector<uint32_t>> secondary_mesh_shape) :
-        devices(std::move(devices)),
         dim(dim),
         padding_left(padding_left),
         padding_right(padding_right),

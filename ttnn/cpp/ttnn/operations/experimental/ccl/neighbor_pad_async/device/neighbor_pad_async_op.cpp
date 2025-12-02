@@ -96,37 +96,19 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks NeighborPadAsync::create_mesh
 
 tt::tt_metal::operation::ProgramWithCallbacks NeighborPadAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    auto mesh_device = input_tensors[0].device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
-    std::vector<IDevice*> devices_to_use = {};
-    const auto& mesh_view = input_tensors[0].device()->get_view();
-    // User specified the cluster-axis. Derive devices based on the current coordinate
-    // and the cluster-axis.
-    devices_to_use =
-        (this->cluster_axis == 0) ? mesh_view.get_devices_on_column(coord[1]) : mesh_view.get_devices_on_row(coord[0]);
-    uint32_t target_ring_size = devices_to_use.size();
+    uint32_t device_index = ccl::get_linearized_index_from_physical_coord(input_tensors[0], coord, this->cluster_axis);
 
-    // cluster_axis
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
-    uint32_t device_index = 0;  // Initialize device index
-    for (uint32_t i = 0; i < target_ring_size; ++i) {
-        if (devices_to_use.at(i) == target_device) {
-            device_index = i;
-            if (i != 0) {
-                backward_device = devices_to_use.at(i - 1);
-            }
-            if (i != target_ring_size - 1) {
-                forward_device = devices_to_use.at(i + 1);
-            }
-        }
-    }
+    std::optional<MeshCoordinate> forward_coord =
+        ccl::get_physical_neighbor_from_physical_coord(input_tensors[0], coord, 1, this->topology, this->cluster_axis);
+
+    std::optional<MeshCoordinate> backward_coord =
+        ccl::get_physical_neighbor_from_physical_coord(input_tensors[0], coord, -1, this->topology, this->cluster_axis);
 
     return neighbor_pad_async_minimal(
         input_tensors[0],
-        target_device,
-        forward_device,
-        backward_device,
+        coord,
+        forward_coord,
+        backward_coord,
         output_tensors[0],
         this->dim,
         this->padding_left,
@@ -136,7 +118,7 @@ tt::tt_metal::operation::ProgramWithCallbacks NeighborPadAsync::create_program_a
         this->barrier_semaphore,
         this->num_links,
         this->topology,
-        target_ring_size,
+        this->ring_size,
         device_index,
         this->secondary_cluster_axis,
         this->secondary_mesh_shape);

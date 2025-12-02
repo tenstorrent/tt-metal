@@ -39,9 +39,9 @@ using namespace ccl;
 
 tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
     const Tensor& input_tensor,
-    IDevice* sender_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& target_device_coord,
+    std::optional<MeshCoordinate> forward_coord,
+    std::optional<MeshCoordinate> backward_coord,
     Tensor& output_tensor,
     const uint32_t dim,
     const uint32_t padding_left,
@@ -111,8 +111,8 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
             }
         }
     } else {
-        is_first_device = !backward_device.has_value();
-        is_last_device = !forward_device.has_value();
+        is_first_device = !backward_coord.has_value();
+        is_last_device = !forward_coord.has_value();
         if (!is_first_device) {
             backward_device_offset = 1;
         }
@@ -237,23 +237,19 @@ tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
                 direction ? backward_device_offset : forward_device_offset};
             if (direction) {
                 writer_rt_args.push_back(false);
-                writer_rt_args.push_back(backward_device.has_value());
-                if (backward_device.has_value()) {
-                    const auto src_fabric_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
-                    const auto dst_fabric_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+                writer_rt_args.push_back(backward_coord.has_value());
+                if (backward_coord.has_value()) {
+                    const auto src_fabric_node_id = mesh_device->get_fabric_node_id(target_device_coord);
+                    const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                     tt::tt_fabric::append_fabric_connection_rt_args(
                         src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
                 }
             } else {
-                writer_rt_args.push_back(forward_device.has_value());
+                writer_rt_args.push_back(forward_coord.has_value());
 
-                if (forward_device.has_value()) {
-                    const auto src_fabric_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
-                    const auto dst_fabric_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+                if (forward_coord.has_value()) {
+                    const auto src_fabric_node_id = mesh_device->get_fabric_node_id(target_device_coord);
+                    const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                     tt::tt_fabric::append_fabric_connection_rt_args(
                         src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
                 }
