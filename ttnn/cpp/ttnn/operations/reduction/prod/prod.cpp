@@ -9,7 +9,6 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -17,7 +16,7 @@
 
 namespace ttnn::operations::reduction {
 
-inline Tensor prod_all(const Tensor& input_a, const MemoryConfig& output_mem_config) {
+inline Tensor compute_prod_all(const Tensor& input_a, const MemoryConfig& output_mem_config) {
     auto formatted_input_tensor = input_a;
     if (formatted_input_tensor.layout() != Layout::TILE) {
         auto a_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_a.padded_shape());
@@ -82,7 +81,7 @@ Tensor ProdOperation::invoke(
 
     // If no dim is provided, compute the prod across all dimensions
     if (!dim.has_value()) {
-        Tensor result = prod_all(input_a, output_mem_config);
+        Tensor result = compute_prod_all(input_a, output_mem_config);
         if (keepdim) {
             // Reshape to have all dimensions (as many as the input rank) set to 1.
             ttnn::SmallVector<uint32_t> output_shape(old_rank, 1);
@@ -199,7 +198,7 @@ Tensor ProdOperation::invoke(
     auto mem_cfg = memory_config.value_or(input.memory_config());
 
     if (dims.empty()) {
-        return prod_all(input, mem_cfg);
+        return compute_prod_all(input, mem_cfg);
     }
     return tt::operations::primary::prod_nc(input, output, dims, mem_cfg);
 }
