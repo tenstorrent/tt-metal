@@ -9,7 +9,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include "erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
-#include "tt_metal/fabric/fabric_router_types.hpp"
+#include "tt_metal/fabric/fabric_router_builder.hpp"  // RouterLocation, RouterBuildSpec
 #include <vector>
 #include <memory>
 #include <array>

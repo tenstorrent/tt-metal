@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fabric_builder.hpp"
-#include "tt_metal/fabric/compute_mesh_router_builder.hpp"
+#include "tt_metal/fabric/fabric_router_builder.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/builder/fabric_core_placement.hpp"
@@ -91,7 +91,6 @@ FabricBuilder::FabricBuilder(
 
 void FabricBuilder::create_routers() {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_->id());
     const bool is_2D_routing = fabric_context_.is_2D_routing_enabled();
 
     // Determine if this device has tunneling dispatch (affects dispatch link selection)
@@ -139,34 +138,15 @@ void FabricBuilder::create_routers() {
         uint32_t dispatch_link_idx =
             tt::tt_metal::RelayMux::get_dispatch_link_index(local_node_, neighbor_fabric_node_id, device_);
 
-        // Get EDM config based on tensix extension status
-        auto get_fabric_router_config = [&](bool is_dispatch, auto eth_direction) {
-            auto fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED;
-            if (!is_dispatch) {
-                fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
-            }
-            return builder_context_.get_fabric_router_config(fabric_tensix_config, eth_direction);
-        };
-
         for (const auto& eth_chan : active_eth_chans) {
-            auto eth_direction = control_plane.routing_direction_to_eth_direction(direction);
-            auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
-
             bool dispatch_link = is_dispatch_link(eth_chan, dispatch_link_idx);
-            const auto& curr_edm_config = get_fabric_router_config(dispatch_link, eth_direction);
 
-            const auto topology = fabric_context_.get_fabric_topology();
-            auto router_builder = ComputeMeshRouterBuilder::build(
-                device_,
-                program_,
-                eth_logical_core,
-                local_node_,
-                neighbor_fabric_node_id,
-                curr_edm_config,
-                eth_direction,
-                dispatch_link,
-                eth_chan,
-                topology);
+            // Use RouterLocation + RouterBuildSpec abstractions
+            auto location = RouterLocation::create(eth_chan, neighbor_fabric_node_id, direction, dispatch_link);
+            auto spec = builder_context_.get_router_build_spec(location, local_node_);
+
+            // Use factory method - will route to ComputeMeshRouterBuilder or SwitchMeshRouterBuilder
+            auto router_builder = FabricRouterBuilder::create(device_, program_, local_node_, location, spec);
             routers_.insert({eth_chan, std::move(router_builder)});
         }
 
