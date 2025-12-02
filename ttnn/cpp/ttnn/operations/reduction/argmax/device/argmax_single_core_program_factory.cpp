@@ -163,8 +163,8 @@ ArgMaxSingleCoreProgramFactory::cached_program_t ArgMaxSingleCoreProgramFactory:
     std::vector<uint32_t> ctime_args = get_ctime_args_single_core(
         input, output, src_page_size, dst_page_size, src_cb_index, dst_cb_index, keepdim, reduce_all);
 
-    const auto src_buffer = input.buffer();
-    const auto dst_buffer = output.buffer();
+    auto* const src_buffer = input.buffer();
+    auto* const dst_buffer = output.buffer();
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(ctime_args);
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(ctime_args);
 
@@ -193,8 +193,8 @@ void ArgMaxSingleCoreProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto src_buffer = tensor_args.input.buffer();
-    auto dst_buffer = tensor_return_value.buffer();
+    auto* src_buffer = tensor_args.input.buffer();
+    auto* dst_buffer = tensor_return_value.buffer();
 
     auto& program = cached_program.program;
     const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;

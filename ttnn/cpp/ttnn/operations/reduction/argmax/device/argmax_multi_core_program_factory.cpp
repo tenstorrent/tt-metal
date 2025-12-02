@@ -395,8 +395,8 @@ void ArgMaxMultiCoreProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto src_buffer = tensor_args.input.buffer();
-    auto dst_buffer = tensor_return_value.buffer();
+    auto* src_buffer = tensor_args.input.buffer();
+    auto* dst_buffer = tensor_return_value.buffer();
 
     auto& program = cached_program.program;
     const auto& reader_kernel_id0 = cached_program.shared_variables.reader_kernel_id0;
