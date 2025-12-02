@@ -490,3 +490,317 @@ static const AdamWCase kAMSGradCases[] = {
 };
 
 INSTANTIATE_TEST_SUITE_P(AdamWFusedAMSGrad, AdamWFusedComparisonTest, ::testing::ValuesIn(kAMSGradCases), CaseName);
+
+// ====================================================================
+// Stochastic Rounding Tests
+// Test AdamW with stochastic rounding enabled
+// ====================================================================
+
+class StochasticRoundingTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().reset_graph();
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+// Small gradient accumulation test
+TEST_F(StochasticRoundingTest, SmallGradientAccumulation) {
+    using namespace ttml;
+
+    const std::array<std::size_t, 4> shape = {1, 16, 128, 256};
+    const uint32_t steps = 100;
+
+    // Initialize with ones - small gradients relative to parameter magnitude
+    xt::xarray<float> w0 = xt::ones<float>({shape[0], shape[1], shape[2], shape[3]});
+    // Very small gradients - these might get rounded away without stochastic rounding
+    xt::xarray<float> g0 = xt::ones<float>({shape[0], shape[1], shape[2], shape[3]}) * 1e-4f;
+
+    // Run with stochastic rounding
+    auto theta_stoch = autograd::create_tensor(to_tt(w0), true);
+    theta_stoch->set_grad(to_tt(g0));
+    ttml::serialization::NamedParameters params_stoch{{"theta", theta_stoch}};
+
+    ttml::optimizers::AdamWFusedConfig stoch_cfg;
+    stoch_cfg.lr = 1e-3f;
+    stoch_cfg.beta1 = 0.9f;
+    stoch_cfg.beta2 = 0.999f;
+    stoch_cfg.epsilon = 1e-8f;
+    stoch_cfg.stochastic_rounding = true;
+
+    ttml::optimizers::AdamWFused opt_stoch(params_stoch, stoch_cfg);
+
+    auto theta_det = autograd::create_tensor(to_tt(w0), true);
+    theta_det->set_grad(to_tt(g0));
+    ttml::serialization::NamedParameters params_det{{"theta", theta_det}};
+
+    ttml::optimizers::AdamWFusedConfig det_cfg;
+    det_cfg.lr = 1e-3f;
+    det_cfg.beta1 = 0.9f;
+    det_cfg.beta2 = 0.999f;
+    det_cfg.epsilon = 1e-8f;
+    det_cfg.stochastic_rounding = false;
+
+    ttml::optimizers::AdamWFused opt_det(params_det, det_cfg);
+
+    xt::xarray<float> w_cpu = w0;
+    CPUAdamW cpu_opt(1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false);
+
+    for (uint32_t i = 0; i < steps; ++i) {
+        opt_stoch.step();
+        opt_det.step();
+        cpu_opt.step(w_cpu, g0);
+    }
+
+    auto result_stoch = core::to_xtensor(theta_stoch->get_value());
+    auto result_det = core::to_xtensor(theta_det->get_value());
+
+    // Total change off all parameters from initial value
+    float total_change_stoch = xt::sum(xt::abs(result_stoch - w0))();
+    float total_change_det = xt::sum(xt::abs(result_det - w0))();
+    float total_change_cpu = xt::sum(xt::abs(w_cpu - w0))();
+
+    fmt::print(
+        "Small gradient accumulation test:\n"
+        "  CPU total change: {:.6f}\n"
+        "  Stochastic rounding total change: {:.6f}\n"
+        "  Deterministic rounding total change: {:.6f}\n",
+        total_change_cpu,
+        total_change_stoch,
+        total_change_det);
+
+    EXPECT_GT(total_change_stoch, 0.0f) << "Stochastic rounding should allow some accumulation";
+}
+
+// Test to verify stochastic rounding rounds in the correct direction (towards CPU result)
+TEST_F(StochasticRoundingTest, RoundingDirectionCorrectness) {
+    using namespace ttml;
+
+    const std::array<std::size_t, 4> shape = {1, 16, 128, 256};
+    const uint32_t steps = 100;
+
+    // Initialize with ones - small gradients relative to parameter magnitude
+    xt::xarray<float> w0 = xt::ones<float>({shape[0], shape[1], shape[2], shape[3]});
+    // Very small gradients - these might get rounded away without stochastic rounding
+    xt::xarray<float> g0 = xt::ones<float>({shape[0], shape[1], shape[2], shape[3]}) * 1e-4f;
+
+    // Run with stochastic rounding
+    auto theta_stoch = autograd::create_tensor(to_tt(w0), true);
+    theta_stoch->set_grad(to_tt(g0));
+    ttml::serialization::NamedParameters params_stoch{{"theta", theta_stoch}};
+
+    ttml::optimizers::AdamWFusedConfig stoch_cfg;
+    stoch_cfg.lr = 1e-3f;
+    stoch_cfg.beta1 = 0.9f;
+    stoch_cfg.beta2 = 0.999f;
+    stoch_cfg.epsilon = 1e-8f;
+    stoch_cfg.stochastic_rounding = true;
+
+    ttml::optimizers::AdamWFused opt_stoch(params_stoch, stoch_cfg);
+
+    auto theta_det = autograd::create_tensor(to_tt(w0), true);
+    theta_det->set_grad(to_tt(g0));
+    ttml::serialization::NamedParameters params_det{{"theta", theta_det}};
+
+    ttml::optimizers::AdamWFusedConfig det_cfg;
+    det_cfg.lr = 1e-3f;
+    det_cfg.beta1 = 0.9f;
+    det_cfg.beta2 = 0.999f;
+    det_cfg.epsilon = 1e-8f;
+    det_cfg.stochastic_rounding = false;
+
+    ttml::optimizers::AdamWFused opt_det(params_det, det_cfg);
+
+    xt::xarray<float> w_cpu = w0;
+    CPUAdamW cpu_opt(1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false);
+
+    for (uint32_t i = 0; i < steps; ++i) {
+        opt_stoch.step();
+        opt_det.step();
+        cpu_opt.step(w_cpu, g0);
+    }
+
+    auto result_stoch = core::to_xtensor(theta_stoch->get_value());
+    auto result_det = core::to_xtensor(theta_det->get_value());
+
+    // Compute total error (distance from CPU result) for each method
+    float error_stoch = xt::sum(xt::abs(result_stoch - w_cpu))();
+    float error_det = xt::sum(xt::abs(result_det - w_cpu))();
+
+    fmt::print(
+        "Rounding direction correctness test:\n"
+        "  Stochastic rounding error (vs CPU): {:.6f}\n"
+        "  Deterministic rounding error (vs CPU): {:.6f}\n",
+        error_stoch,
+        error_det);
+
+    // Stochastic rounding should be closer to CPU result than deterministic
+    EXPECT_LT(error_stoch, error_det)
+        << "Stochastic rounding should produce weights closer to CPU reference than deterministic rounding";
+}
+
+TEST_F(StochasticRoundingTest, RoundingDirectionCounts) {
+    using namespace ttml;
+
+    const std::array<std::size_t, 4> shape = {1, 16, 128, 256};
+    const uint32_t steps = 100;
+
+    // Initialize with ones - small gradients relative to parameter magnitude
+    xt::xarray<float> w0 = xt::ones<float>({shape[0], shape[1], shape[2], shape[3]});
+    // Very small gradients - these might get rounded away without stochastic rounding
+    xt::xarray<float> g0 = xt::ones<float>({shape[0], shape[1], shape[2], shape[3]}) * 1e-4f;
+
+    // Run with stochastic rounding
+    auto theta_stoch = autograd::create_tensor(to_tt(w0), true);
+    theta_stoch->set_grad(to_tt(g0));
+    ttml::serialization::NamedParameters params_stoch{{"theta", theta_stoch}};
+
+    ttml::optimizers::AdamWFusedConfig stoch_cfg;
+    stoch_cfg.lr = 1e-3f;
+    stoch_cfg.beta1 = 0.9f;
+    stoch_cfg.beta2 = 0.999f;
+    stoch_cfg.epsilon = 1e-8f;
+    stoch_cfg.stochastic_rounding = true;
+
+    ttml::optimizers::AdamWFused opt_stoch(params_stoch, stoch_cfg);
+
+    auto theta_det = autograd::create_tensor(to_tt(w0), true);
+    theta_det->set_grad(to_tt(g0));
+    ttml::serialization::NamedParameters params_det{{"theta", theta_det}};
+
+    ttml::optimizers::AdamWFusedConfig det_cfg;
+    det_cfg.lr = 1e-3f;
+    det_cfg.beta1 = 0.9f;
+    det_cfg.beta2 = 0.999f;
+    det_cfg.epsilon = 1e-8f;
+    det_cfg.stochastic_rounding = false;
+
+    ttml::optimizers::AdamWFused opt_det(params_det, det_cfg);
+
+    xt::xarray<float> w_cpu = w0;
+    CPUAdamW cpu_opt(1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false);
+
+    for (uint32_t i = 0; i < steps; ++i) {
+        opt_stoch.step();
+        opt_det.step();
+        cpu_opt.step(w_cpu, g0);
+    }
+
+    auto result_stoch = core::to_xtensor(theta_stoch->get_value());
+    auto result_det = core::to_xtensor(theta_det->get_value());
+
+    // Count per-element rounding directions
+    size_t correct_count = 0;    // stochastic closer to CPU than deterministic
+    size_t incorrect_count = 0;  // stochastic further from CPU than deterministic
+    size_t same_count = 0;       // same distance from CPU
+    size_t total = result_stoch.size();
+
+    for (size_t i = 0; i < total; ++i) {
+        float cpu_val = w_cpu.flat(i);
+        float stoch_val = result_stoch.flat(i);
+        float det_val = result_det.flat(i);
+
+        float stoch_error = std::abs(stoch_val - cpu_val);
+        float det_error = std::abs(det_val - cpu_val);
+
+        if (stoch_error < det_error) {
+            correct_count++;
+        } else if (stoch_error > det_error) {
+            incorrect_count++;
+        } else {
+            same_count++;
+        }
+    }
+
+    float correct_pct = 100.0f * static_cast<float>(correct_count) / static_cast<float>(total);
+    float incorrect_pct = 100.0f * static_cast<float>(incorrect_count) / static_cast<float>(total);
+    float same_pct = 100.0f * static_cast<float>(same_count) / static_cast<float>(total);
+
+    fmt::print(
+        "Rounding direction counts (total {} elements):\n"
+        "  Correct (stochastic closer to CPU): {} ({:.2f}%)\n"
+        "  Incorrect (stochastic further from CPU): {} ({:.2f}%)\n"
+        "  Same distance: {} ({:.2f}%)\n",
+        total,
+        correct_count,
+        correct_pct,
+        incorrect_count,
+        incorrect_pct,
+        same_count,
+        same_pct);
+
+    // Expect majority of weights to be rounded in correct direction
+    EXPECT_GT(correct_count, incorrect_count) << "More weights should be rounded towards CPU than away from it";
+}
+
+TEST_F(StochasticRoundingTest, ErrorComparisonOverMultipleSteps) {
+    using namespace ttml;
+
+    const std::array<std::size_t, 4> shape = {1, 4, 128, 256};
+    const uint32_t steps = 512U;
+    [[maybe_unused]] const uint32_t seed = 42U;
+
+    // xt::xarray<float> w0 = xt::ones<float>({shape[0], shape[1], shape[2], shape[3]});
+    // xt::xarray<float> g0 = xt::ones<float>({shape[0], shape[1], shape[2], shape[3]}) * 1e-4f;
+    xt::xarray<float> w0 = make_random_xarray(shape, seed);
+    xt::xarray<float> g0 = make_random_xarray(shape, seed + 1) * 1e-3f;
+
+    // CPU reference
+    xt::xarray<float> w_cpu = w0;
+    CPUAdamW cpu_opt(1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false);
+
+    // Stochastic rounding
+    auto theta_stoch = autograd::create_tensor(to_tt(w0), true);
+    theta_stoch->set_grad(to_tt(g0));
+    ttml::serialization::NamedParameters params_stoch{{"theta", theta_stoch}};
+
+    ttml::optimizers::AdamWFusedConfig stoch_cfg;
+    stoch_cfg.lr = 1e-3f;
+    stoch_cfg.beta1 = 0.9f;
+    stoch_cfg.beta2 = 0.999f;
+    stoch_cfg.epsilon = 1e-8f;
+    stoch_cfg.stochastic_rounding = true;
+    ttml::optimizers::AdamWFused opt_stoch(params_stoch, stoch_cfg);
+
+    // Deterministic rounding
+    auto theta_det = autograd::create_tensor(to_tt(w0), true);
+    theta_det->set_grad(to_tt(g0));
+    ttml::serialization::NamedParameters params_det{{"theta", theta_det}};
+
+    ttml::optimizers::AdamWFusedConfig det_cfg;
+    det_cfg.lr = 1e-3f;
+    det_cfg.beta1 = 0.9f;
+    det_cfg.beta2 = 0.999f;
+    det_cfg.epsilon = 1e-8f;
+    det_cfg.stochastic_rounding = false;
+    ttml::optimizers::AdamWFused opt_det(params_det, det_cfg);
+
+    for (uint32_t i = 0; i < steps; ++i) {
+        cpu_opt.step(w_cpu, g0);
+        opt_stoch.step();
+        opt_det.step();
+    }
+
+    auto result_stoch = core::to_xtensor(theta_stoch->get_value());
+    auto result_det = core::to_xtensor(theta_det->get_value());
+
+    auto stoch_metrics = compute_error_metrics(w_cpu, result_stoch, "Stochastic");
+    auto det_metrics = compute_error_metrics(w_cpu, result_det, "Deterministic");
+
+    fmt::print(
+        "\nStochastic vs Deterministic (after {} steps):\n"
+        "  Stochastic: mean={:.6e}, max={:.6e}\n"
+        "  Deterministic: mean={:.6e}, max={:.6e}\n",
+        steps,
+        stoch_metrics.mean_error,
+        stoch_metrics.max_error,
+        det_metrics.mean_error,
+        det_metrics.max_error);
+
+    EXPECT_LT(stoch_metrics.mean_error, det_metrics.mean_error);
+    EXPECT_LT(stoch_metrics.max_error, det_metrics.max_error);
+}
