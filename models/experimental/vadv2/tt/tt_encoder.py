@@ -6,6 +6,7 @@ import torch
 import numpy as np
 import copy
 import warnings
+import os
 import ttnn
 from models.experimental.vadv2.tt.tt_temporal_self_attention import TtTemporalSelfAttention
 from models.experimental.vadv2.tt.tt_spatial_cross_attention import TtSpatialCrossAttention
@@ -15,7 +16,7 @@ from models.experimental.vadv2.tt.tt_ffn import TtFFN
 try:
     from tracy import signpost
 
-    use_signpost = True
+    use_signpost = os.getenv("USE_SIGNPOST", "False").lower() in ("true", "1", "yes")
 except ImportError:
     use_signpost = False
 

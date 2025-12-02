@@ -5,6 +5,7 @@
 import ttnn
 import copy
 import warnings
+import os
 from models.experimental.vadv2.tt.tt_ffn import TtFFN
 from models.experimental.vadv2.tt.tt_mha import TtMultiheadAttention
 from models.experimental.vadv2.tt.tt_deformable_attention import TtCustomMSDeformableAttention
@@ -12,7 +13,7 @@ from models.experimental.vadv2.tt.tt_deformable_attention import TtCustomMSDefor
 try:
     from tracy import signpost
 
-    use_signpost = True
+    use_signpost = os.getenv("USE_SIGNPOST", "False").lower() in ("true", "1", "yes")
 except ModuleNotFoundError:
     use_signpost = False
 

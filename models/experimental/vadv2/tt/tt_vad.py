@@ -15,7 +15,7 @@ from models.experimental.vadv2.tt.tt_head import TtVADHead
 try:
     from tracy import signpost
 
-    use_signpost = True
+    use_signpost = os.getenv("USE_SIGNPOST", "False").lower() in ("true", "1", "yes")
 except ModuleNotFoundError:
     use_signpost = False
 

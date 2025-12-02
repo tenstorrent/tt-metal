@@ -12,10 +12,12 @@ from models.experimental.vadv2.tt.tt_utils import inverse_sigmoid, bbox_xyxy_to_
 from models.experimental.vadv2.reference.nms_free_coder import MapNMSFreeCoder, CustomNMSFreeCoder
 from models.experimental.vadv2.tt.common import advanced_indexing, boolean_indexing
 
+import os
+
 try:
     from tracy import signpost
 
-    use_signpost = True
+    use_signpost = os.getenv("USE_SIGNPOST", "False").lower() in ("true", "1", "yes")
 except ModuleNotFoundError:
     use_signpost = False
 

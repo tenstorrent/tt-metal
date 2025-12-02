@@ -3,13 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+import os
 from models.experimental.vadv2.tt.common import TtConv2D
 from models.experimental.vadv2.tt.tt_bottleneck import TtBottleneck
 
 try:
     from tracy import signpost
 
-    use_signpost = True
+    use_signpost = os.getenv("USE_SIGNPOST", "False").lower() in ("true", "1", "yes")
 except ModuleNotFoundError:
     use_signpost = False
 

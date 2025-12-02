@@ -3,11 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+import os
 
 try:
     from tracy import signpost
 
-    use_signpost = True
+    use_signpost = os.getenv("USE_SIGNPOST", "False").lower() in ("true", "1", "yes")
 except ModuleNotFoundError:
     use_signpost = False
 
@@ -64,18 +65,19 @@ def multi_scale_deformable_attn(value, value_spatial_shapes, sampling_locations,
 
         sampling_value_list.append(sampling_value_l_)
 
-        attention_weights = ttnn.permute(attention_weights, (0, 2, 1, 3, 4))
-
-        attention_weights = ttnn.reshape(attention_weights, [bs * num_heads, 1, num_queries, num_levels * num_points])
-
         if use_signpost:
             signpost(header=f"deformable_attn_level_{level}_end")
 
-    output = ttnn.stack(sampling_value_list, -2)
+    # OPTIMIZATION 1: Move attention_weights reshape OUTSIDE the loop (was redundantly done N times)
+    attention_weights = ttnn.permute(attention_weights, (0, 2, 1, 3, 4))
+    attention_weights = ttnn.reshape(attention_weights, [bs * num_heads, 1, num_queries, num_levels * num_points])
+
+    # OPTIMIZATION 2: Replace stack + reshape with concat (2 operations → 1 operation)
+    # stack creates new dimension then reshape flattens it; concat does this directly
+    output = ttnn.concat(sampling_value_list, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # Output shape: [bs*num_heads, embed_dims, num_queries, num_levels*num_points]
+
     ttnn.deallocate(sampling_grids)
-    output = ttnn.reshape(
-        output, [output.shape[0], output.shape[1], output.shape[2], output.shape[3] * output.shape[4]]
-    )
 
     output = output * attention_weights
     output = ttnn.reallocate(output)

@@ -200,8 +200,6 @@ class TtTemporalSelfAttention:
 
             output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
 
-            # Chunked mean to fit in L1 memory (avoid L1 allocation bug for large tensors)
-            # Process in chunks to keep intermediate tensors small
             chunk_size = 1024  # Process 1024 queries at a time
             num_chunks = (num_query + chunk_size - 1) // chunk_size
             mean_output = None
@@ -254,7 +252,6 @@ class TtTemporalSelfAttention:
             output = ttnn.permute(output, (0, 2, 1, 3))  # [num_query, bs, embed_dims, num_bev_queue]
             output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
 
-            # Chunked mean to fit in L1 memory (workaround for L1 allocation bug)
             # Process in chunks along num_query dimension
             chunk_size = 1024  # Process 1024 queries at a time
             num_chunks = (num_query + chunk_size - 1) // chunk_size
