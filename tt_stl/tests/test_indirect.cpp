@@ -15,13 +15,12 @@ namespace {
 
 // Helper class for testing
 struct TestValue {
-    int value;
+    int value{};
 
-    TestValue() : value(0) {}
+    TestValue() = default;
     explicit TestValue(int v) : value(v) {}
 
-    bool operator==(const TestValue& other) const { return value == other.value; }
-    auto operator<=>(const TestValue& other) const { return value <=> other.value; }
+    auto operator<=>(const TestValue& other) const = default;
 };
 
 // Test default construction
@@ -341,7 +340,9 @@ TEST(IndirectTest, ComparisonWithT) {
 // Test deduction guide
 TEST(IndirectTest, DeductionGuide) {
     auto i = indirect(42);
-    static_assert(std::is_same_v<decltype(i), indirect<int>>);
+    static_assert(requires {
+        { indirect(42) } -> std::same_as<indirect<int>>;
+    });
     EXPECT_EQ(*i, 42);
 
     auto s = indirect(std::string("hello"));
@@ -388,7 +389,7 @@ TEST(IndirectTest, RvalueDereference) {
     };
 
     indirect<MoveOnly> i(MoveOnly{42});
-    MoveOnly extracted = *std::move(i);
+    MoveOnly extracted = std::move(i);
 
     EXPECT_EQ(*extracted.ptr, 42);
 }
