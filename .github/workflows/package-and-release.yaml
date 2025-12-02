@@ -163,7 +163,7 @@ jobs:
 
 
   create-changelog:
-    needs: [create-tag]
+    needs: [create-tag, release-precheck]
     permissions: read-all
     runs-on: ubuntu-latest
     steps:
@@ -172,7 +172,8 @@ jobs:
         uses: mikepenz/release-changelog-builder-action@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          ignorePreReleases: true
+          fromTag: ${{ needs.release-precheck.outputs.tag-type == 'dev' && 'latest-dev' || (needs.release-precheck.outputs.tag-type == 'rc' && 'latest-rc' || 'latest') }}
+          toTag: ${{ needs.create-tag.outputs.version }}
           failOnError: true
           outputFile: CHANGELOG.txt
       - name: Output changelog
