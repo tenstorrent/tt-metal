@@ -205,6 +205,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
                 return {OperationType::Scatter, ApiVariant::WithState};
             case AddrgenApiVariant::MulticastScatterWriteSetState:
                 return {OperationType::Scatter, ApiVariant::SetState};
+            case AddrgenApiVariant::MulticastWriteRoute: return {OperationType::BasicWrite, ApiVariant::RouteBasic};
             default: TT_FATAL(false, "Unknown API variant"); return {OperationType::BasicWrite, ApiVariant::Basic};
         }
     };
@@ -212,6 +213,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     auto [operation_type, api_variant] = get_operation_and_api_variant(p.api_variant);
 
     const bool is_fused_atomic_inc = (operation_type == OperationType::FusedAtomicInc);
+    const bool is_route_variant = (api_variant == ApiVariant::RouteBasic);
 
     // Move NUM_PAGES calculation before receiver setup
     const uint32_t NUM_PAGES = (p.tensor_bytes + p.page_size - 1) / p.page_size;
@@ -336,17 +338,6 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     };
     auto src_fn = tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip};
 
-    auto pick_link = [&](Dist::MeshCoordinate mc, uint32_t& out_link_idx) {
-        auto dst_fn = coord_to_fabric_id(std::move(mc));
-        auto links = tt::tt_fabric::get_forwarding_link_indices(src_fn, dst_fn);
-        if (links.empty()) {
-            ADD_FAILURE() << "No forwarding link from src to representative";
-            return false;
-        }
-        out_link_idx = links[0];
-        return true;
-    };
-
     // Representatives at the edge of the receiver rectangle
     Dist::MeshCoordinate rep_e = src_coord;
     if (e_hops) {
@@ -365,47 +356,125 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
         rep_s[0] = max_r;
     }
 
-    uint32_t link_idx_w = 0, link_idx_e = 0, link_idx_n = 0, link_idx_s = 0;
-    if (w_hops && !pick_link(rep_w, link_idx_w)) {
-        return;
-    }
-    if (e_hops && !pick_link(rep_e, link_idx_e)) {
-        return;
-    }
-    if (n_hops && !pick_link(rep_n, link_idx_n)) {
-        return;
-    }
-    if (s_hops && !pick_link(rep_s, link_idx_s)) {
-        return;
-    }
-
-    // Direction bitmask
+    // Direction bitmask (same for both route and non-route variants)
     const uint32_t dir_mask = (w_hops ? 1u : 0u) | (e_hops ? 2u : 0u) | (n_hops ? 4u : 0u) | (s_hops ? 8u : 0u);
     writer_rt.push_back(dir_mask);
 
-    // Append the fabric connection blocks in fixed order: W, E, N, S
-    if (w_hops) {
-        tt::tt_fabric::append_fabric_connection_rt_args(
-            src_fn, coord_to_fabric_id(rep_w), link_idx_w, sender_prog, p.sender_core, writer_rt);
-    }
-    if (e_hops) {
-        tt::tt_fabric::append_fabric_connection_rt_args(
-            src_fn, coord_to_fabric_id(rep_e), link_idx_e, sender_prog, p.sender_core, writer_rt);
-    }
-    if (n_hops) {
-        tt::tt_fabric::append_fabric_connection_rt_args(
-            src_fn, coord_to_fabric_id(rep_n), link_idx_n, sender_prog, p.sender_core, writer_rt);
-    }
-    if (s_hops) {
-        tt::tt_fabric::append_fabric_connection_rt_args(
-            src_fn, coord_to_fabric_id(rep_s), link_idx_s, sender_prog, p.sender_core, writer_rt);
-    }
+    if (is_route_variant) {
+        // Route variant: use routing plane connection manager for each direction
+        // Same structure as non-route but using route-based APIs
 
-    // Append hops
-    writer_rt.push_back((uint32_t)e_hops);
-    writer_rt.push_back((uint32_t)w_hops);
-    writer_rt.push_back((uint32_t)n_hops);
-    writer_rt.push_back((uint32_t)s_hops);
+        // Build destination nodes and connection managers for each active direction
+        // W, E, N, S order (matching non-route variant)
+        if (w_hops) {
+            std::vector<tt::tt_fabric::FabricNodeId> dst_nodes_w = {coord_to_fabric_id(rep_w)};
+            tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                src,
+                dst_nodes_w,
+                {},  // Empty means auto-select link
+                sender_prog,
+                writer_k,
+                p.sender_core,
+                writer_rt,
+                tt::tt_fabric::FabricApiType::Mesh,
+                CoreType::WORKER);
+        }
+        if (e_hops) {
+            std::vector<tt::tt_fabric::FabricNodeId> dst_nodes_e = {coord_to_fabric_id(rep_e)};
+            tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                src,
+                dst_nodes_e,
+                {},
+                sender_prog,
+                writer_k,
+                p.sender_core,
+                writer_rt,
+                tt::tt_fabric::FabricApiType::Mesh,
+                CoreType::WORKER);
+        }
+        if (n_hops) {
+            std::vector<tt::tt_fabric::FabricNodeId> dst_nodes_n = {coord_to_fabric_id(rep_n)};
+            tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                src,
+                dst_nodes_n,
+                {},
+                sender_prog,
+                writer_k,
+                p.sender_core,
+                writer_rt,
+                tt::tt_fabric::FabricApiType::Mesh,
+                CoreType::WORKER);
+        }
+        if (s_hops) {
+            std::vector<tt::tt_fabric::FabricNodeId> dst_nodes_s = {coord_to_fabric_id(rep_s)};
+            tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                src,
+                dst_nodes_s,
+                {},
+                sender_prog,
+                writer_k,
+                p.sender_core,
+                writer_rt,
+                tt::tt_fabric::FabricApiType::Mesh,
+                CoreType::WORKER);
+        }
+
+        // Append hops (same as non-route)
+        writer_rt.push_back((uint32_t)e_hops);
+        writer_rt.push_back((uint32_t)w_hops);
+        writer_rt.push_back((uint32_t)n_hops);
+        writer_rt.push_back((uint32_t)s_hops);
+    } else {
+        // Non-route variant: per-direction fabric connections
+        auto pick_link = [&](Dist::MeshCoordinate mc, uint32_t& out_link_idx) {
+            auto dst_fn = coord_to_fabric_id(std::move(mc));
+            auto links = tt::tt_fabric::get_forwarding_link_indices(src_fn, dst_fn);
+            if (links.empty()) {
+                ADD_FAILURE() << "No forwarding link from src to representative";
+                return false;
+            }
+            out_link_idx = links[0];
+            return true;
+        };
+
+        uint32_t link_idx_w = 0, link_idx_e = 0, link_idx_n = 0, link_idx_s = 0;
+        if (w_hops && !pick_link(rep_w, link_idx_w)) {
+            return;
+        }
+        if (e_hops && !pick_link(rep_e, link_idx_e)) {
+            return;
+        }
+        if (n_hops && !pick_link(rep_n, link_idx_n)) {
+            return;
+        }
+        if (s_hops && !pick_link(rep_s, link_idx_s)) {
+            return;
+        }
+
+        // Append the fabric connection blocks in fixed order: W, E, N, S
+        if (w_hops) {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                src_fn, coord_to_fabric_id(rep_w), link_idx_w, sender_prog, p.sender_core, writer_rt);
+        }
+        if (e_hops) {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                src_fn, coord_to_fabric_id(rep_e), link_idx_e, sender_prog, p.sender_core, writer_rt);
+        }
+        if (n_hops) {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                src_fn, coord_to_fabric_id(rep_n), link_idx_n, sender_prog, p.sender_core, writer_rt);
+        }
+        if (s_hops) {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                src_fn, coord_to_fabric_id(rep_s), link_idx_s, sender_prog, p.sender_core, writer_rt);
+        }
+
+        // Append hops
+        writer_rt.push_back((uint32_t)e_hops);
+        writer_rt.push_back((uint32_t)w_hops);
+        writer_rt.push_back((uint32_t)n_hops);
+        writer_rt.push_back((uint32_t)s_hops);
+    }
 
     tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
 
