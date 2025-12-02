@@ -56,19 +56,24 @@ enum Type : uint8_t {
 };
 }
 
-/**
- * Global state tracking variables
- *
- * These track the currently configured circular buffer indices:
- * - g_state_srca_cb: Source A register configuration
- * - g_state_srcb_cb: Source B register configuration
- * - g_state_pack_cb: Pack/destination register configuration
- *
- * Initialized to INVALID_CB_INDEX to ensure first configuration always executes.
- */
-static uint32_t g_state_srca_cb = INVALID_CB_INDEX;
-static uint32_t g_state_srcb_cb = INVALID_CB_INDEX;
-static uint32_t g_state_pack_cb = INVALID_CB_INDEX;
+struct StateTracker {
+    // Circular buffer indices (12 bytes)
+    uint32_t srca_cb = INVALID_CB_INDEX;
+    uint32_t srcb_cb = INVALID_CB_INDEX;
+    uint32_t pack_cb = INVALID_CB_INDEX;
+
+    // Data formats and operation type (4 bytes total)
+    DataFormat srca_format = DataFormat::Invalid;    // uint8_t
+    DataFormat srcb_format = DataFormat::Invalid;    // uint8_t
+    DataFormat pack_format = DataFormat::Invalid;    // uint8_t
+    Operation::Type current_op = Operation::CUSTOM;  // uint8_t
+
+    // Kernel execution flag (1 byte)
+    bool kernel_executing = false;
+};
+
+// Global State Tracker instance
+static StateTracker g_state_tracker;
 
 /*
  *  *----------------------------------------------------------------------------------------------------*
@@ -77,54 +82,57 @@ static uint32_t g_state_pack_cb = INVALID_CB_INDEX;
  *  *----------------------------------------------------------------------------------------------------*
  */
 
+template <bool to_from_int8 = false>
 ALWI void reconfigure_single_operand(uint32_t cb, bool is_srcA = true) {
     if (is_srcA) {
-        reconfig_data_format_srca(g_state_srca_cb, cb);
-        g_state_srca_cb = cb;
+        reconfig_data_format_srca<to_from_int8>(g_state_tracker.srca_cb, cb);
+        g_state_tracker.srca_cb = cb;
         return;
     } else {
-        reconfig_data_format_srcb(g_state_srcb_cb, cb);
-        g_state_srcb_cb = cb;
+        reconfig_data_format_srcb<to_from_int8>(g_state_tracker.srcb_cb, cb);
+        g_state_tracker.srcb_cb = cb;
     }
 }
 
+template <bool to_from_int8 = false>
 ALWI void reconfigure_dual_operand(uint32_t cb_a, uint32_t cb_b) {
-    bool srcAChanged = g_state_srca_cb != cb_a;
-    bool srcBChanged = g_state_srcb_cb != cb_b;
+    bool srcAChanged = g_state_tracker.srca_cb != cb_a;
+    bool srcBChanged = g_state_tracker.srcb_cb != cb_b;
 
     if (srcAChanged && srcBChanged) {
-        reconfig_data_format(g_state_srca_cb, cb_a, g_state_srcb_cb, cb_b);
-        g_state_srca_cb = cb_a;
-        g_state_srcb_cb = cb_b;
+        reconfig_data_format<to_from_int8>(g_state_tracker.srca_cb, cb_a, g_state_tracker.srcb_cb, cb_b);
+        g_state_tracker.srca_cb = cb_a;
+        g_state_tracker.srcb_cb = cb_b;
         return;
     }
     if (srcAChanged) {
-        reconfig_data_format_srca(g_state_srca_cb, cb_a);
-        g_state_srca_cb = cb_a;
+        reconfig_data_format_srca<to_from_int8>(g_state_tracker.srca_cb, cb_a);
+        g_state_tracker.srca_cb = cb_a;
     }
     if (srcBChanged) {
-        reconfig_data_format_srcb(g_state_srcb_cb, cb_b);
-        g_state_srcb_cb = cb_b;
+        reconfig_data_format_srcb<to_from_int8>(g_state_tracker.srcb_cb, cb_b);
+        g_state_tracker.srcb_cb = cb_b;
     }
 }
 
 ALWI void reconfigure_pack_operand(uint32_t cb_out) {
-    if (g_state_pack_cb != cb_out) {
-        pack_reconfig_data_format(g_state_pack_cb, cb_out);
-        g_state_pack_cb = cb_out;
+    if (g_state_tracker.pack_cb != cb_out) {
+        pack_reconfig_data_format(g_state_tracker.pack_cb, cb_out);
+        g_state_tracker.pack_cb = cb_out;
     }
 }
 
+template <bool to_from_int8 = false>
 ALWI void reconfig_all_operands(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
-    if (g_state_srca_cb != cb_a && g_state_srcb_cb != cb_b && g_state_pack_cb != cb_out) {
-        reconfig_data_format(g_state_srca_cb, cb_a, g_state_srcb_cb, cb_b);
-        pack_reconfig_data_format(g_state_pack_cb, cb_out);
-        g_state_srca_cb = cb_a;
-        g_state_srcb_cb = cb_b;
-        g_state_pack_cb = cb_out;
+    if (g_state_tracker.srca_cb != cb_a && g_state_tracker.srcb_cb != cb_b && g_state_tracker.pack_cb != cb_out) {
+        reconfig_data_format<to_from_int8>(g_state_tracker.srca_cb, cb_a, g_state_tracker.srcb_cb, cb_b);
+        pack_reconfig_data_format(g_state_tracker.pack_cb, cb_out);
+        g_state_tracker.srca_cb = cb_a;
+        g_state_tracker.srcb_cb = cb_b;
+        g_state_tracker.pack_cb = cb_out;
         return;
     }
-    reconfigure_dual_operand(cb_a, cb_b);
+    reconfigure_dual_operand<to_from_int8>(cb_a, cb_b);
     reconfigure_pack_operand(cb_out);
 }
 
@@ -197,7 +205,7 @@ ALWI void state_impl_untilize(uint32_t cb_in, uint32_t cb_out) {
 // --- BINARY with output Operation Handler ---
 template <bool to_from_int8>
 ALWI void state_impl_binary_with_output(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
-    reconfig_all_operands(cb_a, cb_b, cb_out);
+    reconfig_all_operands<to_from_int8>(cb_a, cb_b, cb_out);
 }
 
 // --- MATMUL with output Operation Handler ---
@@ -215,26 +223,26 @@ ALWI void state_impl_pack(uint32_t cb) {
 // --- REDUCE with output Operation Handler ---
 template <bool to_from_int8>
 ALWI void state_impl_reduce_with_output(uint32_t cb_input, uint32_t cb_scaler, uint32_t cb_out) {
-    bool input_changed = g_state_srca_cb != cb_input;
-    bool scaler_changed = g_state_srcb_cb != cb_scaler;
-    bool output_changed = g_state_pack_cb != cb_out;
+    bool input_changed = g_state_tracker.srca_cb != cb_input;
+    bool scaler_changed = g_state_tracker.srcb_cb != cb_scaler;
+    bool output_changed = g_state_tracker.pack_cb != cb_out;
     if (input_changed && scaler_changed && output_changed) {
-        g_state_srca_cb = cb_input;
-        g_state_srcb_cb = cb_scaler;
-        g_state_pack_cb = cb_out;
+        g_state_tracker.srca_cb = cb_input;
+        g_state_tracker.srcb_cb = cb_scaler;
+        g_state_tracker.pack_cb = cb_out;
         return;
     }
     if (input_changed) {
         reconfig_data_format_srca<to_from_int8>(cb_input);
-        g_state_srca_cb = cb_input;
+        g_state_tracker.srca_cb = cb_input;
     }
     if (scaler_changed) {
         reconfig_data_format_srcb<to_from_int8>(cb_scaler);
-        g_state_srcb_cb = cb_scaler;
+        g_state_tracker.srcb_cb = cb_scaler;
     }
     if (output_changed) {
-        pack_reconfig_data_format(g_state_pack_cb, cb_out);
-        g_state_pack_cb = cb_out;
+        pack_reconfig_data_format(g_state_tracker.pack_cb, cb_out);
+        g_state_tracker.pack_cb = cb_out;
     }
 }
 
@@ -256,17 +264,17 @@ ALWI void state_configure(uint32_t cb) {
         "Invalid operation type for single-operand state_configure");
 
     if constexpr (op_type == Operation::UNARY) {
-        reconfigure_single_operand(cb);
+        reconfigure_single_operand<to_from_int8>(cb);
     } else if constexpr (op_type == Operation::COPY) {
-        reconfigure_single_operand(cb);
+        reconfigure_single_operand<to_from_int8>(cb);
     } else if constexpr (op_type == Operation::TRANSPOSE) {
-        reconfigure_single_operand(cb);
+        reconfigure_single_operand<to_from_int8>(cb);
     } else if constexpr (op_type == Operation::PACK) {
         reconfigure_pack_operand(cb);
     } else if constexpr (op_type == Operation::TILIZE) {
-        reconfigure_single_operand(cb);
+        reconfigure_single_operand<to_from_int8>(cb);
     } else if constexpr (op_type == Operation::UNTILIZE) {
-        reconfigure_single_operand(cb);
+        reconfigure_single_operand<to_from_int8>(cb);
     }
 }
 
@@ -283,22 +291,22 @@ ALWI void state_configure(uint32_t cb_a, uint32_t cb_b) {
         "Invalid operation type for dual-operand state_configure");
 
     if constexpr (op_type == Operation::BINARY) {
-        reconfigure_dual_operand(cb_a, cb_b);
+        reconfigure_dual_operand<to_from_int8>(cb_a, cb_b);
     } else if constexpr (op_type == Operation::MATMUL) {
-        reconfigure_dual_operand(cb_b, cb_a);  // SrcA and SrcB are swapped for matmul
+        reconfigure_dual_operand<to_from_int8>(cb_b, cb_a);  // SrcA and SrcB are swapped for matmul
     } else if constexpr (op_type == Operation::REDUCE) {
-        reconfigure_dual_operand(cb_a, cb_b);
+        reconfigure_dual_operand<to_from_int8>(cb_a, cb_b);
     } else if constexpr (op_type == Operation::UNARY) {
-        reconfigure_single_operand(cb_a);
+        reconfigure_single_operand<to_from_int8>(cb_a);
         reconfigure_pack_operand(cb_b);
     } else if constexpr (op_type == Operation::TILIZE) {
-        reconfigure_single_operand(cb_a);
+        reconfigure_single_operand<to_from_int8>(cb_a);
         reconfigure_pack_operand(cb_b);
     } else if constexpr (op_type == Operation::UNTILIZE) {
-        reconfigure_single_operand(cb_a);
+        reconfigure_single_operand<to_from_int8>(cb_a);
         reconfigure_pack_operand(cb_b);
     } else if constexpr (op_type == Operation::TRANSPOSE) {
-        reconfigure_single_operand(cb_a);
+        reconfigure_single_operand<to_from_int8>(cb_a);
         reconfigure_pack_operand(cb_b);
     }
 }
@@ -314,11 +322,11 @@ ALWI void state_configure(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
         "Invalid operation type for full pipeline state_configure");
 
     if constexpr (op_type == Operation::BINARY) {
-        reconfig_all_operands(cb_a, cb_b, cb_out);
+        reconfig_all_operands<to_from_int8>(cb_a, cb_b, cb_out);
     } else if constexpr (op_type == Operation::MATMUL) {
-        reconfig_all_operands(cb_b, cb_a, cb_out);  // SrcA and SrcB are swapped for matmul
+        reconfig_all_operands<to_from_int8>(cb_b, cb_a, cb_out);  // SrcA and SrcB are swapped for matmul
     } else if constexpr (op_type == Operation::REDUCE) {
-        reconfig_all_operands(cb_a, cb_b, cb_out);
+        reconfig_all_operands<to_from_int8>(cb_a, cb_b, cb_out);
     }
 }
 
@@ -332,48 +340,69 @@ ALWI void state_configure(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
  * @brief Set current global states for srcA, srcB, and pack. Used in common intialization functions.
  */
 ALWI void set_g_states(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
-    g_state_srca_cb = cb_a;
-    g_state_srcb_cb = cb_b;
-    g_state_pack_cb = cb_out;
+    g_state_tracker.srca_cb = cb_a;
+    g_state_tracker.srcb_cb = cb_b;
+    g_state_tracker.pack_cb = cb_out;
 }
 
 /**
  * @brief Set current srcA and srcB state. Used in common intialization functions.
  */
 ALWI void set_g_srca_srcb(uint32_t cb_a, uint32_t cb_b) {
-    g_state_srca_cb = cb_a;
-    g_state_srcb_cb = cb_b;
+    g_state_tracker.srca_cb = cb_a;
+    g_state_tracker.srcb_cb = cb_b;
 }
 
 /**
  * @brief Set current srcA state (for debugging)
  */
-ALWI void set_g_srca(uint32_t cb_a) { g_state_srca_cb = cb_a; }
+ALWI void set_g_srca(uint32_t cb_a) { g_state_tracker.srca_cb = cb_a; }
 
 /**
  * @brief Set current srcB state (for debugging)
  */
-ALWI void set_g_srcb(uint32_t cb_b) { g_state_srcb_cb = cb_b; }
+ALWI void set_g_srcb(uint32_t cb_b) { g_state_tracker.srcb_cb = cb_b; }
 
 /**
  * @brief Set current pack state (for debugging)
  */
-ALWI void set_g_pack(uint32_t cb_out) { g_state_pack_cb = cb_out; }
+ALWI void set_g_pack(uint32_t cb_out) { g_state_tracker.pack_cb = cb_out; }
 
 /**
  * @brief Get current srcA state (for debugging)
  */
-ALWI uint32_t get_state_srca() { return g_state_srca_cb; }
+ALWI uint32_t get_state_srca() { return g_state_tracker.srca_cb; }
 
 /**
  * @brief Get current srcB state (for debugging)
  */
-ALWI uint32_t get_state_srcb() { return g_state_srcb_cb; }
+ALWI uint32_t get_state_srcb() { return g_state_tracker.srcb_cb; }
 
 /**
  * @brief Get current pack state (for debugging)
  */
-ALWI uint32_t get_state_pack() { return g_state_pack_cb; }
+ALWI uint32_t get_state_pack() { return g_state_tracker.pack_cb; }
+
+/**
+ * @brief Mark the beginning of kernel execution
+ *
+ * Call this at the start of your kernel to indicate that a kernel is now executing.
+ */
+ALWI void kernel_start() { g_state_tracker.kernel_executing = true; }
+
+/**
+ * @brief Mark the end of kernel execution
+ *
+ * Call this at the end of your kernel to indicate that the kernel has finished.
+ */
+ALWI void kernel_end() { g_state_tracker.kernel_executing = false; }
+
+/**
+ * @brief Check if a kernel is currently executing
+ *
+ * @return true if a kernel is executing, false otherwise
+ */
+ALWI bool is_kernel_executing() { return g_state_tracker.kernel_executing; }
 
 /**
  * @brief Reset all global state to invalid
@@ -382,9 +411,10 @@ ALWI uint32_t get_state_pack() { return g_state_pack_cb; }
  * changed hardware state outside the API's knowledge.
  */
 ALWI void reset_state_tracker() {
-    g_state_srca_cb = INVALID_CB_INDEX;
-    g_state_srcb_cb = INVALID_CB_INDEX;
-    g_state_pack_cb = INVALID_CB_INDEX;
+    g_state_tracker.srca_cb = INVALID_CB_INDEX;
+    g_state_tracker.srcb_cb = INVALID_CB_INDEX;
+    g_state_tracker.pack_cb = INVALID_CB_INDEX;
+    g_state_tracker.kernel_executing = false;
 }
 
 }  // namespace ckernel
