@@ -180,18 +180,18 @@ ttnn.attach_golden_function(ttnn.logaddexp2, golden_function=_golden_function)
 ttnn.attach_golden_function(ttnn.logaddexp2_, golden_function=_golden_function)
 
 
-def _golden_function_divide(input_tensor_a, input_tensor_b, round_mode=None, *args, **kwargs):
+# Note: ttnn.divide is an alias to ttnn.div (set in __init__.py), so they share the same golden function
+# divide_ needs its own golden function attachment since it's a separate in-place operation
+
+
+def _golden_function_divide_inplace(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
-    # Support both divide (without round_mode) and div (with round_mode)
-    if round_mode is None:
-        return torch.divide(input_tensor_a, input_tensor_b)
-    else:
-        return torch.div(input_tensor_a, input_tensor_b, rounding_mode=round_mode)
+    # For in-place operations, use the div golden function
+    return torch.divide(input_tensor_a, input_tensor_b)
 
 
-ttnn.attach_golden_function(ttnn.divide, golden_function=_golden_function_divide)
-ttnn.attach_golden_function(ttnn.divide_, golden_function=_golden_function_divide)
+ttnn.attach_golden_function(ttnn.divide_, golden_function=_golden_function_divide_inplace)
 
 
 def _golden_function(a, b, *args, **kwargs):
