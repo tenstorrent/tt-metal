@@ -417,7 +417,14 @@ void bind_conv2d(nb::module_& mod) {
         If true, then core_grid must also be specified.
         )doc");
 
-    py_conv_config.def_rw("shard_layout", &Conv2dConfig::shard_layout, R"doc(
+    py_conv_config.def_prop_rw(
+        "shard_layout",
+        /*getter*/ [](decltype(Conv2dConfig::shard_layout)& existing_layout) { return existing_layout; },
+        /*setter*/
+        [](decltype(Conv2dConfig::shard_layout)& existing_layout, decltype(Conv2dConfig::shard_layout) new_layout) {
+            existing_layout = new_layout;
+        },
+        R"doc(
         Optional argument that determines the TensorMemoryLayout to be used for the input and output tensor.
         If this is not specified, the op will try to determine the optimal layout based on it's own heuristics.
         Can be either :class:`ttnn.TensorMemoryLayout.HEIGHT_SHARDED`, :class:`ttnn.TensorMemoryLayout.BLOCK_SHARDED` or :class:`ttnn.TensorMemoryLayout.WIDTH_SHARDED`.
