@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-#
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
@@ -30,12 +29,14 @@ class Mlp(torch.nn.Module):
 
         # Add dtype=torch.bfloat16 to match input dtype
         self.fc1 = torch.nn.Linear(in_features, hidden_features, bias=bias, dtype=torch.bfloat16)
+
         # Handle act_layer: if it's already an instance, use it; otherwise instantiate with kwargs
         if isinstance(act_layer, torch.nn.Module):
             self.act = act_layer
         else:
             act_kwargs = act_kwargs or {}
             self.act = act_layer(**act_kwargs)
+
         self.fc2 = torch.nn.Linear(hidden_features, out_features, bias=bias, dtype=torch.bfloat16)
 
     def forward(self, x):
@@ -58,8 +59,8 @@ class Mlp(torch.nn.Module):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_sd35_medium_mlp(device, dtype, in_features, hidden_features, batch_size, seq_len, reset_seeds):
     """
-    Test SD3.5 Medium MLP layer.
-    Validates that the TTNN implementation matches PyTorch reference.
+    Test for SD3.5 Medium MLP layer.
+    Validates the TTNN implementation with PyTorch reference.
     """
     torch.manual_seed(1234)
 
@@ -83,7 +84,7 @@ def test_sd35_medium_mlp(device, dtype, in_features, hidden_features, batch_size
         mesh_device=device,
     )
 
-    # Load weights from reference model
+    # Load weights
     state_dict = {
         "fc1.weight": reference_model.fc1.weight,
         "fc1.bias": reference_model.fc1.bias,
@@ -101,11 +102,7 @@ def test_sd35_medium_mlp(device, dtype, in_features, hidden_features, batch_size
 
     # Convert to TTNN tensor
     tt_input = ttnn.from_torch(
-        torch_input,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
     # TTNN forward pass
@@ -127,4 +124,4 @@ def test_sd35_medium_mlp(device, dtype, in_features, hidden_features, batch_size
     else:
         logger.warning("SD3.5 Medium MLP Failed!")
 
-    assert passing, f"MLP output does not meet PCC requirement {pcc_required}: {pcc_message}."
+    assert passing, f"SD3.5 MLP output does not meet PCC requirement {pcc_required}: {pcc_message}."

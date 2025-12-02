@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-#
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -44,7 +43,7 @@ class SD35MediumMlp(Module):
             hidden_features,
             bias=bias,
             mesh_device=mesh_device,
-            activation_fn="gelu",  # GELU activation built into Linear
+            activation_fn="gelu",
         )
 
         # Second linear layer (fc2)
@@ -67,13 +66,12 @@ class SD35MediumMlp(Module):
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
         Forward pass of MLP.
-
         Args:
             x: Input tensor [1, B, seq_len, in_features]
-
         Returns:
             Output tensor [1, B, seq_len, out_features]
         """
+
         # fc1 with GELU activation
         x = self.fc1(x, compute_kernel_config=self.compute_kernel_config)
 

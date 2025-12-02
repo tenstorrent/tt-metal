@@ -10,12 +10,13 @@ from models.experimental.tt_dit.models.transformers.sd35_med.attention_sd35_medi
 
 
 class RMSNorm(torch.nn.Module):
-    """Reference RMSNorm matching MM-DiT"""
+    """Reference PyTorch RMSNorm matching MM-DiT implementation"""
 
     def __init__(self, dim, elementwise_affine=True, eps=1e-6):
         super().__init__()
         self.eps = eps
         self.learnable_scale = elementwise_affine
+
         if self.learnable_scale:
             self.weight = torch.nn.Parameter(torch.ones(dim, dtype=torch.bfloat16))
         else:
