@@ -44,7 +44,7 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/arch/wormhole_implementation.hpp>
-#include "tt_metal/impl/device/device_pool.hpp"
+#include "tt_metal/impl/device/device_manager.hpp"
 #include "tt_cluster.hpp"
 #include "tools/profiler/perf_counters.hpp"
 
@@ -1011,7 +1011,8 @@ bool isGalaxyMMIODevice(IDevice* device) {
 }
 
 bool useFastDispatch(IDevice* device) {
-    return tt::DevicePool::instance().is_dispatch_firmware_active() && !isGalaxyMMIODevice(device);
+    return tt::tt_metal::MetalContext::instance().device_manager()->is_dispatch_firmware_active() &&
+           !isGalaxyMMIODevice(device);
 }
 
 void writeToCoreControlBuffer(IDevice* device, const CoreCoord& virtual_core, const std::vector<uint32_t>& data) {
@@ -1048,7 +1049,7 @@ void writeToCoreControlBuffer(IDevice* device, const CoreCoord& virtual_core, co
 
 void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
     ZoneScoped;
-    TT_ASSERT(tt::DevicePool::instance().is_dispatch_firmware_active());
+    TT_ASSERT(tt::tt_metal::MetalContext::instance().device_manager()->is_dispatch_firmware_active());
     const DeviceAddr profiler_addr = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::PROFILER);
     uint32_t profile_buffer_idx = 0;
 
@@ -1101,7 +1102,7 @@ void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
     IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer) {
     ZoneScoped;
 
-    TT_ASSERT(tt::DevicePool::instance().is_dispatch_firmware_active());
+    TT_ASSERT(tt::tt_metal::MetalContext::instance().device_manager()->is_dispatch_firmware_active());
 
     const Hal& hal = MetalContext::instance().hal();
     const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, worker_core);

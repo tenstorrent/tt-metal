@@ -30,7 +30,7 @@
 #include "tt_metal/llrt/get_platform_architecture.hpp"
 #include "tt_metal/llrt/llrt.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include "tt_metal/impl/device/device_pool.hpp"
+#include "tt_metal/impl/device/device_manager.hpp"
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/hal.hpp>
@@ -64,6 +64,30 @@ void validate_worker_l1_size(size_t& worker_l1_size, Hal& hal) {
 
 }  // namespace
 
+void MetalContext::initialize_device_manager(
+    const std::vector<ChipId>& device_ids,
+    uint8_t num_hw_cqs,
+    size_t l1_small_size,
+    size_t trace_region_size,
+    const tt_metal::DispatchCoreConfig& dispatch_core_config,
+    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    size_t worker_l1_size,
+    bool init_profiler,
+    bool use_max_eth_core_count_on_all_devices,
+    bool initialize_fabric_and_dispatch_fw) {
+    initialize(dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
+    device_manager_ = std::make_unique<DeviceManager>(
+        device_ids,
+        num_hw_cqs,
+        l1_small_size,
+        trace_region_size,
+        l1_bank_remap,
+        worker_l1_size,
+        init_profiler,
+        use_max_eth_core_count_on_all_devices,
+        initialize_fabric_and_dispatch_fw);
+}
+
 void MetalContext::initialize(
     const DispatchCoreConfig& dispatch_core_config,
     uint8_t num_hw_cqs,
@@ -91,7 +115,7 @@ void MetalContext::initialize(
             worker_l1_size_ != worker_l1_size or l1_bank_remap != l1_bank_remap_ or
             fw_compile_hash != fw_compile_hash_) {
             log_warning(tt::LogAlways, "Closing and re-initializing MetalContext with new parameters.");
-            teardown();
+            teardown(true);
         } else {
             // Re-init request with the same parameters, do nothing unless force re-init requested.
             if (force_reinit_) {
@@ -99,7 +123,7 @@ void MetalContext::initialize(
                 log_debug(
                     tt::LogAlways,
                     "Closing and re-initializing MetalContext with same parameters due to force_reinit flag.");
-                teardown();
+                teardown(true);
             } else {
                 return;
             }
@@ -261,7 +285,7 @@ void MetalContext::initialize(
 
 // IMPORTANT: This function is registered as an atexit handler. Creating threads during program termination may cause
 // undefined behavior. Do not create threads in this function or any functions it calls.
-void MetalContext::teardown() {
+void MetalContext::teardown(bool is_reinit) {
     ZoneScoped;
 
     if (!initialized_) {
@@ -291,6 +315,9 @@ void MetalContext::teardown() {
     if (data_collector_) {
         data_collector_->DumpData();
         data_collector_.reset();
+    }
+    if (device_manager_ && !is_reinit) {
+        device_manager_.reset();
     }
 
     if (dprint_server_) {
@@ -538,7 +565,7 @@ void MetalContext::set_custom_fabric_topology(
     const std::string& mesh_graph_desc_file,
     const std::map<tt_fabric::FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     TT_FATAL(
-        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().empty(),
+        !device_manager_ || device_manager_->get_all_active_devices().empty(),
         "Modifying control plane requires no devices to be active");
     // Set the user specified mesh graph descriptor file and FabricNodeID to physical chip mapping.
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_ = logical_mesh_chip_id_to_physical_chip_id_mapping;
@@ -548,7 +575,7 @@ void MetalContext::set_custom_fabric_topology(
 
 void MetalContext::set_default_fabric_topology() {
     TT_FATAL(
-        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().empty(),
+        !device_manager_ || device_manager_->get_all_active_devices().empty(),
         "Modifying control plane requires no devices to be active");
     // Reset the control plane, since it was initialized with custom parameters.
     control_plane_.reset();

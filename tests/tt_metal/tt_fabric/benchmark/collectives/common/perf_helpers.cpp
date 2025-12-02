@@ -92,5 +92,4 @@ PerfStats run_repeated(HelpersFixture* fixture, const PerfParams& p, int warmup_
     }
     return aggregate_stats(pts);
 }
-
 }  // namespace tt::tt_fabric::bench

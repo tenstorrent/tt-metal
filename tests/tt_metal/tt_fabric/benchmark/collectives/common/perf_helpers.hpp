@@ -66,5 +66,4 @@ PerfStats aggregate_stats(const std::vector<PerfPoint>& pts);
 void warmup_once(HelpersFixture* fixture, PerfParams base, int iters = 1);
 
 PerfStats run_repeated(HelpersFixture* fixture, const PerfParams& p, int warmup_iters, int iters);
-
 }  // namespace tt::tt_fabric::bench

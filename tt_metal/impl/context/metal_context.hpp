@@ -9,6 +9,7 @@
 #include <impl/allocator/allocator_types.hpp>
 #include "tt-metalium/experimental/fabric/routing_table_generator.hpp"
 #include "llrt/hal/generated/dev_msgs.hpp"
+#include "tt_metal/hostdevcommon/api/hostdevcommon/common_values.hpp"
 
 namespace tt::tt_fabric {
 class ControlPlane;
@@ -67,6 +68,19 @@ public:
 
     std::unique_ptr<ProfilerStateManager>& profiler_state_manager() { return profiler_state_manager_; }
     std::unique_ptr<DataCollector>& data_collector() { return data_collector_; }
+    std::unique_ptr<DeviceManager>& device_manager() { return device_manager_; }
+
+    void initialize_device_manager(
+        const std::vector<ChipId>& device_ids,
+        uint8_t num_hw_cqs,
+        size_t l1_small_size,
+        size_t trace_region_size,
+        const tt_metal::DispatchCoreConfig& dispatch_core_config,
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
+        bool init_profiler = true,
+        bool use_max_eth_core_count_on_all_devices = false,
+        bool initialize_fabric_and_dispatch_fw = true);
 
     void initialize(
         const DispatchCoreConfig& dispatch_core_config,
@@ -74,7 +88,7 @@ public:
         const BankMapping& l1_bank_remap,
         size_t worker_l1_size,
         bool minimal = false);
-    void teardown();
+    void teardown(bool is_reinit = false);
 
     // Control plane accessors
     void initialize_control_plane();
@@ -190,6 +204,7 @@ private:
     std::unique_ptr<WatcherServer> watcher_server_;
     std::unique_ptr<ProfilerStateManager> profiler_state_manager_;
     std::unique_ptr<DataCollector> data_collector_;
+    std::unique_ptr<DeviceManager> device_manager_;
 
     std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
