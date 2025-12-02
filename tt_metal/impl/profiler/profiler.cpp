@@ -577,15 +577,17 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
     for (const auto& [core, risc_map] : device_markers_per_core_risc_map) {
         for (const auto& [risc, device_markers] : risc_map) {
             for (const tracy::TTDeviceMarker& marker : device_markers) {
+                experimental::ProgramExecutionUID program_execution_uid(
+                    marker.runtime_host_id, marker.trace_id, marker.trace_id_counter);
                 if (isMarkerAZoneEndpoint(marker)) {
                     if (marker.marker_name != "SYNC-ZONE-SENDER" && marker.marker_name != "SYNC-ZONE-RECEIVER" &&
                         marker.marker_name != "PROFILER-NOC-QUICK-SEND" && !marker.marker_name.ends_with("-FW") &&
                         (!marker.marker_name.ends_with("-KERNEL") || marker.risc == tracy::RiscType::BRISC ||
                          marker.risc == tracy::RiscType::NCRISC)) {
-                        zones_by_op[{marker.runtime_host_id, marker.trace_id_counter}].push_back(marker);
+                        zones_by_op[program_execution_uid].push_back(marker);
                     }
                 } else if (isMarkerATimestampedDatapoint(marker)) {
-                    timestamped_datapoints_by_op[{marker.runtime_host_id, marker.trace_id_counter}].push_back(marker);
+                    timestamped_datapoints_by_op[program_execution_uid].push_back(marker);
                 }
             }
         }
