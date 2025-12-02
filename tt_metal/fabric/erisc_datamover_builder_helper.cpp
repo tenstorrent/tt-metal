@@ -51,8 +51,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     std::optional<size_t> desired_num_links,
     bool build_in_worker_connection_mode,
     Topology topology,
-    bool is_galaxy,
-    const tt::tt_fabric::FabricRouterBufferConfig& edm_buffer_config) :
+    bool is_galaxy) :
     device_sequence(device_sequence), programs(program_sequence) {
     if (topology == Topology::Ring) {
         TT_FATAL(device_sequence.size() > 2, "Ring topology only supports more than 2 devices");
@@ -121,31 +120,14 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
 
         TT_ASSERT(local_link_cores.size() == remote_link_cores.size());
 
-        auto edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short;
-        // change to long axis variantion, and using more buffer slots.
-        if (device_sequence.size() >=
-            tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD) {
-            edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Long;
-        }
-        // if ring topology set extra buffer on dateline edms.
-        auto src_edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
-            .edm_axis = edm_axis,
-            .edm_buffer_config = edm_buffer_config,
-        };
-        auto dest_edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
-            .edm_axis = edm_axis,
-            .edm_buffer_config = edm_buffer_config,
-        };
-        const auto src_curr_edm_config =
-            tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, src_edm_options);
+        const auto src_curr_edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology);
         log_debug(
             tt::LogFabric,
             "FabricEriscDatamoverConfig for src_device {}: buffer_size={}, topology={}",
             src_device->id(),
             edm_buffer_size,
             (int)topology);
-        const auto dest_curr_edm_config =
-            tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, dest_edm_options);
+        const auto dest_curr_edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology);
         log_debug(
             tt::LogFabric,
             "FabricEriscDatamoverConfig for dest_device {}: buffer_size={}, topology={}",
