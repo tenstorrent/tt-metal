@@ -333,6 +333,7 @@ class Generator(WarmupForwardMixin):
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
         start_pos: list[int] | None = None,  # Cached prefixes lengths
+        bitmask=None,  # TODO apply in prefill
     ):
         if getattr(self, "_disable_prefill_tracing", False):
             enable_trace = False
@@ -1036,6 +1037,7 @@ class Generator(WarmupForwardMixin):
         reset_batch=False,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
+        bitmask=None,
     ):
         if getattr(self, "_disable_decode_tracing", False):
             enable_trace = False
@@ -1045,6 +1047,9 @@ class Generator(WarmupForwardMixin):
             reset_inputs = True  # We didn't sample on device, so we need to load inputs.
         else:
             return_logits = False
+
+        if bitmask is not None:
+            self.model.bitmask_to_device(bitmask)
 
         if self.prev_page_table is None:
             self.prev_page_table = (
@@ -1106,6 +1111,8 @@ class Generator(WarmupForwardMixin):
             if async_read:
                 return tt_out
             else:
+                # padded_batch_size, seq_len, vocab_size if not device sampling
+                # vocab_size if device sampling
                 return self.process_decode_output_host(tt_out, is_tokens=(not return_logits))
 
         return tt_tok, tt_log_probs
@@ -1259,7 +1266,7 @@ class Generator(WarmupForwardMixin):
 
         if self.enable_split_sampling and not return_logits:
             return self.model.sampling.sample(
-                logits=trace_tok_rm[0],
+                logits=trace_tok_rm,
                 tt_out_tok=self.trace_inputs_decode[return_logits][0],
             )
 
