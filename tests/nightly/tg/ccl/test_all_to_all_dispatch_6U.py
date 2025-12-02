@@ -30,6 +30,7 @@ from tracy import signpost
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_manager": ttnn.FabricManager.ENABLED,
         },
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,

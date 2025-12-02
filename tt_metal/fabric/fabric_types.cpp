@@ -6,6 +6,16 @@
 
 namespace tt::tt_fabric {
 
+FabricManager operator|(FabricManager lhs, FabricManager rhs) {
+    return static_cast<FabricManager>(static_cast<uint32_t>(lhs) | static_cast<uint32_t>(rhs));
+}
+
+FabricManager operator&(FabricManager lhs, FabricManager rhs) {
+    return static_cast<FabricManager>(static_cast<uint32_t>(lhs) & static_cast<uint32_t>(rhs));
+}
+
+bool has_flag(FabricManager flags, FabricManager test) { return (flags & test) == test; }
+
 FabricType operator|(FabricType lhs, FabricType rhs) {
     return static_cast<FabricType>(static_cast<uint32_t>(lhs) | static_cast<uint32_t>(rhs));
 }

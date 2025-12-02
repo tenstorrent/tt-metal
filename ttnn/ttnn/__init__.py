@@ -133,7 +133,14 @@ from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
 )
 
-from ttnn._ttnn.fabric import FabricConfig, FabricReliabilityMode, FabricTensixConfig, set_fabric_config
+from ttnn._ttnn.fabric import (
+    FabricConfig,
+    FabricReliabilityMode,
+    FabricTensixConfig,
+    FabricUDMMode,
+    FabricManager,
+    set_fabric_config,
+)
 
 # Import cluster functions and types
 from ttnn._ttnn import cluster

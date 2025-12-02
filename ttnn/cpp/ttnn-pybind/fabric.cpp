@@ -49,6 +49,19 @@ void py_bind_fabric_api(py::module& module) {
         .value("DISABLED", tt::tt_fabric::FabricUDMMode::DISABLED)
         .value("ENABLED", tt::tt_fabric::FabricUDMMode::ENABLED);
 
+    py::enum_<tt::tt_fabric::FabricManager>(module, "FabricManager", R"(
+        Specifies the fabric manager mode configuration.
+        Values:
+            DISABLED: Fabric is not managed by a separate process (default).
+            ENABLED: Fabric is maintained by a separate fabric manager process.
+            INIT_FABRIC: Initialize the fabric.
+            TERMINATE_FABRIC: Terminate the fabric.
+        )")
+        .value("DISABLED", tt::tt_fabric::FabricManager::DISABLED)
+        .value("ENABLED", tt::tt_fabric::FabricManager::ENABLED)
+        .value("INIT_FABRIC", tt::tt_fabric::FabricManager::INIT_FABRIC)
+        .value("TERMINATE_FABRIC", tt::tt_fabric::FabricManager::TERMINATE_FABRIC);
+
     module.def(
         "set_fabric_config",
         &tt::tt_fabric::SetFabricConfig,
@@ -56,7 +69,8 @@ void py_bind_fabric_api(py::module& module) {
         py::arg("reliability_mode") = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
         py::arg("num_planes") = std::nullopt,
         py::arg("fabric_tensix_config") = tt::tt_fabric::FabricTensixConfig::DISABLED,
-        py::arg("fabric_udm_mode") = tt::tt_fabric::FabricUDMMode::DISABLED);
+        py::arg("fabric_udm_mode") = tt::tt_fabric::FabricUDMMode::DISABLED,
+        py::arg("fabric_manager") = tt::tt_fabric::FabricManager::DISABLED);
 }
 
 }  // namespace ttnn::fabric

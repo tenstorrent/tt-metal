@@ -33,6 +33,17 @@ enum class FabricUDMMode : uint32_t {
     ENABLED = 1,
 };
 
+// Fabric manager mode configuration
+enum class FabricManager : uint32_t {
+    INIT_FABRIC = 1 << 0,
+    TERMINATE_FABRIC = 1 << 1,
+    ENABLED = (INIT_FABRIC & TERMINATE_FABRIC),
+    DISABLED = (INIT_FABRIC | TERMINATE_FABRIC),
+};
+FabricManager operator|(FabricManager lhs, FabricManager rhs);
+FabricManager operator&(FabricManager lhs, FabricManager rhs);
+bool has_flag(FabricManager flags, FabricManager test_flag);
+
 enum class FabricType {
     MESH = 1 << 0,
     TORUS_X = 1 << 1,  // Connections along mesh_coord[1]

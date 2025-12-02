@@ -47,7 +47,14 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_manager": ttnn.FabricManager.ENABLED,
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Linear,
+        ),
     ],
     indirect=["device_params"],
     ids=["fabric_linear"],
