@@ -29,6 +29,13 @@ def randomize_torch_tensor(tensor_map, tensor_shape):
     if tensor_shape in tensor_map.keys():
         torch_tensor = tensor_map[tensor_shape]
     else:
+        # torch_tensor = torch.zeros(tensor_shape, dtype=torch.bfloat16)
+        # in_n, in_c, in_h, in_w = tensor_shape
+        # for n in range(in_n):
+        #     for c in range(in_c):
+        #         for h in range(in_h):
+        #             for w in range(in_w):
+        #                 torch_tensor[n, c, h, w] = ((h * in_w + w) // 32) * 32
         torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
         tensor_map[tensor_shape] = torch_tensor
 
@@ -176,13 +183,6 @@ def run_max_pool2d(
     ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.reshape(out_n, out_h, out_w, out_c)  # N, H, W, C
     ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))  # N, C, H, W
-
-    # Set torch print options to show all elements without abbreviation
-    torch.set_printoptions(threshold=float("inf"), linewidth=200, sci_mode=False)
-    print("TTNN output: ", ttnn_output[0][0].flatten())
-    print("Torch output: ", torch_output[0][0].flatten())
-    # Reset to default torch print options
-    torch.set_printoptions(profile="default")
 
     # test for equivalance
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
@@ -566,7 +566,7 @@ def run_max_pool2d(
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize("out_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize(
     "input_shape, shard_startegy",
@@ -584,12 +584,17 @@ def run_max_pool2d(
 )
 @pytest.mark.parametrize(
     "kernel_size",
-    ((3, 3),),
+    (
+        (3, 3),
+        (5, 5),
+        (9, 9),
+    ),
 )
 @pytest.mark.parametrize(
     "in_dtype",
     [
         ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 def test_max_pool2d_output_formats_and_layouts(

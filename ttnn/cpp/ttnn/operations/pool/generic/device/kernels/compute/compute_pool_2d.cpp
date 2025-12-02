@@ -290,15 +290,13 @@ void MAIN {
                         tensix_sync();
                         pack_reconfig_data_format(out_cb_id);
 
-                        PACK(tt::compute::common::print_full_tile(pre_tilize_cb_id));
-
                         tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
                         tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
                         tilize_uninit(pre_tilize_cb_id, out_cb_id);
 
-                        PACK(tt::compute::common::print_full_tile(out_cb_id));
-
                         cb_push_back(out_cb_id, in_ntiles_c);
+                        cb_pop_front(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
+                        cb_reserve_back(pre_tilize_cb_id, in_ntiles_c * TILE_HEIGHT);
 
                         if constexpr (is_output_block_format) {
                             pack_reconfig_data_format(pre_tilize_cb_id);
