@@ -22,7 +22,7 @@ def test_pow_arange_masking(exponent, device):
     # Generate all possible bit pattern for bf16
     fp32 = torch.arange(0, 2**16, dtype=torch.int32).to(torch.float32)
 
-    # Mask special values
+    # Mask special values (NaN, -0.0, +inf, -inf)
     nan_mask = torch.isnan(fp32)
     neg_zero_mask = (fp32 == 0.0) & torch.signbit(fp32)
     pos_inf_mask = fp32 == float("inf")
