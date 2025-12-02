@@ -17,7 +17,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
-from models.demos.llama3_70b_galaxy.tt.sampling import TTSampling
+from models.common.sampling.tt_sampling import TTSampling
 from models.demos.llama3_70b_galaxy.demo.demo_common import load_inputs_simple
 
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
@@ -75,13 +75,13 @@ def run_qwen_demo(
 
     top_k = sampling_params["top_k"]
     if isinstance(top_k, int):
-        top_k = [top_k] * batch_size
+        top_k = torch.tensor([top_k] * batch_size)
     top_p = sampling_params["top_p"]
     if isinstance(top_p, float):
-        top_p = [top_p] * batch_size
+        top_p = torch.tensor([top_p] * batch_size)
     temperature = sampling_params["temperature"]
     if isinstance(temperature, float):
-        temperature = [temperature] * batch_size
+        temperature = torch.tensor([temperature] * batch_size)
     seed = sampling_params["seed"]
 
     dummy_weights = False
@@ -182,6 +182,9 @@ def run_qwen_demo(
         args=model_args,
         mesh_device=mesh_device,
         tt_ccl=tt_model.tt_ccl,
+        k=top_k,
+        p=top_p,
+        temp=temperature,
     )
     profiler.end("loading_weights_to_device")
     logger.info("Finished loading weights to device.")
@@ -264,14 +267,11 @@ def run_qwen_demo(
         )
 
         # Sampling
-        tt_out_tok = tt_sampling(tt_out[0], seed)  # Compile once with setting the seed
-        # logger.info(f"Sampling done")
+        _ = tt_sampling(tt_out[0], seed, tt_out_tok=tt_out_tok)  # Compile once with setting the seed
+        logger.info(f"Sampling done")
 
     if not stress_test:
-        ttnn.plus_one(
-            current_pos_tensor,
-            sub_core_grids=model_args.sub_core_grids,
-        )
+        ttnn.plus_one(current_pos_tensor, sub_core_grids=model_args.sub_core_grids, skip_negative_entries=True)
         ttnn.plus_one(
             rot_mat_idxs,
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
@@ -303,10 +303,7 @@ def run_qwen_demo(
     _ = tt_sampling(tt_out[0], tt_out_tok=tt_out_tok)
 
     if not stress_test:
-        ttnn.plus_one(
-            current_pos_tensor,
-            sub_core_grids=model_args.sub_core_grids,
-        )
+        ttnn.plus_one(current_pos_tensor, sub_core_grids=model_args.sub_core_grids, skip_negative_entries=True)
         ttnn.plus_one(
             rot_mat_idxs,
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),

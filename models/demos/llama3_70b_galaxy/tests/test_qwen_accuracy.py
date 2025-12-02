@@ -14,7 +14,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
-from models.demos.llama3_70b_galaxy.tt.sampling import TTSampling
+from models.common.sampling.tt_sampling import TTSampling
 from models.tt_transformers.tt.model_config import ModelArgs
 from transformers import AutoTokenizer
 from tqdm import tqdm
@@ -98,13 +98,13 @@ def test_qwen_model_acc(
 
     top_k = sampling_params["top_k"]
     if isinstance(top_k, int):
-        top_k = [top_k] * batch_size
+        top_k = torch.tensor([top_k] * batch_size)
     top_p = sampling_params["top_p"]
     if isinstance(top_p, float):
-        top_p = [top_p] * batch_size
+        top_p = torch.tensor([top_p] * batch_size)
     temperature = sampling_params["temperature"]
     if isinstance(temperature, float):
-        temperature = [temperature] * batch_size
+        temperature = torch.tensor([temperature] * batch_size)
     seed = sampling_params["seed"]
 
     dtype = ttnn.bfloat8_b
@@ -245,6 +245,9 @@ def test_qwen_model_acc(
         args=model_args,
         mesh_device=mesh_device,
         tt_ccl=tt_model.tt_ccl,
+        k=top_k,
+        p=top_p,
+        temp=temperature,
     )
 
     # Initialize embedding
@@ -280,6 +283,17 @@ def test_qwen_model_acc(
         model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
     )
 
+    # Create initial tt_out_tok for sampling (matching demo_decode.py pattern)
+    ref_token_for_tok = input_ids[0, 0].item()  # First token
+    tt_out_tok = ttnn.from_torch(
+        torch.tensor([[ref_token_for_tok]]).reshape(1, 1, 1, batch_size),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
     def run_model():
         rot_mats = tt_model.rope_setup.get_rm_rot_mats(rot_mat_idxs)
 
@@ -292,7 +306,7 @@ def test_qwen_model_acc(
         )
 
         # Sampling
-        tt_out_tok = tt_sampling(tt_out[0], seed)
+        _ = tt_sampling(tt_out[0], seed, tt_out_tok=tt_out_tok)
 
         # Update the idxs
         ttnn.plus_one(
