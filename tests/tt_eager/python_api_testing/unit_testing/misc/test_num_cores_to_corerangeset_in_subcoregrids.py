@@ -27,7 +27,7 @@ import pytest
                 ]
             ),
         ),
-        # # Test Case 2: Basic Column-wise processing
+        # Test Case 2: Basic Column-wise processing
         (
             ttnn.CoreCoord(1, 0),
             32,
@@ -45,7 +45,7 @@ import pytest
                 ]
             ),
         ),
-        # # Test Case 3: row-wise scenario with small target cores and start offset
+        # Test Case 3: row-wise scenario with small target cores and start offset
         (
             ttnn.CoreCoord(3, 2),
             8,
@@ -64,7 +64,7 @@ import pytest
                 ]
             ),
         ),
-        # # Test Case 4: col-wise scenario with small target cores and start offset
+        # Test Case 4: col-wise scenario with small target cores and start offset
         (
             ttnn.CoreCoord(1, 8),
             8,
