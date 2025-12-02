@@ -211,9 +211,9 @@ jobs:
           - runner-label: BH-DeskBox
             image-name: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
             extra-tag: pipeline-functional
-          - runner-label: BH-LoudBox
-            image-name: ${{ needs.get-image-tags.outputs.bh-loudbox-image-tag }}
-            extra-tag: pipeline-perf
+              # - runner-label: BH-LoudBox
+              # image-name: ${{ needs.get-image-tags.outputs.bh-loudbox-image-tag }}
+              # extra-tag: pipeline-perf
     runs-on:
       - ${{ matrix.bh-config.runner-label }}
       - issue-miw-740
