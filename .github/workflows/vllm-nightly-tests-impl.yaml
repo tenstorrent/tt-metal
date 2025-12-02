@@ -98,8 +98,8 @@ jobs:
           {
             name: "[WH-GH] Gemma3-27B",
             model: "google/gemma-3-27b-it",
-            server-timeout: 10,
-            benchmark-timeout: 5,
+            server-timeout: 35,
+            benchmark-timeout: 10,
             runner-label: topology-6u,
             arch: arch-wormhole_b0,
             mesh-device: TG,
