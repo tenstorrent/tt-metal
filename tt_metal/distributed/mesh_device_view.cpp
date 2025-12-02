@@ -285,20 +285,20 @@ std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates(
     line_coords.push_back(start_coord);
 
     // First try to find a ring path (preferred)
-    bool found_ring = dfs(line_coords, visited, /*require_ring=*/true);
+    bool found_path = dfs(line_coords, visited, /*require_ring=*/true);
 
     // If ring not possible, fall back to any valid path
-    if (!found_ring) {
+    if (!found_path) {
         // Reset and try without ring requirement
         line_coords.clear();
         visited.clear();
         visited.insert(start_coord);
         line_coords.push_back(start_coord);
-        found_ring = dfs(line_coords, visited, /*require_ring=*/false);
+        found_path = dfs(line_coords, visited, /*require_ring=*/false);
     }
 
     TT_FATAL(
-        found_ring && line_coords.size() == length,
+        found_path && line_coords.size() == length,
         "Failed to get line coordinates, got {} coordinates, expected {}",
         line_coords.size(),
         length);
