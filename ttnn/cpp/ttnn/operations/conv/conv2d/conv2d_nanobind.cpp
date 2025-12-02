@@ -417,22 +417,31 @@ void bind_conv2d(nb::module_& mod) {
         If true, then core_grid must also be specified.
         )doc");
 
-    py_conv_config.def_prop_rw(
+    py_conv_config.def_rw(
         "shard_layout",
-        /*getter*/ [](Conv2dConfig& conv) { return conv.shard_layout; },
-        /*setter*/
-        [](Conv2dConfig& conv, nb::handle new_layout) {
-            if (new_layout.is_none()) {
-                conv.shard_layout = std::nullopt;
-            } else {
-                conv.shard_layout = nb::cast<decltype(Conv2dConfig::shard_layout)>(new_layout);
-            }
-        },
+        &Conv2dConfig::shard_layout,
         R"doc(
         Optional argument that determines the TensorMemoryLayout to be used for the input and output tensor.
         If this is not specified, the op will try to determine the optimal layout based on it's own heuristics.
         Can be either :class:`ttnn.TensorMemoryLayout.HEIGHT_SHARDED`, :class:`ttnn.TensorMemoryLayout.BLOCK_SHARDED` or :class:`ttnn.TensorMemoryLayout.WIDTH_SHARDED`.
         )doc");
+
+    // py_conv_config.def_prop_rw(
+    //     "shard_layout",
+    //     /*getter*/ [](Conv2dConfig& conv) { return conv.shard_layout; },
+    //     /*setter*/
+    //     [](Conv2dConfig& conv, nb::handle new_layout) {
+    //         if (new_layout.is_none()) {
+    //             conv.shard_layout = std::nullopt;
+    //         } else {
+    //             conv.shard_layout = nb::cast<decltype(Conv2dConfig::shard_layout)>(new_layout);
+    //         }
+    //     },
+    //     R"doc(
+    //     Optional argument that determines the TensorMemoryLayout to be used for the input and output tensor.
+    //     If this is not specified, the op will try to determine the optimal layout based on it's own heuristics.
+    //     Can be either :class:`ttnn.TensorMemoryLayout.HEIGHT_SHARDED`, :class:`ttnn.TensorMemoryLayout.BLOCK_SHARDED`
+    //     or :class:`ttnn.TensorMemoryLayout.WIDTH_SHARDED`. )doc");
 
     py_conv_config.def_rw("core_grid", &Conv2dConfig::core_grid, R"doc(
         Core Grid to be used for sharding the input tensor.

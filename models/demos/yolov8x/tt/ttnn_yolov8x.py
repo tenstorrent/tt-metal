@@ -97,7 +97,7 @@ class TtConv:
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat16,
             activation=None if self.is_detect_cv2 else ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
-            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED if not self.change_shard else None,
             act_block_w_div=1,
             deallocate_activation=False,
             enable_act_double_buffer=self.enable_act_double_buffer,
@@ -109,8 +109,8 @@ class TtConv:
         if self.deallocate_activation:
             conv_config.deallocate_activation = self.deallocate_activation
 
-        if self.change_shard:
-            conv_config.shard_layout = None
+        # if self.change_shard:
+        #    conv_config.shard_layout = None
 
         if self.act_block_h:
             conv_config.act_block_h_override = self.act_blocks
