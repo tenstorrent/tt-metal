@@ -10,15 +10,15 @@
 namespace ttnn::operations::experimental::nlp_concat_heads_decode::program {
 
 struct NLPConcatHeadsDecodeSubcoregridsSharedVariables {
-    tt::tt_metal::KernelHandle reader_kernel_id;
-    tt::tt_metal::KernelHandle writer_kernel_id;
+    tt::tt_metal::KernelHandle reader_kernel_id{};
+    tt::tt_metal::KernelHandle writer_kernel_id{};
     std::vector<CoreCoord> cores;
-    uint32_t element_size;
-    uint32_t sub_tile_line_bytes;
-    uint32_t num_cores;
-    tt::tt_metal::CBHandle cb_q_output;
-    uint32_t face_h;
-    uint32_t tile_w;
+    uint32_t element_size{};
+    uint32_t sub_tile_line_bytes{};
+    uint32_t num_cores{};
+    tt::tt_metal::CBHandle cb_q_output{};
+    uint32_t face_h{};
+    uint32_t tile_w{};
 };
 
 struct NLPConcatHeadsDecodeSubcoregridsProgramFactory {

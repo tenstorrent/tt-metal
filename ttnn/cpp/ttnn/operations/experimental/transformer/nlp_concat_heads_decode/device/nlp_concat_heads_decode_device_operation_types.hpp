@@ -9,8 +9,8 @@
 namespace ttnn::operations::experimental::nlp_concat_heads_decode {
 
 struct operation_attributes_t {
-    uint32_t num_heads;
-    bool on_subcoregrids;
+    uint32_t num_heads{};
+    bool on_subcoregrids{};
     std::optional<CoreRangeSet> sub_core_grids;
 };
 
