@@ -16,68 +16,6 @@
 
 namespace tt::tt_fabric {
 
-// ============ Helper Functions ============
-
-std::vector<RouterConnectionPair> get_router_connection_pairs(
-    const std::unordered_map<RoutingDirection, std::vector<chan_id_t>>& channels_by_direction,
-    const FabricContext& fabric_context,
-    const std::unordered_map<RoutingDirection, FabricNodeId>& chip_neighbors,
-    bool wrap_around_mesh) {
-    std::vector<RouterConnectionPair> pairs;
-
-    const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
-    const size_t num_intra_chip_neighbors = chip_neighbors.size();
-
-    // Helper to check if we can connect two directions
-    auto can_connect = [&](RoutingDirection dir1, RoutingDirection dir2) {
-        return chip_neighbors.count(dir1) > 0 && chip_neighbors.count(dir2) > 0 &&
-               channels_by_direction.count(dir1) > 0 && channels_by_direction.count(dir2) > 0;
-    };
-
-    // Helper to add connection pairs for two directions
-    auto add_direction_pairs = [&](RoutingDirection dir1, RoutingDirection dir2) {
-        if (!can_connect(dir1, dir2)) {
-            return;
-        }
-
-        const auto& chans_dir1 = channels_by_direction.at(dir1);
-        const auto& chans_dir2 = channels_by_direction.at(dir2);
-        uint32_t num_links = std::min(chans_dir1.size(), chans_dir2.size());
-
-        for (uint32_t link = 0; link < num_links; link++) {
-            pairs.push_back(RouterConnectionPair{
-                .chan1 = chans_dir1[link],
-                .chan2 = chans_dir2[link],
-                .link_idx = link,
-                .num_links = num_links,
-            });
-        }
-    };
-
-    if (is_2D_routing) {
-        // 2D Routing - connect all orthogonal direction pairs
-        add_direction_pairs(RoutingDirection::N, RoutingDirection::S);
-        add_direction_pairs(RoutingDirection::E, RoutingDirection::W);
-        add_direction_pairs(RoutingDirection::N, RoutingDirection::E);
-        add_direction_pairs(RoutingDirection::N, RoutingDirection::W);
-        add_direction_pairs(RoutingDirection::S, RoutingDirection::E);
-        add_direction_pairs(RoutingDirection::S, RoutingDirection::W);
-    } else if (wrap_around_mesh && num_intra_chip_neighbors == 2) {
-        // 1D Routing wrap the corner chips, fold the internal connections
-        auto it = chip_neighbors.begin();
-        auto dir1 = it->first;
-        it++;
-        auto dir2 = it->first;
-        add_direction_pairs(dir1, dir2);
-    } else {
-        // 1D Routing - connect opposite directions
-        add_direction_pairs(RoutingDirection::N, RoutingDirection::S);
-        add_direction_pairs(RoutingDirection::E, RoutingDirection::W);
-    }
-
-    return pairs;
-}
-
 // ============ FabricBuilder Implementation ============
 
 FabricBuilder::FabricBuilder(
@@ -169,13 +107,68 @@ void FabricBuilder::create_routers() {
     }
 }
 
+std::vector<FabricBuilder::RouterConnectionPair> FabricBuilder::get_router_connection_pairs() const {
+    std::vector<RouterConnectionPair> pairs;
+
+    const bool is_2D_routing = fabric_context_.is_2D_routing_enabled();
+    const size_t num_intra_chip_neighbors = chip_neighbors_.size();
+
+    // Helper to check if we can connect two directions
+    auto can_connect = [&](RoutingDirection dir1, RoutingDirection dir2) {
+        return chip_neighbors_.count(dir1) > 0 && chip_neighbors_.count(dir2) > 0 &&
+               channels_by_direction_.count(dir1) > 0 && channels_by_direction_.count(dir2) > 0;
+    };
+
+    // Helper to add connection pairs for two directions
+    auto add_direction_pairs = [&](RoutingDirection dir1, RoutingDirection dir2) {
+        if (!can_connect(dir1, dir2)) {
+            return;
+        }
+
+        const auto& chans_dir1 = channels_by_direction_.at(dir1);
+        const auto& chans_dir2 = channels_by_direction_.at(dir2);
+        uint32_t num_links = std::min(chans_dir1.size(), chans_dir2.size());
+
+        for (uint32_t link = 0; link < num_links; link++) {
+            pairs.push_back(RouterConnectionPair{
+                .chan1 = chans_dir1[link],
+                .chan2 = chans_dir2[link],
+                .link_idx = link,
+                .num_links = num_links,
+            });
+        }
+    };
+
+    if (is_2D_routing) {
+        // 2D Routing - connect all orthogonal direction pairs
+        add_direction_pairs(RoutingDirection::N, RoutingDirection::S);
+        add_direction_pairs(RoutingDirection::E, RoutingDirection::W);
+        add_direction_pairs(RoutingDirection::N, RoutingDirection::E);
+        add_direction_pairs(RoutingDirection::N, RoutingDirection::W);
+        add_direction_pairs(RoutingDirection::S, RoutingDirection::E);
+        add_direction_pairs(RoutingDirection::S, RoutingDirection::W);
+    } else if (wrap_around_mesh_ && num_intra_chip_neighbors == 2) {
+        // 1D Routing wrap the corner chips, fold the internal connections
+        auto it = chip_neighbors_.begin();
+        auto dir1 = it->first;
+        it++;
+        auto dir2 = it->first;
+        add_direction_pairs(dir1, dir2);
+    } else {
+        // 1D Routing - connect opposite directions
+        add_direction_pairs(RoutingDirection::N, RoutingDirection::S);
+        add_direction_pairs(RoutingDirection::E, RoutingDirection::W);
+    }
+
+    return pairs;
+}
+
 void FabricBuilder::connect_routers() {
     const auto topology = fabric_context_.get_fabric_topology();
     const bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy();
 
-    // Get connection pairs based on topology
-    auto connection_pairs =
-        get_router_connection_pairs(channels_by_direction_, fabric_context_, chip_neighbors_, wrap_around_mesh_);
+    // Get connection pairs based on topology (uses member variables)
+    auto connection_pairs = get_router_connection_pairs();
 
     // Connect each pair
     for (const auto& pair : connection_pairs) {

@@ -22,36 +22,6 @@ class FabricContext;
 class FabricBuilderContext;
 
 /**
- * RouterConnectionPair
- *
- * Represents a pair of routers to be connected, with link information.
- * Used by get_router_connection_pairs() to separate topology logic from connection logic.
- */
-struct RouterConnectionPair {
-    chan_id_t chan1;
-    chan_id_t chan2;
-    uint32_t link_idx;
-    uint32_t num_links;
-};
-
-/**
- * Get pairs of routers to connect based on topology
- *
- * Pure function that encapsulates all topology logic (2D vs 1D, direction pairs).
- *
- * @param channels_by_direction Map of direction to list of eth channels
- * @param fabric_context The fabric context (for topology info)
- * @param chip_neighbors Map of directions to neighbor info
- * @param wrap_around_mesh Whether the mesh wraps around
- * @return Vector of RouterConnectionPair describing which routers to connect
- */
-std::vector<RouterConnectionPair> get_router_connection_pairs(
-    const std::unordered_map<RoutingDirection, std::vector<chan_id_t>>& channels_by_direction,
-    const FabricContext& fabric_context,
-    const std::unordered_map<RoutingDirection, FabricNodeId>& chip_neighbors,
-    bool wrap_around_mesh);
-
-/**
  * FabricBuilder
  *
  * Transient orchestrator class that owns router builders during the build process.
@@ -114,6 +84,22 @@ public:
     size_t get_num_routers() const { return routers_.size(); }
 
 private:
+    /**
+     * RouterConnectionPair - Internal struct for router connection info
+     */
+    struct RouterConnectionPair {
+        chan_id_t chan1;
+        chan_id_t chan2;
+        uint32_t link_idx;
+        uint32_t num_links;
+    };
+
+    /**
+     * Get pairs of routers to connect based on topology.
+     * Uses member variables: channels_by_direction_, chip_neighbors_, wrap_around_mesh_
+     */
+    std::vector<RouterConnectionPair> get_router_connection_pairs() const;
+
     tt::tt_metal::IDevice* device_;
     tt::tt_metal::Program& program_;
     FabricContext& fabric_context_;
