@@ -143,9 +143,6 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     log_trace(tt::LogFabric, "Available channel buffering space: {}", this->available_channel_buffering_space);
 
     auto skip_current_sender_channel = [&](uint32_t idx) -> bool {
-        // for dateline connection, skip the last sender channel check (2 for 1d, 4 for 2d)
-        // for dateline upstream, skip the sender channel 1 check (just for 1d)
-        // for dateline upstream adajcent, skip the sender channel 2 check (just for 1d)
         // for fabric with tensix extension, only check the vc1 sender channel and worker channel, other
         // channels are skipped
         uint32_t target_channel = get_worker_connected_sender_channel();

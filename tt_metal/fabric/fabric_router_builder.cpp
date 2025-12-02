@@ -162,9 +162,9 @@ void FabricRouterBuilder::connect_to_downstream_router_over_noc(
         // NOTE: erisc_builder_ is hardcoded here because there is currently no scenario where tensix forwards to tensix
         //       however when that is enabled, this code should be updated to point to the src builder dynamically
         if (auto* downstream_erisc_builder = dynamic_cast<FabricEriscDatamoverBuilder*>(downstream_builder)) {
-            erisc_builder_->setup_downstream_vc_connection(downstream_erisc_builder, vc_index, internal_channel_id, vc_index == 1);
+            erisc_builder_->setup_downstream_vc_connection(downstream_erisc_builder, vc_index, internal_channel_id);
         } else if (auto* downstream_tensix_builder = dynamic_cast<FabricTensixDatamoverBuilder*>(downstream_builder)) {
-            erisc_builder_->setup_downstream_vc_connection(downstream_tensix_builder, vc_index, internal_channel_id, vc_index == 1);
+            erisc_builder_->setup_downstream_vc_connection(downstream_tensix_builder, vc_index, internal_channel_id);
         }
     };
 
