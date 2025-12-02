@@ -6,11 +6,12 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # Find required packages
 find_package(Threads REQUIRED)
 
-# Use gRPC and Protobuf from third_party (fetched via CPM)
+# Use gRPC and its bundled Protobuf from third_party (fetched via CPM)
+# gRPC bundles its own protobuf to keep it isolated from tt-metal's protobuf
 # Set up the variables expected by BuildTelemetryProto.cmake
 # Use grpc++_unsecure since telemetry server uses UNIX sockets with InsecureServerCredentials (no SSL needed)
-set(_PROTOBUF_LIBPROTOBUF protobuf::libprotobuf)
-set(_PROTOBUF_PROTOC $<TARGET_FILE:protobuf::protoc>)
+set(_PROTOBUF_LIBPROTOBUF libprotobuf)  # gRPC's bundled protobuf (no protobuf:: namespace)
+set(_PROTOBUF_PROTOC $<TARGET_FILE:protoc>)  # gRPC's bundled protoc
 set(_GRPC_GRPCPP grpc++_unsecure)
 set(_GRPC_CPP_PLUGIN_EXECUTABLE $<TARGET_FILE:grpc_cpp_plugin>)
 set(_REFLECTION grpc++_reflection)

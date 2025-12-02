@@ -105,66 +105,11 @@ target_compile_options(
 )
 
 ############################################################################################################################
-# abseil-cpp : https://github.com/abseil/abseil-cpp
-############################################################################################################################
-
-CPMAddPackage(
-    NAME abseil-cpp
-    GITHUB_REPOSITORY abseil/abseil-cpp
-    GIT_TAG
-        20230125.2 # Version required by gRPC 1.54.3
-    OPTIONS
-        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
-        "ABSL_PROPAGATE_CXX_STD ON"
-        "BUILD_TESTING OFF"
-        "ABSL_BUILD_TESTING OFF"
-        "BUILD_SHARED_LIBS OFF"
-        "CMAKE_POSITION_INDEPENDENT_CODE ON"
-)
-
-############################################################################################################################
-# c-ares : https://github.com/c-ares/c-ares
-############################################################################################################################
-
-CPMAddPackage(
-    NAME c-ares
-    GITHUB_REPOSITORY c-ares/c-ares
-    GIT_TAG cares-1_21_0
-    OPTIONS
-        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
-        "CARES_STATIC ON"
-        "CARES_SHARED OFF"
-        "CARES_BUILD_TOOLS OFF"
-        "CARES_BUILD_TESTS OFF"
-        "BUILD_SHARED_LIBS OFF"
-)
-
-############################################################################################################################
-# re2 : https://github.com/google/re2
-############################################################################################################################
-
-CPMAddPackage(
-    NAME re2
-    GITHUB_REPOSITORY google/re2
-    GIT_TAG 2023-11-01
-    OPTIONS
-        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
-        "RE2_BUILD_TESTING OFF"
-        "BUILD_SHARED_LIBS OFF"
-        "CMAKE_POSITION_INDEPENDENT_CODE ON"
-    PATCHES
-        re2_disable_install.patch
-)
-
-############################################################################################################################
 # gRPC : https://github.com/grpc/grpc
 ############################################################################################################################
-
-# Set root directories for gRPC to find our CPM-fetched dependencies when using "module" provider
-set(CARES_ROOT_DIR "${c-ares_SOURCE_DIR}" CACHE STRING "c-ares root directory")
-set(ABSL_ROOT_DIR "${abseil-cpp_SOURCE_DIR}" CACHE STRING "Abseil root directory")
-set(PROTOBUF_ROOT_DIR "${protobuf_SOURCE_DIR}" CACHE STRING "Protobuf root directory")
-set(RE2_ROOT_DIR "${re2_SOURCE_DIR}" CACHE STRING "RE2 root directory")
+# Note: gRPC bundles its own dependencies (protobuf, abseil, c-ares, re2, BoringSSL, zlib).
+# This is intentional to keep gRPC's dependencies isolated from tt-metal's protobuf.
+# We use BoringSSL (bundled) instead of system OpenSSL since we only need it for UNIX sockets with InsecureServerCredentials.
 
 CPMAddPackage(
     NAME gRPC
@@ -183,26 +128,12 @@ CPMAddPackage(
         "gRPC_BUILD_GRPC_RUBY_PLUGIN OFF"
         "gRPC_INSTALL OFF"
         "BUILD_SHARED_LIBS OFF"
-        "gRPC_SSL_PROVIDER package"
-        "gRPC_ZLIB_PROVIDER package"
-        "gRPC_PROTOBUF_PROVIDER module"
-        "gRPC_ABSL_PROVIDER module"
-        "gRPC_CARES_PROVIDER module"
-        "gRPC_RE2_PROVIDER module"
         "gRPC_BUILD_GRPC_CPP_PLUGIN ON"
         "gRPC_BUILD_GRPC_REFLECTION OFF"
         "gRPC_BUILD_GRPCPP_CHANNELZ OFF"
     PATCHES
         grpc_tools_target.patch
 )
-
-# Help gRPC find protobuf well-known includes
-if(gRPC_ADDED AND protobuf_ADDED)
-    get_target_property(PROTOBUF_INCLUDE_DIR protobuf::libprotobuf INTERFACE_INCLUDE_DIRECTORIES)
-    # Set the variable that gRPC's proto generation rules expect
-    set(_gRPC_PROTOBUF_WELLKNOWN_INCLUDE_DIR "${protobuf_SOURCE_DIR}/src" CACHE STRING "Protobuf wellknown includes" FORCE)
-    message(STATUS "Set _gRPC_PROTOBUF_WELLKNOWN_INCLUDE_DIR to ${_gRPC_PROTOBUF_WELLKNOWN_INCLUDE_DIR}")
-endif()
 
 ############################################################################################################################
 # yaml-cpp
