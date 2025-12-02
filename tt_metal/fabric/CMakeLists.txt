@@ -39,6 +39,7 @@ target_sources(
         fabric_router_channel_mapping.cpp
         fabric_router_builder.cpp
         compute_mesh_router_builder.cpp
+        fabric_builder.cpp
         builder/fabric_builder_config.cpp
         builder/fabric_builder_helpers.cpp
         builder/fabric_core_placement.cpp
