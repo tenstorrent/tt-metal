@@ -7,7 +7,7 @@
 
 #include <optional>
 
-namespace ttnn::operations::reduction {
+namespace ttnn::operations::reduction::argmax {
 
 struct operation_attributes_t {
     tt::tt_metal::DataType output_dtype;
@@ -26,4 +26,4 @@ struct tensor_args_t {
 using tensor_return_value_t = Tensor;
 using spec_return_value_t = TensorSpec;
 
-}  // namespace ttnn::operations::reduction
+}  // namespace ttnn::operations::reduction::argmax

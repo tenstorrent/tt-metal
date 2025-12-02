@@ -11,7 +11,7 @@
 
 #include <optional>
 
-namespace ttnn::operations::reduction {
+namespace ttnn::operations::reduction::argmax {
 
 namespace detail {
 
@@ -29,10 +29,10 @@ ttnn::SmallVector<uint32_t> get_output_shape(const Tensor& input_tensor, const s
 }  // namespace detail
 
 struct ArgMaxDeviceOperation {
-    using operation_attributes_t = reduction::operation_attributes_t;
-    using tensor_args_t = reduction::tensor_args_t;
-    using spec_return_value_t = reduction::spec_return_value_t;
-    using tensor_return_value_t = reduction::tensor_return_value_t;
+    using operation_attributes_t = argmax::operation_attributes_t;
+    using tensor_args_t = argmax::tensor_args_t;
+    using spec_return_value_t = argmax::spec_return_value_t;
+    using tensor_return_value_t = argmax::tensor_return_value_t;
     using program_factory_t =
         std::variant<program::ArgMaxSingleCoreProgramFactory, program::ArgMaxMultiCoreProgramFactory>;
 
@@ -57,9 +57,9 @@ struct ArgMaxDeviceOperation {
         std::optional<Tensor> optional_output_tensor);
 };
 
-}  // namespace ttnn::operations::reduction
+}  // namespace ttnn::operations::reduction::argmax
 
 namespace ttnn::prim {
 constexpr auto argmax =
-    ttnn::register_operation<"ttnn::prim::argmax", ttnn::operations::reduction::ArgMaxDeviceOperation>();
+    ttnn::register_operation<"ttnn::prim::argmax", ttnn::operations::reduction::argmax::ArgMaxDeviceOperation>();
 }  // namespace ttnn::prim

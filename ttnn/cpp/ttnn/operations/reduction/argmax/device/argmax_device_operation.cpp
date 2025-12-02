@@ -5,7 +5,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::reduction {
+namespace ttnn::operations::reduction::argmax {
 
 namespace detail {
 
@@ -181,4 +181,4 @@ ArgMaxDeviceOperation::invoke(
         tensor_args_t{.input = input, .optional_output_tensor = std::move(optional_output_tensor)}};
 }
 
-}  // namespace ttnn::operations::reduction
+}  // namespace ttnn::operations::reduction::argmax
