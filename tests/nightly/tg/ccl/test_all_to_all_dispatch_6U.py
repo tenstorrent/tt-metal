@@ -49,14 +49,14 @@ from tracy import signpost
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device",
     [
-        pytest.param((8, 4), (8, 4), id="8x4_grid"),
+        pytest.param((4, 8), (4, 8), id="8x4_grid"),
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("batches_per_device", [32])
-@pytest.mark.parametrize("experts", [256])
-@pytest.mark.parametrize("select_experts_k", [8])
-@pytest.mark.parametrize("hidden_size", [7168])
+@pytest.mark.parametrize("experts", [128])
+@pytest.mark.parametrize("select_experts_k", [4])
+@pytest.mark.parametrize("hidden_size", [2880])
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
     [

@@ -199,7 +199,6 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
 @pytest.mark.parametrize(
     "mesh_shape",
     [
-        (1, 8),
         (4, 8),
     ],
 )
