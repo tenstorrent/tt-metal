@@ -64,6 +64,40 @@ def test_cos(device):
     logger.info(f"Cosine: {output}")
 
 
+# Note that [6, 128] case fails with 0.1 pcc in SDXL both model and unit tests
+pytest.mark.parametrize("input_shape", [[6, 128], [1, 160]])  # Typical shapes used in SDXL component
+
+
+@pytest.mark.parametrize(
+    "value_range",
+    [
+        [-0.1, 0.1],  # Standard rand range
+        [5.0366e-05, 0.0474],  # Range seen in [1, 160] unit test
+        [-0.0693, 0.0908],  # Range seen in [6, 128] unit test
+    ],
+)
+def test_cos_sdxl(device, input_shape, value_range):
+    from tests.ttnn.utils_for_testing import assert_with_pcc
+    from models.common.utility_functions import torch_random
+
+    # Create a tensor with random values
+    input_tensor = torch_random(input_shape, value_range[0], value_range[1], dtype=torch.float32)
+    # Compute the cosine
+    torch_output = torch.cos(input_tensor)
+
+    input_tensor = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    tt_output = ttnn.cos(input_tensor)
+    tt_output = ttnn.to_torch(tt_output)
+
+    _, output = assert_with_pcc(torch_output, tt_output, 0.999)
+    logger.info(f"Cosine: {output}")
+
+
 def test_acosh(device):
     # Create a tensor with random values
     tensor = ttnn.rand([2, 2], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
