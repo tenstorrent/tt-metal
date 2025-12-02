@@ -19,12 +19,7 @@ import ttnn
 from models.common.utility_functions import is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import (
-    PagedAttentionConfig,
-    create_tt_model,
-    preprocess_inputs_prefill,
-    sample_host,
-)
+from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill, sample_host
 from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
 
@@ -206,6 +201,7 @@ def prepare_generator_args(
     page_params,
     paged_attention,
     num_layers,
+    model_factory_fn=None,
 ):
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
