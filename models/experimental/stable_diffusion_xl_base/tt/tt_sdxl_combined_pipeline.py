@@ -370,7 +370,9 @@ class TtSDXLCombinedPipeline:
         if denoising_split is not None and denoising_split != self.config.denoising_split:
             self.set_denoising_split(denoising_split)
 
+        profiler.start("auto_compile_if_needed")
         self._auto_compile_if_needed()
+        profiler.end("auto_compile_if_needed")
 
         profiler.start("combined_generation")
 
