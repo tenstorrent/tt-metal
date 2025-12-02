@@ -155,9 +155,13 @@ std::vector<TensorSpec> MinimalMatmulOp::compute_output_specs(const std::vector<
     output_shape[-1] = N;
 
     const auto& memory_config = this->output_mem_config.value_or(in0_input_tensor.memory_config());
-    auto dtype = in0_input_tensor.dtype();
+    auto dtype = this->output_dtype.value_or(in0_input_tensor.dtype());
 
     return {TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config))};
+}
+
+std::vector<Tensor> MinimalMatmulOp::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+    return tt::tt_metal::operation::default_create_output_tensors(*this, input_tensors, {});
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks MinimalMatmulOp::create_program(

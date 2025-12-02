@@ -14,7 +14,7 @@ training_config:
   gradient_accumulation_steps: 1
   data_path: "data/tokenized_shakespeare.csv"
   model_config: "configs/model_configs/gpt2s.yaml"
-  use_bpe: true
+  tokenizer_type: "bpe"
 
 device_config:
   enable_ddp: false

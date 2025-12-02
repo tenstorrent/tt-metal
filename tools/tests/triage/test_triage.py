@@ -6,6 +6,7 @@
 # You also need to install everything needed to run tt-triage.py in that environment
 # Run manually ./tools/tt-triage.py --help to see if it works and install requirements
 
+from datetime import timedelta
 import os
 import sys
 import pytest
@@ -23,6 +24,8 @@ sys.path.insert(0, triage_home)
 
 
 from triage import run_script, FAILURE_CHECKS
+from ttexalens.context import Context
+from ttexalens.tt_exalens_init import init_ttexalens
 
 
 @pytest.fixture(scope="class")
@@ -48,10 +51,18 @@ def cause_hang_with_app(request):
 
         # Check if the process has exited
         if proc.returncode != 0:
+            # Print process output for debugging
+            print("The application did not hang as expected.")
+            stdout, stderr = proc.communicate(input=None, timeout=0)
+            print("\n=== Process stdout ===")
+            print(stdout.decode("utf-8") if stdout else "(empty)")
+            print("\n=== Process stderr ===")
+            print(stderr.decode("utf-8") if stderr else "(empty)")
             raise RuntimeError("The application did not hang as expected.")
     else:
         time.sleep(timeout)
     request.cls.app_configuration = app_configuration
+    request.cls.exalens_context = init_ttexalens()
     try:
         yield
     finally:
@@ -63,8 +74,9 @@ def cause_hang_with_app(request):
             proc.kill()
             proc.wait()
 
-        # TODO: Reset the device state after the hang
-        # subprocess.run(["tt-smi", "-r"], check=True)
+        # Reset the device state after the hang if set in environment
+        if os.environ.get("TT_METAL_RESET_DEVICE_AFTER_HANG", "0") == "1":
+            subprocess.run(["tt-smi", "-r"], check=True)
 
 
 @pytest.mark.parametrize(
@@ -88,7 +100,7 @@ def cause_hang_with_app(request):
                     "TT_METAL_INSPECTOR_LOG_PATH": "/tmp/tt-metal/inspector",
                 },
             },
-            5,
+            20,
         ),
     ],
     indirect=True,
@@ -96,6 +108,7 @@ def cause_hang_with_app(request):
 @pytest.mark.usefixtures("cause_hang_with_app")
 class TestTriage:
     app_configuration: dict
+    exalens_context: Context
 
     def test_triage_help(self):
         global triage_script
@@ -131,10 +144,50 @@ class TestTriage:
         result = run_script(
             script_path=os.path.join(triage_home, "check_binary_integrity.py"),
             args=None,
-            context=None,
+            context=self.exalens_context,
             argv=[],
             return_result=True,
         )
         assert (
             len(FAILURE_CHECKS) == 0
         ), f"Binary integrity check failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
+
+    def test_dump_fast_dispatch(self):
+        global triage_home
+        global FAILURE_CHECKS
+
+        FAILURE_CHECKS.clear()
+        result = run_script(
+            script_path=os.path.join(triage_home, "dump_fast_dispatch.py"),
+            args=None,
+            context=self.exalens_context,
+            argv=[],
+            return_result=True,
+        )
+        assert (
+            len(FAILURE_CHECKS) == 0
+        ), f"Dump fast dispatch check failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
+
+    def test_check_arc(self):
+        global triage_home
+        global FAILURE_CHECKS
+
+        FAILURE_CHECKS.clear()
+        result = run_script(
+            script_path=os.path.join(triage_home, "check_arc.py"),
+            args=None,
+            context=self.exalens_context,
+            argv=[],
+            return_result=True,
+        )
+
+        assert len(FAILURE_CHECKS) == 0, f"Arc check failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
+        for check in result:
+            assert (
+                check.result.location == check.device_description.device.arc_block.location
+            ), f"Incorrect ARC location: {check.result.location}"
+            assert 0 < check.result.clock_mhz < 10000, f"Invalid ARC clock: {check.result.clock_mhz}"
+            if check.result.uptime is not None:
+                assert (
+                    timedelta(seconds=0) < check.result.uptime < timedelta(days=365)
+                ), f"Invalid ARC uptime: {check.result.uptime}"
