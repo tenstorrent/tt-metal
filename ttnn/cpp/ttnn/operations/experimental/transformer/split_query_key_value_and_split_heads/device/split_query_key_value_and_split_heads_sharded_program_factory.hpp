@@ -11,7 +11,7 @@
 #include "ttnn/device_operation.hpp"
 #include "split_query_key_value_and_split_heads_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::transformer::split_query_key_value_and_split_heads::program {
 
 struct SplitFusedQKVAndSplitHeadsShardedProgramFactory {
     struct shared_variables_t {
@@ -35,4 +35,4 @@ struct SplitFusedQKVAndSplitHeadsShardedProgramFactory {
         std::vector<Tensor>& output_tensors);
 };
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::transformer::split_query_key_value_and_split_heads::program

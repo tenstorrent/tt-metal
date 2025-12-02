@@ -4,7 +4,7 @@
 
 #include "split_query_key_value_and_split_heads_sharded_program_factory.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::transformer::split_query_key_value_and_split_heads::program {
 
 using namespace tt::constants;
 using namespace tt;
@@ -167,4 +167,4 @@ void SplitFusedQKVAndSplitHeadsShardedProgramFactory::override_runtime_arguments
     UpdateDynamicCircularBufferAddress(program, cb_out2_id, *out2_buffer);
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::transformer::split_query_key_value_and_split_heads::program

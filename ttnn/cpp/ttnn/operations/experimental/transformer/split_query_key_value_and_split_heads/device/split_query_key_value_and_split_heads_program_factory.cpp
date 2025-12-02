@@ -4,7 +4,7 @@
 
 #include "split_query_key_value_and_split_heads_program_factory.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::transformer::split_query_key_value_and_split_heads::program {
 
 using namespace tt::constants;
 using namespace tt;
@@ -217,4 +217,4 @@ void SplitFusedQKVAndSplitHeadsProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::transformer::split_query_key_value_and_split_heads::program

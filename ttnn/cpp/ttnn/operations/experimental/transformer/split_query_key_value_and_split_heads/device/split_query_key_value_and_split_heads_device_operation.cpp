@@ -4,15 +4,15 @@
 
 #include "split_query_key_value_and_split_heads_device_operation.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::transformer::split_query_key_value_and_split_heads {
 
 SplitFusedQKVAndSplitHeadsDeviceOperation::program_factory_t
 SplitFusedQKVAndSplitHeadsDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input_tensor.is_sharded()) {
-        return SplitFusedQKVAndSplitHeadsShardedProgramFactory{};
+        return program::SplitFusedQKVAndSplitHeadsShardedProgramFactory{};
     } else {
-        return SplitFusedQKVAndSplitHeadsProgramFactory{};
+        return program::SplitFusedQKVAndSplitHeadsProgramFactory{};
     }
 }
 
@@ -149,4 +149,4 @@ SplitFusedQKVAndSplitHeadsDeviceOperation::invoke(
         tensor_args_t{input_tensor, optional_output_tensors.value_or(std::vector<std::optional<ttnn::Tensor>>{})}};
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::transformer::split_query_key_value_and_split_heads

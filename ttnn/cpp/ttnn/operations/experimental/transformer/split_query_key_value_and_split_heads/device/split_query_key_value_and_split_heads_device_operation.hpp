@@ -15,7 +15,7 @@
 #include "split_query_key_value_and_split_heads_program_factory.hpp"
 #include "split_query_key_value_and_split_heads_sharded_program_factory.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::transformer::split_query_key_value_and_split_heads {
 
 struct SplitFusedQKVAndSplitHeadsDeviceOperation {
     using operation_attributes_t = split_query_key_value_and_split_heads::operation_attributes_t;
@@ -23,8 +23,9 @@ struct SplitFusedQKVAndSplitHeadsDeviceOperation {
     using spec_return_value_t = std::vector<TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
 
-    using program_factory_t =
-        std::variant<SplitFusedQKVAndSplitHeadsProgramFactory, SplitFusedQKVAndSplitHeadsShardedProgramFactory>;
+    using program_factory_t = std::variant<
+        program::SplitFusedQKVAndSplitHeadsProgramFactory,
+        program::SplitFusedQKVAndSplitHeadsShardedProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -44,10 +45,11 @@ struct SplitFusedQKVAndSplitHeadsDeviceOperation {
         const std::optional<std::vector<std::optional<ttnn::Tensor>>>& optional_output_tensors);
 };
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::transformer::split_query_key_value_and_split_heads
 
 namespace ttnn::prim {
 constexpr auto split_query_key_value_and_split_heads = ttnn::register_operation<
     "ttnn::prim::split_query_key_value_and_split_heads",
-    ttnn::operations::experimental::transformer::SplitFusedQKVAndSplitHeadsDeviceOperation>();
+    ttnn::operations::experimental::transformer::split_query_key_value_and_split_heads::
+        SplitFusedQKVAndSplitHeadsDeviceOperation>();
 }  // namespace ttnn::prim
