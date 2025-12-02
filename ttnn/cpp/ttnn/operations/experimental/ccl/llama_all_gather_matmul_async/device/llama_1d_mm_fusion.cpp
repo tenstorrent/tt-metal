@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_1d_mm_fusion.hpp"
+
 #include <algorithm>
 #include <utility>
 
@@ -22,6 +24,7 @@ using namespace tt;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
+namespace ttnn::operations {
 namespace llama_agmm_fusion_helpers {
 
 enum class CORE_TYPE : uint32_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
@@ -712,10 +715,6 @@ void override_program_parameters(
 
 }  // namespace llama_agmm_fusion_helpers
 
-namespace ttnn {
-
-namespace operations {
-
 namespace llama_matmul {
 
 ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_multi_core_agmm_fusion_(
@@ -1093,7 +1092,4 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_agmm_fusion_help
 }
 
 }  // namespace llama_matmul
-
-}  // namespace operations
-
-}  // namespace ttnn
+}  // namespace ttnn::operations
