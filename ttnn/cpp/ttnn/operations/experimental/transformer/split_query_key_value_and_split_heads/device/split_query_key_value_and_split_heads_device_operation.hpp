@@ -13,6 +13,7 @@
 
 #include "split_query_key_value_and_split_heads_device_operation_types.hpp"
 #include "split_query_key_value_and_split_heads_program_factory.hpp"
+#include "split_query_key_value_and_split_heads_sharded_program_factory.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 

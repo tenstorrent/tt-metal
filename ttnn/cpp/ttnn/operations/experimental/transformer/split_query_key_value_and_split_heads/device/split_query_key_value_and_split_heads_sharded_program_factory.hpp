@@ -13,14 +13,12 @@
 
 namespace ttnn::operations::experimental::transformer {
 
-struct SplitFusedQKVAndSplitHeadsProgramFactory {
+struct SplitFusedQKVAndSplitHeadsShardedProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle reader_kernel_id{};
-        tt::tt_metal::KernelHandle writer_kernel_id{};
-        uint32_t num_cores_r{};
-        uint32_t num_cores_c{};
-        uint32_t start_core_x{};
-        uint32_t start_core_y{};
+        tt::tt_metal::CBHandle cb_in0_id{};
+        tt::tt_metal::CBHandle cb_out0_id{};
+        tt::tt_metal::CBHandle cb_out1_id{};
+        tt::tt_metal::CBHandle cb_out2_id{};
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
