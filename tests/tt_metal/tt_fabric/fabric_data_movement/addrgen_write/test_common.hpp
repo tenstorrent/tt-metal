@@ -34,16 +34,20 @@ enum class AddrgenApiVariant {
     MulticastFusedAtomicIncWrite,           // fabric_multicast_noc_fused_unicast_with_atomic_inc
     MulticastFusedAtomicIncWriteWithState,  // fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state
     MulticastFusedAtomicIncWriteSetState,  // fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state + _with_state
-    MulticastWriteRoute,                   // fabric_multicast_noc_unicast_write (route variant)
-    MulticastWriteWithStateRoute,          // fabric_multicast_noc_unicast_write_with_state (route variant)
-    MulticastWriteSetStateRoute,           // fabric_multicast_noc_unicast_write_set_state (route variant)
-    ScatterWrite,                          // fabric_unicast_noc_scatter_write
-    ScatterWriteWithState,                 // fabric_unicast_noc_scatter_write_with_state
-    ScatterWriteSetState,                  // fabric_unicast_noc_scatter_write_set_state + _with_state
-    UnicastWriteRoute,                     // fabric_unicast_noc_unicast_write (route variant)
-    UnicastWriteWithStateRoute,            // fabric_unicast_noc_unicast_write_with_state (route variant)
-    UnicastWriteSetStateRoute,             // fabric_unicast_noc_unicast_write_set_state (route variant)
-    FusedAtomicIncWriteRoute,              // fabric_unicast_noc_fused_unicast_with_atomic_inc (route variant)
+    MulticastFusedAtomicIncWriteRoute,     // fabric_multicast_noc_fused_unicast_with_atomic_inc (route variant)
+    MulticastFusedAtomicIncWriteWithStateRoute,  // fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state
+                                                 // (route)
+    MulticastFusedAtomicIncWriteSetStateRoute,   // fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state (route)
+    MulticastWriteRoute,                         // fabric_multicast_noc_unicast_write (route variant)
+    MulticastWriteWithStateRoute,                // fabric_multicast_noc_unicast_write_with_state (route variant)
+    MulticastWriteSetStateRoute,                 // fabric_multicast_noc_unicast_write_set_state (route variant)
+    ScatterWrite,                                // fabric_unicast_noc_scatter_write
+    ScatterWriteWithState,                       // fabric_unicast_noc_scatter_write_with_state
+    ScatterWriteSetState,                        // fabric_unicast_noc_scatter_write_set_state + _with_state
+    UnicastWriteRoute,                           // fabric_unicast_noc_unicast_write (route variant)
+    UnicastWriteWithStateRoute,                  // fabric_unicast_noc_unicast_write_with_state (route variant)
+    UnicastWriteSetStateRoute,                   // fabric_unicast_noc_unicast_write_set_state (route variant)
+    FusedAtomicIncWriteRoute,                    // fabric_unicast_noc_fused_unicast_with_atomic_inc (route variant)
     FusedAtomicIncWriteWithStateRoute,  // fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state (route variant)
     FusedAtomicIncWriteSetStateRoute,   // fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state (route variant)
     ScatterWriteRoute,                  // fabric_unicast_noc_scatter_write (route variant)

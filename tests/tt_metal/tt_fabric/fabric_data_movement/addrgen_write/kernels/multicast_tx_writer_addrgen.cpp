@@ -113,7 +113,8 @@ FORCE_INLINE void send_route_directional_fanout(
     uint32_t src_l1_addr,
     const DstAccT& dst_acc,
     const ScatterAccT& scatter_acc,
-    uint32_t i) {
+    uint32_t i,
+    uint64_t sem_noc = 0) {
     if (hops == 0) {
         return;
     }
@@ -130,6 +131,14 @@ FORCE_INLINE void send_route_directional_fanout(
         } else {
             fabric_multicast_noc_scatter_write_with_state(cm, route_id, src_l1_addr, scatter_acc, i, i + 1, 0, 0);
         }
+    } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
+        if constexpr (api_variant == ApiVariant::RouteBasic) {
+            fabric_multicast_noc_fused_unicast_with_atomic_inc(
+                cm, route_id, ranges, src_l1_addr, dst_acc, i, sem_noc, 1);
+        } else {
+            fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
+                cm, route_id, src_l1_addr, dst_acc, i, sem_noc, 1);
+        }
     }
 }
 
@@ -141,7 +150,8 @@ FORCE_INLINE void setup_route_set_state_for_direction(
     uint8_t route_id,
     const MeshMcastRange* ranges,
     const DstAccT& dst_acc,
-    const ScatterAccT& scatter_acc) {
+    const ScatterAccT& scatter_acc,
+    uint64_t sem_noc = 0) {
     if (!has_hops) {
         return;
     }
@@ -150,6 +160,8 @@ FORCE_INLINE void setup_route_set_state_for_direction(
         fabric_multicast_noc_unicast_write_set_state(cm, route_id, ranges, dst_acc, 0, 0);
     } else if constexpr (operation_type == OperationType::Scatter) {
         fabric_multicast_noc_scatter_write_set_state(cm, route_id, ranges, scatter_acc, 0, 1, 0, 0);
+    } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
+        fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(cm, route_id, ranges, dst_acc, 0, sem_noc, 1);
     }
 }
 
@@ -164,6 +176,8 @@ FORCE_INLINE void setup_route_with_state_for_direction(
     auto noc_send_type_for_op = tt::tt_fabric::NOC_UNICAST_WRITE;
     if constexpr (operation_type == OperationType::Scatter) {
         noc_send_type_for_op = tt::tt_fabric::NOC_UNICAST_SCATTER_WRITE;
+    } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
+        noc_send_type_for_op = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
     }
 
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
@@ -399,13 +413,13 @@ void kernel_main() {
             static_cast<uint8_t>(e_hops), static_cast<uint8_t>(w_hops), 0, static_cast<uint8_t>(s_hops)};
 
         setup_route_set_state_for_direction<operation_type>(
-            hasW, cm_w, route_id_w, &ranges_w_init, dst_acc, scatter_acc);
+            hasW, cm_w, route_id_w, &ranges_w_init, dst_acc, scatter_acc, sem_noc);
         setup_route_set_state_for_direction<operation_type>(
-            hasE, cm_e, route_id_e, &ranges_e_init, dst_acc, scatter_acc);
+            hasE, cm_e, route_id_e, &ranges_e_init, dst_acc, scatter_acc, sem_noc);
         setup_route_set_state_for_direction<operation_type>(
-            hasN, cm_n, route_id_n, &ranges_n_init, dst_acc, scatter_acc);
+            hasN, cm_n, route_id_n, &ranges_n_init, dst_acc, scatter_acc, sem_noc);
         setup_route_set_state_for_direction<operation_type>(
-            hasS, cm_s, route_id_s, &ranges_s_init, dst_acc, scatter_acc);
+            hasS, cm_s, route_id_s, &ranges_s_init, dst_acc, scatter_acc, sem_noc);
     }
 
     // Main loop - process pages
@@ -427,13 +441,13 @@ void kernel_main() {
         if constexpr (is_route_variant) {
             // Route variant: directional fanout using route-based APIs
             send_route_directional_fanout<operation_type, api_variant>(
-                w_hops, cm_w, route_id_w, &ranges_w, src_l1_addr, dst_acc, scatter_acc, i);
+                w_hops, cm_w, route_id_w, &ranges_w, src_l1_addr, dst_acc, scatter_acc, i, sem_noc);
             send_route_directional_fanout<operation_type, api_variant>(
-                e_hops, cm_e, route_id_e, &ranges_e, src_l1_addr, dst_acc, scatter_acc, i);
+                e_hops, cm_e, route_id_e, &ranges_e, src_l1_addr, dst_acc, scatter_acc, i, sem_noc);
             send_route_directional_fanout<operation_type, api_variant>(
-                n_hops, cm_n, route_id_n, &ranges_n, src_l1_addr, dst_acc, scatter_acc, i);
+                n_hops, cm_n, route_id_n, &ranges_n, src_l1_addr, dst_acc, scatter_acc, i, sem_noc);
             send_route_directional_fanout<operation_type, api_variant>(
-                s_hops, cm_s, route_id_s, &ranges_s, src_l1_addr, dst_acc, scatter_acc, i);
+                s_hops, cm_s, route_id_s, &ranges_s, src_l1_addr, dst_acc, scatter_acc, i, sem_noc);
         } else {
             // Non-route variant: directional fanout
             send_directional_fanout<operation_type, api_variant>(
