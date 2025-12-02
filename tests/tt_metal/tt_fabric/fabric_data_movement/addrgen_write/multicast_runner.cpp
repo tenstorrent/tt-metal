@@ -206,6 +206,10 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
             case AddrgenApiVariant::MulticastScatterWriteSetState:
                 return {OperationType::Scatter, ApiVariant::SetState};
             case AddrgenApiVariant::MulticastWriteRoute: return {OperationType::BasicWrite, ApiVariant::RouteBasic};
+            case AddrgenApiVariant::MulticastWriteWithStateRoute:
+                return {OperationType::BasicWrite, ApiVariant::RouteWithState};
+            case AddrgenApiVariant::MulticastWriteSetStateRoute:
+                return {OperationType::BasicWrite, ApiVariant::RouteSetState};
             default: TT_FATAL(false, "Unknown API variant"); return {OperationType::BasicWrite, ApiVariant::Basic};
         }
     };
@@ -213,7 +217,9 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     auto [operation_type, api_variant] = get_operation_and_api_variant(p.api_variant);
 
     const bool is_fused_atomic_inc = (operation_type == OperationType::FusedAtomicInc);
-    const bool is_route_variant = (api_variant == ApiVariant::RouteBasic);
+    const bool is_route_variant =
+        (api_variant == ApiVariant::RouteBasic || api_variant == ApiVariant::RouteWithState ||
+         api_variant == ApiVariant::RouteSetState);
 
     // Move NUM_PAGES calculation before receiver setup
     const uint32_t NUM_PAGES = (p.tensor_bytes + p.page_size - 1) / p.page_size;

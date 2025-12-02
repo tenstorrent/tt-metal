@@ -154,7 +154,9 @@ void kernel_main() {
     }
 
     // Check if this is a route variant
-    constexpr bool is_route_variant = (api_variant == ApiVariant::RouteBasic);
+    constexpr bool is_route_variant =
+        (api_variant == ApiVariant::RouteBasic || api_variant == ApiVariant::RouteWithState ||
+         api_variant == ApiVariant::RouteSetState);
 
     size_t idx = 0;
     const uint32_t dst_base = get_arg_val<uint32_t>(idx++);
@@ -301,6 +303,105 @@ void kernel_main() {
             static_cast<uint8_t>(e_hops), static_cast<uint8_t>(w_hops), 0, static_cast<uint8_t>(s_hops)};
         setup_set_state_for_direction<operation_type>(
             s_hops, south_packet_header, ranges_s, dst_acc, scatter_acc, sem_noc);
+    } else if constexpr (api_variant == ApiVariant::RouteWithState) {
+        // Route variant WithState: set route and noc_send_type for each direction's headers
+        if constexpr (operation_type == OperationType::BasicWrite) {
+            MeshMcastRange ranges_w_init{0, static_cast<uint8_t>(w_hops), 0, 0};
+            MeshMcastRange ranges_e_init{static_cast<uint8_t>(e_hops), 0, 0, 0};
+            MeshMcastRange ranges_n_init{
+                static_cast<uint8_t>(e_hops), static_cast<uint8_t>(w_hops), static_cast<uint8_t>(n_hops), 0};
+            MeshMcastRange ranges_s_init{
+                static_cast<uint8_t>(e_hops), static_cast<uint8_t>(w_hops), 0, static_cast<uint8_t>(s_hops)};
+
+            if (hasW) {
+                PacketHeaderPool::for_each_header(
+                    route_id_w, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+                        auto& slot = cm_w.get(i);
+                        fabric_set_mcast_route(
+                            packet_header,
+                            slot.dst_dev_id,
+                            slot.dst_mesh_id,
+                            ranges_w_init.e,
+                            ranges_w_init.w,
+                            ranges_w_init.n,
+                            ranges_w_init.s);
+                        packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
+                        packet_header->payload_size_bytes = static_cast<uint16_t>(FABRIC_MAX_PACKET_SIZE);
+                    });
+            }
+            if (hasE) {
+                PacketHeaderPool::for_each_header(
+                    route_id_e, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+                        auto& slot = cm_e.get(i);
+                        fabric_set_mcast_route(
+                            packet_header,
+                            slot.dst_dev_id,
+                            slot.dst_mesh_id,
+                            ranges_e_init.e,
+                            ranges_e_init.w,
+                            ranges_e_init.n,
+                            ranges_e_init.s);
+                        packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
+                        packet_header->payload_size_bytes = static_cast<uint16_t>(FABRIC_MAX_PACKET_SIZE);
+                    });
+            }
+            if (hasN) {
+                PacketHeaderPool::for_each_header(
+                    route_id_n, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+                        auto& slot = cm_n.get(i);
+                        fabric_set_mcast_route(
+                            packet_header,
+                            slot.dst_dev_id,
+                            slot.dst_mesh_id,
+                            ranges_n_init.e,
+                            ranges_n_init.w,
+                            ranges_n_init.n,
+                            ranges_n_init.s);
+                        packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
+                        packet_header->payload_size_bytes = static_cast<uint16_t>(FABRIC_MAX_PACKET_SIZE);
+                    });
+            }
+            if (hasS) {
+                PacketHeaderPool::for_each_header(
+                    route_id_s, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+                        auto& slot = cm_s.get(i);
+                        fabric_set_mcast_route(
+                            packet_header,
+                            slot.dst_dev_id,
+                            slot.dst_mesh_id,
+                            ranges_s_init.e,
+                            ranges_s_init.w,
+                            ranges_s_init.n,
+                            ranges_s_init.s);
+                        packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
+                        packet_header->payload_size_bytes = static_cast<uint16_t>(FABRIC_MAX_PACKET_SIZE);
+                    });
+            }
+            noc_async_writes_flushed();
+        }
+    } else if constexpr (api_variant == ApiVariant::RouteSetState) {
+        // Route variant SetState: use set_state addrgen route variant for each direction
+        if constexpr (operation_type == OperationType::BasicWrite) {
+            MeshMcastRange ranges_w_init{0, static_cast<uint8_t>(w_hops), 0, 0};
+            MeshMcastRange ranges_e_init{static_cast<uint8_t>(e_hops), 0, 0, 0};
+            MeshMcastRange ranges_n_init{
+                static_cast<uint8_t>(e_hops), static_cast<uint8_t>(w_hops), static_cast<uint8_t>(n_hops), 0};
+            MeshMcastRange ranges_s_init{
+                static_cast<uint8_t>(e_hops), static_cast<uint8_t>(w_hops), 0, static_cast<uint8_t>(s_hops)};
+
+            if (hasW) {
+                fabric_multicast_noc_unicast_write_set_state(cm_w, route_id_w, &ranges_w_init, dst_acc, 0, 0);
+            }
+            if (hasE) {
+                fabric_multicast_noc_unicast_write_set_state(cm_e, route_id_e, &ranges_e_init, dst_acc, 0, 0);
+            }
+            if (hasN) {
+                fabric_multicast_noc_unicast_write_set_state(cm_n, route_id_n, &ranges_n_init, dst_acc, 0, 0);
+            }
+            if (hasS) {
+                fabric_multicast_noc_unicast_write_set_state(cm_s, route_id_s, &ranges_s_init, dst_acc, 0, 0);
+            }
+        }
     }
 
     // Main loop - process pages
@@ -322,21 +423,34 @@ void kernel_main() {
         if constexpr (is_route_variant) {
             // Route variant: directional fanout using route-based APIs
             if constexpr (operation_type == OperationType::BasicWrite) {
-                // --- Branch 1: direct WEST fanout ---
-                if (w_hops > 0) {
-                    fabric_multicast_noc_unicast_write(cm_w, route_id_w, &ranges_w, src_l1_addr, dst_acc, i, 0);
-                }
-                // --- Branch 2: direct EAST fanout ---
-                if (e_hops > 0) {
-                    fabric_multicast_noc_unicast_write(cm_e, route_id_e, &ranges_e, src_l1_addr, dst_acc, i, 0);
-                }
-                // --- Branch 3: NORTH trunk ---
-                if (n_hops > 0) {
-                    fabric_multicast_noc_unicast_write(cm_n, route_id_n, &ranges_n, src_l1_addr, dst_acc, i, 0);
-                }
-                // --- Branch 4: SOUTH trunk ---
-                if (s_hops > 0) {
-                    fabric_multicast_noc_unicast_write(cm_s, route_id_s, &ranges_s, src_l1_addr, dst_acc, i, 0);
+                if constexpr (api_variant == ApiVariant::RouteBasic) {
+                    // RouteBasic: use basic route variant
+                    if (w_hops > 0) {
+                        fabric_multicast_noc_unicast_write(cm_w, route_id_w, &ranges_w, src_l1_addr, dst_acc, i, 0);
+                    }
+                    if (e_hops > 0) {
+                        fabric_multicast_noc_unicast_write(cm_e, route_id_e, &ranges_e, src_l1_addr, dst_acc, i, 0);
+                    }
+                    if (n_hops > 0) {
+                        fabric_multicast_noc_unicast_write(cm_n, route_id_n, &ranges_n, src_l1_addr, dst_acc, i, 0);
+                    }
+                    if (s_hops > 0) {
+                        fabric_multicast_noc_unicast_write(cm_s, route_id_s, &ranges_s, src_l1_addr, dst_acc, i, 0);
+                    }
+                } else {
+                    // RouteWithState or RouteSetState: use _with_state route variant
+                    if (w_hops > 0) {
+                        fabric_multicast_noc_unicast_write_with_state(cm_w, route_id_w, src_l1_addr, dst_acc, i, 0);
+                    }
+                    if (e_hops > 0) {
+                        fabric_multicast_noc_unicast_write_with_state(cm_e, route_id_e, src_l1_addr, dst_acc, i, 0);
+                    }
+                    if (n_hops > 0) {
+                        fabric_multicast_noc_unicast_write_with_state(cm_n, route_id_n, src_l1_addr, dst_acc, i, 0);
+                    }
+                    if (s_hops > 0) {
+                        fabric_multicast_noc_unicast_write_with_state(cm_s, route_id_s, src_l1_addr, dst_acc, i, 0);
+                    }
                 }
             }
             // Note: Scatter and FusedAtomicInc route variants not implemented yet

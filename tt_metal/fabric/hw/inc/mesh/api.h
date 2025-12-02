@@ -3201,6 +3201,67 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
 
 // clang-format off
 /**
+ * Multicast unicast write (stateful, addrgen overload, route variant): updates masked fields for all headers in route, computes NOC address from addrgen.
+ *
+ * Return value: None
+ *
+ * | Argument                              | Description                             | Type                                          | Required |
+ * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
+ * | UpdateMask                            | Template parameter: which fields to update | UnicastWriteUpdateMask                     | False    |
+ * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                | True     |
+ * | route_id                              | Route containing packet headers         | uint8_t                                       | True     |
+ * | src_addr                              | Source L1 address                       | uint32_t                                      | True     |
+ * | addrgen                               | Address generator (e.g. TensorAccessor) | const AddrGenType&                            | True     |
+ * | page_id                               | Page ID to compute NOC address          | uint32_t                                      | True     |
+ * | offset                                | Offset within page                      | uint32_t                                      | False    |
+ */
+// clang-format on
+template <
+    UnicastWriteUpdateMask UpdateMask = UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize,
+    typename AddrGenType,
+    typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
+FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+
+    uint32_t remaining_size = page_size;
+    uint32_t current_offset = offset;
+
+    // Send full-size packets (loop skips for small pages)
+    while (remaining_size > FABRIC_MAX_PACKET_SIZE) {
+        auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+        // Call basic route _with_state function with UpdateMask
+        fabric_multicast_noc_unicast_write_with_state<UpdateMask>(
+            connection_manager,
+            route_id,
+            src_addr,
+            tt::tt_fabric::NocUnicastCommandHeader{noc_address},
+            FABRIC_MAX_PACKET_SIZE);
+
+        // Wait for hardware to finish reading header before modifying it for next packet
+        noc_async_writes_flushed();
+
+        src_addr += FABRIC_MAX_PACKET_SIZE;
+        current_offset += FABRIC_MAX_PACKET_SIZE;
+        remaining_size -= FABRIC_MAX_PACKET_SIZE;
+    }
+
+    // Send remainder packet (for small pages, this is the only packet)
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+    // Call basic route _with_state function with UpdateMask (no barrier needed after last packet)
+    fabric_multicast_noc_unicast_write_with_state<UpdateMask>(
+        connection_manager, route_id, src_addr, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, remaining_size);
+}
+
+// clang-format off
+/**
  * Multicast unicast write (set-state, TensorAccessor overload): pre-configures headers for repeated use, computes NOC address from addrgen.
  *
  * Return value: None
@@ -3243,6 +3304,45 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
         ranges,
         tt::tt_fabric::NocUnicastCommandHeader{noc_address},
         init_payload_size);
+}
+
+// clang-format off
+/**
+ * Multicast unicast write (set-state, addrgen overload, route variant): pre-configures headers for all connections in route, computes NOC address from addrgen.
+ *
+ * Return value: None
+ *
+ * | Argument                              | Description                             | Type                                          | Required |
+ * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
+ * | UpdateMask                            | Template parameter: which fields to update | UnicastWriteUpdateMask                     | False    |
+ * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                | True     |
+ * | route_id                              | Route containing packet headers         | uint8_t                                       | True     |
+ * | ranges                                | Per-header multicast hop counts (E/W/N/S)| const MeshMcastRange*                        | True     |
+ * | addrgen                               | Address generator (e.g. TensorAccessor) | const AddrGenType&                            | True     |
+ * | page_id                               | Page ID to compute NOC address          | uint32_t                                      | True     |
+ * | offset                                | Offset within page                      | uint32_t                                      | False    |
+ */
+// clang-format on
+template <
+    UnicastWriteUpdateMask UpdateMask = UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize,
+    typename AddrGenType,
+    typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
+FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    const MeshMcastRange* ranges,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    // Cap initial payload size to hardware limit for large pages
+    // The WithState calls in the loop will handle actual chunking
+    uint32_t init_payload_size = (page_size > FABRIC_MAX_PACKET_SIZE) ? FABRIC_MAX_PACKET_SIZE : page_size;
+
+    fabric_multicast_noc_unicast_write_set_state<UpdateMask>(
+        connection_manager, route_id, ranges, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, init_payload_size);
 }
 
 // clang-format off

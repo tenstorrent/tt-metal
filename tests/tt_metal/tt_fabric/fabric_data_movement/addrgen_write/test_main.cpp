@@ -53,7 +53,9 @@ TEST_P(AddrgenComprehensiveTest, Write) {
          api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWrite ||
          api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteWithState ||
          api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteSetState ||
-         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteRoute);
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteRoute ||
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteWithStateRoute ||
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteSetStateRoute);
 
     // Calculate tensor_bytes based on page_size (8 pages total)
     uint32_t num_pages = 8;
@@ -106,6 +108,9 @@ static std::string GetVariantName(tt::tt_fabric::test::AddrgenApiVariant variant
         case tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteSetState:
             return "MulticastFusedAtomicIncWriteSetState";
         case tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteRoute: return "MulticastWriteRoute";
+        case tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteWithStateRoute:
+            return "MulticastWriteWithStateRoute";
+        case tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteSetStateRoute: return "MulticastWriteSetStateRoute";
         case tt::tt_fabric::test::AddrgenApiVariant::ScatterWrite: return "ScatterWrite";
         case tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteWithState: return "ScatterWriteWithState";
         case tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteSetState: return "ScatterWriteSetState";
@@ -147,6 +152,8 @@ INSTANTIATE_TEST_SUITE_P(
             tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteWithState,
             tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteSetState,
             tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteRoute,
+            tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteWithStateRoute,
+            tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteSetStateRoute,
             tt::tt_fabric::test::AddrgenApiVariant::ScatterWrite,
             tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteWithState,
             tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteSetState,
