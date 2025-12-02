@@ -94,6 +94,17 @@ FORCE_INLINE static uint16_t float_to_bfloat16(float val) {
     return uint16_t(ret.u >> 16);
 }
 
+FORCE_INLINE std::uint16_t fp32_to_bf16(float x) {
+    std::uint32_t bits;
+    std::memcpy(&bits, &x, sizeof(bits));
+
+    std::uint32_t lsb = (bits >> 16) & 1u;
+    std::uint32_t rounding_bias = 0x7FFFu + lsb;
+    bits += rounding_bias;
+
+    return static_cast<std::uint16_t>(bits >> 16);
+}
+
 FORCE_INLINE float perform_reduction(float input, uint16_t source_value, ScatterReductionType scatter_reduction_type) {
     float fp32_source_value = bfloat16_to_float(source_value);
     switch (scatter_reduction_type) {
@@ -185,7 +196,7 @@ FORCE_INLINE void copy_fp32_temp_to_output(uint32_t fp32_temp_cb, uint32_t outpu
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(output_l1_write_addr);
 
     for (uint32_t copy_i = 0; copy_i < chunk_size; ++copy_i) {
-        output_l1_write_ptr[copy_i] = float_to_bfloat16(fp32_temp_l1_read_ptr[copy_i]);
+        output_l1_write_ptr[copy_i] = fp32_to_bf16(fp32_temp_l1_read_ptr[copy_i]);
     }
 }
 

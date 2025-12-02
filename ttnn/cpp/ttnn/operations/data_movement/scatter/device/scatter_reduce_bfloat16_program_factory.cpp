@@ -104,7 +104,6 @@ ScatterReduceBfloat16ProgramFactory::cached_program_t ScatterReduceBfloat16Progr
     const uint32_t& index_stick_size_bytes = index_stick_size * index_datum_size;
     const uint32_t& source_stick_size_bytes = source_stick_size * source_datum_size;
     const uint32_t& output_stick_size_bytes = output_stick_size * output_datum_size;
-    const uint32_t& fp32_temp_stick_size_bytes = output_stick_size * fp32_temp_datum_size;
 
     // maximal input/index/source/output chunk size, divisible by 32, calculated as follows:
     // BH available L1 mem size of nearly 1.5 MB...
@@ -120,7 +119,7 @@ ScatterReduceBfloat16ProgramFactory::cached_program_t ScatterReduceBfloat16Progr
     const uint32_t input_and_output_chunk_size_bytes = input_and_output_chunk_size * input_datum_size;
     const uint32_t index_chunk_size_bytes = index_chunk_size * index_datum_size;
     const uint32_t source_chunk_size_bytes = source_chunk_size * source_datum_size;
-    const uint32_t fp32_temp_chunk_size_bytes = input_and_output_chunk_size * fp32_temp_stick_size_bytes;
+    const uint32_t fp32_temp_chunk_size_bytes = input_and_output_chunk_size * fp32_temp_datum_size;
 
     // pad pages to 32
     const uint32_t input_page_size_bytes = ceil32(input_and_output_chunk_size_bytes);
