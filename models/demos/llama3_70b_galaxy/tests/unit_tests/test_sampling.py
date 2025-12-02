@@ -292,7 +292,7 @@ def test_llama_sampling_inference(
     if use_tracing:
         try:
             logger.info("Compile Llama Sampling")
-            ttnn.manual_seed(seed)
+            ttnn.manual_seed(seed, device=mesh_device, sub_core_grids=model_args.sub_core_grids)
             tt_outputs = tt_sampling(tt_input)  # Setting random seed
 
             tt_outputs = tt_sampling(tt_input)  # Compiling without seed; will generate new pseudo-random numbers
@@ -346,7 +346,7 @@ def test_llama_sampling_inference(
         tt_outputs_torch = []
         for i in range(num_samples):
             if i == 0:
-                ttnn.manual_seed(seed)
+                ttnn.manual_seed(seed, device=mesh_device, sub_core_grids=model_args.sub_core_grids)
                 tt_outputs = tt_sampling(tt_input)
             else:
                 tt_outputs = tt_sampling(

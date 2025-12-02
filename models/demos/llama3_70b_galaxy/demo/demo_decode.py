@@ -377,7 +377,7 @@ def run_llama3_demo(
         )
 
         # Sampling
-        ttnn.manual_seed(seed, sub_core_grids=model_args.sub_core_grids)
+        ttnn.manual_seed(seed, sub_core_grids=model_args.sub_core_grids, device=mesh_device)
         _ = tt_sampling(tt_out[0], tt_out_tok=tt_out_tok)  # Compile
         logger.info(f"Sampling done")
 
