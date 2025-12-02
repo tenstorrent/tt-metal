@@ -53,7 +53,9 @@ target_sources(
         moe/moe.cpp
         prod/device/prod_all_program_factory.cpp
         generic/device/reduce_op_device_operation.cpp
-        generic/device/reduce_op_program_factory.cpp
+        generic/device/reduce_op_single_core_hw_program_factory.cpp
+        generic/device/reduce_op_multi_core_h_program_factory.cpp
+        generic/device/reduce_op_multi_core_w_program_factory.cpp
         generic/device/reduce_op.cpp
         generic/generic_reductions.cpp
         prod/device/prod_nc_op.cpp
