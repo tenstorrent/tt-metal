@@ -195,33 +195,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             )
             for i, plen in enumerate(prompt_lens):
                 inputs.attention_mask[i, :plen] = 1
-        else:
-            if (
-                "images" in kwargs
-                and isinstance(kwargs["images"], list)
-                and len(kwargs["images"]) > 0
-                and kwargs["images"][0] is not None
-                and "attention_mask" in kwargs["images"][0]
-            ):
-                inputs.input_ids = tokens.to(kwargs["images"][0].attention_mask.dtype)
-            else:
-                inputs.input_ids = tokens
-            inputs.attention_mask = torch.concat(
-                [
-                    torch.nn.functional.pad(
-                        im.attention_mask, (0, padded_seq_len - im.attention_mask.shape[-1]), value=0
-                    )
-                    if im is not None
-                    else torch.ones_like(tokens[i : i + 1], dtype=tokens.dtype)
-                    for i, im in enumerate(kwargs["images"])
-                ],
-                dim=0,
-            )
 
-        # Prepare text + vision inputs for decoder model
-        text_embeds = self.reference_model.model.language_model.embed_tokens(inputs.input_ids)
-
-        if envs.VLLM_USE_V1:
             if (
                 "pixel_values" in kwargs
                 and len(kwargs["pixel_values"]) > 0
@@ -242,8 +216,30 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
                 image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
             else:
                 # text-only users
-                image_embeds = torch.tensor([], dtype=torch.bfloat16, device=text_embeds.device)
-        else:
+                image_embeds = torch.tensor([], dtype=torch.bfloat16, device=tokens.device)
+        else:  # V0
+            if (
+                "images" in kwargs
+                and isinstance(kwargs["images"], list)
+                and len(kwargs["images"]) > 0
+                and kwargs["images"][0] is not None
+                and "attention_mask" in kwargs["images"][0]
+            ):
+                inputs.input_ids = tokens.to(kwargs["images"][0].attention_mask.dtype)
+            else:
+                inputs.input_ids = tokens
+
+            inputs.attention_mask = torch.concat(
+                [
+                    torch.nn.functional.pad(
+                        im.attention_mask, (0, padded_seq_len - im.attention_mask.shape[-1]), value=0
+                    )
+                    if im is not None
+                    else torch.ones_like(tokens[i : i + 1], dtype=tokens.dtype)
+                    for i, im in enumerate(kwargs["images"])
+                ],
+                dim=0,
+            )
             if (
                 "images" in kwargs
                 and len(kwargs["images"]) > 0
@@ -257,7 +253,10 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
                 image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
             else:
                 # text-only users
-                image_embeds = torch.tensor([], dtype=torch.bfloat16, device=text_embeds.device)
+                image_embeds = torch.tensor([], dtype=torch.bfloat16, device=tokens.device)
+
+        # Prepare text + vision inputs for decoder model
+        text_embeds = self.reference_model.model.language_model.embed_tokens(inputs.input_ids)
 
         input_embeds = merge_vision_tokens(inputs.input_ids, text_embeds, image_embeds, self.reference_model.config)
         (
