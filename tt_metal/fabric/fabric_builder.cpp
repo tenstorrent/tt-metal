@@ -25,28 +25,30 @@ FabricBuilder::FabricBuilder(
     fabric_context_(fabric_context),
     builder_context_(fabric_context.get_builder_context()),
     local_node_(tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
-        device->id())) {}
+        device->id())) {
+    // Initialize topology info that doesn't depend on discovery
+    wrap_around_mesh_ = fabric_context_.is_wrap_around_mesh(local_node_.mesh_id);
 
-void FabricBuilder::create_routers() {
+    // Determine if this device has tunneling dispatch (affects dispatch link selection)
+    auto mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_->id());
+    auto tunnels_from_mmio =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(mmio_device_id);
+    TT_ASSERT(!tunnels_from_mmio.empty());
+    device_has_dispatch_tunnel_ = (tunnels_from_mmio.size() - 1) > 0;
+}
+
+void FabricBuilder::discover_channels() {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const bool is_2D_routing = fabric_context_.is_2D_routing_enabled();
 
-    // Determine if this device has tunneling dispatch (affects dispatch link selection)
-    const auto device_has_dispatch_tunnel = [&]() -> bool {
-        auto mmio_device_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_->id());
-        auto tunnels_from_mmio =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(mmio_device_id);
-        TT_ASSERT(!tunnels_from_mmio.empty());
-        return (tunnels_from_mmio.size() - 1) > 0;
-    }();
-
+    // Helper to check if a channel is a dispatch link
     auto is_dispatch_link = [&](chan_id_t eth_chan, uint32_t dispatch_link_idx) {
         auto link_idx = control_plane.get_routing_plane_id(local_node_, eth_chan);
-        return device_has_dispatch_tunnel && link_idx == dispatch_link_idx;
+        return device_has_dispatch_tunnel_ && link_idx == dispatch_link_idx;
     };
 
-    // Build neighbors and active channels by iterating over directions
+    // Discover active channels and neighbors by iterating over directions
     for (const auto& direction : FabricContext::routing_directions) {
         auto active_eth_chans = control_plane.get_active_fabric_eth_routing_planes_in_direction(local_node_, direction);
         if (active_eth_chans.empty()) {
@@ -68,19 +70,32 @@ void FabricBuilder::create_routers() {
             TT_FATAL(!has_inter_mesh_connections, "1D routing does not support intermesh connections");
         }
 
+        // Cache neighbor and channel info
         FabricNodeId neighbor_fabric_node_id = FabricNodeId(neighbors.begin()->first, neighbors.begin()->second[0]);
         chip_neighbors_.emplace(direction, neighbor_fabric_node_id);
         channels_by_direction_[direction] = active_eth_chans;
 
-        // Get dispatch link index for this direction
+        // Identify and cache dispatch links for this direction
         uint32_t dispatch_link_idx =
             tt::tt_metal::RelayMux::get_dispatch_link_index(local_node_, neighbor_fabric_node_id, device_);
-
         for (const auto& eth_chan : active_eth_chans) {
-            bool dispatch_link = is_dispatch_link(eth_chan, dispatch_link_idx);
+            if (is_dispatch_link(eth_chan, dispatch_link_idx)) {
+                dispatch_links_.insert(eth_chan);
+            }
+        }
+    }
+}
+
+void FabricBuilder::create_routers() {
+    // Create router builders using cached discovery data
+    for (const auto& [direction, eth_channels] : channels_by_direction_) {
+        const auto& neighbor_node = chip_neighbors_.at(direction);
+
+        for (const auto& eth_chan : eth_channels) {
+            bool is_dispatch = dispatch_links_.count(eth_chan) > 0;
 
             // Use RouterLocation + RouterBuildSpec abstractions
-            auto location = RouterLocation::create(eth_chan, neighbor_fabric_node_id, direction, dispatch_link);
+            auto location = RouterLocation::create(eth_chan, neighbor_node, direction, is_dispatch);
             auto spec = builder_context_.get_router_build_spec(location, local_node_);
 
             // Use factory method - will route to ComputeMeshRouterBuilder or SwitchMeshRouterBuilder
@@ -88,18 +103,19 @@ void FabricBuilder::create_routers() {
             routers_.insert({eth_chan, std::move(router_builder)});
         }
 
-        // Configure dispatch link if present
+        // Configure dispatch links for this direction
         // Dispatch requires higher context switching frequency to service slow dispatch / UMD / debug tools
-        if (!active_eth_chans.empty() && device_has_dispatch_tunnel) {
-            constexpr uint32_t k_DispatchFabricRouterContextSwitchInterval = 16;
-            const auto dispatch_eth_chan = active_eth_chans.back();
-            auto& edm_builder = routers_.at(dispatch_eth_chan)->get_erisc_builder();
-            edm_builder.set_firmware_context_switch_interval(k_DispatchFabricRouterContextSwitchInterval);
-            edm_builder.set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType::INTERVAL);
+        if (device_has_dispatch_tunnel_) {
+            for (const auto& eth_chan : eth_channels) {
+                if (dispatch_links_.count(eth_chan) > 0) {
+                    constexpr uint32_t k_DispatchFabricRouterContextSwitchInterval = 16;
+                    auto& edm_builder = routers_.at(eth_chan)->get_erisc_builder();
+                    edm_builder.set_firmware_context_switch_interval(k_DispatchFabricRouterContextSwitchInterval);
+                    edm_builder.set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType::INTERVAL);
+                }
+            }
         }
     }
-
-    wrap_around_mesh_ = fabric_context_.is_wrap_around_mesh(local_node_.mesh_id);
 
     // Record master router channel
     if (!routers_.empty()) {

@@ -30,6 +30,7 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
     FabricBuilder builder(device, *fabric_program_ptr, fabric_context);
 
     // Execute build phases
+    builder.discover_channels();
     builder.create_routers();
     if (!builder.has_routers()) {
         return nullptr;

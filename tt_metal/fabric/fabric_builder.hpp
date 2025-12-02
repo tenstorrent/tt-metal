@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include "tt_metal/fabric/fabric_router_builder.hpp"
 #include "hostdevcommon/fabric_common.h"
@@ -29,12 +30,14 @@ class FabricBuilderContext;
  *
  * Lifecycle:
  *   1. Construct with device, program, and contexts
- *   2. Call build phases in order: create_routers(), connect_routers(), compile_ancillary_kernels(), create_kernels()
- *   3. Call finalize_build_state() to record state
- *   4. FabricBuilder is destroyed, routers are destroyed (they've served their purpose)
+ *   2. Call build phases in order:
+ *      discover_channels() -> create_routers() -> connect_routers() ->
+ *      compile_ancillary_kernels() -> create_kernels() -> finalize_build_state()
+ *   3. FabricBuilder is destroyed, routers are destroyed (they've served their purpose)
  *
  * Usage:
  *   FabricBuilder builder(device, program, fabric_context);
+ *   builder.discover_channels();
  *   builder.create_routers();
  *   builder.connect_routers();
  *   builder.compile_ancillary_kernels();
@@ -46,9 +49,15 @@ public:
     FabricBuilder(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program, FabricContext& fabric_context);
 
     /**
+     * Discover active ethernet channels and neighbors for this device.
+     * Populates: channels_by_direction_, chip_neighbors_, dispatch_links_
+     * Must be called before create_routers().
+     */
+    void discover_channels();
+
+    /**
      * Create all router builders for this device.
-     * Discovers active channels and creates appropriate builders.
-     * Caches channels_by_direction_ for use in connect_routers().
+     * Uses cached discovery data from discover_channels().
      */
     void create_routers();
 
@@ -108,15 +117,17 @@ private:
     // Fabric node ID for this device (derived from device_->id())
     FabricNodeId local_node_;
 
+    // Topology info (initialized in constructor)
+    bool wrap_around_mesh_ = false;
+    bool device_has_dispatch_tunnel_ = false;
+
     // Owned routers - destroyed when FabricBuilder is destroyed
     std::unordered_map<chan_id_t, std::unique_ptr<FabricRouterBuilder>> routers_;
 
-    // Cached during create_routers(), used by connect_routers()
+    // Cached during discover_channels(), used by create_routers() and connect_routers()
     std::unordered_map<RoutingDirection, std::vector<chan_id_t>> channels_by_direction_;
-
-    // Cached neighbor info
     std::unordered_map<RoutingDirection, FabricNodeId> chip_neighbors_;
-    bool wrap_around_mesh_ = false;
+    std::unordered_set<chan_id_t> dispatch_links_;
 
     // Master router channel (first in map)
     chan_id_t master_router_chan_ = 0;
