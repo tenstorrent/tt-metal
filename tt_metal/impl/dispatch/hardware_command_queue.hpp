@@ -80,6 +80,9 @@ public:
 
     IDevice* device() override;
 
+    // needed interface items
+    void terminate() override;
+
 private:
     uint32_t id_;
     uint32_t size_B_;
@@ -155,6 +158,10 @@ private:
     void reset_prefetcher_cache_manager();
 
     int get_prefetcher_cache_sizeB() const;
+
+    void enqueue_record_event(const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids);
+
+    void finish(tt::stl::Span<const SubDeviceId> sub_device_ids);
 };
 
 }  // namespace tt::tt_metal

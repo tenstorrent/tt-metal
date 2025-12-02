@@ -52,6 +52,9 @@ public:
 
     // This function is temporarily needed since MeshCommandQueue relies on the CommandQueue object
     virtual WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) = 0;
+
+    // needed interface items
+    virtual void terminate() = 0;
 };
 
 struct ReadBufferDescriptor;

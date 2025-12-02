@@ -220,10 +220,7 @@ void DevicePool::init_profiler() const {
                     uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
                     auto* mmio_device = get_device(mmio_controlled_device_id);
                     detail::InitDeviceProfiler(mmio_device);
-                    log_info(
-                        tt::LogMetal,
-                        "Profiler started on remote device {}",
-                        mmio_device->id());
+                    log_info(tt::LogMetal, "Profiler started on remote device {}", mmio_device->id());
                 }
             }
         }
@@ -656,7 +653,7 @@ void DevicePool::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
         return;
     }
 
-    const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto& builder_context = fabric_context.get_builder_context();
 
@@ -774,7 +771,7 @@ IDevice* DevicePool::get_active_device(ChipId device_id) const {
     return device;
 }
 
-std::vector<IDevice* > DevicePool::get_all_active_devices() const {
+std::vector<IDevice*> DevicePool::get_all_active_devices() const {
     std::vector<IDevice*> user_devices;
     for (const auto& device : this->devices) {
         if (device && device->is_initialized()) {
@@ -832,7 +829,7 @@ void DevicePool::teardown_fd(const std::unordered_set<ChipId>& devices_to_close)
             if (cq.sysmem_manager().get_bypass_mode()) {
                 cq.record_end();
             }
-            //cq.terminate();
+            cq.terminate();
         }
     }
 }
@@ -922,7 +919,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip
     // Terminate fabric routers
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
-        const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
         const auto& fabric_context = control_plane.get_fabric_context();
         const auto& builder_ctx = fabric_context.get_builder_context();
         auto [termination_signal_address, signal] = builder_ctx.get_fabric_router_termination_address_and_signal();
