@@ -6,7 +6,6 @@
 #include "tt-metalium/kernel_types.hpp"
 #include "tt-metalium/tensor_accessor_args.hpp"
 #include "tt-metalium/work_split.hpp"
-#include "grid_sample_op.hpp"
 #include "grid_sample_utils.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
@@ -15,17 +14,19 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
+#include "ttnn/operations/pool/grid_sample/device/grid_sample_bilinear_program_factory.hpp"
 
-namespace ttnn::operations::grid_sample {
+namespace ttnn::operations::pool::grid_sample::program {
 
-tt::tt_metal::operation::ProgramWithCallbacks grid_sample_bilinear_program_factory(
-    const Tensor& input_tensor,
-    const Tensor& grid_tensor,
-    const Tensor& output_tensor,
-    const std::string& padding_mode,
-    bool align_corners,
-    bool use_precomputed_grid,
-    bool batch_output_channels) {
+GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    const Tensor& input_tensor = tensor_args.input_tensor;
+    const Tensor& grid_tensor = tensor_args.grid;
+    bool use_precomputed_grid = operation_attributes.use_precomputed_grid;
+    bool batch_output_channels = operation_attributes.batch_output_channels;
+
     const bool is_sharded = grid_tensor.is_sharded();
     tt::tt_metal::Program program{};
 
@@ -336,39 +337,60 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_bilinear_program_facto
         }
     }
 
-    // Runtime callback
-    return {
+    return cached_program_t{
         std::move(program),
-        [=](const void*,
-            tt::tt_metal::Program& prog,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>&,
-            const std::vector<Tensor>& output_tensors) {
-            const auto& [input_tensor, grid_tensor] = std::tie(input_tensors[0], input_tensors[1]);
-            const auto& output_tensor = output_tensors[0];
-
-            if (is_sharded) {
-                tt::tt_metal::UpdateDynamicCircularBufferAddress(prog, grid_cb_handle, *grid_tensor.buffer());
-                tt::tt_metal::UpdateDynamicCircularBufferAddress(prog, output_cb_handle, *output_tensor.buffer());
-
-                for (uint32_t i = 0; i < num_cores; i++) {
-                    const CoreCoord& core = logical_cores[i];
-                    tt::tt_metal::GetRuntimeArgs(prog, reader0_kernel_id, core)[0] = input_tensor.buffer()->address();
-                    if (enable_split_reader) {
-                        tt::tt_metal::GetRuntimeArgs(prog, reader1_kernel_id, core)[0] =
-                            input_tensor.buffer()->address();
-                    }
-                }
-            } else {
-                for (uint32_t i = 0; i < num_cores; i++) {
-                    const CoreCoord& core = logical_cores[i];
-                    auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(prog, reader0_kernel_id, core);
-                    reader_runtime_args[0] = input_tensor.buffer()->address();  // rt_arg[0]: input_buffer_address
-                    reader_runtime_args[1] = grid_tensor.buffer()->address();   // rt_arg[1]: grid_buffer_address
-                    tt::tt_metal::GetRuntimeArgs(prog, writer_kernel_id, core)[0] =
-                        output_tensor.buffer()->address();  // rt_arg[0]: output_buffer_address
-                }
-            }
+        shared_variables_t{
+            .is_sharded = is_sharded,
+            .logical_cores = logical_cores,
+            .grid_cb_handle = grid_cb_handle,
+            .output_cb_handle = output_cb_handle,
+            .num_cores = num_cores,
+            .enable_split_reader = enable_split_reader,
+            .reader0_kernel_id = reader0_kernel_id,
+            .reader1_kernel_id = reader1_kernel_id,
+            .writer_kernel_id = writer_kernel_id,
         }};
 }
-}  // namespace ttnn::operations::grid_sample
+
+void GridSampleBilinearProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    auto& prog = cached_program.program;
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& grid_tensor = tensor_args.grid;
+    const auto& is_sharded = cached_program.shared_variables.is_sharded;
+    const auto& grid_cb_handle = cached_program.shared_variables.grid_cb_handle;
+    const auto& output_cb_handle = cached_program.shared_variables.output_cb_handle;
+    const auto& num_cores = cached_program.shared_variables.num_cores;
+    const auto& logical_cores = cached_program.shared_variables.logical_cores;
+    const auto& reader0_kernel_id = cached_program.shared_variables.reader0_kernel_id;
+    const auto& reader1_kernel_id = cached_program.shared_variables.reader1_kernel_id;
+    const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
+    const auto& enable_split_reader = cached_program.shared_variables.enable_split_reader;
+
+    if (is_sharded) {
+        tt::tt_metal::UpdateDynamicCircularBufferAddress(prog, grid_cb_handle, *grid_tensor.buffer());
+        tt::tt_metal::UpdateDynamicCircularBufferAddress(prog, output_cb_handle, *output_tensor.buffer());
+
+        for (uint32_t i = 0; i < num_cores; i++) {
+            const CoreCoord& core = logical_cores[i];
+            tt::tt_metal::GetRuntimeArgs(prog, reader0_kernel_id, core)[0] = input_tensor.buffer()->address();
+            if (enable_split_reader) {
+                tt::tt_metal::GetRuntimeArgs(prog, reader1_kernel_id, core)[0] = input_tensor.buffer()->address();
+            }
+        }
+    } else {
+        for (uint32_t i = 0; i < num_cores; i++) {
+            const CoreCoord& core = logical_cores[i];
+            auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(prog, reader0_kernel_id, core);
+            reader_runtime_args[0] = input_tensor.buffer()->address();  // rt_arg[0]: input_buffer_address
+            reader_runtime_args[1] = grid_tensor.buffer()->address();   // rt_arg[1]: grid_buffer_address
+            tt::tt_metal::GetRuntimeArgs(prog, writer_kernel_id, core)[0] =
+                output_tensor.buffer()->address();  // rt_arg[0]: output_buffer_address
+        }
+    }
+}
+
+}  // namespace ttnn::operations::pool::grid_sample::program
