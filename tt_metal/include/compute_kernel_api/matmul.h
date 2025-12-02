@@ -11,14 +11,20 @@
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB_matmul_api.h"
 #endif
+// defines the default throttle level for matmul kernels (default 0)
 #ifndef MM_THROTTLE
 #define MM_THROTTLE 0
 #endif
 namespace ckernel {
 
-// 4-byte word at 0x10 written by FW - even means no throttle, odd means throttle
-volatile uint32_t* throttle_ptr = reinterpret_cast<volatile uint32_t*>(0x10);
+#ifdef ARCH_BLACKHOLE
+// defines the FW-controlled throttle level for block matmul kernels on blackhole
+#define MM_THROTTLE_MAX 5
+// 4-byte word at MEM_L1_ARC_FW_SCRATCH written by FW - even means no throttle, odd means throttle
+volatile tt_l1_ptr uint32_t* throttle_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MEM_L1_ARC_FW_SCRATCH);
+// tracks the state of the currently programmed matmul MOP (0: default throttle level, 1: max throttle level)
 static uint32_t throttled_mop_status = 0;
+#endif
 
 // clang-format off
 /**
@@ -38,7 +44,7 @@ ALWI void mm_init(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t out_cb_id, co
     UNPACK((llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
 
-    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose)));
+    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure_disaggregated(in0_cb_id, in1_cb_id)));
 
@@ -73,7 +79,7 @@ ALWI void matmul_tiles(
     uint32_t idst,
     const uint32_t transpose) {
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index)));
-    MATH((llk_math_matmul<MATH_FIDELITY>(idst, transpose)));
+    MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, transpose)));
 }
 
 // clang-format off
@@ -92,7 +98,7 @@ ALWI void matmul_tiles(
  // clang-format on
 template <uint32_t num_faces = 4>
 ALWI void matmul_tiles_math(uint32_t idst) {
-    MATH((llk_math_matmul<MATH_FIDELITY, 0, num_faces>(idst)));
+    MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE, num_faces>(idst)));
 }
 
 // clang-format off
@@ -110,7 +116,7 @@ ALWI void matmul_tiles_math(uint32_t idst) {
  */
 // clang-format on
 ALWI void mm_init_short(uint32_t in0_cb_id, uint32_t in1_cb_id, const uint32_t transpose = 0) {
-    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose)));
+    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
 }
 
@@ -163,10 +169,12 @@ ALWI void mm_block_init(
     UNPACK((llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
 
-    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure_disaggregated(in0_cb_id, in1_cb_id)));
+#ifdef ARCH_BLACKHOLE
     MATH((throttled_mop_status = 0));
+#endif
 
     PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(out_cb_id)));
     PACK((llk_pack_init<false, false>(out_cb_id)));
@@ -206,30 +214,28 @@ ALWI void matmul_block(
     uint32_t rt_dim,
     uint32_t kt_dim) {
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
+#ifdef ARCH_BLACKHOLE
 #ifdef TRISC_MATH
-    // invalidate_l1_cache();
     volatile uint32_t mm_throttle_en =
         *(throttle_ptr) % 2;  // value at address is incremented by 1 to toggle throttling
-    // volatile uint32_t *mm_throttle_en_ptr = (uint32_t*)0x10;
-    // volatile uint32_t mm_throttle_en = *(throttle_ptr) % 2;
-    DPRINT_MATH(DPRINT << "mm_throttle_en at 0x10: " << *(throttle_ptr) << ENDL());
     if (mm_throttle_en) {
-        DPRINT_MATH(DPRINT << "mm_throttle_en" << mm_throttle_en << ENDL());
         if (throttled_mop_status != 1) {
-            MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(
+            MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE_MAX>(
                 in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
             throttled_mop_status = 1;
-            DPRINT_MATH(DPRINT << "throttled_mop_status toggled: " << throttled_mop_status << ENDL());
         }
-        MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, transpose, ct_dim, rt_dim, kt_dim)));
+        MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE_MAX>(idst, transpose, ct_dim, rt_dim, kt_dim)));
     } else {
         if (throttled_mop_status != 0) {
-            MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+            MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(
+                in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
             throttled_mop_status = 0;
-            DPRINT_MATH(DPRINT << "throttled_mop_status toggled: " << throttled_mop_status << ENDL());
         }
-        MATH((llk_math_matmul<MATH_FIDELITY>(idst, transpose, ct_dim, rt_dim, kt_dim)));
+        MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, transpose, ct_dim, rt_dim, kt_dim)));
     }
+#endif
+#else
+    MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, transpose, ct_dim, rt_dim, kt_dim)));
 #endif
 }
 
@@ -258,8 +264,10 @@ ALWI void mm_block_init_short(
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
-    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+#ifdef ARCH_BLACKHOLE
     MATH((throttled_mop_status = 0));
+#endif
 }
 
 // clang-format off
