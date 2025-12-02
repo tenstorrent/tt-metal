@@ -32,7 +32,6 @@ class WanTransformerBlock:
         ccl_manager=None,
         parallel_config=None,
         is_fsdp=False,
-        quantization_config=None,
     ):
         self.dim = dim
         self.ffn_dim = ffn_dim
@@ -63,7 +62,6 @@ class WanTransformerBlock:
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
-            quantization_config=quantization_config,
         )
 
         self.attn2 = WanAttention(
@@ -74,7 +72,6 @@ class WanTransformerBlock:
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
-            quantization_config=quantization_config,
         )
 
         self.norm2 = (
@@ -282,7 +279,6 @@ class WanTransformer3DModel:
         ccl_manager=None,
         parallel_config=None,
         is_fsdp=True,
-        quantization_config=None,
     ):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
@@ -331,7 +327,6 @@ class WanTransformer3DModel:
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 is_fsdp=is_fsdp,
-                quantization_config=quantization_config,
             )
             for i in range(num_layers)
         ]
