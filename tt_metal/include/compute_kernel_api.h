@@ -645,11 +645,12 @@ ALWI void sfpu_reduce(uint32_t idst) {
 template <PoolType pool_type, DataFormat format>
 ALWI void sfpu_reduce_init() {
     static_assert(
-        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32 || format == DataFormat::UInt16 || format == DataFormat::Float16_b,
-        "Unsupported data format. Supported formats: Float32, Int32, UInt32, UInt16, Float16_b");
-    static_assert(
         pool_type == PoolType::SUM || pool_type == PoolType::AVG || pool_type == PoolType::MAX || pool_type == PoolType::MIN,
         "Unsupported pool type. Supported pool types: SUM, AVG, MAX, MIN");
+    static_assert(
+        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32 || format == DataFormat::UInt16 || format == DataFormat::Float16_b,
+        "Unsupported data format. Supported formats: Float32, Int32, UInt32, UInt16, Float16_b");
+
     MATH((llk_math_eltwise_unary_sfpu_reduce_init<true, pool_type, format>()));
 }
 
