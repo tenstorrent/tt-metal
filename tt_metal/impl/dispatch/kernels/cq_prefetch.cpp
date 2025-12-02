@@ -1080,7 +1080,7 @@ void paged_read_into_cmddat_q(PrefetchExecBufState& exec_buf_state) {
     uint32_t read_ptr = exec_buf_state.read_ptr;
     uint32_t max_read_pages;
     constexpr uint32_t INITIAL_FETCH_SIZE = 16 * 1024;                           // 16KB (OPTIMIZE HERE)
-    constexpr uint32_t PREFETCH_FETCH_SIZE = cmddat_q_end - INITIAL_FETCH_SIZE;  // the rest
+    constexpr uint32_t PREFETCH_FETCH_SIZE = cmddat_q_size - INITIAL_FETCH_SIZE;  // the rest
 
     // cmddat_q do not wrap around
     // reset all prefetch members when read_ptr is at the beginning of cmddat_q
