@@ -298,8 +298,45 @@ def test_missing_file_raises(tmp_path: Path):
     _write_index(model_dir, {key: missing})
 
     state = load_state_dict(model_dir, "")
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(KeyError):
         _ = state[key]
+
+
+def test_handle_cache_reuses_shard_and_close_releases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "a.safetensors"
+    t1 = torch.randn(2, 2)
+    t2 = torch.randn(3, 1)
+    safetensors.torch.save_file({"w1": t1, "w2": t2}, str(shard))
+    _write_index(model_dir, {"w1": shard.name, "w2": shard.name})
+
+    # Count opens of the shard file
+    open_counts: dict[str, int] = {}
+    original_safe_open = lsd.safe_open
+
+    def counting_safe_open(path, *args, **kwargs):
+        name = Path(path).name
+        open_counts[name] = open_counts.get(name, 0) + 1
+        return original_safe_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(lsd, "safe_open", counting_safe_open, raising=True)
+
+    state = load_state_dict(model_dir, "")
+
+    # Access two keys in the same shard -> single open due to handle cache
+    v1 = state["w1"]
+    v2 = state["w2"]
+    assert torch.equal(v1, t1)
+    assert torch.equal(v2, t2)
+    assert open_counts.get(shard.name, 0) == 1
+
+    # Close handles, then access again -> reopens exactly once
+    state.close()
+    v1b = state["w1"]
+    assert torch.equal(v1b, t1)
+    assert open_counts.get(shard.name, 0) == 2
 
 
 def test_non_numeric_layer_segment_not_filtered(tmp_path: Path):
