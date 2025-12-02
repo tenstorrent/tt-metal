@@ -361,6 +361,7 @@ inline void _llk_unpack_tilizeA_B_(
 inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM)
 {
     // Revert X dim value to default.
+    TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
     TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
     TT_SETADCXX(p_setadc::UNP_B, face_r_dim * FACE_C_DIM - 1, 0x0);
 
