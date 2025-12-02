@@ -21,13 +21,29 @@ from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
 def get_high_perf_compute_config():
     """
     Get compute kernel config optimized for accuracy and numerical stability.
-    Uses HiFi4 with FP32 accumulation for improved postnet accuracy.
+    Uses HiFi4 with float32 weights (like YOLOv5x) for best conv2d accuracy.
+    Based on analysis of other models like Llama Vision.
     """
     return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=ttnn.MathFidelity.HiFi4,  # Keep HiFi4 for accuracy
+        math_approx_mode=True,  # Enable math approximation mode like other models (Stable Diffusion, Llama Vision)
+        fp32_dest_acc_en=True,  # Keep FP32 dest acc for stability
+        packer_l1_acc=True,  # Enable L1 accumulation like Llama Vision for better precision
+    )
+
+
+def get_ultra_high_precision_compute_config():
+    """
+    Ultra high precision config for debugging conv2d noise issues.
+    Uses HiFi4 with additional numerical stability settings and experimental features.
+    """
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,  # Keep HiFi4 for ultra-high precision debugging
         math_approx_mode=False,
-        fp32_dest_acc_en=True,  # Enable FP32 destination accumulation for better accuracy
-        packer_l1_acc=False,  # Disable L1 accumulation when using FP32 dest acc
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+        # Additional precision settings
+        dst_full_sync_en=True,  # Full sync for destination
     )
 
 
@@ -69,16 +85,46 @@ class TtConv1d:
         self.kernel_size = self.weight.shape[2]
         self.padding = (self.kernel_size - 1) // 2
 
-        # Create conv config once
+        # Create conv config once - DEBUG: Conservative settings for numerical stability
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=self.weight.dtype,
             output_layout=ttnn.TILE_LAYOUT,
-            deallocate_activation=True,  # Keep activation tensors (improves performance)
-            reallocate_halo_output=True,  # Reallocate halo output for memory efficiency
-            enable_act_double_buffer=True,  # Enable activation double buffering
-            enable_weights_double_buffer=True,  # Enable weights double buffering
-            config_tensors_in_dram=False,  # Keep config tensors in L1 for speed
+            deallocate_activation=False,  # DEBUG: Disable for better numerical stability
+            reallocate_halo_output=False,  # DEBUG: Disable for better numerical stability
+            enable_act_double_buffer=False,  # DEBUG: Disable for better numerical stability
+            enable_weights_double_buffer=False,  # DEBUG: Disable for better numerical stability
+            config_tensors_in_dram=True,  # DEBUG: Try DRAM for config tensors
             reshard_if_not_optimal=False,  # Don't auto-reshard for consistency
+            enable_kernel_stride_folding=False,  # Disable stride folding for better precision
+            force_split_reader=False,  # Don't force split reader
+        )
+
+        # DEBUG: Create ultra-high precision config for debugging conv2d noise
+        self.debug_conv_config = ttnn.Conv2dConfig(
+            weights_dtype=self.weight.dtype,
+            output_layout=ttnn.TILE_LAYOUT,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            config_tensors_in_dram=False,
+            reshard_if_not_optimal=False,
+        )
+
+        # ULTRA-HIGH PRECISION: Conservative config with selective experimental features
+        self.ultra_precision_conv_config = ttnn.Conv2dConfig(
+            weights_dtype=ttnn.float32,  # Back to float32 weights
+            output_layout=ttnn.TILE_LAYOUT,
+            deallocate_activation=False,  # Keep activation for numerical stability
+            reallocate_halo_output=False,  # Keep halo output for stability
+            enable_act_double_buffer=False,  # Keep disabled for precision
+            enable_weights_double_buffer=False,  # Keep disabled for precision
+            config_tensors_in_dram=True,  # Put config tensors in DRAM for consistency
+            reshard_if_not_optimal=False,  # Keep disabled for consistency
+            enable_kernel_stride_folding=True,  # EXPERIMENTAL: Enable tensor folding optimization
+            enable_activation_reuse=False,  # DISABLED: Causes assertion failure
+            force_split_reader=False,  # DISABLED: May cause issues
+            full_inner_dim=False,  # DISABLED: Only for block sharding
         )
 
     def __call__(self, x, batch_size, input_length):
@@ -100,6 +146,7 @@ class TtConv1d:
 
         # PHASE 2: Apply conv2d with return_weights_and_bias=True to get prepared weights
         # This prevents re-preparation during trace
+        # DEBUG: Try without compute_kernel_config to avoid parameter conflicts
         result, _, [self.weight, self.bias] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
@@ -113,7 +160,7 @@ class TtConv1d:
             stride=(1, 1),
             padding=(self.padding, 0),
             bias_tensor=self.bias,
-            conv_config=self.conv_config,
+            conv_config=self.ultra_precision_conv_config,  # Use ultra-high precision config with experimental features
             return_weights_and_bias=True,
             return_output_dim=True,
         )
@@ -485,14 +532,14 @@ def preprocess_postnet_parameters(torch_model, config: TTNNPostNetConfig, device
         layer_params["conv"] = {
             "weight": ttnn.from_torch(
                 folded_weight,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.float32,  # Back to float32 for better accuracy
+                layout=ttnn.ROW_MAJOR_LAYOUT,  # TTNN conv2d requires ROW_MAJOR for weights
                 device=device,
                 memory_config=DRAM_MEMCFG,  # Weights in DRAM
             ),
             "bias": ttnn.from_torch(
                 folded_bias.reshape(1, 1, 1, -1),  # Reshape to [1, 1, 1, out_channels] for conv2d
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.float32,  # Back to float32 for consistency
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=DRAM_MEMCFG,  # Weights in DRAM
