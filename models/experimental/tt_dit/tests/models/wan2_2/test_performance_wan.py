@@ -136,9 +136,11 @@ def test_pipeline_performance(
             num_inference_steps=2,  # Small number of steps to reduce test time.
             guidance_scale=guidance_scale,
             guidance_scale_2=guidance_scale_2,
+            profiler=benchmark_profiler,
+            profiler_iteration=0,
         )
 
-    logger.info(f"Warmup completed in {pipeline.timing_data['total']:.2f}s")
+    logger.info(f"Warmup completed in {benchmark_profiler.get_duration('total', 0):.2f}s")
 
     # Check output
     if hasattr(result, "frames"):
@@ -279,11 +281,23 @@ def test_pipeline_performance(
                     value=measurements[step_name],
                     target=expected_metrics[step_name],
                 )
-        run_type = f"wan_{'t3k' if tuple(mesh_device.shape) == (2, 4) else 'tg'}_{'bh' if is_blackhole() else 'wh'}"
+        run_type = f"{'BH' if is_blackhole() else 'WH'}_{'T3K' if tuple(mesh_device.shape) == (2, 4) else 'TG'}"
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
             run_type=run_type,
-            ml_model_name="wan",
+            ml_model_name="Wan2.2",
+            batch_size=1,
+            config_params={
+                "width": width,
+                "height": height,
+                "num_frames": num_frames,
+                "num_steps": num_inference_steps,
+                "sp_factor": sp_factor,
+                "tp_factor": tp_factor,
+                "topology": str(topology),
+                "num_links": num_links,
+                "fsdp": is_fsdp,
+            },
         )
 
     pass_perf_check = True
