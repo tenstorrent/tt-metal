@@ -224,6 +224,7 @@ jobs:
           path: CHANGELOG.txt
 
   create-release-notes:
+    if: ${{ !inputs.dry-run }}
     needs: create-changelog
     permissions: read-all
     runs-on: ubuntu-latest
