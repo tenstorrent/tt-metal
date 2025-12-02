@@ -809,6 +809,8 @@ class MLA1D(AbstractModule):
             tt_q_rope, (1, 0, 2, 3)
         )  # [1, bsz, num_heads_local, qk_rope_head_dim], should be no-op
         tt_q_rope = ttnn.to_memory_config(tt_q_rope, **cfg["q_rope_reshard"])
+        # Ensure dtype is bfloat16 for rotary embedding
+        tt_q_rope = ttnn.to_dtype(tt_q_rope, dtype=ttnn.bfloat16)
         tt_q_rope = ttnn.experimental.rotary_embedding_llama(
             tt_q_rope,
             rope_tensors["cos_matrix"],
@@ -846,6 +848,8 @@ class MLA1D(AbstractModule):
         tt_kv_rope = ttnn.to_memory_config(tt_kv_rope, **cfg["kv_rope_reshard"])
         # TODO: Use DP tensors
         # Currently, not using DP tensors because sub-tile RS is not supported
+        # Ensure dtype is bfloat16 for rotary embedding
+        tt_kv_rope = ttnn.to_dtype(tt_kv_rope, dtype=ttnn.bfloat16)
         tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
             tt_kv_rope,
             rope_tensors["cos_matrix"],
@@ -974,6 +978,8 @@ class MLA1D(AbstractModule):
         tt_q_nope = ttnn.linear(tt_q_nope, **cfg["wkv_b1"])  # [1, num_heads_local, seq_len, kv_lora_rank]
 
         # Q RoPE
+        # Ensure dtype is bfloat16 for rotary embedding
+        tt_q_rope = ttnn.to_dtype(tt_q_rope, dtype=ttnn.bfloat16)
         tt_q_rope = ttnn.experimental.rotary_embedding_llama(
             tt_q_rope,
             rope_tensors["cos_matrix"],
@@ -1003,6 +1009,8 @@ class MLA1D(AbstractModule):
         tt_kv_nope = RMSNorm.forward_prefill(tt_kv_nope, cfg["kv_norm"])
 
         # KV RoPE
+        # Ensure dtype is bfloat16 for rotary embedding
+        tt_kv_rope = ttnn.to_dtype(tt_kv_rope, dtype=ttnn.bfloat16)
         tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
             tt_kv_rope,
             rope_tensors["cos_matrix"],
