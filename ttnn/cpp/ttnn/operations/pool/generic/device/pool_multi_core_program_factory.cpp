@@ -279,6 +279,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     const tt::tt_metal::DeviceStorage& reader_indices_storage = reader_indices.device_storage();
     const bool is_block_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+    const bool is_width_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
     // distributing out_hw across the grid
     const auto all_cores = input.shard_spec().value().grid;
@@ -707,22 +708,35 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
 
     // set the starting indices for each core as runtime args
-    if (return_indices) {
-        TT_FATAL(core_starting_indices.size() == ncores, "core starting indices size should match number of cores");
-        for (uint32_t core_i = 0; core_i < ncores; core_i++) {
-            const uint32_t core_x_i = core_i % rectangular_x;
-            const uint32_t core_y_i = core_i / rectangular_x;
-            const CoreRange core(CoreCoord(core_x_i, core_y_i), CoreCoord(core_x_i, core_y_i));
+    uint32_t total_out_nhw = in_n * out_h * out_w;
+    for (uint32_t core_i = 0; core_i < ncores; core_i++) {
+        const uint32_t core_x_i = core_i % rectangular_x;
+        const uint32_t core_y_i = core_i / rectangular_x;
+        const CoreRange core(CoreCoord(core_x_i, core_y_i), CoreCoord(core_x_i, core_y_i));
 
+        uint32_t total_out_nhw_processed;
+        if (is_block_sharded) {
+            total_out_nhw_processed = core_y_i * out_nhw_per_core;
+        } else if (is_width_sharded) {
+            total_out_nhw_processed = 0;
+        } else {
+            total_out_nhw_processed = core_i * out_nhw_per_core;
+        }
+        uint32_t out_nhw_this_core = std::min(out_nhw_per_core, total_out_nhw - total_out_nhw_processed);
+        std::vector<uint32_t> args = {out_nhw_this_core};
+        printf("core (%d, %d) will process %d out_nhw\n", core_x_i, core_y_i, out_nhw_this_core);
+        if (return_indices) {
+            TT_FATAL(core_starting_indices.size() == ncores, "core starting indices size should match number of cores");
             const uint32_t start_index = core_starting_indices[core_i];
             const uint32_t start_mod_batch = start_index % (in_w_padded * in_h_padded);
             const uint32_t start_row = start_mod_batch / in_w_padded;
             const uint32_t start_col = start_mod_batch % in_w_padded;
 
-            std::vector<uint32_t> args = {(uint32_t)(start_row), (uint32_t)(start_col)};
-            SetRuntimeArgs(program, reader0_kernel, core, args);
-            SetRuntimeArgs(program, compute_kernel, core, args);
+            args.push_back((uint32_t)(start_row));
+            args.push_back((uint32_t)(start_col));
         }
+        SetRuntimeArgs(program, reader0_kernel, core, args);
+        SetRuntimeArgs(program, compute_kernel, core, args);
     }
 
     auto temporary_size = calculate_total_cb_size(program);
