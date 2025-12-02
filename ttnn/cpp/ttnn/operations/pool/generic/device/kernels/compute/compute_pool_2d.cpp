@@ -266,6 +266,7 @@ void MAIN {
                     if (tilize_stick_counter == TILE_HEIGHT ||
                         (last_tile && tilize_stick_counter == last_tile_height)) {
                         if (last_tile && last_tile_height != TILE_HEIGHT) {
+                            cb_wait_front(pre_tilize_cb_id, last_tile_height * in_ntiles_c);
                             // if the last tile is not whole we won't have pushed enough sticks, so we need to
                             // push some filler sticks to reach TILE_HEIGHT to make sure the CB pointers are correct
                             // before calling tilize
@@ -275,6 +276,7 @@ void MAIN {
                             cb_push_back(pre_tilize_cb_id, filler_stick_tiles);
                             PACK(DPRINT << "Pushing filler sticks: " << filler_stick_tiles << "\n");
                         }
+                        cb_wait_front(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
                         PACK(DPRINT << "PACKING TILE\n");
                         PACK((pack_untilize_uninit(pre_tilize_cb_id)));
 
@@ -290,9 +292,9 @@ void MAIN {
 
                         PACK(tt::compute::common::print_full_tile(pre_tilize_cb_id));
 
-                        fast_tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
-                        fast_tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
-                        fast_tilize_uninit(pre_tilize_cb_id, out_cb_id);
+                        tilize_init(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
+                        tilize_block(pre_tilize_cb_id, in_ntiles_c, out_cb_id);
+                        tilize_uninit(pre_tilize_cb_id, out_cb_id);
 
                         PACK(tt::compute::common::print_full_tile(out_cb_id));
 

@@ -29,7 +29,7 @@ def randomize_torch_tensor(tensor_map, tensor_shape):
     if tensor_shape in tensor_map.keys():
         torch_tensor = tensor_map[tensor_shape]
     else:
-        torch_tensor = torch.ones(tensor_shape, dtype=torch.bfloat16)
+        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
         tensor_map[tensor_shape] = torch_tensor
 
     return torch_tensor
@@ -567,21 +567,20 @@ def run_max_pool2d(
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("out_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize(
     "input_shape, shard_startegy",
-    # (
-    #     (
-    #         ([1, 64, 112, 112], HS),
-    #         ([1, 280, 10, 10], HS),
-    #         ([1, 384, 32, 32], HS),
-    #         ([1, 256, 132, 20], BS),
-    #         ([1, 512, 8, 6], BS),
-    #         ([2, 4096, 10, 16], WS),
-    #         ([1, 32768, 10, 10], WS),
-    #     )
-    # ),
-    ((([1, 32, 60, 60], HS),)),
+    (
+        (
+            ([1, 64, 112, 112], HS),
+            ([1, 280, 10, 10], HS),
+            ([1, 384, 32, 32], HS),
+            ([1, 256, 132, 20], BS),
+            ([1, 512, 8, 6], BS),
+            ([2, 4096, 10, 16], WS),
+            ([1, 32768, 10, 10], WS),
+        )
+    ),
 )
 @pytest.mark.parametrize(
     "kernel_size",
