@@ -2809,7 +2809,7 @@ void ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
         all_hostnames,
         gsd_yaml,
         false,  // strict_validation
-        false   // assert_on_connection_mismatch
+        true    // assert_on_connection_mismatch
     );
 
     log_debug(tt::LogFabric, "Torus validation passed for configuration: {}", enchantum::to_string(fabric_config));
