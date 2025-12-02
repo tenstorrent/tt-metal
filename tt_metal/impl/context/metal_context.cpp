@@ -188,7 +188,9 @@ void MetalContext::initialize(
     }
 
     // Set internal routing for active ethernet cores, this is required for our FW to run
-    cluster_->set_internal_routing_info_for_ethernet_cores(true);
+    if (has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManager::INIT_FABRIC)) {
+        cluster_->set_internal_routing_info_for_ethernet_cores(true);
+    }
 
     // Initialize debug tools, reset cores, init FW
     if (dprint_server_) {
@@ -449,9 +451,15 @@ void MetalContext::clear_launch_messages_on_eth_cores(ChipId device_id) {
     };
 
     for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
+        if (!has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManager::INIT_FABRIC)) {
+            continue;
+        }
         clear_ethernet_core(eth_core, HalProgrammableCoreType::ACTIVE_ETH);
     }
     for (const auto& eth_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
+        if (!has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManager::INIT_FABRIC)) {
+            continue;
+        }
         clear_ethernet_core(eth_core, HalProgrammableCoreType::IDLE_ETH);
     }
 
@@ -510,7 +518,8 @@ void MetalContext::set_fabric_config(
     tt_fabric::FabricReliabilityMode reliability_mode,
     std::optional<uint8_t> num_routing_planes,
     tt_fabric::FabricTensixConfig fabric_tensix_config,
-    tt_fabric::FabricUDMMode fabric_udm_mode) {
+    tt_fabric::FabricUDMMode fabric_udm_mode,
+    tt_fabric::FabricManager fabric_manager) {
     // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch
     // config, not through this function exposed in the detail API.
     force_reinit_ = true;
@@ -567,6 +576,7 @@ void MetalContext::set_fabric_config(
     // Set the fabric tensix config
     this->set_fabric_tensix_config(fabric_tensix_config);
     this->fabric_udm_mode_ = fabric_udm_mode;
+    this->fabric_manager_ = fabric_manager;
 }
 
 void MetalContext::initialize_fabric_config() {
@@ -605,6 +615,8 @@ void MetalContext::set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric
 tt_fabric::FabricTensixConfig MetalContext::get_fabric_tensix_config() const { return fabric_tensix_config_; }
 
 tt_fabric::FabricUDMMode MetalContext::get_fabric_udm_mode() const { return fabric_udm_mode_; }
+
+tt_fabric::FabricManager MetalContext::get_fabric_manager() const { return fabric_manager_; }
 
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
     if (!logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
@@ -654,53 +666,55 @@ void MetalContext::reset_cores(ChipId device_id) {
     // Assert worker cores + dispatch cores, in case they were in a bad state from before.
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> device_to_early_exit_cores;
 
-    // Active ethernet
-    if (hal_->get_eth_fw_is_cooperative()) {
-        for (const auto& logical_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
-            CoreCoord virtual_core =
-                cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
-            if (erisc_app_still_running(device_id, virtual_core)) {
-                log_info(
-                    tt::LogMetal,
-                    "While initializing device {}, active ethernet dispatch core {} detected as still "
-                    "running, issuing exit signal.",
-                    device_id,
-                    virtual_core.str());
-                erisc_send_exit_signal(device_id, virtual_core, false /* is_idle_eth */);
-                device_to_early_exit_cores[device_id].insert(virtual_core);
+    if (has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManager::INIT_FABRIC)) {
+        // Active ethernet
+        if (hal_->get_eth_fw_is_cooperative()) {
+            for (const auto& logical_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
+                CoreCoord virtual_core =
+                    cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
+                if (erisc_app_still_running(device_id, virtual_core)) {
+                    log_info(
+                        tt::LogMetal,
+                        "While initializing device {}, active ethernet dispatch core {} detected as still "
+                        "running, issuing exit signal.",
+                        device_id,
+                        virtual_core.str());
+                    erisc_send_exit_signal(device_id, virtual_core, false /* is_idle_eth */);
+                    device_to_early_exit_cores[device_id].insert(virtual_core);
+                }
+            }
+        } else {
+            for (const auto& logical_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
+                // Ensure exit to base firmware. Send this before assertion subordinate cores otherwise if we stop the
+                // subordinates we could hang waiting for subordinates to finish
+                CoreCoord virtual_core =
+                    cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
+                if (rtoptions_.get_enable_2_erisc_mode()) {
+                    erisc_send_exit_signal(
+                        device_id, virtual_core, false /* is_idle_eth */);  // Stop any running erisc kernels
+                    llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(device_id, virtual_core);
+                }
+                // Only send reset to subordinate cores
+                // Assert all cores except ERISC0, which is running base firmware.
+                tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
+                tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
+                    tt_cxy_pair(device_id, virtual_core), reset_val);
             }
         }
-    } else {
-        for (const auto& logical_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
-            // Ensure exit to base firmware. Send this before assertion subordinate cores otherwise if we stop the
-            // subordinates we could hang waiting for subordinates to finish
-            CoreCoord virtual_core =
-                cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
-            if (rtoptions_.get_enable_2_erisc_mode()) {
-                erisc_send_exit_signal(
-                    device_id, virtual_core, false /* is_idle_eth */);  // Stop any running erisc kernels
-                llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(device_id, virtual_core);
-            }
-            // Only send reset to subordinate cores
-            // Assert all cores except ERISC0, which is running base firmware.
-            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
-            tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
-                tt_cxy_pair(device_id, virtual_core), reset_val);
-        }
-    }
 
-    // Early exiting dispatch cores should show RUN_MSG_DONE when they exit.
-    for (auto& id_and_cores : device_to_early_exit_cores) {
-        const int timeout_ms = 10000;  // 10 seconds for now
-        if (!id_and_cores.second.empty()) {
-            try {
-                llrt::internal_::wait_until_cores_done(
-                    id_and_cores.first, dev_msgs::RUN_MSG_GO, id_and_cores.second, timeout_ms);
-            } catch (std::runtime_error& e) {
-                log_warning(
-                    tt::LogAlways,
-                    "Detected dispatch kernels still running but failed to complete an early exit. This may happen "
-                    "from time to time following a reset, continuing to FW initialization...");
+        // Early exiting dispatch cores should show RUN_MSG_DONE when they exit.
+        for (auto& id_and_cores : device_to_early_exit_cores) {
+            const int timeout_ms = 10000;  // 10 seconds for now
+            if (!id_and_cores.second.empty()) {
+                try {
+                    llrt::internal_::wait_until_cores_done(
+                        id_and_cores.first, dev_msgs::RUN_MSG_GO, id_and_cores.second, timeout_ms);
+                } catch (std::runtime_error& e) {
+                    log_warning(
+                        tt::LogAlways,
+                        "Detected dispatch kernels still running but failed to complete an early exit. This may happen "
+                        "from time to time following a reset, continuing to FW initialization...");
+                }
             }
         }
     }
@@ -716,13 +730,14 @@ void MetalContext::reset_cores(ChipId device_id) {
         }
     }
 
-    // Reset idle ethernet cores
-    for (const auto& logical_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
-        CoreCoord virtual_core =
-            cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
-        cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
+    if (has_flag(tt::tt_metal::MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManager::INIT_FABRIC)) {
+        // Reset idle ethernet cores
+        for (const auto& logical_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
+            CoreCoord virtual_core =
+                cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
+            cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
+        }
     }
-
     cluster_->l1_barrier(device_id);
 }
 
@@ -1066,6 +1081,9 @@ void MetalContext::initialize_firmware(
         }
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH: {
+            if (!has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManager::INIT_FABRIC)) {
+                break;
+            }
             const bool is_idle_eth = core_type == HalProgrammableCoreType::IDLE_ETH;
             const bool is_active_eth = !is_idle_eth;
             tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX;
