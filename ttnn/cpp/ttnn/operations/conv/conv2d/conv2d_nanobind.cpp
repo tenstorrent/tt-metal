@@ -419,11 +419,9 @@ void bind_conv2d(nb::module_& mod) {
 
     py_conv_config.def_prop_rw(
         "shard_layout",
-        /*getter*/ [](decltype(Conv2dConfig::shard_layout)& existing_layout) { return existing_layout; },
+        /*getter*/ [](Conv2dConfig& conv) { return conv.shard_layout; },
         /*setter*/
-        [](decltype(Conv2dConfig::shard_layout)& existing_layout, decltype(Conv2dConfig::shard_layout) new_layout) {
-            existing_layout = new_layout;
-        },
+        [](Conv2dConfig& conv, decltype(Conv2dConfig::shard_layout) new_layout) { conv.shard_layout = new_layout; },
         R"doc(
         Optional argument that determines the TensorMemoryLayout to be used for the input and output tensor.
         If this is not specified, the op will try to determine the optimal layout based on it's own heuristics.
