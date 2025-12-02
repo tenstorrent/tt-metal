@@ -51,6 +51,6 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
 fi
 
 # MGD generation tests (tests that generate Mesh Graph Descriptors from cabling descriptors)
-echo "Running MGD generation tests..."
+echo "Running MGD generation tests.
 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=CablingDescriptorMGDGenerationTests.*
 echo "MGD generation tests finished"
