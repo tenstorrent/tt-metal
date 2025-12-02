@@ -16,6 +16,7 @@ set(UNIT_TESTS_FABRIC_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_fabric_builder_local_connections.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_z_router_integration.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_z_router_device_detection.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_cabling_descriptor_mgd_generation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_apis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_1d_fabric.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_mux.cpp
@@ -23,11 +24,16 @@ set(UNIT_TESTS_FABRIC_SRC
 
 add_executable(fabric_unit_tests ${UNIT_TESTS_FABRIC_SRC})
 
+add_dependencies(fabric_unit_tests scaleout_generated_protos)
+
 target_link_libraries(
     fabric_unit_tests
     PRIVATE
         tt_metal
         test_common_libs
+        protobuf::libprotobuf
+        generate_mgd_lib
+        scaleout_tools
 )
 
 target_include_directories(
