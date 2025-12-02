@@ -226,7 +226,8 @@ Notes:
     const bool is_fused_atomic_inc =
         (p.api_variant == AddrgenApiVariant::FusedAtomicIncWrite ||
          p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteWithState ||
-         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteSetState);
+         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteSetState ||
+         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteRoute);
 
     const std::string KDIR = "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/";
 

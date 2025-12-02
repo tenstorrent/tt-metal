@@ -1968,6 +1968,9 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
         fabric_set_unicast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id);
     });
 
+    // Ensure route setup is complete before use
+    noc_async_writes_flushed();
+
     uint32_t remaining_size = page_size;
     uint32_t current_offset = offset;
 
@@ -2308,6 +2311,9 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
         auto& slot = connection_manager.get(i);
         fabric_set_unicast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id);
     });
+
+    // Ensure route setup is complete before use
+    noc_async_writes_flushed();
 
     uint32_t remaining = page_size;
     uint32_t current_src_addr = src_addr;
