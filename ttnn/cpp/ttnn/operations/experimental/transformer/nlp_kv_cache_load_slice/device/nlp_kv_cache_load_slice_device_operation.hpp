@@ -31,11 +31,11 @@ struct NlpKVCacheLoadSliceDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        Tensor input_tensor,
+        const Tensor& input_tensor,
         uint32_t seq_len_start,
         uint32_t seq_len_end,
-        std::optional<MemoryConfig> memory_config,
-        std::optional<Tensor> preallocated_output);
+        const std::optional<MemoryConfig>& memory_config,
+        const std::optional<Tensor>& preallocated_output);
 };
 
 }  // namespace ttnn::operations::experimental::transformer

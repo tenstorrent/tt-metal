@@ -3,11 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device/nlp_kv_cache_load_slice_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/core/core.hpp"
 #include "nlp_kv_cache_load_slice.hpp"
-
-#include <utility>
 
 namespace ttnn::operations::experimental::transformer {
 

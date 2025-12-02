@@ -115,7 +115,7 @@ NlpKVCacheLoadSliceDeviceOperation::spec_return_value_t NlpKVCacheLoadSliceDevic
 NlpKVCacheLoadSliceDeviceOperation::tensor_return_value_t NlpKVCacheLoadSliceDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output.value();
+        return *tensor_args.preallocated_output;
     }
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
@@ -123,11 +123,11 @@ NlpKVCacheLoadSliceDeviceOperation::tensor_return_value_t NlpKVCacheLoadSliceDev
 std::
     tuple<NlpKVCacheLoadSliceDeviceOperation::operation_attributes_t, NlpKVCacheLoadSliceDeviceOperation::tensor_args_t>
     NlpKVCacheLoadSliceDeviceOperation::invoke(
-        Tensor input_tensor,
+        const Tensor& input_tensor,
         uint32_t seq_len_start,
         uint32_t seq_len_end,
-        std::optional<MemoryConfig> memory_config,
-        std::optional<Tensor> preallocated_output) {
+        const std::optional<MemoryConfig>& memory_config,
+        const std::optional<Tensor>& preallocated_output) {
     auto input_tensor_shape = input_tensor.padded_shape();
     auto dim0 = input_tensor_shape[0];
     auto dim1 = input_tensor_shape[1];
