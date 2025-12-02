@@ -265,7 +265,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_or_re
         case tt::tt_fabric::NocSendType::NOC_UNICAST_INLINE_WRITE: {
             const auto noc_addr = header.command_fields.unicast_inline_write.noc_address;
             const auto value = header.command_fields.unicast_inline_write.value;
-            noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(noc_addr, value);
+            noc_inline_dw_write(noc_addr, value);
             // temporarily place here until we have txn id support
             noc_async_writes_flushed();
             // Register response for non-posted writes

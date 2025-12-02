@@ -425,7 +425,7 @@ template <
     typename FabricConnectionType,
     typename DownstreamMuxConnectionType,
     size_t NumConnections>
-FORCE_INLINE void forward_to_downstream_mux_or_local_router(
+FORCE_INLINE bool forward_to_downstream_mux_or_local_router(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     FabricConnectionType& fabric_connection,
     std::array<DownstreamMuxConnectionType, NumConnections>& downstream_mux_connections) {
@@ -438,20 +438,21 @@ FORCE_INLINE void forward_to_downstream_mux_or_local_router(
         mux_dir = packet_header->udm_control.write.initial_direction;
     }
 
-    // DPRINT << "Mux Direction " << Direction << " mux_dir " << mux_dir <<ENDL();
-
+    bool can_forward = true;
     if (Direction != mux_dir) {
         // Forward to the correct downstream mux
         uint32_t mux_index = direction_to_mux_index_map[Direction][mux_dir];
-        downstream_mux_connections[mux_index].wait_for_empty_write_slot();
-        downstream_mux_connections[mux_index].send_payload_flush_non_blocking_from_address(
-            (uint32_t)packet_header, packet_header->get_payload_size_including_header());
+        can_forward = downstream_mux_connections[mux_index].edm_has_space_for_packet();
+        if (can_forward) {
+            downstream_mux_connections[mux_index].send_payload_flush_non_blocking_from_address(
+                (uint32_t)packet_header, packet_header->get_payload_size_including_header());
+        }
     } else {
-        // Forward to local router (this mux's direction matches the packet's direction)
         fabric_connection.wait_for_empty_write_slot();
         fabric_connection.send_payload_flush_non_blocking_from_address(
             (uint32_t)packet_header, packet_header->get_payload_size_including_header());
     }
+    return can_forward;
 }
 
 /**
