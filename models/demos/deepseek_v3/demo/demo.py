@@ -237,6 +237,7 @@ def run_demo(
     generator: str = "bp",
     enable_trace: bool = False,
     override_num_layers: int | None = None,
+    repeat_batches: int = 1,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -347,6 +348,7 @@ def run_demo(
             max_new_tokens=max_new_tokens,
             teacher_forcing=token_acc,
             early_print_first_user=early_print_first_user,
+            repeat_batches=repeat_batches,
         )
 
         # Process all generations

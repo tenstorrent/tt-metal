@@ -49,7 +49,7 @@ jobs:
           - { name: "Galaxy Motif-Image-6B-Preview demo tests", arch: "wormhole_b0", model: "motif", timeout: 20, owner_id: "U08TED0JM9D" } # Samuel Adesoye
           - { name: "Galaxy Wan2.2 demo tests", arch: "wormhole_b0", model: "wan22", timeout: 25, owner_id: "U03FJB5TM5Y" } # Colman Glagovich
           - { name: "Galaxy Mochi demo tests", arch: "wormhole_b0", model: "mochi", timeout: 30, owner_id: "U09ELB03XRU" } # Stephen Osborne
-          - { name: "Galaxy DeepSeek v3 demo tests", arch: "wormhole_b0", model: "deepseek_v3", timeout: 45, owner_id: "U08H32XUS9W" } # Yousef Al Rawwash
+          - { name: "Galaxy DeepSeek v3 demo tests", arch: "wormhole_b0", model: "deepseek_v3", timeout: 10, owner_id: "U08H32XUS9W" } # Yousef Al Rawwash
     name: ${{ matrix.test-group.name }}
     runs-on:
       - arch-wormhole_b0
@@ -226,7 +226,7 @@ jobs:
           DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
           DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache
         run: |
-          pytest models/demos/deepseek_v3/demo/test_demo.py --timeout 1200
+          pytest models/demos/deepseek_v3/demo/test_demo.py --timeout 600
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

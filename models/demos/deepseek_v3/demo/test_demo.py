@@ -29,7 +29,8 @@ def test_demo(repeat_batches):
         random_weights=False,
         max_new_tokens=128,
         override_num_layers=5,
+        repeat_batches=repeat_batches,
     )
 
     # Check output
-    assert len(results["generations"][0]["tokens"]) % 128 == 0
+    assert len(results["generations"][0]["tokens"]) == 128
