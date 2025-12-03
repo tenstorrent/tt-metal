@@ -25,7 +25,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run auto triage
-        uses: tenstorrent-metal/tt-auto-triage/.github/actions/auto-triage@ebanerjee/switching-to-copilot
+        uses: tenstorrent-metal/tt-auto-triage/.github/actions/auto-triage@main
         with:
           workflow-name: ${{ inputs.workflow_name }}
           job-name: ${{ inputs.job_name }}
