@@ -118,8 +118,7 @@ bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>&
     }
 
     // a and b identical shape, no broadcast on any dimension
-    if (b.has_value() && (a.logical_shape() == b->logical_shape()) &&
-        (a.memory_config().memory_layout() == b->memory_config().memory_layout())) {
+    if (b.has_value() && (a.logical_shape() == b->logical_shape()) && (a.memory_config() == b->memory_config())) {
         if (is_uneven(a) || is_uneven(*b) || is_uneven(c)) {
             return false;
         }
@@ -128,15 +127,15 @@ bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>&
             c.memory_config().buffer_type() == BufferType::DRAM) {
             return false;
         }
-        // if ((a.memory_config().is_sharded() && a.memory_config().buffer_type() == BufferType::L1)) {
-        //     return true;
-        // }
-        // if (b->memory_config().is_sharded() && b->memory_config().buffer_type() == BufferType::L1) {
-        //     return true;
-        // }
-        // if (c.memory_config().is_sharded() && c.memory_config().buffer_type() == BufferType::L1) {
-        //     return true;
-        // }
+        if ((a.memory_config().is_sharded() && a.memory_config().buffer_type() == BufferType::L1)) {
+            return true;
+        }
+        if (b->memory_config().is_sharded() && b->memory_config().buffer_type() == BufferType::L1) {
+            return true;
+        }
+        if (c.memory_config().is_sharded() && c.memory_config().buffer_type() == BufferType::L1) {
+            return true;
+        }
     }
 
     return false;
