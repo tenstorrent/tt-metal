@@ -34,7 +34,7 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
         result = _sfpu_reciprocal_<2>(denominator);
     } else {
         result = _sfpu_reciprocal_<1>(denominator);
-        result sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+        result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
     }
 
     return result;
