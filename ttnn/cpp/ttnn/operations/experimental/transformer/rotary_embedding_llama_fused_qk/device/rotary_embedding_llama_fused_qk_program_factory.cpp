@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "rotary_embedding_llama_fused_qk_program_factory.hpp"
 #include "rotary_embedding_llama_fused_qk_device_operation_types.hpp"
+#include "rotary_embedding_llama_fused_qk_program_factory.hpp"
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
