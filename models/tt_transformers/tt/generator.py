@@ -122,9 +122,6 @@ class Generator:
                 sequence_lengths_to_warmup = sequence_lengths_to_warmup[: sequence_lengths_to_warmup.index(seq_len)]
                 break
 
-        if 6144 in sequence_lengths_to_warmup:
-            sequence_lengths_to_warmup.remove(6144)
-
         for model_id in range(self.data_parallel):
             for supported_length in sequence_lengths_to_warmup:
                 # When model_id = 0, we compile all operators for the first time
