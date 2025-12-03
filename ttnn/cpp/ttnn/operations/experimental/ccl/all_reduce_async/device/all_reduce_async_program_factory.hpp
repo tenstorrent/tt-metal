@@ -12,13 +12,13 @@ namespace ttnn {
 namespace operations::experimental::ccl::all_reduce_async {
 
 struct AllReduceAsyncSharedVariables {
-    tt::tt_metal::KernelHandle worker_sender_reader_kernel_id;
-    tt::tt_metal::KernelHandle worker_sender_writer_kernel_id;
-    tt::tt_metal::KernelHandle reduction_reader_kernel_id;
+    tt::tt_metal::KernelHandle worker_sender_reader_kernel_id{};
+    tt::tt_metal::KernelHandle worker_sender_writer_kernel_id{};
+    tt::tt_metal::KernelHandle reduction_reader_kernel_id{};
     std::vector<tt::tt_metal::CoreCoord> sender_worker_cores;
     CoreRangeSet output_tensor_cores;
-    tt::tt_metal::CBHandle cb_out;
-    tt::tt_metal::CBHandle cb_reduction;
+    tt::tt_metal::CBHandle cb_out{};
+    tt::tt_metal::CBHandle cb_reduction{};
 };
 
 struct AllReduceAsyncMeshWorkloadFactory {
