@@ -24,7 +24,6 @@ from models.experimental.panoptic_deeplab.tt.common import (
 )
 from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
 from models.experimental.panoptic_deeplab.tt.common import preprocess_nchw_input_tensor
-from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 
 
 @pytest.mark.parametrize(
@@ -36,7 +35,11 @@ from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import s
 def test_model_panoptic_deeplab(device, model_category, model_location_generator):
     """Test PCC comparison between PyTorch and TTNN implementations with fused Conv+BatchNorm."""
 
-    skip_if_not_blackhole_20_cores(device)
+    compute_grid = device.compute_with_storage_grid_size()
+    logger.info(
+        f"Running test on compute grid: {compute_grid.x}x{compute_grid.y} ({compute_grid.x * compute_grid.y} cores)"
+    )
+
     torch.manual_seed(0)
 
     # Get the weights path using the common utility function

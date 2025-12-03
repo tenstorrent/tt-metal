@@ -102,8 +102,9 @@ def create_panoptic_models(device, weights_path):
 def test_resnet_stem_pcc(device, input_shape_nchw, reset_seeds, model_location_generator):
     """Test ResNet stem layer PCC between PyTorch and TTNN implementations."""
     compute_grid = device.compute_with_storage_grid_size()
-    if compute_grid.x != 5 or compute_grid.y != 4:
-        pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
+    logger.info(
+        f"Running test on compute grid: {compute_grid.x}x{compute_grid.y} ({compute_grid.x * compute_grid.y} cores)"
+    )
 
     torch.manual_seed(0)
 
@@ -147,8 +148,9 @@ def test_resnet_layer_pcc(
     """Test ResNet individual layer PCC between PyTorch and TTNN implementations."""
 
     compute_grid = device.compute_with_storage_grid_size()
-    if compute_grid.x != 5 or compute_grid.y != 4:
-        pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
+    logger.info(
+        f"Running test on compute grid: {compute_grid.x}x{compute_grid.y} ({compute_grid.x * compute_grid.y} cores)"
+    )
 
     torch.manual_seed(0)
 
@@ -223,8 +225,9 @@ def test_resnet_layer_pcc(
 def test_resnet_full_pcc(device, batch_size, height, width, reset_seeds, model_location_generator):
     """Test full ResNet PCC between PyTorch and TTNN implementations."""
     compute_grid = device.compute_with_storage_grid_size()
-    if compute_grid.x != 5 or compute_grid.y != 4:
-        pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
+    logger.info(
+        f"Running test on compute grid: {compute_grid.x}x{compute_grid.y} ({compute_grid.x * compute_grid.y} cores)"
+    )
 
     torch.manual_seed(0)
 
