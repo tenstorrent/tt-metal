@@ -192,7 +192,6 @@ def test_pipeline_performance(
                     profiler_iteration=i,
                 )
 
-        # Collect timing data
         logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
 
     # Calculate statistics
