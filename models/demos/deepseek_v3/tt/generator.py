@@ -806,7 +806,6 @@ class DeepseekGenerator:
             Tuple of TTNN tensors, one per layer
         """
         # Calculate expected shape: [batch_per_shard, blocks_per_user]
-        _, dp_factor = self.mesh_device.shape
         batch_per_shard = even_int_div(self.batch_size_per_row, self.mesh_device.shape[0])
         blocks_per_user = even_int_div(self.paged_config.max_num_blocks, batch_per_shard)
 
