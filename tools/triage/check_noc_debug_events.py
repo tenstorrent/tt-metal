@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
 
 import json
 import os
 from pathlib import Path
 from collections import defaultdict
+
+
+# File path derived from profiler
 
 
 def get_profiler_artifacts_dir() -> Path:
@@ -119,12 +125,91 @@ def check_noc_debug_events(device_id: int = 0):
                 currently_locked_ranges = new_ranges
             event["currently_locked_ranges"] = currently_locked_ranges
 
-    # Print out the locked ranges for each core
-    for core, timeline in events.items():
-        for event in timeline:
-            if "currently_locked_ranges" not in event:
+    # for core, timeline in events.items():
+    #     for event in timeline:
+    #         if "currently_locked_ranges" not in event:
+    #             continue
+    #         print(f"{core} Locked ranges at {event['timestamp']}: {event['currently_locked_ranges']}")
+
+    # Check if writes from one core occur during another core's locked period
+    check_writes_during_lock(events, write_core=(2, 1), lock_core=(1, 1))
+
+
+def get_locked_ranges_at_timestamp(
+    events: dict[tuple[int, int], list[dict]], core: tuple[int, int], timestamp: int
+) -> list[tuple[int, int]]:
+    if core not in events:
+        return []
+
+    # Find the event with the closest timestamp <= the given timestamp
+    locked_ranges = []
+    for event in events[core]:
+        event_ts = event.get("timestamp", 0)
+        if event_ts > timestamp:
+            break
+        if "currently_locked_ranges" in event:
+            locked_ranges = event["currently_locked_ranges"]
+
+    return locked_ranges
+
+
+def is_address_in_locked_range(addr: int, locked_ranges: list[tuple[int, int]]) -> tuple[bool, tuple[int, int] | None]:
+    for locked_range in locked_ranges:
+        if locked_range[0] <= addr < locked_range[1]:
+            return True, locked_range
+    return False, None
+
+
+def check_writes_during_lock(
+    events: dict[tuple[int, int], list[dict]], write_core: tuple[int, int], lock_core: tuple[int, int]
+):
+    if lock_core not in events:
+        print(f"Lock core {lock_core} not found in events")
+        return
+
+    if write_core not in events:
+        print(f"Write core {write_core} not found in events")
+        return
+
+    print(f"Checking writes from {write_core} to {lock_core} for locked address violations...")
+
+    violations_found = 0
+    writes_to_lock_core = 0
+
+    for event in events[write_core]:
+        if "type" in event and event["type"] == "WRITE_":
+            timestamp = event["timestamp"]
+            dst_addr = event.get("dst_addr")
+            dst_core = (event.get("dx"), event.get("dy"))
+
+            # Only check writes destined for the lock_core
+            if dst_core != lock_core:
                 continue
-            print(f"{core} Locked ranges at {event['timestamp']}: {event['currently_locked_ranges']}")
+
+            writes_to_lock_core += 1
+
+            # Get the locked ranges on lock_core at this timestamp
+            locked_ranges = get_locked_ranges_at_timestamp(events, lock_core, timestamp)
+
+            if not locked_ranges:
+                continue
+
+            # Check if the destination address falls within a locked range
+            is_locked, matching_range = is_address_in_locked_range(dst_addr, locked_ranges)
+
+            if is_locked:
+                violations_found += 1
+                print(
+                    f"  VIOLATION: Write from {write_core} at timestamp {timestamp} "
+                    f"to address {dst_addr} (0x{dst_addr:x}) on {lock_core} "
+                    f"hits locked range {matching_range} (0x{matching_range[0]:x}-0x{matching_range[1]:x})"
+                )
+
+    print(f"Total writes from {write_core} to {lock_core}: {writes_to_lock_core}")
+    if violations_found == 0:
+        print(f"No locked address violations found")
+    else:
+        print(f"Found {violations_found} write(s) to locked addresses!")
 
 
 if __name__ == "__main__":
