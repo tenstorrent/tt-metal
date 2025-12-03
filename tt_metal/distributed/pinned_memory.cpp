@@ -355,7 +355,7 @@ experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::Me
     experimental::MemoryPinningParameters params{};
     params.max_pins = hal.get_max_pinned_memory_count();
     params.max_total_pin_size = hal.get_total_pinned_memory_size();
-    // Ideally use a 64 bit addresses through the NOC, but otherwise use the iATU to translate 36 bit addresses to 64
+    // Ideally use a 64-bit addresses through the NOC, but otherwise use the iATU to translate 36-bit addresses to 64
     // bit addresses.
     params.can_map_to_noc = MetalContext::instance().hal().get_supports_64_bit_pcie_addressing() ||
                             MetalContext::instance().get_cluster().is_noc_mapping_enabled();
