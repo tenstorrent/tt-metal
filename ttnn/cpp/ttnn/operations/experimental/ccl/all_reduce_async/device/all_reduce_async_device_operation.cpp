@@ -34,7 +34,7 @@ void AllReduceAsyncDeviceOperation::validate_on_program_cache_miss(
             (input_tensor.memory_config().buffer_type() != BufferType::DRAM),
         "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
         "by the fabric api");
-    TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "All Gather currently requires aligned pages");
+    TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "AllReduceAsync currently requires aligned pages");
     TT_FATAL(
         args.ring_size % 2 == 0,
         "AllReduceAsync currently only supports even number of blocks in the reduction kernel.");
@@ -48,7 +48,7 @@ void AllReduceAsyncDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(args.num_links > 0, "Error, num_links should be more than 0 but has {}", args.num_links);
     TT_FATAL(
         args.num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
-        "Worker cores used by links are parallelizaed over rows");
+        "Worker cores used by links are parallelized over rows");
 
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
