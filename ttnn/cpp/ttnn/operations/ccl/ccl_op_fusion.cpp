@@ -519,7 +519,7 @@ void MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args(
     out_rt_args.push_back(static_cast<uint32_t>(this->topology));
     out_rt_args.push_back(static_cast<uint32_t>(this->read_local_slice_from_input));
     out_rt_args.push_back(static_cast<uint32_t>(this->input_tensor_Wt * this->start_ring_index));
-    out_rt_args.push_back(static_cast<uint32_t>(this->input_tensor_Wt * (this->start_ring_index + 1) - 1));
+    out_rt_args.push_back(static_cast<uint32_t>((this->input_tensor_Wt * (this->start_ring_index + 1)) - 1));
 
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[0]));
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[1]));
