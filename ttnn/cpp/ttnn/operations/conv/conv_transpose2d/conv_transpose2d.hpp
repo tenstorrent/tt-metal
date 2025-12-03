@@ -10,7 +10,9 @@
 #include <variant>
 
 #include "ttnn/decorators.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+// #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
+// #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 
 namespace ttnn::operations::conv::conv_transpose2d {
 

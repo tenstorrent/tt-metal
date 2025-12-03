@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
+#if 0
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -375,3 +375,4 @@ tt::tt_metal::operation::OpPerformanceModel Conv2d::create_op_performance_model(
 }  // namespace conv2d
 
 }  // namespace ttnn::operations::conv
+#endif
