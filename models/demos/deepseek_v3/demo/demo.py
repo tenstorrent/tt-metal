@@ -63,11 +63,11 @@ def create_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--model-path",
         type=str,
-        default=os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/deepseek_v3/reference"),
+        required=True,
         help="Path to local HF DeepSeek-V3 model (safetensors)",
     )
     p.add_argument("--max-new-tokens", type=int, default=32, help="Number of tokens to generate")
-    p.add_argument("--cache-dir", type=str, default=os.getenv("DEEPSEEK_V3_CACHE", "generated/deepseek_v3"))
+    p.add_argument("--cache-dir", type=str, required=True)
     # Random-weights mode options (reuse Model1D pipeline; single dense layer only)
     p.add_argument(
         "--random-weights", action="store_true", help="Use randomly initialized weights instead of loading safetensors"
@@ -173,21 +173,16 @@ def load_prompts_from_json(json_file_path: str, max_prompts: int | None = None) 
 def validate_model_path(model_path_str: str, require_safetensors: bool, require_tokenizer: bool) -> None:
     """Validate model path for presence of config, tokenizer (optional), and safetensors (optional)."""
     mp = Path(model_path_str)
-    env_hint = (
-        "Set DEEPSEEK_V3_HF_MODEL to a directory containing the model files,\n"
-        "or pass --model-path /path/to/local/hf/model.\n"
-        "Example: export DEEPSEEK_V3_HF_MODEL=/abs/path/to/deepseek-v3"
-    )
 
     if not mp.exists():
-        raise SystemExit(f"Model path does not exist: '{mp}'.\n{env_hint}")
+        raise SystemExit(f"Model path does not exist: '{mp}'.")
     if not mp.is_dir():
-        raise SystemExit(f"Model path is not a directory: '{mp}'.\n{env_hint}")
+        raise SystemExit(f"Model path is not a directory: '{mp}'.")
 
     # Config: always required so AutoConfig can load
     has_config = (mp / "config.json").exists()
     if not has_config:
-        raise SystemExit("config.json not found in the model directory.\n" f"Checked: '{mp}'.\n{env_hint}")
+        raise SystemExit("config.json not found in the model directory." f"Checked: '{mp}'.")
 
     # Tokenizer files: common possibilities (optional in random-weights mode)
     if require_tokenizer:
@@ -198,15 +193,15 @@ def validate_model_path(model_path_str: str, require_safetensors: bool, require_
         if not has_tokenizer:
             raise SystemExit(
                 "Tokenizer files not found in the model directory. Expected one of: "
-                "tokenizer.model, tokenizer.json, spiece.model, tokenizer_config.json.\n"
-                f"Checked: '{mp}'.\n{env_hint}"
+                "tokenizer.model, tokenizer.json, spiece.model, tokenizer_config.json."
+                f"Checked: '{mp}'."
             )
 
     if require_safetensors:
         # Weights: require at least one safetensors shard
         has_safetensors = len(glob(str(mp / "*.safetensors"))) > 0
         if not has_safetensors:
-            raise SystemExit("No .safetensors files found in the model directory.\n" f"Checked: '{mp}'.\n{env_hint}")
+            raise SystemExit("No .safetensors files found in the model directory." f"Checked: '{mp}'.")
 
 
 def run_demo(
@@ -230,12 +225,17 @@ def run_demo(
         - tokens: List[int] of generated token IDs
         - text: Optional[str] decoded text (only when a tokenizer is present)
     """
-    model_path = str(model_path or os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/deepseek_v3/reference"))
-    cache_dir = str(cache_dir or os.getenv("DEEPSEEK_V3_CACHE", "generated/deepseek_v3"))
+    if model_path is None:
+        raise SystemExit("Missing model path. Provide --model-path.")
+    model_path = Path(model_path)
+
+    if cache_dir is None:
+        raise SystemExit("Missing cache directory. Provide --cache-dir.")
+    cache_dir = Path(cache_dir)
 
     # Validate model directory per mode
     validate_model_path(
-        model_path,
+        str(model_path),
         require_safetensors=not random_weights,
         require_tokenizer=not random_weights,
     )
@@ -293,8 +293,8 @@ def run_demo(
         if generator == "bp":
             gen = DeepseekGeneratorDP(
                 mesh_device=mesh_device,
-                model_path=Path(model_path),
-                cache_dir=Path(cache_dir),
+                model_path=model_path,
+                cache_dir=cache_dir,
                 tokenizer=tokenizer,
                 random_weights=bool(random_weights),
                 dense_layers=(1 if random_weights and single_layer else None),
@@ -307,8 +307,8 @@ def run_demo(
                 assert False, "Tracing is not supported for pp generator."
             gen = DeepseekGeneratorPP(
                 mesh_device=mesh_device,
-                model_path=Path(model_path),
-                cache_dir=Path(cache_dir),
+                model_path=model_path,
+                cache_dir=cache_dir,
                 tokenizer=tokenizer,
                 random_weights=bool(random_weights),
                 dense_layers=(1 if random_weights and single_layer else None),
