@@ -422,7 +422,7 @@ std::vector<MuxConnectionInfo> FabricTensixDatamoverMuxConfig::get_all_mux_conne
 
     // UDM mode - collect downstream mux connection info
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const auto& tensix_config = fabric_context.get_tensix_config();
+    const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
 
     auto downstream_dirs = builder::get_all_other_directions(direction);
 
@@ -619,7 +619,7 @@ MuxConnectionInfo FabricTensixDatamoverRelayConfig::get_mux_connection_info(
     uint32_t connection_region_idx,
     uint32_t stream_id) const {
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const auto& tensix_config = fabric_context.get_tensix_config();
+    const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
     auto mux_config = tensix_config.get_config(FabricTensixCoreType::MUX);
     auto channel_type = tt::tt_fabric::ChannelTypes::RELAY_TO_MUX_CHANNEL;
 
@@ -641,7 +641,7 @@ std::array<MuxConnectionInfo, FabricTensixDatamoverRelayConfig::NUM_MUX_CONNECTI
 FabricTensixDatamoverRelayConfig::get_all_mux_connection_infos(
     const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const {
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const auto& tensix_config = fabric_context.get_tensix_config();
+    const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
 
     // Determine directions to check: [0]=local, [1]=perp1, [2]=perp2
     auto [perp_dir1, perp_dir2] = builder::get_perpendicular_directions(direction);
@@ -686,7 +686,7 @@ size_t FabricTensixDatamoverRelayConfig::get_channel_credits_stream_id(
     // In UDM mode, relay stream IDs must come after mux stream IDs to avoid collisions
     // Both mux and relay are on the same Tensix core, so they share the same stream ID space
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const auto& tensix_config = fabric_context.get_tensix_config();
+    const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
 
     auto mux_config = tensix_config.get_config(FabricTensixCoreType::MUX);
     TT_FATAL(mux_config != nullptr, "Mux config cannot be null");
@@ -962,7 +962,7 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_channel_stream_ids(Ch
 
 std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_persistent_channels_flags(ChannelTypes channel_type) const {
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const auto& tensix_config = fabric_context.get_tensix_config();
+    const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
     size_t num_channels = config_->get_num_channels(channel_type);
     std::vector<uint32_t> is_persistent_channels(num_channels, 0);
 
@@ -1050,7 +1050,7 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args() c
 
     // In UDM mode, add relay's termination signal address for mux to write during teardown
     if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
-        const auto& tensix_config = builder_context.get_tensix_config();
+        const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
         auto relay_config = tensix_config.get_config(FabricTensixCoreType::RELAY);
         auto relay_config_typed = std::dynamic_pointer_cast<const FabricTensixDatamoverRelayConfig>(relay_config);
         ct_args.push_back(relay_config_typed->get_relay_termination_signal_address());
