@@ -6,9 +6,9 @@
 
 #include "metal/ttnn_all_includes.hpp"
 
-namespace ttml::metal::optimizers::adamw_fused {
+namespace ttml::metal::optimizers::adamw_full_precision {
 
-struct AdamWFusedOptimizer {
+struct AdamWFullPrecisionOptimizer {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& param_in,
         const ttnn::Tensor& grad,
@@ -21,8 +21,7 @@ struct AdamWFusedOptimizer {
         const float beta1_pow,
         const float beta2_pow,
         const float epsilon,
-    const float weight_decay,
-    const bool stochastic_rounding,
-    const uint32_t step);
+        const float weight_decay,
+        const uint32_t step);
 };
-}  // namespace ttml::metal::optimizers::adamw_fused
+}  // namespace ttml::metal::optimizers::adamw_full_precision

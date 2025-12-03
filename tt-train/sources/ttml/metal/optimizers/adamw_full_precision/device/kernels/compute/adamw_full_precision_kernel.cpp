@@ -37,24 +37,6 @@ constexpr uint32_t num_tiles_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 constexpr uint32_t twice_block_size = 2 * block_size;
 
-// TODO: This might have to be moved higher, so other optimizers can use it too
-#ifdef TRISC_MATH
-template <int ITERATIONS = 8>
-inline void stochastic_round_tile_face() {
-#pragma GCC unroll ITERATIONS
-    for (int i = 0; i < ITERATIONS; i++) {
-        vFloat a = dst_reg[0];
-        vUInt rounded = float_to_fp16b(a, 1);
-        dst_reg[0] = reinterpret<vFloat>(rounded);
-        dst_reg++;
-    }
-}
-#endif
-
-inline void stochastic_round_tile(uint32_t idx_dst0) {
-    MATH(_llk_math_eltwise_unary_sfpu_params_<false>(stochastic_round_tile_face<8>, idx_dst0));
-}
-
 void MAIN {
     uint32_t runtime_args_counter = 0;
     uint32_t lr = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -67,19 +49,14 @@ void MAIN {
     uint32_t one_minus_beta1 = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t one_minus_beta2 = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t decay_factor = get_arg_val<uint32_t>(runtime_args_counter++);
-    [[maybe_unused]] uint32_t seed = get_arg_val<uint32_t>(runtime_args_counter++);
 
     init_sfpu(cb_param_idx, cb_output_idx);
-#if STOCH_ROUND
-    // If this is enabled, it tends to round up much more for whatever reason
-    // init_prng_seed(seed);
-#endif
 
     for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_core; tile_idx += block_size) {
         // momentum_t calculation
         cb_wait_front(cb_exp_avg_idx, block_size);
         reconfig_data_format(cb_exp_avg_idx, cb_exp_avg_idx);
-        copy_tile_init(cb_exp_avg_idx);
+        copy_tile_to_dst_init_short(cb_exp_avg_idx);
         tile_regs_acquire();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(cb_exp_avg_idx, block_idx, block_idx);
@@ -92,7 +69,7 @@ void MAIN {
         }
         cb_wait_front(cb_grad_idx, block_size);
         reconfig_data_format(cb_grad_idx, cb_grad_idx);
-        copy_tile_init(cb_grad_idx);
+        copy_tile_to_dst_init_short(cb_grad_idx);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(cb_grad_idx, block_idx, block_size + block_idx);
         }
@@ -113,7 +90,7 @@ void MAIN {
         // variance_t calculation
         cb_wait_front(cb_exp_avg_sq_idx, block_size);
         reconfig_data_format(cb_exp_avg_sq_idx, cb_exp_avg_sq_idx);
-        copy_tile_init(cb_exp_avg_sq_idx);
+        copy_tile_to_dst_init_short(cb_exp_avg_sq_idx);
         tile_regs_acquire();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(cb_exp_avg_sq_idx, block_idx, block_idx);
@@ -125,7 +102,7 @@ void MAIN {
             mul_unary_tile(block_idx, beta2);
         }
         reconfig_data_format(cb_grad_idx, cb_grad_idx);
-        copy_tile_init(cb_grad_idx);
+        copy_tile_to_dst_init_short(cb_grad_idx);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(cb_grad_idx, block_idx, block_size + block_idx);
         }
@@ -162,7 +139,7 @@ void MAIN {
 #if AMSGRAD
         // TODO: I think this can be merged, check
         cb_wait_front(cb_max_exp_avg_sq_in_idx, block_size);
-        copy_tile_init(cb_max_exp_avg_sq_in_idx);
+        copy_tile_to_dst_init_short(cb_max_exp_avg_sq_in_idx);
         reconfig_data_format(cb_max_exp_avg_sq_in_idx, cb_max_exp_avg_sq_in_idx);
         for (uint32_t block_idx = 0, cb_tile_idx = 0; cb_tile_idx < block_size; block_idx += 2, ++cb_tile_idx) {
             copy_tile(cb_max_exp_avg_sq_in_idx, cb_tile_idx, block_idx + 1);
@@ -228,7 +205,7 @@ void MAIN {
         }
         cb_wait_front(cb_param_idx, block_size);
         reconfig_data_format(cb_param_idx, cb_param_idx);
-        copy_tile_init(cb_param_idx);
+        copy_tile_to_dst_init_short(cb_param_idx);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(cb_param_idx, block_idx, block_size + block_idx);
         }
@@ -244,11 +221,6 @@ void MAIN {
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             sub_binary_tile(block_size + block_idx, block_idx, block_idx);
         }
-#if STOCH_ROUND
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            stochastic_round_tile(block_idx);
-        }
-#endif
         tile_regs_commit();
         pack_and_push_block(cb_output_idx, block_size);
         cb_pop_front(cb_param_idx, block_size);
