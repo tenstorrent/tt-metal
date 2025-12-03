@@ -15,20 +15,7 @@ import ttnn
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
 from models.demos.deepseek_v3.tt.generator_pp import DeepseekGenerator as DeepseekGeneratorPP
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
-
-
-def _default_mesh_shape() -> ttnn.MeshShape:
-    device_ids = ttnn.get_device_ids()
-    mesh_device_env = os.getenv("MESH_DEVICE")
-    if mesh_device_env == "DUAL":
-        default_mesh_shape = ttnn.MeshShape(8, 8)  # If running on DUAL system
-    elif mesh_device_env == "QUAD":
-        default_mesh_shape = ttnn.MeshShape(16, 8)  # If running on QUAD system
-    elif mesh_device_env == "TG" or len(device_ids) == 32:  # If running on Galaxy system
-        default_mesh_shape = ttnn.MeshShape(4, 8)
-    else:
-        default_mesh_shape = ttnn.MeshShape(1, len(device_ids))
-    return default_mesh_shape
+from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
 
 def _print_performance_metrics(results: dict) -> None:
@@ -253,10 +240,16 @@ def run_demo(
         require_tokenizer=not random_weights,
     )
 
-    # Open mesh device (reusing test fixture defaults) and set fabric to 1D
-    mesh_shape = _default_mesh_shape()
-    logger.info("Setting fabric config to FABRIC_1D for demo run")
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    requested_system_name = os.getenv("MESH_DEVICE")
+    if requested_system_name is None:
+        raise ValueError("Environment variable $MESH_DEVICE is not set. Please set it to DUAL, QUAD, or TG.")
+    mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
+    logger.info(f"Selected MESH_DEVICE: '{requested_system_name}' - mesh shape will be set to: {mesh_shape}")
+
+    fabric_config = ttnn.FabricConfig.FABRIC_1D
+    logger.info(f"Setting fabric config to {fabric_config} for demo run")
+    ttnn.set_fabric_config(fabric_config)
+
     logger.info(f"Opening mesh device with shape {mesh_shape}")
     if enable_trace:
         logger.info("Enabling trace for decode forward pass")

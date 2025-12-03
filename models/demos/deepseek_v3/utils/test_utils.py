@@ -488,3 +488,13 @@ def get_rope_tensors(
     if position_ids is None:
         return rope_setup.get_rot_mats_table(seq_len)
     return rope_setup.get_rot_mats(position_ids)
+
+
+def system_name_to_mesh_shape(system_name: str) -> ttnn.MeshShape:
+    if system_name == "TG":
+        return ttnn.MeshShape(4, 8)
+    elif system_name == "DUAL":
+        return ttnn.MeshShape(8, 8)
+    elif system_name == "QUAD":
+        return ttnn.MeshShape(16, 8)
+    raise ValueError(f"Unsupported system name: {system_name}. Supported values are DUAL, QUAD, and TG.")
