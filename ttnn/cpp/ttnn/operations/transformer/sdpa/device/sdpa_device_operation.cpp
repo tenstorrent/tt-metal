@@ -9,7 +9,6 @@
 #include "sdpa_program_factory.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-// #include "ttnn/run_operation.hpp"
 #include <tt-metalium/constants.hpp>
 #include "ttnn/device.hpp"
 
