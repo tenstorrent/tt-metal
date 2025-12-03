@@ -303,13 +303,14 @@ constexpr bool is_spine_direction(eth_chan_directions direction) {
     return direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH;
 }
 
-// Defined here because sender_channel_0_free_slots_stream_id does not come from
-// fabric_erisc_router_ct_args.hpp
 static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_free_slots_stream_ids = {
-    tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id,
+    sender_channel_0_free_slots_stream_id,
     sender_channel_1_free_slots_stream_id,
     sender_channel_2_free_slots_stream_id,
-    sender_channel_3_free_slots_stream_id};
+    sender_channel_3_free_slots_stream_id,
+    sender_channel_4_free_slots_stream_id,
+    sender_channel_5_free_slots_stream_id,
+    sender_channel_6_free_slots_stream_id};
 static_assert(sender_channel_free_slots_stream_ids[0] == 17);
 static_assert(sender_channel_free_slots_stream_ids[1] == 18);
 static_assert(sender_channel_free_slots_stream_ids[2] == 19);
@@ -376,15 +377,15 @@ FORCE_INLINE constexpr eth_chan_directions map_compact_index_to_direction(size_t
 // Determine which sender channels are "turn" channels (i.e., north/south for east/west routers)
 // Channel 0 is always for local workers, so it's never a turn channel
 // For 2D fabric, channels 1-3 correspond to compact indices 0-2, which map to actual directions
-constexpr auto get_sender_channel_turn_statuses() -> std::array<bool, MAX_NUM_SENDER_CHANNELS> {
-    std::array<bool, MAX_NUM_SENDER_CHANNELS> turn_statuses = {};  // Initialize to false
+constexpr auto get_sender_channel_turn_statuses() -> std::array<bool, MAX_NUM_SENDER_CHANNELS_VC0> {
+    std::array<bool, MAX_NUM_SENDER_CHANNELS_VC0> turn_statuses = {};  // Initialize to false
 
     // Channel 0 is always for local workers, never a turn channel
     // Only non-spine routers (EAST/WEST) have turn channels
     if constexpr (!is_spine_direction(static_cast<eth_chan_directions>(my_direction))) {
         // Check each sender channel (1-3) to see if it goes to a spine direction (NORTH/SOUTH)
         // Sender channel i (for i=1,2,3) corresponds to compact index (i-1)
-        for (size_t sender_channel = 1; sender_channel < MAX_NUM_SENDER_CHANNELS; sender_channel++) {
+        for (size_t sender_channel = 1; sender_channel < MAX_NUM_SENDER_CHANNELS_VC0; sender_channel++) {
             size_t compact_index = sender_channel - 1;
             eth_chan_directions actual_direction = map_compact_index_to_direction(compact_index);
             turn_statuses[sender_channel] = is_spine_direction(actual_direction);
@@ -417,7 +418,7 @@ FORCE_INLINE constexpr size_t map_downstream_direction_to_compact_index(eth_chan
     return direction_to_compact_index_map[my_direction][downstream_direction];
 }
 
-static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_channels_turn_status =
+static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS_VC0> sender_channels_turn_status =
     get_sender_channel_turn_statuses();
 
 static constexpr std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS> vc_0_free_slots_stream_ids = {
@@ -2305,18 +2306,27 @@ void kernel_main() {
     [[maybe_unused]]
     const auto downstream_vc0_noc_interface_buffer_index_local_addr = 0;
 
+    // Read MAX_NUM_SENDER_CHANNELS teardown semaphores (host packs builder_config::num_sender_channels = 7)
     const auto my_sem_for_teardown_from_edm_0 = get_arg_val<uint32_t>(arg_idx++);
     const auto my_sem_for_teardown_from_edm_1 = get_arg_val<uint32_t>(arg_idx++);
     const auto my_sem_for_teardown_from_edm_2 = get_arg_val<uint32_t>(arg_idx++);
     const auto my_sem_for_teardown_from_edm_3 = get_arg_val<uint32_t>(arg_idx++);
+    const auto my_sem_for_teardown_from_edm_4 = get_arg_val<uint32_t>(arg_idx++);
+    const auto my_sem_for_teardown_from_edm_5 = get_arg_val<uint32_t>(arg_idx++);
+    const auto my_sem_for_teardown_from_edm_6 = get_arg_val<uint32_t>(arg_idx++);
 
     ////////////////////////
     // Sender runtime args
     ////////////////////////
+    // Read MAX_NUM_SENDER_CHANNELS sender worker semaphore pointers (host packs builder_config::num_sender_channels =
+    // 7)
     auto sender0_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
     auto sender1_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
     auto sender2_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
     auto sender3_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
+    auto sender4_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
+    auto sender5_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
+    auto sender6_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
 
     ///////////////////////////////////////////////
     // Local tensix (relay) connection runtime args
@@ -2390,6 +2400,9 @@ void kernel_main() {
                 my_sem_for_teardown_from_edm_1,
                 my_sem_for_teardown_from_edm_2,
                 my_sem_for_teardown_from_edm_3,
+                my_sem_for_teardown_from_edm_4,
+                my_sem_for_teardown_from_edm_5,
+                my_sem_for_teardown_from_edm_6,
             });
 
     // create the remote receiver channel buffers using multi-pool system
@@ -2414,15 +2427,15 @@ void kernel_main() {
         SENDER_TO_POOL_IDX>::make();
 
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_connection_live_semaphore_addresses =
-        take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
-            std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
+        take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS_VC0, size_t>(
+            std::array<size_t, MAX_NUM_SENDER_CHANNELS_VC0>{
                 local_sender_channel_0_connection_semaphore_addr,
                 local_sender_channel_1_connection_semaphore_addr,
                 local_sender_channel_2_connection_semaphore_addr,
                 local_sender_channel_3_connection_semaphore_addr});
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_connection_info_addresses =
-        take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
-            std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
+        take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS_VC0, size_t>(
+            std::array<size_t, MAX_NUM_SENDER_CHANNELS_VC0>{
                 local_sender_channel_0_connection_info_addr,
                 local_sender_channel_1_connection_info_addr,
                 local_sender_channel_2_connection_info_addr,
