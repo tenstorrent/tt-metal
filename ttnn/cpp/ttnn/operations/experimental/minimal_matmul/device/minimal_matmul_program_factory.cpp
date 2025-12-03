@@ -30,7 +30,8 @@ void override_program_parameters(
     auto output_addr = output_tensors.at(0).buffer()->address();
     auto in2_addr =
         optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer()->address() : 0;
-
+    auto in3_addr =
+        override_variables.read_local_slice_from_input ? optional_input_tensors.at(1).value().buffer()->address() : 0;
     auto& in0_sender_runtime_args = GetRuntimeArgs(program, override_variables.in0_sender_kernels_id);
     auto& in0_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in0_receiver_kernels_id);
     auto& in1_sender_runtime_args = GetRuntimeArgs(program, override_variables.in1_sender_kernels_id);
@@ -45,6 +46,7 @@ void override_program_parameters(
             in0_sender_args[0] = in0_addr;
             in0_sender_args[1] = output_addr;
             in0_sender_args[2] = in2_addr;
+            in0_sender_args[3] = in3_addr;
         } else {
             auto& in0_receiver_args = in0_receiver_runtime_args[core.x][core.y];
             in0_receiver_args[1] = output_addr;
@@ -739,7 +741,8 @@ ttnn::operations::experimental::minimal_matmul::minimal_matmul_override_variable
         in0_receiver_kernels_id,
         in1_sender_kernels_id,
         in1_receiver_kernels_id,
-        transpose_core_grid};
+        transpose_core_grid,
+        fuse_op && fused_op_signaler->read_local_slice_from_input};
 }
 
 }  // namespace detail

@@ -268,6 +268,11 @@ def run_strided_all_gather_minimal_matmul_impl(
             tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
             tt_matmul_out_tensor_list.append(tt_matmul_out_tensor)
         logger.info(f"Done executing trace")
+
+        logger.info(f"Waiting for op")
+        ttnn.synchronize_device(mesh_device)
+        logger.info(f"Done op")
+
         signpost("stop")
     else:
         for i in range(num_iters):
@@ -301,8 +306,8 @@ def run_strided_all_gather_minimal_matmul_impl(
                     tt_ag_out_slice = tt_ag_out[d : d + 1, :, :, :]
                     eq, output = comp_pcc(tt_ag_out_slice, torch_ag_out_tensor, allowed_pcc)
 
-                logger.info(f"{output}, iteration {i}")
-                assert eq, f"{i} AG FAILED ag: {output}"
+                    logger.info(f"{output}, iteration {i}")
+                    assert eq, f"iter {i} device {d} AG FAILED ag: {output}"
 
             tt_mm_out_tensor = tt_matmul_out_tensor_list[i]
             torch_mm_out_tensor = torch_matmul_output_list[i if not enable_trace else 0]
@@ -318,11 +323,12 @@ def run_strided_all_gather_minimal_matmul_impl(
                 for d in range(mesh_device.shape[1]):
                     tt_mm_out_slice = tt_mm_out[d : d + 1, :, :, :]
                     eq, output = comp_pcc(tt_mm_out_slice, torch_mm_out_tensor)
+                    logger.info(f"{output}, iteration {i}")
+                    assert eq, f"iter {i} device {d} MM FAILED ag: {output}"
             else:
                 eq, output = comp_pcc(tt_mm_out, torch_mm_out_tensor)
-
-            logger.info(f"{output}, iteration {i}")
-            assert eq, f"{i} MM FAILED ag: {output}"
+                logger.info(f"{output}, iteration {i}")
+                assert eq, f"iter {i} MM FAILED ag: {output}"
 
 
 # tiles_per_chunk needs to be divisible by num_workers_per_link

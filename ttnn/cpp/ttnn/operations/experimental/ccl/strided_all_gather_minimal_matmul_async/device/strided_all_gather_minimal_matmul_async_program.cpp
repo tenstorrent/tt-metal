@@ -60,8 +60,8 @@ void StridedAllGatherMinimalMatmulAsyncProgramFactory::override_runtime_argument
             shared_variables.mm_shared_variables,
             &attributes.matmul_struct,
             program,
-            {tensor_args.input_tensor, tensor_args.weight_tensor},
-            {tensor_args.bias},
+            {output_tensor.at(0), tensor_args.weight_tensor},
+            {tensor_args.bias, tensor_args.input_tensor},
             {output_tensor.at(1)});
     }
 }
