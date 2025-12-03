@@ -48,7 +48,7 @@ private:
             receiver_txq_id,
             local_receiver_credits_base_address,
             to_senders_credits_base_address,
-            total_number_of_receiver_to_sender_credit_eth_words);
+            total_number_of_receiver_to_sender_credit_num_bytes);
     }
 };
 
