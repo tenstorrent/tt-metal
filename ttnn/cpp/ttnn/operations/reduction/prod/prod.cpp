@@ -1,18 +1,18 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "prod.hpp"
 #include "device/prod_nc_op.hpp"
 #include "device/prod_op_all.hpp"
-#include "ttnn/operations/creation.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/data_movement/permute/permute.hpp"
-#include "ttnn/operations/functions.hpp"
-#include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
+
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/permute/permute.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/operations/functions.hpp"
 
 namespace ttnn::operations::reduction {
 
