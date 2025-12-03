@@ -34,7 +34,7 @@ ttnn::Tensor ArgMaxOperation::invoke(
     const std::optional<int>& dim,
     bool keepdim,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    bool use_muticore,
+    bool use_multicore,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
     auto input_shape = input_tensor.logical_shape();
@@ -63,7 +63,7 @@ ttnn::Tensor ArgMaxOperation::invoke(
         dim,
         keepdim,
         sub_core_grids,
-        use_muticore,
+        use_multicore,
         output_memory_config,
         std::move(optional_output_tensor));
 }
