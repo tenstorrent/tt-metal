@@ -15,7 +15,7 @@ from models.common.utility_functions import is_grayskull, is_blackhole, torch_ra
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["t3k"], indirect=True)
 def test_wan22_failure_t3k(mesh_device):
-    for i in range(5):
+    for _ in range(5):
         torch_input_tensor = torch.rand((1, 6240, 384), dtype=torch.bfloat16)
         input_tensor = ttnn.from_torch(
             torch_input_tensor,
@@ -36,7 +36,7 @@ def test_wan22_failure_t3k(mesh_device):
 
 
 def test_wan22_failure():
-    for i in range(5):
+    for _ in range(5):
         torch_input_tensor = torch.rand((1, 6240, 384), dtype=torch.bfloat16)
         input_tensor = ttnn.from_torch(
             torch_input_tensor,
