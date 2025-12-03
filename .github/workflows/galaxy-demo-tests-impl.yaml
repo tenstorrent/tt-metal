@@ -247,6 +247,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
+          NO_PROMPT: 1
         run: |
           pytest -n auto models/experimental/tt_dit/tests/models/motif/test_pipeline_motif.py -k "4x8cfg1sp0tp1" --timeout 1200
       - name: Run Wan2.2 demo tests (direct pytest)
