@@ -5,13 +5,11 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::data_movement::transpose {
 
 enum class TransposeOpDim { WH, HC, CN, NH, NW, CW };
 
 enum class TransposeOpParallelizationStrategy { MULTI_CORE_WH, MULTI_CORE_HC, MULTI_CORE_CN };
-
-namespace transpose {
 
 struct operation_attributes_t {
     TransposeOpDim dim;
@@ -26,6 +24,4 @@ struct tensor_args_t {
 using tensor_return_value_t = Tensor;
 using spec_return_value_t = TensorSpec;
 
-}  // namespace transpose
-
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::transpose
