@@ -9,8 +9,6 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
-#include "ttnn/operations/data_movement/untilize/device/untilize_program_factory.hpp"
-
 // #include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 // #include "cpp/ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include <tt-metalium/core_coord.hpp>
@@ -39,7 +37,7 @@ uint32_t get_num_rows(const ttnn::Tensor& tensor) {
     return logical_volume / hidden_size;
 }
 
-GlobalSemaphore launch_fused_untilize(
+auto launch_fused_untilize(
     Program& program,
     IDevice* device,
     const Tensor& input_tensor,
@@ -48,9 +46,9 @@ GlobalSemaphore launch_fused_untilize(
     const CoreRangeSet& sender_core_grid) {
     const auto untilize_cores = subdevice_cores.subtract(sender_core_grid);
     // TODO this may allocate the semaphore on cores that the op doesn't need.
-    GlobalSemaphore sync_semaphore(device, untilize_cores, 0u);
+    GlobalSemaphore sync_semaphore(device, subdevice_cores, 0u);
 
-    data_movement::untilize::untilize_row_wise_fuseable(
+    auto callback = data_movement::untilize::untilize_row_wise_fuseable(
         program,
         input_tensor,
         untilize_output_tensor,
@@ -60,7 +58,7 @@ GlobalSemaphore launch_fused_untilize(
         sync_semaphore,
         subdevice_cores);
 
-    return sync_semaphore;
+    return std::make_tuple(sync_semaphore, callback);
 }
 
 std::pair<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_cb_sizes(
@@ -322,11 +320,12 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
     // launch fused untilize if input is tiled
     std::optional<GlobalSemaphore> untilize_sync_semaphore;
+    std::optional<data_movement::untilize::FuseableUntilizeCallback> untilize_callback;
     if (input_tiled) {
         const auto& untilize_output_tensor = std::get<2>(tensor_return_value);
         TT_FATAL(untilize_output_tensor.has_value(), "Expected untilize intermediate buffer");
         // !TODO deal with override RTs
-        untilize_sync_semaphore = detail::launch_fused_untilize(
+        std::tie(untilize_sync_semaphore, untilize_callback) = detail::launch_fused_untilize(
             program,
             mesh_device,
             tensor_args.input_tensor,
@@ -515,7 +514,9 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
          .binary_writer_kernel_id = binary_writer_kernel_id,
          .cores = sender_cores,
          .init_semaphore = init_semaphore,
-         .cross_device_semaphore = cross_device_semaphore}};
+         .cross_device_semaphore = cross_device_semaphore,
+         .untilize_sync_semaphore = untilize_sync_semaphore,
+         .untilize_callback = untilize_callback}};
 }
 
 void AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::override_runtime_arguments(
@@ -529,26 +530,40 @@ void AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::override_runtime_a
         const auto& binary_writer_kernel_id = shared_variables.binary_writer_kernel_id;
         const auto& cores = shared_variables.cores;
 
+        const auto& maybe_untilize_semaphore = shared_variables.untilize_sync_semaphore;
+
         const auto& output_tensor = std::get<0>(tensor_return_value);
         const auto& metadata_tensor = std::get<1>(tensor_return_value);
+        const auto& untilized_tensor = std::get<2>(tensor_return_value);
+
+        const auto& input_tensor = (untilized_tensor.has_value()) ? untilized_tensor.value() : tensor_args.input_tensor;
 
         for (const auto& core : cores) {
             auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, ternary_reader_kernel_id, core);
             auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, binary_writer_kernel_id, core);
-            reader_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
+            reader_runtime_args.at(0) = input_tensor.buffer()->address();
             reader_runtime_args.at(1) = tensor_args.expert_indices_tensor.buffer()->address();
             reader_runtime_args.at(2) = tensor_args.expert_mapping_tensor.buffer()->address();
             reader_runtime_args.at(3) = output_tensor.buffer()->address();
             reader_runtime_args.at(4) = metadata_tensor.buffer()->address();
             reader_runtime_args.at(5) = (uint32_t)shared_variables.cross_device_semaphore.address();
 
-            writer_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
+            if (maybe_untilize_semaphore.has_value()) {
+                reader_runtime_args.at(8) = maybe_untilize_semaphore->address();
+            }
+
+            writer_runtime_args.at(0) = input_tensor.buffer()->address();
             writer_runtime_args.at(1) = tensor_args.expert_indices_tensor.buffer()->address();
             writer_runtime_args.at(2) = tensor_args.expert_mapping_tensor.buffer()->address();
             writer_runtime_args.at(3) = output_tensor.buffer()->address();
             writer_runtime_args.at(4) = metadata_tensor.buffer()->address();
             writer_runtime_args.at(5) = (uint32_t)shared_variables.cross_device_semaphore.address();
             writer_runtime_args.at(6) = (uint32_t)shared_variables.init_semaphore.address();
+        }
+        auto& maybe_untilize_callback = shared_variables.untilize_callback;
+        if (maybe_untilize_callback.has_value()) {
+            (*maybe_untilize_callback)(
+                *maybe_untilize_semaphore, program, tensor_args.input_tensor, untilized_tensor.value());
         }
     }
 }

@@ -61,6 +61,8 @@ void kernel_main() {
     constexpr uint32_t noc_end_x = get_compile_time_arg_val(num_ct_args + 2);
     constexpr uint32_t noc_end_y = get_compile_time_arg_val(num_ct_args + 3);
     constexpr uint32_t num_dests = get_compile_time_arg_val(num_ct_args + 4);
+    constexpr uint32_t total_col_tiles = get_compile_time_arg_val(num_ct_args + 5);
+    constexpr auto total_num_sticks = tile_height * total_col_tiles;
 
     if constexpr (num_dests == 0) {
         return;
@@ -72,10 +74,13 @@ void kernel_main() {
     uint64_t mcast_sync_semaphore_noc_addr =
         get_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, sync_semaphore_addr);
 
-    DPRINT << "sem wait val: " << start_stick_id << "\n";
     noc_semaphore_wait(sync_semaphore_ptr, start_stick_id);
     noc_semaphore_set(sync_semaphore_ptr, start_stick_id+num_sticks);
 
-    noc_semaphore_set_multicast_loopback_src(sync_semaphore_addr, mcast_sync_semaphore_noc_addr, num_dests);
+    noc_semaphore_set_multicast(sync_semaphore_addr, mcast_sync_semaphore_noc_addr, num_dests);
+
+    // clean up
+    noc_semaphore_wait(sync_semaphore_ptr, total_num_sticks);
+    noc_semaphore_set(sync_semaphore_ptr, 0u);
 #endif
 }

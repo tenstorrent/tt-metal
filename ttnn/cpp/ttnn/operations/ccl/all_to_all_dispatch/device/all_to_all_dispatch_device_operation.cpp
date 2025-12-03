@@ -108,7 +108,7 @@ AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOpera
     }
 
     // final batch in the metadata tensor
-    uint32_t batch = (output_concat_dim == 1) ? input_shape[0] * dispatch_devices : input_shape[0];
+    uint32_t batch = (output_concat_dim == 1) ? indices_shape[0] * dispatch_devices : indices_shape[0];
     uint32_t selected_experts_k = indices_shape[-1];
     uint32_t seq_len = (output_concat_dim == 2) ? indices_shape[-2] * dispatch_devices : indices_shape[-2];
 
@@ -139,8 +139,9 @@ AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOpera
 
     std::optional<TensorSpec> untilized_input_tensor = std::nullopt;
     if (input_tensor.layout() == tt::tt_metal::Layout::TILE) {
+        Shape intermediate_shape({indices_shape[0], 1, seq_len, hidden_size});
         untilized_input_tensor.emplace(
-            input_shape,
+            intermediate_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(),
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
