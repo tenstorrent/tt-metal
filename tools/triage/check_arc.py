@@ -53,7 +53,7 @@ def check_arc_block(arc: NocBlock, postcode: int) -> ArcCheckData:
 
     # We do this in order to support all firmware versions
     # This way we do not support uptime longer than around 9 years, but that is unrealistic
-    heartbeat_offset = 0xA5A5A5A5 if heartbeat_1 > 0xA5A5A5A5 else 0
+    heartbeat_offset = 0xA5A5A5A5 if heartbeat_1 >= 0xA5A5A5A5 else 0
     assert (
         heartbeat_1 > heartbeat_offset
     ), f"ARC heartbeat lower than default value: {RED}{heartbeat_1}{RST}. Expected at least {BLUE}{heartbeat_offset}{RST}"
