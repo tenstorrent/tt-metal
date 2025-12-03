@@ -14,13 +14,15 @@
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+#include "pad_program_factory.hpp"
+
 static const uint32_t max_read_size = 2048;  // max read size in bytes for reader and writer kernels
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::data_movement::pad::program {
 
-operation::ProgramWithCallbacks pad_rm_reader_writer(
+operation::ProgramWithCallbacks PadProgramFactory::pad_rm_reader_writer(
     const Tensor& a,
     Tensor& output,
     const ttnn::Shape& output_padded_shape,
@@ -170,7 +172,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
     return {std::move(program), override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks pad_tile(
+operation::ProgramWithCallbacks PadProgramFactory::pad_tile(
     const Tensor& a,
     Tensor& output,
     const ttnn::Shape& output_padded_shape,
@@ -444,7 +446,7 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint
         ncores_per_batch_h);
 }
 
-operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
+operation::ProgramWithCallbacks PadProgramFactory::pad_rm_reader_writer_multi_core(
     const Tensor& a,
     Tensor& output,
     const ttnn::Shape& output_padded_shape,
@@ -780,7 +782,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     return ret_val;
 }
 
-operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
+operation::ProgramWithCallbacks PadProgramFactory::pad_rm_reader_writer_multi_core_v2(
     const Tensor& a,
     Tensor& output,
     const ttnn::Shape& output_padded_shape,
@@ -1155,7 +1157,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     return ret_val;
 }
 
-operation::ProgramWithCallbacks pad_rm_sharded_height_only(
+operation::ProgramWithCallbacks PadProgramFactory::pad_rm_sharded_height_only(
     const Tensor& a,
     Tensor& output,
     const ttnn::Shape& output_padded_shape,
@@ -1335,7 +1337,7 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks pad_rm_sharded_width_only(
+operation::ProgramWithCallbacks PadProgramFactory::pad_rm_sharded_width_only(
     const Tensor& input_tensor,
     Tensor& output,
     const ttnn::Shape& output_padded_shape,
@@ -1485,7 +1487,7 @@ static inline int advance_tensor_index(std::vector<uint32_t>& idx, const ttnn::S
     return 0;  // overflowed most-significant dim
 }
 
-operation::ProgramWithCallbacks pad_tile_multicore(
+operation::ProgramWithCallbacks PadProgramFactory::pad_tile_multicore(
     const Tensor& a,
     Tensor& output,
     const ttnn::Shape& output_padded_shape,
@@ -1709,4 +1711,4 @@ operation::ProgramWithCallbacks pad_tile_multicore(
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
-}  // namespace ttnn::operations::data_movement::detail
+}  // namespace ttnn::operations::data_movement::pad::program

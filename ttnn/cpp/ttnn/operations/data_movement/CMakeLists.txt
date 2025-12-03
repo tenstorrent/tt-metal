@@ -141,7 +141,7 @@ target_sources(
         non_zero_indices/device/non_zero_indices_device_operation.cpp
         non_zero_indices/device/non_zero_indices_program_factory.cpp
         non_zero_indices/non_zero_indices.cpp
-        pad/device/pad_op.cpp
+        pad/device/pad_device_operation.cpp
         pad/device/pad_program_factory.cpp
         pad/pad.cpp
         permute/device/permute_device_operation.cpp

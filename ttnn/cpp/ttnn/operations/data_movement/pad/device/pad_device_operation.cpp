@@ -10,7 +10,7 @@
 #include "ttnn/operations/creation.hpp"
 
 using namespace tt::tt_metal;
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::data_movement::pad {
 
 PadDeviceOperation::program_factory_t PadDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -130,4 +130,4 @@ std::tuple<PadDeviceOperation::operation_attributes_t, PadDeviceOperation::tenso
         tensor_args_t{input, preallocated_output}};
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::pad

@@ -4,15 +4,23 @@
 
 #pragma once
 
-#include "ttnn/cpp/ttnn/operations/data_movement/pad/device/pad_device_operation_types.hpp"
+#include <optional>
+#include <variant>
 
-namespace ttnn::operations::data_movement {
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/decorators.hpp"
 
+#include "ttnn/operations/data_movement/pad/device/pad_device_operation_types.hpp"
+#include "ttnn/operations/data_movement/pad/device/pad_program_factory.hpp"
+
+namespace ttnn::operations::data_movement::pad {
 struct PadDeviceOperation {
-    using operation_attributes_t = pad::operation_attributes_t;
-    using tensor_args_t = pad::tensor_args_t;
-    using spec_return_value_t = pad::spec_return_value_t;
-    using tensor_return_value_t = pad::tensor_return_value_t;
+    using operation_attributes_t = operation_attributes_t;
+    using tensor_args_t = tensor_args_t;
+    using spec_return_value_t = spec_return_value_t;
+    using tensor_return_value_t = tensor_return_value_t;
     using program_factory_t = std::variant<program::PadProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
@@ -34,7 +42,9 @@ struct PadDeviceOperation {
         const bool use_multicore,
         const std::optional<Tensor>& preallocated_output);
 };
+}  // namespace ttnn::operations::data_movement::pad
 
 namespace ttnn::prim {
-constexpr auto pad = ttnn::register_operation<"ttnn::prim::pad", ttnn::operations::data_movement::PadDeviceOperation>();
+constexpr auto pad =
+    ttnn::register_operation<"ttnn::prim::pad", ttnn::operations::data_movement::pad::PadDeviceOperation>();
 }  // namespace ttnn::prim
