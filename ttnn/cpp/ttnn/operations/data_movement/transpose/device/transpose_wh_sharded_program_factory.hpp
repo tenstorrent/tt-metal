@@ -9,7 +9,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 
-namespace ttnn::operations::data_movement::program {
+namespace ttnn::operations::data_movement::transpose::program {
 
 struct TransposeWHShardedSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
@@ -39,4 +39,4 @@ struct TransposeWHShardedProgramFactory {
         transpose::tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::operations::data_movement::transpose::program

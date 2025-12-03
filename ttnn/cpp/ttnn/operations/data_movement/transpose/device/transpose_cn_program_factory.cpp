@@ -11,7 +11,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::program {
+namespace ttnn::operations::data_movement::transpose::program {
 
 namespace {
 
@@ -201,4 +201,4 @@ void TransposeCNProgramFactory::override_runtime_arguments(
         false);
 }
 
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::operations::data_movement::transpose::program

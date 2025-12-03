@@ -9,7 +9,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::data_movement::transpose {
 
 TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -267,4 +267,4 @@ TransposeDeviceOperation::invoke(
         }};
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::transpose

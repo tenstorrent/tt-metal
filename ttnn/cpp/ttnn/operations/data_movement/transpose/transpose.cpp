@@ -14,7 +14,7 @@
 
 #include <tt-metalium/hal.hpp>
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::data_movement::transpose {
 
 namespace detail {
 
@@ -249,4 +249,4 @@ ttnn::Tensor ExecuteTranspose::invoke(
     return invoke(input_tensor, dim1, dim2, std::nullopt, pad_value);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::transpose

@@ -12,7 +12,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::program {
+namespace ttnn::operations::data_movement::transpose::program {
 
 TransposeWHShardedRMProgramFactory::cached_program_t TransposeWHShardedRMProgramFactory::create(
     const transpose::operation_attributes_t& operation_attributes,
@@ -225,4 +225,4 @@ void TransposeWHShardedRMProgramFactory::override_runtime_arguments(
     UpdateDynamicCircularBufferAddress(program, shared_variables.cb_output, *dst_buffer);
 }
 
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::operations::data_movement::transpose::program
