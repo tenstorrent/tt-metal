@@ -696,11 +696,7 @@ jobs:
         || format('tt-ubuntu-2204-{0}-viommu-stable', matrix.runner_label)
       }}
     steps:
-      - name: 🧬 Checkout Repository (for local actions)
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: 🧬 Checkout Repository (for container)
+      - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -939,11 +935,7 @@ jobs:
         || format('tt-ubuntu-2204-{0}-viommu-stable', matrix.test-group.runner_label)
       }}
     steps:
-      - name: 🧬 Checkout Repository (for local actions)
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: 🧬 Checkout Repository (for container)
+      - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -1041,11 +1033,7 @@ jobs:
     timeout-minutes: 720
     runs-on: ${{ matrix.runs_on }}
     steps:
-      - name: 🧬 Checkout Repository (for local actions)
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: 🧬 Checkout Repository (for container)
+      - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -1164,11 +1152,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     runs-on: tt-ubuntu-2204-large-stable
     steps:
-      - name: 🧬 Checkout Repository (for local actions)
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: 🧬 Checkout Repository (for container)
+      - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive

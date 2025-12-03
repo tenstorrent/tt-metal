@@ -69,11 +69,7 @@ jobs:
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     steps:
-      - name: 🧬 Checkout Repository (for local actions)
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: 🧬 Checkout Repository (for container)
+      - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive

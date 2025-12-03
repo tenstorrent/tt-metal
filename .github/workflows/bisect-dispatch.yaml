@@ -113,12 +113,7 @@ jobs:
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
-      - name: 🧬 Checkout Repository (for local actions)
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          submodules: recursive
-      - name: 🧬 Checkout Repository (for container)
+      - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
