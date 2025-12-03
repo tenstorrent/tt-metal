@@ -417,6 +417,11 @@ void FabricTensixDatamoverConfig::assign_workers_to_tensix_cores(
 
     for (size_t i = 0; i < workers_by_column.size(); i++) {
         size_t tensix_idx = i / num_worker_channels;
+        TT_FATAL(
+            tensix_idx < tensix_cores_for_workers.size(),
+            "tensix_idx {} exceeds tensix_cores_for_workers size {}",
+            tensix_idx,
+            tensix_cores_for_workers.size());
         CoreCoord tensix_core = tensix_cores_for_workers[tensix_idx];
         uint32_t channel_index = i % num_worker_channels;
         // Store tensix core and channel index together
