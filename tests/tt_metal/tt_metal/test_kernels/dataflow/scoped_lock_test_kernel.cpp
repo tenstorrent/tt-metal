@@ -18,15 +18,17 @@ void kernel_main() {
     experimental::Noc noc;
     experimental::CoreLocalMem<uint32_t> buffer(l1_buffer_addr);
 
-    auto lock = buffer.scoped_lock(num_elements);
+    {
+        auto lock = buffer.scoped_lock(num_elements);
 
-    other_sem.up(noc, other_noc_x, other_noc_y, 1);
-    my_sem.wait(1);
+        my_sem.wait(1);
+        other_sem.up(noc, other_noc_x, other_noc_y, 1);
 
-    for (uint32_t i = 0; i < num_elements; i++) {
-        buffer[i] = i;
+        for (uint32_t i = 0; i < num_elements; i++) {
+            buffer[i] = i;
+        }
+
+        my_sem.wait(2);
+        other_sem.up(noc, other_noc_x, other_noc_y, 1);
     }
-
-    other_sem.up(noc, other_noc_x, other_noc_y, 1);
-    my_sem.wait(2);
 }

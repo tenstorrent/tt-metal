@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "dataflow_api.h"
+#include "hw/inc/tt-1xx/risc_common.h"
 
 void kernel_main() {
     uint32_t local_buffer_addr = get_arg_val<uint32_t>(0);
@@ -48,4 +49,11 @@ void kernel_main() {
 
     other_sem.up(noc, other_noc_x, other_noc_y, 1);
     my_sem.wait(2);
+
+    // Unlocked period
+    for (uint32_t i = 0; i < 25; ++i) {
+        uint64_t target_noc_addr = get_noc_addr(target_noc_x, target_noc_y, target_addr);
+        noc_async_write(local_buffer_addr, target_noc_addr, num_elements * sizeof(uint32_t));
+        noc_async_write_barrier();
+    }
 }
