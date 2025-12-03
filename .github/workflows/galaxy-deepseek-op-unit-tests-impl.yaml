@@ -27,7 +27,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "(Galaxy) DeepSeek op unit tests", arch: wormhole_b0, model: deepseek, timeout: 60, owner_id: U03HY7MK4BT}, # Mark O'Connor
+          { name: "(Galaxy) DeepSeek op unit tests", arch: wormhole_b0, model: deepseek, timeout: 30, owner_id: U03HY7MK4BT}, # Mark O'Connor
         ]
     runs-on:
       - arch-wormhole_b0
@@ -44,10 +44,11 @@ jobs:
         ARCH_NAME: ${{ matrix.test-group.arch }}
         DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
         DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache
+        MESH_DEVICE: TG
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:rw
+        - /mnt/MLPerf:/mnt/MLPerf:r
       options: "--device /dev/tenstorrent"
     defaults:
       run:
