@@ -35,6 +35,7 @@ set(TT_METAL_TESTS_SRCS
     test_multi_core_kernel.cpp
     test_multiple_programs.cpp
     test_sdpa_reduce_c.cpp
+    test_sdpa_matmul_reduce_c_transposed.cpp
     test_single_dm_l1_write.cpp
     test_stress_noc_mcast.cpp
     test_transpose_hc.cpp
