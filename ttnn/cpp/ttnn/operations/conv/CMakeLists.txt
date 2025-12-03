@@ -27,7 +27,7 @@ target_sources(
         conv2d/conv2d.cpp
         conv2d/conv2d_utils.cpp
         conv2d/conv2d_op_program_factory_common.cpp
-        conv2d/device/conv2d_op.cpp
+        conv2d/device/conv2d_device_operation.cpp
         conv2d/device/conv2d_op_sharded_program_factory.cpp
         conv2d/device/conv2d_op_width_sharded_program_factory.cpp
         conv_transpose2d/conv_transpose2d.cpp
