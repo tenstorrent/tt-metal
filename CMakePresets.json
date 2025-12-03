@@ -74,6 +74,12 @@
         "targets": ["all"]
       },
       {
+        "name": "dev-libcpp",
+        "configurePreset": "libcpp",
+        "configuration": "Release",
+        "targets": ["all"]
+      },
+      {
         "name": "debug",
         "configurePreset": "default",
         "configuration": "Debug",
