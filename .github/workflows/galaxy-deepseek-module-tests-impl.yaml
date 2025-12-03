@@ -32,7 +32,6 @@ jobs:
     runs-on:
       - arch-wormhole_b0
       - ${{ inputs.topology }}
-      - bare-metal
       - pipeline-functional
       - ${{ inputs.extra-tag }}
     container:
@@ -64,20 +63,8 @@ jobs:
       - name: Run DeepSeek module tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          fail=0
-          echo "LOG_METAL: Running DeepSeek module tests"
-          start_time=$(date +%s)
-
           pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --timeout 10 --durations=0 || fail=1
-
-          end_time=$(date +%s)
-          duration=$((end_time - start_time))
-          echo "LOG_METAL: DeepSeek module tests took $duration seconds to complete"
-
-          if (( fail )); then
-            exit 1
-          fi
+          pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --timeout 10 --durations=0
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
