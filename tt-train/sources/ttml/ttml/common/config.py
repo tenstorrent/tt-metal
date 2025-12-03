@@ -25,7 +25,7 @@ class DeviceConfig:
             device_config = yaml_config.get("device_config", {})
 
         self.mesh_shape = device_config.get("mesh_shape", [1, 1])
-        self.device_ids = device_config.get("device_ids", [])
+        self.device_ids = device_config.get("device_ids", None)
         self.enable_tp = device_config.get("enable_tp", False)
         self.enable_ddp = device_config.get("enable_ddp", False)
 

@@ -18,7 +18,6 @@ from huggingface_hub import hf_hub_download
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 
-sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/sources/ttml')
 import ttml
 from ttml.common.config import (
     TrainingConfig,
@@ -329,6 +328,7 @@ def train():
     tokenizer = AutoTokenizer.from_pretrained(
         "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
     )
+    # tokenizer = AutoTokenizer.from_pretrained("gpt2")
 
     yaml_config = load_config(
         CONFIG, f"{get_tt_metal_home()}/tt-train/configs/training_configs"
@@ -379,6 +379,8 @@ def train():
         repo_id="TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T",
         filename="model.safetensors",
     )
+    # safetensors_path = hf_hub_download("gpt2", filename="model.safetensors")
+
     safetensors_path = safetensors_path.replace("model.safetensors", "")
     print(f"Safetensors path: {safetensors_path}")
 
