@@ -748,8 +748,6 @@ def test_demo_text(
     num_layers,
     mode,
 ):
-    mesh_devices = [create_submeshes(mesh_device, 4)[0]]
-
     """
     Simple demo with limited dependence on reference code.
     """
