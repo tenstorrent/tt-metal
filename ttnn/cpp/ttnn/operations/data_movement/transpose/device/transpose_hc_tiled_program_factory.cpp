@@ -8,6 +8,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -128,6 +129,11 @@ TransposeHCTiledProgramFactory::cached_program_t TransposeHCTiledProgramFactory:
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
+    log_debug(tt::LogOp, "transpose_hc_tiled");
+    log_debug(tt::LogOp, "sub_tile_line_bytes: {}", sub_tile_line_bytes);
+    log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
+    log_debug(tt::LogOp, "single_tile_size: {}", single_tile_size);
+
     IDevice* device = input_tensor.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -141,6 +147,9 @@ TransposeHCTiledProgramFactory::cached_program_t TransposeHCTiledProgramFactory:
     Buffer* dst_buffer = output_tensor.buffer();
 
     uint32_t src0_cb_index = 0;
+    // TODO: noc_async_write only require 16B alignment for both DRAM and L1 for Blackhole, so instead of reading in
+    // face-lines from C tiles to form a single tile, we can load a single tile and then write out its face-lines to C
+    // tiles
     uint32_t alignment = dst_buffer->alignment();
     bool misaligned = alignment > sub_tile_line_bytes;
 

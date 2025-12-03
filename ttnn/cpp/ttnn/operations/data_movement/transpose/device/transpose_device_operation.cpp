@@ -189,6 +189,9 @@ TransposeDeviceOperation::spec_return_value_t TransposeDeviceOperation::compute_
     const auto& dim = operation_attributes.dim;
     const auto& output_mem_config = operation_attributes.output_mem_config;
 
+    // TODO: Remove usage of input/output padded shape
+    // - Get output alignment from input alignment and output dtype, layout, mem_config
+    // - Get shard spec from output strides (logical shape + alignment)?
     auto output_shape = input_tensor.logical_shape();
     auto output_padded_shape = input_tensor.padded_shape();
 
