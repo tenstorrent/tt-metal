@@ -99,8 +99,7 @@ AllReduceAsyncMeshWorkloadFactory::cached_mesh_workload_t AllReduceAsyncMeshWork
     return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
 
-ttnn::device_operation::CachedProgram<AllReduceAsyncMeshWorkloadFactory::shared_variables_t>
-AllReduceAsyncMeshWorkloadFactory::create_at(
+AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFactory::create_at(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinate& coord,
     const tensor_args_t& tensor_args,
