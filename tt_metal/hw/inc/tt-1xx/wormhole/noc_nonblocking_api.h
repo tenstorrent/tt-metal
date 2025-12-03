@@ -10,6 +10,7 @@
 #include "dev_msgs.h"
 #include "noc_overlay_parameters.h"
 #include "risc_attribs.h"
+#include "debug/assert.h"
 
 #if defined(COMPILE_FOR_BRISC)
 constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
@@ -698,6 +699,8 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction
 
     if constexpr (!skip_cmdbuf_chk) {
         while (!noc_cmd_buf_ready(noc, cmd_buf));
+    } else {
+        ASSERT(noc_cmd_buf_ready(noc, cmd_buf));
     }
     while (NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(trid)) > ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
 

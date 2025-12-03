@@ -226,8 +226,6 @@ struct PrefetchExecBufState {
     uint32_t pages;
     uint32_t length;
     uint32_t read_ptr;
-    uint32_t prefetch_page_id;
-    uint32_t prefetch_pages_read;
     uint32_t prefetch_length;
 };
 
@@ -1065,56 +1063,35 @@ uint32_t process_stall(uint32_t cmd_ptr) {
 // It starts by fetching initial chunk of 16KB from DRAM and then prefetches
 // the rest and returns to have the initial cmddat_q to be processed.
 // All fetching from DRAM stops at the end of cmddat_q until the cmddat_q are
-// processed.  Then it repeats again.
-// Note:
-//   exec_buf_state.page_id, base_addr, log_page_size, pages, read_ptr must
-//     be initialized to start using this function.
-//   exec_buf_state.read_ptr needs to be reset to cmddat_q_base when
-//     all commands are processed to reset.
-void paged_read_into_cmddat_q(PrefetchExecBufState& exec_buf_state) {
+// processed.  Then it repeats again. Note: exec_buf_state struct must be
+// initialized to start using this function.
+void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_state) {
+    // This function also resets the cmd_ptr when it is at the end of cmddat_q.
+    // That is the only thing related to cmd_ptr in this function.
+    if (cmd_ptr == cmddat_q_end) {
+        cmd_ptr = cmddat_q_base;
+    }
+
     uint32_t page_id = exec_buf_state.page_id;
     uint32_t base_addr = exec_buf_state.base_addr;
     uint32_t log_page_size = exec_buf_state.log_page_size;
     uint32_t page_size = 1 << log_page_size;
     uint32_t pages = exec_buf_state.pages;
     uint32_t read_ptr = exec_buf_state.read_ptr;
-    uint32_t max_read_pages;
     constexpr uint32_t INITIAL_FETCH_SIZE = 16 * 1024;                           // 16KB (OPTIMIZE HERE)
     constexpr uint32_t PREFETCH_FETCH_SIZE = cmddat_q_size - INITIAL_FETCH_SIZE;  // the rest
-
-    // cmddat_q do not wrap around
-    // reset all prefetch members when read_ptr is at the beginning of cmddat_q
-    if (read_ptr == cmddat_q_base) {
-        // DPRINT << "  entry: prefetch reset" << ENDL();
-        exec_buf_state.prefetch_page_id = exec_buf_state.page_id;
-        exec_buf_state.prefetch_pages_read = 0;
-        exec_buf_state.prefetch_length = 0;
-    }
-
-    // DPRINT << "  entry: page_id:     " << exec_buf_state.page_id << ENDL();
-    // DPRINT << "  entry: page_size:   " << page_size << ENDL();
-    // DPRINT << "  entry: pages:       " << exec_buf_state.pages << ENDL();
-    // DPRINT << "  entry: read_ptr:    " << exec_buf_state.read_ptr << ENDL();
-    // DPRINT << "  entry: length:      " << exec_buf_state.length << ENDL();
+    ASSERT(INITIAL_FETCH_SIZE % (1 << log_page_size) == 0);                       // must be multiple of page_size
 
     auto addr_gen = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), base_addr, page_size);
     // set transaction ID to 1 for all read
     noc_async_read_set_trid(1);
 
     // initial read
-    if (exec_buf_state.prefetch_pages_read == 0) {
-        max_read_pages = cmddat_q_end - read_ptr;
-        uint32_t initial_read_pages = (INITIAL_FETCH_SIZE + page_size - 1) >> log_page_size;
-        if (INITIAL_FETCH_SIZE > max_read_pages) {
-            initial_read_pages = (max_read_pages + page_size - 1) >> log_page_size;
-        }
-        // DPRINT << "  initial: max_read_pages:     " << max_read_pages << ENDL();
-        // DPRINT << "  initial: INITIAL_FETCH_SIZE: " << INITIAL_FETCH_SIZE << ENDL();
+    if (exec_buf_state.prefetch_length == 0) {
+        uint32_t initial_read_pages = INITIAL_FETCH_SIZE >> log_page_size;
         uint32_t initial_pages_at_once = (initial_read_pages > pages) ? pages : initial_read_pages;
         uint32_t initial_read_length = initial_pages_at_once << log_page_size;
-        uint32_t initial_pages_read = initial_pages_at_once;
-        // DPRINT << "  initial: initial_read_length: " << initial_read_length << ENDL();
-        // DPRINT << "  initial: initial_pages_read:  " << initial_pages_read << ENDL();
+        pages -= initial_pages_at_once;
 
         while (initial_pages_at_once != 0) {
             invalidate_l1_cache();
@@ -1128,7 +1105,6 @@ void paged_read_into_cmddat_q(PrefetchExecBufState& exec_buf_state) {
         noc_async_read_barrier_with_trid(1);
         // update length always after barrier to make sure data in cmddat_q
         exec_buf_state.page_id = page_id;
-        pages -= initial_pages_read;
         exec_buf_state.pages = pages;
         exec_buf_state.length += initial_read_length;
         exec_buf_state.read_ptr = read_ptr;
@@ -1136,35 +1112,25 @@ void paged_read_into_cmddat_q(PrefetchExecBufState& exec_buf_state) {
         // add barrier to wait for prefetch noc read to complete
         noc_async_read_barrier_with_trid(1);
         // update always after barrier to make sure data in cmddat_q
-        page_id = exec_buf_state.prefetch_page_id;
-        exec_buf_state.page_id = page_id;
-        pages -= exec_buf_state.prefetch_pages_read;
-        exec_buf_state.pages = pages;
         exec_buf_state.length += exec_buf_state.prefetch_length;
-        exec_buf_state.prefetch_pages_read = 0;
         exec_buf_state.prefetch_length = 0;
-        // DPRINT << "  barrier: page_id:             " << exec_buf_state.page_id << ENDL();
-        // DPRINT << "  barrier: pages:               " << exec_buf_state.pages << ENDL();
-        // DPRINT << "  barrier: length:              " << exec_buf_state.length << ENDL();
-        // DPRINT << "  barrier: prefetch_pages_read: " << exec_buf_state.prefetch_pages_read << ENDL();
-        // DPRINT << "  barrier: prefetch_length:     " << exec_buf_state.prefetch_length << ENDL();
+    } else {
+        ASSERT(exec_buf_state.length == 0);
     }
 
-    // prefetch only when
-    // 1. there wasn't a previous prefetch
-    // 2. there is still space left in cmddat_q
-    // 3. there are still pages to prefetch
-    if (exec_buf_state.prefetch_pages_read == 0 && read_ptr < cmddat_q_end && exec_buf_state.pages > 0) {
-        max_read_pages = cmddat_q_end - read_ptr;
-        uint32_t prefetch_read_pages = (PREFETCH_FETCH_SIZE + page_size - 1) >> log_page_size;
-        if (PREFETCH_FETCH_SIZE > max_read_pages) {
-            prefetch_read_pages = (max_read_pages + page_size - 1) >> log_page_size;
+    // prefetch only when there are still pages to prefetch
+    if (exec_buf_state.pages > 0) {
+        // wrap around to prefetch from beginning again
+        uint32_t max_prefetch_size = PREFETCH_FETCH_SIZE;
+        if (read_ptr == cmddat_q_end) {
+            max_prefetch_size = INITIAL_FETCH_SIZE;
+            read_ptr = cmddat_q_base;
         }
-        // DPRINT << "  prefetch: max_read_pages:      " << max_read_pages << ENDL();
-        // DPRINT << "  prefetch: PREFETCH_FETCH_SIZE: " << PREFETCH_FETCH_SIZE << ENDL();
+        ASSERT(max_prefetch_size % (1 << log_page_size) == 0);  // must be multiple of page_size
+        uint32_t prefetch_read_pages = max_prefetch_size >> log_page_size;
         uint32_t prefetch_pages_at_once = (prefetch_read_pages > pages) ? pages : prefetch_read_pages;
         uint32_t prefetch_read_length = prefetch_pages_at_once << log_page_size;
-        uint32_t prefetch_pages_read = prefetch_pages_at_once;
+        pages -= prefetch_pages_at_once;
 
         while (prefetch_pages_at_once != 0) {
             invalidate_l1_cache();
@@ -1176,21 +1142,15 @@ void paged_read_into_cmddat_q(PrefetchExecBufState& exec_buf_state) {
             prefetch_pages_at_once--;
         }
         // update length always after barrier to make sure data in cmddat_q
-        exec_buf_state.prefetch_page_id = page_id;
-        exec_buf_state.prefetch_pages_read = prefetch_pages_read;
+        exec_buf_state.page_id = page_id;
+        exec_buf_state.pages = pages;
         exec_buf_state.prefetch_length = prefetch_read_length;
         exec_buf_state.read_ptr = read_ptr;
-        // DPRINT << "  prefetch: prefetch_page_id:    " << exec_buf_state.prefetch_page_id << ENDL();
-        // DPRINT << "  prefetch: prefetch_pages_read: " << exec_buf_state.prefetch_pages_read << ENDL();
-        // DPRINT << "  prefetch: prefetch_length:     " << exec_buf_state.prefetch_length << ENDL();
     }
 
-    // DPRINT << "  exit: page_id:     " << exec_buf_state.page_id << ENDL();
-    // DPRINT << "  exit: page_size:   " << page_size << ENDL();
-    // DPRINT << "  exit: pages:       " << exec_buf_state.pages << ENDL();
-    // DPRINT << "  exit: read_ptr:    " << exec_buf_state.read_ptr << ENDL();
-    // DPRINT << "  exit: length:      " << exec_buf_state.length << ENDL();
-    // DPRINT << ENDL();
+    // set transaction ID to 0 for other noc read to not use transaction id 1
+    // to remove unnecessary barrier delay
+    noc_async_read_set_trid(0);
 }
 
 // processes the relay_inline cmd from an exec_buf
@@ -1229,17 +1189,11 @@ FORCE_INLINE static uint32_t process_exec_buf_relay_inline_cmd(
         stride -= remaining_stride;
         exec_buf_state.length = 0;
         cmd_ptr += remaining_stride;
-        // reset if cmd_ptr is at end of cmddat_q
-        if (cmd_ptr == cmddat_q_end) {
-            // DPRINT << "  cmd_ptr/read_ptr reset" << ENDL();
-            cmd_ptr = cmddat_q_base;
-            exec_buf_state.read_ptr = cmddat_q_base;
-        }
-        data_ptr = cmd_ptr;
 
         // fetch more
         noc_async_writes_flushed(RelayInlineState::downstream_noc_index);
-        paged_read_into_cmddat_q(exec_buf_state);
+        paged_read_into_cmddat_q(cmd_ptr, exec_buf_state);
+        data_ptr = cmd_ptr;
         remaining = exec_buf_state.length;
         remaining_stride = exec_buf_state.length;
     }
@@ -1289,17 +1243,11 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(
         stride -= remaining_stride;
         exec_buf_state.length = 0;
         cmd_ptr += remaining_stride;
-        // reset if cmd_ptr is at end of cmddat_q
-        if (cmd_ptr == cmddat_q_end) {
-            // DPRINT << "  cmd_ptr/read_ptr reset" << ENDL();
-            cmd_ptr = cmddat_q_base;
-            exec_buf_state.read_ptr = cmddat_q_base;
-        }
-        data_ptr = cmd_ptr;
 
         // fetch more
         noc_async_writes_flushed();
-        paged_read_into_cmddat_q(exec_buf_state);
+        paged_read_into_cmddat_q(cmd_ptr, exec_buf_state);
+        data_ptr = cmd_ptr;
         remaining = exec_buf_state.length;
         remaining_stride = exec_buf_state.length;
     }
@@ -1335,14 +1283,8 @@ void* copy_into_l1_cache(
         stride -= remaining_stride;
         exec_buf_state.length = 0;
         cmd_ptr += remaining_stride;
-        // reset if cmd_ptr is at end of cmddat_q
-        if (cmd_ptr == cmddat_q_end) {
-            // DPRINT << "  cmd_ptr/read_ptr reset" << ENDL();
-            cmd_ptr = cmddat_q_base;
-            exec_buf_state.read_ptr = cmddat_q_base;
-        }
+        paged_read_into_cmddat_q(cmd_ptr, exec_buf_state);
         l1_ptr = (volatile uint32_t tt_l1_ptr*)(cmd_ptr);
-        paged_read_into_cmddat_q(exec_buf_state);
         remaining = exec_buf_state.length;
         remaining_stride = exec_buf_state.length;
     }
@@ -1394,29 +1336,14 @@ uint32_t process_exec_buf_cmd(
     exec_buf_state.pages = cmd->exec_buf.pages;
     exec_buf_state.length = 0;
     exec_buf_state.read_ptr = cmddat_q_base;
+    exec_buf_state.prefetch_length = 0;
     uint32_t cmd_ptr = cmddat_q_base;
-    // DPRINT << "process_exec_buf_cmd" << ENDL();
-    // DPRINT << "  cmddat_q_base= " << cmddat_q_base << ENDL();
-    // DPRINT << "  cmddat_q_end=  " << cmddat_q_end << ENDL();
 
     bool done = false;
     while (!done) {
-        // DeviceZoneScopedN("PEBC: 1st loop");
-        // reset if cmd_ptr is at end of cmddat_q
-        if (cmd_ptr == cmddat_q_end) {
-            // DPRINT << "  cmd_ptr/read_ptr reset" << ENDL();
-            cmd_ptr = cmddat_q_base;
-            exec_buf_state.read_ptr = cmddat_q_base;
-        }
-        // {
-        // DeviceZoneScopedN("PEBC: paged_read");
-        paged_read_into_cmddat_q(exec_buf_state);
-        // }
+        paged_read_into_cmddat_q(cmd_ptr, exec_buf_state);
 
-        // DPRINT << "  process_cmd" << ENDL();
         while (exec_buf_state.length > 0) {
-            // DPRINT << "  cmd_ptr= " << cmd_ptr << ENDL();
-            // DPRINT << "  length= " << exec_buf_state.length << ENDL();
             uint32_t stride;
             done = process_cmd<false, true>(cmd_ptr, downstream_data_ptr, stride, l1_cache, exec_buf_state);
 
