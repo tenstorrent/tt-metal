@@ -727,7 +727,7 @@ void SDPAProgramFactory::override_runtime_arguments(
 
     auto *q_buffer = tensor_args.q.buffer();
     auto *k_buffer = tensor_args.k.buffer();
-    auto v_buffer = use_mla ? tensor_args.k.buffer() : tensor_args.v.value_or(tensor_args.k).buffer();
+    auto *v_buffer = use_mla ? tensor_args.k.buffer() : tensor_args.v.value_or(tensor_args.k).buffer();
     auto mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask->buffer() : nullptr;
     auto attention_sink_buffer =
         tensor_args.attention_sink.has_value() ? tensor_args.attention_sink->buffer() : nullptr;
