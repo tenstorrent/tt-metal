@@ -49,28 +49,44 @@ class DeprecatedItem(NamedTuple):
         return self.age_days is not None and self.age_days >= Config.MIN_DEPRECATION_DAYS
 
 
-def find_removed_deprecations(base_ref: str = "origin/main") -> List[DeprecatedItem]:
+def find_removed_deprecations(directory: str, base_ref: str = "origin/main") -> List[DeprecatedItem]:
     # Get all C++ files that changed (including deleted ones)
     changed_files = git_utils.get_changed_file_paths(base_ref)
-    changed_cpp_files = [f for f in changed_files if is_cpp_source(f)]
+
+    # Only check C++ files within the directory scope (handles deleted files by path prefix)
+    directory_path = str(Path(directory).resolve())
+    changed_cpp_files = [
+        f for f in changed_files if is_cpp_source(f) and Path(f).resolve().as_posix().startswith(directory_path)
+    ]
 
     if not changed_cpp_files:
         return []
 
-    # Get diff for these files (git diff handles deleted files properly)
+    # Get diffs for these files (git diff handles deleted files properly)
     try:
-        diff = git_utils.get_diff(changed_cpp_files, base_ref)
-        items = git_utils.parse_diff_for_removed_lines(diff, DEPRECATION_PATTERN)
+        # Process committed changes (base_ref to HEAD)
+        committed_diff = git_utils.get_diff(changed_cpp_files, base_ref)
+        committed_items = git_utils.parse_diff_for_removed_lines(committed_diff, DEPRECATION_PATTERN)
+        committed_timestamps = git_utils.get_timestamps_for_items(committed_items, base_ref)
+
+        # Process staged changes (HEAD to index)
+        staged_diff = git_utils.get_staged_diff(changed_cpp_files)
+        staged_items = git_utils.parse_diff_for_removed_lines(staged_diff, DEPRECATION_PATTERN)
+        staged_timestamps = git_utils.get_timestamps_for_items(staged_items, "HEAD")
     except RuntimeError as e:
         print(f"Error: Failed to get diff: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Timestamp from base_ref shows when the removed deprecation was originally added
-    timestamps = git_utils.get_timestamps_for_items(items, base_ref)
-    return [
-        DeprecatedItem(file_path, line_num, content, timestamps.get((file_path, line_num)), is_removed=True)
-        for file_path, line_num, content in items
-    ]
+    # Combine results from both committed and staged changes
+    results = []
+    for file_path, line_num, content in committed_items:
+        timestamp = committed_timestamps.get((file_path, line_num))
+        results.append(DeprecatedItem(file_path, line_num, content, timestamp, is_removed=True))
+    for file_path, line_num, content in staged_items:
+        timestamp = staged_timestamps.get((file_path, line_num))
+        results.append(DeprecatedItem(file_path, line_num, content, timestamp, is_removed=True))
+
+    return results
 
 
 def scan_file_for_deprecations(file_path: str) -> Iterator[Tuple[str, int, str]]:
@@ -176,7 +192,7 @@ def main() -> int:
 
     source_files = find_cpp_sources(directory)
     existing = find_existing_deprecations(source_files)
-    removed = find_removed_deprecations(base_ref)
+    removed = find_removed_deprecations(directory, base_ref)
 
     return print_report(existing, removed)
 

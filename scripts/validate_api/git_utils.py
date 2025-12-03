@@ -88,16 +88,25 @@ def parse_diff_for_removed_lines(diff_output: str, pattern_matcher) -> List[Tupl
 
 
 def get_changed_file_paths(base_ref: str, head_ref: str = "HEAD") -> List[str]:
-    """List of changed files (paths) (includes deleted ones)"""
-    output = run_git(["git", "diff", "--name-only", base_ref, head_ref])
-    return [f for f in output.strip().split("\n") if f]
+    """List of changed files (paths) (includes deleted ones and staged changes)."""
+    committed = run_git(["git", "diff", "--name-only", base_ref, head_ref])
+    staged = run_git(["git", "diff", "--name-only", "--cached"])
+    all_files = {f for f in (committed + staged).split("\n") if f.strip()}
+    return list(all_files)
 
 
 def get_diff(files: List[str], base_ref: str, head_ref: str = "HEAD") -> str:
-    """Get git concatenated diff for specified files."""
+    """Get git diff for specified files between base_ref and head_ref."""
     if not files:
         return ""
     return run_git(["git", "diff", "-U0", base_ref, head_ref, "--"] + files)
+
+
+def get_staged_diff(files: List[str]) -> str:
+    """Get git diff for staged changes in specified files."""
+    if not files:
+        return ""
+    return run_git(["git", "diff", "-U0", "--cached", "--"] + files)
 
 
 def compute_ranges(numbers: List[int]) -> List[Tuple[int, int]]:
