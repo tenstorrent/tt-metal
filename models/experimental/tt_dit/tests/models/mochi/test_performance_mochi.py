@@ -212,7 +212,7 @@ def test_mochi_pipeline_performance(
             logger.info("Tracy profiling disabled")
 
     # Calculate statistics
-    text_encoder_times = [benchmark_profiler.get_duration("text_encoder", i) for i in range(num_perf_runs)]
+    text_encoder_times = [benchmark_profiler.get_duration("encoder", i) for i in range(num_perf_runs)]
     denoising_times = [benchmark_profiler.get_duration("denoising", i) for i in range(num_perf_runs)]
     vae_times = [benchmark_profiler.get_duration("vae", i) for i in range(num_perf_runs)]
     total_times = [benchmark_profiler.get_duration("run", i) for i in range(num_perf_runs)]
@@ -255,21 +255,21 @@ def test_mochi_pipeline_performance(
 
     # Validate performance
     measurements = {
-        "text_encoder": statistics.mean(text_encoder_times),
+        "encoder": statistics.mean(text_encoder_times),
         "denoising": statistics.mean(denoising_times),
         "vae": statistics.mean(vae_times),
         "total": statistics.mean(total_times),
     }
     if tuple(mesh_device.shape) == (2, 4) and vae_mesh_shape == (1, 8):
         expected_metrics = {
-            "text_encoder": 8.0,
+            "encoder": 8.0,
             "denoising": 1320,
             "vae": 55,
             "total": 1385,
         }
     elif tuple(mesh_device.shape) == (4, 8) and vae_mesh_shape == (4, 8):
         expected_metrics = {
-            "text_encoder": 8.0,
+            "encoder": 8.0,
             "denoising": 400,
             "vae": 22,
             "total": 430,
@@ -281,13 +281,13 @@ def test_mochi_pipeline_performance(
         # In CI, dump a performance report
         benchmark_data = BenchmarkData()
         for iteration in range(num_perf_runs):
-            for step_name in ["text_encoder", "denoising", "vae", "run"]:
+            for step_name in ["encoder", "denoising", "vae", "run"]:
                 benchmark_data.add_measurement(
                     profiler=benchmark_profiler,
                     iteration=iteration,
                     step_name=step_name,
                     name=step_name,
-                    value=measurements[step_name],
+                    value=benchmark_profiler.get_duration(step_name, iteration),
                     target=expected_metrics[step_name],
                 )
         run_type = f"{'BH' if is_blackhole() else 'WH'}_{'T3K' if tuple(mesh_device.shape) == (2, 4) else 'TG'}"

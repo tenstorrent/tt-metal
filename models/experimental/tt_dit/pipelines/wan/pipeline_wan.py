@@ -719,7 +719,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         # 3. Encode input prompt
         if profiler:
-            profiler.start("text_encoder", profiler_iteration)
+            profiler.start("encoder", profiler_iteration)
         prompt_embeds, negative_prompt_embeds = self.encode_prompt(
             prompt=prompt,
             negative_prompt=negative_prompt,
@@ -731,7 +731,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             device=device,
         )
         if profiler:
-            profiler.end("text_encoder", profiler_iteration)
+            profiler.end("encoder", profiler_iteration)
 
         # transformer_dtype = self.transformer.dtype if self.transformer is not None else self.transformer_2.dtype
         # prompt_embeds = prompt_embeds.to(transformer_dtype)

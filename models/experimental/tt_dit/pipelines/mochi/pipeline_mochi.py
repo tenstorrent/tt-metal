@@ -606,7 +606,7 @@ class MochiPipeline(DiffusionPipeline):
         device = "cpu"
         # 3. Prepare text embeddings
         if profiler:
-            profiler.start("text_encoder", profiler_iteration)
+            profiler.start("encoder", profiler_iteration)
         (
             prompt_embeds,
             prompt_attention_mask,
@@ -625,7 +625,7 @@ class MochiPipeline(DiffusionPipeline):
             device=device,
         )
         if profiler:
-            profiler.end("text_encoder", profiler_iteration)
+            profiler.end("encoder", profiler_iteration)
 
         print(f"prompt_embeds.shape: {prompt_embeds.shape}")
         print(f"prompt_attention_mask.shape: {prompt_attention_mask.shape}")
