@@ -2,12 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "argmax_device_operation.hpp"
+#include "argmax_utils.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::reduction::argmax {
-
-namespace detail {
 
 /*
  * Generates the output shape for the reduction operation.
@@ -54,8 +53,6 @@ ttnn::SmallVector<uint32_t> get_output_shape(const Tensor& input_tensor, const s
 
     return output_shape;
 }
-
-}  // namespace detail
 
 ArgMaxDeviceOperation::program_factory_t ArgMaxDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -169,7 +166,7 @@ spec_return_value_t ArgMaxDeviceOperation::compute_output_specs(
     }
 
     const auto& input_tensor = tensor_args.input;
-    auto output_shape = detail::get_output_shape(input_tensor, args.dim, args.keepdim);
+    auto output_shape = get_output_shape(input_tensor, args.dim, args.keepdim);
     return TensorSpec(
         ttnn::Shape(output_shape),
         TensorLayout(args.output_dtype, PageConfig(Layout::ROW_MAJOR), args.output_mem_config));

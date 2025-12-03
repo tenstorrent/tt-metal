@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device/argmax_device_operation.hpp"
+#include "device/argmax_utils.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/decorators.hpp"
@@ -17,7 +18,7 @@ namespace ttnn::operations::reduction {
 */
 static Tensor zero_volume_argmax(
     const Tensor& input_tensor, const std::optional<int>& dim, bool keepdim, const MemoryConfig& memory_config) {
-    auto output_shape = argmax::detail::get_output_shape(input_tensor, dim, keepdim);
+    auto output_shape = argmax::get_output_shape(input_tensor, dim, keepdim);
 
     return ttnn::full(
         ttnn::Shape(output_shape),
