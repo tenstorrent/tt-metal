@@ -107,7 +107,7 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& buffer_tensor = tensor_args.buffer_tensor;
 
-    log_debug(tt::LogOp, "DEBUG: all_reduce_async create_program at physical coordinate {} is called", coord);
+    log_debug(tt::LogOp, "all_reduce_async create_program at physical coordinate {} is called", coord);
 
     uint32_t device_index =
         ttnn::ccl::get_linearized_index_from_physical_coord(input_tensor, coord, operation_attributes.cluster_axis);
