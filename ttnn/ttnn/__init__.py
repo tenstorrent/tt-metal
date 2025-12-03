@@ -269,6 +269,7 @@ from ttnn.core import (
     dump_stack_trace_on_segfault,
     num_cores_to_corerangeset,
     num_cores_to_corerangeset_in_subcoregrids,
+    split_work_to_cores,
     get_current_command_queue_id_for_thread,
 )
 
