@@ -11,26 +11,24 @@
 
 namespace tt::tt_fabric {
 
-// ============ Constructor ============
-
 FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) : fabric_context_(fabric_context) {
-    // Default router config
+    // Create default router config
     router_config_ = create_edm_config();
 
-    // Default router config with mux extension for all directions (EAST, WEST, NORTH, SOUTH)
+    // Create router config with mux extension for all directions
     for (size_t direction = 0; direction < eth_chan_directions::COUNT; direction++) {
         router_with_mux_config_[direction] =
             create_edm_config(FabricTensixConfig::MUX, static_cast<eth_chan_directions>(direction));
     }
 
-    // Tensix config will be initialized later after routing tables are configured
+    // Initialize tensix config later after routing tables are configured
     tensix_config_ = nullptr;
 
-    // Initialize per-device state
+    // Initialize per-device build state
     num_devices_ = tt::tt_metal::GetNumAvailableDevices();
     auto num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
     if (num_devices_ != 4 && num_pcie_devices == 4) {
-        // Adding dispatch devices for multi-host setups
+        // Add dispatch devices for multi-host setups
         num_devices_ += num_pcie_devices;
     }
     master_router_chans_.resize(num_devices_, UNINITIALIZED_MASTER_ROUTER_CHAN);

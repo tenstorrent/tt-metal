@@ -26,23 +26,13 @@ class FabricBuilderContext;
  * FabricBuilder
  *
  * Transient orchestrator class that owns router builders during the build process.
- * Provides clear build phases and ownership semantics.
  *
  * Lifecycle:
  *   1. Construct with device, program, and contexts
  *   2. Call build phases in order:
  *      discover_channels() -> create_routers() -> connect_routers() ->
  *      compile_ancillary_kernels() -> create_kernels() -> finalize_build_state()
- *   3. FabricBuilder is destroyed, routers are destroyed (they've served their purpose)
- *
- * Usage:
- *   FabricBuilder builder(device, program, fabric_context);
- *   builder.discover_channels();
- *   builder.create_routers();
- *   builder.connect_routers();
- *   builder.compile_ancillary_kernels();
- *   builder.create_kernels();
- *   builder.finalize_build_state();
+ *   3. FabricBuilder is destroyed, routers are destroyed
  */
 class FabricBuilder {
 public:
@@ -50,20 +40,17 @@ public:
 
     /**
      * Discover active ethernet channels and neighbors for this device.
-     * Populates: channels_by_direction_, chip_neighbors_, dispatch_links_
      * Must be called before create_routers().
      */
     void discover_channels();
 
     /**
      * Create all router builders for this device.
-     * Uses cached discovery data from discover_channels().
      */
     void create_routers();
 
     /**
      * Connect routers using topology-appropriate connections.
-     * Uses cached channels_by_direction_ from create_routers().
      */
     void connect_routers();
 
@@ -105,7 +92,6 @@ private:
 
     /**
      * Get pairs of routers to connect based on topology.
-     * Uses member variables: channels_by_direction_, chip_neighbors_, wrap_around_mesh_
      */
     std::vector<RouterConnectionPair> get_router_connection_pairs() const;
 

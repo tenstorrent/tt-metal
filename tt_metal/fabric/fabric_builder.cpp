@@ -13,8 +13,6 @@
 
 namespace tt::tt_fabric {
 
-// ============ FabricBuilder Implementation ============
-
 FabricBuilder::FabricBuilder(
     tt::tt_metal::IDevice* device, tt::tt_metal::Program& program, FabricContext& fabric_context) :
     device_(device),
@@ -23,10 +21,10 @@ FabricBuilder::FabricBuilder(
     builder_context_(fabric_context.get_builder_context()),
     local_node_(tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
         device->id())) {
-    // Initialize topology info that doesn't depend on discovery
+    // Initialize topology info
     wrap_around_mesh_ = fabric_context_.is_wrap_around_mesh(local_node_.mesh_id);
 
-    // Determine if this device has tunneling dispatch (affects dispatch link selection)
+    // Determine if this device has tunneling dispatch
     auto mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_->id());
     auto tunnels_from_mmio =
@@ -39,13 +37,12 @@ void FabricBuilder::discover_channels() {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const bool is_2D_routing = fabric_context_.is_2D_routing_enabled();
 
-    // Helper to check if a channel is a dispatch link
     auto is_dispatch_link = [&](chan_id_t eth_chan, uint32_t dispatch_link_idx) {
         auto link_idx = control_plane.get_routing_plane_id(local_node_, eth_chan);
         return device_has_dispatch_tunnel_ && link_idx == dispatch_link_idx;
     };
 
-    // Discover active channels and neighbors by iterating over directions
+    // Discover active channels and neighbors
     for (const auto& direction : FabricContext::routing_directions) {
         auto active_eth_chans = control_plane.get_active_fabric_eth_routing_planes_in_direction(local_node_, direction);
         if (active_eth_chans.empty()) {
@@ -55,7 +52,6 @@ void FabricBuilder::discover_channels() {
         auto neighbors = control_plane.get_chip_neighbors(local_node_, direction);
         auto intra_chip_neighbors = neighbors.find(local_node_.mesh_id);
 
-        // Validation
         TT_FATAL(neighbors.size() == 1, "Multiple neighbor meshes per direction is unsupported");
         TT_FATAL(
             std::set<ChipId>(neighbors.begin()->second.begin(), neighbors.begin()->second.end()).size() == 1,
@@ -72,7 +68,7 @@ void FabricBuilder::discover_channels() {
         chip_neighbors_.emplace(direction, neighbor_fabric_node_id);
         channels_by_direction_[direction] = active_eth_chans;
 
-        // Identify and cache dispatch links for this direction
+        // Identify and cache dispatch links
         uint32_t dispatch_link_idx =
             tt::tt_metal::RelayMux::get_dispatch_link_index(local_node_, neighbor_fabric_node_id, device_);
         for (const auto& eth_chan : active_eth_chans) {
@@ -84,14 +80,13 @@ void FabricBuilder::discover_channels() {
 }
 
 void FabricBuilder::create_routers() {
-    // Create router builders using cached discovery data
+    // Create router builders
     for (const auto& [direction, eth_channels] : channels_by_direction_) {
         const auto& neighbor_node = chip_neighbors_.at(direction);
 
         for (const auto& eth_chan : eth_channels) {
             bool is_dispatch = dispatch_links_.count(eth_chan) > 0;
 
-            // Use RouterLocation with aggregate initialization
             RouterLocation location{
                 .eth_chan = eth_chan,
                 .remote_node = neighbor_node,
@@ -99,20 +94,18 @@ void FabricBuilder::create_routers() {
                 .is_dispatch_link = is_dispatch,
             };
 
-            // Use factory method - determines router type internally based on fabric context
             auto router_builder = FabricRouterBuilder::create(device_, program_, local_node_, location);
             routers_.insert({eth_chan, std::move(router_builder)});
         }
     }
 
-    // Configure dispatch links - let each router decide how to configure for dispatch
+    // Configure dispatch links
     if (device_has_dispatch_tunnel_) {
         for (const auto& dispatch_chan : dispatch_links_) {
             routers_.at(dispatch_chan)->configure_for_dispatch();
         }
     }
 
-    // Record master router channel
     if (!routers_.empty()) {
         master_router_chan_ = routers_.begin()->first;
     }
@@ -124,13 +117,13 @@ std::vector<FabricBuilder::RouterConnectionPair> FabricBuilder::get_router_conne
     const bool is_2D_routing = fabric_context_.is_2D_routing_enabled();
     const size_t num_intra_chip_neighbors = chip_neighbors_.size();
 
-    // Helper to check if we can connect two directions
+    // Check if we can connect two directions
     auto can_connect = [&](RoutingDirection dir1, RoutingDirection dir2) {
         return chip_neighbors_.count(dir1) > 0 && chip_neighbors_.count(dir2) > 0 &&
                channels_by_direction_.count(dir1) > 0 && channels_by_direction_.count(dir2) > 0;
     };
 
-    // Helper to add connection pairs for two directions
+    // Add connection pairs for two directions
     auto add_direction_pairs = [&](RoutingDirection dir1, RoutingDirection dir2) {
         if (!can_connect(dir1, dir2)) {
             return;
@@ -178,10 +171,10 @@ void FabricBuilder::connect_routers() {
     const auto topology = fabric_context_.get_fabric_topology();
     const bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy();
 
-    // Get connection pairs based on topology (uses member variables)
+    // Get connection pairs based on topology
     auto connection_pairs = get_router_connection_pairs();
 
-    // Connect each pair - router handles bidirectional VC setup, NOC VC, and core placement internally
+    // Connect each pair
     for (const auto& pair : connection_pairs) {
         auto& router1 = routers_.at(pair.chan1);
         auto& router2 = routers_.at(pair.chan2);
@@ -191,14 +184,12 @@ void FabricBuilder::connect_routers() {
 }
 
 void FabricBuilder::compile_ancillary_kernels() {
-    // Let each router compile its own ancillary kernels
     for (auto& [eth_chan, router_builder] : routers_) {
         router_builder->compile_ancillary_kernels(program_);
     }
 }
 
 void FabricBuilder::create_kernels() {
-    // Compute cluster-wide coordination info
     uint32_t router_channels_mask = 0;
     for (const auto& [router_chan, _] : routers_) {
         router_channels_mask |= (1 << static_cast<uint32_t>(router_chan));
@@ -211,7 +202,6 @@ void FabricBuilder::create_kernels() {
         .router_channels_mask = router_channels_mask,
     };
 
-    // Let each router create its own kernel
     for (auto& [eth_chan, router_builder] : routers_) {
         router_builder->create_kernel(program_, ctx);
     }
