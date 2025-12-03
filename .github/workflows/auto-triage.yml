@@ -11,24 +11,6 @@ on:
         description: "Job/subjob name within the workflow"
         required: true
         type: string
-      model:
-        description: "OpenCode model"
-        required: true
-        type: choice
-        options:
-          - opencode/gpt-5.1-codex
-          - opencode/gpt-5-codex
-          - opencode/grok-code
-        default: opencode/grok-code
-      filter-model:
-        description: "OpenCode model to filter by"
-        required: true
-        type: choice
-        options:
-          - opencode/gpt-5.1-codex
-          - opencode/gpt-5-codex
-          - opencode/grok-code
-        default: opencode/grok-code
 jobs:
   auto-triage:
     runs-on: ubuntu-latest
@@ -47,8 +29,6 @@ jobs:
         with:
           workflow-name: ${{ inputs.workflow_name }}
           job-name: ${{ inputs.job_name }}
-          model: ${{ inputs.model }}
-          filter-model: ${{ inputs.filter-model }}
           copilot-pat: ${{ secrets.TESTING_COPILOT_PAT }}
         env:
           OPENCODE_API_KEY: ${{ secrets.AUTO_TRIAGE_FREE_API_KEY }}
