@@ -12,15 +12,15 @@
 namespace ttnn::operations::data_movement::program {
 
 struct TransposeWHShardedSharedVariables {
-    tt::tt_metal::KernelHandle reader_kernel_id;
-    tt::tt_metal::KernelHandle compute_kernel_id;
-    tt::tt_metal::KernelHandle writer_kernel_id;
-    tt::tt_metal::CBHandle cb_src0;
-    tt::tt_metal::CBHandle cb_output;
-    uint32_t src0_single_tile_size;
-    uint32_t dst_single_tile_size;
-    uint32_t num_cores_x;
-    uint32_t num_cores_y;
+    tt::tt_metal::KernelHandle reader_kernel_id{};
+    tt::tt_metal::KernelHandle compute_kernel_id{};
+    tt::tt_metal::KernelHandle writer_kernel_id{};
+    tt::tt_metal::CBHandle cb_src0{};
+    tt::tt_metal::CBHandle cb_output{};
+    uint32_t src0_single_tile_size{};
+    uint32_t dst_single_tile_size{};
+    uint32_t num_cores_x{};
+    uint32_t num_cores_y{};
 };
 
 struct TransposeWHShardedProgramFactory {

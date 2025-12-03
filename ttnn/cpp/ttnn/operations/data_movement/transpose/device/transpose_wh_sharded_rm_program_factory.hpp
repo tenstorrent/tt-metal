@@ -12,11 +12,11 @@
 namespace ttnn::operations::data_movement::program {
 
 struct TransposeWHShardedRMSharedVariables {
-    tt::tt_metal::KernelHandle reader_kernel_id;
-    tt::tt_metal::CBHandle cb_src0;
-    tt::tt_metal::CBHandle cb_output;
-    uint32_t num_cores_x;
-    uint32_t num_cores_y;
+    tt::tt_metal::KernelHandle reader_kernel_id{};
+    tt::tt_metal::CBHandle cb_src0{};
+    tt::tt_metal::CBHandle cb_output{};
+    uint32_t num_cores_x{};
+    uint32_t num_cores_y{};
 };
 
 struct TransposeWHShardedRMProgramFactory {
