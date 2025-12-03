@@ -243,16 +243,7 @@ inline BlockSplit split_blocks_for_tilize(const CoreRangeSet& grid, uint32_t nbl
 
     if (cliff_core.has_value()) {
         cliff_core_range.insert(CoreRange{*cliff_core, *cliff_core});
-        if (all_cores.size() == 1) {
-            // Cliff core is in a new row, insert it into all_cores
-            all_cores.insert(cliff_core_range.begin(), cliff_core_range.end());
-        } else {
-            // Cliff core is in the same row as the last core range, increment its end
-            auto last_range = *all_cores.rbegin();
-            auto node = all_cores.extract(last_range);
-            node.value().end_coord = *cliff_core;
-            all_cores.insert(std::move(node));
-        }
+        all_cores.insert(CoreRange{*cliff_core, *cliff_core});
     }
 
     return BlockSplit{ncores, all_cores, core_range, cliff_core_range, nblocks_per_core, nblocks_per_core_cliff};
