@@ -14,20 +14,20 @@
 namespace ttnn::operations::transformer::sdpa {
 
 struct operation_attributes_t {
-    const std::optional<float> scale;
-    const tt::tt_metal::MemoryConfig output_mem_config;
-    const std::optional<SDPAProgramConfig> program_config;
-    const bool is_causal;
-    const std::optional<int64_t> chunk_start_idx;
-    const DeviceComputeKernelConfig compute_kernel_config;
-    const bool use_mla;
-    const std::optional<uint32_t> head_dim_v;
-    const std::optional<uint32_t> sliding_window_size;
+    std::optional<float> scale;
+    tt::tt_metal::MemoryConfig output_mem_config;
+    std::optional<SDPAProgramConfig> program_config;
+    bool is_causal = false;
+    std::optional<int64_t> chunk_start_idx;
+    DeviceComputeKernelConfig compute_kernel_config;
+    bool use_mla = false;
+    std::optional<uint32_t> head_dim_v;
+    std::optional<uint32_t> sliding_window_size;
 };
 
 struct tensor_args_t {
-    const Tensor& q;
-    const Tensor& k;
+    Tensor q;
+    Tensor k;
     std::optional<Tensor> v;
     std::optional<Tensor> attn_mask;
     std::optional<Tensor> page_table;
