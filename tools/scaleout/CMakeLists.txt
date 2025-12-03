@@ -156,6 +156,27 @@ target_link_libraries(
         cxxopts::cxxopts
 )
 
+add_executable(generate_cluster_descriptor src/generate_cluster_descriptor.cpp)
+
+set_target_properties(
+    generate_cluster_descriptor
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${CMAKE_BINARY_DIR}/tools/scaleout
+)
+
+add_dependencies(generate_cluster_descriptor scaleout_generated_protos)
+
+target_include_directories(generate_cluster_descriptor SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
+target_link_libraries(
+    generate_cluster_descriptor
+    PRIVATE
+        scaleout_tools
+        protobuf::libprotobuf
+        cxxopts::cxxopts
+)
+
 # Generate MGD library
 add_library(
     generate_mgd_lib
@@ -202,7 +223,7 @@ target_link_libraries(
     PRIVATE
         generate_mgd_lib
         scaleout_tools
-        cxxopts
+        cxxopts::cxxopts
 )
 
 # Generate MGD library
