@@ -82,7 +82,7 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> ar_choose_worker_cores(
     return {sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true)};
 }
 
-namespace operations::experimental::ccl::all_reduce_async::program {
+namespace operations::experimental::ccl::all_reduce_async {
 
 AllReduceAsyncMeshWorkloadFactory::cached_mesh_workload_t AllReduceAsyncMeshWorkloadFactory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
@@ -617,6 +617,6 @@ void AllReduceAsyncMeshWorkloadFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace operations::experimental::ccl::all_reduce_async::program
+}  // namespace operations::experimental::ccl::all_reduce_async
 
 }  // namespace ttnn

@@ -17,7 +17,7 @@ struct AllReduceAsyncDeviceOperation {
     using tensor_args_t = all_reduce_async::tensor_args_t;
     using spec_return_value_t = all_reduce_async::spec_return_value_t;
     using tensor_return_value_t = all_reduce_async::tensor_return_value_t;
-    using program_factory_t = std::variant<program::AllReduceAsyncMeshWorkloadFactory>;
+    using program_factory_t = std::variant<AllReduceAsyncMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

@@ -9,7 +9,7 @@
 
 namespace ttnn {
 
-namespace operations::experimental::ccl::all_reduce_async::program {
+namespace operations::experimental::ccl::all_reduce_async {
 
 struct AllReduceAsyncSharedVariables {
     tt::tt_metal::KernelHandle worker_sender_reader_kernel_id;
@@ -44,7 +44,7 @@ struct AllReduceAsyncMeshWorkloadFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace operations::experimental::ccl::all_reduce_async::program
+}  // namespace operations::experimental::ccl::all_reduce_async
 
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> ar_choose_worker_cores(
     size_t num_links, size_t num_workers_per_link, const CoreRangeSet& available_cores);
