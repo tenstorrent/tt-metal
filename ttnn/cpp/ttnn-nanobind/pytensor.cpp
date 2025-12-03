@@ -772,8 +772,7 @@ void pytensor_module(nb::module_& mod) {
                     std::nullopt,
                     pad_value));
             },
-            nb::keep_alive<1, 6>(),  // match meshdevice
-            // nb::keep_alive<1, 7>(),
+            nb::keep_alive<1, 7>(),
             nb::arg("data"),
             nb::arg("shape"),
             nb::arg("data_type"),
@@ -858,7 +857,6 @@ void pytensor_module(nb::module_& mod) {
             nb::arg("pad_value") = nb::none(),
             nb::arg("mesh_mapper") = nullptr,
             nb::rv_policy::move,
-            nb::keep_alive<1, 4>(),  // match to device
             R"doc(
                 +--------------+--------------------------------+
                 | Argument     | Description                    |
@@ -890,18 +888,12 @@ void pytensor_module(nb::module_& mod) {
                     py_tensor = np.zeros((1, 1, 32, 32))
                     ttnn.Tensor(py_tensor, ttnn.bfloat16, device, ttnn.TILE_LAYOUT)
             )doc")
-        .def_prop_ro(
-            "spec", [](const Tensor& self) { return self.tensor_spec(); }, nb::rv_policy::reference_internal)
-        .def_prop_ro(
-            "shape", [](const Tensor& self) { return self.logical_shape(); }, nb::rv_policy::reference_internal)
-        .def_prop_ro(
-            "padded_shape", [](const Tensor& self) { return self.padded_shape(); }, nb::rv_policy::reference_internal)
-        .def_prop_ro(
-            "dtype", [](const Tensor& self) { return self.dtype(); }, nb::rv_policy::reference_internal)
-        .def_prop_ro(
-            "layout", [](const Tensor& self) { return self.layout(); }, nb::rv_policy::reference_internal)
-        .def_prop_ro(
-            "tile", [](const Tensor& self) { return self.tensor_spec().tile(); }, nb::rv_policy::reference_internal)
+        .def_prop_ro("spec", [](const Tensor& self) { return self.tensor_spec(); })
+        .def_prop_ro("shape", [](const Tensor& self) { return self.logical_shape(); })
+        .def_prop_ro("padded_shape", [](const Tensor& self) { return self.padded_shape(); })
+        .def_prop_ro("dtype", [](const Tensor& self) { return self.dtype(); })
+        .def_prop_ro("layout", [](const Tensor& self) { return self.layout(); })
+        .def_prop_ro("tile", [](const Tensor& self) { return self.tensor_spec().tile(); })
         .def(
             "deallocate",
             [](Tensor& self, bool force) { self.deallocate(force); },
@@ -995,8 +987,7 @@ void pytensor_module(nb::module_& mod) {
             },
             nb::arg("blocking") = true,
             nb::arg("cq_id") = nb::none(),
-            // nb::keep_alive<0, 1>(), // orig
-            nb::rv_policy::reference_internal,  // test
+            nb::keep_alive<0, 1>(),
             R"doc(
             Move TT Tensor from TT accelerator device to host device.
 
@@ -1021,7 +1012,7 @@ void pytensor_module(nb::module_& mod) {
                 }
                 TT_THROW("Unreachable");
             },
-            nb::rv_policy::copy,
+            // nb::rv_policy::copy,
             R"doc(
                  Extract the scalar value from a tensor containing exactly one element.
 
@@ -1068,8 +1059,6 @@ void pytensor_module(nb::module_& mod) {
                float pad_value) {
                 return self.pad(ttnn::Shape(output_tensor_shape), ttnn::Shape(input_tensor_start), pad_value);
             },
-            // nb::rv_policy::take_ownership,  // test
-            nb::rv_policy::automatic_reference,  // test
             R"doc(
             Pad TT Tensor with given pad value ``arg2``.
 
@@ -1143,8 +1132,6 @@ void pytensor_module(nb::module_& mod) {
                const ttnn::SmallVector<uint32_t>& output_tensor_end) {
                 return self.unpad(ttnn::Shape(output_tensor_start), ttnn::Shape(output_tensor_end));
             },
-            // nb::rv_policy::take_ownership,  // test: segfaults distilbert host_slice_with_unpad
-            nb::rv_policy::automatic_reference,  // test
             R"doc(
             Unpad this TT Tensor.
 
@@ -1207,11 +1194,7 @@ void pytensor_module(nb::module_& mod) {
                     [7, 8, 9]]] dtype=bfloat16 ]
         )doc")
         .def(
-            "pad_to_tile",
-            [](const Tensor& self, float pad_value) { return self.pad_to_tile(pad_value); },
-            // nb::rv_policy::take_ownership,  // test
-            nb::rv_policy::automatic_reference,  // test
-            R"doc(
+            "pad_to_tile", [](const Tensor& self, float pad_value) { return self.pad_to_tile(pad_value); }, R"doc(
             Pads TT Tensor with given pad value ``arg0``.
 
             The input tensor must be on host and in ROW_MAJOR layout.
@@ -1271,8 +1254,6 @@ void pytensor_module(nb::module_& mod) {
             [](const Tensor& self, const ttnn::SmallVector<uint32_t>& output_tensor_shape) {
                 return self.unpad_from_tile(ttnn::Shape(output_tensor_shape));
             },
-            // nb::rv_policy::take_ownership, // test
-            nb::rv_policy::automatic_reference,  // test
             R"doc(
             Unpads TT Tensor from given input tensor ``arg0``.
 
@@ -1333,11 +1314,7 @@ void pytensor_module(nb::module_& mod) {
                     [7, 8, 9]]] dtype=bfloat16 ]
         )doc")
         .def(
-            "__repr__",
-            [](const Tensor& self) { return self.write_to_string(); },
-            // nb::rv_policy::take_ownership,  // test
-            nb::rv_policy::copy,  // test
-            R"doc(
+            "__repr__", [](const Tensor& self) { return self.write_to_string(); }, R"doc(
             Prints the tensor as list of nested lists. Number of levels of nesting is equal to tensor rank.
 
             .. code-block:: python
@@ -1358,7 +1335,6 @@ void pytensor_module(nb::module_& mod) {
             // TODO: Rename to physical_volume
             "volume",
             [](const Tensor& self) { return self.physical_volume(); },
-            nb::rv_policy::reference_internal,  // test
             R"doc(
             Get the volume of the tensor.
 
@@ -1370,7 +1346,6 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "logical_volume",
             [](const Tensor& self) { return self.logical_volume(); },
-            nb::rv_policy::reference_internal,  // test
             R"doc(
             Get the logical volume of the tensor.
 
@@ -1380,10 +1355,7 @@ void pytensor_module(nb::module_& mod) {
 
         )doc")
         .def(
-            "storage_type",
-            [](const Tensor& self) { return self.storage_type(); },
-            nb::rv_policy::reference_internal,  // test
-            R"doc(
+            "storage_type", [](const Tensor& self) { return self.storage_type(); }, R"doc(
             Check if the tensor is on host
 
             .. code-block:: python
@@ -1394,7 +1366,6 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "device",
             [](const Tensor& self) { return dynamic_cast<MeshDevice*>(self.device()); },
-            nb::keep_alive<0, 1>(),  // test
             R"doc(
             Get the device of the tensor.
 
@@ -1407,7 +1378,6 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "devices",
             [](const Tensor& self) { return std::vector<MeshDevice*>{dynamic_cast<MeshDevice*>(self.device())}; },
-            nb::keep_alive<0, 1>(),  // test
             R"doc(
             Get devices tensor is mapped on to.
 
@@ -1425,9 +1395,7 @@ void pytensor_module(nb::module_& mod) {
                 auto buffer = convert_to_row_major_host_buffer(self, /*padded_output=*/true);
                 return convert_tt_tensor_to_framework_tensor<nb::pytorch>(buffer);
             },
-            // nb::rv_policy::copy,
-            // nb::rv_policy::take_ownership,  // test
-            nb::rv_policy::move,  // test
+            nb::rv_policy::copy,
             R"doc(
             Convert tensor to torch tensor using legacy padded shape.
             WARNING: Will be deprecated soon!
@@ -1448,9 +1416,7 @@ void pytensor_module(nb::module_& mod) {
                                             : convert_to_row_major_host_buffer(self, /*padded_output=*/false);
                 return convert_tt_tensor_to_framework_tensor<nb::pytorch>(buffer);
             },
-            // nb::rv_policy::copy,
-            // nb::rv_policy::take_ownership,  // test
-            nb::rv_policy::move,  // test
+            nb::rv_policy::copy,
             nb::arg("mesh_composer") = nullptr,
             R"doc(
             Convert tensor to torch tensor.
@@ -1471,9 +1437,7 @@ void pytensor_module(nb::module_& mod) {
                                             : convert_to_row_major_host_buffer(self, /*padded_output=*/false);
                 return convert_tt_tensor_to_framework_tensor<nb::numpy>(buffer);
             },
-            // nb::rv_policy::copy,
-            // nb::rv_policy::take_ownership,  // test
-            nb::rv_policy::move,  // test
+            nb::rv_policy::copy,
             nb::arg("mesh_composer") = nullptr,
             R"doc(
             Convert tensor to numpy tensor.
@@ -1519,8 +1483,6 @@ void pytensor_module(nb::module_& mod) {
                     },
                     self.storage());
             },
-            // nb::rv_policy::reference_internal,  // test: falcon7b had an OOM
-            nb::rv_policy::copy,  // test
             R"doc(
             Get the address of the underlying buffer.
 
@@ -1532,10 +1494,7 @@ void pytensor_module(nb::module_& mod) {
 
         )doc")
         .def(
-            "get_layout",
-            [](const Tensor& self) { return self.layout(); },
-            nb::rv_policy::reference_internal,  // test
-            R"doc(
+            "get_layout", [](const Tensor& self) { return self.layout(); }, R"doc(
             Get memory layout of TT Tensor.
 
             .. code-block:: python
@@ -1544,10 +1503,7 @@ void pytensor_module(nb::module_& mod) {
 
         )doc")
         .def(
-            "get_tile",
-            [](const Tensor& self) { return self.tensor_spec().tile(); },
-            nb::rv_policy::reference_internal,  // test
-            R"doc(
+            "get_tile", [](const Tensor& self) { return self.tensor_spec().tile(); }, R"doc(
             Get tile dims of TT Tensor.
 
             .. code-block:: python
@@ -1556,10 +1512,7 @@ void pytensor_module(nb::module_& mod) {
 
         )doc")
         .def(
-            "memory_config",
-            [](const Tensor& self) { return self.memory_config(); },
-            nb::rv_policy::reference_internal,  // test
-            R"doc(
+            "memory_config", [](const Tensor& self) { return self.memory_config(); }, R"doc(
             Get buffer type of TT Tensor.
 
             .. code-block:: python
@@ -1568,10 +1521,7 @@ void pytensor_module(nb::module_& mod) {
 
         )doc")
         .def(
-            "is_allocated",
-            [](const Tensor& self) { return self.is_allocated(); },
-            nb::rv_policy::reference_internal,  // test
-            R"doc(
+            "is_allocated", [](const Tensor& self) { return self.is_allocated(); }, R"doc(
             Check if TT Tensor is allocated.
 
             .. code-block:: python
@@ -1580,10 +1530,7 @@ void pytensor_module(nb::module_& mod) {
 
         )doc")
         .def(
-            "is_sharded",
-            [](const Tensor& self) { return self.is_sharded(); },
-            nb::rv_policy::reference_internal,  // test
-            R"doc(
+            "is_sharded", [](const Tensor& self) { return self.is_sharded(); }, R"doc(
             Check if TT Tensor is sharded.
 
             .. code-block:: python
@@ -1592,10 +1539,7 @@ void pytensor_module(nb::module_& mod) {
 
         )doc")
         .def(
-            "get_dtype",
-            [](const Tensor& self) { return self.dtype(); },
-            nb::rv_policy::reference_internal,  // test
-            R"doc(
+            "get_dtype", [](const Tensor& self) { return self.dtype(); }, R"doc(
             Get dtype of TT Tensor.
 
             .. code-block:: python
@@ -1607,7 +1551,7 @@ void pytensor_module(nb::module_& mod) {
             [](Tensor& self, int N, int C, int H, int W) {
                 return ttnn::reshape(self, infer_dims_for_reshape(self, ttnn::SmallVector<int>{N, C, H, W}));
             },
-            nb::rv_policy::automatic_reference,  // test
+            // nb::rv_policy::reference_internal,
             R"doc(
                 Reshapes TT tensor
 
@@ -1618,7 +1562,7 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "reshape",
             [](Tensor& self, const ttnn::Shape& shape) -> Tensor { return ttnn::reshape(self, shape); },
-            nb::rv_policy::automatic_reference,  // test
+            // nb::rv_policy::reference_internal,
             R"doc(
                 Reshapes TT tensor
 
@@ -1631,7 +1575,7 @@ void pytensor_module(nb::module_& mod) {
             [](Tensor& self, const ttnn::SmallVector<int32_t>& shape) -> Tensor {
                 return ttnn::reshape(self, infer_dims_for_reshape(self, shape));
             },
-            nb::rv_policy::automatic_reference,  // test
+            // nb::rv_policy::reference_internal,
             R"doc(
                 Reshapes TT tensor
 
@@ -1692,8 +1636,8 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "tensor_topology",
             [](const Tensor& self) { return self.tensor_topology(); },
-            nb::rv_policy::reference_internal,  // test
-            // nb::keep_alive<1, 0>(), //orig
+            // nb::rv_policy::reference_internal,
+            nb::keep_alive<1, 0>(),
             R"doc(
                 Get the topology of the tensor.
 
