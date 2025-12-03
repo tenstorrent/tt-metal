@@ -159,7 +159,7 @@ inline void calculate_sfpu_trig() {
     } else if constexpr (operation == SfpuType::cosine) {
         calculate_cosine<APPROXIMATION_MODE, fp32_dest_acc_en, ITERATIONS>();
     } else if constexpr (operation == SfpuType::tan) {
-        calculate_tangent<APPROXIMATION_MODE, ITERATIONS>();
+        calculate_tangent<APPROXIMATION_MODE, fp32_dest_acc_en, ITERATIONS>();
     }
 }
 
