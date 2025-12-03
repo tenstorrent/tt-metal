@@ -21,13 +21,13 @@ from ..test_transformer_wan import (
 @pytest.mark.parametrize("num_links", [1], ids=["num_links_1"])
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT}],
     indirect=True,
 )
 @pytest.mark.parametrize(
     "sp_axis, tp_axis, topology",
     [
-        (1, 0, ttnn.Topology.Linear),
+        (1, 0, ttnn.Topology.Ring),
     ],
 )
 @pytest.mark.parametrize(
@@ -55,7 +55,7 @@ def test_wan_transformer_exabox(
     reset_seeds,
 ) -> None:
     run_test_wan_transformer(
-        mesh_device, sp_axis, tp_axis, num_links, T, H, W, prompt_seq_len, is_fsdp, topology, chunk_size=64
+        mesh_device, sp_axis, tp_axis, num_links, T, H, W, prompt_seq_len, is_fsdp, topology, chunk_size=128
     )
 
 
@@ -67,13 +67,13 @@ def test_wan_transformer_exabox(
 @pytest.mark.parametrize("num_links", [3], ids=["num_links_3"])
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT}],
     indirect=True,
 )
 @pytest.mark.parametrize(
     "sp_axis, tp_axis, topology",
     [
-        (1, 0, ttnn.Topology.Linear),
+        (1, 0, ttnn.Topology.Ring),
     ],
 )
 @pytest.mark.parametrize(
@@ -112,7 +112,7 @@ def test_wan_transformer_model_exabox(
         prompt_seq_len=prompt_seq_len,
         load_cache=load_cache,
         topology=topology,
-        chunk_size=64,
+        chunk_size=128,
     )
 
 
@@ -124,13 +124,13 @@ def test_wan_transformer_model_exabox(
 @pytest.mark.parametrize("num_links", [3], ids=["num_links_3"])
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT}],
     indirect=True,
 )
 @pytest.mark.parametrize(
     "sp_axis, tp_axis, topology",
     [
-        (1, 0, ttnn.Topology.Linear),
+        (1, 0, ttnn.Topology.Ring),
     ],
 )
 @pytest.mark.parametrize("subfolder", ["transformer", "transformer_2"], ids=["transformer_1", "transformer_2"])
@@ -150,5 +150,5 @@ def test_wan_transformer_model_caching_exabox(
         num_links=num_links,
         subfolder=subfolder,
         topology=topology,
-        chunk_size=64,
+        chunk_size=128,
     )

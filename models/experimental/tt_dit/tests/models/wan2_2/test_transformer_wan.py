@@ -210,6 +210,21 @@ def run_test_wan_transformer(
         trans_mat=tt_trans_mat,
     )
 
+    from tracy import signpost
+
+    signpost("cached")
+    logger.info("Running cached model")
+
+    tt_spatial_out = tt_model(
+        spatial_1BND=tt_spatial,
+        prompt_1BLP=tt_prompt,
+        temb_1BTD=tt_temb,
+        N=spatial_seq_len,
+        rope_cos=tt_rope_cos,
+        rope_sin=tt_rope_sin,
+        trans_mat=tt_trans_mat,
+    )
+
     spatial_concat_dims = [None, None]
     spatial_concat_dims[sp_axis] = 2
     spatial_concat_dims[tp_axis] = 3

@@ -6,7 +6,6 @@ import torch
 import numpy as np
 from models.experimental.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from models.experimental.tt_dit.parallel.config import DiTParallelConfig, VaeHWParallelConfig, ParallelFactor
-from diffusers.utils import export_to_video
 import pytest
 import ttnn
 
@@ -19,13 +18,13 @@ import ttnn
 @pytest.mark.parametrize("num_links", [3], ids=["num_links_3"])
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT}],
     indirect=True,
 )
 @pytest.mark.parametrize(
     "sp_axis, tp_axis, topology",
     [
-        (1, 0, ttnn.Topology.Linear),
+        (1, 0, ttnn.Topology.Ring),
     ],
 )
 @pytest.mark.parametrize(
@@ -83,7 +82,7 @@ def test_pipeline_inference_exabox(
         boundary_ratio=0.875,
         dynamic_load=dynamic_load,
         topology=topology,
-        chunk_size=64,
+        chunk_size=128,
     )
 
     # Run inference
@@ -119,13 +118,13 @@ def test_pipeline_inference_exabox(
 
     # Save video using diffusers utility
     # Remove batch dimension
-    frames = frames[0]
-    try:
-        import socket
+    # frames = frames[0]
+    # try:
+    #     import socket
 
-        hostname = socket.gethostname()
-        video_filename = f"{hostname}_wan_output_video.mp4"
-        export_to_video(frames, video_filename, fps=16)
-    except AttributeError as e:
-        print(f"AttributeError: {e}")
-    print("✓ Saved video to: wan_output_video.mp4")
+    #     hostname = socket.gethostname()
+    #     video_filename = f"{hostname}_wan_output_video.mp4"
+    #     export_to_video(frames, video_filename, fps=16)
+    # except AttributeError as e:
+    #     print(f"AttributeError: {e}")
+    # print("✓ Saved video to: wan_output_video.mp4")

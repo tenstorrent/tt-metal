@@ -6,11 +6,9 @@ import statistics
 import pytest
 import torch
 import ttnn
-import numpy as np
 from loguru import logger
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.experimental.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
-from diffusers.utils import export_to_video
 from .....parallel.config import DiTParallelConfig, VaeHWParallelConfig, ParallelFactor
 
 
@@ -22,13 +20,13 @@ from .....parallel.config import DiTParallelConfig, VaeHWParallelConfig, Paralle
 @pytest.mark.parametrize("num_links", [3], ids=["num_links_3"])
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT}],
     indirect=True,
 )
 @pytest.mark.parametrize(
     "sp_axis, tp_axis, topology",
     [
-        (1, 0, ttnn.Topology.Linear),
+        (1, 0, ttnn.Topology.Ring),
     ],
 )
 @pytest.mark.parametrize(
@@ -98,9 +96,8 @@ def test_pipeline_performance(
         boundary_ratio=0.875,
         dynamic_load=dynamic_load,
         topology=topology,
-        chunk_size=64,
+        chunk_size=128,
     )
-    return
 
     # Warmup run (not timed)
     logger.info("Running warmup iteration...")
@@ -121,30 +118,30 @@ def test_pipeline_performance(
 
     logger.info(f"Warmup completed in {pipeline.timing_data['total']:.2f}s")
 
-    # Check output
-    if hasattr(result, "frames"):
-        frames = result.frames
-    else:
-        frames = result[0] if isinstance(result, tuple) else result
+    # # Check output
+    # if hasattr(result, "frames"):
+    #     frames = result.frames
+    # else:
+    #     frames = result[0] if isinstance(result, tuple) else result
 
-    print(f"✓ Inference completed successfully")
-    print(f"  Output shape: {frames.shape if hasattr(frames, 'shape') else 'Unknown'}")
-    print(f"  Output type: {type(frames)}")
+    # print(f"✓ Inference completed successfully")
+    # print(f"  Output shape: {frames.shape if hasattr(frames, 'shape') else 'Unknown'}")
+    # print(f"  Output type: {type(frames)}")
 
-    # Basic validation
-    if isinstance(frames, np.ndarray):
-        print(f"  Video data range: [{frames.min():.3f}, {frames.max():.3f}]")
-    elif isinstance(frames, torch.Tensor):
-        print(f"  Video data range: [{frames.min().item():.3f}, {frames.max().item():.3f}]")
+    # # Basic validation
+    # if isinstance(frames, np.ndarray):
+    #     print(f"  Video data range: [{frames.min():.3f}, {frames.max():.3f}]")
+    # elif isinstance(frames, torch.Tensor):
+    #     print(f"  Video data range: [{frames.min().item():.3f}, {frames.max().item():.3f}]")
 
-    # Save video using diffusers utility
-    # Remove batch dimension
-    frames = frames[0]
-    try:
-        export_to_video(frames, "wan_output_video.mp4", fps=16)
-    except AttributeError as e:
-        logger.info(f"AttributeError: {e}")
-    print("✓ Saved video to: wan_output_video.mp4")
+    # # Save video using diffusers utility
+    # # Remove batch dimension
+    # frames = frames[0]
+    # try:
+    #     export_to_video(frames, "wan_output_video.mp4", fps=16)
+    # except AttributeError as e:
+    #     logger.info(f"AttributeError: {e}")
+    # print("✓ Saved video to: wan_output_video.mp4")
 
     # Performance measurement runs
     logger.info("Running performance measurement iterations...")
@@ -158,7 +155,7 @@ def test_pipeline_performance(
         prompt_idx = (i + 1) % len(prompts)
         with benchmark_profiler("run", iteration=i):
             with torch.no_grad():
-                result = pipeline(
+                pipeline(
                     prompt=prompts[prompt_idx],
                     negative_prompt=negative_prompt,
                     height=height,
@@ -169,34 +166,6 @@ def test_pipeline_performance(
                     guidance_scale_2=guidance_scale_2,
                     generator=generator,
                 )
-                # Check output
-                if hasattr(result, "frames"):
-                    frames = result.frames
-                else:
-                    frames = result[0] if isinstance(result, tuple) else result
-
-                print(f"✓ Inference completed successfully")
-                print(f"  Output shape: {frames.shape if hasattr(frames, 'shape') else 'Unknown'}")
-                print(f"  Output type: {type(frames)}")
-
-                # Basic validation
-                if isinstance(frames, np.ndarray):
-                    print(f"  Video data range: [{frames.min():.3f}, {frames.max():.3f}]")
-                elif isinstance(frames, torch.Tensor):
-                    print(f"  Video data range: [{frames.min().item():.3f}, {frames.max().item():.3f}]")
-
-                # Save video using diffusers utility
-                # Remove batch dimension
-                frames = frames[0]
-                try:
-                    import socket
-
-                    hostname = socket.gethostname()
-                    video_filename = f"{hostname}_wan_output_video_run{i}.mp4"
-                    export_to_video(frames, video_filename, fps=16)
-                except AttributeError as e:
-                    print(f"AttributeError: {e}")
-                print(f"✓ Saved video to: {video_filename}")
 
         # Collect timing data
         all_timings.append(pipeline.timing_data)
