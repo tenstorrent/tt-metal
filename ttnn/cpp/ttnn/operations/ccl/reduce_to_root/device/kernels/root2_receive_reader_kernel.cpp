@@ -92,6 +92,7 @@ void kernel_main() {
     constexpr uint32_t compute_cb_l = get_compile_time_arg_val(7);
     constexpr uint32_t compute_cb_s = get_compile_time_arg_val(8);
     constexpr uint32_t compute_cb_m = get_compile_time_arg_val(9);
+    constexpr uint32_t input_num_tiles = get_compile_time_arg_val(10);
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
@@ -114,7 +115,6 @@ void kernel_main() {
 
     // reusing the last arg for fabric setup, therefore index overlaps.
     size_t arg_idx = 16;
-    uint32_t input_num_tiles = 16;  // to be modified with tiny tiles HERE
 
     const uint32_t new_packet_size_bytes = packet_size_bytes + 2 * align(page_size_bytes, alignment);
 

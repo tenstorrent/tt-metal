@@ -101,7 +101,7 @@ inline void write_data(
 
     cb_wait_front(cb_int_cb_l, input_num_tiles);
     DPRINT << "printing final l tensor\n";
-    print_full_tile(cb_int_cb_l, 10, false);
+    print_full_tile(cb_int_cb_l, 0, false);
     DPRINT << "waiting front for s tensor\n";
     uint32_t l1_read_addr = get_read_ptr(cb_int_cb_l);
     uint64_t dst_noc_addr = get_noc_addr(core_noc_x, core_noc_y, dst_addr_l, 0);
@@ -149,10 +149,10 @@ void kernel_main() {
     constexpr uint32_t cb_int_cb_l = get_compile_time_arg_val(0);
     constexpr uint32_t cb_int_cb_s = get_compile_time_arg_val(1);
     constexpr uint32_t cb_int_cb_m = get_compile_time_arg_val(2);
+    constexpr uint32_t input_num_tiles = get_compile_time_arg_val(3);
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
-    uint32_t input_num_tiles = 16;  // to be modified with tiny tiles HERE
 
     const uint32_t page_bytes = get_arg_val<uint32_t>(7);
     const uint32_t core_noc_x = get_arg_val<uint32_t>(8);
