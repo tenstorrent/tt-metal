@@ -159,6 +159,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     const DeviceComputeKernelConfig& compute_kernel_config) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler> empty_fused_op_signaler;
+
     ttnn::operations::experimental::minimal_matmul::minimal_matmul_override_variables_t shared_vars =
         minimal_matmul_factory_helper(
             program,
@@ -422,10 +423,11 @@ ttnn::operations::experimental::minimal_matmul::minimal_matmul_override_variable
     uint32_t in1_addr = weight_tensor.buffer()->address();
     uint32_t in2_addr = use_bias ? bias_tensor.value().buffer()->address() : 0;
     uint32_t out_addr = output_tensor.buffer()->address();
-    uint32_t in3_addr =
-        fused_op_signaler->read_local_slice_from_input ? fused_op_signaler->ag_input.value().buffer()->address() : 0;
+    uint32_t in3_addr = (fuse_op && fused_op_signaler->read_local_slice_from_input)
+                            ? fused_op_signaler->ag_input.value().buffer()->address()
+                            : 0;
     auto in3_data_format =
-        fused_op_signaler->read_local_slice_from_input
+        (fuse_op && fused_op_signaler->read_local_slice_from_input)
             ? tt::tt_metal::datatype_to_dataformat_converter(fused_op_signaler->ag_input.value().dtype())
             : in1_data_format;
     auto in3_tile_size = tt::tile_size(in3_data_format);
@@ -465,7 +467,6 @@ ttnn::operations::experimental::minimal_matmul::minimal_matmul_override_variable
         output_tensor,
         bias_tensor,
         (fuse_op && fused_op_signaler->read_local_slice_from_input) ? fused_op_signaler->ag_input : std::nullopt);
-
     auto in0_sender_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
