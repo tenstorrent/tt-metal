@@ -42,6 +42,7 @@ void kernel_main() {
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(4);
     constexpr uint32_t packet_cb_id = get_compile_time_arg_val(5);
     constexpr uint32_t alignment = get_compile_time_arg_val(6);
+    constexpr uint32_t input_num_tiles = get_compile_time_arg_val(7);
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
@@ -66,7 +67,7 @@ void kernel_main() {
     const auto payload_size_bytes = get_arg_val<uint32_t>(4);
     // send a single packet for l tensor (8 pages)
     // send a single packet for m and s tensors (2 pages: 1 each)
-    const uint32_t max_pages_per_packet_l = 16;  // 8;  // get_arg_val<uint32_t>(6); HERE
+    const uint32_t max_pages_per_packet_l = input_num_tiles;  // 8;  // get_arg_val<uint32_t>(6); HERE
     const uint32_t max_pages_per_packet_ms = 2;
     const auto page_segments = get_arg_val<uint32_t>(5);
     const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(6);
@@ -79,7 +80,7 @@ void kernel_main() {
 
     // reusing the last arg for fabric setup, therefore index overlaps.
     size_t arg_idx = 11;
-    uint32_t chunk_size = 16;  // 8; HERE
+    uint32_t chunk_size = input_num_tiles;
 
     bool is_forward = get_arg_val<uint32_t>(arg_idx++) == 1;
     const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
@@ -206,6 +207,7 @@ void kernel_main() {
     DPRINT << "before sending packet to root device 1\n";
 
     DPRINT << "print data from packet cb before send\n";
+    print_full_tile(packet_cb_id, 5, true);
     cb_push_back(packet_cb_id, 1);
 
     // const uint64_t dst_noc_addr = dst_buffer.get_noc_addr(packet_idx, 0, 0);

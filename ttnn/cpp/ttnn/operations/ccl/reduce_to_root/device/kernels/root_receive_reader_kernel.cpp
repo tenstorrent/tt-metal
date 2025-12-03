@@ -58,7 +58,7 @@ inline void read_from_local(
     DPRINT << "after noc read l\n";
     noc_async_read_barrier();
     // DPRINT << "printing local l from compute cb l\n";
-    // print_full_tile(cb_id_in_l, 3, false);
+    // print_full_tile(cb_id_in_l, 0, false);
     cb_push_back(cb_id_in_l, input_num_tiles);
 
     // for tensor s
@@ -103,7 +103,7 @@ inline void read_from_int(
     uint32_t l1_write_addr = get_write_ptr(compute_cb_l);
     tt_memmove<false, false, false, 0>(l1_write_addr, l1_read_addr, input_num_tiles * page_bytes);
     DPRINT << "printing moved l from compute cb l\n";
-    print_full_tile(compute_cb_l, 1, false);
+    print_full_tile(compute_cb_l, 0, false);
     cb_push_back(compute_cb_l, input_num_tiles);
     cb_pop_front(cb_int_l, input_num_tiles);
 
@@ -143,6 +143,7 @@ void kernel_main() {
     constexpr uint32_t compute_cb_l = get_compile_time_arg_val(7);
     constexpr uint32_t compute_cb_s = get_compile_time_arg_val(8);
     constexpr uint32_t compute_cb_m = get_compile_time_arg_val(9);
+    constexpr uint32_t input_num_tiles = get_compile_time_arg_val(10);
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
@@ -180,7 +181,7 @@ void kernel_main() {
     size_t arg_idx = 23;
     uint32_t num_tiles_l = page_idx_end;
 
-    uint32_t chunk_size = 16;  // to be modified with tiny tiles HERE
+    uint32_t chunk_size = input_num_tiles;
 
     const uint32_t new_packet_size_bytes = packet_size_bytes + 2 * align(page_size_bytes, alignment);
 
@@ -290,7 +291,7 @@ void kernel_main() {
 
     tt_memmove<false, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
     // DPRINT << "printing received L from packet l1\n";
-    // print_full_tile(receiver_cb_id_l, 14, false);
+    // print_full_tile(receiver_cb_id_l, 0, false);
     cb_push_back(receiver_cb_id_l, chunk_size);
 
     DPRINT << "pushing second set of inputs for compute to cbs " << (uint32_t)receiver_cb_id_l << ", "
@@ -313,6 +314,8 @@ void kernel_main() {
     // print_full_tile(receiver_cb_id_m, 0, false);
     cb_push_back(receiver_cb_id_m, 1);
 
+    // DPRINT << "print packet data \n";
+    // print_full_tile(packet_cb_id, 5, false);
     cb_push_back(packet_cb_id, 1);
 
     // noc_semaphore_set(local_semaphore_ptr, 0);
@@ -433,7 +436,7 @@ void kernel_main() {
 
     tt_memmove<false, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
     DPRINT << "printing received l from packet 2\n";
-    print_full_tile(receiver_cb_id_l, 15, false);
+    print_full_tile(receiver_cb_id_l, 0, false);
     cb_push_back(receiver_cb_id_l, chunk_size);
 
     cb_reserve_back(receiver_cb_id_s, 1);
@@ -455,6 +458,8 @@ void kernel_main() {
     print_full_tile(receiver_cb_id_m, 0, false);
     cb_push_back(receiver_cb_id_m, 1);
 
+    DPRINT << "print packet data \n";
+    print_full_tile(packet_cb_id, 5, false);
     cb_push_back(packet_cb_id, 1);
     DPRINT << "root reader kernel completed\n";
 }

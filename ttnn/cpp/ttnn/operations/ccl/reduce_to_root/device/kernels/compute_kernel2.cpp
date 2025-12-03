@@ -165,7 +165,6 @@ void MAIN {
         add_block_inplace<true>(cb_l1_temp, cb_l2_temp, out_chunk_tiles);
         DPRINT << "after l add\n";
 
-        // if do_final_division at the end, update OUT_ACC to be OUT_ACC / CUR_SUM
         if (loop_idx == 1) {
             move_block<false>(cb_s1_temp, cb_s_temp, Sq_chunk_t);
             recip_block_inplace<vector_mode>(cb_s_temp, Sq_chunk_t);

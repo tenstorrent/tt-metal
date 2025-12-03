@@ -248,10 +248,11 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     //  device 1 has three buffers for the output results
     //  all devices except device 1 have buffers for packet headers and packets
 
-    uint32_t num_shard_cores = 8;  // 8 for 2 links and get the value from the tensor
+    const uint32_t num_shard_cores = 8;  // 8 for 2 links and get the value from the tensor
     uint32_t input_l_total_num_pages = data_movement::get_num_pages(input_tensor_l);
-    uint32_t input_l_num_pages = input_l_total_num_pages / num_shard_cores;
-    printf("input l total num pages: %u, per core num pages: %u\n", input_l_total_num_pages, input_l_num_pages);
+    const uint32_t input_l_num_pages = input_l_total_num_pages / num_shard_cores;
+    const uint32_t input_num_tiles = input_l_num_pages;
+    printf("input l num pages: %u\n", input_l_num_pages);
 
     const uint32_t input_page_size_bytes =
         input_tensor_l.tensor_spec().compute_page_size_bytes();  // same page size: assuming all are tiny tiles
@@ -265,7 +266,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     printf("packet size bytes initial: %u \n", packet_size_bytes_initial);
 
     // HERE TODO TO DO MAKE SURE THIS IS CORRECT FOR BLACKHOLE CHANGE IT TO 8192
-    uint32_t packet_size_bytes = 8192;
+    uint32_t packet_size_bytes = 2048;
     // eventually add more cores for multi-link
     // const CoreCoord use_cores = {1, 1};
     // const auto
@@ -289,8 +290,6 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     printf("total packets: %u \n", total_packets);
     // program!
     tt::tt_metal::Program program{};
-
-    constexpr uint32_t input_num_tiles = 16;
 
     // sdpa compute values
     const auto tile_width = input_tensor_l.tensor_spec().tile().get_width();
@@ -316,13 +315,13 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     bool use_mla = true;
     uint32_t q_heads_parallel_factor = 1;
-    uint32_t head_dim_v = 512;
+    uint32_t head_dim_v = 128;
     // auto q_shape = {1, 1, 8, 512} ; //{1, B, PNH, DH};  //PNH being number of heads = 8
     // auto k_shape = {1, 8, 256, 512}; //{B, NKV, S, DH};  //NKV being number of experts. also assuming S = 256
     uint32_t B = 1;    // q_shape[1];
     uint32_t PNH = 8;  // q_shape[2],
     uint32_t S = 256;  // k_shape[2],
-    uint32_t DH = 512;  // k_shape[3];
+    uint32_t DH = 128;  // k_shape[3];
     printf("B: %u, PNH: %u, S: %u, DH: %u\n", B, PNH, S, DH);
     uint32_t Bkv = 1;  // k_shape[0];
     uint32_t St = S / tile_height;
@@ -344,7 +343,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     // Create buffers
     constexpr auto sender_cb_l = tt::CBIndex::c_0;
     constexpr auto cb_num_pages = 2;
-    constexpr uint32_t chunk_size = input_num_tiles;
+    uint32_t chunk_size = input_num_tiles;
     const uint32_t aligned_input_page_size_bytes = tt::round_up(input_page_size_bytes, l1_alignment);
     tt::DataFormat input_dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_l.dtype());
 
@@ -655,6 +654,8 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     const uint32_t num_workers_per_direction = 4;
     const auto buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
 
+    printf("buffer size bytes full size channel: %zu\n", buffer_size_bytes_full_size_channel);
+
     std::vector<CoreCoord> mux_cores = {
         CoreCoord(2, 0), CoreCoord(2, 1), CoreCoord(2, 2), CoreCoord(2, 3)};  // to be modified based on device type
     // TODO here change above to 4 cores for 2 links
@@ -679,13 +680,24 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     if (is_sender_device) {
         printf("is sender device satrt\n");
+        reader_ct_args = {input_num_tiles, sender_cb_l, sender_cb_s, sender_cb_m, input_page_size_bytes};
         reader_kernel = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/sender_reader_kernel.cpp",
             all_cores,
             tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
-        writer_ct_args = {0, sender_cb_l, sender_cb_s, sender_cb_m, packet_header_cb_id, packet_cb_id, l1_alignment};
+        writer_ct_args = {
+            0,
+            sender_cb_l,
+            sender_cb_s,
+            sender_cb_m,
+            packet_header_cb_id,
+            packet_cb_id,
+            l1_alignment,
+            input_num_tiles,
+            input_page_size_bytes,
+            packet_size_bytes};
         writer_ct_args[0] = writer_ct_args.size();
 
         fabric_mux_ct_args(
@@ -712,9 +724,10 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             compute_cb_2_s,  // Round 2: intermediate data (s1) -> compute_cb_2_s
             compute_cb_2_m,  // Round 2: intermediate data (m1) -> compute_cb_2_m
             l1_alignment,
-            compute_cb_l,   // Round 1: network data (l2) -> compute_cb_l
-            compute_cb_s,   // Round 1: network data (s2) -> compute_cb_s
-            compute_cb_m};  // Round 1: network data (m2) -> compute_cb_m
+            compute_cb_l,  // Round 1: network data (l2) -> compute_cb_l
+            compute_cb_s,  // Round 1: network data (s2) -> compute_cb_s
+            compute_cb_m,
+            input_num_tiles};  // Round 1: network data (m2) -> compute_cb_m
         reader_ct_args[0] = reader_ct_args.size();
 
         fabric_mux_ct_args(
@@ -729,11 +742,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             all_cores,
             tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
-        writer_ct_args = {
-            compute_out_cb_l,
-            compute_out_cb_s,
-            compute_out_cb_m,
-        };
+        writer_ct_args = {compute_out_cb_l, compute_out_cb_s, compute_out_cb_m, input_num_tiles};
         writer_kernel = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/root_receive_writer_kernel.cpp",
@@ -752,7 +761,8 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             l1_alignment,
             compute_cb_2_l,
             compute_cb_2_s,
-            compute_cb_2_m};
+            compute_cb_2_m,
+            input_num_tiles};
         reader_ct_args[0] = reader_ct_args.size();
 
         fabric_mux_ct_args(
@@ -774,7 +784,8 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             compute_out_cb_m,
             packet_header_cb_id_2,
             packet_cb_id_2,
-            l1_alignment};
+            l1_alignment,
+            input_num_tiles};
         writer_ct_args[0] = writer_ct_args.size();
 
         fabric_mux_ct_args(
@@ -910,27 +921,17 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                 printf("sender device\n");
                 reader_runtime_args = {
                     input_tensor_l.buffer()->address(),
-                    input_l_num_pages,
                     input_tensor_s.buffer()->address(),
                     input_tensor_m.buffer()->address(),
-                    input_page_size_bytes,
                     core_noc_x,
                     core_noc_y};
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel, c, reader_runtime_args);
 
                 writer_runtime_args = {
                     intermediate_tensor_l.buffer()->address(),
-                    // intermediate_tensor_sm.buffer()->address(),
-                    0,                  // page_idx_start,
-                    input_l_num_pages,  // page_idx_end,
-                    input_page_size_bytes,
-                    packet_size_bytes,
-                    num_page_segments,
                     semaphore_round1.address(),
                     core_noc_x,
                     core_noc_y,
-                    virtual_core.x,
-                    virtual_core.y,
                 };
                 // if leftmost: device 0:
                 // sending forward to root
