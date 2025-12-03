@@ -811,7 +811,7 @@ class DeepseekGenerator:
         blocks_per_user = even_int_div(self.paged_config.max_num_blocks, batch_per_shard)
 
         # Extract the user's block table row
-        user_blocks = page_table[user_id, :blocks_per_user].clone()  # [max_num_blocks_per_req] or less
+        user_blocks = page_table[user_id, :min(blocks_per_user, page_table.shape[1])].clone()  # [max_num_blocks_per_req] or less
 
         # Create a full page table with shape [batch_per_shard, blocks_per_user]
         full_page_table = torch.full((batch_per_shard, blocks_per_user), -1, dtype=torch.int32)
