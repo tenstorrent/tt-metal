@@ -64,7 +64,10 @@ void NLPConcatHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
     auto num_cores = shard_spec.grid.num_cores();
     if (args.on_subcoregrids) {
         TT_FATAL(num_cores == input_shape[1], "Input core grid num_cores must be equal to num users");
-        TT_FATAL(args.sub_core_grids.has_value(), "Subcoregrids must be provided if on_subcoregrids is true");
+        TT_FATAL(
+            args.sub_core_grids.has_value(),
+            "Subcoregrids must be provided if input tensor is sharded on non-continuous core ranges or does not start "
+            "from (0,0)");
         TT_FATAL(
             args.sub_core_grids.value().num_cores() >= args.num_heads,
             "Subcoregrids must have at least num_heads cores");
@@ -99,6 +102,10 @@ spec_return_value_t NLPConcatHeadsDecodeDeviceOperation::compute_output_specs(
         CoreRangeSet input_core_grid = input_tensor.shard_spec().value().grid;
         const auto start_coord = input_core_ranges[0].start_coord;
         const auto& sub_core_grids = args.sub_core_grids;
+        TT_FATAL(
+            sub_core_grids.has_value(),
+            "Subcoregrids must be provided if input tensor is sharded on non-continuous core ranges or does not start "
+            "from (0,0)");
         output_core_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
             start_coord, num_heads, sub_core_grids.value(), true);
     } else {
