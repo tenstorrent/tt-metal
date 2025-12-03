@@ -1904,6 +1904,9 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     while (remaining_size > FABRIC_MAX_PACKET_SIZE) {
         auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
 
+        // Ensure hardware has finished reading packet_header before modifying it
+        noc_async_writes_flushed();
+
         // Call with SetRoute=false since we already set it
         fabric_unicast_noc_unicast_write<FabricSenderType, false>(
             client_interface,
@@ -1914,9 +1917,6 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
             FABRIC_MAX_PACKET_SIZE,
             tt::tt_fabric::NocUnicastCommandHeader{noc_address});
 
-        // Wait for hardware to finish reading header before modifying it for next packet
-        noc_async_writes_flushed();
-
         src_addr += FABRIC_MAX_PACKET_SIZE;
         current_offset += FABRIC_MAX_PACKET_SIZE;
         remaining_size -= FABRIC_MAX_PACKET_SIZE;
@@ -1924,6 +1924,9 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
 
     // Send remainder packet (for small pages, this is the only packet)
     auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+    // Ensure hardware has finished reading packet_header before modifying it
+    noc_async_writes_flushed();
 
     // Call with SetRoute=false since we already set it (no barrier needed after last packet)
     fabric_unicast_noc_unicast_write<FabricSenderType, false>(
@@ -2041,6 +2044,9 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
     while (remaining_size > FABRIC_MAX_PACKET_SIZE) {
         auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
 
+        // Ensure hardware has finished reading packet_header before modifying it
+        noc_async_writes_flushed();
+
         // Call basic _with_state function
         fabric_unicast_noc_unicast_write_with_state<UpdateMask>(
             client_interface,
@@ -2049,9 +2055,6 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
             tt::tt_fabric::NocUnicastCommandHeader{noc_address},
             FABRIC_MAX_PACKET_SIZE);
 
-        // Wait for hardware to finish reading header before modifying it for next packet
-        noc_async_writes_flushed();
-
         src_addr += FABRIC_MAX_PACKET_SIZE;
         current_offset += FABRIC_MAX_PACKET_SIZE;
         remaining_size -= FABRIC_MAX_PACKET_SIZE;
@@ -2059,6 +2062,9 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
 
     // Send remainder packet (for small pages, this is the only packet)
     auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+    // Ensure hardware has finished reading packet_header before modifying it
+    noc_async_writes_flushed();
 
     // Call basic _with_state function (no barrier needed after last packet)
     fabric_unicast_noc_unicast_write_with_state<UpdateMask>(
@@ -2241,6 +2247,9 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
 
     // Send intermediate chunks as regular writes (loop skips for small pages)
     while (remaining > FABRIC_MAX_PACKET_SIZE) {
+        // Ensure hardware has finished reading packet_header before modifying it
+        noc_async_writes_flushed();
+
         // Call basic unicast write with SetRoute=false
         fabric_unicast_noc_unicast_write<FabricSenderType, false>(
             client_interface,
@@ -2251,13 +2260,13 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
             FABRIC_MAX_PACKET_SIZE,
             tt::tt_fabric::NocUnicastCommandHeader{current_noc_addr});
 
-        // Wait for hardware to finish reading header before modifying for next packet
-        noc_async_writes_flushed();
-
         current_src_addr += FABRIC_MAX_PACKET_SIZE;
         current_noc_addr += FABRIC_MAX_PACKET_SIZE;
         remaining -= FABRIC_MAX_PACKET_SIZE;
     }
+
+    // Ensure hardware has finished reading packet_header before modifying it
+    noc_async_writes_flushed();
 
     // Final chunk: fused write+atomic inc (for small pages, this is the only packet)
     fabric_unicast_noc_fused_unicast_with_atomic_inc<FabricSenderType, false>(
@@ -2391,6 +2400,9 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
     while (remaining_size > FABRIC_MAX_PACKET_SIZE) {
         auto chunk_noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
 
+        // Ensure hardware has finished reading packet_header before modifying it
+        noc_async_writes_flushed();
+
         // Set noc_send_type to match the command fields
         packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
 
@@ -2403,9 +2415,6 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
             tt::tt_fabric::NocUnicastCommandHeader{chunk_noc_address},
             FABRIC_MAX_PACKET_SIZE);
 
-        // Wait for hardware to finish reading header before modifying for next packet
-        noc_async_writes_flushed();
-
         packet_src_addr += FABRIC_MAX_PACKET_SIZE;
         current_offset += FABRIC_MAX_PACKET_SIZE;
         remaining_size -= FABRIC_MAX_PACKET_SIZE;
@@ -2413,6 +2422,9 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
 
     // Final chunk: fused write+atomic inc (for small pages, this is the only packet)
     auto final_noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+    // Ensure hardware has finished reading packet_header before modifying it
+    noc_async_writes_flushed();
 
     // Set noc_send_type back to fused for final chunk
     packet_header->noc_send_type = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
@@ -2703,6 +2715,9 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
     while (remaining_size > FABRIC_MAX_PACKET_SIZE) {
         auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
 
+        // Ensure hardware has finished reading packet_header before modifying it
+        noc_async_writes_flushed();
+
         // Call basic function with SetRoute=false since we already set it
         fabric_multicast_noc_unicast_write<FabricSenderType, false>(
             client_interface,
@@ -2714,9 +2729,6 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
             FABRIC_MAX_PACKET_SIZE,
             tt::tt_fabric::NocUnicastCommandHeader{noc_address});
 
-        // Wait for hardware to finish reading header before modifying it for next packet
-        noc_async_writes_flushed();
-
         src_addr += FABRIC_MAX_PACKET_SIZE;
         current_offset += FABRIC_MAX_PACKET_SIZE;
         remaining_size -= FABRIC_MAX_PACKET_SIZE;
@@ -2724,6 +2736,9 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
 
     // Send remainder packet (for small pages, this is the only packet)
     auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+    // Ensure hardware has finished reading packet_header before modifying it
+    noc_async_writes_flushed();
 
     // Call basic function with SetRoute=false since we already set it (no barrier needed after last packet)
     fabric_multicast_noc_unicast_write<FabricSenderType, false>(
@@ -2781,6 +2796,9 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
     while (remaining_size > FABRIC_MAX_PACKET_SIZE) {
         auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
 
+        // Ensure hardware has finished reading packet_header before modifying it
+        noc_async_writes_flushed();
+
         // Call basic _with_state function
         fabric_multicast_noc_unicast_write_with_state<UpdateMask>(
             client_interface,
@@ -2789,9 +2807,6 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
             tt::tt_fabric::NocUnicastCommandHeader{noc_address},
             FABRIC_MAX_PACKET_SIZE);
 
-        // Wait for hardware to finish reading header before modifying it for next packet
-        noc_async_writes_flushed();
-
         src_addr += FABRIC_MAX_PACKET_SIZE;
         current_offset += FABRIC_MAX_PACKET_SIZE;
         remaining_size -= FABRIC_MAX_PACKET_SIZE;
@@ -2799,6 +2814,9 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
 
     // Send remainder packet (for small pages, this is the only packet)
     auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+    // Ensure hardware has finished reading packet_header before modifying it
+    noc_async_writes_flushed();
 
     // Call basic _with_state function (no barrier needed after last packet)
     fabric_multicast_noc_unicast_write_with_state<UpdateMask>(
@@ -3107,6 +3125,9 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
 
     // Send intermediate chunks as regular multicast writes (loop skips for small pages)
     while (remaining > FABRIC_MAX_PACKET_SIZE) {
+        // Ensure hardware has finished reading packet_header before modifying it
+        noc_async_writes_flushed();
+
         // Call basic multicast unicast write with SetRoute=false
         fabric_multicast_noc_unicast_write<FabricSenderType, false>(
             client_interface,
@@ -3118,13 +3139,13 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
             FABRIC_MAX_PACKET_SIZE,
             tt::tt_fabric::NocUnicastCommandHeader{current_noc_addr});
 
-        // Wait for hardware to finish reading header before modifying for next packet
-        noc_async_writes_flushed();
-
         current_src_addr += FABRIC_MAX_PACKET_SIZE;
         current_noc_addr += FABRIC_MAX_PACKET_SIZE;
         remaining -= FABRIC_MAX_PACKET_SIZE;
     }
+
+    // Ensure hardware has finished reading packet_header before modifying it
+    noc_async_writes_flushed();
 
     // Final chunk: fused write+atomic inc (for small pages, this is the only packet)
     fabric_multicast_noc_fused_unicast_with_atomic_inc<FabricSenderType, false>(
@@ -3186,6 +3207,9 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
     while (remaining_size > FABRIC_MAX_PACKET_SIZE) {
         auto chunk_noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
 
+        // Ensure hardware has finished reading packet_header before modifying it
+        noc_async_writes_flushed();
+
         // Set noc_send_type to match the command fields
         packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
 
@@ -3198,9 +3222,6 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
             tt::tt_fabric::NocUnicastCommandHeader{chunk_noc_address},
             FABRIC_MAX_PACKET_SIZE);
 
-        // Wait for hardware to finish reading header before modifying for next packet
-        noc_async_writes_flushed();
-
         packet_src_addr += FABRIC_MAX_PACKET_SIZE;
         current_offset += FABRIC_MAX_PACKET_SIZE;
         remaining_size -= FABRIC_MAX_PACKET_SIZE;
@@ -3208,6 +3229,9 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
 
     // Final chunk: fused write+atomic inc (for small pages, this is the only packet)
     auto final_noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+    // Ensure hardware has finished reading packet_header before modifying it
+    noc_async_writes_flushed();
 
     // Set noc_send_type back to fused for final chunk
     packet_header->noc_send_type = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
