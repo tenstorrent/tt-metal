@@ -15,12 +15,13 @@ namespace ttnn::operations::data_movement::transpose {
 TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    bool is_sharded = input_tensor.is_sharded();
-    bool is_l1 = is_sharded && input_tensor.buffer()->is_l1();
+    bool is_l1 = input_tensor.is_sharded() && input_tensor.buffer()->is_l1();
     bool is_row_major = input_tensor.layout() == Layout::ROW_MAJOR;
 
-    switch (operation_attributes.dim) {
-        case TransposeOpDim::WH:
+    auto parallelization_strategy = get_parallelization_strategy(operation_attributes, tensor_args);
+
+    switch (parallelization_strategy) {
+        case TransposeOpParallelizationStrategy::MULTI_CORE_WH:
             if (is_l1) {
                 if (is_row_major) {
                     return program::TransposeWHShardedRMProgramFactory{};
@@ -30,15 +31,29 @@ TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_pro
             }
             return program::TransposeWHProgramFactory{};
 
-        case TransposeOpDim::HC:
+        case TransposeOpParallelizationStrategy::MULTI_CORE_HC:
             if (is_l1) {
                 return program::TransposeHCShardedProgramFactory{};
             }
-            return program::TransposeHCProgramFactory{};
+            if (is_row_major) {
+                return program::TransposeHCRMProgramFactory{};
+            }
+            // Tiled interleaved (non-sharded TILE layout)
+            return program::TransposeHCTiledInterleavedProgramFactory{};
 
-        case TransposeOpDim::CN: return program::TransposeCNProgramFactory{};
+        case TransposeOpParallelizationStrategy::MULTI_CORE_CN: return program::TransposeCNProgramFactory{};
 
-        default: TT_THROW("Unsupported transpose dim for TMP device operation");
+        default: TT_THROW("Unsupported parallelization strategy");
+    }
+}
+
+TransposeOpParallelizationStrategy TransposeDeviceOperation::get_parallelization_strategy(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    switch (operation_attributes.dim) {
+        case TransposeOpDim::WH: return TransposeOpParallelizationStrategy::MULTI_CORE_WH;
+        case TransposeOpDim::HC: return TransposeOpParallelizationStrategy::MULTI_CORE_HC;
+        case TransposeOpDim::CN: return TransposeOpParallelizationStrategy::MULTI_CORE_CN;
+        default: TT_THROW("Unsupported transpose dim for parallelization strategy");
     }
 }
 
