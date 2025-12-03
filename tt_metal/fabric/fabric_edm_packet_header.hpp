@@ -27,6 +27,10 @@
 // NOLINTBEGIN(misc-unused-parameters)
 namespace tt::tt_fabric {
 
+// Helper for dependent static_assert that always evaluates to false
+template <class>
+inline constexpr bool always_false_v = false;
+
 enum TerminationSignal : uint32_t {
     KEEP_RUNNING = 0,
 
@@ -184,6 +188,7 @@ static_assert(
     sizeof(NocMulticastAtomicIncCommandHeader) == 12, "NocMulticastAtomicIncCommandHeader size is not 12 bytes");
 union NocCommandFields {
     NocUnicastCommandHeader unicast_write;
+    NocUnicastCommandHeader unicast_read;
     NocUnicastInlineWriteCommandHeader unicast_inline_write;
     NocMulticastCommandHeader mcast_write;
     NocUnicastAtomicIncCommandHeader unicast_seminc;
@@ -201,6 +206,7 @@ struct UDMWriteControlHeader {
     uint8_t risc_id;
     uint8_t transaction_id;
     uint8_t posted;
+    uint8_t initial_direction;
 } __attribute__((packed));
 
 struct UDMReadControlHeader {
@@ -212,17 +218,18 @@ struct UDMReadControlHeader {
     uint32_t size_bytes;
     uint8_t risc_id;
     uint8_t transaction_id;
+    uint8_t initial_direction;
 } __attribute__((packed));
 
-static_assert(sizeof(UDMWriteControlHeader) == 8, "UDMWriteControlHeader size is not 8 bytes");
-static_assert(sizeof(UDMReadControlHeader) == 15, "UDMReadControlHeader size is not 15 bytes");
+static_assert(sizeof(UDMWriteControlHeader) == 9, "UDMWriteControlHeader size is not 9 bytes");
+static_assert(sizeof(UDMReadControlHeader) == 16, "UDMReadControlHeader size is not 16 bytes");
 
 union UDMControlFields {
     UDMWriteControlHeader write;
     UDMReadControlHeader read;
 } __attribute__((packed));
 
-static_assert(sizeof(UDMControlFields) == 15, "UDMControlFields size is not 15 bytes");
+static_assert(sizeof(UDMControlFields) == 16, "UDMControlFields size is not 16 bytes");
 
 // TODO: wrap this in a debug version that holds type info so we can assert for field/command/
 template <typename Derived>
@@ -280,6 +287,29 @@ struct PacketHeaderBase {
         this->payload_size_bytes = payload_size_bytes;
 #else
         TT_THROW("Calling to_noc_unicast_write from host is unsupported");
+#endif
+        return *static_cast<Derived*>(this);
+    }
+
+    Derived& to_noc_unicast_read(const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#ifndef UDM_MODE
+        static_assert(always_false_v<Derived>, "to_noc_unicast_read requires UDM mode / relay extension to be enabled");
+#endif
+        this->noc_send_type = NOC_UNICAST_READ;
+        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
+            noc_address_components.first.x,
+            noc_address_components.first.y,
+            noc_address_components.second,
+            edm_to_local_chip_noc);
+        NocUnicastCommandHeader modified_command_header = noc_unicast_command_header;
+        modified_command_header.noc_address = noc_addr;
+
+        this->command_fields.unicast_read = modified_command_header;
+        this->payload_size_bytes = payload_size_bytes;
+#else
+        TT_THROW("Calling to_noc_unicast_read from host is unsupported");
 #endif
         return *static_cast<Derived*>(this);
     }
@@ -365,6 +395,28 @@ struct PacketHeaderBase {
         this->payload_size_bytes = payload_size_bytes;
 #else
         TT_THROW("Calling to_noc_unicast_write from host is unsupported");
+#endif
+        return static_cast<volatile Derived*>(this);
+    }
+
+    volatile Derived* to_noc_unicast_read(
+        const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#ifndef UDM_MODE
+        static_assert(always_false_v<Derived>, "to_noc_unicast_read requires UDM mode / relay extension to be enabled");
+#endif
+        this->noc_send_type = NOC_UNICAST_READ;
+        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
+            noc_address_components.first.x,
+            noc_address_components.first.y,
+            noc_address_components.second,
+            edm_to_local_chip_noc);
+
+        this->command_fields.unicast_read.noc_address = noc_addr;
+        this->payload_size_bytes = payload_size_bytes;
+#else
+        TT_THROW("Calling to_noc_unicast_read from host is unsupported");
 #endif
         return static_cast<volatile Derived*>(this);
     }
@@ -702,7 +754,6 @@ static_assert(sizeof(HybridMeshPacketHeader) == 96, "sizeof(HybridMeshPacketHead
 
 struct UDMHybridMeshPacketHeader : public HybridMeshPacketHeader {
     UDMControlFields udm_control;
-    uint8_t padding[1];  // Padding to align to 80 bytes (64 base + 15 control + 1 padding = 80)
 
     // Override to return correct size for UDMHybridMeshPacketHeader
     size_t get_payload_size_including_header() volatile const {
