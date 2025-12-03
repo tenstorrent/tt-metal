@@ -413,7 +413,7 @@ constexpr size_t local_receiver_completion_counters_base_address =
 
 constexpr size_t local_receiver_credits_base_address = std::min(local_receiver_ack_counters_base_address, local_receiver_completion_counters_base_address);
 constexpr size_t total_number_of_receiver_to_sender_credit_num_bytes = (std::max(local_receiver_ack_counters_base_address, local_receiver_completion_counters_base_address) - local_receiver_credits_base_address) * 2;
-constexpr size_t total_number_of_receiver_to_sender_credit_eth_words = tt::align(total_number_of_receiver_to_sender_credit_num_bytes, ETH_WORD_SIZE_BYTES);
+constexpr size_t total_number_of_receiver_to_sender_credit_eth_words = tt::align(total_number_of_receiver_to_sender_credit_num_bytes, ETH_WORD_SIZE_BYTES) / ETH_WORD_SIZE_BYTES;
 
 static_assert(
     !multi_txq_enabled || to_sender_remote_ack_counters_base_address != 0,
