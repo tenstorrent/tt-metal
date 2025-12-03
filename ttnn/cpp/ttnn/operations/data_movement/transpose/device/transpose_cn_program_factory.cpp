@@ -3,6 +3,7 @@
 
 #include "transpose_cn_program_factory.hpp"
 
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -105,6 +106,9 @@ TransposeCNProgramFactory::cached_program_t TransposeCNProgramFactory::create(
     transpose::tensor_return_value_t& tensor_return_value) {
     const auto& input_tensor = tensor_args.input;
     auto& output_tensor = tensor_return_value;
+
+    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_cn needs to be on device!");
+    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_cn needs to be allocated in a buffer on device!");
 
     Program program = Program();
 
