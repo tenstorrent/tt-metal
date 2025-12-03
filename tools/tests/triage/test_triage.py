@@ -168,6 +168,24 @@ class TestTriage:
             len(FAILURE_CHECKS) == 0
         ), f"Dump fast dispatch check failed with {len(FAILURE_CHECKS)} failures: {FAILURE_CHECKS}"
 
+    def test_check_noc_status(self):
+        global triage_home
+        global FAILURE_CHECKS
+
+        FAILURE_CHECKS.clear()
+        result = run_script(
+            script_path=os.path.join(triage_home, "check_noc_status.py"),
+            args=None,
+            context=self.exalens_context,
+            argv=[],
+            return_result=True,
+        )
+        # Some mismatches may occur on unused cores.
+        non_state_failures = [failure for failure in FAILURE_CHECKS if "Mismatched state" not in failure]
+        assert (
+            len(non_state_failures) == 0
+        ), f"Check NOC status check failed with {len(non_state_failures)} failures: {non_state_failures}"
+
     def test_check_arc(self):
         global triage_home
         global FAILURE_CHECKS
