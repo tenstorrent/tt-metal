@@ -140,7 +140,7 @@ jobs:
             ./tests/scripts/multihost/run_dual_galaxy_tests.sh
 
   multi-host-glx-4x:
-    # if: ${{ github.event_name == 'schedule' || github.event.inputs.glx_4x_multihost == 'true' }}
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.glx_4x_multihost == 'true' }}
     runs-on:
       # A physical, multi-host WH Galaxy that's in service
       - multi-host-glx-4x
