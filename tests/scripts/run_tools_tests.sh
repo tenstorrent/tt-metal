@@ -8,6 +8,8 @@ if [ -z "${ARCH_NAME}" ]; then
 fi
 
 if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
+    export TT_METAL_OPERATION_TIMEOUT_SECONDS=0
+
     # Watcher dump tool testing
     echo "Running watcher dump tool tests..."
 
