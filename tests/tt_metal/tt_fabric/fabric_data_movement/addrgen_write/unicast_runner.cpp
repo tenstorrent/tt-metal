@@ -159,6 +159,33 @@ void run_unicast_write_test(HelpersFixture* fixture, const AddrgenTestParams& p)
     Dist::MeshCoordinate src_coord = coord_of_phys(src_phys);
     Dist::MeshCoordinate dst_coord = coord_of_phys(dst_phys);
 
+    // Check if this is a route variant (needed for second destination setup)
+    const bool is_route_variant_early =
+        (p.api_variant == AddrgenApiVariant::UnicastWriteRoute ||
+         p.api_variant == AddrgenApiVariant::UnicastWriteWithStateRoute ||
+         p.api_variant == AddrgenApiVariant::UnicastWriteSetStateRoute ||
+         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteRoute ||
+         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteWithStateRoute ||
+         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteSetStateRoute ||
+         p.api_variant == AddrgenApiVariant::ScatterWriteRoute ||
+         p.api_variant == AddrgenApiVariant::ScatterWriteWithStateRoute ||
+         p.api_variant == AddrgenApiVariant::ScatterWriteSetStateRoute);
+
+    // For route variants: set up second destination chip (hardcoded to chip 2)
+    tt::tt_fabric::FabricNodeId dst2{tt::tt_fabric::MeshId{p.mesh_id}, 5};
+    ChipId dst2_phys = 0;
+    tt::tt_metal::IDevice* dst2_dev = nullptr;
+    Dist::MeshCoordinate dst2_coord{0, 0};
+    tt::tt_metal::CoreCoord rx2_xy = rx_xy;
+    if (is_route_variant_early) {
+        dst2_phys = cp.get_physical_chip_id_from_fabric_node_id(dst2);
+        dst2_dev = find_device_by_id(dst2_phys);
+        if (dst2_dev) {
+            dst2_coord = coord_of_phys(dst2_phys);
+            rx2_xy = dst2_dev->worker_core_from_logical_core(p.receiver_core);
+        }
+    }
+
     // --- IO buffers & initialization (MeshBuffer style) ---
     Dist::DeviceLocalBufferConfig src_local{.page_size = p.page_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
     Dist::DeviceLocalBufferConfig dst_local{
@@ -177,6 +204,10 @@ void run_unicast_write_test(HelpersFixture* fixture, const AddrgenTestParams& p)
     // Initialize shards on specific src/dst devices (pass CQ, use vectors)
     Dist::WriteShard(mcq, src_buf, tx, src_coord, /*blocking=*/true);
     Dist::WriteShard(mcq, dst_buf, zeros, dst_coord, /*blocking=*/true);
+    // For route variants: initialize second destination buffer
+    if (is_route_variant_early && dst2_dev) {
+        Dist::WriteShard(mcq, dst_buf, zeros, dst2_coord, /*blocking=*/true);
+    }
 
     // ---------------------------- PROGRAM FACTORY ----------------------------
     /*
@@ -300,6 +331,20 @@ Notes:
     const uint32_t sem_wait_value = is_fused_atomic_inc ? NUM_PAGES : 1u;
     tt::tt_metal::SetRuntimeArgs(receiver_prog, rx_wait_k, receiver_core, {gsem->address(), sem_wait_value});
 
+    // For route variants: set up second receiver program
+    tt::tt_metal::Program receiver_prog2 = tt::tt_metal::CreateProgram();
+    if (is_route_variant_early && dst2_dev) {
+        auto rx_wait_k2 = tt::tt_metal::CreateKernel(
+            receiver_prog2,
+            KDIR + receiver_kernel_name,
+            p.receiver_core,
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt::tt_metal::NOC::RISCV_0_default,
+                .defines = defines});
+        tt::tt_metal::SetRuntimeArgs(receiver_prog2, rx_wait_k2, p.receiver_core, {gsem->address(), sem_wait_value});
+    }
+
     // Sender program: READER (RISCV_0) + WRITER (RISCV_1)
     tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
     const uint32_t CB_ID = tt::CBIndex::c_0;
@@ -365,11 +410,14 @@ Notes:
 
     if (is_route_variant) {
         // Route variant: use routing plane connection manager
-        // Add num_connections (always 1 for single destination test)
-        writer_rt.push_back(1u);  // num_connections
+        // Add num_connections (2 for dual destination test, fallback to 1 if dst2_dev is null)
+        uint32_t num_connections = (dst2_dev != nullptr) ? 2u : 1u;
+        writer_rt.push_back(num_connections);
 
         // Use append_routing_plane_connection_manager_rt_args for route setup
-        std::vector<tt::tt_fabric::FabricNodeId> dst_nodes = {dst};
+        std::vector<tt::tt_fabric::FabricNodeId> dst_nodes = (dst2_dev != nullptr)
+                                                                 ? std::vector<tt::tt_fabric::FabricNodeId>{dst, dst2}
+                                                                 : std::vector<tt::tt_fabric::FabricNodeId>{dst};
         std::vector<uint32_t> connection_link_indices = {};  // Empty means auto-select
         tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
             src,
@@ -400,6 +448,10 @@ Notes:
     Dist::MeshWorkload receiver_workload;
     Dist::MeshWorkload sender_workload;
     receiver_workload.add_program(Dist::MeshCoordinateRange(dst_coord), std::move(receiver_prog));
+    // For route variants: add second receiver to workload
+    if (is_route_variant_early && dst2_dev) {
+        receiver_workload.add_program(Dist::MeshCoordinateRange(dst2_coord), std::move(receiver_prog2));
+    }
     sender_workload.add_program(Dist::MeshCoordinateRange(src_coord), std::move(sender_prog));
 
     // Run once: receiver first (so it's ready), then sender
@@ -410,6 +462,13 @@ Notes:
     std::vector<uint32_t> rx(n_words, 0u);
     Dist::ReadShard(mcq, rx, dst_buf, dst_coord, /*blocking=*/true);
     verify_payload_words(rx, tx);
+
+    // For route variants: verify second destination
+    if (is_route_variant_early && dst2_dev) {
+        std::vector<uint32_t> rx2(n_words, 0u);
+        Dist::ReadShard(mcq, rx2, dst_buf, dst2_coord, /*blocking=*/true);
+        verify_payload_words(rx2, tx);
+    }
 }
 
 }  // namespace tt::tt_fabric::test
