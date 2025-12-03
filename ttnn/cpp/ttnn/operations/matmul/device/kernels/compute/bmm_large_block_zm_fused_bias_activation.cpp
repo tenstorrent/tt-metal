@@ -177,7 +177,9 @@ void MAIN {
     constexpr uint32_t out_cb_id = tt::CBIndex::c_4;
     constexpr uint32_t mm_partials_cb_id = tt::CBIndex::c_5;
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
-    // When in0 needs to be transposed, we route it here first and then push it to in0_cb_id for matmul call
+    // When in0 needs to be transposed, the original data is read from c_0 (in0_transpose_cb_id),
+    // transposed, and the result is written to c_10 (in0_cb_id), which is then used as input for
+    // the matmul call.
     constexpr uint32_t in0_transpose_cb_id = tt::CBIndex::c_0;
 
 #ifdef FUSE_BIAS

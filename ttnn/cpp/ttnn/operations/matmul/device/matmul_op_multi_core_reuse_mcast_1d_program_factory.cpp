@@ -274,7 +274,7 @@ process_mcast_in0_program_and_create_override_variables(
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
-    const auto& a_shape_logical = get_matmul_tensor_logical_shape(a, transpose_a);
+    const auto& a_shape_logical = ttnn::operations::matmul::get_matmul_tensor_logical_shape(a, transpose_a);
     const auto in0_last_ktile_w = a_shape_logical[-1] % in0_tile.get_width();
 
     const auto in0_tensor_stride_w = transpose_a ? M : 1;
@@ -1078,7 +1078,7 @@ process_mcast_in1_program_and_create_override_variables(
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
 
-    const auto& a_shape_logical = get_matmul_tensor_logical_shape(a, transpose_a);
+    const auto& a_shape_logical = ttnn::operations::matmul::get_matmul_tensor_logical_shape(a, transpose_a);
     const auto in0_last_ktile_w = a_shape_logical[-1] % in0_tile.get_width();
 
     bool extract_shard_sub_blocks = false;
@@ -1884,7 +1884,7 @@ process_gather_in0_program_and_create_override_variables(
     uint32_t in1_shard_width_in_tiles = 0;
     uint32_t in1_CB_tiles = 0;
 
-    const auto& bshape = get_matmul_tensor_padded_shape(b, /*transpose_b=*/false);
+    const auto& bshape = ttnn::operations::matmul::get_matmul_tensor_padded_shape(b, /*transpose_b=*/false);
     uint32_t in1_tensor_width_in_tiles = bshape[-1] / in1_tile.get_width();
 
     if (in1_is_dram_sharded || in1_is_dram_interleaved) {
@@ -2783,7 +2783,13 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
 
     if (gather_in0) {
         TT_FATAL(
-            !transpose_a, "Transpose A is not supported for gather_in0, please use a different program configuration");
+            !transpose_a,
+            "Transpose A is ({}) not supported for gather_in0, please use a different program configuration",
+            transpose_a);
+        TT_FATAL(
+            !transpose_b,
+            "Transpose B is ({}) not supported for gather_in0, please use a different program configuration",
+            transpose_b);
         std::vector<tt_metal::Buffer*> out_buffers;
         out_buffers.reserve(output_tensors.size());
         for (const auto& output_tensor : output_tensors) {
@@ -3293,7 +3299,8 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     const auto& a_shape_logical = get_matmul_tensor_logical_shape(a, /*transpose_a=*/false);
     const auto in0_last_ktile_w = a_shape_logical[-1] % in0_tile.get_width();
 
-    // We keep this as a placeholder for now and we will plumb this later.
+    // We don't support transpose for this program configuration. However, we retain the logic here
+    // to keep the code consistent with the other program configurations.
     const auto transpose_a = false;
     const auto transpose_b = false;
     const auto in0_tensor_stride_w = transpose_a ? Mt : 1;

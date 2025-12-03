@@ -85,66 +85,6 @@ uint32_t estimate_interm_tile_size(
 }
 
 /**
- * @brief Get the tile shape of a tensor, with optional transpose.
- *
- * Returns a tuple representing the height and width of the tensor's tile. If transpose is true,
- * the tile shape dimensions are swapped.
- *
- * @param input_tensor The tensor whose tile shape is queried.
- * @param transpose Whether to return the tile shape after transposing (swap height and width).
- * @return tt::tt_metal::Tile The tile shape of the tensor, possibly transposed.
- */
-tt::tt_metal::Tile get_matmul_tile(const Tensor& input_tensor, bool transpose) {
-    auto curr_tile = input_tensor.tensor_spec().tile();
-    if (!transpose) {
-        return curr_tile;
-    }
-
-    // We check if `transpose` was set in the tile spec, then we negate it.
-    const auto transpose_was_set = curr_tile.get_transpose_of_faces();
-    TT_FATAL(
-        (!transpose_was_set) || curr_tile.get_transpose_within_face(),
-        "The tile spec must have both transpose_within_face {} and transpose_of_faces {} set or neither set",
-        curr_tile.get_transpose_within_face(),
-        curr_tile.get_transpose_of_faces());
-    return tt::tt_metal::Tile({curr_tile.get_width(), curr_tile.get_height()}, !transpose_was_set);
-}
-
-/**
- * @brief Get the shape of a tensor, with optional transpose.
- *
- * Returns the shape of the tensor. If transpose is true, the shape dimensions are swapped.
- *
- * @param input_tensor The tensor whose shape is queried.
- * @param transpose Whether to return the shape after transposing (swap height and width).
- * @return ttnn::Shape The shape of the tensor, possibly transposed.
- */
-auto get_matmul_tensor_logical_shape(const Tensor& input_tensor, bool transpose) {
-    auto shape = input_tensor.logical_shape();
-    if (transpose) {
-        std::swap(shape[-2], shape[-1]);
-    }
-    return shape;
-}
-
-/**
- * @brief Get the padded shape of a tensor, with optional transpose.
- *
- * Returns the padded shape of the tensor. If transpose is true, the padded shape dimensions are swapped.
- *
- * @param input_tensor The tensor whose padded shape is queried.
- * @param transpose Whether to return the padded shape after transposing (swap height and width).
- * @return ttnn::Shape The padded shape of the tensor, possibly transposed.
- */
-auto get_matmul_tensor_padded_shape(const Tensor& input_tensor, bool transpose) {
-    auto padded_shape = input_tensor.padded_shape();
-    if (transpose) {
-        std::swap(padded_shape[-2], padded_shape[-1]);
-    }
-    return padded_shape;
-}
-
-/**
  * @brief Calculate the M dimension for matmul operations
  *
  * @param padded_shape The padded shape of the tensor
@@ -312,6 +252,10 @@ inline uint32_t get_estimated_size_of_cbs(
         auto* in0_buffer = input_tensor_a.buffer();
         const auto in0_tile = get_matmul_tile(input_tensor_a, transpose_a);
         in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_width();
+        if (transpose_a) {
+            // An intermediate CB (c_10) of same size is needed to hold the transposed data
+            in0_shard_width_in_tiles *= 2;
+        }
     }
     in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
 
@@ -588,9 +532,9 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     auto in0_tile = get_matmul_tile(input_tensor_a, transpose_a);
     auto in1_tile = get_matmul_tile(input_tensor_b, transpose_b);
 
-    const auto M = get_M_dim(a_shape_padded, /*in0_tile=*/std::nullopt, fuse_batch);
-    const auto K = get_K_dim(a_shape_padded, /*in0_tile=*/std::nullopt);
-    const auto N = get_N_dim(b_shape_padded, /*in1_tile=*/std::nullopt);
+    const auto M = get_M_dim(a_shape_padded, /*tile=*/std::nullopt, fuse_batch);
+    const auto K = get_K_dim(a_shape_padded, /*tile=*/std::nullopt);
+    const auto N = get_N_dim(b_shape_padded, /*tile=*/std::nullopt);
     uint32_t per_core_M, per_core_N;
     if (mcast_in0) {
         per_core_M = M / in0_tile.get_height();
@@ -1408,9 +1352,8 @@ inline MatmulProgramConfig get_program_config(
     const bool transpose_b,
     const uint32_t bias_single_tile_size,
     const Matmul* matmul) {
-    // Explicitly dereference the pointer to resolve incomplete type error.
-    if ((*matmul).program_config.has_value()) {
-        return (*matmul).program_config.value();
+    if (matmul->program_config.has_value()) {
+        return matmul->program_config.value();
     }
     auto config = generate_matmul_program_config(
         input_tensor_a,
@@ -1508,6 +1451,40 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
 }  // namespace bmm_op_utils
 
 namespace ttnn::operations::matmul {
+
+tt::tt_metal::Tile get_matmul_tile(const Tensor& input_tensor, bool transpose) {
+    auto curr_tile = input_tensor.tensor_spec().tile();
+    if (!transpose) {
+        return curr_tile;
+    }
+
+    // If the tile is already transposed and we are asked to transpose it again,
+    // the result should be the original orientation (double-transpose cancels out).
+    // Therefore, we negate the transpose flag.
+    const auto transpose_was_set = curr_tile.get_transpose_of_faces();
+    TT_FATAL(
+        (!transpose_was_set) || curr_tile.get_transpose_within_face(),
+        "The tile spec must have both transpose_within_face {} and transpose_of_faces {} set or neither set",
+        curr_tile.get_transpose_within_face(),
+        curr_tile.get_transpose_of_faces());
+    return tt::tt_metal::Tile({curr_tile.get_width(), curr_tile.get_height()}, !transpose_was_set);
+}
+
+ttnn::Shape get_matmul_tensor_logical_shape(const Tensor& input_tensor, bool transpose) {
+    auto shape = input_tensor.logical_shape();
+    if (transpose) {
+        std::swap(shape[-2], shape[-1]);
+    }
+    return shape;
+}
+
+ttnn::Shape get_matmul_tensor_padded_shape(const Tensor& input_tensor, bool transpose) {
+    auto padded_shape = input_tensor.padded_shape();
+    if (transpose) {
+        std::swap(padded_shape[-2], padded_shape[-1]);
+    }
+    return padded_shape;
+}
 
 ttnn::Shape compute_matmul_output_shape(
     const Tensor& input_tensor_a, const Tensor& input_tensor_b, bool transpose_a, bool transpose_b) {
@@ -2423,7 +2400,7 @@ void Matmul::validate(
                 const auto M = get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/false);
                 const auto total_M = get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/true);
                 const auto N = get_N_dim(b_shape_padded, in1_tile);
-                const auto K = get_K_dim(a_shape_padded, /*in0_tile=*/std::nullopt);
+                const auto K = get_K_dim(a_shape_padded, /*tile=*/std::nullopt);
                 uint32_t per_core_M = program_config.per_core_M;
                 uint32_t per_core_N = program_config.per_core_N;
                 if (per_core_M > M) {
@@ -2971,8 +2948,8 @@ void SparseMatmul::validate(
     const auto& input_tensor_b = input_tensors.at(1);
     const auto& sparsity = input_tensors.at(2);
 
-    const auto& a_shape_padded = get_matmul_tensor_padded_shape(input_tensor_a, /*transpose_a=*/false);
-    const auto& b_shape_padded = get_matmul_tensor_padded_shape(input_tensor_b, /*transpose_b=*/false);
+    const auto& a_shape_padded = get_matmul_tensor_padded_shape(input_tensor_a, /*transpose=*/false);
+    const auto& b_shape_padded = get_matmul_tensor_padded_shape(input_tensor_b, /*transpose=*/false);
     auto in0_tile = get_matmul_tile(input_tensor_a, /*transpose=*/false);
     auto in1_tile = get_matmul_tile(input_tensor_b, /*transpose=*/false);
 
