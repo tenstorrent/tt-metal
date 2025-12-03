@@ -398,10 +398,10 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     // The large-tensor non-Welford reduce kernel needs
     // an intermediate Float32 CB that can be unpacked
     // directly to dest (if doing a Float32 reduction)
-    constexpr auto large_tensor_im_fp32_cb = tt::CBIndex::c_26;
+    constexpr auto large_tensor_acc_cb = tt::CBIndex::c_26;
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (float32_reduction) {
-        unpack_to_dest_mode[large_tensor_im_fp32_cb] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[large_tensor_acc_cb] = UnpackToDestMode::UnpackToDestFp32;
     }
     auto compute_kernels_id = CreateKernel(
         program,
@@ -468,10 +468,12 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
             .set_page_size(tt::CBIndex::c_21, single_tile_size);
     CreateCircularBuffer(program, all_cores, c_intermed4_config);
     if (large_tensor_needed && !use_welford) {
-        CircularBufferConfig cb_fp32_config =
-            CircularBufferConfig(single_tile_size, {{large_tensor_im_fp32_cb, tt::DataFormat::Float32}})
-                .set_page_size(large_tensor_im_fp32_cb, single_tile_size);
-        CreateCircularBuffer(program, all_cores, cb_fp32_config);
+        const auto large_tensor_acc_data_format = float32_reduction ? tt::DataFormat::Float32 : cb_data_format;
+        const auto large_tensor_acc_tile_size = tt::tile_size(large_tensor_acc_data_format);
+        CircularBufferConfig cb_large_tensor_acc_config =
+            CircularBufferConfig(large_tensor_acc_tile_size, {{large_tensor_acc_cb, large_tensor_acc_data_format}})
+                .set_page_size(large_tensor_acc_cb, large_tensor_acc_tile_size);
+        CreateCircularBuffer(program, all_cores, cb_large_tensor_acc_config);
     }
     if (gamma.has_value() || beta.has_value()) {
         CircularBufferConfig c_intermed5_config =

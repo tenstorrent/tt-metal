@@ -47,14 +47,14 @@ void MAIN {
     constexpr auto cb_out = tt::CBIndex::c_16;    // output
     constexpr auto cb_gamma = tt::CBIndex::c_5;
     constexpr auto cb_beta = tt::CBIndex::c_6;
-    uint32_t cb_xmm = tt::CBIndex::c_24;           // x minus mean
-    constexpr auto cb_ex = tt::CBIndex::c_18;      // E[x]
-    constexpr auto cb_ex2 = tt::CBIndex::c_19;     // E[(x-E[x])^2]
-    constexpr auto cb_xmm2 = tt::CBIndex::c_20;    // xmm^2
-    constexpr auto cb_ex2pe = tt::CBIndex::c_21;   // E[(x-E[x])^2]+eps
-    uint32_t cb_fusion = tt::CBIndex::c_22;        // stream gamma/beta
+    uint32_t cb_xmm = tt::CBIndex::c_24;          // x minus mean
+    constexpr auto cb_ex = tt::CBIndex::c_18;     // E[x]
+    constexpr auto cb_ex2 = tt::CBIndex::c_19;    // E[(x-E[x])^2]
+    constexpr auto cb_xmm2 = tt::CBIndex::c_20;   // xmm^2
+    constexpr auto cb_ex2pe = tt::CBIndex::c_21;  // E[(x-E[x])^2]+eps
+    uint32_t cb_fusion = tt::CBIndex::c_22;       // stream gamma/beta
     constexpr auto scaler0 = 0;
-    constexpr auto cb_fp32 = tt::CBIndex::c_26;
+    constexpr auto cb_accumulate = tt::CBIndex::c_26;  // For accumulating (x-E[x])^2
 #ifdef FUSE_PRE_ADD
 #ifdef RMSNORM
     constexpr uint32_t cb_x = cb_xmm;
@@ -139,17 +139,17 @@ void MAIN {
 
             tile_regs_acquire();
             if (wt > 0) {
-                cb_wait_front(cb_fp32, onetile);
-                reconfig_data_format_srca(cb_fp32);
-                copy_tile_init(cb_fp32);
-                copy_tile(cb_fp32, 0, dst0);
-                cb_pop_front(cb_fp32, onetile);
+                cb_wait_front(cb_accumulate, onetile);
+                reconfig_data_format_srca(cb_accumulate);
+                copy_tile_init(cb_accumulate);
+                copy_tile(cb_accumulate, 0, dst0);
+                cb_pop_front(cb_accumulate, onetile);
             }
             cb_wait_front(cb_xmm2, blk);
 
             // Accumulate (x-E[x])^2
             reconfig_data_format(cb_xmm2, cb_scaler);
-            reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, cb_fp32);
+            reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, cb_accumulate);
             for (uint32_t j = 0; j < blk; j++) {
                 reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, j, scaler0, dst0);
             }
@@ -157,7 +157,7 @@ void MAIN {
             cb_pop_front(cb_xmm2, blk);
 
             const auto final_iter = wt == Wt - blk;
-            const auto pack_cb = final_iter ? cb_ex2 : cb_fp32;
+            const auto pack_cb = final_iter ? cb_ex2 : cb_accumulate;
             if (final_iter) {
                 // Divide by W
                 binop_with_scalar_tile_init();
