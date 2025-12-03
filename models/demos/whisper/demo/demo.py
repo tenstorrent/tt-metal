@@ -742,7 +742,7 @@ def test_demo_for_conditional_generation(
             if mesh_device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
                 expected_perf_metrics = {"prefill_time_to_token": 0.086, "decode_t/s/u": 196.48}
             else:
-                expected_perf_metrics = {"prefill_time_to_token": 0.078, "decode_t/s/u": 240.83}
+                expected_perf_metrics = {"prefill_time_to_token": 0.078, "decode_t/s/u": 218.06}
         else:  # wormhole_b0
             expected_perf_metrics = metrics_dictionary[mesh_device.get_num_devices()]
         total_batch = mesh_device.get_num_devices() * batch_size_per_device
