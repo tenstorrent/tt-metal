@@ -1,16 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 // SPDX-License-Identifier: Apache-2.0
 
-#include <optional>
-#include <string>
-#include <variant>
+#include "layernorm_post_all_gather_2d_program_factory.hpp"
 
-#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_op.hpp"
-#include <tt-metalium/work_split.hpp>
-#include "tt-metalium/circular_buffer_config.hpp"
 #include "ttnn/operations/math.hpp"
 
+#include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/circular_buffer.hpp>
@@ -19,7 +14,7 @@
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
 
-namespace ttnn::operations::normalization {
+namespace ttnn::operations::normalization::layernorm_post_all_gather::program {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -39,32 +34,29 @@ inline uint16_t bfloat16(float float_num) {
     // store lower 16 as 16-bit uint
     return (uint16_t)uint32_data;
 }
+
 inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_bfloats) {
     // first -> lower 16
     // second -> upper 16
     return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
 }
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-// computes layernorm(a)*gamma + beta
-tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_multi_core(
-    const Tensor& a,
-    const Tensor& stats,
-    const std::optional<const Tensor>& gamma,
-    const std::optional<const Tensor>& beta,
-    Tensor& output,
-    LayerNormDistributedType norm_type,
-    float eps,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<bool> use_2d_core_grid,
-    LayerNormDefaultProgramConfig program_config) {
+LayerNormPostAllGather2DProgramFactory::cached_program_t LayerNormPostAllGather2DProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    using tt::tt_metal::CBHandle;
-    using tt::tt_metal::CircularBuffer;
     using tt::tt_metal::CircularBufferConfig;
 
-    const bool is_rmsnorm = norm_type == LayerNormDistributedType::RMSNORM;
+    const auto& a = tensor_args.input;
+    const auto& stats = tensor_args.stats;
+    const auto& gamma = tensor_args.gamma;
+    const auto& beta = tensor_args.beta;
+
+    const bool is_rmsnorm = operation_attributes.norm_type == LayerNormDistributedType::RMSNORM;
     const auto& shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
     const uint32_t HW = H * W;
@@ -83,7 +75,6 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_m
 
     uint32_t num_tile_rows = NC * Ht;
 
-    log_debug(tt::LogOp, "device_id: {}", gamma.value().device()->get_device_ids());
     log_debug(tt::LogOp, "is_rmsnorm: {}", is_rmsnorm);
     log_debug(tt::LogOp, "W: {}", W);
     log_debug(tt::LogOp, "H: {}", H);
@@ -102,7 +93,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_m
     //                Circular Buffer Data Format Setup
     //////////////////////////////////////////////////////////////////////////
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
     uint32_t block_size =
         fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
@@ -139,6 +130,20 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_m
     auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
     auto dst_addr = output.buffer()->address();
+
+    [[maybe_unused]] uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
+    [[maybe_unused]] uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
+
+    // For bert, tensor is packed as RM with width 32
+    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
+        num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_WIDTH : 0;
+    }
+    if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
+        num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_WIDTH : 0;
+    }
+
+    log_debug(tt::LogOp, "num_gamma_tiles: {}", num_gamma_tiles);
+    log_debug(tt::LogOp, "num_beta_tiles: {}", num_beta_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -235,66 +240,24 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_m
     uint32_t max_cores_y = grid_size.y;
     uint32_t tiles_per_core_y = Wt;
 
-    // Declare all variables that will be used later
-    uint32_t cores_x = 0;
-    uint32_t cores_y = 0;
-    uint32_t tiles_per_core_x = 0;
-    uint32_t num_cores = 0;
-    CoreRangeSet all_cores;
-    CoreRangeSet core_group_1;
-    CoreRangeSet core_group_2;
-    uint32_t num_tile_rows_per_core_group_1 = 0;
-    uint32_t num_tile_rows_per_core_group_2 = 0;
-
-    // Determine if we should use 2D kernel layout
-    // If use_2d_core_grid is explicitly set, use that value
-    // Otherwise, infer based on shape conditions (RMSNorm with small height)
-    bool use_2d_kernel = false;
-    if (use_2d_core_grid.has_value()) {
-        use_2d_kernel = *use_2d_core_grid;
+    // 2D kernel layout: distribute work across cores in a 2D grid
+    // cores_x handles tile rows, cores_y handles tile columns
+    uint32_t cores_x = std::min(max_cores_y, num_tile_rows);
+    while (num_tile_rows % cores_x != 0 && cores_x > 1) {
+        cores_x--;
     }
-
-    if (use_2d_kernel) {
-        // 2D kernel layout: distribute work across cores in a 2D grid
-        // cores_x handles tile rows, cores_y handles tile columns
-        cores_x = std::min(max_cores_y, num_tile_rows);
-        while (num_tile_rows % cores_x != 0 && cores_x > 1) {
-            cores_x--;
-        }
-        tiles_per_core_x = num_tile_rows / cores_x;
-        cores_y = std::min(max_cores_y, Wt);
-        while (Wt % cores_y != 0 && cores_y > 1) {
-            cores_y--;
-        }
-        tiles_per_core_y = Wt / cores_y;
-
-        CoreRange all_cores_range({0, 0}, {cores_x - 1, cores_y - 1});
-        all_cores = CoreRangeSet(std::vector{all_cores_range});
-    } else {
-        auto
-            [num_cores_result,
-             all_cores_result,
-             core_group_1_result,
-             core_group_2_result,
-             num_tile_rows_per_core_group_1_result,
-             num_tile_rows_per_core_group_2_result] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
-
-        num_cores = num_cores_result;
-        all_cores = all_cores_result;
-        core_group_1 = core_group_1_result;
-        core_group_2 = core_group_2_result;
-        num_tile_rows_per_core_group_1 = num_tile_rows_per_core_group_1_result;
-        num_tile_rows_per_core_group_2 = num_tile_rows_per_core_group_2_result;
-
-        log_debug(tt::LogOp, "num_cores: {}", num_cores);
-        log_debug(tt::LogOp, "grid_size: {}", grid_size);
-        log_debug(tt::LogOp, "core_group_1: {}", core_group_1.str());
-        log_debug(tt::LogOp, "num_tile_rows_per_core_group_1: {}", num_tile_rows_per_core_group_1);
-        log_debug(tt::LogOp, "core_group_2: {}", core_group_2.str());
-        log_debug(tt::LogOp, "num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
+    uint32_t tiles_per_core_x = num_tile_rows / cores_x;
+    uint32_t cores_y = std::min(max_cores_y, Wt);
+    while (Wt % cores_y != 0 && cores_y > 1) {
+        cores_y--;
     }
+    tiles_per_core_y = Wt / cores_y;
+
+    CoreRange all_cores_range({0, 0}, {cores_x - 1, cores_y - 1});
+    CoreRangeSet all_cores = CoreRangeSet(std::vector{all_cores_range});
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -365,21 +328,23 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_m
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
+    bool float32_reduction = fp32_dest_acc_en && !operation_attributes.program_config.legacy_reduction;
     std::vector<uint32_t> compute_args = {
         tiles_per_core_y,
-        W,
         block_size,
         stats_tiles_cols,
         gamma.has_value(),
         beta.has_value(),
         fp32_dest_acc_en,
+        float32_reduction ? 1 : 0,
+        operation_attributes.program_config.legacy_rsqrt ? 1 : 0,
         cb_length};
 
     const auto* compute_kernel_file =
         is_rmsnorm ? "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/"
                      "rmsnorm_post_allgather.cpp"
                    : "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
-                     "layernorm_post_allgather_welford.cpp";
+                     "layernorm_post_allgather.cpp";
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -490,7 +455,6 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_m
         }
     }
 
-    uint32_t curr_row = 0;
     float winv = 1.0f / (W * num_devices);  // bcast-w scaler
     auto bfloat_winv_value = bfloat16(winv);
     uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
@@ -498,129 +462,99 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_m
         float f;
         uint32_t u;
     } e{};
-    e.f = eps;  // epsilon
+    e.f = operation_attributes.eps;  // epsilon
 
-    // Set runtime arguments based on kernel layout type
-    if (use_2d_kernel) {
-        for (uint32_t x = 0; x < cores_x; ++x) {
-            for (uint32_t y = 0; y < cores_y; ++y) {
-                CoreCoord core = {x, y};
+    // Set runtime arguments for 2D kernel layout
+    for (uint32_t x = 0; x < cores_x; ++x) {
+        for (uint32_t y = 0; y < cores_y; ++y) {
+            CoreCoord core = {x, y};
 
-                uint32_t tile_offset = (x * Wt) + (y * tiles_per_core_y);
-                uint32_t stats_offset = x * stats_tiles_cols;
+            uint32_t tile_offset = (x * Wt) + (y * tiles_per_core_y);
+            uint32_t stats_offset = x * stats_tiles_cols;
 
-                log_debug(
-                    tt::LogOp,
-                    "Setting reader runtime args for core: {}, tile_offset: {}, tiles_per_core_y: {}",
-                    core.x,
-                    tile_offset,
-                    tiles_per_core_y);
-                SetRuntimeArgs(
-                    program,
-                    reader_kernels_id,
-                    core,
-                    {a_addr,
-                     tiles_per_core_x,
-                     tiles_per_core_y,
-                     tile_offset,
-                     stats_offset,
-                     packed_winv_value,
-                     e.u,  // 0-6
-                     gamma_dram_addr,
-                     beta_dram_addr,
-                     stats_addr,
-                     y * tiles_per_core_y}  // 7-9
-                );
-                SetRuntimeArgs(program, compute_kernels_id, core, {tiles_per_core_x});
-                SetRuntimeArgs(
-                    program, writer_kernels_id, core, {dst_addr, tiles_per_core_x * tiles_per_core_y, tile_offset});
-            }
-        }
-    } else {
-        for (uint32_t i = 0; i < num_cores; ++i) {
-            CoreCoord core = {i % grid_size.x, i / grid_size.x};
-
-            uint32_t num_tile_rows_per_core = 0;
-            if (core_group_1.contains(core)) {
-                num_tile_rows_per_core = num_tile_rows_per_core_group_1;
-            } else if (core_group_2.contains(core)) {
-                num_tile_rows_per_core = num_tile_rows_per_core_group_2;
-            } else {
-                TT_THROW("Core not in specified core ranges");
-            }
-
-            uint32_t tile_offset = curr_row * Wt;
-            uint32_t stats_offset = curr_row * stats_tiles_cols;
-            uint32_t y_offset = 0;
-
+            log_debug(
+                tt::LogOp,
+                "Setting reader runtime args for core: {}, tile_offset: {}, tiles_per_core_y: {}",
+                core.x,
+                tile_offset,
+                tiles_per_core_y);
             SetRuntimeArgs(
                 program,
                 reader_kernels_id,
                 core,
                 {a_addr,
-                 num_tile_rows_per_core,
-                 Wt,
+                 tiles_per_core_x,
+                 tiles_per_core_y,
                  tile_offset,
                  stats_offset,
                  packed_winv_value,
-                 e.u,  // 0-5
+                 e.u,  // 0-6
                  gamma_dram_addr,
                  beta_dram_addr,
                  stats_addr,
-                 y_offset}  // 6-8
+                 y * tiles_per_core_y}  // 7-9
             );
-            SetRuntimeArgs(program, compute_kernels_id, core, {num_tile_rows_per_core});
-            SetRuntimeArgs(program, writer_kernels_id, core, {dst_addr, num_tile_rows_per_core * Wt, tile_offset});
-            curr_row += num_tile_rows_per_core;
+            SetRuntimeArgs(program, compute_kernels_id, core, {tiles_per_core_x});
+            SetRuntimeArgs(
+                program, writer_kernels_id, core, {dst_addr, tiles_per_core_x * tiles_per_core_y, tile_offset});
         }
     }
-    auto override_runtime_arguments_callback =
-        [reader_kernel_id = reader_kernels_id, writer_kernel_id = writer_kernels_id, cores](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            const auto& input_tensor = input_tensors.at(0);
-            const auto& stats_tensor = input_tensors.at(1);
-            const auto& gamma_tensor = optional_input_tensors.at(0);
-            const auto& beta_tensor = optional_input_tensors.at(1);
 
-            const auto input_addr = input_tensor.buffer()->address();
-            const auto stats_addr = stats_tensor.buffer()->address();
-            const bool has_gamma = gamma_tensor.has_value();
-            const bool has_beta = beta_tensor.has_value();
-            const auto gamma_addr = has_gamma ? gamma_tensor.value().buffer()->address() : 0;
-            const auto beta_addr = has_beta ? beta_tensor.value().buffer()->address() : 0;
-
-            const auto& output_tensor = output_tensors.at(0);
-            const auto output_addr = output_tensor.buffer()->address();
-
-            auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
-
-            for (const auto& core : cores) {
-                {
-                    auto& reader_args = reader_runtime_args_by_core.at(core.x).at(core.y);
-
-                    reader_args[0] = input_addr;
-                    reader_args[9] = stats_addr;
-                    if (has_gamma) {
-                        reader_args[7] = gamma_addr;
-                    }
-                    if (has_beta) {
-                        reader_args[8] = beta_addr;
-                    }
-                }
-
-                {
-                    auto& writer_args = writer_runtime_args_by_core.at(core.x).at(core.y);
-                    writer_args[0] = output_addr;
-                }
-            }
-        };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return cached_program_t{
+        std::move(program),
+        {.reader_kernel_id = reader_kernels_id,
+         .writer_kernel_id = writer_kernels_id,
+         .compute_kernel_id = compute_kernels_id,
+         .cores = std::move(cores),
+         .tiles_per_core_x = tiles_per_core_x,
+         .tiles_per_core_y = tiles_per_core_y,
+         .Wt = Wt,
+         .stats_tiles_cols = stats_tiles_cols}};
 }
 
-}  // namespace ttnn::operations::normalization
+void LayerNormPostAllGather2DProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    auto& shared_vars = cached_program.shared_variables;
+    auto& program = cached_program.program;
+
+    const auto& input_tensor = tensor_args.input;
+    const auto& stats_tensor = tensor_args.stats;
+    const auto& gamma_tensor = tensor_args.gamma;
+    const auto& beta_tensor = tensor_args.beta;
+
+    const auto input_addr = input_tensor.buffer()->address();
+    const auto stats_addr = stats_tensor.buffer()->address();
+    const bool has_gamma = gamma_tensor.has_value();
+    const bool has_beta = beta_tensor.has_value();
+    const auto gamma_addr = has_gamma ? gamma_tensor.value().buffer()->address() : 0;
+    const auto beta_addr = has_beta ? beta_tensor.value().buffer()->address() : 0;
+    const auto output_addr = output.buffer()->address();
+
+    auto& reader_runtime_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernel_id);
+    auto& writer_runtime_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernel_id);
+
+    for (const auto& core : shared_vars.cores) {
+        {
+            auto& reader_args = reader_runtime_args_by_core.at(core.x).at(core.y);
+
+            reader_args[0] = input_addr;
+            reader_args[9] = stats_addr;
+            if (has_gamma) {
+                reader_args[7] = gamma_addr;
+            }
+            if (has_beta) {
+                reader_args[8] = beta_addr;
+            }
+        }
+
+        {
+            auto& writer_args = writer_runtime_args_by_core.at(core.x).at(core.y);
+            writer_args[0] = output_addr;
+        }
+    }
+}
+
+}  // namespace ttnn::operations::normalization::layernorm_post_all_gather::program
