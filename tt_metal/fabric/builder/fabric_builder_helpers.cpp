@@ -38,4 +38,28 @@ eth_chan_directions get_sender_channel_direction(eth_chan_directions my_directio
     }
 }
 
+std::pair<eth_chan_directions, eth_chan_directions> get_perpendicular_directions(eth_chan_directions direction) {
+    if (direction == eth_chan_directions::EAST || direction == eth_chan_directions::WEST) {
+        // E/W -> perpendicular are N/S
+        return {eth_chan_directions::NORTH, eth_chan_directions::SOUTH};
+    } else {
+        // N/S -> perpendicular are E/W
+        return {eth_chan_directions::EAST, eth_chan_directions::WEST};
+    }
+}
+
+std::vector<eth_chan_directions> get_all_other_directions(eth_chan_directions direction) {
+    std::vector<eth_chan_directions> all_directions = {
+        eth_chan_directions::EAST, eth_chan_directions::WEST, eth_chan_directions::NORTH, eth_chan_directions::SOUTH};
+
+    std::vector<eth_chan_directions> dirs;
+    for (auto dir : all_directions) {
+        if (dir != direction) {
+            dirs.push_back(dir);
+        }
+    }
+
+    return dirs;
+}
+
 }  // namespace tt::tt_fabric::builder
