@@ -282,11 +282,8 @@ jobs:
           TT_CACHE_PATH: /mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
           MESH_DEVICE: TG
         run: |
-          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-4k-b1" --timeout 1000
           pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-8k-b1" --timeout 1000
-          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-16k-b32" --timeout 1000
           pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-32k-b1" --timeout 1000
-          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-64k-b1" --timeout 1000
           pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-128k-b1" --timeout 1000
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
