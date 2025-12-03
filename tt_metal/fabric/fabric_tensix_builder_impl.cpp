@@ -378,8 +378,7 @@ FabricTensixDatamoverMuxConfig::FabricTensixDatamoverMuxConfig(
     }
 
     // Allocate channel storage region for storing channel arrays in L1 (4KB)
-    constexpr size_t channel_storage_size = 4 * 1024;  // 4KB for channel storage
-    channel_storage_region_ = MemoryRegion(current_address, channel_storage_size, 1);
+    channel_storage_region_ = MemoryRegion(current_address, channel_storage_size_, 1);
     current_address = channel_storage_region_.get_end_address();
 
     memory_map_end_address_ = current_address;

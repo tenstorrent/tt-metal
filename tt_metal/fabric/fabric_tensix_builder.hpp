@@ -112,7 +112,7 @@ public:
     // Get the set of missing (routing_plane_id, direction) pairs for a device
     // Only applicable in UDM mode - returns empty set in MUX mode or if all directions have channels
     // Each pair represents a routing plane that doesn't have a tensix builder in that direction
-    const std::set<std::pair<routing_plane_id_t, eth_chan_directions>>& get_missing_directions(ChipId device_id) const;
+    std::set<std::pair<routing_plane_id_t, eth_chan_directions>> get_missing_directions(ChipId device_id) const;
 
     // Check if a device has any missing directions
     bool has_missing_directions(ChipId device_id) const;
@@ -206,8 +206,6 @@ private:
     // Each pair represents a routing plane that needs a tensix builder in that direction
     std::unordered_map<ChipId, std::set<std::pair<routing_plane_id_t, eth_chan_directions>>>
         missing_directions_per_device_;
-    // Empty set for devices without missing directions (or in MUX mode)
-    static inline const std::set<std::pair<routing_plane_id_t, eth_chan_directions>> empty_directions_set_{};
 
     // [device_id][routing_plane_id][direction] -> core_index mapping for ALL directions (active + missing)
     // This is the authoritative lookup for (routing_plane_id, direction) -> core_index

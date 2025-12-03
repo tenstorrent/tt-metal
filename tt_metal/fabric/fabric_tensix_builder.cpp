@@ -370,16 +370,16 @@ std::vector<CoreCoord> FabricTensixDatamoverConfig::build_workers_by_column(tt::
     auto compute_grid = device->compute_with_storage_grid_size();
     uint32_t total_workers = compute_grid.x * compute_grid.y;
 
-    std::vector<CoreCoord> workers_by_column;
-    workers_by_column.reserve(total_workers);
+    std::vector<CoreCoord> workers_by_column(total_workers);
 
     // Sort by column: x first (outer loop), then y within each column (inner loop)
     // This ensures workers in the same column are contiguous and get assigned to the same tensix
+    size_t idx = 0;
     for (uint32_t x = 0; x < compute_grid.x; x++) {
         for (uint32_t y = 0; y < compute_grid.y; y++) {
             CoreCoord logical_worker(x, y);
             CoreCoord translated_worker = device->worker_core_from_logical_core(logical_worker);
-            workers_by_column.push_back(translated_worker);
+            workers_by_column[idx++] = translated_worker;
         }
     }
 
@@ -771,11 +771,11 @@ const std::pair<uint32_t, uint32_t>* FabricTensixDatamoverConfig::get_active_ten
     return &(dir_it->second);
 }
 
-const std::set<std::pair<routing_plane_id_t, eth_chan_directions>>& FabricTensixDatamoverConfig::get_missing_directions(
+std::set<std::pair<routing_plane_id_t, eth_chan_directions>> FabricTensixDatamoverConfig::get_missing_directions(
     ChipId device_id) const {
     auto it = missing_directions_per_device_.find(device_id);
     if (it == missing_directions_per_device_.end()) {
-        return empty_directions_set_;
+        return {};
     }
     return it->second;
 }

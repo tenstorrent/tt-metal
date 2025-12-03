@@ -282,6 +282,9 @@ private:
     // Number of downstream mux connections (all directions except self = 3)
     static constexpr uint32_t NUM_DOWNSTREAM_MUX_CONNECTIONS = 3;
 
+    // Channel storage size for storing channel arrays in L1
+    static constexpr size_t channel_storage_size_ = 4096;  // 4KB for channel storage
+
     // ==================================================================================
     // Mux-specific: Support for inter-mux connections (mux → downstream mux)
     // Each mux can connect to 3 other muxes (all directions except itself)

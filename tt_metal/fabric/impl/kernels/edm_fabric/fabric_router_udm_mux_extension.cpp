@@ -470,11 +470,6 @@ void kernel_main() {
     // In UDM mode, mux does NOT signal upstream routers - the relay will do that
     // (upstream routers connect to relay, not mux)
 
-    auto* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
-    uint16_t my_chip_id = routing_table->my_device_id;
-    // DPRINT << " mux my_chip_id " << my_chip_id << " direction " << (uint)direction << " has_fabric_router " <<
-    // (uint)has_fabric_router <<ENDL();
-
     // Only wait for and open fabric router connection if we have a router
     if constexpr (has_fabric_router) {
         // wait for fabric router to be ready before setting up the connection
@@ -489,11 +484,7 @@ void kernel_main() {
         fabric_connection.open<false>();
     }
 
-    // DPRINT << " mux my_chip_id " << my_chip_id << " direction " << (uint)direction << " Done " <<ENDL();
-
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
-
-    // DPRINT << " mux my_chip_id " << my_chip_id << " direction " << (uint)direction << " Done " <<ENDL();
 
     // Before connecting to downstream muxes, wait for their status to turn into READY_FOR_TRAFFIC
     // Use status_address (our own status address) as the readback location
