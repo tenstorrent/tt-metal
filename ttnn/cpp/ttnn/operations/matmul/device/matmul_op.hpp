@@ -34,6 +34,40 @@ struct matmul_mcast_1d_common_override_variables_t {
 // Allows easily changing buffering strategy in one place for relevant factories.
 constexpr uint32_t MCAST_INPUT_BUFFERING_DEPTH = 2;
 
+/**
+ * @brief Get the tile shape of a tensor, with optional transpose.
+ *
+ * Returns a tuple representing the height and width of the tensor's tile. If transpose is true,
+ * the tile shape dimensions are swapped.
+ *
+ * @param input_tensor The tensor whose tile shape is queried.
+ * @param transpose Whether to return the tile shape after transposing (swap height and width).
+ * @return tt::tt_metal::Tile The tile shape of the tensor, possibly transposed.
+ */
+tt::tt_metal::Tile get_matmul_tile(const Tensor& input_tensor, bool transpose);
+
+/**
+ * @brief Get the shape of a tensor, with optional transpose.
+ *
+ * Returns the shape of the tensor. If transpose is true, the shape dimensions are swapped.
+ *
+ * @param input_tensor The tensor whose shape is queried.
+ * @param transpose Whether to return the shape after transposing (swap height and width).
+ * @return ttnn::Shape The shape of the tensor, possibly transposed.
+ */
+ttnn::Shape get_matmul_tensor_logical_shape(const Tensor& input_tensor, bool transpose);
+
+/**
+ * @brief Get the padded shape of a tensor, with optional transpose.
+ *
+ * Returns the padded shape of the tensor. If transpose is true, the padded shape dimensions are swapped.
+ *
+ * @param input_tensor The tensor whose padded shape is queried.
+ * @param transpose Whether to return the padded shape after transposing (swap height and width).
+ * @return ttnn::Shape The padded shape of the tensor, possibly transposed.
+ */
+ttnn::Shape get_matmul_tensor_padded_shape(const Tensor& input_tensor, bool transpose);
+
 using ttnn::operations::unary::UnaryWithParam;
 
 /**
