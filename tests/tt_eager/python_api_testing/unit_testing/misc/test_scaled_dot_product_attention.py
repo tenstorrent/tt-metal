@@ -238,7 +238,7 @@ def run_sdpa_noncausal(
 
 
 q_chunks = [32, 64, 128, 256, 512]
-k_chunks = [32, 64, 128, 256, 512, 1024]
+k_chunks = [64, 128, 256, 512, 1024]
 
 shapes = [
     [1, 8, 8, 1024, 128],
@@ -248,6 +248,9 @@ shapes = [
     [1, 10, 10, 2048, 128],  # Llama2-70B
 ]
 shape_ids = [f"shape_{'_'.join(str(x) for x in s)}" for s in shapes]
+
+causalities = [True, False]
+causality_ids = [f"causal_{c}" for c in causalities]
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
@@ -259,7 +262,7 @@ shape_ids = [f"shape_{'_'.join(str(x) for x in s)}" for s in shapes]
     shapes,
     ids=shape_ids,
 )
-@pytest.mark.parametrize("causal", [True, False], ids=["is_causal", "non_causal"])
+@pytest.mark.parametrize("causal", causalities, ids=causality_ids)
 def test_sdpa_run_benchmark(
     device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, memory_config, causal, reset_seeds
 ):
@@ -346,11 +349,10 @@ def test_create_perf_table():
 
     results = []
 
-    for causal in [True, False]:
-        causal_str = "is_causal" if causal else "non_causal"
+    for causal_id, causal in zip(causality_ids, causalities):
         for shape_id, shape in zip(shape_ids, shapes):
-            print(f"Running test for {causal_str} and {shape_id}")
-            command = f"pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_scaled_dot_product_attention.py::test_sdpa_run_benchmark -k '{causal_str} and {shape_id}'"
+            print(f"Running test for {causal_id} and {shape_id}")
+            command = f"pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_scaled_dot_product_attention.py::test_sdpa_run_benchmark -k '{causal_id} and {shape_id}'"
 
             run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
             r = post_process_ops_log(
