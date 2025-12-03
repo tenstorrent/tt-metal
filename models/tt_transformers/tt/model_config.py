@@ -585,6 +585,10 @@ class ModelArgs:
 
         if callable(optimizations):
             self.optimizations = optimizations(self)
+        elif isinstance(optimizations, str):
+            # Convert string to callable
+            optimizations_callable = DecodersPrecision.from_string(optimizations)
+            self.optimizations = optimizations_callable(self)
         else:
             self.optimizations = optimizations
 
@@ -2810,9 +2814,19 @@ class DecodersPrecision:
     @classmethod
     def from_string(cls, optimizations: str):
         if optimizations == "performance":
-            return cls.performance
+
+            def performance_wrapper(model_args):
+                return cls.performance(model_args.n_layers, model_args.model_name)
+
+            performance_wrapper.__name__ = "performance"
+            return performance_wrapper
         elif optimizations == "accuracy":
-            return cls.accuracy
+
+            def accuracy_wrapper(model_args):
+                return cls.accuracy(model_args.n_layers, model_args.model_name)
+
+            accuracy_wrapper.__name__ = "accuracy"
+            return accuracy_wrapper
         else:
             raise ValueError(
                 f"Invalid optimization configuration: {optimizations}. Allowed values are 'performance' or 'accuracy'"
