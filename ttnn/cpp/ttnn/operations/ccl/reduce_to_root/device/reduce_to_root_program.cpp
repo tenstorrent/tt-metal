@@ -1054,12 +1054,29 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
         }  // end of loop
     }
 
+    // Collect receiver cores from root and root2 devices
+    std::vector<CoreCoord> receiver_cores;
+    if (is_root_device || is_root2_device) {
+        for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
+            for (auto c : corerange_to_cores(cores_per_link[link_idx], std::nullopt)) {
+                receiver_cores.push_back(c);
+            }
+        }
+    }
+
     return {
         std::move(program),
-        ReduceToRootOp::ReduceToRoot::shared_variables_t{//.send_unary_reader_kernel_id = send_unary_reader_kernel_id,
-                                                         //.send_unary_writer_kernel_id = send_unary_writer_kernel_id,
-                                                         //.sender_cores = sender_cores,
-                                                         .semaphores = semaphores}};
+        ReduceToRootOp::ReduceToRoot::shared_variables_t{
+            .send_unary_reader_kernel_id = is_sender_device ? reader_kernel : 0,
+            .send_unary_writer_kernel_id = is_sender_device ? writer_kernel : 0,
+            .sender_cores = sender_cores,
+            .root1_reader_kernel_id = is_root_device ? reader_kernel : 0,
+            .root1_writer_kernel_id = is_root_device ? writer_kernel : 0,
+            .root2_reader_kernel_id = is_root2_device ? reader_kernel : 0,
+            .root2_writer_kernel_id = is_root2_device ? writer_kernel : 0,
+            .compute_kernel_id = 0,  // TODO: store compute kernel if needed
+            .receiver_cores = receiver_cores,
+            .semaphores = semaphores}};
 }
 
 void ReduceToRootOp::ReduceToRoot::override_runtime_arguments(
@@ -1067,47 +1084,94 @@ void ReduceToRootOp::ReduceToRoot::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    const auto send_coord = operation_attributes.root_coord;
+    printf("inside override_runtime_arguments for ReduceToRoot\n");
 
+    // Iterate over all device programs in the cached workload
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        const auto& coord = range.start_coord();
-        TT_FATAL(
-            coord == range.end_coord(),
-            "Expected single coordinate per program but got range of {} to {}",
-            coord,
-            range.end_coord());
-        // const auto& shared_variables = cached_workload.shared_variables.at(range);
-        /*
-        if (coord == send_coord) {
-            const auto& send_unary_reader_kernel_id = shared_variables.send_unary_reader_kernel_id;
-            const auto& send_unary_writer_kernel_id = shared_variables.send_unary_writer_kernel_id;
+        const auto& shared_variables = cached_workload.shared_variables.at(range);
 
-            // change this when we use more cores for multi-link
-            const auto& core = shared_variables.sender_cores.at(0);
+        // Get the input tensors
+        const auto& input_tensor_l = tensor_args.input_tensor_l;
+        const auto& input_tensor_s = tensor_args.input_tensor_s;
+        const auto& input_tensor_m = tensor_args.input_tensor_m;
 
-            auto& reader_runtime_args = GetRuntimeArgs(program, send_unary_reader_kernel_id, core);
-            reader_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
+        // Get output tensors
+        const auto& output_tensors_l = tensor_return_value[1];        // Final outputs
+        const auto& intermediate_tensors_l = tensor_return_value[0];  // Intermediate tensors
 
-            auto& writer_runtime_args = GetRuntimeArgs(program, send_unary_writer_kernel_id, core);
-            writer_runtime_args.at(0) = tensor_return_value.at(0).buffer()->address();
-            writer_runtime_args.at(8) = shared_variables.semaphore.address();
+        // Determine device type based on which kernels are present
+        bool is_sender_device = shared_variables.send_unary_reader_kernel_id != 0;
+        bool is_root_device = shared_variables.root1_reader_kernel_id != 0;
+        bool is_root2_device = shared_variables.root2_reader_kernel_id != 0;
+
+        // Update sender device runtime args
+        if (is_sender_device) {
+            auto& reader_runtime_args_by_core =
+                tt::tt_metal::GetRuntimeArgs(program, shared_variables.send_unary_reader_kernel_id);
+            auto& writer_runtime_args_by_core =
+                tt::tt_metal::GetRuntimeArgs(program, shared_variables.send_unary_writer_kernel_id);
+
+            for (const auto& core : shared_variables.sender_cores) {
+                // Update reader runtime args - input tensor addresses
+                auto& reader_runtime_args = reader_runtime_args_by_core[core.x][core.y];
+                reader_runtime_args[0] = input_tensor_l.buffer()->address();
+                reader_runtime_args[1] = input_tensor_s.buffer()->address();
+                reader_runtime_args[2] = input_tensor_m.buffer()->address();
+
+                // Update writer runtime args - intermediate tensor address and semaphore
+                auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
+                writer_runtime_args[0] = intermediate_tensors_l[0].buffer()->address();
+                writer_runtime_args[1] = shared_variables.semaphores[0].address();
+            }
         }
 
-        if (coord == receive_coord) {
-            const auto& receive_unary_reader_kernel_id = shared_variables.receive_unary_reader_kernel_id;
-            const auto& receive_unary_writer_kernel_id = shared_variables.receive_unary_writer_kernel_id;
+        // Update root device runtime args
+        if (is_root_device) {
+            auto& reader_runtime_args_by_core =
+                tt::tt_metal::GetRuntimeArgs(program, shared_variables.root1_reader_kernel_id);
+            auto& writer_runtime_args_by_core =
+                tt::tt_metal::GetRuntimeArgs(program, shared_variables.root1_writer_kernel_id);
 
-            // change this when we use more cores for multi-link
-            const auto& core = shared_variables.receiver_cores.at(0);
+            for (const auto& core : shared_variables.receiver_cores) {
+                // Update reader runtime args
+                auto& reader_runtime_args = reader_runtime_args_by_core[core.x][core.y];
+                reader_runtime_args[1] = input_tensor_l.buffer()->address();
+                reader_runtime_args[2] = input_tensor_s.buffer()->address();
+                reader_runtime_args[3] = input_tensor_m.buffer()->address();
+                reader_runtime_args[7] = intermediate_tensors_l[0].buffer()->address();
+                reader_runtime_args[8] = shared_variables.semaphores[0].address();
+                reader_runtime_args[9] = shared_variables.semaphores[1].address();
 
-            auto& reader_runtime_args = GetRuntimeArgs(program, receive_unary_reader_kernel_id, core);
-            reader_runtime_args.at(3) = tensor_return_value.at(0).buffer()->address();
-            reader_runtime_args.at(7) = shared_variables.semaphore.address();
-
-            auto& writer_runtime_args = GetRuntimeArgs(program, receive_unary_writer_kernel_id, core);
-            writer_runtime_args.at(0) = tensor_return_value.at(1).buffer()->address();
+                // Update writer runtime args - output tensor addresses
+                auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
+                writer_runtime_args[3] = output_tensors_l[0].buffer()->address();
+                writer_runtime_args[4] = output_tensors_l[1].buffer()->address();
+                writer_runtime_args[5] = output_tensors_l[2].buffer()->address();
+            }
         }
-        */
+
+        // Update root2 device runtime args
+        if (is_root2_device) {
+            auto& reader_runtime_args_by_core =
+                tt::tt_metal::GetRuntimeArgs(program, shared_variables.root2_reader_kernel_id);
+            auto& writer_runtime_args_by_core =
+                tt::tt_metal::GetRuntimeArgs(program, shared_variables.root2_writer_kernel_id);
+
+            for (const auto& core : shared_variables.receiver_cores) {
+                // Update reader runtime args
+                auto& reader_runtime_args = reader_runtime_args_by_core[core.x][core.y];
+                reader_runtime_args[0] = input_tensor_l.buffer()->address();
+                reader_runtime_args[1] = input_tensor_s.buffer()->address();
+                reader_runtime_args[2] = input_tensor_m.buffer()->address();
+                reader_runtime_args[3] = intermediate_tensors_l[0].buffer()->address();
+                reader_runtime_args[4] = shared_variables.semaphores[0].address();
+
+                // Update writer runtime args - intermediate and output tensor addresses
+                auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
+                writer_runtime_args[0] = intermediate_tensors_l[0].buffer()->address();
+                writer_runtime_args[1] = shared_variables.semaphores[1].address();
+            }
+        }
     }
 };
 }  // namespace ttnn::operations::ccl

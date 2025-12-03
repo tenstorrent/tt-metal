@@ -220,6 +220,7 @@ void kernel_main() {
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
     noc_semaphore_wait(local_semaphore_ptr, 1);
     // DPRINT << "after waiting on semaphore\n";
+    noc_semaphore_set(local_semaphore_ptr, 0);
 
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
     // DPRINT << "after fabric client disconnect\n";

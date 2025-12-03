@@ -124,7 +124,11 @@ def compute_reference_reduce_to_root(
     indirect=["device_params"],
     ids=["fabric_1d_linear"],
 )
-def test_reduce_to_root(bh_2d_mesh_device):
+@pytest.mark.parametrize(
+    "num_iters",
+    [3],
+)
+def test_reduce_to_root(bh_2d_mesh_device, num_iters):
     # Setup
     num_devices = 4
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
@@ -203,87 +207,102 @@ def test_reduce_to_root(bh_2d_mesh_device):
     )
     mesh_mapper2 = ttnn.create_mesh_mapper(submesh_device, mesh_mapper_config2)
 
-    # Generate random input data for each device
+    # Prepare lists to store inputs and golden outputs for each iteration
+    input_tensor_mesh_list_l = []
+    input_tensor_mesh_list_s = []
+    input_tensor_mesh_list_m = []
+    reference_outputs_list = []
+
+    # Generate random input data for each iteration
     torch.manual_seed(42)  # For reproducibility
 
-    # Create different random data for each device
-    l_data_per_device = []
-    s_data_per_device = []
-    m_data_per_device = []
+    for iter_idx in range(num_iters):
+        print(f"\n=== Preparing iteration {iter_idx} ===")
 
-    for device_idx in range(num_devices):
-        # Generate random values in a reasonable range
-        # Use small random values to avoid numerical overflow in exp()
-        # L: logits, small random values
-        l_data = torch.randn(l_shape, dtype=torch.bfloat16) * 0.5 + device_idx
-        # S: sum of exponentials, should be positive - use small positive values
-        s_data = torch.rand(s_shape, dtype=torch.bfloat16) * 0.5 + 1.0 + device_idx * 0.1
-        # M: max values - use small range to avoid exp overflow
-        m_data = torch.randn(m_shape, dtype=torch.bfloat16) * 0.5 + device_idx
+        # Create different random data for each device
+        l_data_per_device = []
+        s_data_per_device = []
+        m_data_per_device = []
 
-        l_data_per_device.append(l_data)
-        s_data_per_device.append(s_data)
-        m_data_per_device.append(m_data)
+        for device_idx in range(num_devices):
+            # Generate random values in a reasonable range
+            # Use small random values to avoid numerical overflow in exp()
+            # L: logits, small random values
+            l_data = torch.randn(l_shape, dtype=torch.bfloat16) * 0.5 + device_idx
+            # S: sum of exponentials, should be positive - use small positive values
+            s_data = torch.rand(s_shape, dtype=torch.bfloat16) * 0.5 + 1.0 + device_idx * 0.1
+            # M: max values - use small range to avoid exp overflow
+            m_data = torch.randn(m_shape, dtype=torch.bfloat16) * 0.5 + device_idx
 
-    print("Input data per device (first row, first few columns):")
-    for idx, (l, s, m) in enumerate(zip(l_data_per_device, s_data_per_device, m_data_per_device)):
-        print(f"  Device {idx}:")
-        print(f"    L[0, 0:8] = {l[0, 0:8]}")
-        print(f"    S[0, 0:8] = {s[0, 0:8]}")
-        print(f"    M[0, 0:8] = {m[0, 0:8]}")
-        print(f"    M[0, 0]={m[0,0]:.4f}, M[0,1]={m[0,1]:.4f}, M[0,31]={m[0,31]:.4f}")
+            l_data_per_device.append(l_data)
+            s_data_per_device.append(s_data)
+            m_data_per_device.append(m_data)
 
-    # Compute reference outputs using PyTorch
-    l_ref, s_ref, m_ref = compute_reference_reduce_to_root(
-        l_data_per_device, s_data_per_device, m_data_per_device, root_device_idx
-    )
+        if iter_idx == 0:
+            print("Input data per device (first row, first few columns):")
+            for idx, (l, s, m) in enumerate(zip(l_data_per_device, s_data_per_device, m_data_per_device)):
+                print(f"  Device {idx}:")
+                print(f"    L[0, 0:8] = {l[0, 0:8]}")
+                print(f"    S[0, 0:8] = {s[0, 0:8]}")
+                print(f"    M[0, 0:8] = {m[0, 0:8]}")
+                print(f"    M[0, 0]={m[0,0]:.4f}, M[0,1]={m[0,1]:.4f}, M[0,31]={m[0,31]:.4f}")
 
-    print(f"Reference outputs computed:")
-    print(f"L shape: {l_ref.shape}, S shape: {s_ref.shape}, M shape: {m_ref.shape}")
-    print(f"Reference first element: L[0,0]={l_ref[0,0]:.4f}, S[0,0]={s_ref[0,0]:.4f}, M[0,0]={m_ref[0,0]:.4f}")
-    print(f"Reference L[0, 0:8] = {l_ref[0, 0:8]}")
-    print(f"Reference S[0, 0:8] = {s_ref[0, 0:8]}")
-    print(f"Reference M[0, 0:8] = {m_ref[0, 0:8]}")
+        # Compute reference outputs using PyTorch
+        l_ref, s_ref, m_ref = compute_reference_reduce_to_root(
+            l_data_per_device, s_data_per_device, m_data_per_device, root_device_idx
+        )
+        reference_outputs_list.append((l_ref, s_ref, m_ref))
 
-    # Create mesh mapper for distributing different data to each device
-    # Shard along dimension 0 (first dim) to send different data to each device
+        if iter_idx == 0:
+            print(f"Reference outputs computed:")
+            print(f"L shape: {l_ref.shape}, S shape: {s_ref.shape}, M shape: {m_ref.shape}")
+            print(f"Reference first element: L[0,0]={l_ref[0,0]:.4f}, S[0,0]={s_ref[0,0]:.4f}, M[0,0]={m_ref[0,0]:.4f}")
+            print(f"Reference L[0, 0:8] = {l_ref[0, 0:8]}")
+            print(f"Reference S[0, 0:8] = {s_ref[0, 0:8]}")
+            print(f"Reference M[0, 0:8] = {m_ref[0, 0:8]}")
 
-    # Stack all device data and send to mesh
-    l_data_all = torch.stack(l_data_per_device, dim=0)  # [num_devices, 8, cols]
-    s_data_all = torch.stack(s_data_per_device, dim=0)
-    m_data_all = torch.stack(m_data_per_device, dim=0)
+        # Stack all device data and send to mesh
+        l_data_all = torch.stack(l_data_per_device, dim=0)  # [num_devices, 8, cols]
+        s_data_all = torch.stack(s_data_per_device, dim=0)
+        m_data_all = torch.stack(m_data_per_device, dim=0)
 
-    print(f"Creating tensors with shapes: L={l_data_all.shape}, S={s_data_all.shape}, M={m_data_all.shape}")
+        if iter_idx == 0:
+            print(f"Creating tensors with shapes: L={l_data_all.shape}, S={s_data_all.shape}, M={m_data_all.shape}")
 
-    l_tensor = ttnn.from_torch(
-        l_data_all,
-        device=submesh_device,
-        layout=layout,
-        tile=tile,
-        dtype=dtype,
-        memory_config=mem_config_l,
-        mesh_mapper=mesh_mapper,
-    )
-    s_tensor = ttnn.from_torch(
-        s_data_all,
-        device=submesh_device,
-        layout=layout,
-        tile=tile,
-        dtype=dtype,
-        memory_config=mem_config_s,
-        mesh_mapper=mesh_mapper,
-    )
-    m_tensor = ttnn.from_torch(
-        m_data_all,
-        device=submesh_device,
-        layout=layout,
-        tile=tile,
-        dtype=dtype,
-        memory_config=mem_config_s,
-        mesh_mapper=mesh_mapper,
-    )
-    print("Input tensors created on all devices")
-    print("their shapes are :", l_tensor.shape, s_tensor.shape, m_tensor.shape)
+        l_tensor = ttnn.from_torch(
+            l_data_all,
+            device=submesh_device,
+            layout=layout,
+            tile=tile,
+            dtype=dtype,
+            memory_config=mem_config_l,
+            mesh_mapper=mesh_mapper,
+        )
+        s_tensor = ttnn.from_torch(
+            s_data_all,
+            device=submesh_device,
+            layout=layout,
+            tile=tile,
+            dtype=dtype,
+            memory_config=mem_config_s,
+            mesh_mapper=mesh_mapper,
+        )
+        m_tensor = ttnn.from_torch(
+            m_data_all,
+            device=submesh_device,
+            layout=layout,
+            tile=tile,
+            dtype=dtype,
+            memory_config=mem_config_s,
+            mesh_mapper=mesh_mapper,
+        )
+
+        input_tensor_mesh_list_l.append(l_tensor)
+        input_tensor_mesh_list_s.append(s_tensor)
+        input_tensor_mesh_list_m.append(m_tensor)
+
+    print("\n=== All input tensors created ===")
+    print(f"Number of iterations: {num_iters}")
 
     # Create intermediate tensors - replicate zeros to all devices
     intermediate_l = ttnn.from_torch(
@@ -306,102 +325,129 @@ def test_reduce_to_root(bh_2d_mesh_device):
     )
     print("intermediate tensor sm data: ", intermediate_sm)
 
-    # Run reduce_to_root operation
-    out_l, out_s, out_m = ttnn.reduce_to_root(
-        l_tensor,
-        s_tensor,
-        m_tensor,
-        root_coord=ttnn.MeshCoordinate(root_coord),
-        intermediate_tensor_l=intermediate_l,
-        intermediate_tensor_s_m=intermediate_sm,
-        topology=ttnn.Topology.Linear,
-    )
+    # Run reduce_to_root operation for each iteration
+    tt_output_list = []
 
-    print("reduce_to_root operation completed")
+    print(f"\n=== Running reduce_to_root for {num_iters} iterations ===")
+    for iter_idx in range(num_iters):
+        print(f"\n--- Iteration {iter_idx} ---")
 
-    # Convert outputs back to torch for verification
-    # Use ConcatMeshToTensor to collect outputs from all devices
-    out_l_torch = ttnn.to_torch(out_l, mesh_composer=ttnn.ConcatMeshToTensor(submesh_device, dim=0))
-    out_s_torch = ttnn.to_torch(out_s, mesh_composer=ttnn.ConcatMeshToTensor(submesh_device, dim=0))
-    out_m_torch = ttnn.to_torch(out_m, mesh_composer=ttnn.ConcatMeshToTensor(submesh_device, dim=0))
+        # Run reduce_to_root operation
+        out_l, out_s, out_m = ttnn.reduce_to_root(
+            input_tensor_mesh_list_l[iter_idx],
+            input_tensor_mesh_list_s[iter_idx],
+            input_tensor_mesh_list_m[iter_idx],
+            root_coord=ttnn.MeshCoordinate(root_coord),
+            intermediate_tensor_l=intermediate_l,
+            intermediate_tensor_s_m=intermediate_sm,
+            topology=ttnn.Topology.Linear,
+        )
 
-    print(f"\nOutput from ALL devices:")
-    for dev_idx in range(num_devices):
-        dev_l = out_l_torch[dev_idx]
-        dev_s = out_s_torch[dev_idx]
-        dev_m = out_m_torch[dev_idx]
-        print(f"  Device {dev_idx}: L[0,0]={dev_l[0,0]}, S[0,0]={dev_s[0,0]}, M[0,0]={dev_m[0,0]}")
+        tt_output_list.append((out_l, out_s, out_m))
 
-    # Extract only the root device output (device index 1)
-    out_l_root = out_l_torch[root_device_idx]
-    out_s_root = out_s_torch[root_device_idx]
-    out_m_root = out_m_torch[root_device_idx]
+        if iter_idx == 0:
+            print("reduce_to_root operation completed (first iteration - compiled)")
+        else:
+            print(f"reduce_to_root operation completed (iteration {iter_idx} - using cached program)")
 
-    print(f"Output shapes: L={out_l_root.shape}, S={out_s_root.shape}, M={out_m_root.shape}")
-    print(f"Reference shapes: L={l_ref.shape}, S={s_ref.shape}, M={m_ref.shape}")
+    print(f"\n=== Verifying outputs for all {num_iters} iterations ===")
 
-    print(f"\nActual output (first row):")
-    print(f"  L[0, 0:8] = {out_l_root[0, 0:8]}")
-    print(f"  S[0, 0:8] = {out_s_root[0, 0:8]}")
-    print(f"  M[0, 0:8] = {out_m_root[0, 0:8]}")
-
-    # Compare with reference
     # Use relaxed tolerance for bfloat16 and exponential operations
     # bfloat16 has ~3 decimal digits of precision, and we have multiple operations
     # (exponentials, multiplications, additions, divisions) which accumulate errors
     rtol = 0.02  # 2% relative tolerance for accumulated rounding errors
     atol = 0.1  # 0.1 absolute tolerance (reasonable for values in range 0.5-3.0)
 
-    # Check L tensor
-    l_match = torch.allclose(out_l_root, l_ref, rtol=rtol, atol=atol)
-    if not l_match:
-        l_diff = torch.abs(out_l_root - l_ref)
-        l_max_diff = torch.max(l_diff)
-        l_mean_diff = torch.mean(l_diff)
-        print(f"L tensor mismatch! Max diff: {l_max_diff}, Mean diff: {l_mean_diff}")
-        print(f"L output sample:\n{out_l_root[:4, :64]}")
-        print(f"L reference sample:\n{l_ref[:4, :64]}")
-    else:
-        print("✓ L tensor matches reference")
+    # Verify outputs for each iteration
+    all_iterations_passed = True
+    for iter_idx in range(num_iters):
+        print(f"\n--- Verifying iteration {iter_idx} ---")
 
-    # Check S tensor - only column 0 is used, other columns can be garbage
-    # S is [8, 256] with tiles of (8, 32), so we have 8 tiles
-    # Each tile is 8x32, we only care about column 0 of each tile
-    # So we check columns: 0, 32, 64, 96, 128, 160, 192, 224 (first col of each tile)
-    s_cols_to_check = [i * 32 for i in range(8)]  # [0, 32, 64, 96, 128, 160, 192, 224]
-    s_output_col0 = out_s_root[:, s_cols_to_check]
-    s_ref_col0 = s_ref[:, s_cols_to_check]
+        out_l, out_s, out_m = tt_output_list[iter_idx]
+        l_ref, s_ref, m_ref = reference_outputs_list[iter_idx]
 
-    s_match = torch.allclose(s_output_col0, s_ref_col0, rtol=rtol, atol=atol)
-    if not s_match:
-        s_diff = torch.abs(s_output_col0 - s_ref_col0)
-        s_max_diff = torch.max(s_diff)
-        s_mean_diff = torch.mean(s_diff)
-        print(f"S tensor (column 0) mismatch! Max diff: {s_max_diff}, Mean diff: {s_mean_diff}")
-        print(f"S output (col 0 of each tile):\n{s_output_col0}")
-        print(f"S reference (col 0 of each tile):\n{s_ref_col0}")
-    else:
-        print("✓ S tensor (column 0) matches reference")
+        # Convert outputs back to torch for verification
+        # Use ConcatMeshToTensor to collect outputs from all devices
+        out_l_torch = ttnn.to_torch(out_l, mesh_composer=ttnn.ConcatMeshToTensor(submesh_device, dim=0))
+        out_s_torch = ttnn.to_torch(out_s, mesh_composer=ttnn.ConcatMeshToTensor(submesh_device, dim=0))
+        out_m_torch = ttnn.to_torch(out_m, mesh_composer=ttnn.ConcatMeshToTensor(submesh_device, dim=0))
 
-    # Check M tensor - also only column 0 is used
-    m_cols_to_check = [i * 32 for i in range(8)]  # [0, 32, 64, 96, 128, 160, 192, 224]
-    m_output_col0 = out_m_root[:, m_cols_to_check]
-    m_ref_col0 = m_ref[:, m_cols_to_check]
+        if iter_idx == 0:
+            print(f"\nOutput from ALL devices:")
+            for dev_idx in range(num_devices):
+                dev_l = out_l_torch[dev_idx]
+                dev_s = out_s_torch[dev_idx]
+                dev_m = out_m_torch[dev_idx]
+                print(f"  Device {dev_idx}: L[0,0]={dev_l[0,0]}, S[0,0]={dev_s[0,0]}, M[0,0]={dev_m[0,0]}")
 
-    m_match = torch.allclose(m_output_col0, m_ref_col0, rtol=rtol, atol=atol)
-    if not m_match:
-        m_diff = torch.abs(m_output_col0 - m_ref_col0)
-        m_max_diff = torch.max(m_diff)
-        m_mean_diff = torch.mean(m_diff)
-        print(f"M tensor (column 0) mismatch! Max diff: {m_max_diff}, Mean diff: {m_mean_diff}")
-        print(f"M output (col 0 of each tile):\n{m_output_col0}")
-        print(f"M reference (col 0 of each tile):\n{m_ref_col0}")
-    else:
-        print("✓ M tensor (column 0) matches reference")
+        # Extract only the root device output (device index 1)
+        out_l_root = out_l_torch[root_device_idx]
+        out_s_root = out_s_torch[root_device_idx]
+        out_m_root = out_m_torch[root_device_idx]
 
-    # Assert all tensors match
-    assert l_match, "L tensor output does not match reference"
-    assert s_match, "S tensor output does not match reference"
-    assert m_match, "M tensor output does not match reference"
+        if iter_idx == 0:
+            print(f"Output shapes: L={out_l_root.shape}, S={out_s_root.shape}, M={out_m_root.shape}")
+            print(f"Reference shapes: L={l_ref.shape}, S={s_ref.shape}, M={m_ref.shape}")
 
-    print("\n✅ All outputs match reference implementation!")
+            print(f"\nActual output (first row):")
+            print(f"  L[0, 0:8] = {out_l_root[0, 0:8]}")
+            print(f"  S[0, 0:8] = {out_s_root[0, 0:8]}")
+            print(f"  M[0, 0:8] = {out_m_root[0, 0:8]}")
+
+        # Check L tensor
+        l_match = torch.allclose(out_l_root, l_ref, rtol=rtol, atol=atol)
+        if not l_match:
+            l_diff = torch.abs(out_l_root - l_ref)
+            l_max_diff = torch.max(l_diff)
+            l_mean_diff = torch.mean(l_diff)
+            print(f"L tensor mismatch! Max diff: {l_max_diff}, Mean diff: {l_mean_diff}")
+            print(f"L output sample:\n{out_l_root[:4, :64]}")
+            print(f"L reference sample:\n{l_ref[:4, :64]}")
+            all_iterations_passed = False
+        else:
+            print("✓ L tensor matches reference")
+
+        # Check S tensor - only column 0 is used, other columns can be garbage
+        # S is [8, 256] with tiles of (8, 32), so we have 8 tiles
+        # Each tile is 8x32, we only care about column 0 of each tile
+        # So we check columns: 0, 32, 64, 96, 128, 160, 192, 224 (first col of each tile)
+        s_cols_to_check = [i * 32 for i in range(8)]  # [0, 32, 64, 96, 128, 160, 192, 224]
+        s_output_col0 = out_s_root[:, s_cols_to_check]
+        s_ref_col0 = s_ref[:, s_cols_to_check]
+
+        s_match = torch.allclose(s_output_col0, s_ref_col0, rtol=rtol, atol=atol)
+        if not s_match:
+            s_diff = torch.abs(s_output_col0 - s_ref_col0)
+            s_max_diff = torch.max(s_diff)
+            s_mean_diff = torch.mean(s_diff)
+            print(f"S tensor (column 0) mismatch! Max diff: {s_max_diff}, Mean diff: {s_mean_diff}")
+            print(f"S output (col 0 of each tile):\n{s_output_col0}")
+            print(f"S reference (col 0 of each tile):\n{s_ref_col0}")
+            all_iterations_passed = False
+        else:
+            print("✓ S tensor (column 0) matches reference")
+
+        # Check M tensor - also only column 0 is used
+        m_cols_to_check = [i * 32 for i in range(8)]  # [0, 32, 64, 96, 128, 160, 192, 224]
+        m_output_col0 = out_m_root[:, m_cols_to_check]
+        m_ref_col0 = m_ref[:, m_cols_to_check]
+
+        m_match = torch.allclose(m_output_col0, m_ref_col0, rtol=rtol, atol=atol)
+        if not m_match:
+            m_diff = torch.abs(m_output_col0 - m_ref_col0)
+            m_max_diff = torch.max(m_diff)
+            m_mean_diff = torch.mean(m_diff)
+            print(f"M tensor (column 0) mismatch! Max diff: {m_max_diff}, Mean diff: {m_mean_diff}")
+            print(f"M output (col 0 of each tile):\n{m_output_col0}")
+            print(f"M reference (col 0 of each tile):\n{m_ref_col0}")
+            all_iterations_passed = False
+        else:
+            print("✓ M tensor (column 0) matches reference")
+
+        # Assert all tensors match for this iteration
+        assert l_match, f"Iteration {iter_idx}: L tensor output does not match reference"
+        assert s_match, f"Iteration {iter_idx}: S tensor output does not match reference"
+        assert m_match, f"Iteration {iter_idx}: M tensor output does not match reference"
+
+    assert all_iterations_passed, "Some iterations failed verification"
+    print(f"\n All {num_iters} iterations passed! Program caching is working correctly!")
