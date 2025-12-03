@@ -4,15 +4,14 @@
 
 #include <gtest/gtest.h>
 #include <umd/device/types/cluster_descriptor_types.hpp>
-#include <tt-metalium/allocator.hpp>
-#include "tt_metal/impl/device/device_manager.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <memory>
+#include <allocator.hpp>
+#include "device/device_manager.hpp"
+#include <host_api.hpp>
 #include <vector>
 
-#include <tt-metalium/device.hpp>
+#include <device.hpp>
 #include "hostdevcommon/common_values.hpp"
-#include "impl/context/metal_context.hpp"
+#include "context/metal_context.hpp"
 #include "tt_metal.hpp"
 #include <llrt/tt_cluster.hpp>
 
