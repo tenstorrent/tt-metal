@@ -264,6 +264,50 @@ private:
     }
 };
 
+class Galaxy1x32Fabric1DFixture : public BaseFabricFixture {
+public:
+    static constexpr std::string_view kMeshGraphDescriptorRelativePath =
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.textproto";
+
+protected:
+    inline static bool should_skip_ = false;
+
+    static void SetUpTestSuite() {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        if (cluster.get_cluster_type() != tt::tt_metal::ClusterType::GALAXY ||
+            tt::tt_metal::GetNumAvailableDevices() < 32) {
+            should_skip_ = true;
+            return;
+        }
+
+        std::filesystem::path mesh_graph_desc_path =
+            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+            kMeshGraphDescriptorRelativePath;
+        TT_FATAL(
+            std::filesystem::exists(mesh_graph_desc_path),
+            "Galaxy1x32Fabric1DFixture requires mesh graph descriptor {} but it was not found",
+            mesh_graph_desc_path.string());
+
+        tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(mesh_graph_desc_path.string(), {});
+        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_1D);
+    }
+
+    static void TearDownTestSuite() {
+        if (should_skip_) {
+            return;
+        }
+        BaseFabricFixture::DoTearDownTestSuite();
+        tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    }
+
+    void SetUp() override {
+        if (should_skip_) {
+            GTEST_SKIP() << "Galaxy1x32Fabric1DFixture requires a Galaxy system with at least 32 chips.";
+        }
+        BaseFabricFixture::SetUp();
+    }
+};
+
 class T3kCustomMeshGraphFabric2DFixture
     : public CustomMeshGraphFabric2DFixture,
       public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<EthCoord>>>> {
