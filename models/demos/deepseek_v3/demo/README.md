@@ -32,7 +32,7 @@ export MESH_DEVICE=DUAL
 python models/demos/deepseek_v3/demo/demo.py \
   "Explain quantum tunneling in one paragraph." \
   --model-path $DEEPSEEK_V3_HF_MODEL \
-  --cache-path $DEEPSEEK_V3_CACHE \
+  --cache-dir $DEEPSEEK_V3_CACHE \
   --max-new-tokens 64
 ```
 
@@ -45,10 +45,11 @@ export DEEPSEEK_V3_HF_MODEL=/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528
 # What system type are we running on? (Can be TG, DUAL, QUAD)
 export MESH_DEVICE=DUAL
 
-# Model path only needs config (tokenizer optional) and defaults to models/demos/deepseek_v3/reference
+# Model path only needs config (tokenizer optional)
 python models/demos/deepseek_v3/demo/demo.py \
   --random-weights --single-layer mlp \
   --model-path $DEEPSEEK_V3_HF_MODEL \
+  --cache-dir $DEEPSEEK_V3_CACHE \
   --max-new-tokens 16
 ```
 

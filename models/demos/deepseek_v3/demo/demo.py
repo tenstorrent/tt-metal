@@ -182,7 +182,7 @@ def validate_model_path(model_path_str: str, require_safetensors: bool, require_
     # Config: always required so AutoConfig can load
     has_config = (mp / "config.json").exists()
     if not has_config:
-        raise SystemExit("config.json not found in the model directory." f"Checked: '{mp}'.")
+        raise SystemExit(f"config.json not found in the model directory. Checked: '{mp}'.")
 
     # Tokenizer files: common possibilities (optional in random-weights mode)
     if require_tokenizer:
@@ -193,7 +193,7 @@ def validate_model_path(model_path_str: str, require_safetensors: bool, require_
         if not has_tokenizer:
             raise SystemExit(
                 "Tokenizer files not found in the model directory. Expected one of: "
-                "tokenizer.model, tokenizer.json, spiece.model, tokenizer_config.json."
+                "tokenizer.model, tokenizer.json, spiece.model, tokenizer_config.json. "
                 f"Checked: '{mp}'."
             )
 
@@ -201,7 +201,7 @@ def validate_model_path(model_path_str: str, require_safetensors: bool, require_
         # Weights: require at least one safetensors shard
         has_safetensors = len(glob(str(mp / "*.safetensors"))) > 0
         if not has_safetensors:
-            raise SystemExit("No .safetensors files found in the model directory." f"Checked: '{mp}'.")
+            raise SystemExit("No .safetensors files found in the model directory. " f"Checked: '{mp}'.")
 
 
 def run_demo(
