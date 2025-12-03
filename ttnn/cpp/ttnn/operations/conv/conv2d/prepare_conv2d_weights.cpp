@@ -15,6 +15,7 @@
 #include "tt-metalium/math.hpp"
 #include "tt-metalium/shape.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include <optional>
@@ -1149,87 +1150,8 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
 
     // Conv1D doesn't support DRAM
     is_dram_conv = is_dram_conv && !is_conv1d;
-
-    if (is_dram_conv) {
-        Conv2dSliceConfig dram_slice_config;
-        std::tie(dram_slice_config, conv_config) = determine_conv2d_slice_config(
-            dram_slice_config_,
-            ConvDRAMParamters{
-                .in_channels = in_channels,
-                .out_channels = out_channels,
-                .batch_size = batch_size,
-                .input_height = input_height,
-                .input_width = input_width,
-                .output_height = output_height,
-                .output_width = output_width,
-                .kernel_size = kernel_size,
-                .stride = stride,
-                .padding_n4 = padding_n4,
-                .dilation = dilation,
-                .groups = groups,
-                .conv_config = conv_config,
-                .compute_kernel_config = compute_config,
-                .compute_grid = device->compute_with_storage_grid_size(),
-                .weights_datatype = conv_config.weights_dtype.value(),
-                .input_datatype = input_dtype,
-                .output_datatype = output_dtype.value_or(input_dtype),
-                .input_layout = input_layout,
-                .enable_bias = has_bias,
-                .mm_conv = mm_conv},
-            device);
-        const uint32_t input_channels_alignment = get_input_channels_alignment(
-            TensorMemoryLayout::INTERLEAVED, input_layout, is_dram_conv, mm_conv, input_memory_config);
-        if (mm_conv) {
-            return Conv2dWeightsBiasPrepConfig(
-                input_channels_alignment,
-                conv_config.weights_dtype,
-                1,
-                1,
-                std::nullopt,
-                std::nullopt,
-                groups,
-                1,
-                input_width,
-                true,
-                has_bias,
-                true,  // parameters_on_device
-                false,
-                conv_config.full_inner_dim,
-                conv_config.enable_activation_reuse,
-                kernel_size,
-                orig_stride,
-                padding_n4);
-        }
-        uint32_t slice_rounding_value = 1;
-        if (conv_config.output_layout == tt_metal::Layout::TILE &&
-            dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
-            // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
-            slice_rounding_value = tt::constants::TILE_HEIGHT;
-        }
-
-        const uint32_t output_sliced_dim =
-            dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
-
-        TT_FATAL(
-            dram_slice_config.num_slices <= output_sliced_dim,
-            " Number of slices {} should be less or equal than the dimension being sliced {} in Conv2D DRAM Slicing",
-            dram_slice_config.num_slices,
-            output_sliced_dim);
-
-        const uint32_t min_output_slice_size =
-            tt::div_up(tt::div_up(output_sliced_dim, slice_rounding_value), dram_slice_config.num_slices) *
-            slice_rounding_value;
-
-        if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT) {
-            output_height = min_output_slice_size;
-            input_height =
-                ((output_height - 1) * stride[0]) + ((kernel_size[0] - 1) * (dilation[0] - 1)) + kernel_size[0];
-        } else {
-            output_width = min_output_slice_size;
-            input_width =
-                ((output_width - 1) * stride[1]) + ((kernel_size[1] - 1) * (dilation[1] - 1)) + kernel_size[1];
-        }
-    }
+    Tensor weight_tensor_on_device;
+    std::optional<Tensor> bias_tensor_on_device = std::nullopt;
 
     auto opt_conv_op_block_config = get_opt_block_config(
         mm_conv,
