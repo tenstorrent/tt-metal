@@ -16,5 +16,6 @@
 #include "ops/silu_bw/silu_bw.hpp"
 #include "ops/softmax/softmax.hpp"
 #include "ops/swiglu_fw/swiglu_fw.hpp"
-#include "optimizers/sgd_fused/sgd_fused.hpp"
+#include "optimizers/adamw_full_precision/adamw_full_precision.hpp"
 #include "optimizers/adamw_fused/adamw_fused.hpp"
+#include "optimizers/sgd_fused/sgd_fused.hpp"
