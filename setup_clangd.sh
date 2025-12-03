@@ -118,6 +118,8 @@ generate_compile_flags() {
     echo "Generating compile_flags.txt for $CHIP_ARCH architecture..."
 
     cat > "$ROOT_DIR/compile_flags.txt" <<EOF
+-DENV_LLK_INFRA
+
 -D$ARCH_DEFINE
 -DTENSIX_FIRMWARE
 -DCOMPILE_FOR_TRISC
@@ -128,6 +130,8 @@ generate_compile_flags() {
 -DLLK_TRISC_UNPACK
 -DLLK_TRISC_MATH
 -DLLK_TRISC_PACK
+
+-DENABLE_LLK_ASSERT
 
 -isystem
 $ROOT_DIR/tests/sfpi/compiler/lib/gcc/riscv-tt-elf/15.1.0/include/
