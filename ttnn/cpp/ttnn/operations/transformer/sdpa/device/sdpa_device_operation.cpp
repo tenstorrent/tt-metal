@@ -52,7 +52,7 @@ void SDPAOperation::validate_on_program_cache_miss(const operation_attributes_t&
     const Tensor& v = use_mla ? tensors.k : tensors.v.value();
 
     // Basic tensor properties
-    for (auto* input_tensor : {&q, &k, &v}) {
+    for (const auto* input_tensor : {&q, &k, &v}) {
         TT_FATAL(input_tensor->storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device");
         TT_FATAL(input_tensor->buffer() != nullptr, "Operands to SDPA need to be allocated in buffers on device");
         TT_FATAL((input_tensor->layout() == Layout::TILE), "Inputs to SDPA must be tilized");
