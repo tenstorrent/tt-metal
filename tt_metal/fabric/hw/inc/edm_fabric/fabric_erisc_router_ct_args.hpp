@@ -402,7 +402,7 @@ constexpr size_t to_sender_remote_completion_counters_base_address =
 
 // To optimize for CPU bottleneck instructions, instead of sending acks individually, based on the specific credit addresses, the router instead
 // will send all credits at once. This eliminates a handful of instructions per ack. This behaviour is completely safe when using these unbounded counter
-// credits because the credits are unbounded unsigned counters. Any overflow materializes as a roll back to zero, and subtractions are safe with unsigned. 
+// credits because the credits are unbounded unsigned counters. Any overflow materializes as a roll back to zero, and subtractions are safe with unsigned.
 constexpr size_t to_senders_credits_base_address = std::min(to_sender_remote_ack_counters_base_address, to_sender_remote_completion_counters_base_address);
 
 constexpr size_t local_receiver_ack_counters_base_address =

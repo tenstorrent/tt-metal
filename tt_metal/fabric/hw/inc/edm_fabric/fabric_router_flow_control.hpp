@@ -22,7 +22,7 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
             ack_counters[i] = 0;
         }
     }
-    
+
     FORCE_INLINE void send_completion_credit(uint8_t src_id) {
         completion_counters[src_id]++;
         completion_counters_base_ptr[src_id] = completion_counters[src_id];
