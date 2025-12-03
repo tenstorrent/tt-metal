@@ -100,16 +100,10 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixScopedLockConcurrentAccess) {
         workload.add_program(device_range, std::move(program));
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, true);
 
-        // The final data on locker core depends on execution order
-        // Locker writes: 0, 1, 2, ...
-        // Writer writes: 0x1000, 0x1001, 0x1002, ... via NoC
-        // Since there's no actual mutex, the data could be from either kernel
         auto* device = mesh_device->get_devices()[0];
         std::vector<uint32_t> final_data(num_elements, 0);
         detail::ReadFromDeviceL1(device, locker_core, locker_buffer_addr, num_elements * sizeof(uint32_t), final_data);
 
-        // Data should be either locker's values or writer's values (or mixed)
-        // We just verify the writes happened
         bool has_locker_data = false;
         bool has_writer_data = false;
         for (uint32_t i = 0; i < num_elements; i++) {
@@ -121,7 +115,6 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixScopedLockConcurrentAccess) {
             }
         }
 
-        // At least one of them should have written
         EXPECT_TRUE(has_locker_data || has_writer_data) << "Neither locker nor writer data found in buffer";
 
         log_info(tt::LogTest, "TensixScopedLockConcurrentAccess passed on device {}", device->id());

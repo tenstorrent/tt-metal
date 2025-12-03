@@ -26,13 +26,25 @@ void kernel_main() {
         local_buffer[i] = 0x1000 + i;
     }
 
-    auto lock = local_buffer.scoped_lock(num_elements);
     other_sem.up(noc, other_noc_x, other_noc_y, 1);
     my_sem.wait(1);
 
-    uint64_t target_noc_addr = get_noc_addr(target_noc_x, target_noc_y, target_addr);
-    noc_async_write(local_buffer_addr, target_noc_addr, num_elements * sizeof(uint32_t));
-    noc_async_write_barrier();
+    {
+        auto lock = local_buffer.scoped_lock(num_elements);
+
+        // Spam some events for the purpose of testing
+        for (uint32_t i = 0; i < 25; ++i) {
+            uint64_t target_noc_addr = get_noc_addr(target_noc_x, target_noc_y, target_addr);
+            noc_async_write(local_buffer_addr, target_noc_addr, num_elements * sizeof(uint32_t));
+            noc_async_write_barrier();
+        }
+    }
+
+    for (uint32_t i = 0; i < 50; ++i) {
+        uint64_t target_noc_addr = get_noc_addr(target_noc_x, target_noc_y, target_addr);
+        noc_async_write(local_buffer_addr, target_noc_addr, num_elements * sizeof(uint32_t));
+        noc_async_write_barrier();
+    }
 
     other_sem.up(noc, other_noc_x, other_noc_y, 1);
     my_sem.wait(2);
