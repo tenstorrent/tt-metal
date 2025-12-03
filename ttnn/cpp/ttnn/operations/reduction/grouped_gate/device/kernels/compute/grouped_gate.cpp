@@ -16,6 +16,7 @@
 #include "ttnn/operations/reduction/topk/device/kernels/compute/topk_common_funcs.hpp"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/eltwise_unary/recip.h"
+#include "compute_kernel_api/bcast.h"
 
 #include "debug/dprint_tensix.h"
 
@@ -289,24 +290,45 @@ void topk(
 void normalize_scores(
     const uint32_t unnormalized_scores_cb_index,
     const uint32_t reduce_scalar_cb_index,
+    const uint32_t intermediate_reduce_cb_index,
     const uint32_t normalized_scores_cb_index) {
     compute_kernel_hw_startup(unnormalized_scores_cb_index, reduce_scalar_cb_index, normalized_scores_cb_index);
     reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL>(
         unnormalized_scores_cb_index, reduce_scalar_cb_index, normalized_scores_cb_index);
     cb_wait_front(unnormalized_scores_cb_index, 1);
     cb_wait_front(reduce_scalar_cb_index, 1);
-    // UNPACK(print_tile(unnormalized_scores_cb_index, 0, true, 0, 8, 0, 1));
-    // UNPACK(print_tile(reduce_scalar_cb_index, 0, true, 0, 8, 0, 1));
+    // UNPACK(print_tile(unnormalized_scores_cb_index, 0, true, 0, 32, 0, 1));
+    // UNPACK(print_tile(reduce_scalar_cb_index, 0, true, 0, 32, 0, 1));
     acquire_dst();
+
     reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL>(unnormalized_scores_cb_index, reduce_scalar_cb_index, 0, 0, 0);
-    // recip_tile_init();
-    // recip_tile(0);  // DST[0] = 1/sum(unnormalized_scores)
+    reduce_uninit();
+
+    recip_tile_init();
+    recip_tile(0);  // DST[0] = 1/sum(unnormalized_scores)
+
+    cb_reserve_back(intermediate_reduce_cb_index, 1);
+    pack_tile(0, intermediate_reduce_cb_index);
+    cb_push_back(intermediate_reduce_cb_index, 1);
+
+    release_dst();
+    // reduce_uninit();
+
+    cb_wait_front(intermediate_reduce_cb_index, 1);
+    // UNPACK(print_tile(intermediate_reduce_cb_index, 0, true, 0, 32, 0, 1));
+    mul_bcast_cols_init_short(unnormalized_scores_cb_index, intermediate_reduce_cb_index);
+
+    acquire_dst();
     cb_reserve_back(normalized_scores_cb_index, 1);
+    UNPACK(print_tile(unnormalized_scores_cb_index, 0, true, 0, 32, 0, 1));
+    UNPACK(print_tile(intermediate_reduce_cb_index, 0, true, 0, 1, 0, 1));
+    mul_tiles_bcast<BroadcastType::COL>(
+        unnormalized_scores_cb_index, intermediate_reduce_cb_index, 0, 0, 0);  // tile *= 1/(sum_col(tile))
     pack_tile(0, normalized_scores_cb_index);
-    PACK(print_tile(normalized_scores_cb_index, 0, true, 0, 8, 0, 1));
     cb_push_back(normalized_scores_cb_index, 1);
     release_dst();
-    reduce_uninit();
+    cb_wait_front(normalized_scores_cb_index, 1);
+    UNPACK(print_tile(normalized_scores_cb_index, 0, true, 0, 32, 0, 1));
 }
 
 }  // namespace blocks
@@ -427,7 +449,8 @@ void MAIN {
             n_activated_experts,
             log_n_activated_experts);
 
-        blocks::normalize_scores(pre_normalized_scores_cb_index, reduce_scalar_cb_index, scores_cb_index);
+        blocks::normalize_scores(
+            pre_normalized_scores_cb_index, reduce_scalar_cb_index, intermediate_local_sort_cb_index, scores_cb_index);
     }
 }
 }  // namespace NAMESPACE
