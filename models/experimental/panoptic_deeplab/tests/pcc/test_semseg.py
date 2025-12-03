@@ -26,8 +26,9 @@ from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_out
 def test_ttnn_semseg(device, model_location_generator):
     """Test semantic segmentation head using the full model with real weights."""
     compute_grid = device.compute_with_storage_grid_size()
-    if compute_grid.x != 5 or compute_grid.y != 4:
-        pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
+    logger.info(
+        f"Running test on compute grid: {compute_grid.x}x{compute_grid.y} ({compute_grid.x * compute_grid.y} cores)"
+    )
 
     torch.manual_seed(0)
 
