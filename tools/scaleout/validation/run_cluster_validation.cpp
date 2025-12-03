@@ -249,7 +249,10 @@ AsicTopology run_connectivity_validation(
     }
     YAML::Node gsd_yaml_node = physical_system_descriptor.generate_yaml_node();
     auto fsd_proto = get_factory_system_descriptor(
-        input_args.cabling_descriptor_path, input_args.deployment_descriptor_path, input_args.fsd_path);
+        input_args.cabling_descriptor_path,
+        input_args.deployment_descriptor_path,
+        input_args.fsd_path,
+        physical_system_descriptor.get_all_hostnames());
     auto missing_topology =
         validate_connectivity(fsd_proto, gsd_yaml_node, input_args.fail_on_warning, physical_system_descriptor);
 

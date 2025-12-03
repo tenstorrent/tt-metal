@@ -99,13 +99,7 @@ tt_metal::AsicTopology generate_asic_topology_from_connections(
 fsd::proto::FactorySystemDescriptor get_factory_system_descriptor(
     const std::optional<std::string>& cabling_descriptor_path,
     const std::optional<std::string>& deployment_descriptor_path,
-    const std::optional<std::string>& fsd_path);
-
-std::string get_factory_system_descriptor_path(
-    const std::optional<std::string>& cabling_descriptor_path,
-    const std::optional<std::string>& deployment_descriptor_path,
     const std::optional<std::string>& fsd_path,
-    const std::string& output_path,
     const std::vector<std::string>& hostnames);
 
 tt_metal::AsicTopology validate_connectivity(

@@ -958,7 +958,8 @@ void handle_workload_timeout(
         auto fsd_proto = get_factory_system_descriptor(
             validation_config.cabling_descriptor_path,
             validation_config.deployment_descriptor_path,
-            validation_config.fsd_path);
+            validation_config.fsd_path,
+            ctx.physical_system_descriptor.get_all_hostnames());
         validate_connectivity(
             fsd_proto, gsd_yaml_node, validation_config.fail_on_warning, ctx.physical_system_descriptor);
     } else {
@@ -1511,53 +1512,27 @@ void perform_link_reset(
     log_output_rank0("Link reset completed. Please run the validation tool again to verify the link.");
 }
 
-std::string get_factory_system_descriptor_path(
-    const std::optional<std::string>& cabling_descriptor_path,
-    const std::optional<std::string>& deployment_descriptor_path,
-    const std::optional<std::string>& fsd_path,
-    const std::string& output_path,
-    const std::vector<std::string>& hostnames) {
-    std::string fsd_file_path;
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-    if (cabling_descriptor_path.has_value()) {
-        log_output_rank0("Creating Factory System Descriptor (Golden Representation)");
-        CablingGenerator cabling_generator;
-        std::string filename =
-            "generated_factory_system_descriptor_" + std::to_string(*distributed_context.rank()) + ".textproto";
-        fsd_file_path = std::filesystem::path(output_path) / filename;
-
-        if (!deployment_descriptor_path.has_value()) {
-            TT_FATAL(hostnames.size() == 1, "Expected exactly one host in the cluster when no deployment descriptor is provided");
-            cabling_generator = tt::scaleout_tools::CablingGenerator(cabling_descriptor_path.value(), hostnames);
-        } else {
-            cabling_generator = tt::scaleout_tools::CablingGenerator(
-                cabling_descriptor_path.value(), deployment_descriptor_path.value());
-        }
-        cabling_generator.emit_factory_system_descriptor(fsd_file_path);
-        return fsd_file_path;
-    } else {
-        // Load FSD from file
-        return fsd_path.value();
-    }
-}
-
 fsd::proto::FactorySystemDescriptor get_factory_system_descriptor(
     const std::optional<std::string>& cabling_descriptor_path,
     const std::optional<std::string>& deployment_descriptor_path,
-    const std::optional<std::string>& fsd_path) {
+    const std::optional<std::string>& fsd_path,
+    const std::vector<std::string>& hostnames) {
     if (!cabling_descriptor_path.has_value() && !fsd_path.has_value()) {
         TT_THROW("Either cabling_descriptor_path or fsd_path must be provided");
     }
 
     if (cabling_descriptor_path.has_value()) {
         log_output_rank0("Creating Factory System Descriptor (Golden Representation)");
+        tt::scaleout_tools::CablingGenerator cabling_generator;
         if (!deployment_descriptor_path.has_value()) {
-            TT_THROW(
-                "Deployment descriptor path is required when cabling descriptor path is provided. "
-                "Use get_factory_system_descriptor_path() with hostnames for single-host systems.");
+            TT_FATAL(
+                hostnames.size() == 1,
+                "Expected exactly one host in the cluster when no deployment descriptor is provided");
+            cabling_generator = tt::scaleout_tools::CablingGenerator(cabling_descriptor_path.value(), hostnames);
+        } else {
+            cabling_generator = tt::scaleout_tools::CablingGenerator(
+                cabling_descriptor_path.value(), deployment_descriptor_path.value());
         }
-        tt::scaleout_tools::CablingGenerator cabling_generator(
-            cabling_descriptor_path.value(), deployment_descriptor_path.value());
         return cabling_generator.generate_factory_system_descriptor();
     } else {
         // Load FSD from file
