@@ -36,8 +36,6 @@
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/compute_common.hpp"
 
-constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
-
 inline void mul_block_bcast_cols2(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t rows, uint32_t cols) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
@@ -84,12 +82,10 @@ constexpr uint32_t cb_s1_temp = get_compile_time_arg_val(13);             // tem
 constexpr uint32_t cb_s2_temp = get_compile_time_arg_val(14);             // temp for s2
 constexpr uint32_t cb_l1_temp = get_compile_time_arg_val(15);             // temp for l1
 constexpr uint32_t cb_l2_temp = get_compile_time_arg_val(16);             // temp for l2
-constexpr uint32_t cb_m1_temp = get_compile_time_arg_val(17);             // temp for m1
-constexpr uint32_t cb_m2_temp = get_compile_time_arg_val(18);             // temp for m2
-constexpr uint32_t scale_fp32 = get_compile_time_arg_val(19);
-constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(20);
-constexpr uint32_t vDHt = get_compile_time_arg_val(21);
-constexpr uint32_t loop_size = get_compile_time_arg_val(22);
+constexpr uint32_t scale_fp32 = get_compile_time_arg_val(17);
+constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(18);
+constexpr uint32_t vDHt = get_compile_time_arg_val(19);
+constexpr uint32_t loop_size = get_compile_time_arg_val(20);
 
 void MAIN {
     DPRINT << "reduce to root compute kernel started\n";
@@ -107,23 +103,18 @@ void MAIN {
 
         // Wait for all inputs to be available
         cb_wait_front(cb_m_in, Sq_chunk_t);
-        UNPACK((DPRINT << "after waiting front cb_m_in\n"));
         cb_wait_front(cb_prev_max, Sq_chunk_t);
-        UNPACK((DPRINT << "after waiting front cb_prev_max\n"));
         cb_wait_front(cb_prev_sum, Sq_chunk_t);
-        UNPACK((DPRINT << "after waiting front cb_prev_sum\n"));
         cb_wait_front(cb_prev_sum_2, Sq_chunk_t);
-        UNPACK((DPRINT << "after waiting front cb_prev_sum_2\n"));
         cb_wait_front(cb_out_accumulate_im, out_chunk_tiles);
-        UNPACK((DPRINT << "after waiting front cb_out_accumulate_im\n"));
         cb_wait_front(cb_out_accumulate_im_2, out_chunk_tiles);
         DPRINT << "all inputs available\n";
 
         // move sum and max to temp cbs
-        // move_block<false>(cb_prev_sum_2, cb_s1_temp, Sq_chunk_t);
-        // DPRINT << "after moving s2\n";
-        // move_block<false>(cb_prev_sum, cb_s2_temp, Sq_chunk_t);
-        // DPRINT << "after moving s1\n";
+        move_block<false>(cb_prev_sum_2, cb_s1_temp, Sq_chunk_t);
+        DPRINT << "after moving s2\n";
+        move_block<false>(cb_prev_sum, cb_s2_temp, Sq_chunk_t);
+        DPRINT << "after moving s1\n";
 
         // Compute max(m1, m2) directly from source CBs
         DPRINT << "reserving and waiting before max block\n";
@@ -135,7 +126,7 @@ void MAIN {
         DPRINT << "after sub_exp_block1 (P1)\n";
 
         // s2 *= P1
-        mul_block_bcast_cols2(cb_prev_sum_2, cb_exp_max_diff_2, cb_s1_temp, Sq_chunk_t, Sq_chunk_t);
+        mul_block_inplace(cb_s1_temp, cb_exp_max_diff_2, Sq_chunk_t);
         DPRINT << "after s2 *= P1\n";
 
         // P2 = exp((m2 - m_new) * scale)
@@ -143,7 +134,7 @@ void MAIN {
         DPRINT << "after sub_exp_block2 (P2)\n";
 
         // s1 *= P2
-        mul_block_bcast_cols2(cb_prev_sum, cb_exp_max_diff, cb_s2_temp, Sq_chunk_t, Sq_chunk_t);
+        mul_block_inplace(cb_s2_temp, cb_exp_max_diff, Sq_chunk_t);
         DPRINT << "after s1 *= P2\n";
 
         // s_new = s2 * P1 + s1 * P2
@@ -171,7 +162,6 @@ void MAIN {
             mul_block_bcast_cols_inplace(cb_l1_temp, cb_s_temp, Sq_chunk_t, vDHt);
             DPRINT << "after final recip and mul\n";
             // cb_push_back(cb_s1_temp, Sq_chunk_t);
-            // PACK((DPRINT << "pushed back s temp\n"));
         }
 
         DPRINT << "after final div\n";
@@ -187,19 +177,14 @@ void MAIN {
         // pop front all the cbs
         cb_pop_front(cb_m_in, Sq_chunk_t);
         cb_pop_front(cb_prev_max, Sq_chunk_t);
-        // cb_pop_front(cb_prev_sum, Sq_chunk_t);
-        // cb_pop_front(cb_prev_sum_2, Sq_chunk_t);
+        cb_pop_front(cb_prev_sum, Sq_chunk_t);
+        cb_pop_front(cb_prev_sum_2, Sq_chunk_t);
         // cb_pop_front(cb_out_accumulate_im, out_chunk_tiles);
         // cb_pop_front(cb_out_accumulate_im_2, out_chunk_tiles);
 
         // cb_push_back(cb_m_temp, Sq_chunk_t);
-        // PACK((DPRINT << "pushed back m temp\n"));
-
         // cb_push_back(cb_s_temp, Sq_chunk_t);
-        // PACK((DPRINT << "pushed back s temp\n"));
-
         // cb_push_back(cb_l1_temp, Sq_chunk_t);
-        // PACK((DPRINT << "pushed back l1 temp\n"));
 
         DPRINT << "reserved back temp cbs\n";
 
