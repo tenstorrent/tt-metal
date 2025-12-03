@@ -64,8 +64,12 @@ def cause_hang_with_app(request):
             raise RuntimeError("The application did not hang as expected.")
     else:
         time.sleep(timeout)
-        # Pytest will only print the output if the test fails, so we can always print it here
-        print_process_output(proc)
+
+        # Check if the process has exited
+        if proc.returncode != 0:
+            print("The application did not hang as expected.")
+            print_process_output(proc)
+            raise RuntimeError("The application did not hang as expected.")
 
     request.cls.app_configuration = app_configuration
     request.cls.exalens_context = init_ttexalens()
