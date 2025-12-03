@@ -157,14 +157,12 @@ class MeshConfig:
             memory_config=memory_config,
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         )
-        print("gathered", gathered.dtype)
 
         # Remove padding if applied
         if padded:
             gathered_sliced = gathered[:, :, :, :-pad_size]
             gathered.deallocate(True)
             gathered = gathered_sliced
-        print("last", gathered.dtype)
         return gathered
 
     def allgather(self, tensor, ccl_manager, memory_config=None, axis=0, dim=3, linear=False):

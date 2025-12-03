@@ -97,24 +97,7 @@ def decode_forward(
 
     # Apply SwiGLU activation
     down_input = apply_swiglu(gate, up, config)
-    # height_sharded_mem_config = ttnn.create_sharded_memory_config(
-    #             shape=(32, 384),  # Shape per shard (tile-aligned)
-    #             core_grid=ttnn.CoreGrid(x=1, y=1),
-    #             strategy=ttnn.ShardStrategy.HEIGHT,
-    #             orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    #             use_height_and_width_as_shard_shape=True,
-    #         )
-    # print(down_input.shape)
-    # down_input = ttnn.to_memory_config(down_input, height_sharded_mem_config)
-    # height_sharded_mem_config_next = ttnn.create_sharded_memory_config(
-    #         shape=(32*32, 384),  # Shape per shard (tile-aligned)
-    #         core_grid=ttnn.CoreGrid(x=1, y=1),
-    #         strategy=ttnn.ShardStrategy.HEIGHT,
-    #         orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    #         use_height_and_width_as_shard_shape=True,
-    #     )
-    # print("down input", down_input.memory_config())
-    down_input = ttnn.transpose(down_input, 1, 0)  # , memory_config=height_sharded_mem_config_next)
+    down_input = ttnn.transpose(down_input, 1, 0)
     down_input = ttnn.reshape(down_input, (1, config.num_experts, seq_len, weights.intermediate_size_per_device))
     # Down projection
     down = ttnn.sparse_matmul(
