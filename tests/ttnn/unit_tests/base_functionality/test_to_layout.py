@@ -13,6 +13,42 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without
 from models.common.utility_functions import is_grayskull, is_blackhole, torch_random
 
 
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["t3k"], indirect=True)
+def test_wan22_failure_t3k(mesh_device):
+    for _ in range(5):
+        torch_input_tensor = torch.rand((1, 6240, 384), dtype=torch.bfloat16)
+        input_tensor = ttnn.from_torch(
+            torch_input_tensor,
+            layout=ttnn.Layout.ROW_MAJOR,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None, None]
+            ),
+        )
+        output_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
+        torch_output_tensor = ttnn.to_torch(
+            output_tensor, dtype=torch.bfloat16, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+        )
+        expanded_input_tensor = torch_input_tensor.expand(8, 6240, 384)
+        assert_with_pcc(expanded_input_tensor, torch_output_tensor)
+
+
+def test_wan22_failure():
+    for _ in range(5):
+        torch_input_tensor = torch.rand((1, 6240, 384), dtype=torch.bfloat16)
+        input_tensor = ttnn.from_torch(
+            torch_input_tensor,
+            layout=ttnn.Layout.ROW_MAJOR,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        output_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
+        torch_output_tensor = ttnn.to_torch(output_tensor, dtype=torch.bfloat16)
+        assert_with_pcc(torch_input_tensor, torch_output_tensor)
+
+
 @pytest.mark.parametrize("height", [32, 30])
 @pytest.mark.parametrize("width", [32, 62])
 @pytest.mark.parametrize("on_device", [True, False])
