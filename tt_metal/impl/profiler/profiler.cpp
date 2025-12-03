@@ -44,7 +44,7 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/arch/wormhole_implementation.hpp>
-#include <tt-metalium/device_pool.hpp>
+#include "tt_metal/impl/device/device_pool.hpp"
 #include "tt_cluster.hpp"
 #include "tools/profiler/perf_counters.hpp"
 
