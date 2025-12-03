@@ -70,6 +70,7 @@ struct SemaphoreDescriptor {
     CoreType core_type = CoreType::WORKER;
     CoreRangeSet core_ranges;
     uint32_t initial_value = 0;
+    uint32_t id;
 };
 
 struct ReaderConfigDescriptor {};
