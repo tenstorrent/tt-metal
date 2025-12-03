@@ -334,7 +334,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t in_scalar_cb_id_0 = next_cb_index++;
     const uint32_t in_scalar_cb_pagesize = tile_size(params.data_format);
     const uint32_t in_scalar_cb_npages = params.multi_buffering_factor;
-    TT_FATAL(in_scalar_cb_npages <= 2, "Kernel logic relys on scalar cb page number being <= 2");
     tt::tt_metal::create_cb(
         in_scalar_cb_id_0, program, all_cores, in_scalar_cb_pagesize, in_scalar_cb_npages, params.data_format);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id_0, in_scalar_cb_pagesize, in_scalar_cb_npages);
@@ -943,8 +942,8 @@ void Pool2D::MultiCore::override_runtime_arguments(
     auto& out_cb = cached_program.shared_variables.out_cb;
 
     const auto& input_tensor = tensor_args.input_tensor_;
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = output_tensors[0].buffer();
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = output_tensors[0].buffer();
 
     bool input_sharded = input_tensor.is_sharded();
     if (input_sharded) {
@@ -957,7 +956,7 @@ void Pool2D::MultiCore::override_runtime_arguments(
 
     if (operation_attributes.return_indices_) {
         auto& out_idx_cb = cached_program.shared_variables.out_idx_cb;
-        auto dst_idx_buffer = output_tensors.size() > 1 ? output_tensors[1].buffer() : nullptr;
+        auto* dst_idx_buffer = output_tensors.size() > 1 ? output_tensors[1].buffer() : nullptr;
         if (out_sharded && dst_idx_buffer) {
             UpdateDynamicCircularBufferAddress(program, out_idx_cb, *dst_idx_buffer);
         }

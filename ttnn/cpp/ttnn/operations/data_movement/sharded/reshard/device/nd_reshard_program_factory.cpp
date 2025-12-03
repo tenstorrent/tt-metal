@@ -11,8 +11,8 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::detail {
 operation::ProgramWithCallbacks nd_reshard_multicore_copy_pages(const Tensor& input, Tensor& output) {
-    auto input_buffer = input.buffer();
-    auto output_buffer = output.buffer();
+    auto* input_buffer = input.buffer();
+    auto* output_buffer = output.buffer();
 
     auto input_nd_shard_spec = input.memory_config().nd_shard_spec().value();
 
@@ -123,14 +123,14 @@ operation::ProgramWithCallbacks nd_reshard_multicore_copy_pages(const Tensor& in
 */
 operation::ProgramWithCallbacks nd_reshard_multicore_copy_local_shard(
     const Tensor& input, Tensor& output, bool is_reader) {
-    auto input_buffer = input.buffer();
-    auto output_buffer = output.buffer();
+    auto* input_buffer = input.buffer();
+    auto* output_buffer = output.buffer();
 
     const auto input_accessor_args = TensorAccessorArgs(*input_buffer);
     const auto output_accessor_args = TensorAccessorArgs(*output_buffer);
 
     // Choose buffer and aligned page size based on is_reader flag
-    auto local_buffer = is_reader ? input_buffer : output_buffer;
+    auto* local_buffer = is_reader ? input_buffer : output_buffer;
     auto aligned_page_size = local_buffer->aligned_page_size();
     auto other_aligned_page_size = is_reader ? output_buffer->aligned_page_size() : input_buffer->aligned_page_size();
 
@@ -233,7 +233,7 @@ operation::ProgramWithCallbacks nd_reshard_multicore_copy_local_shard(
         const auto& output = output_tensors.at(0);
 
         // Choose buffer for distribution spec based on is_reader flag
-        auto local_buffer = is_reader ? input.buffer() : output.buffer();
+        auto* local_buffer = is_reader ? input.buffer() : output.buffer();
         auto num_shards = local_buffer->buffer_distribution_spec()->num_shards();
         auto shard_id_stride = local_buffer->buffer_distribution_spec()->num_cores_with_data() * 2;
 

@@ -218,16 +218,16 @@ void CaptureEnqueueWriteBuffer(
     // TODO (kmabee) - Currently support limited data formats. Long term we might not store data in flatbuffer,
     // but have it provided at runtime so just do what's easiest here and support few types for now.
     ::flatbuffers::Offset<::flatbuffers::Vector<uint32_t>> src_vector;
-    if (auto* uint32_vec = std::get_if<const std::shared_ptr<std::vector<uint32_t>>>(&src)) {
+    if (const auto* uint32_vec = std::get_if<const std::shared_ptr<std::vector<uint32_t>>>(&src)) {
         src_vector = ctx.get_builder().CreateVector(**uint32_vec);
-    } else if (auto* uint16_vec = std::get_if<const std::shared_ptr<std::vector<uint16_t>>>(&src)) {
+    } else if (const auto* uint16_vec = std::get_if<const std::shared_ptr<std::vector<uint16_t>>>(&src)) {
         // Convert uint16_t to uint32_t before creating the FlatBuffers vector
         std::vector<uint32_t> converted(uint16_vec->get()->begin(), uint16_vec->get()->end());
         src_vector = ctx.get_builder().CreateVector(converted);
     } else if (auto* void_ptr = std::get_if<const void*>(&src)) {
         // Assuming the void* points to a buffer of uint32_t values. Infer size, cast to uint32_t.
         size_t num_elements = buffer_ptr->size() / sizeof(uint32_t);
-        auto uint32_data = static_cast<const uint32_t*>(*void_ptr);
+        const auto* uint32_data = static_cast<const uint32_t*>(*void_ptr);
         src_vector = ctx.get_builder().CreateVector(uint32_data, num_elements);
     } else {
         TT_THROW("Unsupported HostDataType for captureEnqueueWriteBuffer()");

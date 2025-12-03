@@ -36,6 +36,18 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="REPORT or CHECK or leave empty to do both",
     )
+    parser.add_argument(
+        "--upper-threshold",
+        type=float,
+        default=1.0,
+        help="Upper threshold multiplier for performance regression checks (default: 1.0)",
+    )
+    parser.add_argument(
+        "--lower-threshold",
+        type=float,
+        default=0.80,
+        help="Lower threshold multiplier for performance improvement checks (default: 0.80)",
+    )
     return parser.parse_args()
 
 
@@ -45,7 +57,11 @@ if __name__ == "__main__":
     if str(args.modelperf) == "REPORT":
         merge_perf_files(fname, "perf", expected_cols)
     elif str(args.modelperf) == "CHECK":
-        check_perf_results(fname, expected_cols, check_cols)
+        check_perf_results(
+            fname, expected_cols, check_cols, lower_threshold=args.lower_threshold, upper_threshold=args.upper_threshold
+        )
     else:
         merge_perf_files(fname, "perf", expected_cols)
-        check_perf_results(fname, expected_cols, check_cols)
+        check_perf_results(
+            fname, expected_cols, check_cols, lower_threshold=args.lower_threshold, upper_threshold=args.upper_threshold
+        )

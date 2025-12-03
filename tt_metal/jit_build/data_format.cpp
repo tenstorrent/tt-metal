@@ -235,6 +235,8 @@ DataFormat get_single_pack_src_format(
             pack_src_format = DataFormat::UInt16;
         } else if (data_format == DataFormat::UInt8) {
             pack_src_format = DataFormat::UInt8;
+        } else if (data_format == DataFormat::Int8) {
+            pack_src_format = DataFormat::Int8;
         } else {
             TT_THROW("No valid conversion from fp32 dest to output format = {}", data_format);
         }

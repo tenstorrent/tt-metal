@@ -38,6 +38,8 @@ target_sources(
         erisc_datamover_builder.cpp
         fabric_router_channel_mapping.cpp
         fabric_router_builder.cpp
+        builder/fabric_builder_config.cpp
+        builder/fabric_builder_helpers.cpp
         builder/fabric_core_placement.cpp
         builder/fabric_channel_allocator.cpp
         builder/fabric_static_sized_channels_allocator.cpp
@@ -49,6 +51,7 @@ target_sources(
         fabric.cpp
         fabric_init.cpp
         fabric_host_utils.cpp
+        fabric_telemetry_reader.cpp
         fabric_context.cpp
         fabric_mux_config.cpp
         fabric_tensix_builder.cpp
@@ -64,6 +67,7 @@ target_sources(
         ccl/ccl_common.cpp
         physical_system_descriptor.cpp
         topology_mapper.cpp
+        topology_mapper_utils.cpp
 )
 
 # Include helper functions and generate headers from protobuf schemas

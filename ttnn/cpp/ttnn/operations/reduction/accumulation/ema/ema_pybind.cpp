@@ -16,7 +16,7 @@
 
 namespace ttnn::operations::reduction::accumulation::detail {
 void bind_reduction_ema_operation(py::module& module) {
-    auto docstring =
+    const auto* docstring =
         R"doc(
         ``ttnn.ema(input: ttnn.Tensor, alpha: float, out: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor``
 

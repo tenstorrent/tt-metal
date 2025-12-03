@@ -11,6 +11,7 @@ constexpr auto kCounter = "counter";
 constexpr auto kConnections = "connections";
 constexpr auto kParams = "params";
 constexpr auto kArguments = "arguments";
+constexpr auto kInputTensors = "input_tensors";
 // params keys
 constexpr auto kName = "name";
 constexpr auto kInputs = "inputs";
@@ -37,4 +38,12 @@ constexpr auto kNodeFunctionStart = "function_start";
 constexpr auto kNodeFunctionEnd = "function_end";
 constexpr auto kNodeCaptureStart = "capture_start";
 constexpr auto kNodeCaptureEnd = "capture_end";
+
+// levelized graph keys
+constexpr auto kInEdges = "in_edges";
+constexpr auto kOutEdges = "out_edges";
+constexpr auto kInternals = "internals";
+constexpr auto kOutputInfo = "output_info";
+constexpr auto kOutputShape = "output_shape";
+constexpr auto kStackingLevel = "stacking_level";
 }  // namespace ttnn::graph

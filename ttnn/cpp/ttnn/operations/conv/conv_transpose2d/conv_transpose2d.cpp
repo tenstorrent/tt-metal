@@ -158,7 +158,9 @@ Result ConvTranpose2dOperation::invoke(
             0,
             false,
             parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
-            input_tensor_post_tm.memory_config());
+            input_tensor_post_tm.memory_config(),
+            /*is_out_tiled*/ true,
+            conv_config.config_tensors_in_dram);
 
         if (conv_config.deallocate_activation) {
             input_tensor_post_tm.deallocate(/*force*/ true);
@@ -288,7 +290,7 @@ Result ConvTranpose2dOperation::invoke(
         conv_config.enable_weights_double_buffer,
         false,  // full_inner_dim
         false,  // enable_activation_reuse
-        false,  // config_tensors_in_dram
+        conv_config.config_tensors_in_dram,
         conv_config.force_split_reader);
     if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
         conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);

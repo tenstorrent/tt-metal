@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "groupnorm.hpp"
-#include "device/groupnorm_op.hpp"
+#include "device/groupnorm_device_operation.hpp"
 #include "groupnorm_input_mask.hpp"
 
 #include "ttnn/operations/core/core.hpp"
@@ -129,42 +129,46 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
     ttnn::Tensor mask = get_mask_tensor(input_tensor, input_mask, negative_mask, core_grid, num_groups);
 
     if (input_tensor.is_sharded()) {
-        const ttnn::operations::normalization::GroupNormShardedMultiCoreProgramConfig& program_config = {
+        const ttnn::operations::normalization::group_norm::GroupNormShardedMultiCoreProgramConfig program_config = {
             .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
             .im_data_format = DataType::BFLOAT16,
             .out_data_format = DataType::BFLOAT16,
             .inplace = inplace.value_or(false),
             .output_layout = output_layout.value_or(input_tensor.layout())};
-        return tt::tt_metal::operation::run(
-                   GroupNorm{
-                       .eps = epsilon,
-                       .num_groups = static_cast<uint32_t>(num_groups),
-                       .output_mem_config = output_mem_config,
-                       .program_config = program_config,
-                       .compute_kernel_config = kernel_config_val,
-                       .use_welford = use_welford},
-                   {input_tensor},
-                   {gamma, beta, mask, negative_mask, reciprocals})
-            .at(0);
+        return ttnn::prim::group_norm(
+            input_tensor,
+            epsilon,
+            static_cast<uint32_t>(num_groups),
+            output_mem_config,
+            program_config,
+            kernel_config_val,
+            use_welford,
+            gamma,
+            beta,
+            mask,
+            negative_mask,
+            reciprocals);
     } else {
-        const ttnn::operations::normalization::GroupNormMultiCoreProgramConfig& program_config = {
+        const ttnn::operations::normalization::group_norm::GroupNormMultiCoreProgramConfig program_config = {
             .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
             .im_data_format = DataType::BFLOAT16,
             .out_data_format = DataType::BFLOAT16,
             .inplace = inplace.value_or(false),
             .output_layout = output_layout.value_or(input_tensor.layout()),
             .num_out_blocks = num_out_blocks.value_or(1)};
-        return tt::tt_metal::operation::run(
-                   GroupNorm{
-                       .eps = epsilon,
-                       .num_groups = static_cast<uint32_t>(num_groups),
-                       .output_mem_config = output_mem_config,
-                       .program_config = program_config,
-                       .compute_kernel_config = kernel_config_val,
-                       .use_welford = use_welford},
-                   {input_tensor},
-                   {gamma, beta, mask, negative_mask, reciprocals})
-            .at(0);
+        return ttnn::prim::group_norm(
+            input_tensor,
+            epsilon,
+            static_cast<uint32_t>(num_groups),
+            output_mem_config,
+            program_config,
+            kernel_config_val,
+            use_welford,
+            gamma,
+            beta,
+            mask,
+            negative_mask,
+            reciprocals);
     }
 }
 

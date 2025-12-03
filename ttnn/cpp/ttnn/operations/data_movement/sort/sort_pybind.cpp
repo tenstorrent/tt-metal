@@ -12,7 +12,7 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_sort_operation(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
         Sorts the elements of the input tensor along the specified dimension in ascending order by default.
         If no dimension is specified, the last dimension of the input tensor is used.
@@ -26,6 +26,9 @@ void bind_sort_operation(py::module& module) {
             stable (bool, optional): If `True`, ensures the original order of equal elements is preserved. Defaults to `False`.
             memory_config (ttnn.MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
             out (tuple of ttnn.Tensor, optional): Preallocated output tensors for the sorted values and indices. Defaults to `None`. The index tensor must be of type uint16 or uint32.
+
+        Returns:
+            List of ttnn.Tensor: A list containing two tensors: The first tensor contains the sorted values, the second tensor contains the indices of the original elements in the sorted order.
 
         Additional info:
             * For now the `stable` argument is not supported.

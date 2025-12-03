@@ -12,6 +12,7 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/udm/udm_memory_pool.hpp"
 #include <type_traits>
 #include "tt_fabric_udm_impl.hpp"
 #include "debug/dprint.h"
@@ -257,8 +258,10 @@ FORCE_INLINE void fabric_fast_write(
 
     connection.wait_for_empty_write_slot();
     connection.send_payload_without_header_non_blocking_from_address(src_addr, len_bytes);
-    connection.send_payload_blocking_from_address(
+    connection.send_payload_flush_non_blocking_from_address(
         reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
+
+    noc_async_writes_flushed();
 }
 
 /**
@@ -352,12 +355,14 @@ FORCE_INLINE void fabric_fast_write_dw_inline(
     }
 
     connection.wait_for_empty_write_slot();
-    connection.send_payload_blocking_from_address(
+    connection.send_payload_flush_non_blocking_from_address(
         reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
 
     if (!posted) {
         fabric_nonposted_writes_acked += num_dests;
     }
+
+    noc_async_writes_flushed();
 }
 
 /**
@@ -392,33 +397,128 @@ FORCE_INLINE void fabric_fast_atomic_inc(
     packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(dest_addr, incr_val, flush));
 
     connection.wait_for_empty_write_slot();
-    connection.send_payload_blocking_from_address(
+    connection.send_payload_flush_non_blocking_from_address(
         reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
 
     if (!posted) {
         fabric_nonposted_atomics_acked += 1;
     }
+
+    noc_async_writes_flushed();
+}
+
+// Map downstream direction to mux array index [0-2], excluding my_direction
+// Examples:
+// - EAST Mux (my_direction=0): WEST(1)→0, NORTH(2)→1, SOUTH(3)→2
+// - WEST Mux (my_direction=1): EAST(0)→0, NORTH(2)→1, SOUTH(3)→2
+// - NORTH Mux (my_direction=2): EAST(0)→0, WEST(1)→1, SOUTH(3)→2
+// - SOUTH Mux (my_direction=3): EAST(0)→0, WEST(1)→1, NORTH(2)→2
+constexpr uint32_t direction_to_mux_index_map[eth_chan_directions::COUNT][eth_chan_directions::COUNT] = {
+    {0, 0, 1, 2},  // EAST Mux -> WEST, NORTH, SOUTH
+    {0, 0, 1, 2},  // WEST Mux -> EAST, NORTH, SOUTH
+    {0, 1, 0, 2},  // NORTH Mux -> EAST, WEST, SOUTH
+    {0, 1, 2, 0},  // SOUTH Mux -> EAST, WEST, NORTH
+};
+
+template <
+    uint32_t Direction,
+    typename FabricConnectionType,
+    typename DownstreamMuxConnectionType,
+    size_t NumConnections>
+FORCE_INLINE void forward_to_downstream_mux_or_local_router(
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
+    FabricConnectionType& fabric_connection,
+    std::array<DownstreamMuxConnectionType, NumConnections>& downstream_mux_connections) {
+    uint32_t mux_dir;
+    NocSendType packet_type = packet_header->get_noc_send_type();
+    // TODO: remove this check when we commonize some common fields between read/write
+    if (packet_type == NOC_UNICAST_READ) {
+        mux_dir = packet_header->udm_control.read.initial_direction;
+    } else {
+        mux_dir = packet_header->udm_control.write.initial_direction;
+    }
+
+    // DPRINT << "Mux Direction " << Direction << " mux_dir " << mux_dir <<ENDL();
+
+    if (Direction != mux_dir) {
+        // Forward to the correct downstream mux
+        uint32_t mux_index = direction_to_mux_index_map[Direction][mux_dir];
+        downstream_mux_connections[mux_index].wait_for_empty_write_slot();
+        downstream_mux_connections[mux_index].send_payload_flush_non_blocking_from_address(
+            (uint32_t)packet_header, packet_header->get_payload_size_including_header());
+    } else {
+        // Forward to local router (this mux's direction matches the packet's direction)
+        fabric_connection.wait_for_empty_write_slot();
+        fabric_connection.send_payload_flush_non_blocking_from_address(
+            (uint32_t)packet_header, packet_header->get_payload_size_including_header());
+    }
 }
 
 /**
- * @brief Send a write acknowledgment back to the sender using atomic increment
+ * @brief Select the appropriate mux connection index based on relay direction and destination
  *
- * This function sends an atomic increment to the sender's NONPOSTED_WRITES_ACKED counter
- * to acknowledge receipt of a write packet. It extracts the sender's information from
+ * For EW relays, determines if ACK needs NS routing and selects the appropriate perpendicular connection.
+ * For NS relays, always returns local connection (index 0).
+ *
+ * @tparam Direction Direction of this relay (EAST=0, WEST=1, NORTH=2, SOUTH=3)
+ * @param dst_chip_id Destination chip ID
+ * @return Mux connection index: 0=local, 1=downstream_en, 2=downstream_ws
+ */
+template <uint32_t Direction>
+FORCE_INLINE uint32_t select_relay_to_mux_connection(uint16_t dst_chip_id) {
+    uint32_t mux_idx = 0;  // Default: use local connection (index 0)
+    if constexpr (Direction == eth_chan_directions::EAST || Direction == eth_chan_directions::WEST) {
+        // For EW relays, check if ACK packet needs NS routing by querying routing info
+        auto* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
+        auto* routing_info = reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(ROUTING_PATH_BASE_2D);
+        uint16_t my_chip_id = routing_table->my_device_id;
+
+        const auto& compressed_route = routing_info->paths[dst_chip_id];
+        uint8_t ns_hops = compressed_route.get_ns_hops();
+        if (ns_hops > 0) {
+            // is there another way to know whether it's north or south hops?
+            if (dst_chip_id < my_chip_id) {
+                mux_idx = 1;
+            } else {
+                mux_idx = 2;
+            }
+        }
+    }
+    return mux_idx;
+}
+
+/**
+ * @brief Send an acknowledgment back to the sender using atomic increment
+ *
+ * This function sends an atomic increment to the sender's counter to acknowledge
+ * receipt of a packet (write, atomic, etc.). It extracts the sender's information from
  * the received packet's UDM control fields and sends an atomic increment to the
- * appropriate counter. The dm_id is extracted from the packet header's risc_id field.
+ * appropriate counter based on the FabricBarrierType template parameter.
  *
+ * For 2D fabrics with multiple mux connections, this function intelligently routes the ACK:
+ * - If relay is NS-oriented: use local connection (same NS dimension)
+ * - If relay is EW-oriented and ACK needs NS routing: use perpendicular NS connection
+ * - Otherwise: use local connection
+ *
+ * @tparam BarrierType The type of barrier counter to increment (e.g., NONPOSTED_WRITES_ACKED, NONPOSTED_ATOMICS_ACKED)
+ * @tparam Direction Direction of this relay (EAST=0, WEST=1, NORTH=2, SOUTH=3)
+ * @tparam FabricConnectionType The connection type
+ * @tparam NumConnections Number of mux connections (1 for single connection, 3 for mux array)
+ * @param connections Array of mux connections [local, downstream_en, downstream_ws] or single connection
  * @param received_header Pointer to the received packet header containing UDM control fields
  * @param increment_value The value to increment the counter by (default 1)
  * @param flush Whether to flush the atomic operation (default false)
  */
-FORCE_INLINE void fabric_fast_write_ack(
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header, uint32_t increment_value = 1, bool flush = false) {
-    // if this is a posted write then we simply exit
+template <FabricBarrierType BarrierType, uint32_t Direction, typename FabricConnectionType, size_t NumConnections>
+FORCE_INLINE void fabric_fast_ack(
+    std::array<FabricConnectionType, NumConnections>& connections,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header,
+    uint32_t increment_value = 1,
+    bool flush = false) {
+    // if this is a posted operation then we simply exit
     if (received_header->udm_control.write.posted) {
         return;
     }
-    auto [connection, is_init] = get_or_open_fabric_connection();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* ack_header = get_or_allocate_header();
 
     uint8_t src_chip_id = received_header->udm_control.write.src_chip_id;
@@ -427,51 +527,50 @@ FORCE_INLINE void fabric_fast_write_ack(
     uint8_t src_noc_y = received_header->udm_control.write.src_noc_y;
     uint8_t src_risc_id = received_header->udm_control.write.risc_id;
 
-    uint32_t counter_addr = get_fabric_counter_address<FabricBarrierType::NONPOSTED_WRITES_ACKED>(src_risc_id);
+    uint32_t counter_addr = get_fabric_counter_address<BarrierType>(src_risc_id);
 
     ack_header->to_noc_unicast_atomic_inc(
         NocUnicastAtomicIncCommandHeader(get_noc_addr(src_noc_x, src_noc_y, counter_addr), increment_value, flush));
     fabric_write_set_unicast_route(ack_header, src_chip_id, src_mesh_id, 0, 1);  // trid=0, posted=1
 
-    connection.wait_for_empty_write_slot();
-    connection.send_payload_blocking_from_address(reinterpret_cast<uint32_t>(ack_header), sizeof(PACKET_HEADER_TYPE));
+    // Determine which mux connection to use for sending the ACK
+    uint32_t mux_idx = select_relay_to_mux_connection<Direction>(src_chip_id);
+
+    connections[mux_idx].wait_for_empty_write_slot();
+    // Use blocking mode to barrier before issue the credits to the receiver, as the order of noc writes to l1 (payload)
+    // and to reg (credit) is not guaranteed.
+    connections[mux_idx].send_payload_blocking_from_address(
+        reinterpret_cast<uint32_t>(ack_header), sizeof(PACKET_HEADER_TYPE));
+}
+
+/**
+ * @brief Send a write acknowledgment back to the sender
+ *
+ * Wrapper function that calls fabric_fast_ack with NONPOSTED_WRITES_ACKED barrier type.
+ */
+template <uint32_t Direction, typename FabricConnectionType, size_t NumConnections>
+FORCE_INLINE void fabric_fast_write_ack(
+    std::array<FabricConnectionType, NumConnections>& connections,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header,
+    uint32_t increment_value = 1,
+    bool flush = false) {
+    fabric_fast_ack<FabricBarrierType::NONPOSTED_WRITES_ACKED, Direction>(
+        connections, received_header, increment_value, flush);
 }
 
 /**
  * @brief Send an atomic increment acknowledgment back to the sender
  *
- * This function sends an atomic increment to the sender's NONPOSTED_ATOMICS_ACKED counter
- * to acknowledge receipt of an atomic increment packet. It extracts the sender's information from
- * the received packet's UDM control fields and sends an atomic increment to the appropriate counter.
- * Since atomic increments reuse the write control header structure, we access udm_control.write fields.
- *
- * @param received_header Pointer to the received packet header containing UDM control fields
- * @param increment_value The value to increment the counter by (default 1)
- * @param flush Whether to flush the atomic operation (default false)
+ * Wrapper function that calls fabric_fast_ack with NONPOSTED_ATOMICS_ACKED barrier type.
  */
+template <uint32_t Direction, typename FabricConnectionType, size_t NumConnections>
 FORCE_INLINE void fabric_fast_atomic_ack(
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header, uint32_t increment_value = 1, bool flush = false) {
-    // if this is a posted atomic then we simply exit
-    if (received_header->udm_control.write.posted) {
-        return;
-    }
-    auto [connection, is_init] = get_or_open_fabric_connection();
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* ack_header = get_or_allocate_header();
-
-    uint8_t src_chip_id = received_header->udm_control.write.src_chip_id;
-    uint16_t src_mesh_id = received_header->udm_control.write.src_mesh_id;
-    uint8_t src_noc_x = received_header->udm_control.write.src_noc_x;
-    uint8_t src_noc_y = received_header->udm_control.write.src_noc_y;
-    uint8_t src_risc_id = received_header->udm_control.write.risc_id;
-
-    uint32_t counter_addr = get_fabric_counter_address<FabricBarrierType::NONPOSTED_ATOMICS_ACKED>(src_risc_id);
-
-    ack_header->to_noc_unicast_atomic_inc(
-        NocUnicastAtomicIncCommandHeader(get_noc_addr(src_noc_x, src_noc_y, counter_addr), increment_value, flush));
-    fabric_write_set_unicast_route(ack_header, src_chip_id, src_mesh_id, 0, 1);  // trid=0, posted=1
-
-    connection.wait_for_empty_write_slot();
-    connection.send_payload_blocking_from_address(reinterpret_cast<uint32_t>(ack_header), sizeof(PACKET_HEADER_TYPE));
+    std::array<FabricConnectionType, NumConnections>& connections,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header,
+    uint32_t increment_value = 1,
+    bool flush = false) {
+    fabric_fast_ack<FabricBarrierType::NONPOSTED_ATOMICS_ACKED, Direction>(
+        connections, received_header, increment_value, flush);
 }
 
 /**
@@ -499,13 +598,13 @@ FORCE_INLINE void fabric_fast_read_any_len(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = get_or_allocate_header();
 
     fabric_read_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id, src_l1_addr, size_bytes, trid);
-    // TODO: remove the 16B once we properly support reads in fabric router
-    packet_header->to_noc_unicast_write(NocUnicastCommandHeader{dest_addr}, 16);
+    packet_header->to_noc_unicast_read(NocUnicastCommandHeader{dest_addr}, 0);
     connection.wait_for_empty_write_slot();
-    connection.send_payload_blocking_from_address(
+    connection.send_payload_flush_non_blocking_from_address(
         reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
 
     fabric_reads_num_acked++;
+    noc_async_writes_flushed();
 }
 
 /**
@@ -519,9 +618,9 @@ FORCE_INLINE void fabric_fast_read_any_len(
  * @param len_bytes Number of bytes to write
  * @param counter_noc_addr NOC address of the counter to increment (only used if use_fused_atomic is true)
  */
-template <bool use_fused_atomic = false>
+template <bool use_fused_atomic, typename FabricConnectionType>
 FORCE_INLINE void fabric_fast_read_ack(
-    WorkerToFabricEdmSender& connection,
+    FabricConnectionType& connection,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     uint64_t dest_addr,
@@ -536,6 +635,8 @@ FORCE_INLINE void fabric_fast_read_ack(
 
     connection.wait_for_empty_write_slot();
     connection.send_payload_without_header_non_blocking_from_address(src_addr, len_bytes);
+    // Use blocking mode to barrier before issue the credits to the receiver, as the order of noc writes to l1 (payload)
+    // and to reg (credit) is not guaranteed.
     connection.send_payload_blocking_from_address(
         reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
 }
@@ -545,15 +646,22 @@ FORCE_INLINE void fabric_fast_read_ack(
  *
  * This function processes a received read request packet by extracting the request
  * parameters from the UDM control fields and sending the requested data back to
- * the source. It handles breaking up large data into multiple packets if needed,
- * and uses a fused atomic increment on the last packet to signal completion.
+ * the source. It reads slot by slot from the UDMMemoryPool circular buffer to
+ * handle wrap-around correctly, and uses a fused atomic increment on the last
+ * packet to signal completion.
  *
+ * @tparam Direction Direction of this relay (EAST=0, WEST=1, NORTH=2, SOUTH=3)
+ * @tparam FabricConnectionType The connection type
+ * @tparam NumConnections Number of mux connections
+ * @param connections Array of mux connections [local, downstream_en, downstream_ws]
  * @param received_header Pointer to the received read request packet header
- * @param src_addr Local source address where the requested data is stored
+ * @param memory_pool Reference to the UDM memory pool instance
  */
+template <uint32_t Direction, typename FabricConnectionType, size_t NumConnections, typename UDMMemoryPoolType>
 FORCE_INLINE void fabric_fast_read_any_len_ack(
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header, uint32_t src_addr) {
-    auto [connection, is_init] = get_or_open_fabric_connection();
+    std::array<FabricConnectionType, NumConnections>& connections,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header,
+    UDMMemoryPoolType& memory_pool) {
     volatile tt_l1_ptr PACKET_HEADER_TYPE* response_header = get_or_allocate_header();
 
     // Extract read request parameters from the received header
@@ -571,15 +679,28 @@ FORCE_INLINE void fabric_fast_read_any_len_ack(
     uint32_t counter_addr = get_fabric_counter_address<FabricBarrierType::READS_NUM_ACKED>(src_risc_id);
     uint64_t counter_noc_addr = get_noc_addr(src_noc_x, src_noc_y, counter_addr);
 
-    fabric_write_set_unicast_route(response_header, src_chip_id, src_mesh_id, transaction_id, 1 /* posted */);
-    while (size_bytes > max_fabric_payload_size) {
-        fabric_fast_read_ack<false>(connection, response_header, src_addr, dest_addr, max_fabric_payload_size);
+    // Determine which mux connection to use
+    uint32_t mux_idx = select_relay_to_mux_connection<Direction>(src_chip_id);
 
-        src_addr += max_fabric_payload_size;
-        dest_addr += max_fabric_payload_size;
-        size_bytes -= max_fabric_payload_size;
+    fabric_write_set_unicast_route(response_header, src_chip_id, src_mesh_id, transaction_id, 1 /* posted */);
+
+    // Read slot by slot from memory pool
+    uint32_t slot_size = memory_pool.get_slot_size();
+    uint32_t slot_idx = memory_pool.get_rd_slot_idx();
+
+    while (size_bytes > slot_size) {
+        uint32_t src_addr = memory_pool.get_slot_addr(slot_idx);
+        fabric_fast_read_ack<false>(connections[mux_idx], response_header, src_addr, dest_addr, slot_size);
+
+        slot_idx = memory_pool.get_next_slot_idx(slot_idx);
+        dest_addr += slot_size;
+        size_bytes -= slot_size;
     }
-    fabric_fast_read_ack<true>(connection, response_header, src_addr, dest_addr, size_bytes, counter_noc_addr);
+
+    // Send final chunk with atomic increment
+    uint32_t src_addr = memory_pool.get_slot_addr(slot_idx);
+    fabric_fast_read_ack<true>(
+        connections[mux_idx], response_header, src_addr, dest_addr, size_bytes, counter_noc_addr);
 }
 
 }  // namespace tt::tt_fabric::udm

@@ -17,6 +17,7 @@ on:
           - llama3_70b_dp
           - falcon7b
           - sentence_bert
+          - whisper
           - sd35
           - flux1
           - motif

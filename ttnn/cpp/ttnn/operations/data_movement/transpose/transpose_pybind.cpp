@@ -15,7 +15,7 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_transpose(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Returns a tensor that is transposed along dims dim1 and dim2
 

@@ -80,6 +80,7 @@ enum class EnvVarID {
     TT_METAL_ENABLE_HW_CACHE_INVALIDATION,  // Enable HW cache invalidation
     TT_METAL_DISABLE_RELAXED_MEM_ORDERING,  // Disable relaxed memory ordering
     TT_METAL_ENABLE_GATHERING,              // Enable instruction gathering
+    TT_METAL_FABRIC_BW_TELEMETRY,           // Enable fabric bandwidth telemetry
     TT_METAL_FABRIC_TELEMETRY,              // Enable fabric telemetry
     TT_FABRIC_PROFILE_RX_CH_FWD,            // Enable fabric RX channel forwarding profiling
     TT_METAL_FORCE_REINIT,                  // Force context reinitialization
@@ -103,15 +104,19 @@ enum class EnvVarID {
     TT_METAL_PROFILER_SYNC,                        // Enable synchronous profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH,  // NoC events report path
+    TT_METAL_PROFILE_PERF_COUNTERS,                // Enable Performance Counter profiling
     TT_METAL_MEM_PROFILER,                         // Enable memory/buffer profiling
     TT_METAL_TRACE_PROFILER,                       // Enable trace profiling
     TT_METAL_PROFILER_TRACE_TRACKING,              // Enable trace tracking
     TT_METAL_PROFILER_MID_RUN_DUMP,                // Force mid-run profiler dumps
     TT_METAL_PROFILER_CPP_POST_PROCESS,            // Enable C++ post-processing for profiler
     TT_METAL_TRACY_MID_RUN_PUSH,                   // Force Tracy mid-run pushes
+    TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES,       // Disable dumping collected device data to files
+    TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY,       // Disable pushing collected device data to Tracy GUI
     TT_METAL_GTEST_NUM_HW_CQS,                     // Number of HW command queues in tests
     TT_METAL_ARC_DEBUG_BUFFER_SIZE,                // ARC processor debug buffer size
     TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
+    TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,  // Terminal command to execute on dispatch timeout.
 
     // ========================================
     // WATCHER SYSTEM
@@ -137,13 +142,14 @@ enum class EnvVarID {
     // ========================================
     // INSPECTOR
     // ========================================
-    TT_METAL_INSPECTOR,                              // Enable/disable inspector
-    TT_METAL_INSPECTOR_LOG_PATH,                     // Inspector log output path
-    TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT,  // Track initialization closely
-    TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS,     // Warn on write exceptions
-    TT_METAL_RISCV_DEBUG_INFO,                       // Enable RISC-V debug info
-    TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS,           // Inspector RPC server address (host:port)
-    TT_METAL_INSPECTOR_RPC,                          // Enable/disable inspector RPC server
+    TT_METAL_INSPECTOR,                                // Enable/disable inspector
+    TT_METAL_INSPECTOR_LOG_PATH,                       // Inspector log output path
+    TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT,    // Track initialization closely
+    TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS,       // Warn on write exceptions
+    TT_METAL_RISCV_DEBUG_INFO,                         // Enable RISC-V debug info
+    TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS,             // Inspector RPC server address (host:port)
+    TT_METAL_INSPECTOR_RPC,                            // Enable/disable inspector RPC server
+    TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT,  // Serialize inspector data on dispatch timeout
 
     // ========================================
     // DEBUG PRINTING (DPRINT)
@@ -160,6 +166,11 @@ enum class EnvVarID {
     // DEVICE MANAGER
     // ========================================
     TT_METAL_NUMA_BASED_AFFINITY,
+
+    // ========================================
+    // FABRIC CONFIGURATION
+    // ========================================
+    TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS,  // Timeout for fabric router sync in milliseconds
 };
 
 // Environment variable name for TT-Metal root directory
@@ -458,6 +469,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_ENABLE_GATHERING=1
         case EnvVarID::TT_METAL_ENABLE_GATHERING: this->enable_gathering = true; break;
 
+        // TT_METAL_FABRIC_BW_TELEMETRY
+        // Enable fabric bandwidth telemetry data collection.
+        // Default: false (telemetry disabled)
+        // Usage: export TT_METAL_FABRIC_BW_TELEMETRY=1
+        case EnvVarID::TT_METAL_FABRIC_BW_TELEMETRY: this->enable_fabric_bw_telemetry = true; break;
+
         // TT_METAL_FABRIC_TELEMETRY
         // Enable fabric telemetry data collection.
         // Default: false (telemetry disabled)
@@ -648,6 +665,28 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             }
             break;
 
+        // TT_METAL_PROFILE_PERF_COUNTERS
+        // Enables Performance Counter profiling using a bitfield to select counter groups.
+        // Default: 0 (disabled)
+        // Usage: export TT_METAL_PROFILE_PERF_COUNTERS=value
+        //
+        // Valid values (bitfield):
+        //   1  (1 << 0) - FPU counters
+        //   2  (1 << 1) - PACK counters
+        //   4  (1 << 2) - UNPACK counters
+        //   8  (1 << 3) - L1 counters
+        //   16 (1 << 4) - INSTRN (instruction) counters
+        //   31 (0x1F)   - All counter groups (fpu|pack|unpack|l1|instrn)
+        //
+        // Multiple groups can be combined by OR-ing the values (e.g., 3 = FPU + PACK)
+        // Note: Currently, only FPU counters are supported
+        case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS:
+            sscanf(value, "%u", &this->profiler_perf_counter_mode);
+            if (this->profiler_perf_counter_mode != 0) {
+                this->profiler_enabled = true;
+            }
+            break;
+
         // TT_METAL_TRACE_PROFILER
         // Enables trace profiler for detailed execution tracing.
         // Default: false (trace profiling disabled)
@@ -702,6 +741,30 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_TRACY_MID_RUN_PUSH=1
         case EnvVarID::TT_METAL_TRACY_MID_RUN_PUSH: this->tracy_mid_run_push = true; break;
 
+        // TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES
+        // Disables dumping collected device data to files.
+        // Default: false (dump to files)
+        // Usage: export TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES=1
+        case EnvVarID::TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES: {
+            // Only disable dumping to files if device profiler is also enabled
+            if (this->profiler_enabled && is_env_enabled(value)) {
+                this->profiler_disable_dump_to_files = true;
+            }
+            break;
+        }
+
+        // TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY
+        // Disables pushing collected device data to Tracy GUI.
+        // Default: false (push to Tracy GUI)
+        // Usage: export TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY=1
+        case EnvVarID::TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY: {
+            // Only disable pushing to Tracy GUI if device profiler is also enabled
+            if (this->profiler_enabled && is_env_enabled(value)) {
+                this->profiler_disable_push_to_tracy = true;
+            }
+            break;
+        }
+
         // TT_METAL_GTEST_NUM_HW_CQS
         // Number of hardware command queues to use in tests.
         // Default: 1
@@ -729,6 +792,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->timeout_duration_for_operations = std::chrono::duration<float>(timeout_duration);
             break;
         }
+
+        // TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE
+        // Terminal command to execute on dispatch timeout.
+        // Default: "" (no command)
+        // Usage: export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=./tools/tt-triage.py
+        case EnvVarID::TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE:
+            this->dispatch_timeout_command_to_execute = std::string(value);
+            break;
 
         // ========================================
         // WATCHER SYSTEM
@@ -964,6 +1035,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             }
             break;
 
+        // TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT
+        // Enables serialization of inspector state on dispatch timeout. Set to '0' to disable.
+        // Default: true (enabled)
+        // Usage: export TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT=1
+        case EnvVarID::TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT:
+            this->inspector_settings.serialize_on_dispatch_timeout = true;
+            if (std::strncmp(value, "0", 1) == 0) {
+                this->inspector_settings.serialize_on_dispatch_timeout = false;
+            }
+            break;
+
         // ========================================
         // DEBUG PRINTING (DPRINT)
         // ========================================
@@ -1038,6 +1120,26 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
         }
 
+        // ========================================
+        // FABRIC CONFIGURATION
+        // ========================================
+        // TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS
+        // Timeout in milliseconds for fabric router sync
+        // Default: 5000ms
+        // Usage: export TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=8000
+        case EnvVarID::TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS:
+            try {
+                int parsed_value = std::stoi(value);
+                if (parsed_value < 0) {
+                    TT_THROW("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS must be non-negative: {}", value);
+                }
+                this->fabric_router_sync_timeout_ms = static_cast<uint32_t>(parsed_value);
+            } catch (const std::invalid_argument& ia) {
+                TT_THROW("Invalid TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS: {}", value);
+            } catch (const std::out_of_range&) {
+                TT_THROW("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS value out of range: {}", value);
+            }
+            break;
         // TT_METAL_DISABLE_XIP_DUMP
         // Disable XIP dump
         // Default: false

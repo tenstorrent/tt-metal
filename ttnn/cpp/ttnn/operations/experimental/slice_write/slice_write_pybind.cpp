@@ -17,7 +17,7 @@ namespace ttnn::operations::experimental::slice_write {
 namespace py = pybind11;
 
 void bind_slice_write(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Writes the input tensor to a slice of the output tensor.
 

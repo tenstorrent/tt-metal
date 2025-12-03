@@ -155,7 +155,7 @@ operation::OpPerformanceModel create_op_performance_model_for_matmul(
 std::tuple<uint32_t, uint32_t> get_subblock_sizes(
     uint32_t m_tiles_per_core, uint32_t n_tiles_per_core, bool fp32_dest_acc_en) {
     uint32_t out_subblock_h, out_subblock_w;
-    for (auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
+    for (const auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
         out_subblock_w = std::get<0>(subblock_hw);
         out_subblock_h = std::get<1>(subblock_hw);
         if ((out_subblock_h * out_subblock_w) <= 4 || !fp32_dest_acc_en) {
@@ -199,7 +199,7 @@ inline uint32_t get_estimated_size_of_cbs(
     uint32_t in0_single_tile_size = tt::tile_size(in0_data_format);  // use as estimate for output as well
     uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
     uint32_t output_single_tile_size = in0_single_tile_size;
-    auto in0_buffer = input_tensor_a.buffer();
+    auto* in0_buffer = input_tensor_a.buffer();
     auto in0_tile = input_tensor_a.tensor_spec().tile();
     uint32_t in2_block_tiles = 0;
     uint32_t in0_shard_width_in_tiles = 0;
@@ -219,7 +219,7 @@ inline uint32_t get_estimated_size_of_cbs(
 }
 
 inline uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
-    auto device = input_tensor_a.device();
+    auto* device = input_tensor_a.device();
     auto lowest_address = device->lowest_occupied_compute_l1_address();
     uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
     max_l1_space = max_l1_space - device->allocator()->get_base_allocator_addr(HalMemType::L1);
@@ -447,7 +447,7 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const tt::tt_metal::DataType output_dtype,
     const bool all_dram_interleaved) {
-    auto device = input_tensor_a.device();
+    auto* device = input_tensor_a.device();
     auto grid_size = compute_with_storage_grid_size.value_or(device->compute_with_storage_grid_size());
     uint32_t M = fuse_batch ? input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1]
                             : input_tensor_a.padded_shape()[-2];
@@ -1289,7 +1289,7 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
         "Only one constraint may be true for h or w!");
 
     uint32_t out_subblock_h, out_subblock_w;
-    for (auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
+    for (const auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
         out_subblock_h = std::get<0>(subblock_hw);
         out_subblock_w = std::get<1>(subblock_hw);
         if (fp32_dest_acc_en) {

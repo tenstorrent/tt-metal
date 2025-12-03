@@ -121,5 +121,7 @@ def test_ttnn_semseg(device, model_location_generator):
         to_channel_first=False,
         output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
         exp_pcc=0.972,
+        exp_abs_err=2.0,
+        exp_rel_err=0.4,
     )
-    assert passed, f"Semantic segmentation PCC test failed"
+    assert passed, f"Semantic segmentation PCC and tolerance tests failed"

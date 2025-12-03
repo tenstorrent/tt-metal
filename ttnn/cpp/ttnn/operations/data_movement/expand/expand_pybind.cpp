@@ -37,7 +37,7 @@ void py_bind_expand(py::module& module, const data_movement_operation_t& operati
 }  // namespace detail
 
 void py_bind_expand(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
         Returns a new tensor where singleton dimensions are expanded to a larger side.
         Unlike :func:`torch.expand`, this function is not zero-cost and perform a memory copy to create the expanded tensor. This is due to `ttnn.Tensor`'s lack of strided tensor support.

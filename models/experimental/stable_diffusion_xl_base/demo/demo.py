@@ -190,7 +190,8 @@ def run_demo_inference(
             img = img.unsqueeze(0)
             img = pipeline.image_processor.postprocess(img, output_type="pil")[0]
             images.append(img)
-            if is_ci_env:
+            skip_saving = os.getenv("TT_SDXL_SKIP_CHECK_AND_SAVE", "0") == "1"
+            if is_ci_env or skip_saving:
                 logger.info(f"Image {len(images)}/{len(prompts) // batch_size} generated successfully")
             else:
                 img.save(f"output/output{len(images) + start_from}.png")

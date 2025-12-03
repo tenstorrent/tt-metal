@@ -17,7 +17,7 @@ void FusedRMSNormPreAllGather::validate(const std::vector<Tensor>& input_tensors
     using namespace tt::constants;
 
     TT_FATAL(input_tensors.size() == 1, "Must have 1 input tensor");
-    auto& tensor = input_tensors.at(0);
+    const auto& tensor = input_tensors.at(0);
 
     TT_FATAL(tensor.layout() == Layout::TILE, "Input tensor must have TILE layout, got: {}", tensor.layout());
     TT_FATAL(

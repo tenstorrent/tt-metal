@@ -13,6 +13,7 @@ target_sources(
         convert_to_hwc/convert_to_hwc.cpp
         convert_to_hwc/device/convert_to_hwc_device_operation.cpp
         convert_to_hwc/device/convert_to_hwc_program_factory.cpp
+        convert_to_hwc/device/gather.cpp
 )
 
 target_include_directories(ttnn_op_experimental_cnn PRIVATE ${FixmeOpIncDirs})

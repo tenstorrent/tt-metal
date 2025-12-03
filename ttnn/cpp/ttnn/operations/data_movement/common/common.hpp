@@ -15,11 +15,10 @@ namespace operations {
 namespace data_movement {
 
 ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& output_shape, uint32_t);
-
 ttnn::Shape squeeze_shape_to_4D(const ttnn::Shape& output_shape);
 ttnn::Shape squeeze_shape_to_3D(const ttnn::Shape& output_shape);
-
-ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor);
+ttnn::Tensor squeeze_from_ND_to_4D(
+    const ttnn::Tensor& tensor, const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 ttnn::Shape unsqueeze_shape_to_3D(const ttnn::Shape& shape);
 ttnn::Shape unsqueeze_shape_to_4D(const ttnn::Shape& shape);
 
@@ -201,6 +200,13 @@ ttnn::Shape compute_padded_shape(
     ttnn::Shape logical_shape,
     uint32_t tile_height = tt::constants::TILE_HEIGHT,
     uint32_t tile_width = tt::constants::TILE_WIDTH);
+
+/**
+ * Pads a shape to align with tile dimensions
+ * @param unpadded_shape Original shape to be padded
+ * @return Padded shape aligned to tile dimensions
+ */
+ttnn::Shape pad_to_tile_shape(const ttnn::Shape& unpadded_shape);
 
 enum class ShardStrategy { BLOCK, HEIGHT, WIDTH };
 
