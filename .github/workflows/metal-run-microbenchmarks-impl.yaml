@@ -95,7 +95,11 @@ jobs:
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
-      - name: 🧬 Checkout Repository
+      - name: 🧬 Checkout Repository (for local actions)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: 🧬 Checkout Repository (for container)
         uses: actions/checkout@v4
         with:
           submodules: recursive

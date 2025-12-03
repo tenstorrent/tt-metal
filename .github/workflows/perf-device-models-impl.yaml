@@ -167,7 +167,11 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: 🧬 Checkout Repository
+      - name: 🧬 Checkout Repository (for local actions)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: 🧬 Checkout Repository (for container)
         uses: actions/checkout@v4
         with:
           submodules: recursive

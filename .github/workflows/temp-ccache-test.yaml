@@ -76,7 +76,11 @@ jobs:
           # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
           ccache -z
 
-      - name: 🧬 Checkout Repository
+      - name: 🧬 Checkout Repository (for local actions)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: 🧬 Checkout Repository (for container)
         uses: actions/checkout@v4
         with:
           submodules: recursive

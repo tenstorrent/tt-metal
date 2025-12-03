@@ -119,7 +119,11 @@ jobs:
       - name: Mark repository as safe directory
         run: |
           git config --global --add safe.directory $GITHUB_WORKSPACE
-      - name: 🧬 Checkout Repository
+      - name: 🧬 Checkout Repository (for local actions)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: 🧬 Checkout Repository (for container)
         uses: actions/checkout@v4
         with:
           submodules: recursive

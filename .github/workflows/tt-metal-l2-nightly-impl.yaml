@@ -110,7 +110,11 @@ jobs:
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
     steps:
-      - name: 🧬 Checkout Repository
+      - name: 🧬 Checkout Repository (for local actions)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: 🧬 Checkout Repository (for container)
         uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -162,7 +166,11 @@ jobs:
         || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
       }}
     steps:
-      - name: 🧬 Checkout Repository
+      - name: 🧬 Checkout Repository (for local actions)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: 🧬 Checkout Repository (for container)
         uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -212,7 +220,11 @@ jobs:
         ((inputs.runner-label == 'P100' && 'tt-ubuntu-2204-p100a-viommu-stable') || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label))
       }}
     steps:
-      - name: 🧬 Checkout Repository
+      - name: 🧬 Checkout Repository (for local actions)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: 🧬 Checkout Repository (for container)
         uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -262,7 +274,11 @@ jobs:
         || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
       }}
     steps:
-      - name: 🧬 Checkout Repository
+      - name: 🧬 Checkout Repository (for local actions)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: 🧬 Checkout Repository (for container)
         uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -314,7 +330,11 @@ jobs:
         || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
       }}
     steps:
-      - name: 🧬 Checkout Repository
+      - name: 🧬 Checkout Repository (for local actions)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: 🧬 Checkout Repository (for container)
         uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -366,7 +386,11 @@ jobs:
         || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
       }}
     steps:
-      - name: 🧬 Checkout Repository
+      - name: 🧬 Checkout Repository (for local actions)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: 🧬 Checkout Repository (for container)
         uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -420,7 +444,11 @@ jobs:
         || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
       }}
     steps:
-      - name: 🧬 Checkout Repository
+      - name: 🧬 Checkout Repository (for local actions)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: 🧬 Checkout Repository (for container)
         uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -480,7 +508,11 @@ jobs:
         || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
       }}
     steps:
-      - name: 🧬 Checkout Repository
+      - name: 🧬 Checkout Repository (for local actions)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: 🧬 Checkout Repository (for container)
         uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -532,7 +564,11 @@ jobs:
         || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
       }}
     steps:
-      - name: 🧬 Checkout Repository
+      - name: 🧬 Checkout Repository (for local actions)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: 🧬 Checkout Repository (for container)
         uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -598,7 +634,11 @@ jobs:
             test_filter: "_oft"
             owner: U06Q7ESTFEV # Borys Bradel
     steps:
-      - name: 🧬 Checkout Repository
+      - name: 🧬 Checkout Repository (for local actions)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: 🧬 Checkout Repository (for container)
         uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -649,7 +689,11 @@ jobs:
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
     steps:
-      - name: 🧬 Checkout Repository
+      - name: 🧬 Checkout Repository (for local actions)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: 🧬 Checkout Repository (for container)
         uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -702,7 +746,11 @@ jobs:
         || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
       }}
     steps:
-      - name: 🧬 Checkout Repository
+      - name: 🧬 Checkout Repository (for local actions)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: 🧬 Checkout Repository (for container)
         uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -754,7 +802,11 @@ jobs:
         || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
       }}
     steps:
-      - name: 🧬 Checkout Repository
+      - name: 🧬 Checkout Repository (for local actions)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: 🧬 Checkout Repository (for container)
         uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -807,7 +859,11 @@ jobs:
         || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
       }}
     steps:
-      - name: 🧬 Checkout Repository
+      - name: 🧬 Checkout Repository (for local actions)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: 🧬 Checkout Repository (for container)
         uses: actions/checkout@v4
         with:
           submodules: recursive
