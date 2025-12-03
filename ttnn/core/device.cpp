@@ -4,6 +4,10 @@
 
 #include "ttnn/device.hpp"
 
+namespace tt::tt_metal::tensor_impl {
+void clear_pinned_memories_cache();
+}
+
 namespace ttnn {
 
 namespace device {
@@ -23,7 +27,11 @@ void enable_program_cache(IDevice& device) { device.enable_program_cache(); }
 
 void disable_and_clear_program_cache(IDevice& device) { device.disable_and_clear_program_cache(); }
 
-void close_device(MeshDevice& device) { device.close(); }
+void close_device(MeshDevice& device) {
+    fmt::println(stderr, "Clearing pinned memories cache");
+    tt::tt_metal::tensor_impl::clear_pinned_memories_cache();
+    device.close();
+}
 
 bool is_wormhole_or_blackhole(tt::ARCH arch) { return arch == tt::ARCH::WORMHOLE_B0 or arch == tt::ARCH::BLACKHOLE; }
 
