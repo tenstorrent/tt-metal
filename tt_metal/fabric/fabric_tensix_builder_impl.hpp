@@ -223,14 +223,14 @@ protected:
     //   - worker_xy: NOC coordinates (x,y) of connected worker/client
     //   - edm_read_counter: Local tracking of packets read by the local kernel
     // Remote clients populate this when establishing connection; local kernel reads it to get client NOC coords
-    std::map<ChannelTypes, MemoryRegion> connection_info_regions_{};
+    std::map<ChannelTypes, MemoryRegion> connection_info_regions_;
 
     // Connection liveness/handshake region (per channel type)
     // Remote clients write to this address to signal connection state changes:
     //   - Write 1 (open_connection_value): Client requests connection establishment
     //   - Write 2 (close_connection_request_value): Client requests connection teardown
     // Local polls these addresses to detect when clients want to connect/disconnect
-    std::map<ChannelTypes, MemoryRegion> connection_handshake_regions_{};
+    std::map<ChannelTypes, MemoryRegion> connection_handshake_regions_;
 
     // RESERVED/UNUSED: Flow control region (per channel type)
     // This region is allocated but NOT currently used by mux/relay kernels
@@ -240,7 +240,7 @@ protected:
     //   - Local decrements: increment_local_update_ptr_val(stream_id, 1) when sending packet
     //   - Remote client increments: writes to stream register via NoC when consuming packet
     // The flow_control_regions_ is passed to constructors but never stored/used (legacy/reserved)
-    std::map<ChannelTypes, MemoryRegion> flow_control_regions_{};
+    std::map<ChannelTypes, MemoryRegion> flow_control_regions_;
 
     // Buffer index synchronization region (per channel type) - used for connection lifecycle synchronization
     // This stores the write pointer (wrptr) for each channel's buffer slots, used ONLY during:
@@ -253,7 +253,7 @@ protected:
     // During normal operation: Local tracks wrptr/rdptr internally using local_write_counter/local_read_counter
     //   - These are NOT stored in buffer_index_regions_ during packet forwarding
     //   - buffer_index_regions_ is only accessed during connection establishment/teardown
-    std::map<ChannelTypes, MemoryRegion> buffer_index_regions_{};
+    std::map<ChannelTypes, MemoryRegion> buffer_index_regions_;
 
     // Channel buffer storage regions (one per channel type, sorted by ChannelTypes enum)
     // Each channel type has its own buffer region with type-specific configuration
