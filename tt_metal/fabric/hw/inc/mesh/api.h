@@ -26,8 +26,7 @@ struct is_addrgen : std::false_type {};
 template <typename T>
 struct is_addrgen<T, std::void_t<decltype(std::declval<const T&>().get_noc_addr(0))>> : std::true_type {};
 
-// Import FABRIC_MAX_PACKET_SIZE from addrgen_api.h
-using tt::tt_fabric::linear::FABRIC_MAX_PACKET_SIZE;
+// FABRIC_MAX_PACKET_SIZE is available via macro from addrgen_api.h
 
 // hop info e/w/n/s
 struct MeshMcastRange {

@@ -9,6 +9,7 @@
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "tt_metal/fabric/hw/inc/fabric_config.h"
 
 namespace tt::tt_fabric {
 
@@ -69,9 +70,10 @@ FORCE_INLINE uint64_t get_noc_address(const AddrGenType& d, const uint32_t id, u
 
 }  // namespace addrgen_detail
 
-// Maximum fabric packet payload size
+// Maximum fabric packet payload size (runtime configuration)
 // Used for packetization logic in fabric write functions
-inline constexpr uint32_t FABRIC_MAX_PACKET_SIZE = 4352;
+// Note: This is now a function call that reads from L1 configuration
+#define FABRIC_MAX_PACKET_SIZE (tt::tt_fabric::get_fabric_max_packet_size())
 
 template <typename AddrGenType>
 FORCE_INLINE void to_noc_unicast_write(
