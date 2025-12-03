@@ -31,62 +31,32 @@ void RotaryEmbeddingLlamaFusedQKDeviceOperation::validate_on_program_cache_miss(
     const auto& trans_mat = tensor_args.trans_mat;
 
     auto* ref_device = q_input_tensor.device();
-    TT_FATAL(
-        q_input_tensor.storage_type() == StorageType::DEVICE,
-        "Q input tensor to rotary embedding need to be on device!");
-    TT_FATAL(
-        q_input_tensor.buffer() != nullptr,
-        "Q input tensor to rotary embedding need to be allocated in buffers on device!");
-    TT_FATAL(q_input_tensor.device() == ref_device, "Q input tensor to rotary embedding need to be on same device!");
-    TT_FATAL(
-        (q_input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED),
-        "Q input tensor for RoPE must be HEIGHT_SHARDED.");
-    TT_FATAL((q_input_tensor.dtype() == DataType::BFLOAT16), "Q input tensor to rotary embedding must be bfloat16");
 
-    TT_FATAL(
-        k_input_tensor.storage_type() == StorageType::DEVICE,
-        "K input tensor to rotary embedding need to be on device!");
-    TT_FATAL(
-        k_input_tensor.buffer() != nullptr,
-        "K input tensor to rotary embedding need to be allocated in buffers on device!");
-    TT_FATAL(k_input_tensor.device() == ref_device, "Operands to rotary embedding need to be on same device!");
-    TT_FATAL(
-        (k_input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED),
-        "K input tensor for RoPE must be HEIGHT_SHARDED.");
-    TT_FATAL((k_input_tensor.dtype() == DataType::BFLOAT16), "K input tensor to rotary embedding must be bfloat16");
+    auto validate_tensor = [ref_device](const Tensor& tensor, const std::string& name) {
+        TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} tensor must be on device!", name);
+        TT_FATAL(tensor.buffer() != nullptr, "{} tensor must be allocated in buffers on device!", name);
+        TT_FATAL(tensor.device() == ref_device, "{} tensor must be on same device!", name);
+        TT_FATAL(
+            tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+            "{} tensor must be HEIGHT_SHARDED.",
+            name);
+        TT_FATAL(tensor.dtype() == DataType::BFLOAT16, "{} tensor must be bfloat16", name);
+    };
 
-    TT_FATAL(cos.storage_type() == StorageType::DEVICE, "Cos tensor to rotary embedding need to be on device!");
-    TT_FATAL(cos.buffer() != nullptr, "Cos tensor to rotary embedding need to be allocated in buffers on device!");
-    TT_FATAL(cos.device() == ref_device, "Operands to rotary embedding need to be on same device!");
-    TT_FATAL(
-        (cos.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED),
-        "Cos tensor for RoPE must be HEIGHT_SHARDED.");
-    TT_FATAL((cos.dtype() == DataType::BFLOAT16), "Cos tensor to rotary embedding must be bfloat16");
-
-    TT_FATAL(sin.storage_type() == StorageType::DEVICE, "Sin tensor to rotary embedding need to be on device!");
-    TT_FATAL(sin.buffer() != nullptr, "Sin tensor to rotary embedding need to be allocated in buffers on device!");
-    TT_FATAL(sin.device() == ref_device, "Operands to rotary embedding need to be on same device!");
-    TT_FATAL(
-        (sin.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED),
-        "Sin tensor for RoPE must be HEIGHT_SHARDED.");
-    TT_FATAL((sin.dtype() == DataType::BFLOAT16), "Sin tensor to rotary embedding must be bfloat16");
-
-    TT_FATAL(
-        trans_mat.storage_type() == StorageType::DEVICE, "Trans mat tensor to rotary embedding need to be on device!");
-    TT_FATAL(
-        trans_mat.buffer() != nullptr,
-        "Trans mat tensor to rotary embedding need to be allocated in buffers on device!");
-    TT_FATAL(trans_mat.device() == ref_device, "Trans mat tensor to rotary embedding need to be on same device!");
-    TT_FATAL(
-        (trans_mat.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED),
-        "Trans mat tensor for RoPE must be HEIGHT_SHARDED.");
-    TT_FATAL((trans_mat.dtype() == DataType::BFLOAT16), "Trans mat tensor to rotary embedding must be bfloat16");
+    validate_tensor(q_input_tensor, "Q input");
+    validate_tensor(k_input_tensor, "K input");
+    validate_tensor(cos, "Cos");
+    validate_tensor(sin, "Sin");
+    validate_tensor(trans_mat, "Trans mat");
 
     Layout tensor_layout = args.row_major_QK ? Layout::ROW_MAJOR : Layout::TILE;
-    TT_FATAL(q_input_tensor.layout() == tensor_layout, "Q input tensor must be in layout {}", tensor_layout);
-    TT_FATAL(k_input_tensor.layout() == tensor_layout, "K input tensor must be in layout {}", tensor_layout);
-    TT_FATAL(cos.layout() == tensor_layout, "cos tensor must be in layout {}", tensor_layout);
-    TT_FATAL(sin.layout() == tensor_layout, "sin tensor must be in layout {}", tensor_layout);
+    auto validate_layout = [tensor_layout](const Tensor& tensor, const std::string& name) {
+        TT_FATAL(tensor.layout() == tensor_layout, "{} tensor must be in layout {}", name, tensor_layout);
+    };
+    validate_layout(q_input_tensor, "Q input");
+    validate_layout(k_input_tensor, "K input");
+    validate_layout(cos, "cos");
+    validate_layout(sin, "sin");
 
     // Check for decode mode
     TT_FATAL(
