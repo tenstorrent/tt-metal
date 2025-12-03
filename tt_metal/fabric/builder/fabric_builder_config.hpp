@@ -74,6 +74,8 @@ uint32_t get_downstream_edm_count(bool is_2D_routing);
 
 uint32_t get_vc0_downstream_edm_count(bool is_2D_routing);
 
+uint32_t get_vc1_downstream_edm_count(bool is_2D_routing);
+
 }  // namespace builder_config
 
 /**
