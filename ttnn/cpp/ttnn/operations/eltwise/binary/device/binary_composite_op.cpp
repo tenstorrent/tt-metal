@@ -276,7 +276,9 @@ Tensor ExecuteDiv::invoke(
     // Only require legacy mode for round_mode if not INT32
     const auto has_legacy_only_args = ((round_mode.has_value() and !is_int32));
 
-    const auto has_legacy_only_args = (round_mode.has_value() and !is_int32) or output_dtype.has_value() or approx_mode;
+    // Only round_mode and approx_mode=true force the legacy path
+    // output_dtype can be used with both legacy and new (binary_ng) paths
+    const auto has_legacy_only_args = (round_mode.has_value() and !is_int32) or (approx_mode == true);
 
     if (not(use_legacy
                 ? *use_legacy
@@ -285,7 +287,7 @@ Tensor ExecuteDiv::invoke(
                           input_a, input_b, output_mem_config, output_tensor, lhs_activations, rhs_activations))) {
         TT_FATAL(
             not has_legacy_only_args,
-            "approx_mode, optional output_dtype are not valid when passing use_legacy parameter as false in div");
+            "approx_mode=true and round_mode are not valid when passing use_legacy parameter as false in div");
 
         TT_FATAL(
             (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
