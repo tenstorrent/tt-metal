@@ -113,9 +113,12 @@ enum class EnvVarID {
     TT_METAL_PROFILER_MID_RUN_DUMP,                // Force mid-run profiler dumps
     TT_METAL_PROFILER_CPP_POST_PROCESS,            // Enable C++ post-processing for profiler
     TT_METAL_TRACY_MID_RUN_PUSH,                   // Force Tracy mid-run pushes
+    TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES,       // Disable dumping collected device data to files
+    TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY,       // Disable pushing collected device data to Tracy GUI
     TT_METAL_GTEST_NUM_HW_CQS,                     // Number of HW command queues in tests
     TT_METAL_ARC_DEBUG_BUFFER_SIZE,                // ARC processor debug buffer size
     TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
+    TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,  // Terminal command to execute on dispatch timeout.
 
     // ========================================
     // WATCHER SYSTEM
@@ -141,13 +144,14 @@ enum class EnvVarID {
     // ========================================
     // INSPECTOR
     // ========================================
-    TT_METAL_INSPECTOR,                              // Enable/disable inspector
-    TT_METAL_INSPECTOR_LOG_PATH,                     // Inspector log output path
-    TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT,  // Track initialization closely
-    TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS,     // Warn on write exceptions
-    TT_METAL_RISCV_DEBUG_INFO,                       // Enable RISC-V debug info
-    TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS,           // Inspector RPC server address (host:port)
-    TT_METAL_INSPECTOR_RPC,                          // Enable/disable inspector RPC server
+    TT_METAL_INSPECTOR,                                // Enable/disable inspector
+    TT_METAL_INSPECTOR_LOG_PATH,                       // Inspector log output path
+    TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT,    // Track initialization closely
+    TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS,       // Warn on write exceptions
+    TT_METAL_RISCV_DEBUG_INFO,                         // Enable RISC-V debug info
+    TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS,             // Inspector RPC server address (host:port)
+    TT_METAL_INSPECTOR_RPC,                            // Enable/disable inspector RPC server
+    TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT,  // Serialize inspector data on dispatch timeout
 
     // ========================================
     // DEBUG PRINTING (DPRINT)
@@ -775,6 +779,30 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_TRACY_MID_RUN_PUSH=1
         case EnvVarID::TT_METAL_TRACY_MID_RUN_PUSH: this->tracy_mid_run_push = true; break;
 
+        // TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES
+        // Disables dumping collected device data to files.
+        // Default: false (dump to files)
+        // Usage: export TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES=1
+        case EnvVarID::TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES: {
+            // Only disable dumping to files if device profiler is also enabled
+            if (this->profiler_enabled && is_env_enabled(value)) {
+                this->profiler_disable_dump_to_files = true;
+            }
+            break;
+        }
+
+        // TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY
+        // Disables pushing collected device data to Tracy GUI.
+        // Default: false (push to Tracy GUI)
+        // Usage: export TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY=1
+        case EnvVarID::TT_METAL_PROFILER_DISABLE_PUSH_TO_TRACY: {
+            // Only disable pushing to Tracy GUI if device profiler is also enabled
+            if (this->profiler_enabled && is_env_enabled(value)) {
+                this->profiler_disable_push_to_tracy = true;
+            }
+            break;
+        }
+
         // TT_METAL_GTEST_NUM_HW_CQS
         // Number of hardware command queues to use in tests.
         // Default: 1
@@ -802,6 +830,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->timeout_duration_for_operations = std::chrono::duration<float>(timeout_duration);
             break;
         }
+
+        // TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE
+        // Terminal command to execute on dispatch timeout.
+        // Default: "" (no command)
+        // Usage: export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=./tools/tt-triage.py
+        case EnvVarID::TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE:
+            this->dispatch_timeout_command_to_execute = std::string(value);
+            break;
 
         // ========================================
         // WATCHER SYSTEM
@@ -1034,6 +1070,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->inspector_settings.rpc_server_enabled = true;
             if (std::strncmp(value, "0", 1) == 0) {
                 this->inspector_settings.rpc_server_enabled = false;
+            }
+            break;
+
+        // TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT
+        // Enables serialization of inspector state on dispatch timeout. Set to '0' to disable.
+        // Default: true (enabled)
+        // Usage: export TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT=1
+        case EnvVarID::TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT:
+            this->inspector_settings.serialize_on_dispatch_timeout = true;
+            if (std::strncmp(value, "0", 1) == 0) {
+                this->inspector_settings.serialize_on_dispatch_timeout = false;
             }
             break;
 
