@@ -246,6 +246,9 @@ target_link_libraries(
     generate_traffic_tests
     PRIVATE
         generate_traffic_tests_lib
+        generate_mgd_lib
         scaleout_tools
+        protobuf::libprotobuf
+        yaml-cpp::yaml-cpp
         cxxopts::cxxopts
 )
