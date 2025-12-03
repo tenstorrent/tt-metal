@@ -6,7 +6,7 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-namespace operations::data_movement {
+namespace operations::data_movement::transpose {
 
 struct ExecuteTranspose {
     static ttnn::Tensor invoke(
@@ -20,9 +20,9 @@ struct ExecuteTranspose {
         const ttnn::Tensor& input_tensor, int64_t dim1, int64_t dim2, const std::optional<float>& pad_value = 0.0f);
 };
 
-}  // namespace operations::data_movement
+}  // namespace operations::data_movement::transpose
 
 constexpr auto transpose =
-    ttnn::register_operation<"ttnn::transpose", ttnn::operations::data_movement::ExecuteTranspose>();
+    ttnn::register_operation<"ttnn::transpose", ttnn::operations::data_movement::transpose::ExecuteTranspose>();
 
 }  // namespace ttnn

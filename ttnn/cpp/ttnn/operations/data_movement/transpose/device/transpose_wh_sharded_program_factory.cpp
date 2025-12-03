@@ -11,7 +11,7 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::program {
+namespace ttnn::operations::data_movement::transpose::program {
 
 TransposeWHShardedProgramFactory::cached_program_t TransposeWHShardedProgramFactory::create(
     const transpose::operation_attributes_t& operation_attributes,
@@ -221,4 +221,4 @@ void TransposeWHShardedProgramFactory::override_runtime_arguments(
     SetRuntimeArgs(program, shared_variables.writer_kernel_id, cores, unary_writer_args);
 }
 
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::operations::data_movement::transpose::program

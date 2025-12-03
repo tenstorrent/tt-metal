@@ -12,7 +12,7 @@
 
 #include <variant>
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::data_movement::transpose {
 
 struct TransposeDeviceOperation {
     using operation_attributes_t = transpose::operation_attributes_t;
@@ -49,9 +49,9 @@ struct TransposeDeviceOperation {
         const std::optional<float>& pad_value);
 };
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::transpose
 
 namespace ttnn::prim {
-constexpr auto transpose =
-    ttnn::register_operation<"ttnn::prim::transpose", ttnn::operations::data_movement::TransposeDeviceOperation>();
+constexpr auto transpose = ttnn::
+    register_operation<"ttnn::prim::transpose", ttnn::operations::data_movement::transpose::TransposeDeviceOperation>();
 }  // namespace ttnn::prim
