@@ -738,6 +738,8 @@ std::tuple<Conv2dSliceAttr::IOShape, Conv2dSliceAttr::IOShape> Conv2dSliceAttr::
 
 uint32_t Conv2dSliceAttr::get_L1_usage(
     IOShape output_slice_start, IOShape output_slice_end, op_slicing::Op2DSliceConfig slice_config) {
+    // Remove this->conv_config from scope so that for each slice, conv_config can be calculated independently.
+    auto conv_config = this->conv_config;
     auto weights_datatype = conv_config.weights_dtype.value_or(weight_tensor.dtype());
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     TT_FATAL(!mm_conv, "Conv2D DRAM with matmul should never use the slicing code path.");
