@@ -9,7 +9,15 @@ import pytest
 from tests.nightly.t3000.ccl.test_ring_joint_attention import run_ring_joint_sdpa, create_ring_joint_sdpa_submesh
 
 
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize(
+    "dtype, pcc_threshold",
+    [
+        (ttnn.bfloat16, 0.994),
+        (ttnn.bfloat8_b, 0.944),
+        (ttnn.bfloat4_b, 0.8),
+    ],
+    ids=["bf16", "bf8_b", "bf4_b"],
+)
 @pytest.mark.parametrize(
     "b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size",
     [
@@ -76,6 +84,7 @@ def test_ring_joint_sdpa(
     up_axis,
     up_factor,
     all_gather_topology,
+    pcc_threshold,
 ):
     mesh_device_shape = list(mesh_device.shape)
     assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
@@ -101,10 +110,19 @@ def test_ring_joint_sdpa(
         rp_axis,
         up_axis,
         all_gather_topology,
+        pcc_threshold,
     )
 
 
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize(
+    "dtype, pcc_threshold",
+    [
+        (ttnn.bfloat16, 0.994),
+        (ttnn.bfloat8_b, 0.944),
+        (ttnn.bfloat4_b, 0.8),
+    ],
+    ids=["bf16", "bf8_b", "bf4_b"],
+)
 @pytest.mark.parametrize(
     "b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size",
     [
@@ -159,6 +177,7 @@ def test_ring_joint_sdpa_program_cache(
     up_axis,
     up_factor,
     all_gather_topology,
+    pcc_threshold,
 ):
     mesh_device_shape = list(mesh_device.shape)
     assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
@@ -195,6 +214,7 @@ def test_ring_joint_sdpa_program_cache(
             rp_axis,
             up_axis,
             all_gather_topology,
+            pcc_threshold,
         )
 
     assert submesh.num_program_cache_entries() == 1
