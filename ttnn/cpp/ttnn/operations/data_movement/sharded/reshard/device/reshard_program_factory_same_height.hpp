@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/sharded/reshard/device/reshard_device_operation_types.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::data_movement::reshard::program {
 

@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/sharded/reshard/device/reshard_program_factory_same_height.hpp"
+#include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;

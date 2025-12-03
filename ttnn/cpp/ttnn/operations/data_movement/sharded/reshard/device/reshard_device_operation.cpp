@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/sharded/reshard/device/reshard_device_operation.hpp"
-
-#include <enchantum/enchantum.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/data_movement/common/common.hpp"
+
+#include <enchantum/enchantum.hpp>
 
 using namespace tt::tt_metal;
 
