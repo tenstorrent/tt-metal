@@ -186,13 +186,12 @@ RotaryEmbeddingLlamaFusedQKProgramFactory::cached_program_t RotaryEmbeddingLlama
         cos_interm_cb_index,
         sin_interm_cb_index,
     };
-    const std::string compute_kernel_path = operation_attributes.row_major_QK
-                                                ? "ttnn/cpp/ttnn/operations/experimental/transformer/"
-                                                  "rotary_embedding_llama_fused_qk/device/kernels/compute/"
-                                                  "rotary_embedding_llama_sharded_row_major.cpp"
-                                                : "ttnn/cpp/ttnn/operations/experimental/transformer/"
-                                                  "rotary_embedding_llama_fused_qk/device/kernels/compute/"
-                                                  "rotary_embedding_llama_sharded.cpp";
+    const std::string compute_kernel_path =
+        operation_attributes.row_major_QK
+            ? "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/kernels/"
+              "compute/rotary_embedding_llama_sharded_row_major.cpp"
+            : "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/kernels/"
+              "compute/rotary_embedding_llama_sharded.cpp";
     auto rotary_embedding_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_path,
@@ -218,6 +217,7 @@ RotaryEmbeddingLlamaFusedQKProgramFactory::cached_program_t RotaryEmbeddingLlama
         .cb_q_output = cb_q_output,
         .cb_k_output = cb_k_output};
 
+    // NOLINTNEXTLINE(performance-move-const-arg): CachedProgram ctor requires rvalue reference
     return cached_program_t{std::move(program), std::move(shared_variables)};
 }
 
