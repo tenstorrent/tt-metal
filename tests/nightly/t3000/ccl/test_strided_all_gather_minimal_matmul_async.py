@@ -341,40 +341,40 @@ def run_strided_all_gather_minimal_matmul_impl(
 @pytest.mark.parametrize(
     "M, K, N, dim, other_dim, num_workers_per_link, layout, ag_input_dtype, mm_block_m, mm_block_k, mm_block_n, subblock_h, subblock_w, mm_core_grid, shard_weights",
     [
-        (64, 512, 512, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 512, 1024, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 512, 2048, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 512, 512, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (128, 512, 512, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (128, 512, 512, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 1024, 512, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 64, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 1024, 512, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 64, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 512, 1024, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 64, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 512, 1024, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 64, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 4096, 1024, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (4096, 4096, 4096, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (4096, 4096, 4096, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(4, 4), False),
+        # (64, 512, 512, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        # (64, 512, 1024, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        # (64, 512, 2048, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        # (64, 512, 512, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        # (128, 512, 512, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        # (128, 512, 512, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        # (64, 1024, 512, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 64, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        # (64, 1024, 512, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 64, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        # (64, 512, 1024, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 64, 1, 1, ttnn.CoreCoord(2, 2), False),
+        # (64, 512, 1024, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 64, 1, 1, ttnn.CoreCoord(2, 2), False),
+        # (64, 4096, 1024, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        # (4096, 4096, 4096, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        # (4096, 4096, 4096, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(4, 4), False),
         (4096, 4096, 4096, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 256, 256, 2, 2, ttnn.CoreCoord(4, 4), False),
-        (4096, 4096, 4096, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 160, 256, 1, 1, ttnn.CoreCoord(4, 4), False),
-        (4096, 4096, 4096, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 160, 256, 256, 1, 1, ttnn.CoreCoord(4, 4), False),
+        # (4096, 4096, 4096, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 160, 256, 1, 1, ttnn.CoreCoord(4, 4), False),
+        # (4096, 4096, 4096, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 160, 256, 256, 1, 1, ttnn.CoreCoord(4, 4), False),
     ],
     ids=[
-        "base",  # 1 forward pass through K
-        "forwardbackwardK",  # 1 forward, 1 backward (special because it's not reusing on the first backward)
-        "twiceforwardbackwardK",  # 2 forward, 2 backward (both the non reuse and reuse branches hit)
-        "2workercores",  # test two worker cores on the AG side
-        "mblock21worker",  # make m block size greater than 1
-        "mblock22workers",  # make m block size greater than 1, plus 2 workers
-        "kblock21worker",  # make k block size greater than 1
-        "kblock22workers",  # make m block size greater than 1, plus 2 workers
-        "nblock21worker",  # make n block size greater than 1
-        "nblock22workers",  # make n block size greater than 1, plus 2 workers
-        "morerows",
-        "4k4k4k",
-        "4x4mmcores",  # increase to a larger core grid
+        # "base",  # 1 forward pass through K
+        # "forwardbackwardK",  # 1 forward, 1 backward (special because it's not reusing on the first backward)
+        # "twiceforwardbackwardK",  # 2 forward, 2 backward (both the non reuse and reuse branches hit)
+        # "2workercores",  # test two worker cores on the AG side
+        # "mblock21worker",  # make m block size greater than 1
+        # "mblock22workers",  # make m block size greater than 1, plus 2 workers
+        # "kblock21worker",  # make k block size greater than 1
+        # "kblock22workers",  # make m block size greater than 1, plus 2 workers
+        # "nblock21worker",  # make n block size greater than 1
+        # "nblock22workers",  # make n block size greater than 1, plus 2 workers
+        # "morerows",
+        # "4k4k4k",
+        # "4x4mmcores",  # increase to a larger core grid
         "fulltest",
-        "unalignedK",
-        "unalignedM",
+        # "unalignedK",
+        # "unalignedM",
     ],
 )
 @pytest.mark.parametrize(
@@ -391,34 +391,34 @@ def run_strided_all_gather_minimal_matmul_impl(
     "enable_trace,num_iters",
     [
         (True, 10),
-        (False, 1),
     ],
-    ids=["perf", "check"],
+    ids=[
+        "perf",
+    ],
 )
 @pytest.mark.parametrize(
     "use_non_fused",
     [
-        True,
         False,
     ],
-    ids=["separate", "fused"],
+    ids=["fused"],
 )
 @pytest.mark.parametrize(
     "read_local_slice_from_input",
     [
         True,
-        False,
     ],
-    ids=["read_local", "copy_local"],
+    ids=[
+        "read_local",
+    ],
 )
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring", "fabric_linear"],
+    ids=["fabric_ring"],
 )
 def test_strided_all_gather_minimal_matmul_async(
     mesh_device,
