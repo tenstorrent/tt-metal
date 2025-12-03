@@ -66,10 +66,10 @@ const uint32_t NOC_RET_ADDR_COORDINATE = NOC_RET_ADDR_HI;
 const uint32_t NOC_COORDINATE_MASK = 0xFFFFFF;
 
 // ToDo check with Keranous if this is correct
-constexpr uint32_t NOC_PCIE_MASK = 0x0000FFFF;
+constexpr uint32_t NOC_PCIE_MASK = 0x1000000F;
 
 constexpr uint32_t WRITE_RESPONSE_STATIC_VC = 14;
-constexpr uint32_t READ_RESPONSE_STATIC_VC = 15;
+constexpr uint32_t READ_RESPONSE_STATIC_VC = 12;
 
 extern uint32_t noc_reads_num_issued[NUM_NOCS];
 extern uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
@@ -269,7 +269,8 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     }
     uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_STATIC_VC(vc) |
                              NOC_RESP_STATIC_VC(WRITE_RESPONSE_STATIC_VC) | (linked ? NOC_CMD_VC_LINKED : 0x0) |
-                             (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0) | NOC_CMD_RESP_MARKED;
+                             (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0) |
+                             (posted ? 0x0 : NOC_CMD_RESP_MARKED);
 
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_cmd_field);
 
@@ -795,7 +796,7 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
         cmd_buf,
         NOC_CTRL_LO,
         NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | (linked ? NOC_CMD_VC_LINKED : 0x0) |
-            (posted ? 0 : NOC_CMD_RESP_MARKED) | NOC_CMD_AT);
+            (posted ? 0 : NOC_CMD_RESP_MARKED) | NOC_CMD_AT | NOC_RESP_STATIC_VC(READ_RESPONSE_STATIC_VC));
     NOC_CMD_BUF_WRITE_REG(
         noc,
         cmd_buf,
@@ -883,13 +884,13 @@ inline __attribute__((always_inline)) void ncrisc_noc_read_set_state(
     while (!noc_cmd_buf_ready(noc, cmd_buf));
 
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        uint32_t noc_rd_cmd_field =
-            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+        uint32_t noc_rd_cmd_field = NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC |
+                                    NOC_CMD_STATIC_VC(1) | NOC_RESP_STATIC_VC(READ_RESPONSE_STATIC_VC);
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_rd_cmd_field);
     }
     if constexpr (use_vc) {
-        uint32_t noc_rd_cmd_field =
-            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc);
+        uint32_t noc_rd_cmd_field = NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC |
+                                    NOC_CMD_STATIC_VC(vc) | NOC_RESP_STATIC_VC(READ_RESPONSE_STATIC_VC);
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_rd_cmd_field);
     }
     // Handles reading from PCIe
@@ -1012,11 +1013,9 @@ template <bool posted = false, bool one_packet = false>
 inline __attribute__((always_inline)) void ncrisc_noc_write_set_state(
     uint32_t noc, uint32_t cmd_buf, uint64_t dst_noc_addr, uint32_t len_bytes = 0, const uint32_t vc = 0) {
     while (!noc_cmd_buf_ready(noc, cmd_buf));
-
     uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
-                             NOC_RESP_STATIC_VC(WRITE_RESPONSE_STATIC_VC) | 0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
-                             0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
-                             (!posted ? NOC_CMD_RESP_MARKED : 0x0);
+                             NOC_RESP_STATIC_VC(WRITE_RESPONSE_STATIC_VC) | 0x0 | 0x0 |
+                             (posted ? 0x0 : NOC_CMD_RESP_MARKED);
 
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_cmd_field);
     // Handles writing to PCIe
@@ -1360,8 +1359,8 @@ enum CQNocSend {
 // clang-format on
 template <uint32_t cmd_buf>
 inline __attribute__((always_inline)) void noc_read_init_state(uint32_t noc) {
-    uint32_t noc_rd_cmd_field =
-        NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+    uint32_t noc_rd_cmd_field = NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC |
+                                NOC_CMD_STATIC_VC(1) | NOC_RESP_STATIC_VC(READ_RESPONSE_STATIC_VC);
 
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_rd_cmd_field);
 }
