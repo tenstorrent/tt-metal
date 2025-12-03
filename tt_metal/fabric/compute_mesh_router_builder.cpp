@@ -101,7 +101,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         get_child_builder_variant_sender_channel_injection_flags(router_injection_flags, erisc_to_router_channel_map);
 
     std::vector<bool> tensix_injection_flags;
-    if (will_create_tensix_builder) {
+    if (downstream_is_tensix_builder) {
         size_t tensix_num_channels = builder_config::get_num_tensix_sender_channels(topology, fabric_tensix_config);
         auto tensix_to_router_channel_map =
             get_variant_to_router_channel_map(channel_mapping, BuilderType::TENSIX, tensix_num_channels);

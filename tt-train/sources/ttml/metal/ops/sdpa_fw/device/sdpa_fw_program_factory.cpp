@@ -8,7 +8,7 @@
 #include <cmath>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include "metal/ops/common/program_utils.hpp"
+#include "metal/common/program_utils.hpp"
 
 namespace {
 
