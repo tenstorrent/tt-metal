@@ -66,11 +66,14 @@ def calculate_key_values(config, key_value_states, *, parameters):
     bsz, tgt_len, hidden_size = key_value_states.shape
     head_size = hidden_size // config.encoder_attention_heads
 
+    compute_grid_size = key_value_states.device().compute_with_storage_grid_size()
+    core_grid = ttnn.CoreGrid(y=compute_grid_size.y, x=compute_grid_size.x)
     key_value_states = ttnn.to_memory_config(key_value_states, ttnn.L1_MEMORY_CONFIG)
     fused_kv = ttnn.linear(
         key_value_states,
         parameters.key_value.weight,
         bias=parameters.key_value.bias,
+        core_grid=core_grid,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn.deallocate(key_value_states)
