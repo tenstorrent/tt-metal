@@ -1395,6 +1395,11 @@ Matmul create_matmul_struct(
     bool are_inputs_32F = (input_tensor_a.dtype() == DataType::FLOAT32 && input_tensor_b.dtype() == DataType::FLOAT32);
     math_fidelity = are_inputs_32F ? MathFidelity::HiFi4 : math_fidelity;
 
+    std::cout << "KCM create_matmul_struct. math_fidelity: " << math_fidelity << " increase_fidelity: " << increase_fidelity;
+    // std::cout << " has_user_grid: " << has_user_grid << " has_program_config: " << has_program_config;
+    std::cout << " are_inputs_low_precision_df: " << are_inputs_low_precision_df << " are_inputs_32F: " << are_inputs_32F;
+    std::cout << " input_tensor_a.dtype(): " << input_tensor_a.dtype() << " input_tensor_b.dtype(): " << input_tensor_b.dtype() << std::endl;
+
     bool broadcast_batch =
         parameters.bcast_batch.value_or(get_broadcast_batch(input_tensor_a, input_tensor_b, parameters.program_config));
     TT_FATAL(!(has_user_grid && has_program_config), "Cannot use both user core grid/coordinates and a program config");
@@ -1439,6 +1444,21 @@ Matmul create_matmul_struct(
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/is_float_32,
         /*default_l1_acc=*/!is_float_32);
+
+    // Print the kernel_config_val fields for debug now:
+    if (const auto* wh = std::get_if<::ttnn::WormholeComputeKernelConfig>(&kernel_config_val)) {
+        std::cout << std::boolalpha
+                  << "KCM create_matmul_struct."
+                  << " has_compute_kernel_config:" << (bool) parameters.compute_kernel_config.has_value()
+                  << " math_fidelity:" << wh->math_fidelity
+                  << " math_approx_mode:" << wh->math_approx_mode
+                  << " fp32_dest_acc_en:" << wh->fp32_dest_acc_en
+                  << " packer_l1_acc:" << wh->packer_l1_acc
+                  << " dst_full_sync_en:" << wh->dst_full_sync_en
+                  << " throttle_level:" << static_cast<int>(wh->throttle_level)
+                  << std::endl;
+    }
+
     auto in0_tile = input_tensor_a.tensor_spec().tile();
     auto in1_tile = input_tensor_b.tensor_spec().tile();
 
@@ -1479,6 +1499,7 @@ Tensor matmul(
         optional_input_tensors.push_back(std::nullopt);
     }
 
+    std::cout << "KCM inside matmul before operation::run() and create_matmul_struct()" << std::endl;
     return operation::run(
                create_matmul_struct(input_tensor_a, input_tensor_b, parameters, {optional_output_tensor}),
                {input_tensor_a, input_tensor_b},
