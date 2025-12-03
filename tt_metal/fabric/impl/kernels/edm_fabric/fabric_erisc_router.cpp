@@ -309,8 +309,7 @@ static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_fr
     tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id,
     sender_channel_1_free_slots_stream_id,
     sender_channel_2_free_slots_stream_id,
-    sender_channel_3_free_slots_stream_id,
-    sender_channel_4_free_slots_stream_id};
+    sender_channel_3_free_slots_stream_id};
 static_assert(sender_channel_free_slots_stream_ids[0] == 17);
 static_assert(sender_channel_free_slots_stream_ids[1] == 18);
 static_assert(sender_channel_free_slots_stream_ids[2] == 19);
@@ -385,13 +384,11 @@ constexpr auto get_sender_channel_turn_statuses() -> std::array<bool, MAX_NUM_SE
     if constexpr (!is_spine_direction(static_cast<eth_chan_directions>(my_direction))) {
         // Check each sender channel (1-3) to see if it goes to a spine direction (NORTH/SOUTH)
         // Sender channel i (for i=1,2,3) corresponds to compact index (i-1)
-        for (size_t sender_channel = 1; sender_channel < MAX_NUM_SENDER_CHANNELS - 1; sender_channel++) {
+        for (size_t sender_channel = 1; sender_channel < MAX_NUM_SENDER_CHANNELS; sender_channel++) {
             size_t compact_index = sender_channel - 1;
             eth_chan_directions actual_direction = map_compact_index_to_direction(compact_index);
             turn_statuses[sender_channel] = is_spine_direction(actual_direction);
         }
-        // this is to ignore the dateline vc for the turn status calculation.
-        turn_statuses[MAX_NUM_SENDER_CHANNELS - 1] = false;
     }
 
     return turn_statuses;
@@ -1247,9 +1244,6 @@ FORCE_INLINE void update_telemetry(
 
     bool sender_idle = !any_sender_channels_active(local_sender_channel_free_slots_stream_ids_ordered);
     bool receiver_idle = (get_ptr_val<to_receiver_packets_sent_streams[0]>() == 0);
-    if constexpr (enable_deadlock_avoidance && !skip_receiver_channel_1_connection) {
-        receiver_idle = receiver_idle && (get_ptr_val<to_receiver_packets_sent_streams[1]>() == 0);
-    }
 
     {  // heartbeat update
         volatile RiscTimestampV2* tx_heartbeat_addr = &fabric_telemetry->dynamic_info.erisc[MY_ERISC_ID].tx_heartbeat;
@@ -2153,7 +2147,6 @@ void kernel_main() {
     // We make sure to do this before we handshake to guarantee that the registers are
     // initialized before the other side has any possibility of modifying them.
     init_ptr_val<to_receiver_packets_sent_streams[0]>(0);
-    init_ptr_val<to_receiver_packets_sent_streams[1]>(0);
     init_ptr_val<to_sender_packets_acked_streams[0]>(0);
     init_ptr_val<to_sender_packets_acked_streams[1]>(0);
     init_ptr_val<to_sender_packets_acked_streams[2]>(0);
@@ -2175,11 +2168,8 @@ void kernel_main() {
 
     if constexpr (is_2d_fabric) {
         init_ptr_val<sender_channel_free_slots_stream_ids[3]>(SENDER_NUM_BUFFERS_ARRAY[3]);  // Compact index 2
-        init_ptr_val<sender_channel_free_slots_stream_ids[4]>(SENDER_NUM_BUFFERS_ARRAY[4]);  // VC1
         init_ptr_val<to_sender_packets_acked_streams[3]>(0);
-        init_ptr_val<to_sender_packets_acked_streams[4]>(0);
         init_ptr_val<to_sender_packets_completed_streams[3]>(0);
-        init_ptr_val<to_sender_packets_completed_streams[4]>(0);
     }
 
     if constexpr (code_profiling_enabled_timers_bitfield != 0) {
@@ -2204,12 +2194,10 @@ void kernel_main() {
     const size_t local_sender_channel_1_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_2_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_3_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
-    const size_t local_sender_channel_4_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_0_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_1_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_2_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_3_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
-    const size_t local_sender_channel_4_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
 
     // downstream EDM VC0 connection info
     const auto has_downstream_edm_vc0_buffer_connection = get_arg_val<uint32_t>(arg_idx++);
@@ -2250,16 +2238,6 @@ void kernel_main() {
     // unused - to be deleted
     [[maybe_unused]]
     const auto downstream_vc0_noc_interface_buffer_index_local_addr = 0;
-
-    // downstream EDM semaphore location
-    [[maybe_unused]] const auto has_downstream_edm_vc1_buffer_connection = get_arg_val<uint32_t>(arg_idx++);
-    [[maybe_unused]] const auto downstream_edm_vc1_buffer_base_address = get_arg_val<uint32_t>(arg_idx++);
-    [[maybe_unused]] const auto downstream_edm_vc1_noc_x = get_arg_val<uint32_t>(arg_idx++);
-    [[maybe_unused]] const auto downstream_edm_vc1_noc_y = get_arg_val<uint32_t>(arg_idx++);
-
-    [[maybe_unused]] const auto downstream_edm_vc1_worker_registration_id = get_arg_val<uint32_t>(arg_idx++);
-    [[maybe_unused]] const auto downstream_edm_vc1_worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
-    [[maybe_unused]] const auto downstream_edm_vc1_buffer_index_semaphore_address = get_arg_val<uint32_t>(arg_idx++);
 
     const auto my_sem_for_teardown_from_edm_0 = get_arg_val<uint32_t>(arg_idx++);
     const auto my_sem_for_teardown_from_edm_1 = get_arg_val<uint32_t>(arg_idx++);
@@ -2322,7 +2300,6 @@ void kernel_main() {
             *reinterpret_cast<volatile uint32_t*>(local_sender_channel_3_connection_buffer_index_id) = 0;
             *sender3_worker_semaphore_ptr = 0;
         }
-        static_assert(is_sender_channel_serviced[4] == false, "Sender channel 4 should not be serviced");
     }
     *edm_status_ptr = tt::tt_fabric::EDMStatus::STARTED;
 
@@ -2347,7 +2324,6 @@ void kernel_main() {
                 my_sem_for_teardown_from_edm_1,
                 my_sem_for_teardown_from_edm_2,
                 my_sem_for_teardown_from_edm_3,
-                0  // DELETEME Issue #33360 my_sem_for_teardown_from_edm_4});
             });
 
     // create the remote receiver channel buffers using multi-pool system
@@ -2377,16 +2353,14 @@ void kernel_main() {
                 local_sender_channel_0_connection_semaphore_addr,
                 local_sender_channel_1_connection_semaphore_addr,
                 local_sender_channel_2_connection_semaphore_addr,
-                local_sender_channel_3_connection_semaphore_addr,
-                local_sender_channel_4_connection_semaphore_addr});  // DELETEME Issue #33360
+                local_sender_channel_3_connection_semaphore_addr});
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_connection_info_addresses =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
             std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
                 local_sender_channel_0_connection_info_addr,
                 local_sender_channel_1_connection_info_addr,
                 local_sender_channel_2_connection_info_addr,
-                local_sender_channel_3_connection_info_addr,
-                local_sender_channel_4_connection_info_addr});  // DELETEME Issue #33360
+                local_sender_channel_3_connection_info_addr});
 
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
         auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
