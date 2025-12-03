@@ -414,7 +414,7 @@ def _generate_with_temperature(
     # Run prefill pass for KV cache mode to populate cache with prompt context
     # Process all but the last prefix token; the last one will be handled by the generation loop
     # to avoid processing the same token twice with different position embeddings
-    if kv_cache and prefix_len > 1:
+    if kv_cache and prompt is not None and prefix_len > 1:
         logger.debug(f"Running prefill pass for {prefix_len - 1} prefix tokens (out of {prefix_len})")
         # Process prefix tokens except the last one
         for prefill_pos in range(prefix_len - 1):
@@ -459,7 +459,7 @@ def _generate_with_temperature(
         input_ids = input_ids[:, -2:-1]
         logger.debug(f"Prefill complete, starting generation from position {prefix_len - 1}")
     else:
-        # Initial decode position for non-KV-cache mode or empty prefix
+        # Initial decode position for non-KV-cache mode or no prompt
         current_decode_pos = (
             ttnn.from_torch(
                 torch.zeros(unpadded_batch_size), device=mesh_device, dtype=ttnn.int32, mesh_mapper=input_mesh_mapper
@@ -467,10 +467,15 @@ def _generate_with_temperature(
             if kv_cache
             else None
         )
+        # For KV cache mode without prefill, start with just the first token
+        if kv_cache:
+            input_ids = input_ids[:, :1]
 
-    # Generation loop - start from one position before transcription_start_pos to process the last prefix token
-    # (prefill only processes up to prefix_len-2, so generation handles prefix_len-1 onwards)
-    generation_start = (transcription_start_pos - 1) if kv_cache else 0
+    # Generation loop start: if prefill ran, start from last prefix position; otherwise start from 0
+    if kv_cache and prompt is not None:
+        generation_start = transcription_start_pos - 1
+    else:
+        generation_start = 0
     for i in tqdm(range(generation_start, MAX_GEN_LEN), desc=f"Decode inference iterations (temp={temperature})"):
         start_iter = time.time()
 
