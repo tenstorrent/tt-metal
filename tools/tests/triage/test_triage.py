@@ -64,7 +64,7 @@ def cause_hang_with_app(request):
             raise RuntimeError("The application did not hang as expected.")
     else:
         time.sleep(timeout)
-        # Pytest will only print the output if the test fails, so we print can always print it here
+        # Pytest will only print the output if the test fails, so we can always print it here
         print_process_output(proc)
 
     request.cls.app_configuration = app_configuration
