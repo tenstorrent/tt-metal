@@ -234,9 +234,9 @@ void SplitProgramFactory::override_runtime_arguments(
     const auto& start_core_x = cached_program.shared_variables.start_core_x;
     const auto& start_core_y = cached_program.shared_variables.start_core_y;
 
-    auto src_dram_buffer = tensor_args.input.buffer();
-    auto dst_0_dram_buffer = output_tensors.at(0).buffer();
-    auto dst_1_dram_buffer = output_tensors.at(1).buffer();
+    auto* src_dram_buffer = tensor_args.input.buffer();
+    auto* dst_0_dram_buffer = output_tensors.at(0).buffer();
+    auto* dst_1_dram_buffer = output_tensors.at(1).buffer();
 
     for (int core_idx_y = 0; core_idx_y < num_cores_c; core_idx_y++) {
         for (int core_idx_x = 0; core_idx_x < num_cores_r; core_idx_x++) {

@@ -121,13 +121,13 @@ const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
 
 uint16_t get_bus_id(tt::umd::Cluster& cluster, ChipId chip_id) {
     // Prefer cached value from cluster descriptor (available for silicon and our simulator/mock descriptors)
-    auto cluster_desc = cluster.get_cluster_description();
+    auto* cluster_desc = cluster.get_cluster_description();
     uint16_t bus_id = cluster_desc->get_bus_id(chip_id);
     return bus_id;
 }
 
 UbbId get_ubb_id(tt::umd::Cluster& cluster, ChipId chip_id) {
-    auto cluster_desc = cluster.get_cluster_description();
+    auto* cluster_desc = cluster.get_cluster_description();
     const auto& tray_bus_ids = ubb_bus_ids.at(cluster_desc->get_arch());
     const auto bus_id = get_bus_id(cluster, chip_id);
     auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
@@ -1157,6 +1157,7 @@ eth_chan_directions ControlPlane::routing_direction_to_eth_direction(RoutingDire
         case RoutingDirection::S: dir = eth_chan_directions::SOUTH; break;
         case RoutingDirection::E: dir = eth_chan_directions::EAST; break;
         case RoutingDirection::W: dir = eth_chan_directions::WEST; break;
+        case RoutingDirection::Z: return static_cast<eth_chan_directions>(eth_chan_magic_values::INVALID_DIRECTION);
         default: TT_FATAL(false, "Invalid Routing Direction");
     }
     return dir;
@@ -1767,7 +1768,7 @@ void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabri
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
     auto active_ethernet_cores = this->get_active_ethernet_cores(physical_chip_id);
 
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto& factory = hal.get_fabric_telemetry_factory(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
 
     auto telemetry = factory.create<::tt::tt_fabric::fabric_telemetry::FabricTelemetryStaticOnly>();
@@ -2093,8 +2094,8 @@ void fill_connection_info_fields(
     const FabricEriscDatamoverConfig& config,
     uint32_t sender_channel,
     uint16_t worker_free_slots_stream_id) {
-    auto channel_allocator = config.channel_allocator.get();
-    const auto static_channel_allocator =
+    auto* channel_allocator = config.channel_allocator.get();
+    auto* const static_channel_allocator =
         dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
     TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
     connection_info.edm_noc_x = static_cast<uint8_t>(virtual_core.x);
@@ -2145,11 +2146,8 @@ void ControlPlane::populate_fabric_connection_info(
 
     const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     // Always populate fabric router config for normal workers
-    const auto& edm_config = fabric_context.get_fabric_router_config(
-        tt::tt_fabric::FabricEriscDatamoverType::Default,
-        tt::tt_fabric::FabricEriscDatamoverAxis::Short,
-        fabric_tensix_config,
-        static_cast<eth_chan_directions>(sender_channel));
+    const auto& edm_config =
+        fabric_context.get_fabric_router_config(fabric_tensix_config, static_cast<eth_chan_directions>(sender_channel));
     CoreCoord fabric_router_virtual_core = cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_channel_id);
 
     fill_connection_info_fields(
@@ -2174,9 +2172,7 @@ void ControlPlane::populate_fabric_connection_info(
         auto core_id = tensix_config.get_core_id_for_channel(physical_chip_id, eth_channel_id);
         // In UDM mode, get the first channel for worker connection for now.
         // TODO: have a vector of worker channels based on the current core and connected eth_channel_id
-        uint32_t tensix_sender_channel = (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM)
-                                             ? static_cast<uint32_t>(UdmMuxChannelId::WORKER_CHANNEL_BASE)
-                                             : sender_channel;
+        uint32_t tensix_sender_channel = sender_channel;
 
         fill_tensix_connection_info_fields(
             tensix_connection_info, mux_core_virtual, tensix_config, tensix_sender_channel, core_id);
@@ -2309,10 +2305,22 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
         auto exit_node_hash = (*exit_node.src_exit_node) + (*exit_node.dst_exit_node);
         auto src_eth_chan = exit_node.eth_conn.src_chan;
         auto exit_node_chip = exit_node_fabric_node_id.chip_id;
+
+        // Check if this is BLACKHOLE and channel 8 or 9, which should use Z direction
+        const auto& chip_spec = this->mesh_graph_->get_chip_spec();
+        bool is_blackhole_z_channel =
+            (chip_spec.arch == tt::ARCH::BLACKHOLE) && (src_eth_chan == 8 || src_eth_chan == 9);
+
         for (const auto& [port_id, chip_id] : mesh_edge_ports_to_chip_id[*my_mesh_id]) {
             if (exit_node_chip == chip_id) {
                 auto port_direction = port_id.first;
                 auto logical_chan_id = port_id.second;
+
+                // If this is a Z channel on BLACKHOLE, prefer Z direction ports
+                if (is_blackhole_z_channel && port_direction != RoutingDirection::Z) {
+                    continue;
+                }
+
                 port_id_t port_id = {port_direction, logical_chan_id};
                 // Assign this port id to the exit node if it is not already assigned
                 bool valid_direction =
@@ -2321,9 +2329,11 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
                 if (assigned_port_ids.find(port_id) == assigned_port_ids.end() && valid_direction) {
                     assigned_port_ids.insert(port_id);
                     ports_to_neighbor.push_back(PortDescriptor{port_id, assoc_connection_hash});
-                    exit_node_directions_[exit_node_fabric_node_id][src_eth_chan] = port_direction;
+                    // Override direction to Z if this is a Z channel on BLACKHOLE
+                    RoutingDirection final_direction = is_blackhole_z_channel ? RoutingDirection::Z : port_direction;
+                    exit_node_directions_[exit_node_fabric_node_id][src_eth_chan] = final_direction;
                     logical_port_to_eth_chan_[exit_node_fabric_node_id][port_id] = src_eth_chan;
-                    curr_exit_node_direction[exit_node_hash] = port_direction;
+                    curr_exit_node_direction[exit_node_hash] = final_direction;
                     break;
                 }
             }
@@ -2812,7 +2822,7 @@ void ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
         all_hostnames,
         gsd_yaml,
         false,  // strict_validation
-        false   // assert_on_connection_mismatch
+        true    // assert_on_connection_mismatch
     );
 
     log_debug(tt::LogFabric, "Torus validation passed for configuration: {}", enchantum::to_string(fabric_config));
@@ -2838,7 +2848,7 @@ std::string ControlPlane::get_galaxy_cabling_descriptor_path(tt::tt_fabric::Fabr
          {FabricType::TORUS_Y, Y_TORUS_PATH},
          {FabricType::TORUS_XY, XY_TORUS_PATH}}};
 
-    auto it = std::find_if(
+    const auto* it = std::find_if(
         cabling_map.begin(), cabling_map.end(), [fabric_type](const auto& pair) { return pair.first == fabric_type; });
     TT_FATAL(it != cabling_map.end(), "Unknown torus configuration: {}", enchantum::to_string(fabric_config));
 

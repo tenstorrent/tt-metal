@@ -395,7 +395,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
             core_index_offset += num_cores_per_batch * num_cores_per_group;
         }
     }
-    for ([[maybe_unused]] auto& coord : mcast_sender_core_ranges) {
+    for ([[maybe_unused]] const auto& coord : mcast_sender_core_ranges) {
         log_debug(tt::LogOp, "mcast sender coord: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -404,7 +404,7 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
             mcast_receiver_core_ranges.insert(CoreRange(core_coords[i]));
         }
     }
-    for ([[maybe_unused]] auto& coord : mcast_receiver_core_ranges) {
+    for ([[maybe_unused]] const auto& coord : mcast_receiver_core_ranges) {
         log_debug(tt::LogOp, "mcast receiver coord: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
     CoreRangeSet mcast_sender_cores = CoreRangeSet(mcast_sender_core_ranges);
@@ -1049,8 +1049,8 @@ void GroupNormShardedProgramFactory::override_runtime_arguments(
     const auto& input = tensor_args.input;
     auto& output = tensor_return_value;
 
-    auto src_buffer = input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
 
     UpdateDynamicCircularBufferAddress(program, shared_vars.cb_in0, *src_buffer);
     if (shared_vars.cb_output != shared_vars.cb_in0) {
