@@ -5,6 +5,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include <map>
 #include <set>
@@ -105,6 +106,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
         } else {
             core = {i / num_cores_y, i % num_cores_y};
         }
+        log_debug(tt::LogOp, "core: {}", core);
 
         height += shard_height;
 
@@ -202,11 +204,13 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
                 non_repeat_noc_x_values.push_back(read_cores_noc_x[k]);
                 non_repeat_noc_y_values.push_back(read_cores_noc_y[k]);
             }
-        } else {
+        } else {  // contains multiple H blocks
             std::set<uint32_t> unique_values(read_cores_indices.begin(), read_cores_indices.end());
             num_non_repeat_cores = unique_values.size();
             read_stick_stride = read_stick_offset[1] - read_stick_offset[0];
 
+            // TODO: add the second batch args (num_non_repeat_cores, read_stick_offset, non_repeat_noc_x_values,
+            // non_repeat_noc_y_values) to support multiple batch in a shard
             for (uint32_t k = 1; k < num_sticks_per_core; ++k) {
                 if ((read_cores_indices[k - 1] == read_cores_indices[k]) &&
                     (read_stick_offset[k] == read_stick_offset[k - 1] + stick_size_bytes)) {
@@ -304,6 +308,10 @@ TransposeHCShardedProgramFactory::cached_program_t TransposeHCShardedProgramFact
 
     auto& all_cores = shard_spec.grid;
     uint32_t num_cores = shard_spec.num_cores();
+
+    log_debug(tt::LogOp, "all_cores: {}", all_cores);
+    log_debug(tt::LogOp, "num_cores: {}", num_cores);
+
     auto bbox = shard_spec.grid.bounding_box();
     CoreCoord grid_size = {bbox.end_coord.x + 1, bbox.end_coord.y + 1};
     uint32_t num_cores_x = grid_size.x;
