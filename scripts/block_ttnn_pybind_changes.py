@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Sequence
 
 
-FREEZE_MESSAGE = "Legacy pybind11 bindings are deprecated use nanobind bindings."
+FREEZE_MESSAGE = "Legacy pybind11 bindings are deprecated. Use nanobind bindings."
 PYBIND_TOKEN = "pybind"
 
 
