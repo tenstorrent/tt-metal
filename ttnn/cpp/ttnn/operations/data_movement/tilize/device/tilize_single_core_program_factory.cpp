@@ -24,7 +24,7 @@ TilizeSingleCoreProgramFactory::cached_program_t TilizeSingleCoreProgramFactory:
     tt::tt_metal::Program program{};
 
     auto a = tensor_args.input_tensor;
-    auto output = tensor_return_value;
+    const auto& output = tensor_return_value;
 
     CoreRange core({0, 0}, {0, 0});
 
