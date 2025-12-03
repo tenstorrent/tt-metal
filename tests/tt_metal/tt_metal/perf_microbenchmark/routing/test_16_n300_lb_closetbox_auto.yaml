@@ -1,0 +1,166 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Auto-generated traffic tests  # Topology: 16 meshes, WORMHOLE_B0
+
+Tests:
+  - name: ClosetBox_SimpleUnicast
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      mesh_descriptor_path: tests/tt_metal/tt_fabric/custom_mesh_descriptors/16_n300_lb_closetbox_auto_mgd.textproto
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+    senders:
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [0, [0, 1]]
+  - name: ClosetBox_InterMeshUnicast
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      mesh_descriptor_path: tests/tt_metal/tt_fabric/custom_mesh_descriptors/16_n300_lb_closetbox_auto_mgd.textproto
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 2048
+      num_packets: 100
+    senders:
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [1, [0, 0]]
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [2, [0, 0]]
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [3, [0, 0]]
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [8, [0, 0]]
+      - device: [1, [0, 0]]
+        patterns:
+          - destination:
+              device: [2, [0, 0]]
+      - device: [1, [0, 0]]
+        patterns:
+          - destination:
+              device: [3, [0, 0]]
+      - device: [2, [0, 0]]
+        patterns:
+          - destination:
+              device: [3, [0, 0]]
+      - device: [2, [0, 0]]
+        patterns:
+          - destination:
+              device: [5, [0, 0]]
+      - device: [3, [0, 0]]
+        patterns:
+          - destination:
+              device: [12, [0, 0]]
+      - device: [4, [0, 0]]
+        patterns:
+          - destination:
+              device: [5, [0, 0]]
+      - device: [4, [0, 0]]
+        patterns:
+          - destination:
+              device: [6, [0, 0]]
+      - device: [4, [0, 0]]
+        patterns:
+          - destination:
+              device: [7, [0, 0]]
+      - device: [4, [0, 0]]
+        patterns:
+          - destination:
+              device: [11, [0, 0]]
+      - device: [5, [0, 0]]
+        patterns:
+          - destination:
+              device: [6, [0, 0]]
+      - device: [5, [0, 0]]
+        patterns:
+          - destination:
+              device: [7, [0, 0]]
+      - device: [6, [0, 0]]
+        patterns:
+          - destination:
+              device: [7, [0, 0]]
+      - device: [7, [0, 0]]
+        patterns:
+          - destination:
+              device: [15, [0, 0]]
+      - device: [8, [0, 0]]
+        patterns:
+          - destination:
+              device: [9, [0, 0]]
+      - device: [8, [0, 0]]
+        patterns:
+          - destination:
+              device: [10, [0, 0]]
+      - device: [8, [0, 0]]
+        patterns:
+          - destination:
+              device: [11, [0, 0]]
+      - device: [9, [0, 0]]
+        patterns:
+          - destination:
+              device: [10, [0, 0]]
+      - device: [9, [0, 0]]
+        patterns:
+          - destination:
+              device: [11, [0, 0]]
+      - device: [10, [0, 0]]
+        patterns:
+          - destination:
+              device: [11, [0, 0]]
+      - device: [10, [0, 0]]
+        patterns:
+          - destination:
+              device: [13, [0, 0]]
+      - device: [12, [0, 0]]
+        patterns:
+          - destination:
+              device: [13, [0, 0]]
+      - device: [12, [0, 0]]
+        patterns:
+          - destination:
+              device: [14, [0, 0]]
+      - device: [12, [0, 0]]
+        patterns:
+          - destination:
+              device: [15, [0, 0]]
+      - device: [13, [0, 0]]
+        patterns:
+          - destination:
+              device: [14, [0, 0]]
+      - device: [13, [0, 0]]
+        patterns:
+          - destination:
+              device: [15, [0, 0]]
+      - device: [14, [0, 0]]
+        patterns:
+          - destination:
+              device: [15, [0, 0]]
+  - name: ClosetBox_AllToAllUnicast
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      mesh_descriptor_path: tests/tt_metal/tt_fabric/custom_mesh_descriptors/16_n300_lb_closetbox_auto_mgd.textproto
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [1024, 2048]
+    defaults:
+      ftype: unicast
+      num_packets: 100
+    patterns:
+      - type: all_to_all
