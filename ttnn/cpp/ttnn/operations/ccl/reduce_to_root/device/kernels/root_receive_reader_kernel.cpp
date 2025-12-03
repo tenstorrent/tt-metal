@@ -144,6 +144,8 @@ void kernel_main() {
     constexpr uint32_t compute_cb_s = get_compile_time_arg_val(8);
     constexpr uint32_t compute_cb_m = get_compile_time_arg_val(9);
     constexpr uint32_t input_num_tiles = get_compile_time_arg_val(10);
+    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(11);
+    constexpr uint32_t packet_size_bytes = get_compile_time_arg_val(12);
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
@@ -160,25 +162,19 @@ void kernel_main() {
     const uint32_t int_src_l = get_arg_val<uint32_t>(4);
     const uint32_t int_src_s = get_arg_val<uint32_t>(5);
     const uint32_t int_src_m = get_arg_val<uint32_t>(6);
-    auto page_idx_start = get_arg_val<uint32_t>(7);
-    const auto page_idx_end = get_arg_val<uint32_t>(8);
-    const auto max_pages_per_packet = get_arg_val<uint32_t>(9);
-    const auto intermediate_base_addr = get_arg_val<uint32_t>(10);
-    const auto packet_size_bytes = get_arg_val<uint32_t>(11);
-    const auto page_size_bytes = get_arg_val<uint32_t>(12);
-    const auto page_segments = get_arg_val<uint32_t>(13);  // always 1 delete unecessay parts
-    const uint32_t sender_semaphore_addr = get_arg_val<uint32_t>(14);
-    const uint32_t sender_semaphore_addr2 = get_arg_val<uint32_t>(15);
-    const uint8_t sender_num_hops = get_arg_val<uint32_t>(16);  // always 1
-    const uint32_t core_noc_x = get_arg_val<uint32_t>(17);
-    const uint32_t core_noc_y = get_arg_val<uint32_t>(18);
-    const uint32_t out_ready_sem_x = get_arg_val<uint32_t>(19);
-    const uint32_t out_ready_sem_y = get_arg_val<uint32_t>(20);
-    const uint32_t out_ready_sem_2_x = get_arg_val<uint32_t>(21);
-    const uint32_t out_ready_sem_2_y = get_arg_val<uint32_t>(22);
+    const auto intermediate_base_addr = get_arg_val<uint32_t>(7);
+    const uint32_t sender_semaphore_addr = get_arg_val<uint32_t>(8);
+    const uint32_t sender_semaphore_addr2 = get_arg_val<uint32_t>(9);
+    const uint32_t core_noc_x = get_arg_val<uint32_t>(10);
+    const uint32_t core_noc_y = get_arg_val<uint32_t>(11);
+
+    const uint8_t sender_num_hops = 1;
+    uint32_t page_idx_start = 0;
+    const auto page_idx_end = input_num_tiles;
+    const auto max_pages_per_packet = input_num_tiles;
 
     // reusing the last arg for fabric setup, therefore index overlaps.
-    size_t arg_idx = 23;
+    size_t arg_idx = 12;
     uint32_t num_tiles_l = page_idx_end;
 
     uint32_t chunk_size = input_num_tiles;

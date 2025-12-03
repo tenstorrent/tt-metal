@@ -86,7 +86,6 @@ inline void write_intermediate_data(
 
 inline void write_data(
     uint32_t dst_addr_l,
-    uint32_t num_tiles_l,
     uint32_t dst_addr_s,
     uint32_t dst_addr_m,
     uint32_t page_bytes,
@@ -139,43 +138,25 @@ inline void write_data(
 void kernel_main() {
     DPRINT << "root writer kernel started\n";
     uint32_t inter_dst_addr_l = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles_l = get_arg_val<uint32_t>(1);
-    uint32_t inter_dst_addr_s = get_arg_val<uint32_t>(2);
-    uint32_t inter_dst_addr_m = get_arg_val<uint32_t>(3);
-    uint32_t final_dst_addr_l = get_arg_val<uint32_t>(4);
-    uint32_t final_dst_addr_s = get_arg_val<uint32_t>(5);
-    uint32_t final_dst_addr_m = get_arg_val<uint32_t>(6);
+    uint32_t inter_dst_addr_s = get_arg_val<uint32_t>(1);
+    uint32_t inter_dst_addr_m = get_arg_val<uint32_t>(2);
+    uint32_t final_dst_addr_l = get_arg_val<uint32_t>(3);
+    uint32_t final_dst_addr_s = get_arg_val<uint32_t>(4);
+    uint32_t final_dst_addr_m = get_arg_val<uint32_t>(5);
+    const uint32_t core_noc_x = get_arg_val<uint32_t>(6);
+    const uint32_t core_noc_y = get_arg_val<uint32_t>(7);
 
     constexpr uint32_t cb_int_cb_l = get_compile_time_arg_val(0);
     constexpr uint32_t cb_int_cb_s = get_compile_time_arg_val(1);
     constexpr uint32_t cb_int_cb_m = get_compile_time_arg_val(2);
     constexpr uint32_t input_num_tiles = get_compile_time_arg_val(3);
+    constexpr uint32_t page_bytes = get_compile_time_arg_val(4);
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
 
-    const uint32_t page_bytes = get_arg_val<uint32_t>(7);
-    const uint32_t core_noc_x = get_arg_val<uint32_t>(8);
-    const uint32_t core_noc_y = get_arg_val<uint32_t>(9);
-
     DPRINT << "BEFORE writing first output to intermediate buffer\n";
 
-    // write l, s, m from device 0 to intermediate buffers
-    /*
-    write_data(
-        get_write_ptr(inter_dst_addr_l),
-        num_tiles_l,
-        get_write_ptr(inter_dst_addr_s),
-        get_write_ptr(inter_dst_addr_m),
-        page_bytes,
-        core_noc_x,
-        core_noc_y,
-        cb_int_cb_l,
-        cb_int_cb_s,
-        cb_int_cb_m,
-        onetile,
-        input_num_tiles);
-    */
     write_intermediate_data(
         cb_int_cb_l,
         cb_int_cb_s,
@@ -190,7 +171,6 @@ void kernel_main() {
     // write l, s, m from device 2 to final buffers
     write_data(
         final_dst_addr_l,
-        num_tiles_l,
         final_dst_addr_s,
         final_dst_addr_m,
         page_bytes,
