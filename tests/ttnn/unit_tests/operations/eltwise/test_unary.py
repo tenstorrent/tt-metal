@@ -908,33 +908,36 @@ def test_unary_trunc_ttnn_opt(input_shapes, device):
     ),
 )
 @pytest.mark.parametrize(
-    "torch_dtype, ttnn_dtype",
+    "torch_dtype, ttnn_dtype, atol",
     [
-        (torch.float32, ttnn.float32),
-        (torch.bfloat16, ttnn.bfloat16),
-        (torch.bfloat16, ttnn.bfloat8_b),
+        (torch.float32, ttnn.float32, 0.011),
+        (torch.bfloat16, ttnn.bfloat16, 0.032),
+        (torch.bfloat16, ttnn.bfloat8_b, 0.3),
     ],
 )
-def test_unary_silu_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
+@pytest.mark.parametrize("ttnn_function", [ttnn.silu, ttnn.swish])
+def test_unary_silu_swish_ttnn(input_shapes, torch_dtype, ttnn_dtype, ttnn_function, device, atol):
+    torch.manual_seed(0)
     in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     if ttnn_dtype == ttnn.bfloat8_b:
         in_data1 = ttnn.to_torch(input_tensor1, dtype=torch_dtype)
 
-    output_tensor = ttnn.silu(input_tensor1)
-    golden_function = ttnn.get_golden_function(ttnn.silu)
+    output_tensor = ttnn_function(input_tensor1)
+    golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data1, device=device)
 
-    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.9999)
+    assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=atol)
 
 
-def test_unary_silu_threshold(device):
+@pytest.mark.parametrize("ttnn_function", [ttnn.silu, ttnn.swish])
+def test_unary_silu_swish_threshold(ttnn_function, device):
     in_data1 = torch.tensor([[-1.0, 0.0, 0.5, 1.0, 1.5, 3.5, 5.0, 5.2, 5.5]], dtype=torch.bfloat16)
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn.silu(input_tensor1)
-    golden_function = ttnn.get_golden_function(ttnn.silu)
+    output_tensor = ttnn_function(input_tensor1)
+    golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data1, device=device)
 
     assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=0.032)
