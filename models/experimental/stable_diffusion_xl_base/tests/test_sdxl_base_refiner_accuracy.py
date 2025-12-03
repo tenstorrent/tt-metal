@@ -28,7 +28,7 @@ from models.experimental.stable_diffusion_xl_base.utils.clip_fid_ranges import (
 
 test_demo_base_and_refiner.__test__ = False
 COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/coco2014/captions/captions_source.tsv"
-OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_base_and_refiner_test_results.json"
+OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
 
 
 @pytest.mark.parametrize(
@@ -189,10 +189,6 @@ def test_accuracy_sdxl_base_and_refiner(
     else:
         logger.info("FID score is not calculated for less than 2 prompts.")
 
-    print(f"FID score: {fid_score}")
-    print(f"Average CLIP Score: {average_clip_score}")
-    print(f"Standard Deviation of CLIP Scores: {deviation_clip_score}")
-
     avg_gen_end_to_end = profiler.get("end_to_end_generation")
     model_name = "sdxl-base-refiner-tp" if use_cfg_parallel else "sdxl-base-refiner"
 
@@ -289,6 +285,7 @@ def test_accuracy_sdxl_base_and_refiner(
 
     with open(f"{OUT_ROOT}/{RESULTS_FILE_NAME}", "w") as f:  # this is for CI compatibility
         json.dump(data, f, indent=4)
+    print(json.dumps(data, indent=4))
 
     logger.info(f"Test results saved to {OUT_ROOT}/{RESULTS_FILE_NAME}")
 
