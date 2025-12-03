@@ -118,7 +118,8 @@ inline bool decode_route_to_buffer_by_hops(uint16_t hops, volatile uint8_t* out_
     }
 
     // Forward for (hops - 1) steps, then write on the final hop
-    const uint64_t shift_amount = static_cast<uint64_t>((hops - 1) * intra_mesh_routing_path_t<1, true>::FIELD_WIDTH);
+    const uint64_t shift_amount =
+        static_cast<uint64_t>(hops - 1) * static_cast<uint64_t>(intra_mesh_routing_path_t<1, true>::FIELD_WIDTH);
     const uint64_t routing_field_value =
         (intra_mesh_routing_path_t<1, true>::FWD_ONLY_FIELD & ((1ULL << shift_amount) - 1ULL)) |
         (static_cast<uint64_t>(intra_mesh_routing_path_t<1, true>::WRITE_ONLY) << shift_amount);

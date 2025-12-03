@@ -592,7 +592,7 @@ private:
         ASSERT(distance_in_hops > 0 && distance_in_hops <= LowLatencyRoutingFields::MAX_NUM_ENCODINGS);
 #endif
         const uint64_t shift_amount =
-            static_cast<uint64_t>((distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH);
+            static_cast<uint64_t>(distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH;
         return (LowLatencyRoutingFields::FWD_ONLY_FIELD & ((1ULL << shift_amount) - 1ULL)) |
                (static_cast<uint64_t>(LowLatencyRoutingFields::WRITE_ONLY) << shift_amount);
     }
@@ -611,10 +611,9 @@ private:
             chip_multicast_command_header.start_distance_in_hops > 0 &&
             distance_in_hops <= LowLatencyRoutingFields::MAX_NUM_ENCODINGS);
 #endif
-        const uint64_t total_shift =
-            static_cast<uint64_t>((distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH);
-        const uint64_t start_shift = static_cast<uint64_t>(
-            (chip_multicast_command_header.start_distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH);
+        const uint64_t total_shift = static_cast<uint64_t>(distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH;
+        const uint64_t start_shift = static_cast<uint64_t>(chip_multicast_command_header.start_distance_in_hops - 1) *
+                                     LowLatencyRoutingFields::FIELD_WIDTH;
         const uint64_t range_bits =
             static_cast<uint64_t>(chip_multicast_command_header.range_hops) * LowLatencyRoutingFields::FIELD_WIDTH;
 
