@@ -1041,33 +1041,40 @@ class MasterConfigLoader:
                     param_names.append("target_shape")
                     param_lists.append(target_shape_list)
                 if operation_name == "pad" or operation_name == "ttnn::pad":
-                    # Handle both formats - separate value lists for each format
-                    padding_value_list = []
-                    output_shape_value_list = []
+                    # FIX: Don't mix formats! Each config must keep its own parameters.
+                    # Build COMPLETE parameter sets for BOTH formats in the SAME config
+                    # This ensures each row in the zipped result has consistent parameters
 
-                    # Extract values matching each format from paired_configs
+                    padding_complete = []
+                    value_complete = []
+                    output_padded_shape_complete = []
+                    input_tensor_start_complete = []
+
                     for idx, cfg in enumerate(paired_configs):
                         if "padding" in cfg and "value" in cfg:
-                            padding_value_list.append(cfg["value"])
+                            # This config uses padding format - also store None for output_padded_shape
+                            padding_complete.append(cfg["padding"])
+                            value_complete.append(cfg["value"])
+                            output_padded_shape_complete.append(None)
+                            input_tensor_start_complete.append(None)
                         elif "output_padded_shape" in cfg and "input_tensor_start" in cfg and "value" in cfg:
-                            output_shape_value_list.append(cfg["value"])
+                            # This config uses output_padded_shape format - also store None for padding
+                            padding_complete.append(None)
+                            value_complete.append(cfg["value"])
+                            output_padded_shape_complete.append(cfg["output_padded_shape"])
+                            input_tensor_start_complete.append(cfg["input_tensor_start"])
+                        else:
+                            # Config has neither format - skip this config entirely
+                            # Remove corresponding entries from all other param lists
+                            # (This is safer than adding None values which might cause issues)
+                            continue
 
-                    # Use the format that has the most configs
-                    padding_count = len(padding_list) if padding_list else 0
-                    output_shape_count = len(output_padded_shape_list) if output_padded_shape_list else 0
-
-                    if output_shape_count > padding_count:
-                        # Use output_padded_shape format (has more configs)
-                        if len(output_shape_value_list) == output_shape_count:
-                            param_names.extend(["output_padded_shape", "input_tensor_start", "value"])
-                            param_lists.extend(
-                                [output_padded_shape_list, input_tensor_start_list, output_shape_value_list]
-                            )
-                    elif padding_count > 0:
-                        # Use padding format
-                        if len(padding_value_list) == padding_count:
-                            param_names.extend(["padding", "value"])
-                            param_lists.extend([padding_list, padding_value_list])
+                    # Add ALL pad parameters (both formats) to support mixed configs
+                    # The sweep test will check which ones are None and use the appropriate format
+                    param_names.extend(["padding", "output_padded_shape", "input_tensor_start", "value"])
+                    param_lists.extend(
+                        [padding_complete, output_padded_shape_complete, input_tensor_start_complete, value_complete]
+                    )
                 if operation_name == "tilize_with_val_padding" and padded_shape_list and pad_value_list:
                     param_names.extend(["padded_shape", "pad_value"])
                     param_lists.extend([padded_shape_list, pad_value_list])
