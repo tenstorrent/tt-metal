@@ -279,9 +279,14 @@ class OpenVLALanguageModel(GenerationMixin):
         def model_factory_fn(*args, **kwargs):
             return create_tt_model(*args, **kwargs, ModelArgsClass=get_LLama2OpenVLAArgs(local_state_dict))
 
-        self.model_args, self.model, self.page_table, self.tt_kv_cache, self.tokenizer = prepare_generator_args(
-            **self.generator_args_config, model_factory_fn=model_factory_fn
-        )
+        (
+            self.model_args,
+            self.model,
+            self.page_table,
+            self.tt_kv_cache,
+            self.tokenizer,
+            self.processor,
+        ) = prepare_generator_args(**self.generator_args_config, model_factory_fn=model_factory_fn)
         self.generator = Generator(self.model, self.model_args, device, self.tokenizer)
         self.num_actions = 1
 
@@ -1250,7 +1255,7 @@ def get_final_action(generated_ids, action_dims, bin_centers, vocab_size, action
     return actions
 
 
-class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration):
+class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration, GenerationMixin):
     config_class: PretrainedConfig = OpenVLAConfig
 
     def __init__(self, config: OpenVLAConfig, ttnn_device=None, local_state_dict=None) -> None:
