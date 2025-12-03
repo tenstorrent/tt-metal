@@ -102,7 +102,7 @@ python -m models.experimental.maskformer_swin.runner \
 - CNN flow: mask projection conv uses TT-CNN builder with height slicing, TILE output, and L1-preferred inputs.
 - Layout hygiene: tensors stay in TILE layout through decoder/heads; pixel embeddings are permuted once to NHWC before the projection matmul to reduce layout churn.
 - Tunable knobs: `--height/--width` for 320×320 or 640×640, env vars (`MASKFORMER_TT_DECODER`, `MASKFORMER_TT_MASK_PROJ`, `MASKFORMER_TT_FUSE_LINEAR_ACT`, `MASKFORMER_TT_USE_LINEAR`), and program configs in `tt_configs.py`.
-- Perf artifacts: example Wormhole N300 measurements for 320×320 and 640×640 live in `perf_wormhole_n300_{320,640}.json` plus headers `perf_header_wormhole_n300_{320,640}.json`. Regenerate with `--dump-perf` on hardware to refresh numbers for your firmware/runtime.
+- Perf artifacts: example Wormhole N300 measurements for 320×320 and 640×640 are posted in the PR comments for this submission. Regenerate locally with `--dump-perf` on hardware to produce `generated/tt_perf.json` (and an accompanying header) for your firmware/runtime.
 - Programmatic eval: `eval_utils.run_coco_eval` mirrors the CLI for mIoU/PQ; `dump_predictions_json` serializes per-query class confidences for quick inspection.
 - Known limitation: TT mask projection will fall back to the HF conv if TT-CNN configs are unsupported on a given firmware/runtime; the fallback is logged and the rest of the TT path continues.
 
