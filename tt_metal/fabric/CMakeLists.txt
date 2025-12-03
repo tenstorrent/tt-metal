@@ -1,6 +1,8 @@
 add_library(fabric OBJECT)
 add_library(TT::Metalium::Fabric ALIAS fabric)
 
+# DNM: Revert me
+
 # These headers are for the device, not host; will require cross compiling to lint them (future work).
 set_target_properties(
     fabric
