@@ -11,7 +11,7 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt-metalium/hal.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -337,7 +337,7 @@ SenderReceiverConfig get_device_sender_receiver_config_in_ring(
 }
 
 std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor) {
-    auto mesh_device = tensor.device();
+    auto* mesh_device = tensor.device();
     std::vector<IDevice*> devices = {};
     devices.reserve(tensor.device_storage().coords.size());
     for (const auto& coord : tensor.device_storage().coords) {
@@ -363,13 +363,17 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_workers_per_link,
     IDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const CoreCoord core_grid_offset) {
+    const CoreCoord core_grid_offset,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
     const size_t num_workers_preferred = num_workers_per_link * num_links;
-    const auto available_cores = device->worker_cores(
+    auto available_cores = device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
         sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+    if (sub_core_grid.has_value()) {
+        available_cores = available_cores.intersection(sub_core_grid.value());
+    }
     if (available_cores.num_cores() < num_workers_preferred) {
         log_warning(
             tt::LogOp,

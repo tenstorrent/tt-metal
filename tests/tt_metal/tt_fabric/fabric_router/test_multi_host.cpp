@@ -3,20 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <filesystem>
 #include <memory>
 #include <vector>
 #include <tt_stl/span.hpp>
 #include <cstring>
+#include <unistd.h>
 
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed_context.hpp>
+#include <hostdevcommon/fabric_common.h>
 
 namespace tt::tt_fabric {
 namespace multi_host_tests {
@@ -322,6 +324,114 @@ TEST(MultiHost, TestBigMesh2x4Fabric1DSanity) {
     }
 }
 
+TEST(MultiHost, Test32x4QuadGalaxyControlPlaneInit) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        log_info(tt::LogTest, "This test is only for GALAXY");
+        GTEST_SKIP();
+    }
+    const std::filesystem::path quad_galaxy_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/32x4_quad_galaxy_torus_xy_graph_descriptor.textproto";
+    auto control_plane = std::make_unique<ControlPlane>(quad_galaxy_mesh_graph_desc_path.string());
+
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+}
+
+TEST(MultiHost, Test32x4QuadGalaxyFabric2DSanity) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        log_info(tt::LogTest, "This test is only for GALAXY");
+        GTEST_SKIP();
+    }
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    // Validate control plane apis
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto fabric_type = get_fabric_type(tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY);
+
+    FabricNodeId src_node_id(MeshId{0}, 3);  // On host rank 0
+    MeshCoordinate src_mesh_coord(0, 3);
+    FabricNodeId dst_node_id(MeshId{0}, 96);  // On host rank 3
+    MeshCoordinate dst_mesh_coord(0, 96);
+
+    RoutingDirection expected_direction;
+    RoutingDirection expected_reverse_direction;
+    if (fabric_type == tt::tt_fabric::FabricType::TORUS_XY) {
+        expected_direction = RoutingDirection::N;
+        expected_reverse_direction = RoutingDirection::S;
+    } else {
+        expected_direction = RoutingDirection::S;
+        expected_reverse_direction = RoutingDirection::N;
+    }
+
+    auto host_local_coord_range = control_plane.get_coord_range(MeshId{0}, MeshScope::LOCAL);
+    if (host_local_coord_range.contains(src_mesh_coord)) {
+        const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
+        EXPECT_EQ(direction, expected_direction);
+
+        const auto& eth_chans_by_direction =
+            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, expected_direction);
+        EXPECT_TRUE(!eth_chans_by_direction.empty());
+        const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
+        EXPECT_TRUE(!eth_chans.empty());
+    }
+
+    if (host_local_coord_range.contains(dst_mesh_coord)) {
+        const auto& reverse_direction = control_plane.get_forwarding_direction(dst_node_id, src_node_id);
+        EXPECT_EQ(reverse_direction, expected_reverse_direction);
+
+        const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id);
+        EXPECT_TRUE(!eth_chans.empty());
+        const auto& eth_chans_by_direction =
+            control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id, expected_reverse_direction);
+        EXPECT_TRUE(!eth_chans_by_direction.empty());
+    }
+}
+
+TEST(MultiHost, Test32x4QuadGalaxyFabric1DSanity) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        log_info(tt::LogTest, "This test is only for GALAXY");
+        GTEST_SKIP();
+    }
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_1D_RING,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    // Validate control plane apis
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    FabricNodeId src_node_id(MeshId{0}, 3);  // On host rank 0
+    MeshCoordinate src_mesh_coord(0, 3);
+    FabricNodeId dst_node_id(MeshId{0}, 96);  // On host rank 3
+    MeshCoordinate dst_mesh_coord(0, 96);
+
+    auto host_local_coord_range = control_plane.get_coord_range(MeshId{0}, MeshScope::LOCAL);
+    if (host_local_coord_range.contains(src_mesh_coord)) {
+        const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
+        EXPECT_EQ(direction, RoutingDirection::N);
+
+        const auto& eth_chans_by_direction =
+            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, RoutingDirection::N);
+        EXPECT_TRUE(!eth_chans_by_direction.empty());
+        const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
+        EXPECT_TRUE(!eth_chans.empty());
+    }
+
+    if (host_local_coord_range.contains(dst_mesh_coord)) {
+        const auto& reverse_direction = control_plane.get_forwarding_direction(dst_node_id, src_node_id);
+        EXPECT_EQ(reverse_direction, RoutingDirection::S);
+
+        const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id);
+        EXPECT_TRUE(!eth_chans.empty());
+        const auto& eth_chans_by_direction =
+            control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id, RoutingDirection::S);
+        EXPECT_TRUE(!eth_chans_by_direction.empty());
+    }
+}
+
 TEST(MultiHost, TestQuadGalaxyControlPlaneInit) {
     if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
         log_info(tt::LogTest, "This test is only for GALAXY");
@@ -622,6 +732,78 @@ TEST(MultiHost, TestClosetBox3PodTTSwitchAPIs) {
         auto host_rank = mesh_graph.get_host_rank_for_chip(switch_mesh_id, chip_id);
         EXPECT_EQ(*host_rank, MeshHostRankId{0}) << "All switch chips should be on host rank 0";
     }
+}
+
+TEST(MultiHost, BHDualGalaxyControlPlaneInit) {
+    // This test is intended for 2 meshes, each 4x8 Blackhole mesh connected with 2 connections
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
+        tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+        log_info(tt::LogTest, "This test is only for Blackhole Galaxy");
+        GTEST_SKIP();
+    }
+    const std::filesystem::path dual_bh_galaxy_experimental_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_bh_galaxy_experimental_mesh_graph_descriptor.textproto";
+    auto control_plane = std::make_unique<ControlPlane>(dual_bh_galaxy_experimental_mesh_graph_desc_path.string());
+
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+}
+
+TEST(MultiHost, BHDualGalaxyFabric2DSanity) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
+        tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+        log_info(tt::LogTest, "This test is only for Blackhole Galaxy (4x8)");
+        GTEST_SKIP();
+    }
+
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    control_plane.print_routing_tables();
+
+    // Test Z direction functionality
+    // Verify routing_direction_to_eth_direction returns INVALID_DIRECTION for Z
+    EXPECT_EQ(
+        control_plane.routing_direction_to_eth_direction(RoutingDirection::Z),
+        static_cast<eth_chan_directions>(eth_chan_magic_values::INVALID_DIRECTION));
+
+    // Verify get_forwarding_eth_chans_to_chip can handle Z direction
+    // (This will return empty if no Z connections exist, but should not crash)
+    const auto& intramesh_connections = get_all_intramesh_connections(control_plane);
+    for (const auto& [src_node_id, dst_node_id] : intramesh_connections) {
+        const auto& z_chans =
+            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, RoutingDirection::Z);
+        // Z direction channels may be empty if no Z connections exist, which is expected
+        // The important thing is that the API doesn't crash
+    }
+
+    // Verify channels 8 and 9 are associated with Z direction when appropriate
+    // Check if any fabric node has channels 8 or 9 assigned to Z direction
+    const auto& mesh_ids = control_plane.get_mesh_graph().get_mesh_ids();
+    size_t z_channel_count = 0;
+    for (const auto& mesh_id : mesh_ids) {
+        const auto& chip_ids = control_plane.get_mesh_graph().get_chip_ids(mesh_id);
+        for (const auto& [_, chip_id] : chip_ids) {
+            auto fabric_node_id = FabricNodeId(mesh_id, static_cast<std::uint32_t>(chip_id));
+            const auto& z_direction_chans =
+                control_plane.get_active_fabric_eth_channels_in_direction(fabric_node_id, RoutingDirection::Z);
+            for (const auto& chan : z_direction_chans) {
+                if (chan == 8 || chan == 9) {
+                    z_channel_count++;
+                    // Verify that get_eth_chan_direction returns INVALID_DIRECTION for Z channels
+                    EXPECT_EQ(
+                        control_plane.get_eth_chan_direction(fabric_node_id, chan),
+                        static_cast<eth_chan_directions>(eth_chan_magic_values::INVALID_DIRECTION));
+                }
+            }
+        }
+    }
+    // Verify that we found exactly 8 Z channels (channels 8 and 9, 2 chips per mesh, bidirectional = 8 total)
+    EXPECT_EQ(z_channel_count, 8) << "Expected 8 Z channels (channels 8 and 9, 2 chips per mesh, bidirectional = 8 total)";
 }
 
 }  // namespace multi_host_tests

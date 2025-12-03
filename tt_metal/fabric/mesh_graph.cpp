@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "mesh_graph.hpp"
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "fabric_host_utils.hpp"
 
 #include <enchantum/enchantum.hpp>
@@ -19,7 +19,7 @@
 #include <tt_stl/indestructible.hpp>
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_graph_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include "protobuf/mesh_graph_descriptor.pb.h"
 
 // Implementation of hash function for port_id_t
@@ -71,15 +71,15 @@ const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mes
         {tt::tt_fabric::FabricType::TORUS_X,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_x_graph_descriptor.textproto"},
-         }},
+             {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_x_graph_descriptor.textproto"}}},
         {tt::tt_fabric::FabricType::TORUS_Y,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_y_graph_descriptor.textproto"},
-         }},
+             {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_y_graph_descriptor.textproto"}}},
         {tt::tt_fabric::FabricType::TORUS_XY,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_xy_graph_descriptor.textproto"},
-         }}});
+             {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_xy_graph_descriptor.textproto"}}}});
 
 MeshGraph::MeshGraph(const std::string& mesh_graph_desc_file_path, std::optional<FabricConfig> fabric_config) {
     log_debug(tt::LogFabric, "mesh_graph_desc_file_path: {}", mesh_graph_desc_file_path);
@@ -177,7 +177,7 @@ std::unordered_map<ChipId, RouterEdge> MeshGraph::get_valid_connections(
         N = MeshCoordinate((src_mesh_coord[0] - 1 + mesh_shape[0]) % mesh_shape[0], src_mesh_coord[1]);
         S = MeshCoordinate((src_mesh_coord[0] + 1) % mesh_shape[0], src_mesh_coord[1]);
     }
-    for (auto& [coord, direction] :
+    for (const auto& [coord, direction] :
          {std::pair{N, RoutingDirection::N},
           std::pair{E, RoutingDirection::E},
           std::pair{S, RoutingDirection::S},
@@ -430,6 +430,15 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
                 mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
             }
         }
+        // Z, for all chips (only if using blackhole)
+        if (chip_spec_.num_z_ports > 0) {
+            chan_id = 0;
+            for (std::uint32_t chip_id = 0; chip_id < (mesh_shape[0] * mesh_shape[1]); chip_id++) {
+                for (std::uint32_t i = 0; i < chip_spec_.num_z_ports; i++) {
+                    mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::Z, chan_id++}] = chip_id;
+                }
+            }
+        }
     }
 
     // Populate switches as meshes (switches are treated as meshes internally)
@@ -552,6 +561,15 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
         for (std::uint32_t chip_id = 0; chip_id < (switch_shape[0] * switch_shape[1]); chip_id += switch_shape[1]) {
             for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
                 mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
+            }
+        }
+        // Z, for all chips (only if using blackhole)
+        if (chip_spec_.num_z_ports > 0) {
+            chan_id = 0;
+            for (std::uint32_t chip_id = 0; chip_id < (switch_shape[0] * switch_shape[1]); chip_id++) {
+                for (std::uint32_t i = 0; i < chip_spec_.num_z_ports; i++) {
+                    mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::Z, chan_id++}] = chip_id;
+                }
             }
         }
     }
@@ -774,7 +792,7 @@ std::filesystem::path MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type
     const tt::tt_metal::ClusterType cluster_type,
     const std::string& root_dir,
     const tt::tt_fabric::FabricType fabric_type) {
-    auto& fabric_to_cluster_map = cluster_type_to_mesh_graph_descriptor.get();
+    const auto& fabric_to_cluster_map = cluster_type_to_mesh_graph_descriptor.get();
     auto fabric_it = fabric_to_cluster_map.find(fabric_type);
     if (fabric_it != fabric_to_cluster_map.end()) {
         const auto& cluster_to_descriptor_map = fabric_it->second;

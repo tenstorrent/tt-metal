@@ -13,10 +13,10 @@ namespace ttnn::operations::full {
 Tensor Full::invoke(
     const ttnn::SmallVector<uint32_t>& shape,
     const std::variant<float, int> fill_value,
-    const ttnn::Tensor& any,
-    const std::optional<DataType>& dtype,
-    const std::optional<Layout>& layout,
-    const std::optional<MemoryConfig>& memory_config) {
-    return ttnn::prim::full(shape, fill_value, any, dtype, layout, memory_config);
+    ttnn::MeshDevice* mesh_device,
+    const DataType& dtype,
+    const Layout& layout,
+    const MemoryConfig& memory_config) {
+    return ttnn::prim::full(shape, fill_value, mesh_device, dtype, layout, memory_config);
 }
 }  // namespace ttnn::operations::full

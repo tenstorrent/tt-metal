@@ -170,8 +170,6 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serializable.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serialization.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serialization.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/bpe_tokenizer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/bpe_tokenizer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/char_tokenizer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/char_tokenizer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/char_tokenizer_trainer.cpp
@@ -193,7 +191,9 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/operations.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ttnn_all_includes.hpp
     # Common
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/common/program_utils.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/dataflow_utils.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/compute_utils.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/program_utils.hpp
     # RMSNorm
     # RMSNorm Forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.cpp
@@ -211,6 +211,22 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_program_factory.cpp
+    # LayerNorm Backward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/layernorm_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/layernorm_bw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/device/layernorm_bw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/device/layernorm_bw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/device/layernorm_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/device/layernorm_bw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/device/layernorm_bw_program_factory.cpp
+    # LayerNorm Forward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/layernorm_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/layernorm_fw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/device/layernorm_fw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/device/layernorm_fw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/device/layernorm_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/device/layernorm_fw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/device/layernorm_fw_program_factory.cpp
     # CrossEntropy
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/cross_entropy_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/cross_entropy_fw.hpp
@@ -644,7 +660,6 @@ target_link_libraries(
         xtensor
         xtensor-blas
         xtl
-        tokenizers_cpp
         Boost::core
         Boost::container
         tt-logger
@@ -664,17 +679,7 @@ message(STATUS "xtensor-blas_SOURCE_DIR: ${xtensor-blas_SOURCE_DIR}")
 message(STATUS "cli11_SOURCE_DIR: ${CLI11_SOURCE_DIR}")
 target_include_directories(ttml PUBLIC ${CLI11_SOURCE_DIR}/include)
 
-target_include_directories(ttml PUBLIC ${TOKENZIER_CPP_PATH}/include)
-
 if(ENABLE_LIBCXX)
-    target_link_libraries(
-        tokenizers_cpp
-        PUBLIC
-            ${LIBC++}
-            ${LIBC++ABI}
-    )
-    target_compile_options(tokenizers_cpp PUBLIC -stdlib=libc++)
-
     target_link_libraries(
         PUBLIC
             ${LIBC++}

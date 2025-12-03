@@ -22,6 +22,8 @@ std::vector<uint8_t> serialize_link_metrics_to_bytes(const std::vector<::Etherne
         proto_channel_id->set_tray_id(*link_metric.channel_identifier.tray_id);
         proto_channel_id->set_asic_location(*link_metric.channel_identifier.asic_location);
         proto_channel_id->set_channel(link_metric.channel_identifier.channel);
+        proto_channel_id->set_port_id(link_metric.channel_identifier.port_id);
+        proto_channel_id->set_port_type(link_metric.channel_identifier.port_type);
 
         // Serialize LinkStatus
         auto* proto_link_status = proto_link_metrics->mutable_link_status();
@@ -73,6 +75,8 @@ std::vector<::EthernetLinkMetrics> deserialize_link_metrics_from_bytes(const std
         link_metric.channel_identifier.tray_id = tt::tt_metal::TrayID(proto_channel_id.tray_id());
         link_metric.channel_identifier.asic_location = tt::tt_metal::ASICLocation(proto_channel_id.asic_location());
         link_metric.channel_identifier.channel = static_cast<uint8_t>(proto_channel_id.channel());
+        link_metric.channel_identifier.port_id = proto_channel_id.port_id();
+        link_metric.channel_identifier.port_type = proto_channel_id.port_type();
 
         // Deserialize LinkStatus
         const auto& proto_link_status = proto_link_metric.link_status();
@@ -108,6 +112,8 @@ std::vector<uint8_t> serialize_eth_chan_identifiers_to_bytes(const std::vector<:
         proto_exit_node->set_tray_id(*exit_node.tray_id);
         proto_exit_node->set_asic_location(*exit_node.asic_location);
         proto_exit_node->set_channel(exit_node.channel);
+        proto_exit_node->set_port_id(exit_node.port_id);
+        proto_exit_node->set_port_type(exit_node.port_type);
     }
 
     // Serialize to bytes
@@ -138,6 +144,8 @@ std::vector<::EthChannelIdentifier> deserialize_eth_chan_identifiers_from_bytes(
         exit_node.tray_id = tt::tt_metal::TrayID(proto_exit_node.tray_id());
         exit_node.asic_location = tt::tt_metal::ASICLocation(proto_exit_node.asic_location());
         exit_node.channel = static_cast<uint8_t>(proto_exit_node.channel());
+        exit_node.port_id = proto_exit_node.port_id();
+        exit_node.port_type = proto_exit_node.port_type();
 
         exit_nodes.push_back(std::move(exit_node));
     }

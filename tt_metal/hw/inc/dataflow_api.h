@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #if __has_include("chlkc_unpack_data_format.h")
 #include "chlkc_pack_data_format.h"
 #include "chlkc_unpack_data_format.h"
@@ -100,7 +101,7 @@ bool is_l1_address(uint64_t addr) { return ((addr & 0xFFFFFFFF) < NOC_REG_SPACE_
  * | arg_idx        | Unique Runtime argument index                                           | uint32_t | 0 to 341    | True     |
  */
 // clang-format on
-static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) { return (uint32_t)&rta_l1_base[arg_idx]; }
+static FORCE_INLINE uintptr_t get_arg_addr(int arg_idx) { return (uintptr_t)&rta_l1_base[arg_idx]; }
 
 // clang-format off
 /**
@@ -114,7 +115,7 @@ static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) { return (uint32_t)&rta_l
  * | arg_idx        | Common Runtime argument index                                           | uint32_t | 0 to 341    | True     |
  */
 // clang-format on
-static FORCE_INLINE uint32_t get_common_arg_addr(int arg_idx) { return (uint32_t)&crta_l1_base[arg_idx]; }
+static FORCE_INLINE uintptr_t get_common_arg_addr(int arg_idx) { return (uintptr_t)&crta_l1_base[arg_idx]; }
 
 // clang-format off
 /**
@@ -314,7 +315,7 @@ uint32_t get_read_ptr(uint32_t operand) {
     return rd_ptr_bytes;
 }
 
-inline void wait_for_sync_register_value(uint32_t addr, int32_t val) {
+inline void wait_for_sync_register_value(uintptr_t addr, int32_t val) {
     volatile tt_reg_ptr uint32_t* reg_ptr = (volatile uint32_t*)addr;
     int32_t reg_value;
     WAYPOINT("SW");
@@ -341,7 +342,7 @@ inline void wait_for_sync_register_value(uint32_t addr, int32_t val) {
 // clang-format on
 FORCE_INLINE
 bool cb_pages_reservable_at_back(int32_t operand, int32_t num_pages) {
-    uint32_t pages_acked_ptr = (uint32_t)get_cb_tiles_acked_ptr(operand);
+    uintptr_t pages_acked_ptr = (uintptr_t)get_cb_tiles_acked_ptr(operand);
 
     // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
     // "tiles_pushed" is updated by the producer only when the tiles are pushed
@@ -371,7 +372,7 @@ bool cb_pages_reservable_at_back(int32_t operand, int32_t num_pages) {
 // clang-format on
 FORCE_INLINE
 void cb_reserve_back(int32_t operand, int32_t num_pages) {
-    uint32_t pages_acked_ptr = (uint32_t)get_cb_tiles_acked_ptr(operand);
+    uintptr_t pages_acked_ptr = (uintptr_t)get_cb_tiles_acked_ptr(operand);
 
     // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
     // "tiles_pushed" is updated by the producer only when the tiles are pushed
@@ -418,7 +419,7 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
 FORCE_INLINE
 bool cb_pages_available_at_front(int32_t operand, int32_t num_pages) {
     uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
-    uint32_t pages_received_ptr = (uint32_t)get_cb_tiles_received_ptr(operand);
+    uintptr_t pages_received_ptr = (uintptr_t)get_cb_tiles_received_ptr(operand);
 
     uint16_t pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
     return num_pages <= pages_received;
@@ -451,7 +452,7 @@ bool cb_pages_available_at_front(int32_t operand, int32_t num_pages) {
 FORCE_INLINE
 void cb_wait_front(int32_t operand, int32_t num_pages) {
     uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
-    uint32_t pages_received_ptr = (uint32_t)get_cb_tiles_received_ptr(operand);
+    uintptr_t pages_received_ptr = (uintptr_t)get_cb_tiles_received_ptr(operand);
 
     uint16_t pages_received;
 
@@ -2039,7 +2040,7 @@ inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
 // clang-format off
 /**
  * Initiates an asynchronous read for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size).
- * Must first set the transaction id using \a noc_async_read_tile_dram_sharded_set_trid and the stateful registers
+ * Must first set the transaction id using \a noc_async_read_set_trid and the stateful registers
  * using an API such as \a noc_async_read_one_packet_set_state.
  *
  * Return value: None
@@ -2055,9 +2056,9 @@ inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
  */
 // clang-format on
 template <bool skip_ptr_update = false>
-FORCE_INLINE void noc_async_read_tile_dram_sharded_with_state_with_trid(
+FORCE_INLINE void noc_async_read_one_packet_with_state_with_trid(
     uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid = 0, uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT(NocEventType::READ_DRAM_SHARDED_WITH_STATE);
+    RECORD_NOC_EVENT(NocEventType::READ_WITH_STATE_AND_TRID);
 
     WAYPOINT("NRDW");
     ncrisc_noc_fast_read_with_transaction_id<noc_mode, skip_ptr_update>(
@@ -2078,7 +2079,7 @@ FORCE_INLINE void noc_async_read_tile_dram_sharded_with_state_with_trid(
  */
 // clang-format on
 FORCE_INLINE
-void noc_async_read_tile_dram_sharded_set_trid(uint32_t trid = 0, uint8_t noc = noc_index) {
+void noc_async_read_set_trid(uint32_t trid = 0, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT(NocEventType::READ_SET_TRID);
 
     WAYPOINT("NSTW");
@@ -2351,6 +2352,26 @@ struct MulticastEndpoint;
 template <typename T>
 struct noc_traits_t {
     static_assert(sizeof(T) == 0, "NoC transactions are not supported for this type");
+};
+
+/**
+ * @brief RAII style wrapper for a scoped lock
+ *
+ * @tparam ReleaseFunc The function to call when this instance goes out of scope.
+ */
+template <typename ReleaseFunc>
+class Lock {
+public:
+    inline __attribute__((always_inline)) Lock(ReleaseFunc release_func) : release_func_(release_func) {}
+    inline __attribute__((always_inline)) ~Lock() { release_func_(); }
+
+    Lock(const Lock&) = delete;
+    Lock(Lock&&) = delete;
+    Lock& operator=(const Lock&) = delete;
+    Lock& operator=(Lock&&) = delete;
+
+private:
+    ReleaseFunc release_func_;
 };
 
 /**
@@ -2759,7 +2780,16 @@ public:
         return rd_ptr_bytes;
     }
 
+    [[nodiscard]] auto scoped_lock() {
+        // TODO: Register with the debugger to track the lock
+        return Lock([this]() { release_scoped_lock(); });
+    }
+
 private:
+    void release_scoped_lock() {
+        // TODO: Unregister with the debugger
+    }
+
     uint32_t cb_id_;
 };
 
@@ -3230,6 +3260,188 @@ struct noc_traits_t<tensor_accessor::Page> {
         } else {
             return noc_addr;
         }
+    }
+};
+
+/**
+ * @brief Provides a safe pointer to a structure of type T in the core's local memory
+ *
+ * Pointers are tagged with tt_l1_ptr to give the compiler latency information.
+ *
+ * Usage:
+ * - For non-volatile access with compiler optimizations: CoreLocalMem<uint32_t>
+ * - For volatile access (prevents optimization): CoreLocalMem<volatile uint32_t>
+ *
+ * Note: When using non-volatile types with NOC operations, you must ensure proper
+ * memory ordering with compiler barriers (e.g., asm volatile("" ::: "memory"))
+ * or L1 cache invalidation as needed.
+ */
+template <typename T, typename AddressType = uintptr_t>
+class CoreLocalMem {
+    using difference_type = std::ptrdiff_t;
+
+    static_assert(std::is_integral<AddressType>::value, "AddressType must be an integral type");
+    static_assert(std::is_unsigned<AddressType>::value, "AddressType must be unsigned for address representation");
+    static_assert(
+        sizeof(AddressType) >= sizeof(difference_type),
+        "AddressType must be large enough to hold difference_type for safe pointer arithmetic");
+
+public:
+    /** @brief Construct a CoreLocalMem instance from a raw address
+     *
+     * @param address The raw address of the structure in the core's local memory
+     */
+    CoreLocalMem(AddressType address) : address_(address) {}
+
+    /** @brief Construct a CoreLocalMem instance from a raw pointer
+     *
+     * @param ptr The pointer to the structure in the core's local memory
+     */
+    CoreLocalMem(T* ptr) : address_(reinterpret_cast<AddressType>(ptr)) {}
+
+    /** @brief Copy constructor
+     *
+     * @param other The other CoreLocalMem to copy from
+     */
+    CoreLocalMem(const CoreLocalMem&) = default;
+
+    /** @brief Copy assignment operator
+     *
+     * @param other The other CoreLocalMem to copy from
+     * @return A reference to the assigned CoreLocalMem
+     */
+    CoreLocalMem& operator=(const CoreLocalMem&) = default;
+
+    /** @brief Get the raw pointer to the structure in the core's local memory
+     *
+     * @return The raw pointer to the structure in the core's local memory
+     */
+    tt_l1_ptr T* get_unsafe_ptr() const { return reinterpret_cast<tt_l1_ptr T*>(address_); }
+
+    /** @brief Get the memory address
+     *
+     * @return The address
+     */
+    AddressType get_address() const { return address_; }
+
+    /** @brief Get the element at the given index
+     *
+     * @param index The index of the element to get
+     * @return Reference to the element at the given index
+     */
+    T& operator[](uint32_t index) const {
+        // TODO: To be moved to a Watcher sanitize check. Fix for eth cores.
+        ASSERT(address_ + (index + 1) * sizeof(T) <= MEM_L1_SIZE);
+        return get_unsafe_ptr()[index];
+    }
+
+    /** @brief Dereference operator to get reference to the value
+     *
+     * @return Reference to the value at the address
+     */
+    T& operator*() const {
+        // TODO: To be moved to a Watcher sanitize check. Fix for eth cores.
+        ASSERT(address_ + sizeof(T) <= MEM_L1_SIZE);
+        return get_unsafe_ptr()[0];
+    }
+
+    /** @brief Arrow operator for struct/class member access
+     *
+     * @return Pointer to the structure in the core's local memory
+     */
+    tt_l1_ptr T* operator->() const {
+        // TODO: To be moved to a Watcher sanitize check. Fix for eth cores.
+        ASSERT(address_ + sizeof(T) <= MEM_L1_SIZE);
+        return get_unsafe_ptr();
+    }
+
+    CoreLocalMem& operator+=(difference_type offset) {
+        address_ += offset * sizeof(T);
+        return *this;
+    }
+
+    CoreLocalMem& operator-=(difference_type offset) {
+        address_ -= offset * sizeof(T);
+        return *this;
+    }
+
+    CoreLocalMem& operator++() {
+        address_ += sizeof(T);
+        return *this;
+    }
+
+    CoreLocalMem& operator--() {
+        address_ -= sizeof(T);
+        return *this;
+    }
+
+    CoreLocalMem operator++(int) {
+        CoreLocalMem tmp = *this;
+        operator++();
+        return tmp;
+    }
+
+    CoreLocalMem operator--(int) {
+        CoreLocalMem tmp = *this;
+        operator--();
+        return tmp;
+    }
+
+    CoreLocalMem operator+(difference_type offset) const { return CoreLocalMem(address_ + offset * sizeof(T)); }
+
+    CoreLocalMem operator-(difference_type offset) const { return CoreLocalMem(address_ - offset * sizeof(T)); }
+
+    difference_type operator-(const CoreLocalMem& other) const {
+        difference_type byte_diff =
+            static_cast<difference_type>(address_) - static_cast<difference_type>(other.address_);
+        // Compiler automatically optimizes division to a shift if T is pow2
+        return byte_diff / sizeof(T);
+    }
+
+    [[nodiscard]] auto scoped_lock() {
+        return Lock([this]() { release_scoped_lock(); });
+    }
+
+    bool operator==(const CoreLocalMem& other) const { return address_ == other.address_; }
+    bool operator!=(const CoreLocalMem& other) const { return address_ != other.address_; }
+    bool operator<(const CoreLocalMem& other) const { return address_ < other.address_; }
+    bool operator<=(const CoreLocalMem& other) const { return address_ <= other.address_; }
+    bool operator>(const CoreLocalMem& other) const { return address_ > other.address_; }
+    bool operator>=(const CoreLocalMem& other) const { return address_ >= other.address_; }
+    explicit operator bool() const { return address_ != 0; }
+
+private:
+    void release_scoped_lock() {
+        // TODO: Unregister with the debugger
+    }
+
+    AddressType address_;
+};
+
+template <typename T, typename AddressType>
+struct noc_traits_t<CoreLocalMem<T, AddressType>> {
+    struct src_args_type {
+        AddressType offset_bytes = 0;
+    };
+    struct dst_args_type {
+        AddressType offset_bytes = 0;
+    };
+    struct dst_args_mcast_type {};
+
+    template <Noc::AddressType address_type>
+    static auto src_addr(const CoreLocalMem<T, AddressType>& src, const Noc&, const src_args_type& args) {
+        static_assert(address_type == Noc::AddressType::LOCAL_L1, "CoreLocalMem can only be used as local L1 source");
+        return src.get_address() + args.offset_bytes;
+    }
+    template <Noc::AddressType address_type>
+    static auto dst_addr(const CoreLocalMem<T, AddressType>& dst, const Noc& noc, const dst_args_type& args) {
+        static_assert(address_type == Noc::AddressType::LOCAL_L1, "CoreLocalMem can only be used as local L1 dest");
+        return dst.get_address() + args.offset_bytes;
+    }
+    template <Noc::AddressType address_type>
+    static auto dst_addr_mcast(
+        const CoreLocalMem<T, AddressType>& dst, const Noc& noc, const dst_args_mcast_type& args) {
+        static_assert(false, "CoreLocalMem cannot be used as NoC mcast destination");
     }
 };
 

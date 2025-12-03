@@ -52,12 +52,13 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
+          auto-triage: false # Disable auto-triage because we need to run triage tests explicitly
       - name: Run triage tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
             mkdir -p generated/test_reports
             pip install -r tools/triage/requirements.txt
-            pytest ./tools/tests/triage/
+            TT_METAL_RESET_DEVICE_AFTER_HANG=1 pytest ./tools/tests/triage/
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

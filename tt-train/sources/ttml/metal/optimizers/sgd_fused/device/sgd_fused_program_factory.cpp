@@ -10,7 +10,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include "metal/ops/common/program_utils.hpp"
+#include "metal/common/program_utils.hpp"
 #include "sgd_fused_device_operation_types.hpp"
 #include "tt-metalium/bfloat16.hpp"
 
@@ -119,7 +119,7 @@ void assign_per_core_runtime_args(
     const bool use_dampening = !(bfloat_one_minus_dampening == bfloat16(1.0F));
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         // Determine how many tiles this core will process
         uint32_t num_tiles_per_core = 0;
@@ -436,7 +436,7 @@ void SGDFusedProgramFactory::override_runtime_arguments(
     const bool use_dampening = !(bfloat_one_minus_dampening == bfloat16(1.0F));
 
     for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         // Update input buffers for the reader kernel
         {

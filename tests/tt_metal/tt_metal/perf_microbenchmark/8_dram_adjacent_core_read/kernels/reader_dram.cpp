@@ -36,7 +36,7 @@ void kernel_main() {
     for (uint32_t block = 0; block < num_blocks; ++block) {
         uint32_t l1_write_addr = get_write_ptr(cb_id);
 
-        noc_async_read_tile_dram_sharded_set_trid(curr_block_trid);
+        noc_async_read_set_trid(curr_block_trid);
 
         for (uint32_t h = 0; h < num_pages; ++h) {
             uint32_t current_page_size = page_size;
@@ -48,7 +48,7 @@ void kernel_main() {
                 noc_async_read_one_packet_set_state<true>(src_base_addr, current_page_size, vc);
             }
 
-            noc_async_read_tile_dram_sharded_with_state_with_trid(
+            noc_async_read_one_packet_with_state_with_trid(
                 src_base_addr, l1_read_addr, l1_write_addr, curr_block_trid);
             l1_read_addr += current_page_size;
             l1_write_addr += current_page_size;

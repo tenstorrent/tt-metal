@@ -27,11 +27,9 @@ set(SOURCES
     autograd/autograd_test.cpp
     autograd/module_base_parameters_test.cpp
     schedulers/schedulers_test.cpp
-    tokenizers/bpe_tokenizer_test.cpp
     tokenizers/char_tokenizer_trainer_test.cpp
     tokenizers/char_tokenizer_test.cpp
     3rd_party/xtensor_test.cpp
-    3rd_party/tokenizers_test.cpp
     datasets/in_memory_token_dataset_test.cpp
     datasets/random_split_test.cpp
     datasets/utils_test.cpp
@@ -47,7 +45,7 @@ set(SOURCES
     serialization/safetensors_test.cpp
     ops/cross_entropy_fw_op_test.cpp
     ops/positional_embedding_test.cpp
-    ops/layer_norm_op_test.cpp
+    ops/layer_norm_composite_test.cpp
     ops/distributed/comm_ops_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp
@@ -59,6 +57,8 @@ set(SOURCES
     ops/softmax_test.cpp
     ops/silu_op_test.cpp
     ops/sdpa_fw_op_test.cpp
+    ops/layernorm_bw_fused_op_test.cpp
+    ops/layernorm_fw_fused_op_test.cpp
     ops/swiglu_op_test.cpp
 )
 

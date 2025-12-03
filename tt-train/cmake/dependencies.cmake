@@ -114,18 +114,6 @@ CPMAddPackage(
         "MSGPACK_NO_BOOST ON"
 )
 
-CPMAddPackage(
-    NAME tokenizers-cpp
-    GITHUB_REPOSITORY mlc-ai/tokenizers-cpp
-    GIT_TAG 55d53aa38dc8df7d9c8bd9ed50907e82ae83ce66
-    PATCH_COMMAND
-        patch --dry-run -p1 -R < ${CMAKE_CURRENT_LIST_DIR}/tokenizers-cpp.patch || patch -p1 < ${CMAKE_CURRENT_LIST_DIR}/tokenizers-cpp.patch
-    OPTIONS
-        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
-)
-if(tokenizers-cpp_ADDED)
-    target_compile_options(tokenizers_cpp PRIVATE -Wno-for-loop-analysis)
-endif()
 # gersemi: on
 
 ####################################################################################################################

@@ -133,7 +133,6 @@ class TtTransformerBlock(LightweightModule):
         kv_cache=None,
         batch_size=1,
     ) -> ttnn.Tensor:
-        TG = self.args.is_galaxy
         # x contains input in layer 0 and ffout of previous layer thereafter, x should be dealocated
         # h contains 0 in layer 0 and h_prev+x_prev+attn_out_prev thereafter, h is persistent
         skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
@@ -165,10 +164,9 @@ class TtTransformerBlock(LightweightModule):
             batch_size=batch_size,
         )
         if mode == "prefill":
-            h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
+            h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)  # bfloat8_b
             x.deallocate(True)
             ff_in_sharded, _ = self.ff_norm(h, None, mode)
-
         if mode == "decode":
             ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
             attn_out.deallocate(True)
@@ -176,7 +174,7 @@ class TtTransformerBlock(LightweightModule):
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in_sharded, mode)
         if self.layer_num == self.n_layers - 1 or mode == "prefill":
-            out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
+            out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg)  # bfloat8_b if prefill, bfloat16 if decode
             if mode == "decode":
                 ff_out.deallocate(True)
             if mode == "prefill":

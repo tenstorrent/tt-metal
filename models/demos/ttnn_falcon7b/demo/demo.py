@@ -13,12 +13,7 @@ from transformers import AutoTokenizer, FalconConfig, FalconForCausalLM
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-    nearest_32,
-    profiler,
-)
+from models.common.utility_functions import nearest_32, profiler
 from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor
 from models.demos.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path, model_config_entries
@@ -287,7 +282,6 @@ def run_falcon_demo_kv(
 
     ### Second prefill run without compile ###
     profiler.enable()
-    enable_persistent_kernel_cache()
 
     post_processor = partial(post_process)
     use_cache = True
@@ -442,8 +436,6 @@ def test_demo(
     model_location_generator,
     device,
 ):
-    disable_persistent_kernel_cache()
-
     return run_falcon_demo_kv(
         user_input=user_input,
         model_version="tiiuae/falcon-7b-instruct",
