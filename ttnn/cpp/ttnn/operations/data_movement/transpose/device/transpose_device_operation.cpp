@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "transpose_device_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
@@ -248,6 +249,16 @@ TransposeDeviceOperation::spec_return_value_t TransposeDeviceOperation::compute_
 TransposeDeviceOperation::tensor_return_value_t TransposeDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<TransposeDeviceOperation::tensor_return_value_t>
+TransposeDeviceOperation::create_op_performance_model(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, const Tensor& output) {
+    const auto& input_tensor = tensor_args.input;
+    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
+        {input_tensor}, {output}, ideal_dev_clock_cycles);
+    return result;
 }
 
 std::tuple<TransposeDeviceOperation::operation_attributes_t, TransposeDeviceOperation::tensor_args_t>
