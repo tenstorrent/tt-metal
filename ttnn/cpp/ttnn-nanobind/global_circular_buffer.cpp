@@ -27,6 +27,7 @@ void py_module(nb::module_& mod) {
         "create_global_circular_buffer",
         nb::overload_cast<IDevice*, const std::vector<std::pair<CoreCoord, CoreRangeSet>>&, uint32_t, BufferType>(
             &ttnn::global_circular_buffer::create_global_circular_buffer),
+        nb::keep_alive<0, 1>(),  // test
         nb::arg("device"),
         nb::arg("sender_receiver_core_mapping"),
         nb::arg("size"),
@@ -46,6 +47,7 @@ void py_module(nb::module_& mod) {
         "create_global_circular_buffer",
         nb::overload_cast<MeshDevice*, const std::vector<std::pair<CoreCoord, CoreRangeSet>>&, uint32_t, BufferType>(
             &ttnn::global_circular_buffer::create_global_circular_buffer),
+        nb::keep_alive<0, 1>(),  // test
         nb::arg("mesh_device"),
         nb::arg("sender_receiver_core_mapping"),
         nb::arg("size"),
