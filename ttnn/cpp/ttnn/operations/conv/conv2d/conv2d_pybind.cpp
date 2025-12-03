@@ -55,7 +55,7 @@ void py_bind_conv2d(py::module& module) {
             conv_config (ttnn.Conv2dConfig, optional): Configuration for convolution. Default: None.
             compute_config (ttnn.DeviceComputeKernelConfig, optional): Configuration for compute kernel. Default: None
             memory_config (ttnn.MemoryConfig, optional): Output Tensor's Memory Configuration. Default: None.
-            slice_config (ttnn.Conv2dSliceConfig, optional): Configuration for slicing input & output tensors in DRAM. If set to None input is in DRAM, DRAM slicing is automatically enabled. Default: None.
+            slice_config (ttnn.Conv2dSliceConfig, optional): Configuration for slicing input & output tensors in DRAM. If set to None and input is in DRAM, DRAM slicing is automatically enabled. Default: None.
             return_output_dim (bool, optional): If true, the op also returns the height and width of the output tensor in [N, H, W, C] format. Default: False
             return_weights_and_bias (bool, optional): If true, the op also returns the preprocessed weight and bias on device. Default: False
 
