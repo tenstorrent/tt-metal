@@ -135,7 +135,7 @@ void py_bind_conv2d(py::module& module) {
                 :header-rows: 1
 
                 * - dtype
-                  -layout
+                  - layout
                 * - FLOAT32
                   - TILE
                 * - BFLOAT16
