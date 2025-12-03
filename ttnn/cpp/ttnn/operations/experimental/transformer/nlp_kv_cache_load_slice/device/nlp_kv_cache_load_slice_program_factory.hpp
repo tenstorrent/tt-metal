@@ -7,7 +7,7 @@
 #include "nlp_kv_cache_load_slice_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::transformer::program {
+namespace ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice::program {
 
 struct NlpKVCacheLoadSliceSharedVariables {
     tt::tt_metal::KernelHandle unary_reader_kernel_id{};
@@ -33,4 +33,4 @@ struct NlpKVCacheLoadSliceProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::transformer::program
+}  // namespace ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice::program

@@ -9,7 +9,7 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
-namespace ttnn::operations::experimental::transformer::program {
+namespace ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice::program {
 
 using namespace tt::constants;
 using namespace tt;
@@ -171,4 +171,4 @@ void NlpKVCacheLoadSliceProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::transformer::program
+}  // namespace ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice::program

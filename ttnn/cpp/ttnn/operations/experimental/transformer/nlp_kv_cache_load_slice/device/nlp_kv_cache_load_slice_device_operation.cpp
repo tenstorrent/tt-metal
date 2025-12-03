@@ -5,7 +5,7 @@
 #include "nlp_kv_cache_load_slice_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice {
 
 NlpKVCacheLoadSliceDeviceOperation::program_factory_t NlpKVCacheLoadSliceDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
@@ -149,7 +149,7 @@ std::
 
     operation_attributes_t operation_attributes{output_tensor_start, output_tensor_end};
     tensor_args_t tensor_args{input_tensor, preallocated_output};
-    return {operation_attributes, tensor_args};
+    return std::make_tuple(std::move(operation_attributes), std::move(tensor_args));
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice

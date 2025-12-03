@@ -11,13 +11,13 @@
 #include "nlp_kv_cache_load_slice_device_operation_types.hpp"
 #include "nlp_kv_cache_load_slice_program_factory.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice {
 
 struct NlpKVCacheLoadSliceDeviceOperation {
-    using operation_attributes_t = transformer::operation_attributes_t;
-    using tensor_args_t = transformer::tensor_args_t;
-    using spec_return_value_t = transformer::spec_return_value_t;
-    using tensor_return_value_t = transformer::tensor_return_value_t;
+    using operation_attributes_t = nlp_kv_cache_load_slice::operation_attributes_t;
+    using tensor_args_t = nlp_kv_cache_load_slice::tensor_args_t;
+    using spec_return_value_t = nlp_kv_cache_load_slice::spec_return_value_t;
+    using tensor_return_value_t = nlp_kv_cache_load_slice::tensor_return_value_t;
     using program_factory_t = std::variant<program::NlpKVCacheLoadSliceProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
@@ -38,10 +38,10 @@ struct NlpKVCacheLoadSliceDeviceOperation {
         const std::optional<Tensor>& preallocated_output);
 };
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice
 
 namespace ttnn::prim {
 constexpr auto nlp_kv_cache_load_slice = ttnn::register_operation<
     "ttnn::prim::nlp_kv_cache_load_slice",
-    ttnn::operations::experimental::transformer::NlpKVCacheLoadSliceDeviceOperation>();
+    ttnn::operations::experimental::transformer::nlp_kv_cache_load_slice::NlpKVCacheLoadSliceDeviceOperation>();
 }  // namespace ttnn::prim
