@@ -52,7 +52,7 @@ def check_arc_block(arc: NocBlock, postcode: int) -> ArcCheckData:
     heartbeats_per_second = (heartbeat_1 - heartbeat_0) / delay_seconds
 
     # We do this in order to support all firmware versions
-    # This way we do not support uptime longer than around 9 years, but that is unrealistic
+    # This way we do not support uptime longer than around 8 years, but that is unrealistic
     heartbeat_offset = 0xA5A5A5A5 if heartbeat_1 >= 0xA5A5A5A5 else 0
     assert (
         heartbeat_1 > heartbeat_offset
