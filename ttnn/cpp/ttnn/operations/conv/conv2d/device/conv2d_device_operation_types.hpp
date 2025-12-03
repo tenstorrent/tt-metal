@@ -166,6 +166,59 @@ struct Conv2dConfig {
     }
 };
 
+class Conv2dSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
+    using OptionalRefTensor = std::optional<std::reference_wrapper<ttnn::Tensor>>;
+    using RefTensor = std::reference_wrapper<ttnn::Tensor>;
+
+    Conv2dConfig auto_slice_conv_config;
+    uint32_t batch_size;
+    IOShape input_shape;
+    uint32_t input_channels;
+    uint32_t output_channels;
+    std::array<uint32_t, 2> kernel_size;
+    std::array<uint32_t, 2> stride;
+    std::array<uint32_t, 4> padding_n4;
+    std::array<uint32_t, 2> dilation;
+    uint32_t groups;
+    tt::tt_metal::Layout input_layout;
+    tt::tt_metal::DataType input_dtype;
+    tt::tt_metal::DataType output_dtype;
+    Tensor& weight_tensor;
+    OptionalRefTensor bias_tensor;
+    Conv2dConfig conv_config;
+    DeviceComputeKernelConfig compute_config;
+    MeshDevice* device;
+
+public:
+    Conv2dSliceAttr(
+        uint32_t batch_size,
+        IOShape input_shape,
+        uint32_t input_channels,
+        uint32_t output_channels,
+        std::array<uint32_t, 2> kernel_size,
+        std::array<uint32_t, 2> stride,
+        std::array<uint32_t, 4> padding_n4,
+        std::array<uint32_t, 2> dilation,
+        uint32_t groups,
+        tt::tt_metal::Layout input_layout,
+        tt::tt_metal::DataType input_dtype,
+        tt::tt_metal::DataType output_dtype,
+        Tensor& weight_tensor,
+        OptionalRefTensor bias_tensor,
+        Conv2dConfig& conv_config,
+        DeviceComputeKernelConfig& compute_config,
+        MeshDevice* device);
+    std::tuple<std::tuple<IOShape, IOShape>, std::array<uint32_t, 4>> get_input_slice_and_padding(
+        IOShape output_slice_start, IOShape output_slice_end);
+    std::tuple<IOShape, IOShape> get_input_slice(IOShape output_slice_start, IOShape output_slice_end) override;
+    uint32_t get_L1_usage(
+        IOShape output_slice_start, IOShape output_slice_end, op_slicing::Op2DSliceConfig slice_config) override;
+    tt::tt_metal::MemoryConfig get_input_memory_config(IOShape output_slice_start, IOShape output_slice_end) override;
+    ttnn::Tensor run_L1_op(
+        const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) override;
+    std::string name() override;
+};
+
 // TODO: Accept parallelization
 enum class Conv2dOpParallelizationStrategy { MULTI_CORE, MULTI_CORE_REUSE, MULTI_CORE_REUSE_MCAST, SINGLE_CORE };
 
