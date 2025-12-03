@@ -121,8 +121,8 @@ parameters = {
 }
 
 # Only add model_traced suite if it has valid configurations
-# if model_traced_params and any(len(v) > 0 for v in model_traced_params.values() if isinstance(v, list)):
-#     parameters["model_traced"] = model_traced_params
+if model_traced_params and any(len(v) > 0 for v in model_traced_params.values() if isinstance(v, list)):
+    parameters["model_traced"] = model_traced_params
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:

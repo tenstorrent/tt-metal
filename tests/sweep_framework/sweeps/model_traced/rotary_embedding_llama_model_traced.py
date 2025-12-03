@@ -36,8 +36,8 @@ parameters = {
 }
 
 # Only add model_traced suite if it has valid configurations
-# if model_traced_params:
-#     parameters["model_traced"] = model_traced_params
+if model_traced_params:
+    parameters["model_traced"] = model_traced_params
 
 
 def run(
