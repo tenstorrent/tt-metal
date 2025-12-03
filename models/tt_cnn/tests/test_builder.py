@@ -548,6 +548,73 @@ def test_conv2d_configuration_from_model_args(input_size, channel_config, batch_
 
 
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("input_size", INPUT_SIZES)
+@pytest.mark.parametrize("channel_config", CHANNEL_CONFIGS)
+@pytest.mark.parametrize("kernel_config", KERNEL_CONFIGS)
+def test_conv2d_return_output_dim(input_size, channel_config, kernel_config, device):
+    input_height, input_width = input_size
+    in_channels, out_channels = channel_config["in_channels"], channel_config["out_channels"]
+    kernel_size, padding = kernel_config["kernel_size"], kernel_config["padding"]
+
+    configuration = Conv2dConfiguration.with_random_weights(
+        input_height=input_height,
+        input_width=input_width,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        batch_size=1,
+        kernel_size=(kernel_size, kernel_size),
+        padding=(padding, padding),
+    )
+
+    torch_input_tensor, ttnn_input_tensor = create_conv2d_input_tensor(configuration)
+    layer = TtConv2d(configuration, device)
+
+    ttnn_output_tensor, (H, W) = layer(ttnn_input_tensor, return_output_dim=True)
+
+    expected_h = (input_height + 2 * padding - (kernel_size - 1) - 1) // 1 + 1
+    expected_w = (input_width + 2 * padding - (kernel_size - 1) - 1) // 1 + 1
+
+    assert H == expected_h, f"Height mismatch: got {H}, expected {expected_h}"
+    assert W == expected_w, f"Width mismatch: got {W}, expected {expected_w}"
+
+
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("input_size", SLICE_INPUT_SIZES)
+@pytest.mark.parametrize("channels", SLICE_CHANNEL_CONFIGS)
+@pytest.mark.parametrize("kernel_config", KERNEL_CONFIGS)
+def test_conv2d_return_output_dim_with_channel_slicing(input_size, channels, kernel_config, device):
+    input_height, input_width = input_size
+    in_channels, out_channels = channels["in_channels"], channels["out_channels"]
+    kernel_size, padding = kernel_config["kernel_size"], kernel_config["padding"]
+
+    slice_strategy = ChannelSliceStrategyConfiguration(num_slices=4)
+
+    configuration = Conv2dConfiguration.with_random_weights(
+        input_height=input_height,
+        input_width=input_width,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        batch_size=1,
+        kernel_size=(kernel_size, kernel_size),
+        padding=(padding, padding),
+        slice_strategy=slice_strategy,
+    )
+
+    torch_input_tensor, ttnn_input_tensor = create_conv2d_input_tensor(configuration)
+    ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    layer = TtConv2d(configuration, device)
+
+    ttnn_output_tensor, (H, W) = layer(ttnn_input_tensor, return_output_dim=True)
+
+    expected_h = (input_height + 2 * padding - (kernel_size - 1) - 1) // 1 + 1
+    expected_w = (input_width + 2 * padding - (kernel_size - 1) - 1) // 1 + 1
+
+    assert H == expected_h
+    assert W == expected_w
+
+
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 def test_conv2d_slicing_validation_errors(device):
     """Test that validation errors are raised correctly for Conv2D slicing"""
 
