@@ -165,7 +165,6 @@ void device_module(nb::module_& m_device) {
         .def(nb::self == nb::self)
         .def(nb::self != nb::self);
 
-    // TODO_NANOBIND: May need a placement new impl?
     m_device.def(
         "CreateDevice",
         [](int device_id,

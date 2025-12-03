@@ -18,9 +18,6 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/base_types.hpp>
 
-// variant of two other classes defined here
-// NB_MAKE_OPAQUE(ttnn::DeviceComputeKernelConfig);
-
 namespace ttnn::operations::core {
 
 struct DeviceComputeKernelConfigPlaceholder {};
@@ -46,7 +43,6 @@ void py_module_types(nb::module_& mod) {
         .value("LEVEL_5", compute_throttle_utils::ThrottleLevel::LEVEL_5);
 
     // variant of (Grayskull|Wormhole)ComputeKernelConfig
-    // opaque and this line seem mutually exclusive. variant typecaster should handle it?
     nb::class_<DeviceComputeKernelConfigPlaceholder>(mod, "DeviceComputeKernelConfig");
 
     nb::class_<GrayskullComputeKernelConfig>(mod, "GrayskullComputeKernelConfig")
@@ -105,6 +101,7 @@ void py_module(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::kw_only(),
         nb::arg("queue_id") = nb::none(),
+        nb::keep_alive<0, 2>(),  // test
         R"doc(
             Copy tensor from host to device.
 
