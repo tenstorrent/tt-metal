@@ -199,3 +199,53 @@ target_link_libraries(
         protobuf::libprotobuf
         cxxopts::cxxopts
 )
+
+# Generate Traffic Tests library
+add_library(
+    generate_traffic_tests_lib
+    OBJECT
+    generate_traffic_tests/generate_traffic_tests.cpp
+)
+
+add_dependencies(generate_traffic_tests_lib scaleout_generated_protos)
+
+target_include_directories(
+    generate_traffic_tests_lib
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/generate_traffic_tests
+)
+target_include_directories(
+    generate_traffic_tests_lib
+    SYSTEM
+    PUBLIC
+        ${CMAKE_CURRENT_BINARY_DIR}
+        ${CMAKE_BINARY_DIR}/tt_metal/fabric
+)
+
+target_link_libraries(
+    generate_traffic_tests_lib
+    PUBLIC
+        generate_mgd_lib
+        scaleout_tools
+        protobuf::libprotobuf
+        yaml-cpp::yaml-cpp
+)
+
+# Generate Traffic Tests CLI tool
+add_executable(generate_traffic_tests generate_traffic_tests/generate_traffic_tests_main.cpp)
+
+set_target_properties(
+    generate_traffic_tests
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${CMAKE_BINARY_DIR}/tools/scaleout
+)
+
+target_link_libraries(
+    generate_traffic_tests
+    PRIVATE
+        generate_traffic_tests_lib
+        scaleout_tools
+        cxxopts::cxxopts
+)
