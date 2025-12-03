@@ -67,7 +67,7 @@ void py_bind_conv2d(py::module& module) {
             - tuple[ttnn.Tensor, tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, and preprocessed weight and bias tensors that are both on device, if return_weights_and_bias = True
             - tuple[ttnn.Tensor, tuple[int, int], tuple[ttnn.Tensor, ttnn.Tensor]]: If true, the op also returns the preprocessed weight and bias on the device. Weight and bias should be used for the same convolution next time it is called to avoid preparing weights and bias multiple times. Default: false.
 
-                Note:
+        Note:
 
             The :attr: `input_tensor` supports the following data type and layout:
             .. list-table:: input_tensor
