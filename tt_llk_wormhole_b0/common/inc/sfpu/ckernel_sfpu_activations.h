@@ -97,7 +97,8 @@ inline void _calculate_activation_()
 template <bool APPROXIMATION_MODE>
 void _init_hardsigmoid_()
 {
-    sfpi::vConstFloatPrgm0 = 0.1668f;
+    // For hardsigmoid slope is 1/6, FP32 IEEE 754 representation.
+    sfpi::vConstFloatPrgm0 = 0.1666666716337204f;
     sfpi::vConstFloatPrgm1 = 0.5f;
 }
 
