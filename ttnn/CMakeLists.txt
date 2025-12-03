@@ -79,6 +79,7 @@ target_sources(
         core/distributed/fabric_socket.cpp
         core/distributed/mpi_socket.cpp
         core/events.cpp
+        core/debug_event.cpp
         core/global_circular_buffer.cpp
         core/global_semaphore.cpp
         core/graph/graph_argument_serializer.cpp

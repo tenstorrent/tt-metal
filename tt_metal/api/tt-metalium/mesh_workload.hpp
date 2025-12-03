@@ -44,6 +44,7 @@ public:
     uint32_t get_cb_base_addr(std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type);
     uint32_t get_cb_size(std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type);
     MeshWorkloadImpl& impl() { return *pimpl_; }
+    uint64_t get_id() const;
 
 private:
     std::unique_ptr<MeshWorkloadImpl> pimpl_;
