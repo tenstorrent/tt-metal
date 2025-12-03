@@ -675,7 +675,7 @@ void post_conv2d_op_memory_checks(
     const auto& input_tensor_b = tensor_args.b;
     const auto& input_tensor_bias = tensor_args.bias;
     const bool has_bias = input_tensor_bias.has_value();
-    auto device = input_tensor_a.device();
+    auto *device = input_tensor_a.device();
     const auto& weights_shape = input_tensor_b.padded_shape();
     const auto& sliding_window_config = operation_attributes.sliding_window_config;
     const auto& parallelization_config = operation_attributes.parallelization_config;
