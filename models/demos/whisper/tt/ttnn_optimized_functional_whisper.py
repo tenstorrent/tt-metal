@@ -294,10 +294,13 @@ def whisper_attention(
             fused_qkv_dtype = ttnn.bfloat8_b
         else:
             fused_qkv_dtype = ttnn.bfloat16
+        compute_grid_size = hidden_states.device().compute_with_storage_grid_size()
+        core_grid = ttnn.CoreGrid(y=compute_grid_size.y, x=compute_grid_size.x)
         fused_qkv = ttnn.linear(
             hidden_states,
             parameters.query_key_value.weight,
             bias=parameters.query_key_value.bias,
+            core_grid=core_grid,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=fused_qkv_dtype,
         )
