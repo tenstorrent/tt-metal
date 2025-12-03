@@ -667,7 +667,11 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        batch_size=1,
     ):
+        if batch_size > 1:
+            x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
+
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
@@ -706,6 +710,9 @@ class Attention(LightweightModule):
 
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
+
+        if batch_size > 1:
+            xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len // batch_size, -1])
 
         ttnn.deallocate(x_11SH)
 
@@ -809,6 +816,10 @@ class Attention(LightweightModule):
             ttnn.deallocate(k_fill)
             ttnn.deallocate(v_fill)
 
+        if batch_size > 1:
+            k_fill = ttnn.reshape(k_fill, [1, 1, seq_len, -1])
+            v_fill = ttnn.reshape(v_fill, [1, 1, seq_len, -1])
+
         # SDPA
         q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=self.activation_dtype or ttnn.bfloat8_b)
         ttnn.deallocate(q_heads_1QSD)
@@ -885,6 +896,9 @@ class Attention(LightweightModule):
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
+        if batch_size > 1:
+            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, 1, seq_len, -1])
+
         # Reduce-scatter
         if not self.use_fused_all_gather_matmul:
             output_11SH = tt_all_reduce(
@@ -913,6 +927,7 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        batch_size=1,
     ):
         if mode == "prefill":
             return self.forward_prefill(
@@ -923,6 +938,7 @@ class Attention(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache,
+                batch_size=batch_size,
             )
         else:
             return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)

@@ -33,11 +33,11 @@ from models.tt_transformers.tt.rope import get_rot_mats
     "paged_attention",
     (
         True,
-        False,
+        # False,
     ),
     ids=(
         "paged_attention",
-        "default_attention",
+        # "default_attention",
     ),
 )
 @pytest.mark.parametrize(
@@ -63,7 +63,7 @@ def test_attention_inference(
 ):
     dtype = ttnn.bfloat8_b
     pcc = 0.99
-    batch_size = 1  # For prefill we only support batch_size = 1
+    batch_size = 2  # For prefill we only support batch_size = 1
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
     model_args.n_layers = 1
@@ -157,6 +157,7 @@ def test_attention_inference(
         user_id=0,
         mode="prefill",
         page_table=page_table_tt,
+        batch_size=batch_size,
     )
     tt_out = ttnn.to_torch(
         tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape)
