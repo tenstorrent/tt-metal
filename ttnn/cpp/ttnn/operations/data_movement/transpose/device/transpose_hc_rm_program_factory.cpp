@@ -8,6 +8,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -136,6 +137,9 @@ TransposeHCRMProgramFactory::cached_program_t TransposeHCRMProgramFactory::creat
     Program program = CreateProgram();
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
+
+    log_debug(tt::LogOp, "transpose_hc_rm");
+    log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
 
     IDevice* device = input_tensor.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
