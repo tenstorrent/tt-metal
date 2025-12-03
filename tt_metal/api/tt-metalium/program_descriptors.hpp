@@ -139,8 +139,6 @@ struct ProgramDescriptor {
     SemaphoreDescriptors semaphores;
     CBDescriptors cbs;
     std::optional<ttsl::hash::hash_t> custom_program_hash;
-
-    uint32_t add_semaphore(CoreRangeSet core_ranges, uint32_t initial_value, CoreType core_type = CoreType::WORKER);
 };
 
 }  // namespace tt::tt_metal
