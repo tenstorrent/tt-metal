@@ -1805,8 +1805,8 @@ class ModelArgs:
                 try:
                     if hasattr(model, "model") and hasattr(model.model, "lm_head_multiplier"):
                         self.lm_head_multiplier = float(model.model.lm_head_multiplier)
-                except Exception:
-                    pass
+                except (AttributeError, ValueError, TypeError) as e:
+                    logger.warning(f"Could not set lm_head_multiplier from HF model: {e}")
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
 

@@ -91,8 +91,7 @@ class TransformerBlock(LightweightModule):
             TG=args.is_galaxy,
         )
 
-        # Resolve FFN norm key dynamically for broader model compatibility (Falcon, etc.)
-        # ssinghal: Not happy with this location at the moment but will have to figure out where to put this.
+        # Resolve FFN norm key dynamically for broader model compatibility.
         def _resolve_ffn_norm_key(sd, ln):
             base = f"layers.{ln}."
             # Preferred aliases in order
@@ -107,16 +106,11 @@ class TransformerBlock(LightweightModule):
             for key in preferred:
                 if f"{base}{key}.weight" in sd:
                     return key
-            # Fallback: scan for any layer norm that is not the attention norm
-            suffixes = []
-            for k in sd.keys():
-                if k.startswith(base) and k.endswith(".weight") and ("norm" in k or "layernorm" in k):
-                    suffix = k[len(base) : -len(".weight")]
-                    if suffix != "attention_norm" and not suffix.startswith("pre_feedforward"):
-                        suffixes.append(suffix)
-            if suffixes:
-                return suffixes[0]
-            return "ffn_norm"
+            # No permissive fallback: raise with context so model config can be corrected
+            available = [
+                k[len(base) : -len(".weight")] for k in sd.keys() if k.startswith(base) and k.endswith(".weight")
+            ]
+            raise KeyError(f"Could not resolve FFN norm key for {base[:-1]}. Tried {preferred}. Available: {available}")
 
         ffn_norm_key = _resolve_ffn_norm_key(state_dict, layer_num)
 

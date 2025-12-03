@@ -839,12 +839,7 @@ def test_demo_text(
         # Keep track of generated outputs to print out every iteration
         all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(global_batch_size)]
         for user in range(global_batch_size):
-            user_tok = int(prefilled_token[user].item())
-            # Clamp to valid vocab range to avoid tokenizer decode overflow
-            if user_tok < 0:
-                user_tok = 0
-            elif user_tok >= vocab_size:
-                user_tok = vocab_size - 1
+            user_tok = prefilled_token[user].item()
             all_outputs[user].append(user_tok)
 
         user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
@@ -918,12 +913,7 @@ def test_demo_text(
                 current_pos += 1
             # Save output token to print out later
             for user in range(global_batch_size):
-                user_tok = int(out_tok[user].item())
-                # Clamp to valid vocab range to avoid tokenizer decode overflow
-                if user_tok < 0:
-                    user_tok = 0
-                elif user_tok >= vocab_size:
-                    user_tok = vocab_size - 1
+                user_tok = out_tok[user].item()
                 if (
                     user_tok not in tokenizer.stop_tokens and user_done[user] == False
                 ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
