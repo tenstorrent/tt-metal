@@ -66,8 +66,14 @@ void NlpCreateHeadsSegformerDeviceOperation::validate_on_program_cache_miss(
 spec_return_value_t NlpCreateHeadsSegformerDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (args.output_mem_config.is_sharded()) {
-        TT_ASSERT(false);
-        return {};
+        TT_FATAL(false, "Sharded output memory config is not supported for nlp_create_qkv_heads_segformer");
+        TensorSpec spec(
+            ttnn::Shape({}),
+            tt::tt_metal::TensorLayout(
+                tt::tt_metal::DataType::INVALID,
+                tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+                args.output_mem_config));
+        return {spec, spec, spec};
     }
 
     const auto& input_tensor = tensor_args.input_tensor;
@@ -92,9 +98,9 @@ tensor_return_value_t NlpCreateHeadsSegformerDeviceOperation::create_output_tens
     }
     auto output_specs = compute_output_specs(args, tensor_args);
     return {
-        create_device_tensor(output_specs[0], tensor_args.input_tensor.device()),
-        create_device_tensor(output_specs[1], tensor_args.input_tensor.device()),
-        create_device_tensor(output_specs[2], tensor_args.input_tensor.device())};
+        create_device_tensor(std::get<0>(output_specs), tensor_args.input_tensor.device()),
+        create_device_tensor(std::get<1>(output_specs), tensor_args.input_tensor.device()),
+        create_device_tensor(std::get<2>(output_specs), tensor_args.input_tensor.device())};
 }
 
 std::tuple<

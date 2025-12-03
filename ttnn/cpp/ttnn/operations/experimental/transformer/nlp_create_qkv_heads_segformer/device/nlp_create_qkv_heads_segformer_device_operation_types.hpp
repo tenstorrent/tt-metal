@@ -18,6 +18,6 @@ struct tensor_args_t {
 };
 
 using tensor_return_value_t = std::tuple<Tensor, Tensor, Tensor>;
-using spec_return_value_t = std::vector<TensorSpec>;
+using spec_return_value_t = std::tuple<TensorSpec, TensorSpec, TensorSpec>;
 
 }  // namespace ttnn::operations::experimental::transformer::nlp_create_qkv_heads_segformer
