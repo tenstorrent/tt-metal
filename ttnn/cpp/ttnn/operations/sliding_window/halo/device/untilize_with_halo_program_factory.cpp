@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "untilize_with_halo_program_factory.hpp"
+#include "ttnn/operations/sliding_window/halo/device/untilize_with_halo_program_factory.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -19,9 +19,12 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::data_movement::program {
 
-// In order to make circular buffer indicies sequential, we use variable to keep track of the next available index.
+// TODO: Look into increasing this to tradeoff some L1 for performance (#19980)
+constexpr int UNTILIZE_BLOCK_SIZE = 32;
+
+// In order to make circular buffer indices sequential, we use variable to keep track of the next available index.
 // Circular buffer indices should be assigned right before their creation.
 struct CBIndices {
     // Invalid value for cb id is 32, number greater than the maximum number of index circular buffer can have.
@@ -58,22 +61,88 @@ static inline CBHandle create_circular_buffer(
 
 constexpr bool ENABLE_UNTILIZE_DOUBLE_BUFFERING = true;
 
-operation::ProgramWithCallbacks untilize_with_halo_multi_core(
-    Program& program,
-    const Tensor& input_tensor,
-    const uint32_t pad_val,
-    const uint32_t ncores_nhw,
-    const uint32_t max_out_nsticks_per_core,
-    const Tensor& padding_config0,
-    const Tensor& padding_config1,
-    const Tensor& gather_config0,
-    const Tensor& gather_config1,
-    const std::vector<uint16_t>& number_of_blocks_per_core,
-    const bool remote_read,
-    const bool transpose_mcast,
-    Tensor& output_tensor,
-    const int block_size,
-    bool config_tensors_in_dram) {
+UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory::create(
+    const sliding_window::halo::operation_attributes_t& operation_attributes,
+    const sliding_window::halo::tensor_args_t& tensor_args,
+    sliding_window::halo::tensor_return_value_t& output_tensor) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& pad_val = operation_attributes.pad_val;
+    const int block_size = UNTILIZE_BLOCK_SIZE;
+    const uint32_t ncores_nhw = operation_attributes.config.num_cores_nhw;
+    const uint32_t max_out_nsticks_per_core = operation_attributes.max_out_nsticks_per_core;
+    const bool config_tensors_in_dram = operation_attributes.config_tensors_in_dram;
+    const bool remote_read = operation_attributes.remote_read;
+    const bool transpose_mcast = operation_attributes.transpose_mcast;
+
+    auto *device = input_tensor.device();
+
+    bool is_in_tiled = input_tensor.layout() == Layout::TILE;
+    bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+
+    auto pad_metadata = sliding_window::generate_pad_metadata(operation_attributes.config);
+    auto op_trace_metadata = sliding_window::generate_op_trace_metadata(operation_attributes.config);
+    auto shard_boundaries = sliding_window::generate_shard_boundaries(operation_attributes.config);
+    const uint32_t input_shard_height = input_tensor.memory_config().shard_spec()->shape[0];
+    auto tensor_metadata =
+        sliding_window::generate_tensor_metadata(pad_metadata, operation_attributes.config, input_shard_height);
+
+    uint32_t num_cores_x = input_tensor.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
+
+    auto kernel_config = sliding_window::generate_halo_kernel_config_tensors(
+        tensor_metadata,
+        shard_boundaries,
+        is_block_sharded,
+        transpose_mcast,
+        remote_read,
+        device,
+        num_cores_x,
+        is_in_tiled,
+        UNTILIZE_BLOCK_SIZE);
+
+    const auto& pad_config0 = kernel_config.pad_config0;
+    const auto& pad_config1 = kernel_config.pad_config1;
+    const auto& gather_config0 = kernel_config.gather_config0;
+    const auto& gather_config1 = kernel_config.gather_config1;
+
+    const auto pad_config_tensor0 = sliding_window::construct_on_host_config_tensor(
+        pad_config0, operation_attributes.parallel_config, operation_attributes.config_tensors_in_dram);
+    const auto pad_config_tensor1 = sliding_window::construct_on_host_config_tensor(
+        pad_config1, operation_attributes.parallel_config, operation_attributes.config_tensors_in_dram);
+    const auto gather_config_tensor0 = sliding_window::construct_on_host_config_tensor(
+        gather_config0, operation_attributes.parallel_config, operation_attributes.config_tensors_in_dram);
+    const auto gather_config_tensor1 = sliding_window::construct_on_host_config_tensor(
+        gather_config1, operation_attributes.parallel_config, operation_attributes.config_tensors_in_dram);
+
+    auto pad_config_device_tensor0 = sliding_window::move_config_tensor_to_device(
+        pad_config_tensor0,
+        operation_attributes.parallel_config,
+        is_block_sharded,
+        device,
+        operation_attributes.config_tensors_in_dram);
+    auto pad_config_device_tensor1 = sliding_window::move_config_tensor_to_device(
+        pad_config_tensor1,
+        operation_attributes.parallel_config,
+        is_block_sharded,
+        device,
+        operation_attributes.config_tensors_in_dram);
+    auto gather_config_device_tensor0 = sliding_window::move_config_tensor_to_device(
+        gather_config_tensor0,
+        operation_attributes.parallel_config,
+        is_block_sharded,
+        device,
+        operation_attributes.config_tensors_in_dram);
+    auto gather_config_device_tensor1 = sliding_window::move_config_tensor_to_device(
+        gather_config_tensor1,
+        operation_attributes.parallel_config,
+        is_block_sharded,
+        device,
+        operation_attributes.config_tensors_in_dram);
+
+    const auto number_of_blocks_per_core = sliding_window::remap_nhw_scalar_argument_across_full_grid(
+        kernel_config.number_of_blocks_per_core, operation_attributes.parallel_config);
+
+    Program program = CreateProgram();
+
     Buffer* src_buffer = input_tensor.buffer();
     Buffer* dst_buffer = output_tensor.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -182,13 +251,13 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         }
     }
 
-    TT_ASSERT(padding_config0.dtype() == DataType::UINT16);
-    TT_ASSERT(padding_config1.dtype() == DataType::UINT16);
-    TT_ASSERT(gather_config0.dtype() == DataType::UINT16);
-    TT_ASSERT(gather_config1.dtype() == DataType::UINT16);
+    TT_ASSERT(pad_config_device_tensor0.dtype() == DataType::UINT16);
+    TT_ASSERT(pad_config_device_tensor1.dtype() == DataType::UINT16);
+    TT_ASSERT(gather_config_device_tensor0.dtype() == DataType::UINT16);
+    TT_ASSERT(gather_config_device_tensor1.dtype() == DataType::UINT16);
 
-    const auto& padding_config_storage0 = padding_config0.device_storage();
-    auto padding_config_buffer0 = padding_config_storage0.get_buffer();
+    const auto& padding_config_storage0 = pad_config_device_tensor0.device_storage();
+    auto* padding_config_buffer0 = padding_config_storage0.get_buffer();
     cb_indices.padding_config0 = cb_indices.get_next_cb_id();
     auto padding_config_cb0 = create_circular_buffer(
         program,
@@ -199,8 +268,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         padding_config_buffer0->page_size(),
         config_tensors_in_dram ? nullptr : padding_config_buffer0);
 
-    const auto& padding_config_storage1 = padding_config1.device_storage();
-    auto padding_config_buffer1 = padding_config_storage1.get_buffer();
+    const auto& padding_config_storage1 = pad_config_device_tensor1.device_storage();
+    auto* padding_config_buffer1 = padding_config_storage1.get_buffer();
     cb_indices.padding_config1 = cb_indices.get_next_cb_id();
     auto padding_config_cb1 = create_circular_buffer(
         program,
@@ -211,8 +280,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         padding_config_buffer1->page_size(),
         config_tensors_in_dram ? nullptr : padding_config_buffer1);
 
-    const auto& gather_config_storage0 = gather_config0.device_storage();
-    auto gather_config_buffer0 = gather_config_storage0.get_buffer();
+    const auto& gather_config_storage0 = gather_config_device_tensor0.device_storage();
+    auto* gather_config_buffer0 = gather_config_storage0.get_buffer();
     cb_indices.gather_config0 = cb_indices.get_next_cb_id();
     auto gather_config_cb0 = create_circular_buffer(
         program,
@@ -223,8 +292,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         gather_config_buffer0->page_size(),
         config_tensors_in_dram ? nullptr : gather_config_buffer0);
 
-    const auto& gather_config_storage1 = gather_config1.device_storage();
-    auto gather_config_buffer1 = gather_config_storage1.get_buffer();
+    const auto& gather_config_storage1 = gather_config_device_tensor1.device_storage();
+    auto* gather_config_buffer1 = gather_config_storage1.get_buffer();
     cb_indices.gather_config1 = cb_indices.get_next_cb_id();
     auto gather_config_cb1 = create_circular_buffer(
         program,
@@ -236,7 +305,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         config_tensors_in_dram ? nullptr : gather_config_buffer1);
 
     const bool is_height_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
-    const bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     const bool is_width_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
     const uint32_t block_stride = 2;  // Skip every 2nd block because of split reader
@@ -338,29 +406,37 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
             core_index++;
         }
     }
-    auto override_runtime_arguments_callback = [src_cb,
-                                                out_cb,
-                                                padding_config_cb0,
-                                                padding_config_cb1,
-                                                gather_config_cb0,
-                                                gather_config_cb1,
-                                                padding_config_storage0,
-                                                padding_config_storage1,
-                                                gather_config_storage0,
-                                                gather_config_storage1](
-                                                   const void* operation,
-                                                   Program& program,
-                                                   const std::vector<Tensor>& input_tensors,
-                                                   const std::vector<std::optional<const Tensor>>&,
-                                                   const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
 
-        UpdateDynamicCircularBufferAddress(program, src_cb, *src_buffer);
-        UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
-    };
+    return cached_program_t{
+        std::move(program),
+        shared_variables_t{
+            .src_cb = src_cb,
+            .out_cb = out_cb,
+            .padding_config_cb0 = padding_config_cb0,
+            .padding_config_cb1 = padding_config_cb1,
+            .gather_config_cb0 = gather_config_cb0,
+            .gather_config_cb1 = gather_config_cb1,
+            .padding_config_storage0 = padding_config_storage0,
+            .padding_config_storage1 = padding_config_storage1,
+            .gather_config_storage0 = gather_config_storage0,
+            .gather_config_storage1 = gather_config_storage1,
+        }};
+}
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+void UntilizeWithHaloProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const sliding_window::halo::operation_attributes_t& operation_attributes,
+    const sliding_window::halo::tensor_args_t& tensor_args,
+    sliding_window::halo::tensor_return_value_t& output_tensor) {
+    auto& program = cached_program.program;
+
+    auto *src_buffer = tensor_args.input_tensor.buffer();
+    auto *dst_buffer = output_tensor.buffer();
+    auto& src_cb = cached_program.shared_variables.src_cb;
+    auto& out_cb = cached_program.shared_variables.out_cb;
+
+    UpdateDynamicCircularBufferAddress(program, src_cb, *src_buffer);
+    UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
 }
 
 struct InplaceCBIndices {
@@ -377,4 +453,4 @@ private:
     uint32_t next_cb_id = tt::CBIndex::c_0;
 };
 
-}  // namespace ttnn::operations::data_movement::detail
+}  // namespace ttnn::operations::data_movement::program

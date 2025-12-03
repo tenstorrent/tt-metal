@@ -16,7 +16,7 @@
 
 namespace ttnn::operations::reduction::accumulation::detail {
 void bind_reduction_cumprod_operation(py::module& module) {
-    auto docstring =
+    const auto* docstring =
         R"doc(
         Returns cumulative product of `input` along dimension `dim`
         For a given `input` of size N, the `output` will also contain N elements and be such that:

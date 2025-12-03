@@ -103,10 +103,10 @@ enum class BandwidthStatistics {
 };
 // The header of each statistic in the Bandwidth Summary CSV
 const std::unordered_map<BandwidthStatistics, std::string> BandwidthStatisticsHeader = {
-    {BandwidthStatistics::BandwidthMean, "avg_bandwidth_GB_per_s"},
-    {BandwidthStatistics::BandwidthMin, "bw_min_GB_per_s"},
-    {BandwidthStatistics::BandwidthMax, "bw_max_GB_per_s"},
-    {BandwidthStatistics::BandwidthStdDev, "bw_std_dev_GB_per_s"},
+    {BandwidthStatistics::BandwidthMean, "avg_bandwidth_gigabytes_per_s"},
+    {BandwidthStatistics::BandwidthMin, "bw_min_gigabytes_per_s"},
+    {BandwidthStatistics::BandwidthMax, "bw_max_gigabytes_per_s"},
+    {BandwidthStatistics::BandwidthStdDev, "bw_std_dev_gigabytes_per_s"},
     {BandwidthStatistics::PacketsPerSecondMean, "avg_packets_per_s"},
     {BandwidthStatistics::CyclesMean, "avg_cycles"},
 };

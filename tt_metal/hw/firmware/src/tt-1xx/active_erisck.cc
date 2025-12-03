@@ -31,7 +31,9 @@ void _start() {
     extern uint32_t __kernel_data_lma[];
     do_crt1((uint32_t tt_l1_ptr*)__kernel_data_lma);
 
-    noc_local_state_init(NOC_INDEX);
+    if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
+        noc_local_state_init(NOC_INDEX);
+    }
 
     {
         DeviceZoneScopedMainChildN("ERISC-KERNEL");

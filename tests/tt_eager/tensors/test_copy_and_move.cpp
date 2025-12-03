@@ -120,7 +120,7 @@ void test_tensor_move_semantics(distributed::MeshDevice* device) {
                        DataType::BFLOAT16,
                        Layout::TILE)
                        .to_device(device);
-    auto og_buffer_a = dev_a.buffer();
+    auto* og_buffer_a = dev_a.buffer();
     Tensor dev_a_copy = std::move(dev_a);
     TT_FATAL(dev_a_copy.buffer() == og_buffer_a, "Test Failed");
     auto dev_a_copy_on_host = dev_a_copy.cpu();

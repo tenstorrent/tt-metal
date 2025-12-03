@@ -5,8 +5,11 @@
 #include "groupnorm_input_mask.hpp"
 #include <tt-metalium/constants.hpp>
 #include <algorithm>
+#include "ttnn/types.hpp"
 
 using namespace tt::constants;
+using tt::tt_metal::DataType;
+using tt::tt_metal::Layout;
 
 namespace ttnn::operations::normalization {
 

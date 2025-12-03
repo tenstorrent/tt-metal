@@ -231,20 +231,28 @@ struct ExecuteBinaryFmod {
     static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     static Tensor invoke(
-        const Tensor& input_tensor, float scalar, const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const Tensor& input_tensor,
+        float scalar,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 struct ExecuteBinaryRemainder {
     static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     static Tensor invoke(
-        const Tensor& input_tensor, float scalar, const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const Tensor& input_tensor,
+        float scalar,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 struct ExecuteLCM {

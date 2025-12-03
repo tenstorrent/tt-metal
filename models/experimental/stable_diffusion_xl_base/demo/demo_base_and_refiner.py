@@ -164,6 +164,10 @@ def run_demo_inference(
         )
 
         profiler.end("end_to_end_generation")
+        if iter == 0:
+            profiler.times["end_to_end_generation"][0] -= profiler.times["auto_compile_if_needed"][0]
+            for key in profiler.times.keys():
+                profiler.times[key] = [profiler.times[key][-1]]
 
         for idx, img in enumerate(imgs):
             if iter * batch_size + idx >= len(prompts):

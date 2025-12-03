@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "moe_pybind.hpp"
+#include "ttnn/operations/reduction/moe/moe_pybind.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -10,14 +10,14 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include "ttnn/operations/reduction/moe/moe.hpp"
 #include "ttnn-pybind/decorators.hpp"
 
-#include "moe.hpp"
-
 namespace ttnn::operations::reduction::detail {
+namespace py = pybind11;
 
 void bind_reduction_moe_operation(py::module& module) {
-    auto doc =
+    const auto* const doc =
         R"doc(
             Returns the weight of the zero-th MoE expert.
 
@@ -80,20 +80,20 @@ void bind_reduction_moe_operation(py::module& module) {
         )doc";
 
     using OperationType = decltype(ttnn::moe);
-    bind_registered_operation(
+
+    ttnn::bind_registered_operation(
         module,
         ttnn::moe,
         doc,
         ttnn::pybind_overload_t{
             [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& expert_mask_tensor,
-               const ttnn::Tensor& topk_mask_tensor,
-               const uint16_t k,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> optional_output_tensor) {
-                return self(
-                    input_tensor, expert_mask_tensor, topk_mask_tensor, k, memory_config, optional_output_tensor);
+               const Tensor& input_tensor,
+               const Tensor& expert_mask_tensor,
+               const Tensor& topk_mask_tensor,
+               uint16_t k,
+               const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+               const std::optional<Tensor>& output_tensor) {
+                return self(input_tensor, expert_mask_tensor, topk_mask_tensor, k, memory_config, output_tensor);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("expert_mask_tensor").noconvert(),

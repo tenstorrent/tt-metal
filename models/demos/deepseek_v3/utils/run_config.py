@@ -8,6 +8,8 @@ from enum import Enum
 from types import NoneType
 from typing import Any, overload
 
+from loguru import logger
+
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, MeshDeviceStub, OpConfigBase, SavedWeight
 
@@ -172,6 +174,11 @@ def _merge_run_config(
             model_state_config_item, MeshDeviceStub
         ), "MeshDeviceStub should have been replaced by a real MeshDevice from the model state"
         return model_state_config_item
+
+    # If model config doesn't need this weight (is None), but cached weight exists, ignore it
+    if model_state_config_item is None and isinstance(weight_config_item, SavedWeight):
+        logger.warning(f"Cached weight {weight_config_item.path} is not needed by the model config, ignoring it.")
+        return None
 
     raise ValueError(
         f"Unsupported model and weight config items to merge: {model_state_config_item} and {weight_config_item}. Try recalculating cached weights."

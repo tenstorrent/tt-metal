@@ -508,9 +508,9 @@ void WatcherServer::Impl::poll_watcher_data() {
 
     // Print to the user which features are disabled via env vars.
     std::string disabled_features;
-    auto& disabled_features_set = rtoptions.get_watcher_disabled_features();
+    const auto& disabled_features_set = rtoptions.get_watcher_disabled_features();
     if (!disabled_features_set.empty()) {
-        for (auto& feature : disabled_features_set) {
+        for (const auto& feature : disabled_features_set) {
             disabled_features += feature + ",";
         }
         disabled_features.pop_back();

@@ -151,11 +151,11 @@ struct Embeddings {
 
 ```cpp
 struct operation_attributes_t {
-    const MemoryConfig output_mem_config;
-    const bool tilized;
-    const EmbeddingsType embeddings_type;
-    const std::optional<uint32_t> pad_token;
-    const DataType output_dtype;
+    MemoryConfig output_mem_config;
+    bool tilized;
+    EmbeddingsType embeddings_type;
+    std::optional<uint32_t> pad_token;
+    DataType output_dtype;
 };
 ```
 
@@ -183,9 +183,9 @@ struct Embedding {
 
 ```cpp
 struct tensor_args_t {
-    const Tensor& input_tensor_arg;
-    const Tensor& weight_arg;
-    const std::optional<Tensor>& optional_output_tensor;
+    Tensor input_tensor_arg;
+    Tensor weight_arg;
+    std::optional<Tensor> optional_output_tensor;
 };
 ```
 
@@ -412,7 +412,7 @@ return ttnn::prim::embedding(input_tensor, weight, ...);
 
 ### Step 7: Create Program Factory
 
-To define `shared_params_t` and `override_runtime_arguments`, find the lambda that updates runtime arguments in the old program factory. It's usually called `override_runtime_args_callback`.
+To define `shared_variables_t` and `override_runtime_arguments`, find the lambda that updates runtime arguments in the old program factory. It's usually called `override_runtime_args_callback`.
 
 **Example - Old program factory lambda:**
 
@@ -447,18 +447,18 @@ auto override_runtime_args_callback = [
 };
 ```
 
-**Lambda capture → `shared_params_t`:**
+**Lambda capture → `shared_variables_t`:**
 
-The lambda's capture list becomes `shared_params_t`:
+The lambda's capture list becomes `shared_variables_t`:
 
 ```cpp
-struct shared_params_t {
+struct shared_variables_t {
     uint32_t num_cores_x;
     uint32_t num_cores_y;
     KernelHandle reader_kernel_id;
     KernelHandle writer_kernel_id;
     std::vector<CoreCoord> cores;
-    // Note: 'device' is typically not needed in shared_params_t
+    // Note: 'device' is typically not needed in shared_variables_t
 };
 ```
 

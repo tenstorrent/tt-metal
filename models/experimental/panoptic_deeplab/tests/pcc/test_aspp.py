@@ -13,12 +13,12 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
 from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.panoptic_deeplab.tt.common import (
     PDL_L1_SMALL_SIZE,
     get_panoptic_deeplab_weights_path,
     get_panoptic_deeplab_config,
 )
+from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
@@ -114,10 +114,18 @@ def test_ttnn_aspp(device, model_location_generator):
     ttnn_aspp_output_torch = ttnn.to_torch(ttnn_aspp_output).permute(0, 3, 1, 2)
     ttnn_aspp_output_torch = torch.reshape(ttnn_aspp_output_torch, (1, 256, 32, 64))
 
-    pcc_passed, pcc_message = assert_with_pcc(pytorch_aspp_output, ttnn_aspp_output_torch, pcc=0.99)
+    passed = check_ttnn_output(
+        "aspp_output",
+        pytorch_aspp_output,
+        ttnn_aspp_output,
+        to_channel_first=True,
+        output_shape=(1, 256, 32, 64),
+        exp_pcc=0.99,
+        exp_abs_err=0.03,
+        exp_rel_err=0.4,
+    )
 
-    logger.info(f"ASPP PCC: {pcc_message}")
-    assert pcc_passed, f"ASPP PCC test failed: {pcc_message}"
+    assert passed, f"ASPP PCC and tolerance test failed"
     assert (
         pytorch_aspp_output.shape == ttnn_aspp_output_torch.shape
     ), f"Shape mismatch: {pytorch_aspp_output.shape} vs {ttnn_aspp_output_torch.shape}"

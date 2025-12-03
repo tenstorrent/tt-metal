@@ -27,7 +27,17 @@ uint64_t ceil32(const uint64_t& number) {
 // tensors)
 // ... divided by 4 to account for 4-byte datum sizes of each tensor (fp32, int32)
 // ... minimized by ~20% to account for reserved memory
-uint32_t calculate_optimal_chunk_size(IDevice* device) { return ceil32(device->l1_size_per_core() / 4 / 4 * 0.8 - 32); }
+
+inline uint32_t get_max_l1_space(IDevice* device) {
+    auto lowest_address = device->lowest_occupied_compute_l1_address();
+    uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
+    max_l1_space = max_l1_space - device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    return max_l1_space;
+}
+
+uint32_t calculate_optimal_chunk_size(IDevice* device) {
+    return ceil32(((((get_max_l1_space(device)) / 4) / 4) * 0.8) - 32);
+}
 
 ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
@@ -43,10 +53,10 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const auto& src_shape{src_tensor.logical_shape()};
     const auto& output_shape{output_tensor.logical_shape()};
 
-    auto input_buffer = input_tensor.buffer();
-    auto index_buffer = index_tensor.buffer();
-    auto src_buffer = src_tensor.buffer();
-    auto output_buffer = output_tensor.buffer();
+    auto* input_buffer = input_tensor.buffer();
+    auto* index_buffer = index_tensor.buffer();
+    auto* src_buffer = src_tensor.buffer();
+    auto* output_buffer = output_tensor.buffer();
 
     const uint32_t& input_stick_size = input_shape[-1];
     const uint32_t& index_stick_size = index_shape[-1];
@@ -67,12 +77,13 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
 
     // maximal input/index/source/output chunk size, divisible by 32, calculated as follows:
     // BH available L1 mem size of nearly 1.5 MB...
+    // ... minimized by the amount of memory reserved by a model...
     // ... divided by 4 to be able to allocate four equally long row chunks (coming from input/index/source/output
     // tensors)
     // ... divided by 4 to account for 4-byte datum sizes of each tensor (fp32, int32)
     // ... minimized by ~20% to account for reserved memory
     const uint32_t input_and_output_max_chunk_size = calculate_optimal_chunk_size(input_tensor.device());
-    const uint32_t index_and_source_max_chunk_size = input_and_output_max_chunk_size;
+    const uint32_t index_and_source_max_chunk_size = calculate_optimal_chunk_size(input_tensor.device());
     const uint32_t input_and_output_chunk_size = std::min(input_stick_size, input_and_output_max_chunk_size);
     const uint32_t index_chunk_size = std::min(index_stick_size, index_and_source_max_chunk_size);
     const uint32_t source_chunk_size = std::min(source_stick_size, index_and_source_max_chunk_size);
@@ -114,7 +125,7 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*output_buffer).append_to(compile_time_args);
 
-    auto device = input_tensor.device();
+    auto* device = input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t work_units = input_tensor.logical_volume() / input_stick_size;
     const auto
@@ -137,7 +148,6 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
         create_kernel(program, writer_kernel_path, all_cores, WriterDataMovementConfig{compile_time_args});
 
     std::vector<CoreCoord> cores{};
-
     uint32_t stick_offset = 0;
     for (uint32_t i = 0; i < all_cores_in_bounding_box; ++i) {
         const CoreCoord core{i / (farthest_x_y.y + 1), i % (farthest_x_y.y + 1)};

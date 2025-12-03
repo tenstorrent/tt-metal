@@ -12,7 +12,7 @@ namespace ttnn::operations::reduction::detail {
 namespace py = pybind11;
 
 void bind_manual_seed_operation(py::module& module) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
             Sets a seed to pseudo random number generators (PRNGs) on the specified device.
 
             This operation allows users to either set a single seed value to all PRNGs in the device, or to specify potentially different seed values to PRNGs at the cores assigned to the provided user IDs.

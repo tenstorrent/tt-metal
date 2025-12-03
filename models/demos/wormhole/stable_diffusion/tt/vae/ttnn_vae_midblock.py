@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import ttnn
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_attention import Attention
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_resnet import ResnetBlock
 
@@ -16,6 +17,7 @@ class MidBlock:
         input_width,
         resnet_norm_num_blocks=[(1, 1), (1, 1)],
     ):
+        self.device = device
         self.resnets = []
         self.resnets.append(
             ResnetBlock(
@@ -50,6 +52,8 @@ class MidBlock:
 
     def __call__(self, hidden_states):
         hidden_states = self.resnets[0](hidden_states)
+        ttnn.ReadDeviceProfiler(self.device)
         hidden_states = self.attention(hidden_states)
+        ttnn.ReadDeviceProfiler(self.device)
         hidden_states = self.resnets[1](hidden_states)
         return hidden_states

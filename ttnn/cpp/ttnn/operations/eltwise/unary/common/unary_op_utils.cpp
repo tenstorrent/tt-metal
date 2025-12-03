@@ -177,13 +177,13 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             // log10[x] = log[x]/log[10] = log[x]*0.4342944819032518; FP32@U32 0x3ede5bd9; FP16@U16 0x36f3;
             op_init_and_name = {
                 fmt::format("log_with_base_tile_init<{}u>();", (uint32_t)param0),
-                fmt::format("log_with_base_tile<{1}u>({0}, 0x36f3u);", idst, (uint32_t)param0)};
+                fmt::format("log_with_base_tile<{1}u>({0}, 0x3ede5bd9u);", idst, (uint32_t)param0)};
             break;
 
         case UnaryOpType::LOG2:  // log2[x] = log[x]*1.4426950408889634f; FP32@U32 0x3fb8aa3b; FP16@U16 0x3dc5;
             op_init_and_name = {
                 fmt::format("log_with_base_tile_init<{}u>();", (uint32_t)param0),
-                fmt::format("log_with_base_tile<{1}u>({0}, 0x3dc5u);", idst, (uint32_t)param0)};
+                fmt::format("log_with_base_tile<{1}u>({0}, 0x3fb8aa3bu);", idst, (uint32_t)param0)};
             break;
         case UnaryOpType::LOG1P:
             op_init_and_name = {
@@ -459,6 +459,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     (uint32_t)datatype_to_dataformat_converter((DataType)params[0]),
                     (uint32_t)datatype_to_dataformat_converter((DataType)params[1]))};
             break;
+        case UnaryOpType::BITCAST:
+            // Bitcast uses identity kernel (copy_tile + pack_tile) - no LLK needed
+            // Parameters are input_dtype and output_dtype, but we don't need them for the kernel
+            op_init_and_name = {};
+            break;
         case UnaryOpType::MAXIMUM:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
@@ -662,10 +667,12 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             break;
         case UnaryOpType::LOG10:
             // log10[x] = log[x]/log[10] = log[x]*0.4342944819032518; FP32@U32 0x3ede5bd9; FP16@U16 0x36f3;
-            op_init_and_name = {"log_with_base_tile_init();", fmt::format("log_with_base_tile({}, 0x36f3u);", idst)};
+            op_init_and_name = {
+                "log_with_base_tile_init();", fmt::format("log_with_base_tile({}, 0x3ede5bd9u);", idst)};
             break;
         case UnaryOpType::LOG2:  // log2[x] = log[x]*1.4426950408889634f; FP32@U32 0x3fb8aa3b; FP16@U16 0x3dc5;
-            op_init_and_name = {"log_with_base_tile_init();", fmt::format("log_with_base_tile({}, 0x3dc5u);", idst)};
+            op_init_and_name = {
+                "log_with_base_tile_init();", fmt::format("log_with_base_tile({}, 0x3fb8aa3bu);", idst)};
             break;
         case UnaryOpType::ABS: op_init_and_name = {"abs_tile_init();", fmt::format("abs_tile({});", idst)}; break;
         case UnaryOpType::ABS_INT32:
@@ -822,6 +829,11 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             break;
         case UnaryOpType::MISH: op_init_and_name = {}; break;
         case UnaryOpType::IDENTITY: op_init_and_name = {}; break;
+        case UnaryOpType::BITCAST:
+            // Bitcast uses identity kernel (copy_tile + pack_tile) - no LLK needed
+            // Parameters are input_dtype and output_dtype, but we don't need them for the kernel
+            op_init_and_name = {};
+            break;
         case UnaryOpType::TANHSHRINK: op_init_and_name = {}; break;
         case UnaryOpType::HARDSWISH: op_init_and_name = {}; break;
         case UnaryOpType::CBRT: op_init_and_name = {}; break;

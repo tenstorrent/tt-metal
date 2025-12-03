@@ -514,17 +514,18 @@ on:
           - matmul.short.matmul_user_program_config_mcast_2d
           - matmul.sparse.sparse_matmul
           - matmul.sparse.batched_sparse_matmul
-          - max_pool2d.full.max_pool2d_large_dims
-          - max_pool2d.full.max_pool2d_params
-          - max_pool2d.short.max_pool2d_short_sweep
+          - pool2d.full.max_pool2d_large_dims
+          - pool2d.full.max_pool2d_params
+          - pool2d.short.avg_pool2d_short_sweep
+          - pool2d.short.max_pool2d_short_sweep
+          - pool2d.global_avg_pool2d
+          - pool2d.max_pool2d
           - normalization.batch_norm.batch_norm
           - normalization.generality.layernorm
           - normalization.generality.softmax
           - normalization.generality.softmax_fused
           - normalization.softmax.softmax
           - normalization.softmax.softmax_sharded
-          - pooling.global_avg_pool2d
-          - pooling.max_pool2d
           - reduction.argmax.argmax
           - reduction.argmax.argmax_output
           - reduction.backward.prod_bw.prod_bw

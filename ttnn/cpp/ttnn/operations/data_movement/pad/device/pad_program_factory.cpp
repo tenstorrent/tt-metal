@@ -152,8 +152,8 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>& optional_tensors,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* src_buffer = input_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
         CoreCoord core = {0, 0};
         {
             auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
@@ -284,9 +284,9 @@ operation::ProgramWithCallbacks pad_tile(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>& optional_tensors,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_dram_buffer = input_tensors.at(0).buffer();
+        auto* src_dram_buffer = input_tensors.at(0).buffer();
 
-        auto dst_dram_buffer = output_tensors.at(0).buffer();
+        auto* dst_dram_buffer = output_tensors.at(0).buffer();
 
         CoreCoord core = {0, 0};
 
@@ -662,8 +662,8 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>& optional_tensors,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* src_buffer = input_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
 
         for (uint32_t j = 0; j < ncores_h; ++j) {
             for (uint32_t i = 0; i < ncores_w; ++i) {
@@ -706,8 +706,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     uint32_t num_w_sticks_per_core_group_1,
     const CoreRangeSet& core_group_2,
     uint32_t num_w_sticks_per_core_group_2) {
-    auto input_buffer = input_tensor.buffer();
-    auto output_buffer = output_tensor.buffer();
+    auto* input_buffer = input_tensor.buffer();
+    auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
 
@@ -720,7 +720,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_total);
 
-    auto& front_pad = input_tensor_start;
+    const auto& front_pad = input_tensor_start;
     uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
     for (uint32_t i = 0, curr_sticks_read = 0, curr_sticks_write = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -794,7 +794,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
              N_padded = output_padded_shape[0];
     uint32_t NCH_padded = H_padded * C_padded * N_padded;
 
-    auto& front_pad = input_tensor_start;
+    const auto& front_pad = input_tensor_start;
 
     auto stick_size = W * a.element_size();
     auto stick_size_padded = W_padded * a.element_size();
@@ -1031,7 +1031,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_padded);
 
-    auto& front_pad = input_tensor_start;
+    const auto& front_pad = input_tensor_start;
     uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
     for (uint32_t i = 0, curr_sticks_read = 0; i < num_cores_padded; i++) {
         CoreCoord core;
@@ -1169,7 +1169,7 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
     uint32_t W_padded = output_padded_shape[3], H_padded = output_padded_shape[2], C_padded = output_padded_shape[1],
              N_padded = output_padded_shape[0];
 
-    auto& front_pad = input_tensor_start;
+    const auto& front_pad = input_tensor_start;
 
     log_debug(tt::LogOp, "H_padded: {}", H_padded);
     log_debug(tt::LogOp, "front_pad: {}", front_pad);
@@ -1325,8 +1325,8 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_buffer_a = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* src_buffer_a = input_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
 
         UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer_a);
         UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
@@ -1463,8 +1463,8 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto input_buffer = input_tensors.at(0).buffer();
-        auto output_buffer = output_tensors.at(0).buffer();
+        auto* input_buffer = input_tensors.at(0).buffer();
+        auto* output_buffer = output_tensors.at(0).buffer();
 
         UpdateDynamicCircularBufferAddress(program, input_shard_cb, *input_buffer);
         UpdateDynamicCircularBufferAddress(program, output_shard_cb, *output_buffer);
@@ -1683,8 +1683,8 @@ operation::ProgramWithCallbacks pad_tile_multicore(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>&,
             const std::vector<Tensor>& output_tensors) {
-            auto src_buffer = input_tensors.at(0).buffer();
-            auto dst_buffer = output_tensors.at(0).buffer();
+            auto* src_buffer = input_tensors.at(0).buffer();
+            auto* dst_buffer = output_tensors.at(0).buffer();
 
             uint32_t num_cores_x = compute_with_storage_grid_size.x;
             uint32_t num_cores_y = compute_with_storage_grid_size.y;

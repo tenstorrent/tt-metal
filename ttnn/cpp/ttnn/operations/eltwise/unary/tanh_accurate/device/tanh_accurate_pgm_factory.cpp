@@ -93,8 +93,8 @@ TanhAccurateProgramFactory::cached_program_t TanhAccurateProgramFactory::create(
             .set_page_size(output_cb_index, single_tile_size_output);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    auto src_buffer = input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
 
     std::vector<uint32_t> reader_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
@@ -136,7 +136,7 @@ TanhAccurateProgramFactory::cached_program_t TanhAccurateProgramFactory::create(
         unary_defines["TANH_BF16"] = "1";
     }
 
-    auto path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanh_accurate.cpp";
+    const auto* path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanh_accurate.cpp";
     if (ops_chain[0].type() == UnaryOpType::TANHSHRINK) {
         path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanhshrink.cpp";
     }
@@ -210,8 +210,8 @@ void TanhAccurateProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
 
     const auto& input = tensor_args.input;
-    auto src_buffer = input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
 
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

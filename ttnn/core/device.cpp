@@ -29,6 +29,16 @@ bool is_wormhole_or_blackhole(tt::ARCH arch) { return arch == tt::ARCH::WORMHOLE
 
 void deallocate_buffers(IDevice* device) { device->allocator()->deallocate_buffers(); }
 
+// Device management for auto-formatting
+// Note: This functionality is planned for deprecation in the future.
+namespace {
+MeshDevice* default_device = nullptr;
+}  // namespace
+
+void SetDefaultDevice(MeshDevice* dev) { default_device = dev; }
+
+MeshDevice* GetDefaultDevice() { return default_device; }
+
 }  // namespace device
 
 using namespace device;

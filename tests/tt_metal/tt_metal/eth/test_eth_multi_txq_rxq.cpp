@@ -131,8 +131,8 @@ static void run_multi_txq_rxq_test(
     uint32_t data_txq_id,
     uint32_t ack_txq_id,
     uint32_t num_messages) {
-    auto device_0 = mesh_device_0->get_devices()[0];
-    auto device_1 = mesh_device_1->get_devices()[0];
+    auto* device_0 = mesh_device_0->get_devices()[0];
+    auto* device_1 = mesh_device_1->get_devices()[0];
     // Find ethernet cores that connect device_0 and device_1 using standard metal APIs
     std::optional<CoreCoord> sender_core_0;
     std::optional<CoreCoord> receiver_core_0;

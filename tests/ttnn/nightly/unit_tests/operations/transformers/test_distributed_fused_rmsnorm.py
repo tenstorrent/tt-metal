@@ -233,6 +233,42 @@ def test_distributed_fused_rmsnorm_sweep_shapes(
 @pytest.mark.parametrize("stats_dtype", [ttnn.bfloat16], ids=["BFLOAT16_stats"])
 @pytest.mark.parametrize(
     "seqlen",
+    [32, 4096],
+    ids=["seqlen32", "seqlen4096"],
+)
+@pytest.mark.parametrize("hidden_dim", [320, 2432], ids=["hidden_dim320", "hidden_dim2432"])
+@pytest.mark.parametrize("num_heads_per_device", [1], ids=["num_heads1"])
+@pytest.mark.parametrize("use_weight", [True], ids=["has_weight"])
+@pytest.mark.parametrize("use_rope", [False], ids=["no_rope"])
+@pytest.mark.parametrize("num_simulated_devices", [2], ids=["num_simulated_devices2"])
+def test_distributed_fused_rmsnorm_odd_hidden_dim(
+    device,
+    num_simulated_devices,
+    seqlen,
+    hidden_dim,
+    dtype,
+    stats_dtype,
+    num_heads_per_device,
+    use_weight,
+    use_rope,
+    reset_seeds,
+):
+    """
+    This test case ensures that the hidden dim tiles is a number not divisible by DST size,
+    testing that CB sizes are correct in order to prevent hangs.
+    """
+    num_heads = num_heads_per_device * num_simulated_devices
+    check_hidden_dim_divisible_by_num_heads(hidden_dim, num_heads)
+    inp_shape = (1, 1, seqlen, hidden_dim)
+    run_distributed_fused_rmsnorm(
+        device, num_simulated_devices, inp_shape, dtype, stats_dtype, num_heads_per_device, use_weight, use_rope
+    )
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["BFLOAT16_in"])
+@pytest.mark.parametrize("stats_dtype", [ttnn.bfloat16], ids=["BFLOAT16_stats"])
+@pytest.mark.parametrize(
+    "seqlen",
     [9472, 18944],
     ids=["seqlen9472", "seqlen18944"],
 )
