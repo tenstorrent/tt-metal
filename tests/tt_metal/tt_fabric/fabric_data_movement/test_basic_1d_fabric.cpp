@@ -1875,6 +1875,19 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
 }
 
 TEST_F(Fabric1DFixture, TestUnicastRaw) { RunTestUnicastRaw(this, 1, RoutingDirection::E); }
+
+TEST_F(Galaxy1x32Fabric1DFixture, TestUnicastRaw_AllHops) {
+    const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
+    TT_ASSERT(num_devices == 32, "1x32 mesh required for this test");
+    for (uint32_t hops = 1; hops < num_devices; hops++) {
+        RunTestUnicastRaw(this, hops, RoutingDirection::E);
+    }
+
+    for (uint32_t hops = 1; hops < num_devices; hops++) {
+        RunTestUnicastRaw(this, hops, RoutingDirection::W);
+    }
+}
+
 TEST_F(Fabric1DFixture, TestUnicastConnAPI) { RunTestUnicastConnAPI(this, 1); }
 TEST_F(Fabric1DFixture, TestUnicastConnAPIDRAM) { RunTestUnicastConnAPI(this, 1, RoutingDirection::E, true); }
 TEST_F(Fabric1DFixture, TestUnicastTGGateways) { RunTestUnicastTGGateways(this); }
