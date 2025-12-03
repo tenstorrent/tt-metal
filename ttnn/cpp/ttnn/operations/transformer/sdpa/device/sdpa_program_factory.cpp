@@ -725,7 +725,7 @@ void SDPAProgramFactory::override_runtime_arguments(
     std::size_t q_chunk_size =
         operation_attributes.program_config ? operation_attributes.program_config->q_chunk_size : 32;
 
-    auto q_buffer = tensor_args.q.buffer();
+    auto *q_buffer = tensor_args.q.buffer();
     auto k_buffer = tensor_args.k.buffer();
     auto v_buffer = use_mla ? tensor_args.k.buffer() : tensor_args.v.value_or(tensor_args.k).buffer();
     auto mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask->buffer() : nullptr;
