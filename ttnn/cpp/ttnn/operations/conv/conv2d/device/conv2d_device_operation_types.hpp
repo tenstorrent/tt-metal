@@ -209,6 +209,25 @@ struct operation_attributes_t {
     std::optional<bool> force_split_reader;
 };
 
+struct hashable_operation_attributes_t {
+    sliding_window::SlidingWindowConfig sliding_window_config{};
+    uint32_t output_channels = 0;
+    bool untilize_out = false;
+    bool has_bias = false;
+    std::optional<ttnn::operations::unary::UnaryWithParam> activation;
+    Conv2dParallelizationConfig parallelization_config{};
+    Conv2dBlockConfig block_config{};
+    tt::tt_metal::MemoryConfig memory_config;
+    tt::tt_metal::DataType dtype = tt::tt_metal::DataType::INVALID;
+    std::array<std::uint32_t, 4> input_tensor_shape{};
+    DeviceComputeKernelConfig compute_kernel_config;
+    bool enable_act_double_buffer = false;
+    bool enable_weights_double_buffer = false;
+    bool enable_activation_reuse = false;
+    bool config_tensors_in_dram = false;
+    std::optional<bool> force_split_reader;
+};
+
 struct tensor_args_t {
     Tensor a;
     Tensor b;

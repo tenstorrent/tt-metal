@@ -26,6 +26,7 @@ namespace ttnn::operations::conv::conv2d {
 
 struct Conv2dDeviceOperation {
     using operation_attributes_t = conv2d::operation_attributes_t;
+    using hashable_operation_attributes_t = conv2d::hashable_operation_attributes_t;
     using tensor_args_t = conv2d::tensor_args_t;
     using spec_return_value_t = conv2d::spec_return_value_t;
     using tensor_return_value_t = conv2d::tensor_return_value_t;
@@ -40,6 +41,8 @@ struct Conv2dDeviceOperation {
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_miss(const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_hit(const operation_attributes_t& args, const tensor_args_t& tensor_args);
+    static tt::stl::hash::hash_t compute_program_hash(
+        const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor);
 
