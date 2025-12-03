@@ -13,6 +13,7 @@
 #include <tt_stl/overloaded.hpp>
 
 #include "ttnn/core.hpp"
+#include "ttnn/debug_event.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation_concepts.hpp"
@@ -146,6 +147,7 @@ inline void set_runtime_id(tt::tt_metal::distributed::MeshWorkload& workload) {
     for (auto& [_, program] : workload.get_programs()) {
         program.set_runtime_id(op_id);
     }
+    ttnn::debug_event::log_runtime_id(workload.get_id(), op_id);
 }
 
 // Tracks all programs in `workload` and returns true if any program was hooked.
