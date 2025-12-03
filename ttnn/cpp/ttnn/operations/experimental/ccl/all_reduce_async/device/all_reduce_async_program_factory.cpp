@@ -142,16 +142,14 @@ AllReduceAsyncMeshWorkloadFactory::create_at(
 
     log_debug(tt::LogOp, "Running TG Llama specific all_reduce_async_minimal_multi_core_with_workers");
     // previously parameters from all_reduce_async_minimal_multi_core_with_workers
-    auto& target_device_coord = coord;
-    auto& output_dtype = operation_attributes.dtype;
-    auto& num_links = operation_attributes.num_links;
-    auto& ring_size = operation_attributes.ring_size;
-    auto& ring_index = device_index;
-    auto& topology = operation_attributes.topology;
-    auto& semaphore = operation_attributes.semaphore;
-    auto& sub_device_id = operation_attributes.sub_device_id;
-    auto& use_noc1_only = operation_attributes.use_noc1_only;
-    auto& use_optimal_ccl_for_llama = operation_attributes.use_optimal_ccl_for_llama;
+    const auto& output_dtype = operation_attributes.dtype;
+    const auto& num_links = operation_attributes.num_links;
+    const auto& ring_size = operation_attributes.ring_size;
+    const auto& topology = operation_attributes.topology;
+    const auto& semaphore = operation_attributes.semaphore;
+    const auto& sub_device_id = operation_attributes.sub_device_id;
+    const auto& use_noc1_only = operation_attributes.use_noc1_only;
+    const auto& use_optimal_ccl_for_llama = operation_attributes.use_optimal_ccl_for_llama;
 
     // KERNEL CREATION
     tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_1;
@@ -159,29 +157,19 @@ AllReduceAsyncMeshWorkloadFactory::create_at(
 
     tt::tt_metal::Program program{};
     auto* mesh_device = input_tensor.device();
-    [[maybe_unused]] bool is_first_chip = ring_index == 0;
-    [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
+    [[maybe_unused]] bool is_first_chip = device_index == 0;
+    [[maybe_unused]] bool is_last_chip = device_index == ring_size - 1;
     log_trace(
-        tt::LogOp,
-        "DEBUG: device coord: {}, is_first_chip: {}, is_last_chip: {}",
-        target_device_coord,
-        is_first_chip,
-        is_last_chip);
+        tt::LogOp, "DEBUG: device coord: {}, is_first_chip: {}, is_last_chip: {}", coord, is_first_chip, is_last_chip);
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
     std::vector<Tensor> output_tensors = {output_tensor};
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
     auto [num_targets_forward, num_targets_backward] =
-        ttnn::ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, true);
+        ttnn::ccl::get_forward_backward_line_mcast_distance(ring_size, device_index, topology, true);
     auto [forward_args, backward_args] = ttnn::ccl::get_forward_backward_line_mcast_configuration(
-        topology,
-        target_device_coord,
-        forward_coord,
-        backward_coord,
-        num_targets_forward,
-        num_targets_backward,
-        mesh_device);
+        topology, coord, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
 
     // Tensor Info
     [[maybe_unused]] const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
@@ -410,7 +398,7 @@ AllReduceAsyncMeshWorkloadFactory::create_at(
 
     // Reader
     std::vector<uint32_t> reader_compile_args = {
-        ring_index,                 // my_chip_id
+        device_index,               // my_chip_id
         src0_cb_index,              // cb0_id
         op_config.get_page_size(),  // tensor0_page_size
     };
@@ -429,7 +417,7 @@ AllReduceAsyncMeshWorkloadFactory::create_at(
 
     // Writer
     std::vector<uint32_t> writer_compile_args = {
-        ring_index,                       // my_chip_id
+        device_index,                     // my_chip_id
         reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
         num_packet_headers_storable,      // num_packet_headers_storable
         src0_cb_index,                    // cb0_id
@@ -551,7 +539,7 @@ AllReduceAsyncMeshWorkloadFactory::create_at(
 
         writer_rt_args.push_back(forward_coord.has_value());
         if (forward_coord.has_value()) {
-            const auto target_fabric_node_id = mesh_device->get_fabric_node_id(target_device_coord);
+            const auto target_fabric_node_id = mesh_device->get_fabric_node_id(coord);
             const auto forward_device_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
             tt::tt_fabric::append_fabric_connection_rt_args(
                 target_fabric_node_id, forward_device_fabric_node_id, link, program, {core}, writer_rt_args);
@@ -559,7 +547,7 @@ AllReduceAsyncMeshWorkloadFactory::create_at(
 
         writer_rt_args.push_back(backward_coord.has_value());
         if (backward_coord.has_value()) {
-            const auto target_fabric_node_id = mesh_device->get_fabric_node_id(target_device_coord);
+            const auto target_fabric_node_id = mesh_device->get_fabric_node_id(coord);
             const auto backward_device_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
             tt::tt_fabric::append_fabric_connection_rt_args(
                 target_fabric_node_id, backward_device_fabric_node_id, link, program, {core}, writer_rt_args);
