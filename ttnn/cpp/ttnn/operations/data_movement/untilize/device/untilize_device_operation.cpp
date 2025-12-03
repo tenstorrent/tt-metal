@@ -221,11 +221,12 @@ tt::stl::hash::hash_t UntilizeDeviceOperation::compute_program_hash(
 
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
     operation::Hash hash = operation::hash_operation<UntilizeDeviceOperation>(
-        operation_attributes,
+        operation_attributes.output_mem_config,
         program_factory.index(),
         input_tensor.dtype(),
         input_tensor.memory_config(),
         input_shape.volume(),
+        operation_attributes.use_multicore,
         operation_attributes.use_pack_untilize,
         operation_attributes.fp32_dest_acc_en,
         operation_attributes.sub_core_grids,
