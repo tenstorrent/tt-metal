@@ -192,4 +192,4 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            echo "Add 4x WH GLX tests here"
+            ./tests/scripts/multihost/run_quad_galaxy_tests.sh
