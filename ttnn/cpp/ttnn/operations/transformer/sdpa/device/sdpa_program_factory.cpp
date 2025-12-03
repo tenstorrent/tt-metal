@@ -32,6 +32,9 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     const auto& page_table = tensor_args.page_table;
     const auto& attention_sink = tensor_args.attention_sink;
     auto scale = operation_attributes.scale;
+    if (not scale.has_value()) {
+        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1]));
+    }
     const bool is_causal = operation_attributes.is_causal;
     const auto& chunk_start_idx = operation_attributes.chunk_start_idx;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
@@ -44,6 +47,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         operation_attributes.program_config ? operation_attributes.program_config->q_chunk_size : 32;
     std::size_t k_chunk_size =
         operation_attributes.program_config ? operation_attributes.program_config->k_chunk_size : 32;
+
     /*
     Q: B x NQH x S x DH
     K: B x NKH x DH x S
@@ -158,13 +162,13 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    auto q_buffer = input_tensor_q.buffer();
-    auto k_buffer = input_tensor_k.buffer();
-    auto v_buffer = use_mla ? input_tensor_k.buffer() : input_tensor_v.buffer();
-    auto mask_buffer = attn_mask.has_value() ? attn_mask.value().buffer() : nullptr;
-    auto attention_sink_buffer = attention_sink.has_value() ? attention_sink.value().buffer() : nullptr;
+    auto* q_buffer = input_tensor_q.buffer();
+    auto* k_buffer = input_tensor_k.buffer();
+    auto* v_buffer = use_mla ? input_tensor_k.buffer() : input_tensor_v.buffer();
+    auto* mask_buffer = attn_mask.has_value() ? attn_mask.value().buffer() : nullptr;
+    auto* attention_sink_buffer = attention_sink.has_value() ? attention_sink.value().buffer() : nullptr;
 
-    auto out0_buffer = output_tensor.buffer();
+    auto* out0_buffer = output_tensor.buffer();
 
     bool use_attention_sink = attention_sink.has_value();
 

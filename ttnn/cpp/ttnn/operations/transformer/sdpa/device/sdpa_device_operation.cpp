@@ -9,6 +9,9 @@
 #include "sdpa_program_factory.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+// #include "ttnn/run_operation.hpp"
+#include <tt-metalium/constants.hpp>
+#include "ttnn/device.hpp"
 
 using namespace tt::tt_metal;
 
@@ -382,9 +385,8 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> SDPAOp
 
     // calculate arch specific parameters
     MathFidelity math_fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
-    auto arch = output_tensor.storage_type() == StorageType::DEVICE
-                    ? output_tensor.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto arch = output_tensor.storage_type() == StorageType::DEVICE ? output_tensor.device()->arch()
+                                                                    : ttnn::GetDefaultDevice()->arch();
     Tensors input_tensors = {tensor_args.q, tensor_args.k};
     if (tensor_args.v.has_value()) {
         input_tensors.emplace_back(tensor_args.v.value());

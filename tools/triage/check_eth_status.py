@@ -14,7 +14,7 @@ Description:
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from run_checks import run as get_run_checks
-from triage import ScriptConfig, triage_field, log_check, run_script
+from triage import ScriptConfig, triage_field, log_check_location, run_script
 from ttexalens.context import Context
 from ttexalens.device import Device, OnChipCoordinate
 from ttexalens.register_store import read_word_from_device
@@ -23,10 +23,6 @@ import utils
 script_config = ScriptConfig(
     depends=["run_checks"],
 )
-
-
-def log_check_with_loc(loc: OnChipCoordinate, ok: bool, message: str):
-    log_check(ok, f"{loc._device._id} {loc.to_user_str()}: {message}")
 
 
 @dataclass
@@ -84,7 +80,7 @@ class EthCore(ABC):
             if read_data != previous_data:
                 return True
             previous_data = read_data
-        log_check_with_loc(self.location, False, f"No heartbeat detected for {self.location.to_user_str()}")
+        log_check_location(self.location, False, "No heartbeat detected")
         return False
 
     def get_results(self):
@@ -103,16 +99,16 @@ class EthCore(ABC):
                 output.port_status = "Unknown"
             else:
                 output.port_status = port_status_str
-            log_check_with_loc(self.location, port_status_str != "Down", f"{self.location.to_user_str()} port is down")
+            log_check_location(self.location, port_status_str != "Down", "port is down")
 
         # RETRAIN COUNT
         output.retrain_count = int(
             read_word_from_device(self.location, self.eth_core_definitions.retrain_count, context=self.context)
         )
-        log_check_with_loc(
+        log_check_location(
             self.location,
             not output.retrain_count,
-            f"{self.location.to_user_str()} retrain count is {output.retrain_count}",
+            f"retrain count is {output.retrain_count}",
         )
 
         # RX LINK UP
@@ -121,10 +117,10 @@ class EthCore(ABC):
             if read_word_from_device(self.location, self.eth_core_definitions.rx_link_up, context=self.context)
             else "Down"
         )
-        log_check_with_loc(
+        log_check_location(
             self.location,
             output.rx_link_up == "Up",
-            f"{self.location.to_user_str()} rx link is not up: {output.rx_link_up}",
+            f"rx link is not up: {output.rx_link_up}",
         )
 
         # MAILBOX
@@ -139,10 +135,10 @@ class EthCore(ABC):
                 output.mailbox.append(f"0x{mailbox_value:08X}")
                 if mailbox_value & 0xFFFF0000 == 0xCA110000:
                     any_pending_message = True
-                log_check_with_loc(
+                log_check_location(
                     self.location,
                     not any_pending_message,
-                    f"{self.location.to_user_str()} mailbox: {output.mailbox} (pending message)",
+                    f"mailbox: {output.mailbox} (pending message)",
                 )
         else:
             output.mailbox = ["None"]

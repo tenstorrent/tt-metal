@@ -19,8 +19,8 @@ void MorehGroupNormBackwardGammaBetaGradOperation::validate_tensors(
     const auto& mean = tensor_args.mean;
     const auto& rstd = tensor_args.rstd;
 
-    auto& gamma_grad = tensor_args.gamma_grad;
-    auto& beta_grad = tensor_args.beta_grad;
+    const auto& gamma_grad = tensor_args.gamma_grad;
+    const auto& beta_grad = tensor_args.beta_grad;
 
     auto num_groups = operation_attributes.num_groups;
 
@@ -121,7 +121,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::tensor_return_value_t
 MorehGroupNormBackwardGammaBetaGradOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto output_specs = compute_output_specs(operation_attributes, tensor_args);
-    auto device = tensor_args.output_grad.device();
+    auto* device = tensor_args.output_grad.device();
 
     std::vector<std::optional<Tensor>> result(2);
 

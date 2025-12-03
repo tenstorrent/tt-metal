@@ -41,7 +41,7 @@ target_sources(
         sdpa/device/sdpa_device_operation.cpp
         sdpa/device/sdpa_program_factory.cpp
         sdpa/sdpa.cpp
-        sdpa_decode/device/sdpa_decode_op.cpp
+        sdpa_decode/device/sdpa_decode_device_operation.cpp
         sdpa_decode/device/sdpa_decode_program_factory.cpp
         sdpa_decode/sdpa_decode.cpp
         sdpa_windowed/device/sdpa_windowed_op.cpp

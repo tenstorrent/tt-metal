@@ -16,7 +16,7 @@ namespace detail {
 namespace py = pybind11;
 
 void bind_upsample(py::module& module) {
-    const auto doc = R"doc(
+    const auto* const doc = R"doc(
         Upsamples a given multi-channel 2D (spatial) data.
         The input data is assumed to be of the form [N, H, W, C].
 

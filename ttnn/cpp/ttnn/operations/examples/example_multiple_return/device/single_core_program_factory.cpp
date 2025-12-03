@@ -20,7 +20,7 @@ ExampleMultipleReturnDeviceOperation::SingleCore::create(
     const auto& output_tensor1 = tensor_return_value.at(0);
     const auto& output_tensor2 = tensor_return_value.at(1);
 
-    auto src_buffer = input_tensor.buffer();
+    auto* src_buffer = input_tensor.buffer();
 
     tt::tt_metal::Program program{};
 
@@ -147,9 +147,9 @@ void ExampleMultipleReturnDeviceOperation::SingleCore::override_runtime_argument
     const auto& output_tensor1 = tensor_return_value.at(0);
     const auto& output_tensor2 = tensor_return_value.at(1);
 
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer1 = output_tensor1.has_value() ? output_tensor1.value().buffer() : nullptr;
-    auto dst_buffer2 = output_tensor2.has_value() ? output_tensor2.value().buffer() : nullptr;
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer1 = output_tensor1.has_value() ? output_tensor1.value().buffer() : nullptr;
+    auto* dst_buffer2 = output_tensor2.has_value() ? output_tensor2.value().buffer() : nullptr;
 
     {
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, CoreCoord{0, 0});

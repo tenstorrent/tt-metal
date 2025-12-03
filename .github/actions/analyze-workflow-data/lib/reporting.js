@@ -633,7 +633,7 @@ async function enrichRegressions(regressedDetails, filteredGrouped, errorSnippet
         if (item.run_id) {
           item.error_snippets = errorSnippetsCache.get(item.run_id) || await fetchErrorSnippetsForRun(
             item.run_id,
-            20,
+            Number.POSITIVE_INFINITY,
             undefined,
             getAnnotationsDirForRunId(item.run_id)
           );
@@ -748,7 +748,7 @@ async function enrichStayedFailing(stayedFailingDetails, filteredGrouped, errorS
         if (item.run_id) {
           item.error_snippets = errorSnippetsCache.get(item.run_id) || await fetchErrorSnippetsForRun(
             item.run_id,
-            20,
+            Number.POSITIVE_INFINITY,
             undefined,
             getAnnotationsDirForRunId(item.run_id)
           );
@@ -790,6 +790,22 @@ async function enrichStayedFailing(stayedFailingDetails, filteredGrouped, errorS
   }
 }
 
+function buildWorkflowBadge(workflowPath, timeSinceSuccess) {
+  const workflowFileName = workflowPath
+    ? workflowPath
+      .replace(/^\.github\/workflows\//, '')
+      .replace(/\.ya?ml$/i, '')
+    : '';
+  const badgeParts = [];
+  if (timeSinceSuccess !== EMPTY_VALUE) {
+    badgeParts.push(`Last success: ${timeSinceSuccess}`);
+  }
+  if (workflowFileName) {
+    badgeParts.push(`workflow file: ${workflowFileName}`);
+  }
+  return badgeParts.length ? ` <em>(${badgeParts.join(', ')})</em>` : '';
+}
+
 /**
  * Builds the regressions section of the report
  * @param {Array} regressedDetails - Array of enriched regression detail objects
@@ -804,7 +820,7 @@ function buildRegressionsSection(regressedDetails, context) {
   const lines = regressedDetails.map(it => {
     const workflowName = it.workflow_url ? `<a href="${it.workflow_url}">${it.name}</a>` : it.name;
     const timeSinceSuccess = getTimeSinceLastSuccess(it.name);
-    const timeBadge = timeSinceSuccess !== EMPTY_VALUE ? ` <em>(Last success: ${timeSinceSuccess})</em>` : '';
+    const timeBadge = buildWorkflowBadge(it.workflow_path, timeSinceSuccess);
 
     if (it.first_failed_run_url) {
       const sha = it.first_failed_head_short || (it.first_failed_head_sha ? it.first_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
@@ -866,7 +882,7 @@ function buildStayedFailingSection(stayedFailingDetails, context) {
   const lines = stayedFailingDetails.map(it => {
     const workflowName = it.workflow_url ? `<a href="${it.workflow_url}">${it.name}</a>` : it.name;
     const timeSinceSuccess = getTimeSinceLastSuccess(it.name);
-    const timeBadge = timeSinceSuccess !== EMPTY_VALUE ? ` <em>(Last success: ${timeSinceSuccess})</em>` : '';
+    const timeBadge = buildWorkflowBadge(it.workflow_path, timeSinceSuccess);
 
     if (it.first_failed_run_url) {
       const sha = it.first_failed_head_short || (it.first_failed_head_sha ? it.first_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
