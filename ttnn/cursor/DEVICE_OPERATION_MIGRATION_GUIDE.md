@@ -608,6 +608,11 @@ Great examples of operations migrated to TMP:
 - `update_cache/`, `fill_cache/`, `fused_update_cache/` all demonstrate mesh workload factory pattern
 - Shows how to handle multiple factory variants (tiled vs row_major for fused_update_cache)
 
+**Send Async operations**: `ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/device/`
+- Demonstrates another mesh workload factory example
+- PRs:
+  - https://github.com/tenstorrent/tt-metal/pull/33005
+
 ---
 
 ## Building and Testing
