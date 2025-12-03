@@ -32,21 +32,22 @@ void kernel_main() {
 
         // Send out writes with transaction ids
         // Avoid using transaction id 0 in case fast dispatch breaks it in the future
+        noc_async_read_one_packet_set_state(sub1_src_noc_addr, bytes_per_transaction);
         for (uint32_t i = 1; i <= num_of_transactions; i++) {  // Using 1-(num_of_transactions) as the transaction ids
             noc_async_read_set_trid(i);
-            noc_async_read(sub1_src_noc_addr, tmp_local_addr, bytes_per_transaction);
+            noc_async_read_one_packet_with_state_with_trid(
+                sub1_src_noc_addr, bytes_per_transaction * (i - 1), tmp_local_addr, i);
             tmp_local_addr += bytes_per_transaction;
-            sub1_src_noc_addr += bytes_per_transaction;
         }
 
         tmp_local_addr = l1_local_addr;
 
+        noc_async_write_one_packet_set_state(sub0_dst_noc_addr, bytes_per_transaction);
         // Wait for reads with transaction ids to finish
         for (uint32_t i = 1; i <= num_of_transactions; i++) {  // Using 1-(num_of_transactions) as the transaction ids
             noc_async_read_barrier_with_trid(i);
-            noc_async_write(tmp_local_addr, sub0_dst_noc_addr, bytes_per_transaction);
+            noc_async_write_one_packet_with_state(tmp_local_addr, tmp_local_addr);
             tmp_local_addr += bytes_per_transaction;
-            sub0_dst_noc_addr += bytes_per_transaction;
         }
         noc_async_write_barrier();
     }
