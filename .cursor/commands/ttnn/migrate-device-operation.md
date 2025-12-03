@@ -22,6 +22,18 @@ The comprehensive guide includes:
 
 See the comprehensive guide for detailed examples and the complete 15-step checklist.
 
+## Code Style Guide
+
+**Follow the code style conventions at:** `_local/tmp_codestyle.md`
+
+Key conventions include:
+- Copyright header format (`© 2025 Tenstorrent AI ULC.`)
+- Namespace conventions (each operation in its own namespace)
+- Struct definitions (`operation_attributes_t`, `tensor_args_t`, SharedVariables)
+- Value initialization for trivial types in structs
+- Auto with pointers (`auto*` not `auto`)
+- Include sorting and const correctness
+
 ## Common Pitfalls
 
 1. **Forgetting to register the prim**: Always register in `ttnn::prim` namespace and use it instead of direct calls
@@ -29,6 +41,9 @@ See the comprehensive guide for detailed examples and the complete 15-step check
 3. **Not including values that affect the program structure in hash**: Every parameter that affects program structure must be in the hash
 4. **Redundant tensors in tensor_args_t**: Do not add redundant arguments like `preallocated_output`, if legacy operation did not handle that explicitly in `create_output_tensors`
 5. **tensor_args_t must NOT contain references** - no `const &` or `&`
+6. **Missing value initialization**: Add `{}` to trivial types in structs (bool, uint32_t, KernelHandle)
+7. **Wrong copyright**: Use "Tenstorrent AI ULC." not "Tenstorrent Inc."
+8. **Wrong namespace**: Use `ttnn::operations::<category>::<operation_name>` not just `ttnn::operations::<category>`
 
 ## Example Reference
 
