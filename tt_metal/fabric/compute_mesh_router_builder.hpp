@@ -47,8 +47,6 @@ public:
 
     // ============ FabricRouterBuilder Interface Implementation ============
 
-    void connect_to_downstream_router_over_noc(FabricRouterBuilder& other, uint32_t vc) override;
-
     void configure_connection(
         FabricRouterBuilder& peer, uint32_t link_idx, uint32_t num_links, Topology topology, bool is_galaxy) override;
 
@@ -118,6 +116,12 @@ private:
      * Connect the local tensix builder to the erisc builder in UDM mode
      */
     void connect_to_local_tensix_builder(FabricTensixDatamoverBuilder& tensix_builder);
+
+    /**
+     * Connect to downstream router over NOC (one-way connection).
+     * Internal method called by configure_connection for bidirectional setup.
+     */
+    void connect_to_downstream_router_over_noc(ComputeMeshRouterBuilder& other, uint32_t vc);
 
     // Compute-mesh specific state
     std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder_;

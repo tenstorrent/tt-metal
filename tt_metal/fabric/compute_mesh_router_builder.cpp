@@ -155,13 +155,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     return router_builder;
 }
 
-void ComputeMeshRouterBuilder::connect_to_downstream_router_over_noc(
-    FabricRouterBuilder& other_interface, uint32_t vc) {
-    // For now, cast to concrete type since we need access to internals
-    // Phase 4 will abstract this better with establish_bidirectional_connection
-    auto* other_ptr = dynamic_cast<ComputeMeshRouterBuilder*>(&other_interface);
-    TT_FATAL(other_ptr != nullptr, "connect_to_downstream_router_over_noc requires ComputeMeshRouterBuilder");
-    ComputeMeshRouterBuilder& other = *other_ptr;
+void ComputeMeshRouterBuilder::connect_to_downstream_router_over_noc(ComputeMeshRouterBuilder& other, uint32_t vc) {
     auto connect_vc = [&](uint32_t vc_index,
                           FabricDatamoverBuilderBase* downstream_builder,
                           uint32_t logical_sender_channel_idx) {
@@ -417,14 +411,17 @@ void ComputeMeshRouterBuilder::connect_to_local_tensix_builder(FabricTensixDatam
 
 void ComputeMeshRouterBuilder::configure_connection(
     FabricRouterBuilder& peer, uint32_t link_idx, uint32_t num_links, Topology topology, bool is_galaxy) {
-    // Cast to concrete type to access erisc builder
-    auto* peer_ptr = dynamic_cast<ComputeMeshRouterBuilder*>(&peer);
-    TT_FATAL(peer_ptr != nullptr, "configure_connection requires ComputeMeshRouterBuilder peer");
+    // Safe: FabricBuilder guarantees all routers on a device are the same concrete type
+    auto& peer_compute = static_cast<ComputeMeshRouterBuilder&>(peer);
 
-    // Configure NOC VC based on link index
+    // Establish bidirectional VC0 connections
+    this->connect_to_downstream_router_over_noc(peer_compute, 0);
+    peer_compute.connect_to_downstream_router_over_noc(*this, 0);
+
+    // Configure NOC VC based on link index (must be same for both routers)
     auto edm_noc_vc = erisc_builder_->config.DEFAULT_NOC_VC + (link_idx % erisc_builder_->config.NUM_EDM_NOC_VCS);
     erisc_builder_->config.edm_noc_vc = edm_noc_vc;
-    peer_ptr->erisc_builder_->config.edm_noc_vc = edm_noc_vc;
+    peer_compute.erisc_builder_->config.edm_noc_vc = edm_noc_vc;
 
     // Apply core placement optimizations
     core_placement::CorePlacementContext cctx{
@@ -432,7 +429,7 @@ void ComputeMeshRouterBuilder::configure_connection(
         .is_galaxy = is_galaxy,
         .num_links = num_links,
     };
-    core_placement::apply_core_placement_optimizations(cctx, *erisc_builder_, *peer_ptr->erisc_builder_, link_idx);
+    core_placement::apply_core_placement_optimizations(cctx, *erisc_builder_, *peer_compute.erisc_builder_, link_idx);
 }
 
 void ComputeMeshRouterBuilder::configure_for_dispatch() {

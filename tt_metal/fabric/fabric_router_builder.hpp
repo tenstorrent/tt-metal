@@ -64,7 +64,7 @@ struct KernelCreationContext {
  *
  * Usage:
  *   auto router = FabricRouterBuilder::create(device, program, local_node, location);
- *   router->connect_to_downstream_router_over_noc(*other_router, vc);
+ *   router->configure_connection(*other_router, link_idx, num_links, topology, is_galaxy);
  */
 class FabricRouterBuilder {
 public:
@@ -89,16 +89,8 @@ public:
     // ============ Connection Methods ============
 
     /**
-     * Connect to downstream router over NOC (one-way connection)
-     *
-     * @param other The other router builder to connect to
-     * @param vc Virtual channel ID
-     */
-    virtual void connect_to_downstream_router_over_noc(FabricRouterBuilder& other, uint32_t vc) = 0;
-
-    /**
      * Configure connection between this router and a peer router.
-     * Handles NOC VC configuration and core placement optimizations for both routers.
+     * Handles bidirectional VC connections, NOC VC configuration, and core placement optimizations.
      *
      * @param peer The peer router builder
      * @param link_idx The link index within the direction

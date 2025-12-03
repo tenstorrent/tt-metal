@@ -181,16 +181,11 @@ void FabricBuilder::connect_routers() {
     // Get connection pairs based on topology (uses member variables)
     auto connection_pairs = get_router_connection_pairs();
 
-    // Connect each pair
+    // Connect each pair - router handles bidirectional VC setup, NOC VC, and core placement internally
     for (const auto& pair : connection_pairs) {
         auto& router1 = routers_.at(pair.chan1);
         auto& router2 = routers_.at(pair.chan2);
 
-        // Bidirectional VC0 connections
-        router1->connect_to_downstream_router_over_noc(*router2, 0);
-        router2->connect_to_downstream_router_over_noc(*router1, 0);
-
-        // Configure connection (NOC VC + core placement) - router handles internally
         router1->configure_connection(*router2, pair.link_idx, pair.num_links, topology, is_galaxy);
     }
 }
