@@ -3,6 +3,7 @@
 
 #include "transpose_hc_sharded_program_factory.hpp"
 
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -285,6 +286,9 @@ TransposeHCShardedProgramFactory::cached_program_t TransposeHCShardedProgramFact
     transpose::tensor_return_value_t& tensor_return_value) {
     const auto& input_tensor = tensor_args.input;
     auto& output_tensor = tensor_return_value;
+
+    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
+    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
 
     Program program = CreateProgram();
 

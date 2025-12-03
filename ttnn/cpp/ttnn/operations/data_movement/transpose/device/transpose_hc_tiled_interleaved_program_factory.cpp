@@ -5,6 +5,7 @@
 
 #include "ttnn/operations/math.hpp"
 
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -104,6 +105,9 @@ TransposeHCTiledInterleavedProgramFactory::cached_program_t TransposeHCTiledInte
     const auto& input_tensor = tensor_args.input;
     auto& output_tensor = tensor_return_value;
     const auto& pad_value = operation_attributes.pad_value;
+
+    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
+    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
 
     Program program = Program();
     auto tile = input_tensor.tensor_spec().tile();
