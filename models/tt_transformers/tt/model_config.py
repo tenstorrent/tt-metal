@@ -482,6 +482,8 @@ class ModelArgs:
 
         self.rms_norm_add_unit_offset = False
         self.embed_scale = None
+        # Multiplier applied to logits after LM head; HF Falcon models use this
+        self.lm_head_multiplier = 1.0
 
         assert not os.getenv(
             "FAKE_DEVICE"
@@ -530,6 +532,8 @@ class ModelArgs:
         # Load model params
         if self.base_model_name in ["Phi-3-mini-128k-instruct"]:
             self.trust_remote_code_hf = True
+        if "falcon3" in HF_MODEL.lower():
+            self.trust_remote_code_hf = True
         self._set_hf_params(self.CKPT_DIR)
 
         # Set the max number of tokens for each prefill chunk based on the model and device
@@ -554,6 +558,8 @@ class ModelArgs:
                 "DeepSeek-R1-Distill-Qwen-14B": {"N150": 4, "N300": 64, "T3K": 128, "TG": None, "P150x4": None},
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-3-mini-128k-instruct": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Falcon3-1B": {"N150": 64, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Falcon3-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
             }
@@ -1846,6 +1852,12 @@ class ModelArgs:
             if self.cache_hf_flag:
                 self.cached_hf_model = model
             state_dict = model.state_dict()
+            # Capture HF logits multiplier if provided by the model implementation
+            try:
+                if hasattr(model, "model") and hasattr(model.model, "lm_head_multiplier"):
+                    self.lm_head_multiplier = float(model.model.lm_head_multiplier)
+            except (AttributeError, ValueError, TypeError) as e:
+                logger.warning(f"Could not set lm_head_multiplier from HF model: {e}")
             self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
 
         if self.is_multimodal:
@@ -2254,6 +2266,10 @@ class ModelArgs:
             "Llama-3.2-90B": "meta-llama/Llama-3.2-90B-Vision-Instruct",
             "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
             "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
+            "Falcon3-1B-Base": "tiiuae/Falcon3-1B-Base",
+            "Falcon3-1B-Instruct": "tiiuae/Falcon3-1B-Instruct",
+            "Falcon3-7B-Base": "tiiuae/Falcon3-7B-Base",
+            "Falcon3-7B-Instruct": "tiiuae/Falcon3-7B-Instruct",
         }
 
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
@@ -2300,6 +2316,18 @@ class ModelArgs:
                     fallback_tokenizer_path = "mistralai/Mistral-7B-Instruct-v0.3"
                 elif "phi-3-mini" in model_name_lower and "128k" in model_name_lower and "instruct" in model_name_lower:
                     fallback_tokenizer_path = "microsoft/Phi-3-mini-128k-instruct"
+                elif "falcon3" in model_name_lower and "1b" in model_name_lower and "base" in model_name_lower:
+                    fallback_tokenizer_path = "tiiuae/Falcon3-1B-Base"
+                elif "falcon3" in model_name_lower and "1b" in model_name_lower and "instruct" in model_name_lower:
+                    fallback_tokenizer_path = "tiiuae/Falcon3-1B-Instruct"
+                elif "falcon3" in model_name_lower and "7b" in model_name_lower and "base" in model_name_lower:
+                    fallback_tokenizer_path = "tiiuae/Falcon3-7B-Base"
+                elif "falcon3" in model_name_lower and "7b" in model_name_lower and "instruct" in model_name_lower:
+                    fallback_tokenizer_path = "tiiuae/Falcon3-7B-Instruct"
+                elif "falcon3" in model_name_lower and "1b" in model_name_lower:
+                    fallback_tokenizer_path = "tiiuae/Falcon3-1B-Instruct"
+                elif "falcon3" in model_name_lower and "7b" in model_name_lower:
+                    fallback_tokenizer_path = "tiiuae/Falcon3-7B-Instruct"
 
             if fallback_tokenizer_path:
                 logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")

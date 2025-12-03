@@ -135,6 +135,53 @@ run_llama3_func() {
 
 }
 
+run_falcon3_func() {
+
+  fail=0
+
+  # Falcon3 1B and 7B accuracy/perf sanity via simple_text_demo (functional lane)
+  falcon3_1b_base=tiiuae/Falcon3-1B-Base
+  falcon3_1b_instruct=tiiuae/Falcon3-1B-Instruct
+  falcon3_7b_base=tiiuae/Falcon3-7B-Base
+  falcon3_7b_instruct=tiiuae/Falcon3-7B-Instruct
+
+  for repo in "$falcon3_1b_base" "$falcon3_1b_instruct" "$falcon3_7b_base" "$falcon3_7b_instruct"; do
+    HF_MODEL=$repo pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1" --timeout 1200 || fail=1
+    echo "LOG_METAL: Falcon3 functional tests for $repo completed"
+  done
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+
+}
+
+run_falcon3_perf() {
+
+  fail=0
+
+  falcon3_1b_base=tiiuae/Falcon3-1B-Base
+  falcon3_1b_instruct=tiiuae/Falcon3-1B-Instruct
+  falcon3_7b_base=tiiuae/Falcon3-7B-Base
+  falcon3_7b_instruct=tiiuae/Falcon3-7B-Instruct
+
+  # N150 perf executed on N300 perf pipeline machines (mirroring llama3 perf section approach for N150)
+  for repo in "$falcon3_1b_base" "$falcon3_1b_instruct" "$falcon3_7b_base" "$falcon3_7b_instruct"; do
+    MESH_DEVICE=N150 HF_MODEL=$repo pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
+    echo "LOG_METAL: Falcon3 tests for $repo completed on N150"
+  done
+  # Run all Falcon3 tests for 1B and 7B variants
+  for repo in "$falcon3_1b_base" "$falcon3_1b_instruct" "$falcon3_7b_base" "$falcon3_7b_instruct"; do
+    HF_MODEL=$repo pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
+    echo "LOG_METAL: Falcon3 tests for $repo completed"
+  done
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+
+}
+
 run_ufld_v2_func() {
   #ufld_v2 demo
   pytest models/demos/wormhole/ufld_v2/demo/demo.py
