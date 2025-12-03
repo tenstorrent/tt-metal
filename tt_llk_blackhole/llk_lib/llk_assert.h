@@ -4,14 +4,9 @@
 
 #pragma once
 
-#ifndef ENV_LLK_INFRA
+#ifdef ENABLE_LLK_ASSERT
 
-// Assume we are executing in tt-metal and we have assert already available.
-#include "debug/assert.h"
-
-#define LLK_ASSERT(condition, message) ASSERT(condition)
-
-#else
+#ifdef ENV_LLK_INFRA
 
 #include "ckernel.h"
 
@@ -25,4 +20,17 @@
         }                              \
     } while (0)
 
-#endif
+#else
+
+// Assume we are executing in tt-metal and we have assert already available.
+#include "debug/assert.h"
+
+#define LLK_ASSERT(condition, message) ASSERT(condition)
+
+#endif // ENV_LLK_INFRA
+
+#else
+
+#define LLK_ASSERT(condition, message) ((void)condition)
+
+#endif // ENABLE_LLK_ASSERT

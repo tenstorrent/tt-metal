@@ -64,7 +64,7 @@ OBJCOPY         := $(TOOL_PATH)/riscv-tt-elf-objcopy
 OPTIONS_ALL	:= -g -O3 -std=$(CXX_VERSION) -ffast-math
 OPTIONS_COMPILE := -fno-use-cxa-atexit -Wall -fno-exceptions -fno-rtti -Werror -Wunused-parameter \
 				   -Wfloat-equal -Wpointer-arith -Wnull-dereference -Wredundant-decls -Wuninitialized \
-				   -Wmaybe-uninitialized -DTENSIX_FIRMWARE -DENV_LLK_INFRA $(ARCH_DEFINE)
+				   -Wmaybe-uninitialized -DTENSIX_FIRMWARE -DENV_LLK_INFRA -DENABLE_LLK_ASSERT $(ARCH_DEFINE)
 
 BOOT_MODE := $(if $(bootmode),$(bootmode),brisc)
 ifeq ($(BOOT_MODE),brisc)
