@@ -1962,3 +1962,35 @@ def test_unary_rdiv_ttnn(input_shapes, torch_dtype, ttnn_dtype, param, round_mod
         assert_with_pcc(golden_tensor, output_tensor, pcc=0.999)
     else:
         assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=3, allow_nonfinite=True)
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    (
+        (torch.Size([3, 2048, 2048])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize(
+    "memory_config",
+    [ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG, ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG],
+)
+def test_hardmish_shard(input_shape, memory_config, device):
+    # Create random tensors
+    torch_input = torch.randn(*input_shape, dtype=torch.bfloat16)
+
+    # Convert to TTNN tensors with tile layout
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT)
+
+    # Perform the operation with the specified memory config
+    ttnn_result = ttnn.hardmish(
+        ttnn_input,
+        memory_config=memory_config,
+    )
+    print(ttnn_result.memory_config())
+
+    golden_function = ttnn.get_golden_function(ttnn.hardmish)
+    golden = golden_function(torch_input, device=device)
+
+    result = ttnn.to_torch(ttnn_result)
+    assert_with_ulp(golden, result, 1)

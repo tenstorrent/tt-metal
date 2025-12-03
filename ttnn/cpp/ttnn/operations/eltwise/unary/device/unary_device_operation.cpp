@@ -91,11 +91,18 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         input_tensor.buffer() != nullptr,
         "Operands to eltwise unary need to be allocated in buffers on the device. Buffer is null.");
 
-    TT_FATAL(
-        input_tensor.memory_config().memory_layout() == out_memory_config.memory_layout(),
-        "Unary operation requires Input and Output memory layout to match. Input layout: {}, Output layout: {}",
-        static_cast<int>(input_tensor.memory_config().memory_layout()),
-        static_cast<int>(out_memory_config.memory_layout()));
+    // Allow sharded output from non-sharded input if shard_spec can be created automatically
+    // Only skip layout check when output is sharded but missing shard_spec (will be auto-created)
+    bool allow_sharded_output = out_memory_config.is_sharded() &&
+                                !out_memory_config.shard_spec().has_value();
+
+    if (!allow_sharded_output) {
+        TT_FATAL(
+            input_tensor.memory_config().memory_layout() == out_memory_config.memory_layout(),
+            "Unary operation requires Input and Output memory layout to match. Input layout: {}, Output layout: {}",
+            static_cast<int>(input_tensor.memory_config().memory_layout()),
+            static_cast<int>(out_memory_config.memory_layout()));
+    }
 
     if (!input_tensor.is_sharded()) {
         TT_FATAL(
@@ -136,12 +143,17 @@ spec_return_value_t UnaryDeviceOperation::compute_output_specs(
     }
 
     auto output_layout = Layout::TILE;
-    if (args.output_memory_config.is_sharded()) {
+    auto output_memory_config = args.output_memory_config;
+
+    // Automatically compute shard_spec if output is sharded but missing shard_spec
+    output_memory_config = compute_auto_shard_spec(tensor_args.input, output_memory_config);
+
+    if (output_memory_config.is_sharded()) {
         output_layout = tensor_args.input.layout();
     }
 
     const auto output_shape = tensor_args.input.logical_shape();
-    return TensorSpec(output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
+    return TensorSpec(output_shape, TensorLayout(args.output_dtype, output_layout, output_memory_config));
 }
 
 tensor_return_value_t UnaryDeviceOperation::create_output_tensors(
