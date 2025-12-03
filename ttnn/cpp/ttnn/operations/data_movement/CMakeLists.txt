@@ -143,6 +143,13 @@ target_sources(
         non_zero_indices/non_zero_indices.cpp
         pad/device/pad_device_operation.cpp
         pad/device/pad_program_factory.cpp
+        pad/device/pad_rm_reader_writer_multi_core_program_factory.cpp
+        pad/device/pad_rm_reader_writer_multi_core_v2_program_factory.cpp
+        pad/device/pad_rm_reader_writer_program_factory.cpp
+        pad/device/pad_rm_sharded_height_only_program_factory.cpp
+        pad/device/pad_rm_sharded_width_only_program_factory.cpp
+        pad/device/pad_tile_multicore_program_factory.cpp
+        pad/device/pad_tile_program_factory.cpp
         pad/pad.cpp
         permute/device/permute_device_operation.cpp
         permute/device/permute_rm_program_factory.cpp

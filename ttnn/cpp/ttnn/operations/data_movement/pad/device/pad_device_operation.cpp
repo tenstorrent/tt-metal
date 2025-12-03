@@ -14,7 +14,8 @@ namespace ttnn::operations::data_movement::pad {
 
 PadDeviceOperation::program_factory_t PadDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return program::PadProgramFactory{};
+    TT_FATAL(false, "TODO");
+    // return program::PadProgramFactory{};
 }
 
 void PadDeviceOperation::validate_on_program_cache_hit(

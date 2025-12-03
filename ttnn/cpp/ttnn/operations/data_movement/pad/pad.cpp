@@ -141,20 +141,14 @@ ttnn::Tensor pad_impl(
             "output_w != output_memory_config.shard_spec().shape[1]");
 
         ttnn::Shape output_shape{output_padded_shape};
-        auto output_tensor = tt::tt_metal::operation::run(
-                                 pad::PadDeviceOperation{
-                                     output_shape,
-                                     output_shape,
-                                     ttnn::Shape{input_tensor_start},
-                                     value,
-                                     output_memory_config,
-                                     use_multicore},
-                                 {input_tensor},
-                                 {},
-                                 {})
-                                 .front();
-
-        return output_tensor;
+        return ttnn::prim::pad(
+            input_tensor,
+            output_shape,
+            output_shape,
+            ttnn::Shape{input_tensor_start},
+            value,
+            output_memory_config,
+            use_multicore);
     }
 }
 

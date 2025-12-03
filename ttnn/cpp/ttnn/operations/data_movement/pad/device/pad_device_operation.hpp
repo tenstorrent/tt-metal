@@ -13,7 +13,14 @@
 #include "ttnn/decorators.hpp"
 
 #include "ttnn/operations/data_movement/pad/device/pad_device_operation_types.hpp"
-#include "ttnn/operations/data_movement/pad/device/pad_program_factory.hpp"
+
+#include "ttnn/operations/data_movement/pad/device/pad_rm_reader_writer_multi_core_program_factory.hpp"
+#include "ttnn/operations/data_movement/pad/device/pad_rm_reader_writer_multi_core_v2_program_factory.hpp"
+#include "ttnn/operations/data_movement/pad/device/pad_rm_reader_writer_program_factory.hpp"
+#include "ttnn/operations/data_movement/pad/device/pad_rm_sharded_height_only_program_factory.hpp"
+#include "ttnn/operations/data_movement/pad/device/pad_rm_sharded_width_only_program_factory.hpp"
+#include "ttnn/operations/data_movement/pad/device/pad_tile_multicore_program_factory.hpp"
+#include "ttnn/operations/data_movement/pad/device/pad_tile_program_factory.hpp"
 
 namespace ttnn::operations::data_movement::pad {
 struct PadDeviceOperation {
@@ -21,7 +28,14 @@ struct PadDeviceOperation {
     using tensor_args_t = tensor_args_t;
     using spec_return_value_t = spec_return_value_t;
     using tensor_return_value_t = tensor_return_value_t;
-    using program_factory_t = std::variant<program::PadProgramFactory>;
+    using program_factory_t = std::variant<
+        program::PadRmReaderWriterMultiCoreProgramFactory,
+        program::PadRmReaderWriterMultiCoreV2ProgramFactory,
+        program::PadRmReaderWriterProgramFactory,
+        program::PadRmShardedHeightOnlyProgramFactory,
+        program::PadRmShardedWidthOnlyProgramFactory,
+        program::PadTileMulticoreProgramFactory,
+        program::PadTileCoreProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
