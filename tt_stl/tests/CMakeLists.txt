@@ -1,3 +1,6 @@
+# PImpl test utility library (separate compilation to test incomplete types)
+add_subdirectory(test_indirect_util)
+
 # Smoke tests (fast, not necessarily thorough)
 add_library(unit_tests_stl_smoke OBJECT)
 add_library(TT::Metalium::Test::STL::Smoke ALIAS unit_tests_stl_smoke)
@@ -9,6 +12,7 @@ target_sources(
         test_cleanup.cpp
         test_indestructible.cpp
         test_indirect.cpp
+        test_indirect_pimpl.cpp
         test_optional_reference.cpp
         test_span.cpp
         test_strong_type.cpp
@@ -21,6 +25,7 @@ target_link_libraries(
         gtest
         gtest_main
         TT::STL
+        test_indirect_util
 )
 
 add_executable(unit_tests_stl)
