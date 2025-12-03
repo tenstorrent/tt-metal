@@ -19,7 +19,6 @@ from callstack_provider import (
     format_callstack_with_message,
     run as get_callstack_provider,
     CallstackProvider,
-    CallstacksData,
 )
 from run_checks import run as get_run_checks
 from ttexalens.coordinate import OnChipCoordinate
