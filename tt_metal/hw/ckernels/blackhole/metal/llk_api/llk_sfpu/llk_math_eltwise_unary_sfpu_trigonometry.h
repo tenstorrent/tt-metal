@@ -16,7 +16,7 @@ inline void llk_math_eltwise_unary_sfpu_sine_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::sine, APPROXIMATE>();
 }
 
-template <bool APPROXIMATE, bool fp32_dest_acc_en = true>
+template <bool APPROXIMATE, bool fp32_dest_acc_en>
 inline void llk_math_eltwise_unary_sfpu_sine_op(uint dst_index) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_sfpu_trig<SfpuType::sine, APPROXIMATE, fp32_dest_acc_en>,
@@ -30,7 +30,7 @@ inline void llk_math_eltwise_unary_sfpu_cosine_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::cosine, APPROXIMATE>();
 }
 
-template <bool APPROXIMATE, bool fp32_dest_acc_en = true>
+template <bool APPROXIMATE, bool fp32_dest_acc_en>
 inline void llk_math_eltwise_unary_sfpu_cosine_op(uint dst_index) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_sfpu_trig<SfpuType::cosine, APPROXIMATE, fp32_dest_acc_en>,
@@ -44,10 +44,12 @@ inline void llk_math_eltwise_unary_sfpu_tan_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::tan, APPROXIMATE>();
 }
 
-template <bool APPROXIMATE>
+template <bool APPROXIMATE, bool fp32_dest_acc_en>
 inline void llk_math_eltwise_unary_sfpu_tan_op(uint dst_index) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_sfpu_trig<SfpuType::tan, APPROXIMATE>, dst_index, (int)VectorMode::RC);
+        ckernel::sfpu::calculate_sfpu_trig<SfpuType::tan, APPROXIMATE, fp32_dest_acc_en>,
+        dst_index,
+        (int)VectorMode::RC);
 }
 
 // asin
