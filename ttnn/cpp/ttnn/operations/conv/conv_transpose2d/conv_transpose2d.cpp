@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-// #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include "ttnn/operations/conv/conv_transpose2d/prepare_conv_transpose2d_weights.hpp"
 #include "ttnn/operations/core/core.hpp"

@@ -12,7 +12,6 @@
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-// #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
@@ -164,32 +163,6 @@ ActivationReuseConfig calculate_activation_reuse_params(
     return config;
 }
 
-// tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
-// tt::tt_metal::Program& program,
-// const Tensor& a,
-// const Tensor& b,
-// const ttnn::Shape& ashape,
-// std::optional<const Tensor> bias,
-// const sliding_window::SlidingWindowConfig& sliding_window_config,
-// const sliding_window::ParallelConfig& parallel_config,
-// const std::vector<uint32_t>& op_trace_metadata,
-// const std::vector<sliding_window::ShardBoundary>& shard_boundaries,
-// uint32_t output_channels,
-// uint32_t groups,
-// bool untilize_out,
-// bool has_bias,
-// const std::optional<unary::UnaryWithParam>& fused_activation,
-// const Conv2dParallelizationConfig& parallelization_config,
-// const Conv2dBlockConfig& block_config,
-// bool transpose_mcast,
-// Tensor& output,
-// DeviceComputeKernelConfig compute_kernel_config,
-// bool enable_act_double_buffer,
-// bool enable_weights_double_buffer,
-// bool full_inner_dim,
-// bool enable_activation_reuse,
-// bool config_tensors_in_dram,
-// std::optional<bool> force_split_reader) {
 Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -1391,52 +1364,8 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         std::vector<CoreCoord> core_range_vec = grid_to_cores(core_range.start_coord, core_range.end_coord, true);
         mcast_sender_cores_vec.insert(mcast_sender_cores_vec.end(), core_range_vec.begin(), core_range_vec.end());
     }
-    // Capture conv_reader_indices_storage to cache this with the program
-    // auto override_runtime_arguments_callback =
-    //     [mcast_sender_cores = mcast_sender_cores_vec,
-    //      writer_mcast_sender_id = writer_mcast_sender_id,
-    //      cb_sharded_act = cb_sharded_act,
-    //      cb_output = cb_output,
-    //      cb_partials = cb_partials,
-    //      partials_cb_uses_output = partials_cb_uses_output,
-    //      has_bias = has_bias,
-    //      conv_reader_indices_storage = conv_reader_indices_storage](
-    //         const void* operation,
-    //         Program& program,
-    //         const std::vector<Tensor>& input_tensors,
-    //         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    //         const std::vector<Tensor>& output_tensors) {
-    //         // Reader config indices is an optional static sharded tensor, so no need to update address
-    //         TT_FATAL(output_tensors.size() == 1, "Expected exactly 1 output tensor but got {}",
-    //         output_tensors.size());
-
-    //         auto* src_buffer_a = input_tensors.at(0).buffer();
-    //         auto* src_buffer_b = input_tensors.at(1).buffer();
-
-    //         std::optional<tt::tt_metal::Buffer*> src_buffer_c = std::nullopt;
-    //         if (has_bias) {
-    //             src_buffer_c = optional_input_tensors.at(0).value().buffer();
-    //             TT_FATAL(src_buffer_c.value() != nullptr, "Source buffer C must not be null when bias is present");
-    //         }
-
-    //         auto& writer_sender_kernel_args_by_core = GetRuntimeArgs(program, writer_mcast_sender_id);
-    //         for (const auto& core : mcast_sender_cores) {
-    //             auto& runtime_args = writer_sender_kernel_args_by_core[core.x][core.y];
-    //             runtime_args[0] = src_buffer_b->address();
-    //             if (has_bias) {
-    //                 runtime_args[1] = (*src_buffer_c)->address();
-    //             }
-    //         }
-
-    //         UpdateDynamicCircularBufferAddress(program, cb_sharded_act, *src_buffer_a);
-    //         UpdateDynamicCircularBufferAddress(program, cb_output, *output_tensors.at(0).buffer());
-    //         if (partials_cb_uses_output) {
-    //             UpdateDynamicCircularBufferAddress(program, cb_partials, *output_tensors.at(0).buffer());
-    //         }
-    //     };
-    // return {.program = std::move(program), .override_runtime_arguments_callback =
-    // override_runtime_arguments_callback};
     post_conv2d_op_memory_checks(program, operation_attributes, tensor_args, output_tensor);
+    // Capture conv_reader_indices_storage to cache this with the program
     return cached_program_t{
         std::move(program),
         shared_variables_t{

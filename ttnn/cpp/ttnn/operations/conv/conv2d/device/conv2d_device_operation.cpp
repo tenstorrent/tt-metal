@@ -10,7 +10,6 @@
 #include <cstdint>
 #include <optional>
 #include <utility>
-// #include "conv2d_op.hpp"
 #include <tt-metalium/math.hpp>
 
 #include <tt-metalium/tt_metal.hpp>
@@ -26,30 +25,6 @@
 
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
-
-// #include "tt-metalium/buffer_types.hpp"
-// #include "ttnn/tensor/types.hpp"
-// #include <tt-metalium/work_split.hpp>
-
-// #include <array>
-// #include <cstdint>
-// #include <optional>
-// #include <utility>
-// #include <tt-metalium/math.hpp>
-
-// #include <tt-metalium/tt_metal.hpp>
-// #include <tt-metalium/circular_buffer.hpp>
-// #include <tt-metalium/constants.hpp>
-
-// #include "tt-metalium/shape.hpp"
-// #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-// #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-// #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
-// // #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-// #include "ttnn/operations/cb_utils.hpp"
-
-// #include "ttnn/operations/sliding_window/sliding_window.hpp"
-// #include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn::operations::conv::conv2d {
 Conv2dDeviceOperation::program_factory_t Conv2dDeviceOperation::select_program_factory(
@@ -167,13 +142,9 @@ void Conv2dDeviceOperation::validate_on_program_cache_hit(
 
 tt::stl::hash::hash_t Conv2dDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // return tt::stl::hash::hash_objects_with_default_seed(
-    //     tt::stl::hash::type_hash<device_operation_t>, operation_attributes, tensor_args);
-
     hashable_operation_attributes_t hashable_args = {
         .sliding_window_config = args.sliding_window_config,
         .output_channels = args.output_channels,
-        // .groups = args.groups,
         .untilize_out = args.untilize_out,
         .has_bias = args.has_bias,
         .activation = args.activation,
@@ -185,14 +156,10 @@ tt::stl::hash::hash_t Conv2dDeviceOperation::compute_program_hash(
         .compute_kernel_config = args.compute_kernel_config,
         .enable_act_double_buffer = args.enable_act_double_buffer,
         .enable_weights_double_buffer = args.enable_weights_double_buffer,
-        // .full_inner_dim = args.full_inner_dim,
         .enable_activation_reuse = args.enable_activation_reuse,
         .config_tensors_in_dram = args.config_tensors_in_dram,
         .force_split_reader = args.force_split_reader,
-        // .pre_op_l1_allocation_size_bytes = args.pre_op_l1_allocation_size_bytes,
     };
-    // return tt::stl::hash::hash_objects_with_default_seed(
-    //     tt::stl::hash::type_hash<hashable_operation_attributes_t>, hashable_args, tensor_args);
     return tt::stl::hash::hash_objects_with_default_seed(hashable_args, tensor_args);
 }
 

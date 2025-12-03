@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <optional>
 
-// #include "conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 
 #include "tt-metalium/circular_buffer_config.hpp"

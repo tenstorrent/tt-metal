@@ -6,7 +6,6 @@
 #include <string>
 #include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
-// #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
@@ -41,29 +40,6 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activat
     return {{1, num_rows_padded, num_cols_padded}, {1, num_rows, num_cols}};
 }
 
-// tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
-//     tt::tt_metal::Program& program,
-//     const Tensor& a,
-//     const Tensor& b,
-//     const ttnn::Shape& ashape,
-//     const std::optional<const Tensor>& bias,
-//     const sliding_window::SlidingWindowConfig& sliding_window_config,
-//     const sliding_window::ParallelConfig& parallel_config,
-//     const std::vector<uint32_t>& op_trace_metadata,
-//     const std::vector<sliding_window::ShardBoundary>& shard_boundaries,
-//     uint32_t output_channels,
-//     uint32_t groups,
-//     bool untilize_out,
-//     bool has_bias,
-//     const std::optional<unary::UnaryWithParam>& fused_activation,
-//     const Conv2dParallelizationConfig& parallelization_config,
-//     const Conv2dBlockConfig& block_config,
-//     Tensor& output,
-//     DeviceComputeKernelConfig compute_kernel_config,
-//     bool enable_act_double_buffer,
-//     bool enable_weights_double_buffer,
-//     bool config_tensors_in_dram) {
-
 Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -87,21 +63,16 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
         ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config);
 
     const auto output_channels = operation_attributes.output_channels;
-    // const auto groups = operation_attributes.groups;
     const auto untilize_out = operation_attributes.untilize_out;
     const auto has_bias = operation_attributes.has_bias;
     const auto& fused_activation = operation_attributes.activation;
     const auto& parallelization_config = operation_attributes.parallelization_config;
     const auto& block_config = operation_attributes.block_config;
-    // const auto transpose_mcast = a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
     auto& output = output_tensor;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
     const auto enable_act_double_buffer = operation_attributes.enable_act_double_buffer;
     const auto enable_weights_double_buffer = operation_attributes.enable_weights_double_buffer;
-    // const auto full_inner_dim = operation_attributes.full_inner_dim;
-    // const auto enable_activation_reuse = operation_attributes.enable_activation_reuse;
     const auto config_tensors_in_dram = operation_attributes.config_tensors_in_dram;
-    // const auto& force_split_reader = operation_attributes.force_split_reader;
 
     tt::tt_metal::IDevice* device = a.device();
     TT_FATAL(a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Conv activation should be in row major layxsout");
@@ -666,45 +637,6 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
         }
     }
 
-    // auto override_runtime_arguments_callback =
-    //     [cb_sharded_act,
-    //      cb_output,
-    //      cb_partials,
-    //      partials_cb_uses_output,
-    //      has_bias,
-    //      full_core_grid,
-    //      weights_kernel_id,
-    //      total_num_active_cores,
-    //      conv_reader_indices_storage](
-    //         const void* operation,
-    //         tt::tt_metal::Program& program,
-    //         const std::vector<Tensor>& input_tensors,
-    //         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    //         const std::vector<Tensor>& output_tensors) {
-    //         auto* src_buffer_a = input_tensors.at(0).buffer();
-    //         auto* src_buffer_b = input_tensors.at(1).buffer();
-
-    //         auto& weights_kernel_runtime_args = GetRuntimeArgs(program, weights_kernel_id);
-    //         for (uint32_t core_index = 0; core_index < total_num_active_cores; core_index++) {
-    //             uint32_t core_x = core_index % full_core_grid.x;
-    //             uint32_t core_y = core_index / full_core_grid.x;
-
-    //             auto& this_core_weights_kernel_runtime_args = weights_kernel_runtime_args[core_x][core_y];
-    //             this_core_weights_kernel_runtime_args[1] = src_buffer_b->address();
-    //             if (has_bias) {
-    //                 this_core_weights_kernel_runtime_args[2] =
-    //                 optional_input_tensors.at(0).value().buffer()->address();
-    //             }
-    //         }
-
-    //         UpdateDynamicCircularBufferAddress(program, cb_sharded_act, *src_buffer_a);
-    //         UpdateDynamicCircularBufferAddress(program, cb_output, *output_tensors.at(0).buffer());
-    //         if (partials_cb_uses_output) {
-    //             UpdateDynamicCircularBufferAddress(program, cb_partials, *output_tensors.at(0).buffer());
-    //         }
-    //     };
-    // return {.program = std::move(program), .override_runtime_arguments_callback =
-    // override_runtime_arguments_callback};
     post_conv2d_op_memory_checks(program, operation_attributes, tensor_args, output_tensor);
     return cached_program_t{
         std::move(program),
