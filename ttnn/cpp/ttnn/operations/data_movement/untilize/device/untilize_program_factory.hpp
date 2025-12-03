@@ -37,7 +37,11 @@ tt::tt_metal::operation::ProgramWithCallbacks untilize_row_wise_fuseable(
 }  // namespace detail
 
 namespace untilize {
-tt::tt_metal::operation::ProgramWithCallbacks untilize_row_wise_fuseable(
+
+using FuseableUntilizeCallback =
+    std::function<void(const std::optional<GlobalSemaphore>&, Program&, const Tensor&, const Tensor&)>;
+
+FuseableUntilizeCallback untilize_row_wise_fuseable(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const Tensor& output_tensor,

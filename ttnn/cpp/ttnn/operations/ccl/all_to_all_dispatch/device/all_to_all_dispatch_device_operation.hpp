@@ -6,7 +6,7 @@
 
 #include <variant>
 #include <optional>
-
+#include "ttnn/operations/data_movement/untilize/device/untilize_program_factory.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
@@ -70,6 +70,8 @@ struct AllToAllDispatchDeviceOperation {
             std::vector<CoreCoord> cores;
             const GlobalSemaphore init_semaphore;
             const GlobalSemaphore cross_device_semaphore;
+            const std::optional<GlobalSemaphore> untilize_sync_semaphore;
+            const std::optional<data_movement::untilize::FuseableUntilizeCallback> untilize_callback;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

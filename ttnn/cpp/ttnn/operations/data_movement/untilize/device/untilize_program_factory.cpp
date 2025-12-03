@@ -50,18 +50,20 @@ CoreRange validate_fuse_sync_args(
     return core_range;
 }
 
-std::array<uint32_t,5> get_fuse_sync_ct_args(const CoreRange& sync_core_grid, MeshDevice * device) {
+std::array<uint32_t, 6> get_fuse_sync_ct_args(
+    const CoreRange& sync_core_grid, MeshDevice* device, const uint32_t total_column_tiles) {
     // writer uses NOC1 by default so the coordinates are flipped
     const auto end_coord = device->worker_core_from_logical_core(sync_core_grid.start_coord);
     const auto start_coord = device->worker_core_from_logical_core(sync_core_grid.end_coord);
     const uint32_t num_dests = sync_core_grid.size() - 1;
 
     return {
-        start_coord.x, // noc_start_x
-        start_coord.y, // noc_start_y
-        end_coord.x, // noc_end_x
-        end_coord.y, // noc_end_y
+        start_coord.x,  // noc_start_x
+        start_coord.y,  // noc_start_y
+        end_coord.x,    // noc_end_x
+        end_coord.y,    // noc_end_y
         num_dests,
+        total_column_tiles,
     };
 }
 
@@ -76,7 +78,7 @@ tt::tt_metal::operation::ProgramWithCallbacks untilize_row_wise_fuseable(
     uint32_t max_tiles_per_block) {
     tt::tt_metal::Program program{};
 
-    return untilize::untilize_row_wise_fuseable(
+    const auto callback_impl = untilize::untilize_row_wise_fuseable(
         program,
         input_tensor,
         output_tensor,
@@ -86,11 +88,23 @@ tt::tt_metal::operation::ProgramWithCallbacks untilize_row_wise_fuseable(
         semaphore,
         sync_core_grids,
         max_tiles_per_block);
+
+    auto override_runtime_arguments_callback = [callback_impl](
+                                                   const void* operation,
+                                                   Program& program,
+                                                   const std::vector<Tensor>& input_tensors,
+                                                   const std::vector<std::optional<const Tensor>>& optional_tensors,
+                                                   const std::vector<Tensor>& output_tensors) {
+        auto op = reinterpret_cast<const Untilize*>(operation);
+        return callback_impl(op->_internal_semaphore, program, input_tensors.back(), output_tensors.back());
+    };
+
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 }  // namespace detail
 
 namespace untilize {
-tt::tt_metal::operation::ProgramWithCallbacks untilize_row_wise_fuseable(
+FuseableUntilizeCallback untilize_row_wise_fuseable(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const Tensor& output_tensor,
@@ -159,7 +173,8 @@ tt::tt_metal::operation::ProgramWithCallbacks untilize_row_wise_fuseable(
     if(semaphore.has_value()){
         writer_defines["FUSED_OP_SYNC"] ="1";
         const auto sync_core_range = detail::validate_fuse_sync_args(sub_core_grids, sync_core_grids);
-        const auto sync_ct_args = detail::get_fuse_sync_ct_args(sync_core_range, input_tensor.device());
+        const auto sync_ct_args =
+            detail::get_fuse_sync_ct_args(sync_core_range, input_tensor.device(), total_column_tiles);
         writer_ct_args.insert(writer_ct_args.end(),sync_ct_args.begin(), sync_ct_args.end());
     }
 
@@ -243,32 +258,27 @@ tt::tt_metal::operation::ProgramWithCallbacks untilize_row_wise_fuseable(
                                                 cb_src0 = cb_src0,
                                                 cb_output = cb_output,
                                                 cores_with_rtargs](
-                                                   const void* operation,
+                                                   const std::optional<GlobalSemaphore>& sync_semaphore,
                                                    Program& program,
-                                                   const std::vector<Tensor>& input_tensors,
-                                                   const std::vector<std::optional<const Tensor>>&,
-                                                   const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
-        {
-            auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-            for (const CoreCoord& core : cores_with_rtargs) {
-                auto& runtime_args = runtime_args_by_core[core.x][core.y];
-                runtime_args[0] = src_buffer->address();
-            }
-        }
+                                                   const Tensor& input_tensor,
+                                                   const Tensor& output_tensor) {
+        auto src_buffer = input_tensor.buffer();
+        auto dst_buffer = output_tensor.buffer();
 
-        {
-            auto& runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
-            for (const CoreCoord& core : cores_with_rtargs) {
-                auto& runtime_args = runtime_args_by_core[core.x][core.y];
-                runtime_args[0] = dst_buffer->address();
+        for (const CoreCoord& core : cores_with_rtargs) {
+            auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            reader_runtime_args[0] = src_buffer->address();
+
+            auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            writer_runtime_args[0] = dst_buffer->address();
+
+            if (sync_semaphore.has_value()) {
+                writer_runtime_args[6] = sync_semaphore->address();
             }
         }
     };
 
-    return {
-        .program = tt::tt_metal::Program{}, .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return override_runtime_arguments_callback;
 }
 }  // namespace untilize
 

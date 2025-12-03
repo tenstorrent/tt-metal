@@ -10,12 +10,30 @@ using namespace ttnn::operations::ccl::common;
 
 namespace detail {
 
-template <uint32_t tile_size = 32>
-void wait_untilize_sync(uint32_t i, volatile tt_l1_ptr uint32_t* sync_semaphore_ptr) {
-    if (i % tile_size) {
-        noc_semaphore_wait_min(sync_semaphore_ptr, i + tile_size);
+template <bool Enable, uint32_t TileSize = 32>
+struct TileChunkSync {
+    TileChunkSync(const uint32_t end_index, volatile tt_l1_ptr uint32_t* sync_semaphore_ptr) {};
+    void wait(const uint32_t i) {};
+};
+
+template <uint32_t TileSize>
+struct TileChunkSync<true, TileSize> {
+    const uint32_t m_end_index;
+    volatile tt_l1_ptr uint32_t* m_sync_semaphore_ptr;
+    uint32_t m_next_chunk;
+
+    TileChunkSync(const uint32_t end_index, volatile tt_l1_ptr uint32_t* sync_semaphore_ptr) :
+        m_end_index(end_index), m_sync_semaphore_ptr(sync_semaphore_ptr), m_next_chunk(0u) {};
+
+    void wait(const uint32_t i) {
+        if (i == m_next_chunk || i == m_end_index) {
+            noc_semaphore_wait_min(m_sync_semaphore_ptr, i + 1u);
+            m_next_chunk += TileSize;
+        }
     }
-}
+
+    ~TileChunkSync() { noc_semaphore_set(m_sync_semaphore_ptr, 0u); };
+};
 }  // namespace detail
 
 void kernel_main() {
@@ -79,7 +97,7 @@ void kernel_main() {
     uint32_t token_start_idx = get_arg_val<uint32_t>(rt_args++);
     uint32_t token_end_idx = get_arg_val<uint32_t>(rt_args++);
 
-    volatile tt_l1_ptr uint32_t* untilize_semaphore_ptr;
+    volatile tt_l1_ptr uint32_t* untilize_semaphore_ptr = nullptr;
     if constexpr (untilize_input_sync) {
         untilize_semaphore_ptr = get_arg_val<decltype(untilize_semaphore_ptr)>(rt_args++);
     }
@@ -111,16 +129,13 @@ void kernel_main() {
         cb_push_back(indices_tensor_cb_id, 1);
     }
 
+    detail::TileChunkSync<untilize_input_sync> untilize_sync(token_end_idx, untilize_semaphore_ptr);
+
     // read the input tokens
     for (uint32_t i = token_start_idx; i < token_end_idx; i++) {
         cb_reserve_back(input_tensor_cb_id, 1);
 
-        if constexpr (untilize_input_sync) {
-            DPRINT << "i: " << i << "\n";
-            noc_semaphore_wait_min(untilize_semaphore_ptr, i + 1);
-
-            // detail::wait_untilize_sync(i, untilize_semaphore_ptr);
-        }
+        untilize_sync.wait(i);
 
         uint32_t l1_write_addr = get_write_ptr(input_tensor_cb_id);
         noc_async_read_page(i, input_addr_gen, l1_write_addr);

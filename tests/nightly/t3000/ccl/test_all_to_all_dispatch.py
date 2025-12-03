@@ -551,13 +551,13 @@ def run_all_to_all_dispatch_test(
 @pytest.mark.parametrize("cluster_axis", [0, 1], ids=["cluster_row", "cluster_col"])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
-@pytest.mark.parametrize("hidden_size", [7168])
+@pytest.mark.parametrize("hidden_size", [32])
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize(
     "batches_per_device, seq_len, num_iters, warmup_iters, input_memory_config, output_memory_config",
     [
-        (16, 2, 1, 1, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),  # b16s2, dram-dram
-        (1, 3, 1, 1, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),  # b1s3, l1-l1
+        (16, 2, 2, 1, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),  # b16s2, dram-dram
+        (1, 3, 2, 1, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),  # b1s3, l1-l1
     ],
     ids=["b16s2-dram", "b1s3-l1"],
 )
