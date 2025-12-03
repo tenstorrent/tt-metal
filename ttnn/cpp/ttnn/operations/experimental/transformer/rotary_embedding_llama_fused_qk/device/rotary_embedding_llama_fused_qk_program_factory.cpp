@@ -9,7 +9,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 
-namespace ttnn::operations::experimental::transformer::program {
+namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk::program {
 
 using namespace tt::constants;
 
@@ -247,4 +247,4 @@ void RotaryEmbeddingLlamaFusedQKProgramFactory::override_runtime_arguments(
     UpdateDynamicCircularBufferAddress(program, shared_variables.cb_k_output, *k_dst_buffer);
 }
 
-}  // namespace ttnn::operations::experimental::transformer::program
+}  // namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk::program

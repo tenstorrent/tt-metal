@@ -9,7 +9,7 @@
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk {
 
 RotaryEmbeddingLlamaFusedQKDeviceOperation::program_factory_t
 RotaryEmbeddingLlamaFusedQKDeviceOperation::select_program_factory(
@@ -203,7 +203,7 @@ RotaryEmbeddingLlamaFusedQKDeviceOperation::invoke(
         .sin = sin_cache,
         .trans_mat = trans_mat,
     };
-    return {attributes, tensor_args};
+    return std::make_tuple(std::move(attributes), std::move(tensor_args));
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk

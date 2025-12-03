@@ -10,13 +10,13 @@
 
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/rotary_embedding_llama_fused_qk_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk {
 
 struct RotaryEmbeddingLlamaFusedQKDeviceOperation {
-    using operation_attributes_t = transformer::operation_attributes_t;
-    using tensor_args_t = transformer::tensor_args_t;
-    using spec_return_value_t = transformer::spec_return_value_t;
-    using tensor_return_value_t = transformer::tensor_return_value_t;
+    using operation_attributes_t = rotary_embedding_llama_fused_qk::operation_attributes_t;
+    using tensor_args_t = rotary_embedding_llama_fused_qk::tensor_args_t;
+    using spec_return_value_t = rotary_embedding_llama_fused_qk::spec_return_value_t;
+    using tensor_return_value_t = rotary_embedding_llama_fused_qk::tensor_return_value_t;
     using program_factory_t = std::variant<program::RotaryEmbeddingLlamaFusedQKProgramFactory>;
     using shared_variables_t = program::RotaryEmbeddingLlamaFusedQKProgramFactory::shared_variables_t;
 
@@ -42,10 +42,11 @@ struct RotaryEmbeddingLlamaFusedQKDeviceOperation {
         bool row_major_QK);
 };
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk
 
 namespace ttnn::prim {
 constexpr auto rotary_embedding_llama_fused_qk = ttnn::register_operation<
     "ttnn::prim::rotary_embedding_llama_fused_qk",
-    ttnn::operations::experimental::transformer::RotaryEmbeddingLlamaFusedQKDeviceOperation>();
+    ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk::
+        RotaryEmbeddingLlamaFusedQKDeviceOperation>();
 }  // namespace ttnn::prim

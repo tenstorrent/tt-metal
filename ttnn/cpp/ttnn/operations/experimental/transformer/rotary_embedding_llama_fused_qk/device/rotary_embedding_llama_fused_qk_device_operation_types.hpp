@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk {
 
 struct operation_attributes_t {
     tt::tt_metal::MemoryConfig q_output_mem_config;
@@ -28,4 +28,4 @@ using tensor_return_value_t = std::tuple<Tensor, Tensor>;
 
 using spec_return_value_t = std::tuple<TensorSpec, TensorSpec>;
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk

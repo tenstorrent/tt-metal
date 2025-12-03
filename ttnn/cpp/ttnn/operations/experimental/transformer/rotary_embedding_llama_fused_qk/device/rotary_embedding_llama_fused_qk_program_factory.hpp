@@ -7,7 +7,7 @@
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/rotary_embedding_llama_fused_qk_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::transformer::program {
+namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk::program {
 
 struct RotaryEmbeddingLlamaFusedQKSharedVariables {
     tt::tt_metal::CBHandle cb_q_input{};
@@ -35,4 +35,4 @@ struct RotaryEmbeddingLlamaFusedQKProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::transformer::program
+}  // namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk::program
