@@ -10,11 +10,11 @@
 namespace ttnn::operations::reduction::argmax {
 
 struct operation_attributes_t {
-    tt::tt_metal::DataType output_dtype;
+    tt::tt_metal::DataType output_dtype{};
     std::optional<int> dim;
-    bool keepdim;
+    bool keepdim{};
     std::optional<CoreRangeSet> sub_core_grids;
-    bool use_multicore;
+    bool use_multicore{};
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 

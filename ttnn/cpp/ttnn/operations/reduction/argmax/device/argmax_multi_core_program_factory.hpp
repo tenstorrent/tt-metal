@@ -9,8 +9,8 @@
 namespace ttnn::operations::reduction::argmax::program {
 
 struct ArgMaxMultiCoreSharedVariables {
-    tt::tt_metal::KernelHandle reader_kernel_id0;
-    tt::tt_metal::KernelHandle reader_kernel_id1;
+    tt::tt_metal::KernelHandle reader_kernel_id0{};
+    tt::tt_metal::KernelHandle reader_kernel_id1{};
     std::vector<CoreCoord> cores_coords0;
     std::vector<CoreCoord> cores_coords1;
 };
