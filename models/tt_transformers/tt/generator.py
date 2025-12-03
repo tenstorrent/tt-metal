@@ -318,7 +318,7 @@ class Generator:
 
             page_table_user = (
                 self._get_prefill_user_page_table(
-                    page_table,
+                    page_table if use_batched_prefill else page_table[idx : idx + 1],
                     kv_cache[model_id],
                     seq_len,
                     trace_enabled=enable_trace_current_prompt,
@@ -1708,20 +1708,18 @@ class Generator:
             num_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
         else:
             num_blocks = num_blocks_in_seq(prefill_len, block_size)
-        page_table = page_table[:, :num_blocks]
         if trace_enabled:
             if page_table.shape[1] < num_blocks:
                 # If page table is too short, pad it with -1
                 padding = torch.ones(1, num_blocks - page_table.shape[1], dtype=torch.int32) * -1
                 page_table = torch.cat([page_table, padding], dim=1)
-        # Pad page table to 32 users
-        padded_page_table = torch.ones(32, page_table.shape[1], dtype=torch.int32) * -1
         if use_batched_prefill:
+            padded_page_table = torch.ones(32, page_table.shape[1], dtype=torch.int32) * -1
             assert user_id is not None
             for i, user in enumerate(user_id):
                 padded_page_table[user, :] = page_table[i, :]
         else:
-            padded_page_table[user_id, :] = page_table[0, :]
+            padded_page_table = page_table[:, :num_blocks]
         return padded_page_table
 
     ## Destructor
