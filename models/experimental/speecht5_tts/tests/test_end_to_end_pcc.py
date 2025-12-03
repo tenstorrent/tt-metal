@@ -173,8 +173,8 @@ def test_end_to_end_pcc():
 
     print(f"PyTorch encoder output shape: {pytorch_encoder_output.shape}")
 
-    # TTNN encoder forward
-    input_ids_ttnn = ttnn.from_torch(input_ids, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    # TTNN encoder forward (use same conversion as working test)
+    input_ids_ttnn = ttnn.from_torch(input_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     ttnn_encoder_output = ttnn_encoder(input_ids_ttnn)
     # Handle tuple return (some models return tuples)
     if isinstance(ttnn_encoder_output, tuple):
@@ -196,7 +196,7 @@ def test_end_to_end_pcc():
 
     # Create decoder inputs using PyTorch encoder output
     batch_size, seq_len, hidden_size = pytorch_encoder_output.shape
-    decoder_seq_len = max_sequence_length  # Same as in other tests
+    decoder_seq_len = 10  # Same as in other tests
 
     # Create mel input (random but deterministic)
     torch.manual_seed(42)

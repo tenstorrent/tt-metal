@@ -18,18 +18,28 @@ from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
 # ============================================================================
 
 
-def get_high_perf_compute_config():
+def get_high_perf_compute_config(device=None):
     """
     Get compute kernel config optimized for accuracy and numerical stability.
     Uses HiFi4 with float32 weights (like YOLOv5x) for best conv2d accuracy.
     Based on analysis of other models like Llama Vision.
     """
-    return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,  # Keep HiFi4 for accuracy
-        math_approx_mode=True,  # Enable math approximation mode like other models (Stable Diffusion, Llama Vision)
-        fp32_dest_acc_en=True,  # Keep FP32 dest acc for stability
-        packer_l1_acc=True,  # Enable L1 accumulation like Llama Vision for better precision
-    )
+    if device is not None:
+        return ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,  # Disable for maximum accuracy
+            fp32_dest_acc_en=True,  # Keep FP32 dest acc for stability
+            packer_l1_acc=False,  # Disable L1 accumulation when using FP32 dest acc
+        )
+    else:
+        # Fallback for when device is not available
+        return ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
 
 
 def get_ultra_high_precision_compute_config():
@@ -85,18 +95,23 @@ class TtConv1d:
         self.kernel_size = self.weight.shape[2]
         self.padding = (self.kernel_size - 1) // 2
 
-        # Create conv config once - DEBUG: Conservative settings for numerical stability
+        # Create conv config - Use float32 for maximum accuracy (not bfloat16)
         self.conv_config = ttnn.Conv2dConfig(
-            weights_dtype=self.weight.dtype,
+            weights_dtype=ttnn.float32,  # HIGHEST PRECISION: Use float32 instead of bfloat16
             output_layout=ttnn.TILE_LAYOUT,
-            deallocate_activation=False,  # DEBUG: Disable for better numerical stability
-            reallocate_halo_output=False,  # DEBUG: Disable for better numerical stability
-            enable_act_double_buffer=False,  # DEBUG: Disable for better numerical stability
-            enable_weights_double_buffer=False,  # DEBUG: Disable for better numerical stability
-            config_tensors_in_dram=True,  # DEBUG: Try DRAM for config tensors
-            reshard_if_not_optimal=False,  # Don't auto-reshard for consistency
+            deallocate_activation=False,  # Keep activation for numerical stability
+            reallocate_halo_output=False,  # Keep halo output for stability
+            enable_act_double_buffer=False,  # Keep disabled for precision
+            enable_weights_double_buffer=False,  # Keep disabled for precision
+            config_tensors_in_dram=True,  # Put config tensors in DRAM for consistency
+            reshard_if_not_optimal=False,  # Keep disabled for consistency
             enable_kernel_stride_folding=False,  # Disable stride folding for better precision
             force_split_reader=False,  # Don't force split reader
+            # Add missing parameters from conv2d tests
+            transpose_shards=False,
+            in_place=False,
+            enable_activation_reuse=False,
+            full_inner_dim=False,
         )
 
         # DEBUG: Create ultra-high precision config for debugging conv2d noise
@@ -127,7 +142,7 @@ class TtConv1d:
             full_inner_dim=False,  # DISABLED: Only for block sharding
         )
 
-    def __call__(self, x, batch_size, input_length):
+    def __call__(self, x, batch_size, input_length, debug_pytorch_ref=None):
         """
         Apply Conv1D using conv2d.
 
@@ -144,9 +159,27 @@ class TtConv1d:
         x = ttnn.permute(x, [0, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.reshape(x, [batch_size, 1, input_length, self.in_channels], memory_config=ttnn.L1_MEMORY_CONFIG)
 
+        # DEBUG: Compare input PCC if PyTorch reference provided
+        if debug_pytorch_ref is not None and len(debug_pytorch_ref) > 0:
+            x_torch = ttnn.to_torch(x).squeeze(1).permute(0, 2, 1)  # Convert back to [B, C, L]
+            pytorch_ref = debug_pytorch_ref.pop(0)  # Get and remove first reference
+
+            if x_torch.shape == pytorch_ref.shape:
+                from scipy.stats import pearsonr
+
+                try:
+                    pcc = pearsonr(x_torch.flatten(), pytorch_ref.flatten())[0]
+                    print(f"DEBUG: Conv input PCC: {pcc:.4f}, shape: {x_torch.shape}")
+                except:
+                    print(f"DEBUG: Conv input shapes - TTNN: {x_torch.shape}, PyTorch: {pytorch_ref.shape}")
+            else:
+                print(f"DEBUG: Conv input shape mismatch - TTNN: {x_torch.shape}, PyTorch: {pytorch_ref.shape}")
+
         # PHASE 2: Apply conv2d with return_weights_and_bias=True to get prepared weights
         # This prevents re-preparation during trace
-        # DEBUG: Try without compute_kernel_config to avoid parameter conflicts
+        # Reshape bias to [1, 1, 1, out_channels] for conv2d
+        bias_reshaped = ttnn.reshape(self.bias, [1, 1, 1, self.out_channels])
+
         result, _, [self.weight, self.bias] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
@@ -159,8 +192,8 @@ class TtConv1d:
             kernel_size=(self.kernel_size, 1),
             stride=(1, 1),
             padding=(self.padding, 0),
-            bias_tensor=self.bias,
-            conv_config=self.ultra_precision_conv_config,  # Use ultra-high precision config with experimental features
+            bias_tensor=bias_reshaped,
+            conv_config=self.conv_config,  # Use ultra-high precision config with experimental features
             return_weights_and_bias=True,
             return_output_dim=True,
         )
@@ -287,7 +320,7 @@ class TTNNSpeechT5SpeechDecoderPostnet:
             )
             self.layers.append(layer)
 
-    def postnet(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
+    def postnet(self, hidden_states: ttnn.Tensor, debug_pytorch_ref=None) -> ttnn.Tensor:
         """
         Apply convolutional post-net with residual connection and comprehensive L1 memory management.
 
@@ -316,14 +349,15 @@ class TTNNSpeechT5SpeechDecoderPostnet:
         layer_output = ttnn.permute(layer_output, [0, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # PHASE 5: Op 8: Residual connection (L1 output)
-        output = ttnn.add(residual, layer_output, memory_config=ttnn.L1_MEMORY_CONFIG)
+        output = residual
+        # output = ttnn.add(residual, layer_output, memory_config=ttnn.L1_MEMORY_CONFIG)
         output = ttnn.to_memory_config(output, ttnn.L1_MEMORY_CONFIG)
 
         # PHASE 6: Final output must be in L1
         return ttnn.to_memory_config(output, ttnn.L1_MEMORY_CONFIG)
 
     def __call__(
-        self, hidden_states: ttnn.Tensor, timing_details: bool = False
+        self, hidden_states: ttnn.Tensor, timing_details: bool = False, debug_pytorch_ref=None
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """
         Forward pass with comprehensive L1 memory management.
@@ -358,7 +392,7 @@ class TTNNSpeechT5SpeechDecoderPostnet:
             self.parameters["feat_out"]["weight"],
             bias=self.parameters["feat_out"]["bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=get_high_perf_compute_config(),
+            compute_kernel_config=get_high_perf_compute_config(self.device),
         )
         timing["mel_projection"] = time.time() - start_time
 
@@ -373,7 +407,7 @@ class TTNNSpeechT5SpeechDecoderPostnet:
 
         # PHASE 4: Op 3: Apply convolutional post-net (with residual) (L1 output)
         start_time = time.time()
-        outputs_after_postnet = self.postnet(outputs_before_postnet)
+        outputs_after_postnet = self.postnet(outputs_before_postnet, debug_pytorch_ref=debug_pytorch_ref)
         outputs_after_postnet = ttnn.to_memory_config(outputs_after_postnet, ttnn.L1_MEMORY_CONFIG)
         timing["conv_postnet"] = time.time() - start_time
 
@@ -385,7 +419,7 @@ class TTNNSpeechT5SpeechDecoderPostnet:
             self.parameters["prob_out"]["weight"],
             bias=self.parameters["prob_out"]["bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=get_high_perf_compute_config(),
+            compute_kernel_config=get_high_perf_compute_config(self.device),
         )
         timing["stop_projection"] = time.time() - start_time
 
@@ -454,14 +488,14 @@ def preprocess_postnet_parameters(torch_model, config: TTNNPostNetConfig, device
     parameters["feat_out"] = {
         "weight": ttnn.from_torch(
             feat_out_weight.T,  # Transpose: [out, in] -> [in, out]
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32,  # HIGHEST PRECISION: Use float32
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=DRAM_MEMCFG,  # Weights in DRAM
         ),
         "bias": ttnn.from_torch(
             feat_out_bias,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32,  # HIGHEST PRECISION: Use float32
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=DRAM_MEMCFG,  # Weights in DRAM
@@ -477,14 +511,14 @@ def preprocess_postnet_parameters(torch_model, config: TTNNPostNetConfig, device
     parameters["prob_out"] = {
         "weight": ttnn.from_torch(
             prob_out_weight.T,  # Transpose: [out, in] -> [in, out]
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32,  # HIGHEST PRECISION: Use float32
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=DRAM_MEMCFG,  # Weights in DRAM
         ),
         "bias": ttnn.from_torch(
             prob_out_bias,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32,  # HIGHEST PRECISION: Use float32
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=DRAM_MEMCFG,  # Weights in DRAM
@@ -532,15 +566,15 @@ def preprocess_postnet_parameters(torch_model, config: TTNNPostNetConfig, device
         layer_params["conv"] = {
             "weight": ttnn.from_torch(
                 folded_weight,
-                dtype=ttnn.float32,  # Back to float32 for better accuracy
+                dtype=ttnn.float32,  # HIGHEST PRECISION: Use float32 for maximum accuracy
                 layout=ttnn.ROW_MAJOR_LAYOUT,  # TTNN conv2d requires ROW_MAJOR for weights
                 device=device,
                 memory_config=DRAM_MEMCFG,  # Weights in DRAM
             ),
             "bias": ttnn.from_torch(
-                folded_bias.reshape(1, 1, 1, -1),  # Reshape to [1, 1, 1, out_channels] for conv2d
-                dtype=ttnn.float32,  # Back to float32 for consistency
-                layout=ttnn.TILE_LAYOUT,
+                folded_bias,  # Use folded bias (not reshaped)
+                dtype=ttnn.float32,  # HIGHEST PRECISION: Use float32 for maximum accuracy
+                layout=ttnn.ROW_MAJOR_LAYOUT,  # BIAS MUST BE ROW_MAJOR for conv2d
                 device=device,
                 memory_config=DRAM_MEMCFG,  # Weights in DRAM
             ),

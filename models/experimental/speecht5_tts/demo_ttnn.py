@@ -43,9 +43,10 @@ from models.experimental.speecht5_tts.tt.ttnn_speecht5_postnet import (
 from models.experimental.speecht5_tts.tt.ttnn_speecht5_generator import SpeechT5Generator
 
 
-def get_high_perf_compute_config():
+def get_high_perf_compute_config(device):
     """Get optimized compute kernel configuration with FP32 accumulation."""
-    return ttnn.WormholeComputeKernelConfig(
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=True,  # Enable FP32 destination accumulation for better accuracy
