@@ -22,11 +22,11 @@ jobs:
         id: setup
         run: |
           set -e
-          
+
           # Extract date from issue creation timestamp
           RAW_CREATED="${{ github.event.issue.created_at }}"
           OPENED_DATE="${RAW_CREATED%%T*}"
-          
+
           # Query the org project by number and list fields
           RESP=$(gh api graphql -f query='
           query($org:String!, $number:Int!){
@@ -58,12 +58,12 @@ jobs:
 
           PROJECT_ID=$(echo "$RESP" | jq -r '.data.organization.projectV2.id // empty')
           FIELD_ID=$(echo "$RESP" | jq -r --arg NAME "$OPENED_ON_FIELD_NAME" '.data.organization.projectV2.fields.nodes[] | select(. != null and .name==$NAME) | .id // empty')
-          
+
           if [ -z "$PROJECT_ID" ]; then
             echo "Error: Project '$PROJECT_NUMBER' not found in org '$ORG'" >&2
             exit 1
           fi
-          
+
           if [ -z "$FIELD_ID" ]; then
             echo "Error: Field '$OPENED_ON_FIELD_NAME' not found in project" >&2
             echo "Available fields:" >&2
@@ -78,7 +78,7 @@ jobs:
       - name: Add Issue to Project and Set Date
         run: |
           set -e
-          
+
           # Add issue to project (idempotent - will return existing item if already added)
           ADD_RESP=$(gh api graphql -f query='
           mutation($projectId:ID!, $contentId:ID!){
