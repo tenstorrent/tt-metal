@@ -126,30 +126,34 @@ std::tuple<AllReduceAsyncDeviceOperation::operation_attributes_t, AllReduceAsync
 AllReduceAsyncDeviceOperation::invoke(
     const Tensor& input_tensor,
     Tensor& buffer_tensor,
-    uint32_t num_links,
-    uint32_t ring_size,
-    DataType dtype,
-    const MemoryConfig& output_mem_config,
-    ttnn::ccl::Topology topology,
-    const GlobalSemaphore& semaphore,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const ttnn::ccl::Topology topology,
+    const GlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<DataType> dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<size_t> num_preferred_links,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_noc1_only,
-    bool use_optimal_ccl_for_llama,
-    uint32_t cluster_axis,
-    const distributed::MeshDevice* mesh_device) {
+    bool use_optimal_ccl_for_llama) {
+    const auto& mesh_view = mesh_device.get_view();
+    TT_FATAL(
+        mesh_view.is_mesh_2d(), "all-reduce invoked with cluster_axis API on >2D mesh, which is currently unsupported");
+    std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+
     return {
         operation_attributes_t(
-            num_links,
-            ring_size,
-            dtype,
-            output_mem_config,
+            num_preferred_links.has_value() ? num_preferred_links.value() : 1,
+            num_devices,
+            dtype.value_or(input_tensor.dtype()),
+            memory_config.value_or(input_tensor.memory_config()),
             topology,
-            semaphore,
-            sub_device_id,
+            multi_device_global_semaphore,
+            subdevice_id,
             use_noc1_only,
             use_optimal_ccl_for_llama,
             cluster_axis,
-            mesh_device),
+            &mesh_device),
         tensor_args_t{.input_tensor = input_tensor, .buffer_tensor = buffer_tensor}};
 }
 

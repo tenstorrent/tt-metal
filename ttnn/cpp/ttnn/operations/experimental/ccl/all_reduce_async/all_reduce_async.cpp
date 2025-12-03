@@ -410,23 +410,19 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
 
     log_debug(tt::LogOp, "Using minimal all_reduce_async");
-    const auto& mesh_view = mesh_device.get_view();
-    std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-
     return ttnn::prim::all_reduce_async(
         input_tensor,
         buffer_tensor,
-        num_preferred_links.has_value() ? num_preferred_links.value() : 1,
-        num_devices,
-        dtype.value_or(input_tensor.dtype()),
-        out_memory_config,
+        cluster_axis,
+        mesh_device,
         topology,
         multi_device_global_semaphore,
+        dtype,
+        out_memory_config,
+        num_preferred_links,
         worker_subdevice_id_opt,
         use_noc1_only,
-        use_optimal_ccl_for_llama,
-        cluster_axis,
-        &mesh_device);
+        use_optimal_ccl_for_llama);
 }
 
 std::vector<ttnn::Tensor> ExecuteAllReduceAsync::invoke(
@@ -446,26 +442,22 @@ std::vector<ttnn::Tensor> ExecuteAllReduceAsync::invoke(
     MemoryConfig out_memory_config = memory_config.value_or(input_tensors.at(0).memory_config());
 
     log_debug(tt::LogOp, "Using minimal all_reduce_async with multiple tensors");
-    const auto& mesh_view = mesh_device.get_view();
-    std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-
-    std::vector<Tensor> output_tensors;
+    std::vector<ttnn::Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
     for (size_t i = 0; i < input_tensors.size(); ++i) {
         output_tensors.push_back(ttnn::prim::all_reduce_async(
             input_tensors[i],
             buffer_tensor,
-            num_preferred_links.has_value() ? num_preferred_links.value() : 1,
-            num_devices,
-            dtype.value_or(input_tensors[i].dtype()),
-            out_memory_config,
+            cluster_axis,
+            mesh_device,
             topology,
             multi_device_global_semaphore.global_semaphores[i],
+            dtype,
+            out_memory_config,
+            num_preferred_links,
             worker_subdevice_id_opt,
             use_noc1_only,
-            use_optimal_ccl_for_llama,
-            cluster_axis,
-            &mesh_device));
+            use_optimal_ccl_for_llama));
     }
     return output_tensors;
 }

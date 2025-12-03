@@ -34,17 +34,16 @@ struct AllReduceAsyncDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
         Tensor& buffer_tensor,
-        uint32_t num_links,
-        uint32_t ring_size,
-        DataType dtype,
-        const MemoryConfig& output_mem_config,
-        ttnn::ccl::Topology topology,
-        const GlobalSemaphore& semaphore,
-        std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+        const uint32_t cluster_axis,
+        const MeshDevice& mesh_device,
+        const ttnn::ccl::Topology topology,
+        const GlobalSemaphore& multi_device_global_semaphore,
+        const std::optional<DataType> dtype,
+        const std::optional<MemoryConfig>& memory_config,
+        const std::optional<size_t> num_preferred_links,
+        std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
         bool use_noc1_only,
-        bool use_optimal_ccl_for_llama,
-        uint32_t cluster_axis,
-        const distributed::MeshDevice* mesh_device);
+        bool use_optimal_ccl_for_llama);
 };
 
 }  // namespace ttnn::operations::experimental::ccl::all_reduce_async
