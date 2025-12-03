@@ -48,7 +48,7 @@ jobs:
           }' -F org="$ORG" -F number="$PROJECT_NUMBER")
 
           PROJECT_ID=$(echo "$RESP" | jq -r '.data.organization.projectV2.id')
-          FIELD_ID=$(echo "$RESP" | jq -r --arg NAME "$OPENED_ON_FIELD_NAME" '.data.organization.projectV2.fields.nodes[] | select(.name==$NAME) | .id')
+          FIELD_ID=$(echo "$RESP" | jq -r --arg NAME "$OPENED_ON_FIELD_NAME" '.data.organization.projectV2.fields.nodes[] | select(. != null and .name==$NAME) | .id')
 
           if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "null" ]; then
             echo "Project not found: $ORG / $PROJECT_NUMBER" >&2
@@ -57,7 +57,7 @@ jobs:
           if [ -z "$FIELD_ID" ] || [ "$FIELD_ID" = "null" ]; then
             echo "Field not found: \"$OPENED_ON_FIELD_NAME\"" >&2
             echo "Available fields:" >&2
-            echo "$RESP" | jq -r '.data.organization.projectV2.fields.nodes[] | "\(.name) [\(.dataType)]"' >&2
+            echo "$RESP" | jq -r '.data.organization.projectV2.fields.nodes[] | select(. != null) | "\(.name) [\(.dataType)]"' >&2
             exit 1
           fi
 
