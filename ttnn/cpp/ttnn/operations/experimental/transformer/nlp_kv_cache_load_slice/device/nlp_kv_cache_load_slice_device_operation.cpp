@@ -126,7 +126,7 @@ std::
         const Tensor& input_tensor,
         uint32_t seq_len_start,
         uint32_t seq_len_end,
-        const std::optional<MemoryConfig>& memory_config,
+        [[maybe_unused]] const std::optional<MemoryConfig>& memory_config,
         const std::optional<Tensor>& preallocated_output) {
     auto input_tensor_shape = input_tensor.padded_shape();
     auto dim0 = input_tensor_shape[0];
