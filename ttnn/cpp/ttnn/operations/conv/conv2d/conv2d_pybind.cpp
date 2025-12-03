@@ -44,7 +44,7 @@ void py_bind_conv2d(py::module& module) {
             input_height (int): This is a Tenstorrent-specific parameter. The height of the input tensor.
             input_width (int): This is a Tenstorrent-specific parameter. The width of the input tensor.
             kernel_size (tuple[int, int]): The size of the convolving kernel.
-            stride (tuple[int, int]): he stride of the convolution. Default: (1, 1).
+            stride (tuple[int, int]): The stride of the convolution. Default: (1, 1).
             padding (tuple[int, int] or tuple[int, int, int, int]): Zero-padding added to both sides of the input. Default: (0, 0). [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
             dilation (tuple[int, int]): The spacing between kernel elements. Default: (1, 1).
             groups (int): Number of blocked connections from input channels to output channels. Default: 1.
