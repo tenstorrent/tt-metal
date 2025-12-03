@@ -321,9 +321,6 @@ def test_large_layer_norm_with_legacy_reduction_and_rsqrt(device, h, w, legacy_r
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welford, dtype):
-    if dtype == torch.float32 and use_welford and w == 3232:
-        pytest.skip("See: https://github.com/tenstorrent/tt-metal/issues/33694")
-
     torch.manual_seed(3333)
 
     torch_input_tensor = torch.rand((h, w), dtype=dtype)
@@ -350,7 +347,11 @@ def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_passes(torch_output_tensor, output_tensor)
+    if dtype == torch.float32 and use_welford and w == 3232:
+        # Fallback to PCC, see https://github.com/tenstorrent/tt-metal/issues/33694
+        assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    else:
+        assert_passes(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("use_welford", [True, False])
