@@ -726,6 +726,25 @@ Conv2dSliceAttr::get_input_slice_and_padding(
         pad_right = padding_n4[3];
         input_slice_width_end = input_width;
     }
+    uint32_t input_slice_height = input_slice_height_end - input_slice_height_start;
+    uint32_t input_slice_width = input_slice_width_end - input_slice_width_start;
+    uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
+    // Apply width rounding and adjust right padding if necessary
+    uint32_t width_rounding_value =
+        (conv_config.output_layout == tt::tt_metal::Layout::TILE) ? tt::constants::TILE_HEIGHT : 1;
+
+    bool single_slice =
+        (input_slice_height == std::get<0>(input_shape)) && (input_slice_width == std::get<1>(input_shape));
+
+    if (output_slice_width % width_rounding_value != 0 && !single_slice) {
+        uint32_t additional_padded_width = width_rounding_value - (output_slice_width % width_rounding_value);
+        log_trace(
+            tt::LogOp,
+            "Conv2d DRAM Slicing: Additional padding of {} added to the right side.",
+            additional_padded_width);
+        pad_right += additional_padded_width * stride[1];  // Adjust right padding
+    }
+
     return {
         {{input_slice_height_start, input_slice_width_start}, {input_slice_height_end, input_slice_width_end}},
         {pad_top, pad_bottom, pad_left, pad_right}};
@@ -743,10 +762,7 @@ uint32_t Conv2dSliceAttr::get_L1_usage(
     auto weights_datatype = conv_config.weights_dtype.value_or(weight_tensor.dtype());
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     TT_FATAL(!mm_conv, "Conv2D DRAM with matmul should never use the slicing code path.");
-    auto [output_slice_height_start, output_slice_width_start] = output_slice_start;
-    auto [output_slice_height_end, output_slice_width_end] = output_slice_end;
-    auto output_slice_height = output_slice_height_end - output_slice_height_start;
-    auto output_slice_width = output_slice_width_end - output_slice_width_start;
+
     auto [input_slicing, slice_padding] = get_input_slice_and_padding(output_slice_start, output_slice_end);
     auto [input_slice_start, input_slice_end] = input_slicing;
     auto [input_slice_height_start, input_slice_width_start] = input_slice_start;
@@ -754,6 +770,8 @@ uint32_t Conv2dSliceAttr::get_L1_usage(
     auto input_slice_height = input_slice_height_end - input_slice_height_start;
     auto input_slice_width = input_slice_width_end - input_slice_width_start;
 
+    auto [output_slice_height, output_slice_width] = calculate_output_image_size(
+        {input_slice_height, input_slice_width}, kernel_size, stride, slice_padding, dilation);
     auto compute_grid = device->compute_with_storage_grid_size();
     log_trace(
         tt::LogOp,
@@ -901,13 +919,6 @@ tt::tt_metal::MemoryConfig Conv2dSliceAttr::get_input_memory_config(
     uint32_t input_slice_width = std::get<1>(input_end) - std::get<1>(input_start);
     uint32_t output_slice_height = std::get<0>(output_slice_end) - std::get<0>(output_slice_start);
     uint32_t output_slice_width = std::get<1>(output_slice_end) - std::get<1>(output_slice_start);
-    uint32_t width_rounding_value =
-        (conv_config.output_layout == tt::tt_metal::Layout::TILE) ? tt::constants::TILE_HEIGHT : 1;
-
-    if (output_slice_width % width_rounding_value != 0) {
-        uint32_t additional_padded_width = width_rounding_value - (output_slice_width % width_rounding_value);
-        output_slice_width += additional_padded_width;
-    }
 
     if (!conv_config.shard_layout.has_value()) {
         if (!conv_config.weights_dtype.has_value()) {
@@ -967,25 +978,10 @@ ttnn::Tensor Conv2dSliceAttr::run_L1_op(
     uint32_t input_slice_height = input_slice_height_end - input_slice_height_start;
     uint32_t input_slice_width = input_slice_width_end - input_slice_width_start;
 
-    bool single_slice =
-        (input_slice_height == std::get<0>(input_shape)) && (input_slice_width == std::get<1>(input_shape));
-
     auto [output_slice_height_start, output_slice_width_start] = output_slice_start;
     auto [output_slice_height_end, output_slice_width_end] = output_slice_end;
     uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
 
-    // Apply width rounding and adjust right padding if necessary
-    uint32_t width_rounding_value =
-        (conv_config.output_layout == tt::tt_metal::Layout::TILE) ? tt::constants::TILE_HEIGHT : 1;
-    if (output_slice_width % width_rounding_value != 0 && !single_slice) {
-        uint32_t additional_padded_width = width_rounding_value - (output_slice_width % width_rounding_value);
-        log_trace(
-            tt::LogOp,
-            "Conv2d DRAM Slicing: Additional padding of {} added to the right side.",
-            additional_padded_width);
-        this_op_padding[3] += additional_padded_width * stride[1];  // Adjust right padding
-        output_slice_width += additional_padded_width;
-    }
     log_debug(
         tt::LogOp,
         "Conv input {}, padding {}, dilation {}, kernel {}, stride {}, output slice {}x{}",

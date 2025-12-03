@@ -1073,7 +1073,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     core_count_and_size& winning_config = height;
     // Make sure that BS not only has smaller size but provides at least some slicing along the channels.
     // In case we have BS that would slice the tensor only along the HS conv2d code would fail later on.
-    if (block.size < winning_config.size && block.core_count > compute_grid_size.x) {
+    if (block.size < winning_config.size && block.core_count >= compute_grid_size.x) {
         winning_config = block;
     }
     if (width.size < winning_config.size && !is_mm_conv) {
