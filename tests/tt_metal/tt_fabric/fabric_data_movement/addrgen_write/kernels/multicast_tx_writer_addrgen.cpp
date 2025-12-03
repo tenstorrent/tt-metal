@@ -190,14 +190,14 @@ FORCE_INLINE void setup_route_with_state_for_direction(
 }
 
 //
-// Unified multicast writer (fabric sender) kernel — consolidates 9 variants + route variant.
+// Unified multicast writer (fabric sender) kernel — consolidates 18 variants (3 operation types × 6 API variants).
 // Sends pages from CB c_0 to multiple destination devices using compile-time parameters:
 //   - OPERATION_TYPE: BasicWrite, Scatter, or FusedAtomicInc
-//   - API_VARIANT: Basic, WithState, SetState, or RouteBasic
+//   - API_VARIANT: Basic, WithState, SetState, RouteBasic, RouteWithState, or RouteSetState
 //
 // CT args:
 //   0: OPERATION_TYPE (OperationType enum: BasicWrite, Scatter, FusedAtomicInc)
-//   1: API_VARIANT (ApiVariant enum: Basic, WithState, SetState, RouteBasic)
+//   1: API_VARIANT (ApiVariant enum: Basic, WithState, SetState, RouteBasic, RouteWithState, RouteSetState)
 //   2: TOTAL_PAGES
 //   3: PAGE_SIZE (actual data size to transfer)
 //   4: ALIGNED_PAGE_SIZE (destination buffer spacing for address calculation)
