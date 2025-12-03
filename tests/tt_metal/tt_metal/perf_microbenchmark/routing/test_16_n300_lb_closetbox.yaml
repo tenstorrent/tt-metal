@@ -2,10 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-allocation_policies:
-    receiver:
-      max_configs_per_core: 2
-
 Tests:
   # ======================================================================================
   # Routing within a superpod (cluster of 4 loudboxes)
