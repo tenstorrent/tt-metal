@@ -145,9 +145,15 @@ xt::xarray<float> dot_product(const xt::xarray<float>& input_0, const xt::xarray
     return result;
 }
 
+// Helper function to scale a tensor by a scalar factor
+// Used to pre-scale Query or Key tensors to match kernel's mathematical flow
+xt::xarray<float> scale_tensor(const xt::xarray<float>& tensor, float scale_factor) {
+    return tensor * scale_factor;
+}
+
 // Pure float implementation of SDPA backward pass using xtensor
 // This serves as the reference ground truth for testing
-// Returns: {dQ, dK, dV}
+// Returns: {dQ, dK, dV, intermediates}
 std::vector<xt::xarray<float>> float_sdpa_backward(
     const xt::xarray<float>& Q,
     const xt::xarray<float>& K,
@@ -155,7 +161,7 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
     const xt::xarray<float>& grad_output,
     const std::optional<xt::xarray<float>>& attn_mask = std::nullopt) {
     auto shape = Q.shape();
-    size_t B = shape[0], H = shape[1], S = shape[2], D = shape[3];
+    size_t B = shape[0], H = shape[1], S = shape[2], D = shape[3], intermediate_size = 64;
 
     auto kv_shape = K.shape();
     size_t G = kv_shape[1];  // number of KV heads (groups)
@@ -203,7 +209,9 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
         }
     }
 
-    // Step 4: Softmax over last dimension
+    // Step 4: Softmax over last dimension and store intermediates
+    // Intermediates shape: (B, H, S, 64) where position 0 = max_val, position 32 = recip_sum_exp
+    xt::xarray<float> intermediates = xt::zeros<float>({B, H, S, intermediate_size});
     xt::xarray<float> attention_weights = xt::zeros<float>({B, H, S, S});
     for (size_t b = 0; b < B; ++b) {
         for (size_t h = 0; h < H; ++h) {
@@ -214,6 +222,9 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
                     max_val = std::max(max_val, scores(b, h, i, j));
                 }
 
+                // Store max_val at position 0
+                intermediates(b, h, i, 0) = max_val;
+
                 // Compute exp and sum
                 float sum_exp = 0.0F;
                 for (size_t j = 0; j < S; ++j) {
@@ -221,6 +232,9 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
                     attention_weights(b, h, i, j) = exp_val;
                     sum_exp += exp_val;
                 }
+
+                // Store recip_sum_exp at position 32
+                intermediates(b, h, i, 32) = 1.0F / sum_exp;
 
                 // Normalize
                 for (size_t j = 0; j < S; ++j) {
@@ -343,7 +357,7 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
         }
     }
 
-    return {dQ, dK, dV};
+    return {dQ, dK, dV, intermediates};
 }
 
 // Wrapper around matmul to handle sharing of KV heads across groups of query
@@ -527,10 +541,11 @@ std::vector<ttnn::Tensor> composite_sdpa(
 
 TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     using namespace ttml;
-    const uint32_t B = 1U, qNH = 1U, kvNH = 1U, S = 64U, qD = 128U, kvD = 128U;
+    const uint32_t B = 1U, qNH = 1U, kvNH = 1U, S = 1024U, qD = 128U, kvD = 128U;
     const float dropout_probability = 0.0F;
     const bool fp32_dest_acc_en = true;
     const float atol = 3e-2F, rtol = 3e-2F;
+    const float scale_factor = 1.0F / std::sqrt(static_cast<float>(qD));
 
     auto* device = &autograd::ctx().get_device();
 
@@ -567,6 +582,9 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
         []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
         seed);
 
+    xt::xarray<float> scale_query_tensor = scale_tensor(query_tensor, scale_factor);
+    auto scaled_query = core::from_xtensor(scale_query_tensor, device);
+
     auto query = core::from_xtensor(query_tensor, device);
     auto key = core::from_xtensor(key_tensor, device);
     auto value = core::from_xtensor(value_tensor, device);
@@ -580,6 +598,7 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     auto float_dQ = float_gradients[0];
     auto float_dK = float_gradients[1];
     auto float_dV = float_gradients[2];
+    auto float_intermediates = float_gradients[3];
     fmt::print("Float reference computed.\n\n");
 
     // ========== Composite Implementation (uses ttnn ops) ==========
@@ -598,18 +617,17 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     recip_sum_exp = ttnn::add(padded_interm, recip_sum_exp);
 
     auto forward_intermediates = ttnn::concat(std::vector<ttnn::Tensor>{max_value, recip_sum_exp}, 3);
-    fmt::print("Intermediates shape: {}\n", forward_intermediates.logical_shape());
-
-    xt::xarray<float> fowrard_intermediates_xtensor = core::to_xtensor(forward_intermediates);
-    for (uint32_t i = 0; i < 2U; ++i) {
-        for (uint32_t j = 0; j < S; ++j) {
-            fmt::print(
-                "forward_intermediates[0,0,{},{}] = {:.6e}\n",
-                j,
-                i * 32,
-                fowrard_intermediates_xtensor(0, 0, j, i * 32));
-        }
-    }
+    // fmt::print("Intermediates shape: {}\n", forward_intermediates.logical_shape());
+    // xt::xarray<float> fowrard_intermediates_xtensor = core::to_xtensor(forward_intermediates);
+    // for (uint32_t i = 0; i < 2U; ++i) {
+    //     for (uint32_t j = 0; j < S; ++j) {
+    //         fmt::print(
+    //             "forward_intermediates[0,0,{},{}] = {:.6e}\n",
+    //             j,
+    //             i * 32,
+    //             fowrard_intermediates_xtensor(0, 0, j, i * 32));
+    //     }
+    // }
 
     // Diagnostic: Check intermediate values that might affect numerical stability
     xt::xarray<float> max_val_cpu = core::to_xtensor(max_value);
@@ -618,6 +636,8 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     fmt::print("Q row 0 (seq 0-31): max={:.6e}, recip_sum={:.6e}\n", max_val_cpu(0, 0, 0, 0), recip_cpu(0, 0, 0, 0));
     fmt::print("Q row 32 (seq 32): max={:.6e}, recip_sum={:.6e}\n", max_val_cpu(0, 0, 32, 0), recip_cpu(0, 0, 32, 0));
 
+    auto float_intermediates_cpu = core::from_xtensor<float, ttnn::DataType::FLOAT32>(float_intermediates, device);
+
     auto op_result = ttml::metal::sdpa_bw(
         grad_output,
         attn_output,
@@ -625,7 +645,7 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
         key,
         value,
         attn_mask,
-        forward_intermediates,
+        float_intermediates_cpu,
         dropout_probability,
         fp32_dest_acc_en);
 
@@ -739,114 +759,7 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
 
     // DEBUG: Check xt::isclose to understand second tile issue
     fmt::print("\n=== DEBUG: Analyzing xt::isclose for second tile issue ===\n");
-    auto isclose_result = xt::isclose(sdpa_bw_dK, float_dK, rtol, atol);
-    size_t xtensor_false_count = 0;
-    size_t first_false_idx = 0;
-    bool found_first_false = false;
-    for (size_t i = 0; i < sdpa_bw_dK.size(); ++i) {
-        if (!isclose_result.flat(i)) {
-            xtensor_false_count++;
-            if (!found_first_false) {
-                first_false_idx = i;
-                found_first_false = true;
-            }
-        }
-    }
-    // Check the distribution of FALSE indices
-    size_t false_before_half = 0;
-    size_t false_after_half = 0;
-    size_t halfway = sdpa_bw_dK.size() / 2;
-    for (size_t i = 0; i < sdpa_bw_dK.size(); ++i) {
-        if (!isclose_result.flat(i)) {
-            if (i < halfway)
-                false_before_half++;
-            else
-                false_after_half++;
-        }
-    }
-
-    fmt::print(
-        "xt::isclose found {} mismatches out of {} elements (tolerance: 3e-2)\n",
-        xtensor_false_count,
-        sdpa_bw_dK.size());
-    fmt::print("Distribution:\n");
-    fmt::print("  First half (indices 0-{}): {} mismatches\n", halfway - 1, false_before_half);
-    fmt::print("  Second half (indices {}-{}): {} mismatches\n", halfway, sdpa_bw_dK.size() - 1, false_after_half);
-
-    // Detailed analysis of mismatch pattern in second tile
-    if (xtensor_false_count > 0) {
-        fmt::print("\n=== Detailed Mismatch Analysis (first 20 errors) ===\n");
-        size_t count = 0;
-        for (size_t i = 0; i < sdpa_bw_dK.size() && count < 20; ++i) {
-            if (!isclose_result.flat(i)) {
-                // Convert flat index to [B, H, S, D]
-                size_t b = i / (1 * 64 * 128);
-                size_t h = (i / (64 * 128)) % 1;
-                size_t s = (i / 128) % 64;
-                size_t d = i % 128;
-
-                float kernel_val = sdpa_bw_dK.flat(i);
-                float float_val = float_dK.flat(i);
-                float composite_val = composite_dK.flat(i);
-                float diff_float = std::abs(kernel_val - float_val);
-                float diff_composite = std::abs(kernel_val - composite_val);
-
-                fmt::print(
-                    "[{},{},{},{}]: kernel={:.6e}, float={:.6e}, composite={:.6e}, diff_float={:.6e}, "
-                    "diff_composite={:.6e}\n",
-                    b,
-                    h,
-                    s,
-                    d,
-                    kernel_val,
-                    float_val,
-                    composite_val,
-                    diff_float,
-                    diff_composite);
-                count++;
-            }
-        }
-
-        // Check if errors are concentrated in specific sequence positions or dimensions
-        std::map<size_t, size_t> errors_by_seq_pos;
-        std::map<size_t, size_t> errors_by_dim;
-        for (size_t i = 0; i < sdpa_bw_dK.size(); ++i) {
-            if (!isclose_result.flat(i)) {
-                size_t s = (i / 128) % 64;
-                size_t d = i % 128;
-                errors_by_seq_pos[s]++;
-                errors_by_dim[d]++;
-            }
-        }
-
-        fmt::print("\n=== Error Distribution by Sequence Position ===\n");
-        for (const auto& [seq_pos, cnt] : errors_by_seq_pos) {
-            fmt::print("  Seq pos {}: {} errors\n", seq_pos, cnt);
-        }
-
-        // Check if positions 33-63 have smaller errors that pass the threshold
-        fmt::print("\n=== Max error per sequence position (entire second tile) ===\n");
-        for (size_t s = 32; s < 64; ++s) {
-            float max_err = 0.0f;
-            for (size_t d = 0; d < 128; ++d) {
-                float diff = std::abs(sdpa_bw_dK(0, 0, s, d) - float_dK(0, 0, s, d));
-                max_err = std::max(max_err, diff);
-            }
-            if (max_err > 1e-3f) {  // Only print if error is significant
-                fmt::print("  Seq pos {}: max_err={:.6e}\n", s, max_err);
-            }
-        }
-
-        fmt::print("\n=== Error Distribution by Dimension (top 10) ===\n");
-        std::vector<std::pair<size_t, size_t>> dim_errors(errors_by_dim.begin(), errors_by_dim.end());
-        std::sort(
-            dim_errors.begin(), dim_errors.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
-        for (size_t i = 0; i < std::min(size_t(10), dim_errors.size()); ++i) {
-            fmt::print("  Dim {}: {} errors\n", dim_errors[i].first, dim_errors[i].second);
-        }
-    }
-
-    fmt::print("\nNOTE: All errors in second half suggests tile-specific kernel bug, not just numerical noise.\n");
+    // add analysis for the second tile (elements 32-63 in seq dimension) if needed
 
     // Final assertions
     // 3e-2F

@@ -57,7 +57,7 @@ void kernel_main() {
         uint32_t global_row_idx = r;
         uint32_t q_start_idx = global_row_idx * qWt;
 
-        DPRINT << "Q_WRITER: Writing row " << r << ", q_start_idx=" << q_start_idx << ENDL();
+        // DPRINT << "Q_WRITER: Writing row " << r << ", q_start_idx=" << q_start_idx << ENDL();
         // cb_wait_front(cb_masked_interm, 2U);
         // print_tile(cb_masked_interm, 0);
         // print_tile(cb_masked_interm, 1);

@@ -67,8 +67,8 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(cb_grad_value, kWt);
 
-        DPRINT << "Writer: r=" << r << ", batch_idx=" << batch_idx << ", group_idx=" << group_idx
-               << ", s_tile_idx=" << s_tile_idx << ", grad_v_row_base_tiles=" << grad_v_row_base_tiles << ENDL();
+        // DPRINT << "Writer: r=" << r << ", batch_idx=" << batch_idx << ", group_idx=" << group_idx
+        //        << ", s_tile_idx=" << s_tile_idx << ", grad_v_row_base_tiles=" << grad_v_row_base_tiles << ENDL();
 
         // -------- Grad Key: same shape as Key (B, kNH, S, kEmbd) --------
         uint32_t grad_k_row_base_tiles = ((batch_idx * num_of_groups + group_idx) * Ht + s_tile_idx) * kWt;

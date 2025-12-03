@@ -94,12 +94,15 @@ void generate_tile_with_bfloat16_value(uint32_t cb_id, uint16_t bf16_value) {
 
 // Generates a tile intended for performing row reduction through matrix multiplication.
 // This approach is used to avoid the precision loss observed when using the reduce_tile operation.
-void generate_matmul_row_reduce_tile(uint32_t cb_id) {
-    constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
-    constexpr uint16_t zero = 0x0;
+// Template parameter T should be uint16_t for BF16 or uint32_t for FP32.
+template <typename T>
+void generate_matmul_row_reduce_tile_t(uint32_t cb_id) {
+    // For BF16: one = 0x3F80 (bf16 1.0), For FP32: one = 0x3F800000 (fp32 1.0)
+    constexpr T one = (sizeof(T) == 2) ? static_cast<T>(0x3F80) : static_cast<T>(0x3F800000);
+    constexpr T zero = static_cast<T>(0);
 
     cb_reserve_back(cb_id, onetile);
-    uint16_t* tile_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_id));
+    T* tile_ptr = reinterpret_cast<T*>(get_write_ptr(cb_id));
 
     for (uint32_t face = 0; face < 4; ++face) {
         uint32_t offset = (face & 1U) << 4U;
@@ -114,6 +117,16 @@ void generate_matmul_row_reduce_tile(uint32_t cb_id) {
         }
     }
     cb_push_back(cb_id, onetile);
+}
+
+// Convenience wrapper for BF16 (backward compatibility)
+inline void generate_matmul_row_reduce_tile(uint32_t cb_id) {
+    generate_matmul_row_reduce_tile_t<uint16_t>(cb_id);
+}
+
+// Convenience wrapper for FP32
+inline void generate_matmul_row_reduce_tile_fp32(uint32_t cb_id) {
+    generate_matmul_row_reduce_tile_t<uint32_t>(cb_id);
 }
 
 // ----- Type conversion helper functions -----

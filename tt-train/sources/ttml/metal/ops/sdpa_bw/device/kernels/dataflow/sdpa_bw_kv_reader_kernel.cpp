@@ -86,6 +86,9 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_grad_output);
     const DataFormat data_format = get_dataformat(cb_grad_output);
 
+    const uint32_t precise_tile_bytes = get_tile_size(cb_intermediates);
+    const DataFormat precise_data_format = get_dataformat(cb_intermediates);
+
     // Create TensorAccessor generators
     const auto grad_output_address_generator = TensorAccessor(grad_output_args, grad_output_addr, tile_bytes);
     const auto attn_output_address_generator = TensorAccessor(attn_output_args, attn_output_addr, tile_bytes);
@@ -93,11 +96,14 @@ void kernel_main() {
     const auto key_address_generator = TensorAccessor(key_args, key_addr, tile_bytes);
     const auto value_address_generator = TensorAccessor(value_args, value_addr, tile_bytes);
     const auto mask_address_generator = TensorAccessor(mask_args, mask_addr, tile_bytes);
-    const auto intermediates_address_generator = TensorAccessor(intermediates_args, intermediates_addr, tile_bytes);
+    const auto intermediates_address_generator =
+        TensorAccessor(intermediates_args, intermediates_addr, precise_tile_bytes);
 
     constexpr uint16_t one = 0x00003F80;                          // (bfloat16)1.0 -> uint16_t
     generate_tile_with_bfloat16_value(cb_reduction_scaler, one);  // generate tile with bfloat16 value 1.0
-    generate_matmul_row_reduce_tile(cb_matmul_reduce);            // generate tile for matmul row reduce
+
+    // generate_matmul_row_reduce_tile(cb_matmul_reduce);            // generate tile for matmul row reduce
+    generate_matmul_row_reduce_tile_fp32(cb_matmul_reduce);  // generate tile for matmul row reduce in fp32
 
     const float scaler = uint32_to_float(scaler_bits);
     const float minus_one = uint32_to_float(minus_one_bits);
@@ -115,8 +121,8 @@ void kernel_main() {
         uint32_t global_row_idx = start_row + i;
         uint32_t kv_start_idx = global_row_idx * kWt;
 
-        DPRINT << "Reader: Processing row " << i << ", global_row_idx=" << global_row_idx
-               << ", kv_start_idx=" << kv_start_idx << ENDL();
+        // DPRINT << "Reader: Processing row " << i << ", global_row_idx=" << global_row_idx
+        //        << ", kv_start_idx=" << kv_start_idx << ENDL();
 
         read_row(kv_start_idx, kWt, cb_key, key_address_generator, tile_bytes);
         read_row(kv_start_idx, kWt, cb_value, value_address_generator, tile_bytes);
@@ -128,8 +134,8 @@ void kernel_main() {
         uint32_t first_q_head_idx = group_idx * heads_per_group;
         uint32_t q_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * qWt;
 
-        DPRINT << "Reader: batch_idx=" << batch_idx << ", group_idx=" << group_idx
-               << ", first_q_head_idx=" << first_q_head_idx << ", q_offset=" << q_offset << ENDL();
+        // DPRINT << "Reader: batch_idx=" << batch_idx << ", group_idx=" << group_idx
+        //        << ", first_q_head_idx=" << first_q_head_idx << ", q_offset=" << q_offset << ENDL();
 
         // the offset of attn_mask associated with this group of K and V
         // jump to relevent batch and head, then jump to the row in attn_mask associated with current row of K and V
@@ -164,7 +170,7 @@ void kernel_main() {
                     num_of_interm_tiles,
                     cb_intermediates,
                     intermediates_address_generator,
-                    tile_bytes);
+                    precise_tile_bytes);
 
                 // [DEBUG]: Used for debug, should be removed later
                 // cb_wait_front(cb_masked_interm, num_of_interm_tiles);

@@ -281,44 +281,116 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
 
     // Could we write intermediates in fp32 to improve numerical stability?
+    // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
     [[maybe_unused]] auto cb_intermediates = create_circular_buffer(
-        program, all_cores, kIntermediatesCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumOfIntermCBTiles);
+        program,
+        all_cores,
+        kIntermediatesCbIndex,
+        precise_data_format,
+        float32_single_tile_size_bytes,
+        kNumOfIntermCBTiles);
+    // [[maybe_unused]] auto cb_intermediates = create_circular_buffer(
+    //     program, all_cores, kIntermediatesCbIndex, data_format, bfloat16_single_tile_size_bytes,
+    //     kNumOfIntermCBTiles);
 
     // Utility buffers
+    // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
     [[maybe_unused]] auto cb_mat_mul_reduce = create_circular_buffer(
-        program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
+        program,
+        all_cores,
+        kMatMulReduceCbIndex,
+        precise_data_format,
+        float32_single_tile_size_bytes,
+        kSingleTileBuffer);
+    // [[maybe_unused]] auto cb_mat_mul_reduce = create_circular_buffer(
+    //     program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
 
     [[maybe_unused]] auto cb_reduction_scaler = create_circular_buffer(
         program, all_cores, kReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
-    
+
+    // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
     [[maybe_unused]] auto cb_prev_grad_value_holder = create_circular_buffer(
-        program, all_cores, kPrevGradValueHolderCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
+        program, all_cores, kPrevGradValueHolderCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
 
     [[maybe_unused]] auto cb_cur_grad_value_holder = create_circular_buffer(
-        program, all_cores, kCurGradValueHolderCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
+        program, all_cores, kCurGradValueHolderCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
+    // [[maybe_unused]] auto cb_prev_grad_value_holder = create_circular_buffer(
+    //     program, all_cores, kPrevGradValueHolderCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
 
+    // [[maybe_unused]] auto cb_cur_grad_value_holder = create_circular_buffer(
+    //     program, all_cores, kCurGradValueHolderCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
+
+    // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
     [[maybe_unused]] auto cb_prev_grad_key_holder = create_circular_buffer(
-        program, all_cores, kPrevGradKeyHolderCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
+        program, all_cores, kPrevGradKeyHolderCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
 
     [[maybe_unused]] auto cb_cur_grad_key_holder = create_circular_buffer(
-        program, all_cores, kCurGradKeyHolderCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
+        program, all_cores, kCurGradKeyHolderCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
+    // [[maybe_unused]] auto cb_prev_grad_key_holder = create_circular_buffer(
+    //     program, all_cores, kPrevGradKeyHolderCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
+
+    // [[maybe_unused]] auto cb_cur_grad_key_holder = create_circular_buffer(
+    //     program, all_cores, kCurGradKeyHolderCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
 
     // used to hold transpose value of attention weights, which is used in grad_V computation
+    // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
     [[maybe_unused]] auto cb_transpose_wh = create_circular_buffer(
-        program, all_cores, kTransposeWhCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
+        program,
+        all_cores,
+        kTransposeWhCbIndex,
+        precise_data_format,
+        float32_single_tile_size_bytes,
+        kSingleTileBuffer);
+    // [[maybe_unused]] auto cb_transpose_wh = create_circular_buffer(
+    //     program, all_cores, kTransposeWhCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
 
     // Intermediate computation buffers
+    // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
     [[maybe_unused]] auto cb_attention_weights = create_circular_buffer(
-        program, all_cores, kAttentionWeightsCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
+        program,
+        all_cores,
+        kAttentionWeightsCbIndex,
+        precise_data_format,
+        float32_single_tile_size_bytes,
+        kSingleTileBuffer);
+    // [[maybe_unused]] auto cb_attention_weights = create_circular_buffer(
+    //     program, all_cores, kAttentionWeightsCbIndex, data_format, bfloat16_single_tile_size_bytes,
+    //     kSingleTileBuffer);
 
+    // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
     [[maybe_unused]] auto cb_grad_attention = create_circular_buffer(
-        program, all_cores, kGradAttentionCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
+        program,
+        all_cores,
+        kGradAttentionCbIndex,
+        precise_data_format,
+        float32_single_tile_size_bytes,
+        kSingleTileBuffer);
+    // [[maybe_unused]] auto cb_grad_attention = create_circular_buffer(
+    //     program, all_cores, kGradAttentionCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
 
-    [[maybe_unused]] auto cb_grad_scores = create_circular_buffer(
-        program, all_cores, kGradScoresCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
+    // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
+    [[maybe_unused]] auto cb_grad_scores =  // CBIndex::c_15
+        create_circular_buffer(
+            program,
+            all_cores,
+            kGradScoresCbIndex,
+            precise_data_format,
+            float32_single_tile_size_bytes,
+            kSingleTileBuffer);
+    // [[maybe_unused]] auto cb_grad_scores = create_circular_buffer(
+    //     program, all_cores, kGradScoresCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
 
-    [[maybe_unused]] auto cb_u_scaler_row = create_circular_buffer(
-        program, all_cores, kUScalarRowCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
+    //[Debug]: switch to fp32 to improve numerical stability when computing u_scalar_row
+    [[maybe_unused]] auto cb_u_scaler_row =  // CBIndex::c_17
+        create_circular_buffer(
+            program,
+            all_cores,
+            kUScalarRowCbIndex,
+            precise_data_format,
+            float32_single_tile_size_bytes,
+            kSingleTileBuffer);
+    // [[maybe_unused]] auto cb_u_scaler_row = create_circular_buffer(
+    //     program, all_cores, kUScalarRowCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
 
     // Output gradient buffers
     [[maybe_unused]] auto cb_grad_query = create_circular_buffer(
@@ -334,8 +406,25 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         program, all_cores, kSyncOutputWriterCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
 
     // [DEBUG]: Used for debug, should be removed later
+    // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
     [[maybe_unused]] auto cb_masked_interm = create_circular_buffer(
-        program, all_cores, kMaskedIntermCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumOfIntermCBTiles);
+        program,
+        all_cores,
+        kMaskedIntermCbIndex,
+        precise_data_format,
+        float32_single_tile_size_bytes,
+        kNumOfIntermCBTiles);
+    // [[maybe_unused]] auto cb_masked_interm = create_circular_buffer(
+    //     program, all_cores, kMaskedIntermCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumOfIntermCBTiles);
+
+    [[maybe_unused]] auto cb_scaled_query = create_circular_buffer(
+        program, all_cores, tt::CBIndex::c_23, data_format, bfloat16_single_tile_size_bytes, qWt);
+
+    [[maybe_unused]] auto cb_prev_corr = create_circular_buffer(
+        program, all_cores, tt::CBIndex::c_24, precise_data_format, float32_single_tile_size_bytes, qWt);
+
+    [[maybe_unused]] auto cb_cur_corr = create_circular_buffer(
+        program, all_cores, tt::CBIndex::c_25, precise_data_format, float32_single_tile_size_bytes, qWt);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -406,6 +495,14 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     // 4) Create compute kernels
     // -------------------------------------------------------------------------
 
+    // constexpr auto kPrevGradKeyHolderCbIndex = tt::CBIndex::c_11;
+    // constexpr auto kCurGradKeyHolderCbIndex = tt::CBIndex::c_12;
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    unpack_to_dest_mode[tt::CBIndex::c_11] = UnpackToDestMode::UnpackToDestFp32;  // set for prev_grad_key_holder
+    unpack_to_dest_mode[tt::CBIndex::c_12] = UnpackToDestMode::UnpackToDestFp32;  // set for cur_grad_key_holder
+    unpack_to_dest_mode[tt::CBIndex::c_9] = UnpackToDestMode::UnpackToDestFp32;   // set for prev_grad_value_holder
+    unpack_to_dest_mode[tt::CBIndex::c_10] = UnpackToDestMode::UnpackToDestFp32;  // set for cur_grad_value_holder
+
     // Group 1 compile-time arguments
     std::vector<uint32_t> compute_group_1_args = {
         num_rows_per_core_group_1,  // per_core_block_cnt
@@ -420,8 +517,20 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         custom_inf                  // mask transform constant
     };
 
-    kernels.compute_group_1 = create_compute_kernel(
-        program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, args.fp32_dest_acc_en);
+    // kernels.compute_group_1 = create_compute_kernel(
+    //     program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, args.fp32_dest_acc_en);
+
+    kernels.compute_group_1 = tt::tt_metal::CreateKernel(
+        program,
+        kComputeKernelPath,
+        core_group_1,
+        tt::tt_metal::ComputeConfig{
+            .math_fidelity = MathFidelity::HiFi4,
+            .fp32_dest_acc_en = args.fp32_dest_acc_en,
+            .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+            .math_approx_mode = false,
+            .compile_args = compute_group_1_args,
+            .defines = defines});
 
     // Group 2 (if present)
     if (!core_group_2.ranges().empty()) {
@@ -438,8 +547,20 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
             custom_inf                  // mask transform constant
         };
 
-        kernels.compute_group_2 = create_compute_kernel(
-            program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, args.fp32_dest_acc_en);
+        // kernels.compute_group_2 = create_compute_kernel(
+        //     program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, args.fp32_dest_acc_en);
+
+        kernels.compute_group_2 = tt::tt_metal::CreateKernel(
+            program,
+            kComputeKernelPath,
+            core_group_2,
+            tt::tt_metal::ComputeConfig{
+                .math_fidelity = MathFidelity::HiFi4,
+                .fp32_dest_acc_en = args.fp32_dest_acc_en,
+                .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+                .math_approx_mode = false,
+                .compile_args = compute_group_2_args,
+                .defines = defines});
     }
 
     // -------------------------------------------------------------------------

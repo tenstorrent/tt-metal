@@ -17,6 +17,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/transpose_wh_dest.h"
 
 // test
 #include "compute_kernel_api/eltwise_unary/fill.h"
@@ -86,12 +87,14 @@ void mask_intermediates(
     tile_regs_acquire();
     for (uint32_t tile_idx = 0; tile_idx < num_of_interm_tiles; ++tile_idx) {
         // UNPACK({ DPRINT << "Copying intermediates tile " << tile_idx << " to " << 2 * tile_idx << ENDL(); });
+        reconfig_data_format(cb_intermediates, cb_intermediates);
         copy_tile_init(cb_intermediates);
         copy_tile(cb_intermediates, /* tile_idx */ tile_idx, /* register idx */ 2 * tile_idx);
 
         // UNPACK({
         //     DPRINT << "Copying matmul reduction for tile " << 2 * tile_idx << " to " << 2 * tile_idx + 1 << ENDL();
         // });
+        reconfig_data_format(cb_mat_mul_reduction, cb_mat_mul_reduction);
         copy_tile_init(cb_mat_mul_reduction);
         copy_tile(cb_mat_mul_reduction, /* tile_idx */ 0, /* register idx */ 2 * tile_idx + 1);
 
@@ -131,6 +134,7 @@ void apply_statistics_inplace(uint32_t cb_attention_weights, uint32_t cb_masked_
     exp_tile_init</* approx */ false>();
     exp_tile</* approx */ false>(working_reg);
 
+    reconfig_data_format(cb_masked_interm, cb_masked_interm);
     // bcast 1/sum(exp(x - max(x))) stored in intermediates[1]
     unary_bcast_init<BroadcastType::COL>(cb_masked_interm, cb_masked_interm);
     unary_bcast<BroadcastType::COL>(cb_masked_interm, /* tile idx */ 1U, /* reg tile idx */ intermediates_reg);
@@ -155,8 +159,9 @@ void apply_statistics_inplace(uint32_t cb_attention_weights, uint32_t cb_masked_
 inline void transpose_attn_weights(uint32_t cb_attention_weights, uint32_t cb_transpose_wh) {
     cb_wait_front(cb_attention_weights, onetile);
     // transpose attention weights
+    reconfig_data_format(cb_attention_weights, cb_attention_weights);
     tile_regs_acquire();
-    transpose_wh_init_short(cb_attention_weights);
+    transpose_wh_init(cb_attention_weights, cb_transpose_wh);
     transpose_wh_tile(cb_attention_weights, /* tile idx */ 0, /* reg idx */ 0);
     tile_regs_commit();
 
@@ -166,6 +171,147 @@ inline void transpose_attn_weights(uint32_t cb_attention_weights, uint32_t cb_tr
     pack_tile(0, cb_transpose_wh);
     tile_regs_release();
     cb_push_back(cb_transpose_wh, onetile);
+}
+
+void compute_u_scalar_row(
+    uint32_t cb_grad_output,
+    uint32_t cb_attn_output,
+    /*output result*/ uint32_t cb_u_scalar_row,
+    /*mutmul reduction*/ uint32_t cb_mat_mul_reduction,
+    uint32_t tiles_per_row,
+    uint32_t scaler_bits) {
+    const uint32_t accum_register = 0;
+    // TODO[check]: probably I need reconfig data format for cb_grad_output and cb_attn_output here
+    // using general init function instead of specific mul_tiles_init() because specific one doesn't support
+    // accumulation to dest regs
+    reconfig_data_format(cb_grad_output, cb_attn_output);
+    binary_tiles_init<true, ELWMUL>(cb_grad_output, cb_attn_output, /*acc_to_dest*/ true);
+    tile_regs_acquire();
+    for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
+        mul_tiles(
+            cb_grad_output,
+            cb_attn_output,
+            /* tile_idx */ tile_idx,
+            /* tile_idx */ tile_idx,
+            /* dst_reg_idx*/ accum_register);
+    }
+
+    binop_with_scalar_tile_init();
+    mul_unary_tile(/* dst_reg_idx*/ accum_register, scaler_bits);  // multiply by scaler factor
+    tile_regs_commit();
+
+    pack_reconfig_data_format(cb_u_scalar_row);
+    cb_reserve_back(cb_u_scalar_row, onetile);
+    tile_regs_wait();
+    pack_tile(accum_register, cb_u_scalar_row);
+    tile_regs_release();
+    cb_push_back(cb_u_scalar_row, onetile);
+
+    cb_wait_front(cb_u_scalar_row, onetile);
+    tile_regs_acquire();
+    reconfig_data_format(cb_u_scalar_row, cb_mat_mul_reduction);
+    mm_init_short(cb_u_scalar_row, cb_mat_mul_reduction, /* transpose */ 0);
+    // mm_init(cb_u_scalar_row, cb_mat_mul_reduction, cb_u_scalar_row, /* transpose */ 0);
+    matmul_tiles(
+        cb_u_scalar_row,
+        cb_mat_mul_reduction,
+        /* tile_idx */ 0,
+        /* tile_idx */ 0,
+        /* dst_reg_idx*/ accum_register,
+        /* transpose */ 0);
+    tile_regs_commit();
+
+    tile_regs_wait();
+    cb_pop_front(cb_u_scalar_row, onetile);
+    cb_reserve_back(cb_u_scalar_row, onetile);
+    pack_reconfig_data_format(cb_u_scalar_row);
+    pack_tile(accum_register, cb_u_scalar_row);
+    tile_regs_release();
+    cb_push_back(cb_u_scalar_row, onetile);
+}
+
+// Compute gradient w.r.t. attention weights
+void compute_grad_attn_weights(
+    uint32_t cb_grad_output,
+    uint32_t cb_value,
+    uint32_t tiles_per_row,
+    uint32_t cb_grad_attn_weights,
+    uint32_t scaler_bits) {
+    reconfig_data_format(cb_grad_output, cb_value);
+    mm_init_short(cb_grad_output, cb_value, /* transpose */ 1);
+    // mm_init(cb_grad_output, cb_value, cb_grad_attn_weights, /* transpose */ 1);
+    tile_regs_acquire();
+    for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
+        matmul_tiles(
+            cb_grad_output,
+            cb_value,
+            /* tile_idx */ tile_idx,
+            /* tile_idx */ tile_idx,
+            /* dst_reg_idx*/ 0,
+            /* transpose */ 1);
+    }
+
+    binop_with_scalar_tile_init();
+    mul_unary_tile(/* dst_reg_idx*/ 0, scaler_bits);  // multiply by scaler factor
+
+    tile_regs_commit();
+
+    tile_regs_wait();
+    cb_reserve_back(cb_grad_attn_weights, onetile);
+    pack_reconfig_data_format(cb_grad_attn_weights);
+    pack_tile(0, cb_grad_attn_weights);
+    tile_regs_release();
+
+    cb_push_back(cb_grad_attn_weights, onetile);
+}
+
+// Compute gradient w.r.t. scores(before softmax) dL/dZ = dL/d(Q@K^T) = (dP - u_scalar_row) * P
+// TODO(vmelnykov): In general we need to use fp32 for cb_grad_scores but right now we can't do matmul beween fp16
+// and fp32 CBs(need to compute grad Q and grad K with better accuracy)
+void compute_grad_scores(
+    uint32_t cb_grad_attn_weights,
+    uint32_t cb_attention_weights,
+    uint32_t cb_u_scalar_row,
+    uint32_t scaler_bits,
+    /* output */ uint32_t cb_grad_scores,
+    bool transpose = false) {
+    cb_wait_front(cb_grad_attn_weights, onetile);
+    cb_wait_front(cb_u_scalar_row, onetile);
+
+    const uint32_t grad_reg = 0;
+    const uint32_t attn_weights_reg = 1U;
+    const uint32_t u_scalar_reg = 2U;
+
+    // compute: grad_scores = (grad_attn_weights - u_scalar_row) * attention_weights
+    tile_regs_acquire();
+    reconfig_data_format(cb_grad_attn_weights, cb_u_scalar_row);
+    sub_bcast_cols_init_short(cb_grad_attn_weights, cb_u_scalar_row);
+    sub_tiles_bcast_cols(
+        cb_grad_attn_weights,
+        cb_u_scalar_row,
+        /* tile_idx */ 0,
+        /* tile_idx */ 0,
+        grad_reg);  // result in grad_reg
+
+    // copy attention_weights to reg 1
+    reconfig_data_format(cb_attention_weights, cb_attention_weights);
+    copy_tile_init(cb_attention_weights);
+    copy_tile(cb_attention_weights, /* tile_idx */ 0, /* register idx */ attn_weights_reg);
+
+    mul_binary_tile_init();
+    mul_binary_tile(grad_reg, attn_weights_reg, grad_reg);  // result in grad_reg
+
+    // binop_with_scalar_tile_init();
+    // mul_unary_tile(/* dst_reg_idx*/ grad_reg, scaler_bits);  // multiply by scaler factor
+
+    tile_regs_commit();
+
+    tile_regs_wait();
+    cb_reserve_back(cb_grad_scores, onetile);
+    pack_reconfig_data_format(cb_grad_scores);
+    pack_tile(grad_reg, cb_grad_scores);
+    tile_regs_release();
+    cb_push_back(cb_grad_scores, onetile);
 }
 
 void update_grad_value(
@@ -185,10 +331,11 @@ void update_grad_value(
     // mm_init(cb_transpose_wh, cb_grad_output, cb_cur_grad_value, 0);
     cb_reserve_back(cb_cur_grad_value, tiles_per_row);
     pack_reconfig_data_format(cb_cur_grad_value);
-    reconfig_data_format(cb_transpose_wh, cb_grad_output);
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx++) {
         tile_regs_acquire();
-        mm_init_short(cb_transpose_wh, cb_grad_output, /* transpose */ 0);
+        // reconfig_data_format(cb_transpose_wh, cb_grad_output);
+        // mm_init_short(cb_transpose_wh, cb_grad_output, /* transpose */ 0);
+        mm_init_short_with_dt(cb_transpose_wh, cb_grad_output, cb_prev_grad_value, /*transpose*/ 0);
         matmul_tiles(
             cb_transpose_wh,
             cb_grad_output,
@@ -198,6 +345,7 @@ void update_grad_value(
             /* transpose */ 0);
 
         if (do_accumulate) {
+            copy_tile_to_dst_init_short_with_dt(cb_transpose_wh, cb_prev_grad_value);
             copy_tile_init(cb_prev_grad_value);
             copy_tile(cb_prev_grad_value, /* tile_idx */ tile_idx, /* register idx */ 1U);
 
@@ -219,124 +367,127 @@ void update_grad_value(
     }
 }
 
-void compute_u_scalar_row(
-    uint32_t cb_grad_output,
-    uint32_t cb_attn_output,
-    /*output result*/ uint32_t cb_u_scalar_row,
-    /*mutmul reduction*/ uint32_t cb_mat_mul_reduction,
-    uint32_t tiles_per_row) {
-    const uint32_t accum_register = 0;
-    // TODO[check]: probably I need reconfig data format for cb_grad_output and cb_attn_output here
-    // using general init function instead of specific mul_tiles_init() because specific one doesn't support
-    // accumulation to dest regs
-    binary_tiles_init<true, ELWMUL>(cb_grad_output, cb_attn_output, /*acc_to_dest*/ true);
+void fill_corr_cb_with_zeros(uint32_t cb_corr, uint32_t tiles_per_head) {
     tile_regs_acquire();
-    for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
-        mul_tiles(
-            cb_grad_output,
-            cb_attn_output,
-            /* tile_idx */ tile_idx,
-            /* tile_idx */ tile_idx,
-            /* dst_reg_idx*/ accum_register);
+    fill_tile_init();
+    fill_tile(/* dst_reg_idx*/ 0, 0.0F);  // fill with zeros
+    tile_regs_commit();
+
+    tile_regs_wait();
+    cb_reserve_back(cb_corr, tiles_per_head);
+    pack_reconfig_data_format(cb_corr);
+    for (uint32_t tile_idx = 0; tile_idx < tiles_per_head; tile_idx++) {
+        pack_tile(/*dst_reg_idx*/ 0, cb_corr);
     }
-    tile_regs_commit();
-
-    pack_reconfig_data_format(cb_u_scalar_row);
-    cb_reserve_back(cb_u_scalar_row, onetile);
-    tile_regs_wait();
-    pack_tile(accum_register, cb_u_scalar_row);
-    tile_regs_release();
-    cb_push_back(cb_u_scalar_row, onetile);
-
-    cb_wait_front(cb_u_scalar_row, onetile);
-    tile_regs_acquire();
-    mm_init_short(cb_u_scalar_row, cb_mat_mul_reduction, /* transpose */ 0);
-    matmul_tiles(
-        cb_u_scalar_row,
-        cb_mat_mul_reduction,
-        /* tile_idx */ 0,
-        /* tile_idx */ 0,
-        /* dst_reg_idx*/ accum_register,
-        /* transpose */ 0);
-    tile_regs_commit();
-
-    cb_pop_front(cb_u_scalar_row, onetile);
-    cb_reserve_back(cb_u_scalar_row, onetile);
-    pack_tile(accum_register, cb_u_scalar_row);
-    tile_regs_release();
-    cb_push_back(cb_u_scalar_row, onetile);
+    cb_push_back(cb_corr, tiles_per_head);
 }
 
-// Compute gradient w.r.t. attention weights
-void compute_grad_attn_weights(
-    uint32_t cb_grad_output, uint32_t cb_value, uint32_t tiles_per_row, uint32_t cb_grad_attn_weights) {
-    reconfig_data_format(cb_grad_output, cb_value);
-    mm_init_short(cb_grad_output, cb_value, /* transpose */ 1);
-    // mm_init(cb_grad_output, cb_value, cb_grad_attn_weights, /* transpose */ 1);
-    tile_regs_acquire();
-    for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
-        matmul_tiles(
-            cb_grad_output,
-            cb_value,
-            /* tile_idx */ tile_idx,
-            /* tile_idx */ tile_idx,
-            /* dst_reg_idx*/ 0,
-            /* transpose */ 1);
-    }
-    tile_regs_commit();
+// current matmul res is already in cur_sum_dest_reg_idx
+// function assumes that dest_reg is in acquired state via *acquire_dst* call
+void kahan_summation(uint32_t cb_prev_sum, uint32_t cb_corr, uint32_t tile_idx, uint32_t cur_mm_dest_reg_idx = 0) {
+    const uint32_t corr_reg = cur_mm_dest_reg_idx + 1U;
+    const uint32_t prev_sum_reg = cur_mm_dest_reg_idx + 2U;
+    const uint32_t result_reg = cur_mm_dest_reg_idx + 3U;
 
-    tile_regs_wait();
-    cb_reserve_back(cb_grad_attn_weights, onetile);
-    pack_reconfig_data_format(cb_grad_attn_weights);
-    pack_tile(0, cb_grad_attn_weights);
-    tile_regs_release();
+    // y = cur_sum - corr
+    reconfig_data_format(cb_corr, cb_corr);
+    copy_tile_init(cb_corr);
+    copy_tile(cb_corr, tile_idx, corr_reg);
 
-    cb_push_back(cb_grad_attn_weights, onetile);
+    sub_binary_tile_init();
+    sub_binary_tile(cur_mm_dest_reg_idx, corr_reg, cur_mm_dest_reg_idx);  // y = cur_mm_res - corr
+
+    reconfig_data_format(cb_prev_sum, cb_prev_sum);
+    copy_tile_init(cb_prev_sum);
+    copy_tile(cb_prev_sum, tile_idx, prev_sum_reg);
+
+    add_binary_tile_init();
+    add_binary_tile(cur_mm_dest_reg_idx, prev_sum_reg, result_reg);  // t = prev_sum + y
+
+    // corr = (t - prev_sum) - y
+    sub_binary_tile_init();
+    sub_binary_tile(result_reg, prev_sum_reg, corr_reg);  // corr = t - prev_sum
+    sub_binary_tile_init();
+    sub_binary_tile(corr_reg, cur_mm_dest_reg_idx, corr_reg);  // corr = (t - prev_sum) - y
+
+    // prev_sum = t
+    // result already in result_reg
 }
 
-// Compute gradient w.r.t. scores(before softmax) dL/dZ = dL/d(Q@K^T) = (dP - u_scalar_row) * P
-void compute_grad_scores(
-    uint32_t cb_grad_attn_weights,
-    uint32_t cb_attention_weights,
-    uint32_t cb_u_scalar_row,
-    uint32_t scaler_bits,
-    /* output */ uint32_t cb_grad_scores) {
-    cb_wait_front(cb_grad_attn_weights, onetile);
-    cb_wait_front(cb_u_scalar_row, onetile);
+// void update_grad_key(
+//     uint32_t cb_grad_scores,
+//     uint32_t cb_query,
+//     uint32_t scaler_bits,
+//     uint32_t cb_transpose_wh,
+//     uint32_t cb_prev_grad_key,
+//     uint32_t cb_cur_grad_key,
+//     uint32_t cb_prev_corr,
+//     uint32_t cb_cur_corr,
+//     uint32_t tiles_per_row,
+//     bool do_accumulate = false) {
+//     // TODO: rename trasnpose function
+//     transpose_attn_weights(cb_grad_scores, cb_transpose_wh);
+//     cb_wait_front(cb_transpose_wh, onetile);
 
-    const uint32_t grad_reg = 0;
-    const uint32_t attn_weights_reg = 1U;
-    const uint32_t u_scalar_reg = 2U;
+//     // mm_init(cb_transpose_wh, cb_query, cb_cur_grad_key, 0);
+//     cb_reserve_back(cb_cur_grad_key, tiles_per_row);
+//     pack_reconfig_data_format(cb_cur_grad_key);
 
-    // compute: grad_scores = (grad_attn_weights - u_scalar_row) * attention_weights
-    tile_regs_acquire();
-    sub_bcast_cols_init_short(cb_grad_attn_weights, cb_u_scalar_row);
-    sub_tiles_bcast_cols(
-        cb_grad_attn_weights,
-        cb_u_scalar_row,
-        /* tile_idx */ 0,
-        /* tile_idx */ 0,
-        grad_reg);  // result in grad_reg
+//     if (do_accumulate) {
+//         cb_wait_front(cb_prev_corr, tiles_per_row);
+//         cb_reserve_back(cb_cur_corr, tiles_per_row);
+//     }
 
-    // copy attention_weights to reg 1
-    copy_tile_init(cb_attention_weights);
-    copy_tile(cb_attention_weights, /* tile_idx */ 0, /* register idx */ attn_weights_reg);
+//     // reconfig_data_format(cb_transpose_wh, cb_query);
+//     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx++) {
+//         tile_regs_acquire();
+//         // reconfig_data_format(cb_transpose_wh, cb_query);
+//         // mm_init_short(cb_transpose_wh, cb_query, /* transpose */ 0);
+//         mm_init_short_with_dt(cb_transpose_wh, cb_query, cb_prev_grad_key, /*transpose*/ 0);
+//         matmul_tiles(
+//             cb_transpose_wh,
+//             cb_query,
+//             /* tile_idx */ 0,
+//             /* tile_idx */ tile_idx,
+//             /* dst_reg_idx*/ 0,
+//             /* transpose */ 0);
 
-    mul_binary_tile_init();
-    mul_binary_tile(grad_reg, attn_weights_reg, grad_reg);  // result in grad_reg
+//         // apply scaler factor to the result before matmul accumulation
+//         // maybe will achive better accuracy
+//         // binop_with_scalar_tile_init();
+//         // mul_unary_tile(/* dst_reg_idx*/ 0, scaler_bits);  // multiply by scaler factor
 
-    // try to apply scaler here to improve accuracy
-    binop_with_scalar_tile_init();
-    mul_unary_tile(/* dst_reg_idx*/ grad_reg, scaler_bits);  // multiply by scaler factor
-    tile_regs_commit();
+//         if (do_accumulate) {
+//             // reconfig_data_format(cb_prev_grad_key, cb_prev_grad_key);
+//             // copy_tile_init(cb_prev_grad_key);
+//             // copy_tile(cb_prev_grad_key, /* tile_idx */ tile_idx, /* register idx */ 1U);
 
-    tile_regs_wait();
-    cb_reserve_back(cb_grad_scores, onetile);
-    pack_reconfig_data_format(cb_grad_scores);
-    pack_tile(grad_reg, cb_grad_scores);
-    tile_regs_release();
-    cb_push_back(cb_grad_scores, onetile);
-}
+//             // add_binary_tile_init();
+//             // add_binary_tile(0, 1U, 0);  // accumulate in register 0
+//             kahan_summation(cb_prev_grad_key, cb_prev_corr, tile_idx, /* cur_mm_dest_reg_idx */ 0);
+//         }
+//         tile_regs_commit();
+
+//         tile_regs_wait();
+//         pack_reconfig_data_format(cb_cur_grad_key);
+//         const uint32_t result_reg = do_accumulate ? 3U : 0U;
+//         pack_tile(result_reg, cb_cur_grad_key);
+//         if (do_accumulate) {
+//             pack_reconfig_data_format(cb_cur_corr);
+//             pack_tile(1U, cb_cur_corr);
+//         }
+//         tile_regs_release();
+//     }
+//     cb_push_back(cb_cur_grad_key, tiles_per_row);
+
+//     cb_pop_front(cb_transpose_wh, onetile);
+//     if (do_accumulate) {
+//         cb_pop_front(cb_prev_grad_key, tiles_per_row);
+//         cb_pop_front(cb_prev_corr, tiles_per_row);
+
+//         cb_push_back(cb_cur_corr, tiles_per_row);
+//     }
+// }
 
 void update_grad_key(
     uint32_t cb_grad_scores,
@@ -354,10 +505,12 @@ void update_grad_key(
     // mm_init(cb_transpose_wh, cb_query, cb_cur_grad_key, 0);
     cb_reserve_back(cb_cur_grad_key, tiles_per_row);
     pack_reconfig_data_format(cb_cur_grad_key);
-    reconfig_data_format(cb_transpose_wh, cb_query);
+    // reconfig_data_format(cb_transpose_wh, cb_query);
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx++) {
         tile_regs_acquire();
-        mm_init_short(cb_transpose_wh, cb_query, /* transpose */ 0);
+        // reconfig_data_format(cb_transpose_wh, cb_query);
+        // mm_init_short(cb_transpose_wh, cb_query, /* transpose */ 0);
+        mm_init_short_with_dt(cb_transpose_wh, cb_query, cb_prev_grad_key, /*transpose*/ 0);
         matmul_tiles(
             cb_transpose_wh,
             cb_query,
@@ -372,7 +525,9 @@ void update_grad_key(
         // mul_unary_tile(/* dst_reg_idx*/ 0, scaler_bits);  // multiply by scaler factor
 
         if (do_accumulate) {
-            copy_tile_init(cb_prev_grad_key);
+            // reconfig_data_format_srca(cb_prev_grad_key);
+            // copy_tile_init(cb_prev_grad_key);
+            copy_tile_to_dst_init_short_with_dt(cb_transpose_wh, cb_prev_grad_key);
             copy_tile(cb_prev_grad_key, /* tile_idx */ tile_idx, /* register idx */ 1U);
 
             add_binary_tile_init();
@@ -403,10 +558,13 @@ void update_grad_query(
     cb_wait_front(cb_grad_scores, onetile);
     cb_reserve_back(cb_cur_grad_query, tiles_per_row);
     pack_reconfig_data_format(cb_cur_grad_query);
-    reconfig_data_format(cb_grad_scores, cb_key);
+    // TODO(vmelnykov): In general we need to use fp32 for cb_grad_scores but right now we can't do matmul beween fp16
+    // and fp32 CBs(need to compute grad Q and grad K with better accuracy)
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; tile_idx++) {
         tile_regs_acquire();
-        mm_init_short(cb_grad_scores, cb_key, /* transpose */ 0);
+        // reconfig_data_format(cb_grad_scores, cb_key);
+        // mm_init_short(cb_grad_scores, cb_key, /* transpose */ 0);
+        mm_init_short_with_dt(cb_grad_scores, cb_key, cb_prev_grad_query, /*transpose*/ 0);
         matmul_tiles(
             cb_grad_scores,
             cb_key,
@@ -421,6 +579,7 @@ void update_grad_query(
         // mul_unary_tile(/* dst_reg_idx*/ 0, scaler_bits);  // multiply by scaler factor
 
         if (do_accumulate) {
+            copy_tile_to_dst_init_short_with_dt(cb_grad_scores, cb_prev_grad_query);
             copy_tile_init(cb_prev_grad_query);
             copy_tile(cb_prev_grad_query, /* tile_idx */ tile_idx, /* register idx */ 1U);
 
@@ -446,7 +605,7 @@ void pack_result(uint32_t cb_source, uint32_t cb_output, uint32_t num_tiles) {
     cb_reserve_back(cb_output, num_tiles);
 
     pack_reconfig_data_format(cb_output);
-    reconfig_data_format(cb_source, cb_output);
+    reconfig_data_format(cb_source, cb_source);
 
     copy_tile_init(cb_source);
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
