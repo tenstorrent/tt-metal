@@ -9,6 +9,7 @@
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt_stl/optional_reference.hpp>
+#include <type_traits>
 
 std::ostream& operator<<(std::ostream& os, const std::vector<bool>& value) {
     os << "[";
@@ -184,7 +185,11 @@ void GraphArgumentSerializer::register_small_vector() {
     registry()[typeid(std::reference_wrapper<ttsl::SmallVector<T, N>>)] = conversion_function;
     registry()[typeid(std::reference_wrapper<const ttsl::SmallVector<T, N>>)] = conversion_function;
     registry()[typeid(const std::reference_wrapper<ttsl::SmallVector<T, N>>)] = conversion_function;
-    registry()[typeid(std::reference_wrapper<ttsl::SmallVector<const T, N>>)] = conversion_function;
+    // Skip SmallVector<const T, N> registration for fundamental types to avoid overload collision
+    // in llvm_small_vector.hpp when T is const-qualified (e.g., const bool, const int)
+    if constexpr (!std::is_fundamental_v<T>) {
+        registry()[typeid(std::reference_wrapper<ttsl::SmallVector<const T, N>>)] = conversion_function;
+    }
     registry()[typeid(std::reference_wrapper<const ttsl::SmallVector<T, N>>)] = conversion_function;
 }
 
