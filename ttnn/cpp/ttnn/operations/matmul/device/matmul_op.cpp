@@ -799,12 +799,12 @@ MatmulProgramConfig create_matmul_program_config(
                 compute_kernel_config,
                 output_dtype);
         }
-        uint32_t k = a_shape[-1] / ttnn::TILE_SIZE;
-        uint32_t n = b_shape[-1] / ttnn::TILE_SIZE;
+        uint32_t k = div_up(a_shape[-1], ttnn::TILE_SIZE);
+        uint32_t n = div_up(b_shape[-1], ttnn::TILE_SIZE);
         auto shard_shape = input_tensor_a_memory_config.shard_spec().value().shape;
-        m_tiles_per_core = shard_shape[0] / ttnn::TILE_SIZE;
-        n_tiles_per_core = (n * shard_shape[1]) / (k * ttnn::TILE_SIZE);
-        k_tiles_per_core = std::gcd(shard_shape[1] / ttnn::TILE_SIZE, k);
+        m_tiles_per_core = div_up(shard_shape[0], ttnn::TILE_SIZE);
+        n_tiles_per_core = div_up(n * shard_shape[1], k * ttnn::TILE_SIZE);
+        k_tiles_per_core = std::gcd(div_up(shard_shape[1], ttnn::TILE_SIZE), k);
     }
 
     n_tiles_per_core = std::max(n_tiles_per_core, (unsigned int)1);
@@ -1943,10 +1943,10 @@ void Matmul::validate(
                             program_config.in0_block_w);
                         if (!program_config.gather_in0) {  // Padding allowed for gather_in0
                             TT_FATAL(
-                            (shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
-                            "Error: shard_shape[1] ({}) / in0_tile_shape[1] ({}) must be divisible by in0_block_w.",
-                            shard_shape[1],
-                            in0_tile_shape[1]);
+                                (shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
+                                "Error: shard_shape[1] ({}) / in0_tile_shape[1] ({}) must be divisible by in0_block_w.",
+                                shard_shape[1],
+                                in0_tile_shape[1]);
                         }
                     }
                     if (this->output_mem_config.is_sharded()) {
