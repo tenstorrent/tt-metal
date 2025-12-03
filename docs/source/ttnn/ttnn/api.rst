@@ -50,6 +50,7 @@ Core
    ttnn.deallocate
    ttnn.reallocate
    ttnn.to_memory_config
+   ttnn.split_work_to_cores
 
 
 Tensor Creation
