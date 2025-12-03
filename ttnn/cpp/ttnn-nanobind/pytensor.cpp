@@ -1021,7 +1021,7 @@ void pytensor_module(nb::module_& mod) {
                 }
                 TT_THROW("Unreachable");
             },
-            // nb::rv_policy::copy,
+            nb::rv_policy::copy,
             R"doc(
                  Extract the scalar value from a tensor containing exactly one element.
 
@@ -1598,7 +1598,7 @@ void pytensor_module(nb::module_& mod) {
             [](Tensor& self, int N, int C, int H, int W) {
                 return ttnn::reshape(self, infer_dims_for_reshape(self, ttnn::SmallVector<int>{N, C, H, W}));
             },
-            nb::rv_policy::take_ownership,  // test
+            nb::rv_policy::automatic_reference,  // test
             R"doc(
                 Reshapes TT tensor
 
@@ -1609,7 +1609,7 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "reshape",
             [](Tensor& self, const ttnn::Shape& shape) -> Tensor { return ttnn::reshape(self, shape); },
-            nb::rv_policy::take_ownership,  // test
+            nb::rv_policy::automatic_reference,  // test
             R"doc(
                 Reshapes TT tensor
 
@@ -1622,7 +1622,7 @@ void pytensor_module(nb::module_& mod) {
             [](Tensor& self, const ttnn::SmallVector<int32_t>& shape) -> Tensor {
                 return ttnn::reshape(self, infer_dims_for_reshape(self, shape));
             },
-            nb::rv_policy::take_ownership,  // test
+            nb::rv_policy::automatic_reference,  // test
             R"doc(
                 Reshapes TT tensor
 
