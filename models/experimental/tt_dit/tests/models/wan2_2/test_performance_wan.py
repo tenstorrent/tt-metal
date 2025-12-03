@@ -287,11 +287,6 @@ def test_pipeline_performance(
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
 
     if is_ci_env:
-        device_name_map = {
-            (1, 4): "bh_qb",
-            (2, 4): "wh_t3k",
-            (4, 8): "bh_glx" if is_blackhole() else "wh_glx",
-        }
         # In CI, dump a performance report
         benchmark_data = BenchmarkData()
         for iteration in range(num_perf_runs):
