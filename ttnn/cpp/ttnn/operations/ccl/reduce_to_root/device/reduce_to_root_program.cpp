@@ -793,10 +793,13 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     if (!is_sender_device) {
         printf("compute kernel start\n");
         // scale = 1/sqrt(head_size)
-        uint32_t head_size = 64;
-        auto scale_fp32 = static_cast<uint32_t>(1.0f / sqrtf(static_cast<float>(head_size)));
-        // TODO: not sure of this value cause it will end up being 0, so I will set to 1 for now
-        scale_fp32 = 1;
+        // Encode scale as float-to-uint32 using union for proper bit representation
+        union {
+            float f;
+            uint32_t u;
+        } scale_union{};
+        scale_union.f = 1.0f;  // Scale factor for exponential: exp((m1-m)*scale)
+        uint32_t scale_fp32 = scale_union.u;
         uint32_t loop_size = is_root_device ? 2 : 1;
 
         auto compute_kernel_configuration = ttnn::init_device_compute_kernel_config(

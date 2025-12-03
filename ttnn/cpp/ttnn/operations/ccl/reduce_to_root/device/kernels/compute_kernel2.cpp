@@ -4,14 +4,14 @@
 // this kernel receives l, m, s tensors from the reader and perform the following computations
 // - inputs: l1, s1, m1 and l2, s2, m2; output: l, s, m
 //----> m = max(m1, m2)
-//- P1 = exp((m1 - m) * scale) (called exp_max_diff)
+//- P1 = exp((m1 - m) * scale)
 //- P2 = exp((m2 - m) * scale)
 //----> s = s1 * P1 + s2 * P2
 //----> l = l1 * P1 + l2 * P2
 // writes the tensors l, s, m to the writer buffers
 
 // for last round of device 1 add extra compute:
-// out = v / s
+// out = l / s
 
 // shoud do something similar to sdpa_flash_decode kernel (where out is the l)
 
@@ -111,9 +111,9 @@ void MAIN {
         DPRINT << "all inputs available\n";
 
         // move sum and max to temp cbs
-        move_block<false>(cb_prev_sum_2, cb_s1_temp, Sq_chunk_t);
+        move_block<false>(cb_prev_sum, cb_s1_temp, Sq_chunk_t);
         DPRINT << "after moving s2\n";
-        move_block<false>(cb_prev_sum, cb_s2_temp, Sq_chunk_t);
+        move_block<false>(cb_prev_sum_2, cb_s2_temp, Sq_chunk_t);
         DPRINT << "after moving s1\n";
 
         // Compute max(m1, m2) directly from source CBs
@@ -121,38 +121,41 @@ void MAIN {
         max_block<vector_mode>(cb_m_in, cb_prev_max, cb_m_temp, Sq_chunk_t);
         DPRINT << "after max block\n";
 
-        // P1 = exp((m1 - m_new) * scale)
+        // P1 = exp((m1 - m_new) * scale) - store in cb_exp_max_diff_2
         sub_exp_block<scale_fp32, vector_mode>(cb_m_in, cb_m_temp, cb_exp_max_diff_2, Sq_chunk_t);
         DPRINT << "after sub_exp_block1 (P1)\n";
 
-        // s2 *= P1
-        mul_block_inplace(cb_s1_temp, cb_exp_max_diff_2, Sq_chunk_t);
-        DPRINT << "after s2 *= P1\n";
-
-        // P2 = exp((m2 - m_new) * scale)
+        // P2 = exp((m2 - m_new) * scale) - store in cb_exp_max_diff
         sub_exp_block<scale_fp32, vector_mode>(cb_prev_max, cb_m_temp, cb_exp_max_diff, Sq_chunk_t);
         DPRINT << "after sub_exp_block2 (P2)\n";
 
-        // s1 *= P2
-        mul_block_inplace(cb_s2_temp, cb_exp_max_diff, Sq_chunk_t);
-        DPRINT << "after s1 *= P2\n";
+        // For S: use element-wise multiplication (all columns of P)
+        // Note: Only column 0 is meaningful, other columns are garbage but unused
+        // s1 * P1 (element-wise)
+        mul_block_inplace(cb_s1_temp, cb_exp_max_diff_2, Sq_chunk_t);
+        DPRINT << "after s1 *= P1\n";
 
-        // s_new = s2 * P1 + s1 * P2
+        // s2 * P2 (element-wise)
+        mul_block_inplace(cb_s2_temp, cb_exp_max_diff, Sq_chunk_t);
+        DPRINT << "after s2 *= P2\n";
+
+        // s_new = s1 * P1 + s2 * P2
         add_block_inplace<true>(cb_s1_temp, cb_s2_temp, Sq_chunk_t);
         DPRINT << "after cur sum\n";
 
         DPRINT << "START OF MUL L1\n";
-        // l1 * P2 -> cb_l1_temp
-        mul_block_bcast_cols(cb_out_accumulate_im, cb_exp_max_diff, cb_l1_temp, Sq_chunk_t, vDHt);
-        DPRINT << "after l1 * P2\n";
+        // For L: broadcast column 0 of P to all columns
+        // l1 * P1 -> cb_l1_temp (broadcast column 0 of P1)
+        mul_block_bcast_cols(cb_out_accumulate_im, cb_exp_max_diff_2, cb_l1_temp, Sq_chunk_t, vDHt);
+        DPRINT << "after l1 * P1\n";
 
         DPRINT << "START OF MUL L2\n";
-        // l2 * P1 -> cb_l2_temp
-        mul_block_bcast_cols(cb_out_accumulate_im_2, cb_exp_max_diff_2, cb_l2_temp, Sq_chunk_t, vDHt);
-        DPRINT << "after l2 * P1\n";
+        // l2 * P2 -> cb_l2_temp (broadcast column 0 of P2)
+        mul_block_bcast_cols(cb_out_accumulate_im_2, cb_exp_max_diff, cb_l2_temp, Sq_chunk_t, vDHt);
+        DPRINT << "after l2 * P2\n";
 
         DPRINT << "START OF ADD\n";
-        // l_new = l1 * P2 + l2 * P1
+        // l_new = l1 * P1 + l2 * P2
         add_block_inplace<true>(cb_l1_temp, cb_l2_temp, out_chunk_tiles);
         DPRINT << "after l add\n";
 
