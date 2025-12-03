@@ -86,41 +86,58 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         # perf wise this makes sense because we dont need to permute to channel last after it
         # we dont need to permute to channel last because this is final output that goes to the host
 
-        # First config
-        final_upsample_mm_config1 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(5, 4),
-            in0_block_w=2,
-            out_subblock_h=4,
-            out_subblock_w=2,
-            out_block_h=4,
-            out_block_w=2,
-            per_core_M=4,
-            per_core_N=2,
-            fuse_batch=False,
-            fused_activation=None,
-            mcast_in0=True,
-            gather_in0=False,
-            num_global_cb_receivers=0,
-            untilize_out=False,
-        )
+        # Determine grid configuration based on device compute grid
+        # Use optimized configs for 5x4 grid (20 cores), auto-config for all other grids
+        compute_grid = device.compute_with_storage_grid_size()
+        use_optimized_config = compute_grid.x == 5 and compute_grid.y == 4
 
-        # Second config
-        final_upsample_mm_config2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(5, 4),
-            in0_block_w=2,
-            out_subblock_h=4,
-            out_subblock_w=2,
-            out_block_h=16,
-            out_block_w=2,
-            per_core_M=16,
-            per_core_N=2,
-            fuse_batch=False,
-            fused_activation=None,
-            mcast_in0=True,
-            gather_in0=False,
-            num_global_cb_receivers=0,
-            untilize_out=False,
-        )
+        if use_optimized_config:
+            logger.debug(f"Using optimized matmul configs for 5x4 grid (20 cores)")
+        else:
+            logger.debug(
+                f"Using auto-config for {compute_grid.x}x{compute_grid.y} grid ({compute_grid.x * compute_grid.y} cores)"
+            )
+
+        if use_optimized_config:
+            # Optimized configs for 5x4 grid (20 cores)
+            final_upsample_mm_config1 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(5, 4),
+                in0_block_w=2,
+                out_subblock_h=4,
+                out_subblock_w=2,
+                out_block_h=4,
+                out_block_w=2,
+                per_core_M=4,
+                per_core_N=2,
+                fuse_batch=False,
+                fused_activation=None,
+                mcast_in0=True,
+                gather_in0=False,
+                num_global_cb_receivers=0,
+                untilize_out=False,
+            )
+
+            final_upsample_mm_config2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(5, 4),
+                in0_block_w=2,
+                out_subblock_h=4,
+                out_subblock_w=2,
+                out_block_h=16,
+                out_block_w=2,
+                per_core_M=16,
+                per_core_N=2,
+                fuse_batch=False,
+                fused_activation=None,
+                mcast_in0=True,
+                gather_in0=False,
+                num_global_cb_receivers=0,
+                untilize_out=False,
+            )
+        else:
+            # Auto-config for all other grid sizes (e.g., 12x10 for 120 cores)
+            # TTNN will automatically select optimal configuration based on device capabilities
+            final_upsample_mm_config1 = None
+            final_upsample_mm_config2 = None
 
         self.final_upsample = TtBilinearUpsample(
             device,
