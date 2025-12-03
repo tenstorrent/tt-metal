@@ -11,6 +11,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
+#include "llk_assert.h"
 #include "llk_defs.h"
 
 namespace ckernel::packer
@@ -166,6 +167,7 @@ inline void packer_addr_counter_init()
 template <bool reconfiguring>
 inline void cache_exponential_section_sizes_in_gprs(const uint num_faces = 4, const bool partial_face = false)
 {
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP]  = (partial_face ? 1 : num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
     regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP8] = (1 + ((num_faces > 2) ? 2 : 0) + 16) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
 
@@ -221,6 +223,7 @@ inline void set_packer_strides(const uint pack_src_format, [[maybe_unused]] cons
 template <bool is_fp32_dest_acc_en>
 inline void set_packer_config(const uint pack_src_format, const uint pack_dst_format, const uint num_faces = 4, const bool partial_face = false)
 {
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     // Get pointer to registers for current state ID
     volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
 
@@ -389,6 +392,7 @@ inline void reconfig_packer_data_format(
     const uint num_faces    = 4,
     const bool partial_face = false)
 {
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     // Configure packers
     pack_config_u config;
     config.val[2] = 0; // Only need to modify word[2][15:0]
@@ -530,6 +534,7 @@ inline void configure_pack(
     const bool narrow_tile  = false,
     const uint relu_config  = 0)
 {
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     // Get pointer to registers for current state ID
     volatile uint* cfg = get_cfg_pointer();
 

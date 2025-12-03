@@ -11,6 +11,7 @@
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
 #include "cunpack_common.h"
+#include "llk_assert.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -94,12 +95,14 @@ inline void _llk_unpack_debug_dump_seek_(std::uint8_t offset)
 
 inline void _llk_unpack_config_tile_dim_srca_impl_(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xffff0000>(num_faces);
     config_unpacker_0_face_dim<true, p_setadc::UNP_A>(face_r_dim);
 }
 
 inline void _llk_unpack_config_tile_dim_srcb_impl_(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     const uint face_dim = face_r_dim * FACE_C_DIM;
     cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 16, 0xffff0000>(face_dim);
     cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1, 16, 0xffff0000>(num_faces);

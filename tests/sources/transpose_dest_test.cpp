@@ -30,7 +30,7 @@ void run_kernel()
     for (int i = 0; i < TILE_CNT; ++i)
     {
         _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            L1_ADDRESS(buffer_A[i]), UNPACK_TRANSPOSE_FACES, formats.unpack_src, formats.unpack_dst);
+            L1_ADDRESS(buffer_A[i]), false, formats.unpack_src, formats.unpack_dst);
         _llk_unpack_set_srcb_dummy_valid_();
     }
 }

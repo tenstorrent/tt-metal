@@ -10,6 +10,7 @@
 #include "ckernel_globals.h"
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
+#include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_pack_common.h"
 
@@ -39,6 +40,7 @@ inline void _llk_pack_untilize_mop_config_(
     [[maybe_unused]] std::uint32_t row_num_datums = TILE_C_DIM,
     const std::uint32_t tile_dst_offset           = 0)
 {
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     /*
     Outer loop iterates over the rows in the block, while the inner loop iterates
     over each tile in the block.
@@ -149,6 +151,7 @@ inline void _llk_pack_untilize_init_(
         // Changed to check against TILE_C_DIM instead of FACE_C_DIM until tt-metal#24095 is investigated.
         static_assert(row_num_datums < TILE_C_DIM, "row_num_datums must be set to less than TILE_C_DIM for narrow_row packing");
     }
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
     _llk_pack_untilize_configure_addrmod_<diagonal>();
 
@@ -201,6 +204,7 @@ inline void _llk_pack_untilize_(
     [[maybe_unused]] const std::uint32_t tile_dst_rt_offset = 0)
 {
     static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
     /*
     full_ct_dim represents the number of input tiles.

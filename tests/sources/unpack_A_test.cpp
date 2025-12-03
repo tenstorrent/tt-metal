@@ -30,8 +30,7 @@ void run_kernel()
 
     for (int i = 0; i < TILE_CNT; ++i)
     {
-        _llk_unpack_A_<BROADCAST_TYPE, ACC_TO_DEST, REUSE_DEST_TYPE, unpack_to_dest>(
-            L1_ADDRESS(buffer_A[i]), UNPACK_TRANSPOSE_FACES, formats.unpack_src, formats.unpack_dst);
+        _llk_unpack_A_<BROADCAST_TYPE, ACC_TO_DEST, REUSE_DEST_TYPE, unpack_to_dest>(L1_ADDRESS(buffer_A[i]), false, formats.unpack_src, formats.unpack_dst);
     }
 }
 

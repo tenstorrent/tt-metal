@@ -11,6 +11,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cmath_common.h"
+#include "llk_assert.h"
 #include "llk_math_common.h"
 
 using namespace ckernel;
@@ -22,6 +23,7 @@ template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastTyp
 inline void _llk_math_eltwise_unary_datacopy_(
     const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format, const std::uint32_t num_faces = 4)
 {
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     // For 32bit data, each half of DEST can take 16 tiles. Since dest offset is returned as if 16bit data are used, we need to
     // adjust it to offset in faces for 32bit data.
     std::uint32_t dest_base_offset_in_faces = get_dest_buffer_base() >> 5;
@@ -149,6 +151,7 @@ inline void eltwise_unary_configure_addrmod()
 template <DataCopyType type, bool is_fp32_dest_acc_en, BroadcastType bcast_type = BroadcastType::NONE, bool tilize = false, bool is_int_fpu_en = false>
 inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows, const uint num_faces, const uint dst_format)
 {
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     // always move 32x32 tile, packed as 16x16x4
 
     if constexpr (type == A2D)
@@ -236,6 +239,9 @@ inline void _llk_math_eltwise_unary_datacopy_init_(
     const std::uint32_t num_faces                                    = 4,
     const std::uint32_t dst_format                                   = 255)
 {
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(transpose_of_faces == 0, "transpose_of_faces: this parameter is unused");
+    LLK_ASSERT(within_face_16x16_transpose == 0, "within_face_16x16_transpose: this parameter is unused");
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>();
 
     if constexpr (type == A2D)

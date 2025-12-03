@@ -30,7 +30,7 @@ void run_kernel()
     {
         ZONE_SCOPED("INIT")
         _llk_unpack_AB_hw_configure_<is_fp32_dest_acc_en>(formats.unpack_src, formats.unpack_src, formats.unpack_dst, formats.unpack_dst, 8, false, 4);
-        _llk_unpack_AB_init_<>(FACE_R_DIM, TILE_NUM_FACES, false, false, dest_acc_en_input);
+        _llk_unpack_AB_init_<>(FACE_R_DIM, TILE_NUM_FACES, false, false);
         PROFILER_SYNC();
     }
     {

@@ -28,14 +28,15 @@ constexpr uint32_t buffer_B_tilized = 0x1f000;
 
 void run_kernel()
 {
-    int run = 0; // first L1-to-L1 run, we access the first set of formats_array in our array
+    const std::uint32_t block_ct_dim = is_blackhole ? 0 : BLOCK_CT_DIM;
+    int run                          = 0; // first L1-to-L1 run, we access the first set of formats_array in our array
     _llk_unpack_tilize_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(formats_array[run].unpack_src, formats_array[run].unpack_dst, FACE_R_DIM, 0, 4);
 
     _llk_unpack_tilize_init_(formats_array[run].unpack_src, formats_array[run].unpack_dst, 1, FACE_R_DIM, false);
-    _llk_unpack_tilize_(L1_ADDRESS(buffer_A[0]), 0, formats_array[run].unpack_src, 1, FACE_R_DIM, 4, false);
+    _llk_unpack_tilize_(L1_ADDRESS(buffer_A[0]), 0, formats_array[run].unpack_src, block_ct_dim, FACE_R_DIM, 4, false);
 
     _llk_unpack_tilize_init_(formats_array[run].unpack_src, formats_array[run].unpack_dst, 1, FACE_R_DIM, false);
-    _llk_unpack_tilize_(L1_ADDRESS(buffer_B[0]), 0, formats_array[run].unpack_src, 1, FACE_R_DIM, 4, false);
+    _llk_unpack_tilize_(L1_ADDRESS(buffer_B[0]), 0, formats_array[run].unpack_src, block_ct_dim, FACE_R_DIM, 4, false);
 
     t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(
         semaphore::PACK_DONE); // Unpacker waits on signal when packer will increment semaphore to 1 (waits while semaphore == 0), utilizing SEMWAIT.

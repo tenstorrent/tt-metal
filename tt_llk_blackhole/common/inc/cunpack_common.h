@@ -9,6 +9,7 @@
 
 #include "ckernel.h"
 #include "ckernel_globals.h"
+#include "llk_assert.h"
 
 namespace ckernel::unpacker
 {
@@ -214,6 +215,8 @@ inline void configure_unpack_AB(
     const uint unpA_num_faces       = 4,
     const uint unpB_num_faces       = 4)
 {
+    LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");
+    LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
     // Check that unpacker is done (all contexts freed up) before starting hw configuration
     wait_for_idle();
 

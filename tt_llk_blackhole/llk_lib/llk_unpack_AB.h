@@ -12,6 +12,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "llk_assert.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -19,6 +20,7 @@ using namespace ckernel::unpacker;
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces = false, const std::uint32_t num_faces = 4, const bool narrow_tile = false)
 {
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     static constexpr uint unpack_srca = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
@@ -89,6 +91,7 @@ inline void _llk_unpack_AB_hw_configure_(
     const std::uint32_t within_face_16x16_transpose = 0,
     const std::uint32_t num_faces                   = 4)
 {
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     constexpr bool is_row_pool  = false;
     constexpr bool stoch_rnd_en = (stoch_rnd_mode == StochRndType::All);
     constexpr bool fpu_srnd_en  = stoch_rnd_en || (stoch_rnd_mode == StochRndType::Fpu);
@@ -105,6 +108,8 @@ inline void _llk_unpack_AB_init_(
     const std::uint32_t transpose                    = 0,
     [[maybe_unused]] const std::uint32_t acc_to_dest = 0)
 {
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(acc_to_dest == 0, "acc_to_dest: this parameter is unused");
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose); // transpose within the face
 
     constexpr std::uint32_t UNP_SEL = p_setadc::UNP_AB;
@@ -116,6 +121,7 @@ inline void _llk_unpack_AB_init_(
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_(const std::uint32_t address_a, const std::uint32_t address_b, [[maybe_unused]] const bool transpose_of_faces = 0)
 {
+    LLK_ASSERT(!transpose_of_faces, "transpose_of_faces: this parameter is unused");
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset counters
 
     // Program srcA and srcB base addresses
