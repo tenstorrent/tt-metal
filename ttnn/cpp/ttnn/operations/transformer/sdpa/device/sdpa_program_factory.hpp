@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "sdpa_device_operation.hpp"
 #include "sdpa_device_operation_types.hpp"
 
 #include "ttnn/device_operation.hpp"
