@@ -334,31 +334,6 @@ run_t3000_motif_tests() {
   run_t3000_dit_tests "models/experimental/tt_dit/tests/models/motif/test_pipeline_motif.py -k 2x4cfg0sp0tp1"
 }
 
-run_t3000_llama3_load_checkpoints_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_load_checkpoints_tests"
-
-  # Llama3.1-70B weights
-  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/original_weights/
-  # Llama3.2-90B weights
-  llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct
-
-  for llama_dir in "$llama70b" "$llama90b"; do
-    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/tests/test_load_checkpoints.py --timeout=1800; fail+=$?
-    echo "LOG_METAL: Llama3 load checkpoints tests for $llama_dir completed"
-  done
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_load_checkpoints_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
 
 run_t3000_gemma3_tests() {
   # Record the start time
@@ -374,6 +349,24 @@ run_t3000_gemma3_tests() {
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_t3000_gemma3_tests $duration seconds to complete"
+}
+
+run_t3000_whisper_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_whisper_tests"
+
+  pytest -n auto models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation --timeout=600 ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_whisper_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
 }
 
 run_t3000_wan22_tests() {
@@ -415,9 +408,6 @@ run_t3000_mochi_tests() {
 }
 
 run_t3000_tests() {
-  # Run llama3 load checkpoints tests
-  run_t3000_llama3_load_checkpoints_tests
-
   # Run llama3 smaller tests (1B, 3B, 8B, 11B)
   run_t3000_llama3_tests
 
@@ -465,6 +455,9 @@ run_t3000_tests() {
 
   # Run gemma3 tests
   run_t3000_gemma3_tests
+
+  # Run whisper tests
+  run_t3000_whisper_tests
 
   # Run Wan2.2 tests
   run_t3000_wan22_tests

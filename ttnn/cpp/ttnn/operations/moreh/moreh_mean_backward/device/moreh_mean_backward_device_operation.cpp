@@ -49,7 +49,7 @@ MorehMeanBackwardOperation::spec_return_value_t MorehMeanBackwardOperation::comp
 
 MorehMeanBackwardOperation::tensor_return_value_t MorehMeanBackwardOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto& output_grad = tensor_args.output_grad;
+    const auto& output_grad = tensor_args.output_grad;
     if (tensor_args.input_grad.has_value()) {
         return tensor_args.input_grad.value();
     }

@@ -18,6 +18,7 @@
 #include "wormhole/wh_hal.hpp"
 #include "impl/context/metal_context.hpp"
 #include "hal_1xx_common.hpp"
+#include "impl/dispatch/dispatch_settings.hpp"
 
 namespace {
 
@@ -99,7 +100,6 @@ public:
         includes.push_back("tt_metal/hw/inc/tt-1xx/wormhole");
         includes.push_back("tt_metal/hw/inc/tt-1xx/wormhole/wormhole_b0_defines");
         includes.push_back("tt_metal/hw/inc/tt-1xx/wormhole/noc");
-        includes.push_back("tt_metal/lite_fabric/hw/inc/wormhole");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib");
 
@@ -289,6 +289,7 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->noc_multicast_encoding_func_ = [](uint32_t x_start, uint32_t y_start, uint32_t x_end, uint32_t y_end) {
         return NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end);
     };
+    this->noc_xy_pcie64_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_PCIE_ENCODING(x, y) >> 32; };
     this->noc_mcast_addr_start_x_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_START_X(addr); };
     this->noc_mcast_addr_start_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_START_Y(addr); };
     this->noc_mcast_addr_end_x_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_END_X(addr); };
@@ -338,6 +339,7 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     // https://github.com/tenstorrent/tt-isa-documentation/tree/main/WormholeB0/PCIExpressTile for more details.
     this->pcie_addr_lower_bound_ = 0x8'0000'0000ULL;
     this->pcie_addr_upper_bound_ = 0x8'FFFE'0000ULL - 1ULL;
+    this->supports_64_bit_pcie_addressing_ = false;
 
     this->noc_x_id_translate_table_ = {
         NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_0),
@@ -369,6 +371,10 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
         // No checks
         return true;
     };
+
+    this->max_pinned_memory_count_ = 12;
+    this->total_pinned_memory_size_ =
+        4ULL * 1024ULL * 1024ULL * 1024ULL - static_cast<uint64_t>(tt::tt_metal::DispatchSettings::MAX_HUGEPAGE_SIZE);
 }
 
 }  // namespace tt_metal

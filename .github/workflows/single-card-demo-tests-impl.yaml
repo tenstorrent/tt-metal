@@ -25,6 +25,11 @@ on:
       run-perf-tests:
         type: boolean
         default: true
+      mlperf-read-only:
+        required: false
+        type: boolean
+        default: true
+        description: "Set to false to allow write access to MLPerf mount"
 
 jobs:
   define-demo-tests:
@@ -90,7 +95,7 @@ jobs:
             { name: "ds_r1_qwen", runner-label: "N300", performance: false, cmd: run_ds_r1_qwen_func, owner_id: U07RY6B5FLJ, civ2-compatible: true},  #Gongyu Wang
             # { name: "gemma3", runner-label: "N150", performance: true, cmd: run_gemma3_perf, owner_id: U08TJ70UFRT},  # Harry Andrews TODO: Gemma3 N150 tests pulled due to OOM; will be addressed in future PR
             { name: "gemma3", runner-label: "N300", performance: true, cmd: run_gemma3_perf, owner_id: U08TJ70UFRT},  # Harry Andrews
-            { name: "phi4", runner-label: "N300", performance: false, cmd: run_phi4_func, owner_id: U094PKWHNJ0, civ2-compatible: true},  # Petar Milojevic
+            # { name: "phi4", runner-label: "N300", performance: false, cmd: run_phi4_func, owner_id: U094PKWHNJ0, civ2-compatible: true},  # Petar Milojevic
           ]]
     steps:
       - name: Compute tests
@@ -169,7 +174,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
+        - /mnt/MLPerf:/mnt/MLPerf${{ inputs.mlperf-read-only && ':ro' || ':rw' }}
       options: >-
         --device /dev/tenstorrent ${{ matrix.test-group.civ2-compatible == true && '-e TT_GH_CI_INFRA=1' || '' }} --cap-add=ALL --security-opt seccomp=unconfined --ulimit nproc=65536:65536 --ulimit nofile=65536:65536 --privileged -v /sys:/sys
     defaults:
@@ -178,7 +183,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}

@@ -22,6 +22,7 @@
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "common/tt_backend_api_types.hpp"
+#include <llrt/tt_cluster.hpp>
 
 namespace tt {
 namespace tt_metal {

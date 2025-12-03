@@ -12,7 +12,7 @@ namespace tt::tt_fabric {
 enum class FabricConfig : uint32_t {
     DISABLED = 0,
     FABRIC_1D = 1,           // 1D routing and no deadlock avoidance
-    FABRIC_1D_RING = 2,      // 1D routing and deadlock avoidance using datelines
+    FABRIC_1D_RING = 2,      // 1D routing and deadlock avoidance using bubble flow control
     FABRIC_2D = 3,           // 2D routing
     FABRIC_2D_TORUS_X = 4,   // 2D routing and deadlock avoidance along X axis
     FABRIC_2D_TORUS_Y = 5,   // 2D routing and deadlock avoidance along Y axis
@@ -25,6 +25,7 @@ enum class FabricConfig : uint32_t {
 enum class FabricTensixConfig : uint32_t {
     DISABLED = 0,  // not using tensix extension
     MUX = 1,       // using mux kernel as tensix extension
+    UDM = 2,       // in udm (unified datamovement) mode, we build both mux and relay kernels as tensix extension
 };
 
 // Unified Datamovement knob for configuring fabric with different parameters
