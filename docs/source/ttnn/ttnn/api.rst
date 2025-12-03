@@ -15,8 +15,6 @@ Device
    ttnn.synchronize_device
    ttnn.SetDefaultDevice
    ttnn.GetDefaultDevice
-   ttnn.format_input_tensor
-   ttnn.format_output_tensor
    ttnn.pad_to_tile_shape
 
 Memory Config
@@ -114,6 +112,7 @@ Pointwise Unary
    ttnn.asinh
    ttnn.atan
    ttnn.atanh
+   ttnn.bitcast
    ttnn.bitwise_not
    ttnn.bitwise_left_shift
    ttnn.bitwise_right_shift
