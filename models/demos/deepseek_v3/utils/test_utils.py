@@ -65,22 +65,21 @@ def get_quant_scale(tensor: torch.Tensor, block_shape: Sequence[int]) -> torch.T
 def dequantize_state_dict(state_dict, hf_config, dtype=torch.bfloat16):
     dequantized_state_dict = {}
 
-    for name, tensor in state_dict.items():
-        if name.endswith("_scale_inv"):
-            continue
+    # Avoid materializing any unneeded tensors by iterating over keys and filtering
+    for name in {k for k in state_dict.keys() if not k.endswith("_scale_inv")}:
+        tensor = state_dict[name]
+        if tensor is None:
+            raise ValueError(f"Expected tensor {name} to exist in state_dict but it was None")
 
-        if tensor is not None:
-            # Look for corresponding scale tensor
-            scale_name = name + "_scale_inv"
-            if scale_name in state_dict:
-                scale_tensor = state_dict[scale_name]
-                # Dequantize using the scale
-                dequantized_tensor = dequantize(
-                    tensor, scale_tensor, hf_config.quantization_config["weight_block_size"]
-                )
-                dequantized_state_dict[name] = dequantized_tensor.to(dtype)
-            else:
-                dequantized_state_dict[name] = tensor.to(dtype)
+        # Look for corresponding scale tensor
+        scale_name = name + "_scale_inv"
+        if scale_name in state_dict:
+            scale_tensor = state_dict[scale_name]
+            # Dequantize using the scale
+            dequantized_tensor = dequantize(tensor, scale_tensor, hf_config.quantization_config["weight_block_size"])
+            dequantized_state_dict[name] = dequantized_tensor.to(dtype)
+        else:
+            dequantized_state_dict[name] = tensor.to(dtype)
 
     return dequantized_state_dict
 
