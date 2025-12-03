@@ -37,14 +37,14 @@
 #include "profiler_state_manager.hpp"
 #include "tools/profiler/noc_event_profiler_utils.hpp"
 #include "tracy/Tracy.hpp"
-#include "tt-metalium/profiler_types.hpp"
+#include "profiler_types.hpp"
 #include "common/tt_backend_api_types.hpp"
-#include "impl/context/metal_context.hpp"
+#include "context/metal_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/arch/wormhole_implementation.hpp>
-#include "tt_metal/impl/device/device_manager.hpp"
+#include "device/device_manager.hpp"
 #include "tt_cluster.hpp"
 #include "tools/profiler/perf_counters.hpp"
 

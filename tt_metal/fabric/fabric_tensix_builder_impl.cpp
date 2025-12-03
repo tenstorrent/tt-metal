@@ -5,22 +5,16 @@
 #include "fabric_tensix_builder_impl.hpp"
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <hal.hpp>
+#include <tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
 
-#include "impl/context/metal_context.hpp"
-#include "llrt/core_descriptor.hpp"
-#include "tt_metal/fabric/fabric_context.hpp"
-#include "tt_metal/fabric/fabric_builder_context.hpp"
-#include "tt_metal/fabric/fabric_host_utils.hpp"
-#include "tt_metal/fabric/fabric_router_builder.hpp"
-#include "dispatch/kernel_config/relay_mux.hpp"
-#include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
-#include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
-#include "tt_align.hpp"
-#include <bit>
-#include <algorithm>
+#include "context/metal_context.hpp"
+#include "fabric_context.hpp"
+#include "fabric_builder_context.hpp"
+#include "fabric_host_utils.hpp"
+#include "fabric_router_builder.hpp"
+#include "builder/fabric_static_sized_channels_allocator.hpp"
 #include <utility>
 
 namespace tt::tt_fabric {

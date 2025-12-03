@@ -12,24 +12,24 @@
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_metal.hpp>
-#include "tt_metal/common/executor.hpp"
-#include "impl/context/metal_context.hpp"
+#include "common/executor.hpp"
+#include "context/metal_context.hpp"
 
-#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <experimental/fabric/control_plane.hpp>
 
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/topology.hpp"
 #include "dispatch/system_memory_manager.hpp"
 
-#include <tt-metalium/tt_metal_profiler.hpp>
+#include <tt_metal_profiler.hpp>
 #include "profiler/profiler_state.hpp"
 #include "profiler/profiler_state_manager.hpp"
 
-#include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/experimental/fabric/fabric.hpp>
-#include "tt_metal/fabric/fabric_context.hpp"
+#include <experimental/fabric/fabric_types.hpp>
+#include <experimental/fabric/fabric.hpp>
+#include "fabric/fabric_context.hpp"
 
-#include <tt-metalium/device.hpp>
+#include <device.hpp>
 #include "device_impl.hpp"
 
 using namespace tt::tt_metal;

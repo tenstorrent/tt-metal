@@ -7,9 +7,9 @@
 #include <vector>
 #include <llrt/rtoptions.hpp>
 #include <impl/allocator/allocator_types.hpp>
-#include "tt-metalium/experimental/fabric/routing_table_generator.hpp"
+#include "experimental/fabric/routing_table_generator.hpp"
 #include "llrt/hal/generated/dev_msgs.hpp"
-#include "tt_metal/hostdevcommon/api/hostdevcommon/common_values.hpp"
+#include "hostdevcommon/api/hostdevcommon/common_values.hpp"
 
 namespace tt::tt_fabric {
 class ControlPlane;

@@ -21,7 +21,6 @@
 #include <memory>
 #include <optional>
 #include <source_location>
-#include <unordered_map>
 #include <utility>
 
 #include "allocator.hpp"
@@ -33,34 +32,29 @@
 #include "mesh_config.hpp"
 #include "mesh_trace.hpp"
 #include "profiler_types.hpp"
-#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include <experimental/fabric/routing_table_generator.hpp>
 #include "shape_base.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
-#include "tt_metal/common/thread_pool.hpp"
-#include "tt_metal/impl/device/device_manager.hpp"
-#include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include "tt_metal/distributed/fd_mesh_command_queue.hpp"
-#include "tt_metal/distributed/sd_mesh_command_queue.hpp"
+#include "common/thread_pool.hpp"
+#include "device/device_manager.hpp"
+#include <experimental/fabric/control_plane.hpp>
+#include <experimental/fabric/fabric_types.hpp>
+#include "distributed/fd_mesh_command_queue.hpp"
+#include "distributed/sd_mesh_command_queue.hpp"
 #include "tracy/Tracy.hpp"
-#include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
-#include "tt_metal/distributed/distributed_coordinate_translator.hpp"
-
-#include "llrt/hal.hpp"
+#include "tools/profiler/tt_metal_tracy.hpp"
 #include <env_lib.hpp>
 
-#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
-#include "tt_metal/impl/debug/inspector/inspector.hpp"
-#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
-#include "dispatch/launch_message_ring_buffer_state.hpp"
+#include "allocator/l1_banking_allocator.hpp"
+#include "debug/inspector/inspector.hpp"
+#include "sub_device/sub_device_manager.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include <umd/device/types/xy_pair.hpp>
-#include "impl/context/metal_context.hpp"
-#include "impl/dispatch/system_memory_manager.hpp"
+#include "context/metal_context.hpp"
+#include "dispatch/system_memory_manager.hpp"
 #include <llrt/tt_cluster.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <llrt/tt_cluster.hpp>
 
 namespace tt {
 namespace tt_metal {

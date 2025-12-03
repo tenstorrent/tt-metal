@@ -6,7 +6,6 @@
 
 #include <host_api.hpp>
 #include <tt_metal.hpp>
-#include <array>
 #include <map>
 #include <string>
 #include <variant>
@@ -22,16 +21,15 @@
 #include "dispatch_s.hpp"
 #include "hal_types.hpp"
 #include "prefetch.hpp"
-#include "impl/context/metal_context.hpp"
-#include "impl/debug/inspector/inspector.hpp"
-#include "rtoptions.hpp"
+#include "context/metal_context.hpp"
+#include "debug/inspector/inspector.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include "dispatch/system_memory_manager.hpp"
 
-#include "tt_metal/impl/device/device_manager.hpp"
-#include "tt_metal/fabric/fabric_context.hpp"
-#include <impl/dispatch/dispatch_query_manager.hpp>
-#include <impl/dispatch/dispatch_mem_map.hpp>
+#include "device/device_manager.hpp"
+#include "fabric/fabric_context.hpp"
+#include <dispatch/dispatch_query_manager.hpp>
+#include <dispatch/dispatch_mem_map.hpp>
 
 using namespace tt::tt_metal;
 

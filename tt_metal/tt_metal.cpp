@@ -44,19 +44,19 @@
 #include "lightmetal_binary.hpp"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt_metal_profiler.hpp>
+#include <program.hpp>
 #include "program/program_impl.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "tracy/Tracy.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <tt_stl/enum.hpp>
 #include "fabric/hw/inc/fabric_routing_mode.h"
-#include <tt-metalium/graph_tracking.hpp>
+#include <graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "get_platform_architecture.hpp"
 #include "common/tt_backend_api_types.hpp"
-#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <experimental/fabric/control_plane.hpp>
 
 namespace tt {
 

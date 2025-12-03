@@ -4,13 +4,12 @@
 
 #include "data.hpp"
 #include <stdexcept>
-#include "impl/debug/inspector/rpc_server_controller.hpp"
-#include "impl/debug/inspector/logger.hpp"
-#include "impl/dispatch/system_memory_manager.hpp"
-#include "impl/context/metal_context.hpp"
+#include "rpc_server_controller.hpp"
+#include "logger.hpp"
+#include "context/metal_context.hpp"
 #include "distributed/mesh_workload_impl.hpp"
 #include "jit_build/build_env_manager.hpp"
-#include "tt_metal/impl/device/device_manager.hpp"
+#include "device/device_manager.hpp"
 #include <tt_stl/reflection.hpp>
 #include <llrt/tt_cluster.hpp>
 

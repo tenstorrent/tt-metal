@@ -35,30 +35,29 @@
 #include "program/program_impl.hpp"
 #include "core_coord.hpp"
 #include "device.hpp"
-#include "impl/context/metal_context.hpp"
+#include "context/metal_context.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "hal_types.hpp"
-#include "jit_build/build.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "metal_soc_descriptor.h"
-#include "tt-metalium/program.hpp"
+#include "program.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
-#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
-#include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
-#include "tt_metal/impl/dispatch/topology.hpp"
-#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
+#include "allocator/l1_banking_allocator.hpp"
+#include "dispatch/hardware_command_queue.hpp"
+#include "dispatch/topology.hpp"
+#include "sub_device/sub_device_manager.hpp"
 #include "tt_metal/fabric/fabric_init.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
-#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <experimental/fabric/control_plane.hpp>
 #include <umd/device/coordinates/coordinate_manager.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <impl/debug/watcher_server.hpp>
-#include <impl/dispatch/dispatch_mem_map.hpp>
+#include <debug/watcher_server.hpp>
+#include <dispatch/dispatch_mem_map.hpp>
 
 namespace tt {
 

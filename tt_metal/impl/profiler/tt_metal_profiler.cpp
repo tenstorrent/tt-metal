@@ -34,7 +34,7 @@
 #include "data_types.hpp"
 #include "hal_types.hpp"
 #include "hostdevcommon/profiler_common.h"
-#include "impl/context/metal_context.hpp"
+#include "context/metal_context.hpp"
 #include "kernel_types.hpp"
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
@@ -45,12 +45,12 @@
 #include "profiler_state.hpp"
 #include "profiler_types.hpp"
 #include "profiler_state_manager.hpp"
-#include "tt-metalium/program.hpp"
-#include "tt_metal/impl/device/device_manager.hpp"
+#include "program.hpp"
+#include "device/device_manager.hpp"
 #include "rtoptions.hpp"
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyTTDevice.hpp"
-#include <tt-metalium/distributed.hpp>
+#include <distributed.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
