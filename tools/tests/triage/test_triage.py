@@ -75,11 +75,11 @@ def cause_hang_with_app(request):
         proc.terminate()
         try:
             proc.wait(timeout=5)
+            # Pytest will only display this if test fails
+            print_process_output(proc)
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
-
-        print_process_output(proc)
 
         # Reset the device state after the hang if set in environment
         if os.environ.get("TT_METAL_RESET_DEVICE_AFTER_HANG", "0") == "1":
