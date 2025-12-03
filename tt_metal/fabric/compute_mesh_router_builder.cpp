@@ -61,7 +61,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     bool downstream_is_tensix_builder = will_create_tensix_builder && fabric_tensix_extension_mux_mode;
 
     // Get the appropriate EDM config from builder context
-    auto tensix_config_for_lookup = will_create_tensix_builder ? FabricTensixConfig::MUX : FabricTensixConfig::DISABLED;
+    auto tensix_config_for_lookup = will_create_tensix_builder ? fabric_tensix_config : FabricTensixConfig::DISABLED;
     const auto& edm_config = builder_context.get_fabric_router_config(tensix_config_for_lookup, eth_direction);
 
     // Create channel mapping EARLY (needed for computing injection flags)
