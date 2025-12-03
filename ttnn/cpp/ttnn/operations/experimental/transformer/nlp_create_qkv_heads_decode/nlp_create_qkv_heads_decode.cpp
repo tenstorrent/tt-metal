@@ -14,11 +14,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsDecodeOperati
     const Tensor& input_tensor,
     const uint32_t num_heads,
     const std::optional<const uint32_t> num_kv_heads,
+    std::optional<std::array<Tensor, 3>>& optional_output_tensors,
     const std::optional<const bool> overlap_qk_coregrid,
     const std::optional<const Tensor>& batch_offset,
     const std::optional<const uint32_t> slice_size,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<std::array<Tensor, 3>> optional_output_tensors) {
+    const std::optional<MemoryConfig>& memory_config) {
     const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_heads);
     const bool overlap_qk_coregrid_val = input_tensor.is_sharded() ? overlap_qk_coregrid.value_or(true) : true;
     // Check if input is on subcoregrids
