@@ -727,7 +727,9 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             compute_cb_l,  // Round 1: network data (l2) -> compute_cb_l
             compute_cb_s,  // Round 1: network data (s2) -> compute_cb_s
             compute_cb_m,
-            input_num_tiles};  // Round 1: network data (m2) -> compute_cb_m
+            input_num_tiles,
+            input_page_size_bytes,
+            packet_size_bytes};
         reader_ct_args[0] = reader_ct_args.size();
 
         fabric_mux_ct_args(
@@ -742,7 +744,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             all_cores,
             tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
-        writer_ct_args = {compute_out_cb_l, compute_out_cb_s, compute_out_cb_m, input_num_tiles};
+        writer_ct_args = {compute_out_cb_l, compute_out_cb_s, compute_out_cb_m, input_num_tiles, input_page_size_bytes};
         writer_kernel = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/root_receive_writer_kernel.cpp",
@@ -762,7 +764,9 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             compute_cb_2_l,
             compute_cb_2_s,
             compute_cb_2_m,
-            input_num_tiles};
+            input_num_tiles,
+            input_page_size_bytes,
+            packet_size_bytes};
         reader_ct_args[0] = reader_ct_args.size();
 
         fabric_mux_ct_args(
@@ -785,7 +789,9 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             packet_header_cb_id_2,
             packet_cb_id_2,
             l1_alignment,
-            input_num_tiles};
+            input_num_tiles,
+            input_page_size_bytes,
+            packet_size_bytes};
         writer_ct_args[0] = writer_ct_args.size();
 
         fabric_mux_ct_args(
@@ -859,12 +865,6 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     CoreCoord termination_master = CoreCoord(0, 0);
 
     for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
-        // CoreCoord virtual_core = link_idx == 0 ? mesh_device->worker_core_from_logical_core(CoreCoord(0, 0))
-        //                                        : mesh_device->worker_core_from_logical_core(CoreCoord(1, 0));
-        // CoreCoord opposite_core_coord = link_idx == 0 ? mesh_device->worker_core_from_logical_core(CoreCoord(0, 1))
-        //                                               : mesh_device->worker_core_from_logical_core(CoreCoord(1, 1));
-        CoreCoord virtual_core = CoreCoord(0, 0);
-        CoreCoord opposite_core_coord = CoreCoord(0, 0);
         uint32_t start_ix = link_idx == 0 ? 0 : 2;
         if (link_idx == 1) {
             termination_master = CoreCoord(1, 0);
@@ -969,24 +969,11 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                     intermediate_cb_l,
                     intermediate_cb_s,
                     intermediate_cb_m,
-                    0,                  // page_idx_start,
-                    input_l_num_pages,  // page_idx_end,
-                    num_pages_per_packet,
                     intermediate_tensor_l.buffer()->address(),
-                    // intermediate_tensor_sm.buffer()->address(),
-                    packet_size_bytes,
-                    input_page_size_bytes,
-                    num_page_segments,
                     semaphore_round1.address(),
                     semaphore_round2.address(),
-                    1,  // num_hops,
                     core_noc_x,
-                    core_noc_y,
-                    virtual_core.x,
-                    virtual_core.y,
-                    opposite_core_coord.x,
-                    opposite_core_coord.y,
-                };
+                    core_noc_y};
                 printf("before adding fabric rt args\n");
 
                 // first receiving from device on the left
@@ -1030,13 +1017,11 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                 printf("input_page_size_bytes: %u\n", input_page_size_bytes);
                 writer_runtime_args = {
                     intermediate_cb_l,
-                    input_l_num_pages,
                     intermediate_cb_s,
                     intermediate_cb_m,
                     output_tensor_l.buffer()->address(),
                     output_tensor_s.buffer()->address(),
                     output_tensor_m.buffer()->address(),
-                    input_page_size_bytes,
                     core_noc_x,
                     core_noc_y};
                 printf("is root device end of setting rt args\n");
@@ -1050,21 +1035,10 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                     input_tensor_l.buffer()->address(),
                     input_tensor_s.buffer()->address(),
                     input_tensor_m.buffer()->address(),
-                    0,  // page_idx_start,
-                    input_l_num_pages,
-                    num_pages_per_packet,
                     intermediate_tensor_l.buffer()->address(),
-                    // intermediate_tensor_sm.buffer()->address(),
-                    packet_size_bytes,
-                    input_page_size_bytes,
-                    num_page_segments,
                     semaphore_round1.address(),
-                    1,  // num_hops,
                     core_noc_x,
-                    core_noc_y,
-                    virtual_core.x,
-                    virtual_core.y,
-                };
+                    core_noc_y};
 
                 fabric_mux_rt_args(
                     1,  // first forward
@@ -1080,18 +1054,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel, c, reader_runtime_args);
                 writer_runtime_args = {
-                    intermediate_tensor_l.buffer()->address(),
-                    // intermediate_tensor_sm.buffer()->address(),
-                    0,                  // page_idx_start,
-                    input_l_num_pages,  // page_idx_end,
-                    input_page_size_bytes,
-                    packet_size_bytes,
-                    num_page_segments,
-                    semaphore_round2.address(),
-                    core_noc_x,
-                    core_noc_y,
-                    opposite_core_coord.x,
-                    opposite_core_coord.y};
+                    intermediate_tensor_l.buffer()->address(), semaphore_round2.address(), core_noc_x, core_noc_y};
                 fabric_mux_rt_args(
                     0,  // then backward
                     c == termination_master,

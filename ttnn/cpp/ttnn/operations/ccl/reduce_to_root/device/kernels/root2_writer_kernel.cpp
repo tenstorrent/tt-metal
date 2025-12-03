@@ -43,6 +43,8 @@ void kernel_main() {
     constexpr uint32_t packet_cb_id = get_compile_time_arg_val(5);
     constexpr uint32_t alignment = get_compile_time_arg_val(6);
     constexpr uint32_t input_num_tiles = get_compile_time_arg_val(7);
+    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(8);
+    constexpr uint32_t payload_size_bytes = get_compile_time_arg_val(9);
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
@@ -60,26 +62,19 @@ void kernel_main() {
     DPRINT << "num mux clients: " << (uint32_t)num_mux_clients << "\n";
 
     const uint32_t receiver_base_address = get_arg_val<uint32_t>(0);
-    const uint32_t page_idx_start = get_arg_val<uint32_t>(1);
-    const uint32_t page_idx_end = get_arg_val<uint32_t>(2);
-    const uint8_t dst_num_hops = 1;  // get_arg_val<uint32_t>(3);
-    const auto page_size_bytes = get_arg_val<uint32_t>(3);
-    const auto payload_size_bytes = get_arg_val<uint32_t>(4);
-    // send a single packet for l tensor (8 pages)
-    // send a single packet for m and s tensors (2 pages: 1 each)
-    const uint32_t max_pages_per_packet_l = input_num_tiles;  // 8;  // get_arg_val<uint32_t>(6); HERE
-    const uint32_t max_pages_per_packet_ms = 2;
-    const auto page_segments = get_arg_val<uint32_t>(5);
-    const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(6);
-    const uint32_t core_noc_x = get_arg_val<uint32_t>(7);
-    const uint32_t core_noc_y = get_arg_val<uint32_t>(8);
-    const uint32_t out_ready_sem_x = get_arg_val<uint32_t>(9);
-    const uint32_t out_ready_sem_y = get_arg_val<uint32_t>(10);
+    const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(1);
+    const uint32_t core_noc_x = get_arg_val<uint32_t>(2);
+    const uint32_t core_noc_y = get_arg_val<uint32_t>(3);
+    const uint32_t page_idx_start = 0;
+    const uint32_t page_idx_end = input_num_tiles;
+    const uint8_t dst_num_hops = 1;
+
+    const uint32_t max_pages_per_packet_l = input_num_tiles;
 
     const uint32_t aligned_page_size_bytes = round_up(page_size_bytes, alignment);
 
     // reusing the last arg for fabric setup, therefore index overlaps.
-    size_t arg_idx = 11;
+    size_t arg_idx = 4;
     uint32_t chunk_size = input_num_tiles;
 
     bool is_forward = get_arg_val<uint32_t>(arg_idx++) == 1;
@@ -167,7 +162,7 @@ void kernel_main() {
 
     // initial packet size
     uint32_t curr_pages_per_packet = std::min(max_pages_per_packet_l, page_idx_end - page_idx_start);
-    uint32_t packet_idx = 0;  // page_idx_start / max_pages_per_packet_l;
+    uint32_t packet_idx = 0;
 
     DPRINT << "before noc semaphore wait\n";
     // wait for receiver to signal it is ready

@@ -93,28 +93,25 @@ void kernel_main() {
     constexpr uint32_t compute_cb_s = get_compile_time_arg_val(8);
     constexpr uint32_t compute_cb_m = get_compile_time_arg_val(9);
     constexpr uint32_t input_num_tiles = get_compile_time_arg_val(10);
+    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(11);
+    constexpr uint32_t packet_size_bytes = get_compile_time_arg_val(12);
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
     const uint32_t src_addr_l = get_arg_val<uint32_t>(0);
     const uint32_t src_addr_s = get_arg_val<uint32_t>(1);
     const uint32_t src_addr_m = get_arg_val<uint32_t>(2);
-    const auto page_idx_start = get_arg_val<uint32_t>(3);
-    const auto page_idx_end = get_arg_val<uint32_t>(4);
-    const auto max_pages_per_packet = get_arg_val<uint32_t>(5);
-    const auto intermediate_base_addr = get_arg_val<uint32_t>(6);
-    const auto packet_size_bytes = get_arg_val<uint32_t>(7);
-    const auto page_size_bytes = get_arg_val<uint32_t>(8);
-    const auto page_segments = get_arg_val<uint32_t>(9);
-    const uint32_t sender_semaphore_addr = get_arg_val<uint32_t>(10);
-    const uint8_t sender_num_hops = get_arg_val<uint32_t>(11);  // always 1
-    const uint32_t core_noc_x = get_arg_val<uint32_t>(12);
-    const uint32_t core_noc_y = get_arg_val<uint32_t>(13);
-    const uint32_t out_ready_sem_x = get_arg_val<uint32_t>(14);
-    const uint32_t out_ready_sem_y = get_arg_val<uint32_t>(15);
+    const auto intermediate_base_addr = get_arg_val<uint32_t>(3);
+    const uint32_t sender_semaphore_addr = get_arg_val<uint32_t>(4);
+    const uint32_t core_noc_x = get_arg_val<uint32_t>(5);
+    const uint32_t core_noc_y = get_arg_val<uint32_t>(6);
+    const auto page_idx_start = 0;
+    const auto page_idx_end = input_num_tiles;
+    const auto max_pages_per_packet = input_num_tiles;
+    const uint8_t sender_num_hops = 1;
 
     // reusing the last arg for fabric setup, therefore index overlaps.
-    size_t arg_idx = 16;
+    size_t arg_idx = 7;
 
     const uint32_t new_packet_size_bytes = packet_size_bytes + 2 * align(page_size_bytes, alignment);
 
