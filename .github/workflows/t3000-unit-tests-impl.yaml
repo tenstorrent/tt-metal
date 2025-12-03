@@ -30,10 +30,9 @@ jobs:
       - name: Generate Matrix
         id: set-matrix
         run: |
-          FULL_MATRIX=$(jq -n -c '[
+          ALWAYS_RUN=$(jq -n '[
             {
               "name": "t3k ttmetal tests",
-              "model": "ttmetal",
               "arch": "wormhole_b0",
               "cmd": "run_t3000_ttmetal_tests",
               "timeout": 40,
@@ -41,7 +40,6 @@ jobs:
             },
             {
               "name": "t3k ttnn tests",
-              "model": "ttnn",
               "arch": "wormhole_b0",
               "cmd": "run_t3000_ttnn_tests",
               "timeout": 45,
@@ -49,12 +47,14 @@ jobs:
             },
             {
               "name": "t3k tt_metal multiprocess tests",
-              "model": "tt_metal multiprocess",
               "arch": "wormhole_b0",
               "cmd": "run_t3000_tt_metal_multiprocess_tests",
               "timeout": 15,
               "owner_id": "U03NG0A5ND7" # Aditya Saigal
-            },
+            }
+            ]')
+
+          MODEL_TESTS=$(jq -n '[
             {
               "name": "t3k falcon7b tests",
               "model": "falcon7b",
@@ -179,13 +179,18 @@ jobs:
             }
           ]')
 
+          echo "[INFO] Selected model: ${{ inputs.model }}"
           # Filter matrix based on model selection
           if [ "${{ inputs.model }}" = "all" ]; then
-            echo "matrix=$FULL_MATRIX" >> $GITHUB_OUTPUT
-          else
-            FILTERED_MATRIX=$(echo "$FULL_MATRIX" | jq --arg model "${{ inputs.model }}" '[.[] | select(.model == $model)]' --compact-output)
-            echo "matrix=$FILTERED_MATRIX" >> $GITHUB_OUTPUT
+              MATRIX=$(jq -n -c --argjson MT "$MODEL_TESTS" --argjson AR "$ALWAYS_RUN" '$MT + $AR')
+            else
+              CHOSEN_MODEL=$(echo "$MODEL_TESTS" | jq --arg model "${{ inputs.model }}" '[.[] | select(.model == $model)]')
+              MATRIX=$(jq -n -c --argjson CM "$CHOSEN_MODEL" --argjson AR "$ALWAYS_RUN" '$CM + $AR')
           fi
+
+          echo "[INFO] Tests to be run:"
+          echo $MATRIX | jq '.[].name'
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
 
   t3000-unit-tests:
     needs: generate-matrix

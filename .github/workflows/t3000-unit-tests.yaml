@@ -10,9 +10,6 @@ on:
         type: choice
         options:
           - all
-          - ttmetal
-          - ttnn
-          - tt_metal multiprocess
           - falcon7b
           - falcon40b
           - llama3-small
