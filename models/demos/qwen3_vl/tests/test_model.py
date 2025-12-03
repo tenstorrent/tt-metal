@@ -9,7 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.qwen3_vl.reference.functional import qwen2_5_vision_transformer_preprocess
+from models.demos.qwen3_vl.reference.functional import qwen3_vision_transformer_preprocess
 from models.demos.qwen3_vl.tt.model import VisionTransformer
 from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
 from models.tt_transformers.tt.load_checkpoints import (
@@ -39,12 +39,12 @@ from models.tt_transformers.tt.load_checkpoints import (
     "seq_len, image_grid_thw",
     [
         (
-            42952,
-            torch.tensor([[1, 236, 182]]),
+            32960,
+            torch.tensor([[1, 206, 160]]),
         ),  # 300 DPI scanned doc with Letter paper (8.5x11 inches) has resolution around 2550x3300
         (
-            14308,
-            torch.tensor([[1, 98, 146]]),
+            11008,
+            torch.tensor([[1, 86, 128]]),
         ),  # 240 DPI scanned doc with Letter paper (8.5x11 inches) has resolution around 2048x1300
     ],
     ids=["300dpi", "240dpi"],
@@ -72,7 +72,7 @@ def test_vision_model_inference(
 
     # Example inputs for http://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg
     # pixel_values are produced by Qwen2_5_VLImageProcessor, these come from the above img
-    pt_pixel_values = torch.randn([seq_len, 1176]) * 0.8320 + 1.2969  # std and mean from above img
+    pt_pixel_values = torch.randn([seq_len, 1536]) * 0.8320 + 1.2969  # std and mean from above img
     ref_seq_len = image_grid_thw[0, 1] * image_grid_thw[0, 2]
     seq_len = ((ref_seq_len // 2048) + 1) * 2048
 
@@ -96,22 +96,12 @@ def test_vision_model_inference(
     state_dict_prefix = model_args.get_state_dict_prefix("VisionTransformer")
     state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
 
-    # Initialize TT model
-    tt_model = VisionTransformer(
-        args=model_args,
-        state_dict=state_dict,
-        weight_cache_path=model_args.weight_cache_path(dtype),
-        dtype=dtype,
-    )
-
     # Get the necessary preprocessing for vision model
-    cu_seqlens, cu_window_seqlens, position_embeddings, window_index = qwen2_5_vision_transformer_preprocess(
+    cu_seqlens, position_embeddings = qwen3_vision_transformer_preprocess(
         seq_len=ref_seq_len,
         grid_thw=image_grid_thw,
         head_dim=model_args.head_dim,
         spatial_merge_size=model_args.hf_config.vision_config.spatial_merge_size,
-        window_size=model_args.hf_config.vision_config.window_size,
-        patch_size=model_args.hf_config.vision_config.patch_size,
     )
 
     # Pre-compute the rotational embedding matrix and send to device
@@ -149,44 +139,55 @@ def test_vision_model_inference(
 
     # Prepare input tensor for the TT model
     patch_input = reference_model.patch_embed(pt_pixel_values)  # Use ref model for conv3d for now
-    tt_input = tt_model.prepare_input(patch_input, window_index)
-
-    # Run TT model
-    tt_out = tt_model(
-        tt_input,
-        unpadded_seq_len=ref_seq_len,
-        cu_seqlens=ttnn.from_torch(cu_seqlens, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device),
-        cu_window_seqlens=ttnn.from_torch(
-            cu_window_seqlens,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-        ),
-        rot_mats=rot_mats,
-    )
+    pos_embeds = reference_model.fast_pos_embed_interpolate(image_grid_thw)
+    patch_input = patch_input + pos_embeds
+    tt_input = tt_model.prepare_input(patch_input, seq_len)
 
     # Run reference model
-    reference_output = reference_model(pt_pixel_values, image_grid_thw)
+    reference_output, reference_deepstack_visual_embeds = reference_model(pt_pixel_values, image_grid_thw)
+
+
+    # Run TT model
+    tt_out, tt_deepstack_visual_embeds = tt_model(
+        tt_input,
+        unpadded_seq_len=ref_seq_len,
+        rot_mats=rot_mats,
+    )
 
     tt_out = ttnn.to_torch(
         tt_out,
         mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1),
     )
-    tt_output_torch = tt_out[:, 0:1, :, : model_args.hf_config.vision_config.out_hidden_size].squeeze(0).squeeze(0)
 
-    # Post-process in torch
-    tt_output_torch = tt_output_torch[torch.argsort(window_index), :]
+    tt_deepstack_visual_embeds = [ttnn.to_torch(
+        tt_deepstack_visual_embeds[i], 
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1),
+    ) for i in range(len(tt_deepstack_visual_embeds))]
+
+    tt_output_torch = tt_out[:, 0:1, :, : model_args.hf_config.vision_config.out_hidden_size].squeeze(0).squeeze(0)
+    tt_deepstack_visual_embeds_torch = [
+        tt_deepstack_visual_embeds[i][:, 0:1, :, : model_args.hf_config.vision_config.out_hidden_size].squeeze(0).squeeze(0) 
+        for i in range(len(tt_deepstack_visual_embeds))]
 
     # Compare outputs
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
     logger.info(comp_allclose(reference_output, tt_output_torch))
-    logger.info(f"PCC: {pcc_message}")
+    logger.info(f"PCC of output: {pcc_message}")
+    deepstack_visual_embeds_passing = True
+    for i in range(len(tt_deepstack_visual_embeds)):
+        deepstack_visual_embeds_passing_i, pcc_message = comp_pcc(reference_deepstack_visual_embeds[i], tt_deepstack_visual_embeds_torch[i], pcc)
+        deepstack_visual_embeds_passing &= deepstack_visual_embeds_passing_i
+        logger.info(comp_allclose(reference_deepstack_visual_embeds[i], tt_deepstack_visual_embeds_torch[i]))
+        logger.info(f"PCC of deepstack visual embeds {i}: {pcc_message}")
 
     # Generate test summary message
     test_desc = f"Vision Transformer Model ({num_layers} layers)"
 
-    if passing:
+    if passing and deepstack_visual_embeds_passing:
         logger.info(f"{test_desc} Passed!")
-    else:
-        logger.warning(f"{test_desc} Failed!")
+    elif not passing:
+        logger.warning(f"{test_desc} Failed! PCC value is lower than {pcc} for some of the outputs. Check Warnings!")
+    elif not deepstack_visual_embeds_passing:
+        logger.warning(f"{test_desc} Failed! PCC value is lower than {pcc} for some of the deepstack visual embeds. Check Warnings!")
     assert passing, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
+    assert deepstack_visual_embeds_passing, f"PCC value is lower than {pcc} for some of the deepstack visual embeds. Check Warnings!"

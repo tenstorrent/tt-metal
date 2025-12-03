@@ -7,7 +7,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.qwen3_vl.tt.vision_rmsnorm import RMSNorm
+from models.demos.qwen3_vl.tt.vision_rmsnorm import LayerNorm
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 
@@ -20,7 +20,6 @@ class VisionAttention(LightweightModule):
         self,
         x,
         rot_mats,
-        cu_seqlens,
         user_id=0,
         page_table=None,
         chunk_page_table=None,
@@ -28,7 +27,6 @@ class VisionAttention(LightweightModule):
     ):
         return self.forward_prefill(
             x,
-            cu_seqlens=cu_seqlens,
             rot_mats=rot_mats,
             user_id=user_id,
             page_table=page_table,

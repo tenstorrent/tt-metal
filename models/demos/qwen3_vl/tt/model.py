@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from turtle import forward
 from models.tt_transformers.tt.model_config import TensorGroup
 import torch
 from loguru import logger
@@ -27,7 +26,7 @@ from models.tt_transformers.tt.model import Transformer as TTTransformer
 
 class VisionTransformer(LightweightModule):
     """
-    Vision Transformer model for Qwen 2.5 VL.
+    Vision Transformer model for Qwen 3 VL.
     This implements only the transformer blocks part of the vision transformer.
     Patch embedding and merging should be done outside this class.
     """
@@ -88,32 +87,35 @@ class VisionTransformer(LightweightModule):
             args=args,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
+            state_dict_prefix=args.get_state_dict_prefix("PatchMerger"),
             dtype=dtype,
         )
 
-        self.deepstack_visual_indices = args.hf_config.vision_config.deepstack_visual_indices
+        self.deepstack_visual_indices = args.hf_config.vision_config.deepstack_visual_indexes
         self.deepstack_merger_list = [
             PatchMerger(
                 mesh_device=args.mesh_device,
                 args=args,
                 state_dict=state_dict,
                 weight_cache_path=weight_cache_path,
+                state_dict_prefix=args.get_state_dict_prefix("DeepstackMerger", deepstack_merger_num=i),
                 dtype=dtype,
                 postshuffle_norm=True,
             )
-            for _ in range(args.hf_config.vision_config.depth)
+            for i in range(len(self.deepstack_visual_indices))
         ]
 
-    def prepare_input(self, patch_input, window_index, seq_len=None):
+    def prepare_input(self, patch_input, seq_len=None):
         """Convert a patchified torch input to a ttnn tensor
         Args:
             patch_input (torch.Tensor): Patchified input tensor
-            window_index (torch.Tensor): Window index tensor
+            seq_len (int): Sequence length
 
         Returns:
             ttnn.Tensor: Prepared input tensor
         """
         patch_seq_len, _ = patch_input.shape
+        x = patch_input
         seq_len = ((patch_seq_len // 128) + 1) * 128 if seq_len is None else seq_len
         x = torch.nn.functional.pad(x, (0, 0, 0, seq_len - patch_seq_len)).unsqueeze(0)
         x = self.args.prepare_residual_tensor_prefill(
@@ -148,7 +150,8 @@ class VisionTransformer(LightweightModule):
                 rot_mats=rot_mats,
             )
             if i in self.deepstack_visual_indices:
-                deepstack_feature_list.append(self.deepstack_merger_list[i](x[:, :, :unpadded_seq_len, :]))
+                idx = self.deepstack_visual_indices.index(i)
+                deepstack_feature_list.append(self.deepstack_merger_list[idx](x[:, :, :unpadded_seq_len, :]))
 
         # Merge patches - first remove any sequence length padding
         x = x[:, :, :unpadded_seq_len, :]

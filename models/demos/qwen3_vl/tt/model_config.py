@@ -89,7 +89,7 @@ class VisionModelArgs(ModelArgs):
     def is_distributed_norm(self, mode):
         return False
 
-    def get_state_dict_prefix(self, module_name, layer_num=None):
+    def get_state_dict_prefix(self, module_name, layer_num=None, deepstack_merger_num=None):
         layer_prefix = f"visual.blocks.{layer_num}." if layer_num is not None else ""
         module_map = {
             "MLP": "feed_forward",
@@ -97,6 +97,9 @@ class VisionModelArgs(ModelArgs):
             "VisionBlock": "",
             "VisionTransformer": "visual",
             "PatchMerger": "visual.merger",
+            "norm1": "norm1",
+            "norm2": "norm2",
+            "DeepstackMerger": f"visual.deepstack_merger_list.{deepstack_merger_num}",
             "": "",  # If no module is given, just get layer prefix
         }
         return layer_prefix + module_map[module_name]
@@ -128,8 +131,8 @@ class VisionModelArgs(ModelArgs):
     def reference_patch_merger(self):
         return self.reference_vision_model().merger
     
-    def reference_deepstack_merger_list(self):
-        return self.reference_vision_model().deepstack_merger_list
+    def reference_deepstack_merger(self):
+        return self.reference_vision_model().deepstack_merger_list[0]
 
     def reference_patch_embed(self):
         return self.reference_vision_model().patch_embed

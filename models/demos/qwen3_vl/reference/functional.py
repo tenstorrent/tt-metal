@@ -197,7 +197,7 @@ def qwen3_vl_rot_pos_emb(grid_thw: torch.Tensor, spatial_merge_size: int, head_d
     merge_size = spatial_merge_size
 
     max_hw = int(grid_thw[:, 1:].max().item())
-    freq_table = qwen2_5_vision_rotary_embedding(max_hw, head_dim)  # (max_hw, dim // 2)
+    freq_table = qwen3_vision_rotary_embedding(max_hw, head_dim // 2)
     device = freq_table.device
 
     total_tokens = int(torch.prod(grid_thw, dim=1).sum().item())
@@ -340,15 +340,11 @@ def qwen2_5_vl_vision_block(
     return hidden_states
 
 
-def qwen2_5_vision_transformer_preprocess(
+def qwen3_vision_transformer_preprocess(
     seq_len: int,
     grid_thw: torch.Tensor,
     head_dim: int,
     spatial_merge_size: int,
-    window_size: int,
-    patch_size: int,
-    num_grid_per_side: int,
-    pos_embedding: torch.nn.Embedding,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
     """Preprocesses input for Qwen2.5 Vision Transformer.
 
@@ -446,7 +442,7 @@ def qwen2_5_vision_transformer(
     seq_len, _ = hidden_states.size()
 
     # Preprocess the input
-    cu_seqlens, cu_window_seqlens, position_embeddings, window_index = qwen2_5_vision_transformer_preprocess(
+    cu_seqlens, cu_window_seqlens, position_embeddings, window_index = qwen3_vision_transformer_preprocess(
         seq_len=seq_len,
         grid_thw=grid_thw,
         head_dim=head_dim,
@@ -475,8 +471,8 @@ def qwen2_5_vision_transformer(
     return hidden_states
 
 
-def qwen2_5_vision_rotary_embedding(seqlen: int, dim, theta: float = 10000.0, device=None) -> torch.Tensor:
-    """Functional implementation of Qwen2_5_VisionRotaryEmbedding.
+def qwen3_vision_rotary_embedding(seqlen: int, dim, theta: float = 10000.0, device=None) -> torch.Tensor:
+    """Functional implementation of Qwen3VLVisionRotaryEmbedding.
 
     Args:
         seqlen: Sequence length to generate embeddings for

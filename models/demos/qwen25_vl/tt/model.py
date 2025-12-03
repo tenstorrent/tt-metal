@@ -141,6 +141,7 @@ class VisionTransformer(LightweightModule):
                 cu_seqlens_now = cu_window_seqlens
 
             # Forward through block
+            logger.info(f"Forwarding through block {i} of shape {x.shape}")
             x = block(
                 x,
                 cu_seqlens=cu_seqlens_now,
