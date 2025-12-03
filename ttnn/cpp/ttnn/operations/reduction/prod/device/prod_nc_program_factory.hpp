@@ -3,8 +3,8 @@
 
 #pragma once
 
-#include "ttnn/device_operation.hpp"
 #include "prod_nc_device_operation_types.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::reduction::prod_nc::program {
 

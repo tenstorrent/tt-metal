@@ -1,15 +1,15 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 // SPDX-License-Identifier: Apache-2.0
-
-#include <string>
 
 #include "prod_nc_program_factory.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
-#include <tt-metalium/work_split.hpp>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
+
+#include <string>
 
 namespace ttnn::operations::reduction::prod_nc::program {
 
