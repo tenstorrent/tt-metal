@@ -22,12 +22,21 @@ jobs:
         id: evt
         run: |
           RAW_CREATED="${{ github.event.issue.created_at }}"
+          if [ -z "$RAW_CREATED" ]; then
+            echo "Error: Issue created_at timestamp is empty" >&2
+            exit 1
+          fi
           OPENED_DATE="${RAW_CREATED%%T*}"
+          if [[ ! "$OPENED_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+            echo "Error: Invalid date format: $OPENED_DATE" >&2
+            exit 1
+          fi
           echo "opened_date=$OPENED_DATE" >> "$GITHUB_OUTPUT"
 
       - name: Resolve Project ID and Field ID
         id: ids
         run: |
+          set -e
           # Query the org project by number and list fields
           RESP=$(gh api graphql -f query='
           query($org:String!, $number:Int!){
@@ -45,17 +54,28 @@ jobs:
                 }
               }
             }
-          }' -F org="$ORG" -F number="$PROJECT_NUMBER")
+          }' -F org="$ORG" -F number="$PROJECT_NUMBER") || {
+            echo "Error: Failed to query GraphQL API" >&2
+            exit 1
+          }
 
-          PROJECT_ID=$(echo "$RESP" | jq -r '.data.organization.projectV2.id')
-          FIELD_ID=$(echo "$RESP" | jq -r --arg NAME "$OPENED_ON_FIELD_NAME" '.data.organization.projectV2.fields.nodes[] | select(. != null and .name==$NAME) | .id')
-
-          if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "null" ]; then
-            echo "Project not found: $ORG / $PROJECT_NUMBER" >&2
+          # Check for GraphQL errors
+          if echo "$RESP" | jq -e '.errors' > /dev/null 2>&1; then
+            echo "Error: GraphQL query returned errors:" >&2
+            echo "$RESP" | jq '.errors' >&2
             exit 1
           fi
-          if [ -z "$FIELD_ID" ] || [ "$FIELD_ID" = "null" ]; then
-            echo "Field not found: \"$OPENED_ON_FIELD_NAME\"" >&2
+
+          PROJECT_ID=$(echo "$RESP" | jq -r '.data.organization.projectV2.id // empty')
+          if [ -z "$PROJECT_ID" ]; then
+            echo "Error: Project not found: $ORG / $PROJECT_NUMBER" >&2
+            echo "Response: $RESP" >&2
+            exit 1
+          fi
+
+          FIELD_ID=$(echo "$RESP" | jq -r --arg NAME "$OPENED_ON_FIELD_NAME" '.data.organization.projectV2.fields.nodes[] | select(. != null and .name==$NAME) | .id // empty')
+          if [ -z "$FIELD_ID" ]; then
+            echo "Error: Field not found: \"$OPENED_ON_FIELD_NAME\"" >&2
             echo "Available fields:" >&2
             echo "$RESP" | jq -r '.data.organization.projectV2.fields.nodes[] | select(. != null) | "\(.name) [\(.dataType)]"' >&2
             exit 1
@@ -67,7 +87,8 @@ jobs:
       - name: Get Issue Node ID
         id: issue
         run: |
-          ISSUE_NODE_ID=$(gh api graphql -f query='
+          set -e
+          RESP=$(gh api graphql -f query='
           query($owner:String!, $repo:String!, $number:Int!){
             repository(owner:$owner, name:$repo){
               issue(number:$number){ id }
@@ -75,10 +96,22 @@ jobs:
           }' \
           -F owner='${{ github.repository_owner }}' \
           -F repo='${{ github.event.repository.name }}' \
-          -F number='${{ github.event.issue.number }}' --jq '.data.repository.issue.id')
+          -F number='${{ github.event.issue.number }}') || {
+            echo "Error: Failed to query issue node ID" >&2
+            exit 1
+          }
 
-          if [ -z "$ISSUE_NODE_ID" ] || [ "$ISSUE_NODE_ID" = "null" ]; then
-            echo "Could not resolve issue node ID" >&2
+          # Check for GraphQL errors
+          if echo "$RESP" | jq -e '.errors' > /dev/null 2>&1; then
+            echo "Error: GraphQL query returned errors:" >&2
+            echo "$RESP" | jq '.errors' >&2
+            exit 1
+          fi
+
+          ISSUE_NODE_ID=$(echo "$RESP" | jq -r '.data.repository.issue.id // empty')
+          if [ -z "$ISSUE_NODE_ID" ]; then
+            echo "Error: Could not resolve issue node ID" >&2
+            echo "Response: $RESP" >&2
             exit 1
           fi
 
@@ -87,6 +120,7 @@ jobs:
       - name: Add Issue to Project (idempotent)
         id: add
         run: |
+          set -e
           ADD_RESP=$(gh api graphql -f query='
           mutation($projectId:ID!, $contentId:ID!){
             addProjectV2ItemById(input:{projectId:$projectId, contentId:$contentId}){
@@ -94,19 +128,30 @@ jobs:
             }
           }' \
           -F projectId='${{ steps.ids.outputs.project_id }}' \
-          -F contentId='${{ steps.issue.outputs.id }}')
+          -F contentId='${{ steps.issue.outputs.id }}') || {
+            echo "Error: Failed to add issue to project" >&2
+            exit 1
+          }
 
-          ITEM_ID=$(echo "$ADD_RESP" | jq -r '.data.addProjectV2ItemById.item.id')
-          if [ -z "$ITEM_ID" ] || [ "$ITEM_ID" = "null" ]; then
-            echo "Failed to add/find project item" >&2
-            echo "$ADD_RESP" >&2
+          # Check for GraphQL errors
+          if echo "$ADD_RESP" | jq -e '.errors' > /dev/null 2>&1; then
+            echo "Error: GraphQL mutation returned errors:" >&2
+            echo "$ADD_RESP" | jq '.errors' >&2
+            exit 1
+          fi
+
+          ITEM_ID=$(echo "$ADD_RESP" | jq -r '.data.addProjectV2ItemById.item.id // empty')
+          if [ -z "$ITEM_ID" ]; then
+            echo "Error: Failed to get project item ID" >&2
+            echo "Response: $ADD_RESP" >&2
             exit 1
           fi
           echo "item_id=$ITEM_ID" >> "$GITHUB_OUTPUT"
 
       - name: Set "Opened On" field value (Date)
         run: |
-          gh api graphql -f query='
+          set -e
+          UPDATE_RESP=$(gh api graphql -f query='
           mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $date:String!){
             updateProjectV2ItemFieldValue(input:{
               projectId:$projectId,
@@ -120,4 +165,23 @@ jobs:
           -F projectId='${{ steps.ids.outputs.project_id }}' \
           -F itemId='${{ steps.add.outputs.item_id }}' \
           -F fieldId='${{ steps.ids.outputs.field_id }}' \
-          -F date='${{ steps.evt.outputs.opened_date }}'
+          -F date='${{ steps.evt.outputs.opened_date }}') || {
+            echo "Error: Failed to update field value" >&2
+            exit 1
+          }
+
+          # Check for GraphQL errors
+          if echo "$UPDATE_RESP" | jq -e '.errors' > /dev/null 2>&1; then
+            echo "Error: GraphQL mutation returned errors:" >&2
+            echo "$UPDATE_RESP" | jq '.errors' >&2
+            exit 1
+          fi
+
+          UPDATED_ITEM_ID=$(echo "$UPDATE_RESP" | jq -r '.data.updateProjectV2ItemFieldValue.projectV2Item.id // empty')
+          if [ -z "$UPDATED_ITEM_ID" ]; then
+            echo "Error: Failed to update field value" >&2
+            echo "Response: $UPDATE_RESP" >&2
+            exit 1
+          fi
+
+          echo "Successfully set 'Opened On' to ${{ steps.evt.outputs.opened_date }} for issue #${{ github.event.issue.number }}"
