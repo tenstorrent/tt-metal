@@ -538,6 +538,9 @@ inline void matmul_configure_mop_throttled(
 
     constexpr bool high_fidelity = NUM_FIDELITY_PHASES > 0;
     static_assert((THROTTLE_LEVEL > 0) && (THROTTLE_LEVEL <= 5), "MM throttling only enabled for THROTTLE_LEVEL={1,2,3,4,5}");
+    LLK_ASSERT(
+        (in0_tile_r_dim == TILE_R_DIM) && (in0_tile_c_dim == TILE_C_DIM) && (in1_tile_r_dim == TILE_R_DIM) && (in1_tile_c_dim == TILE_C_DIM) && !partial_face,
+        "MM throttling only enabled for full 32x32 tile size");
 
     const bool reuse_a = ct_dim >= rt_dim;
 
