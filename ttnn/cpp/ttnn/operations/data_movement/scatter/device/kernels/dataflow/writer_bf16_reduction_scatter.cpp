@@ -6,28 +6,6 @@
 
 #include "../scatter_bf16_reduction_common.hpp"
 
-namespace {
-
-// this function is supposed to write either a whole stick or part of it (76800 elements)
-template <typename AddrGen>
-FORCE_INLINE void write_to_output(
-    const uint32_t& cb,
-    const AddrGen& addr_gtor,
-    const uint32_t& offset_bytes,
-    const uint32_t& chunk_size_bytes,
-    const uint32_t& stick_id) {
-    cb_wait_front(cb, ONE_PAGE);
-    const uint64_t destination_noc_address = get_noc_addr(stick_id, addr_gtor);
-    const uint32_t l1_read_address = get_read_ptr(cb);
-
-    noc_async_write(l1_read_address, destination_noc_address + offset_bytes, chunk_size_bytes);
-    noc_async_write_barrier();
-
-    cb_pop_front(cb, ONE_PAGE);
-}
-
-}  // namespace
-
 void kernel_main() {
     constexpr auto ctas{get_ctas()};
 

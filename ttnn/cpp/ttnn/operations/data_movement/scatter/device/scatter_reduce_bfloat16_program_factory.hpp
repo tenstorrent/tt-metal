@@ -13,14 +13,6 @@
 
 namespace ttnn::operations::data_movement::scatter {
 
-enum class ScatterReduceBfloat16CB : std::underlying_type_t<tt::CBIndex> {
-    INPUT = CBIndex::c_0,
-    SRC = CBIndex::c_1,
-    INDEX = CBIndex::c_2,
-    DST = CBIndex::c_3,
-    FP32_TEMP = CBIndex::c_4
-};
-
 using namespace tt;
 using namespace tt::tt_metal;
 
