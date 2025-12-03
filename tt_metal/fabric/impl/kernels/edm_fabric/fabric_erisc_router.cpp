@@ -1248,9 +1248,6 @@ FORCE_INLINE void update_telemetry(
         bool receiver_idle = false;
         if (!rx_progress) {
             receiver_idle = (get_ptr_val<to_receiver_packets_sent_streams[0]>() == 0);
-            if constexpr (enable_deadlock_avoidance && !skip_receiver_channel_1_connection) {
-                receiver_idle = receiver_idle && (get_ptr_val<to_receiver_packets_sent_streams[1]>() == 0);
-            }
         }
         if (rx_progress || receiver_idle) {
             volatile RiscTimestampV2* rx_heartbeat_addr =
