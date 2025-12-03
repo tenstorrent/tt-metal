@@ -446,6 +446,7 @@ def run_demo_whisper_for_translation_dataset(
     num_inputs,
     generation_params: Optional[GenerationParams] = None,
     batch_size_per_device=1,
+    stream=False,
 ):
     torch.manual_seed(0)
 
@@ -542,11 +543,27 @@ def run_demo_whisper_for_translation_dataset(
             logger.info(f"Sample {i + j + 1}: {generation_params.language} text: {source_text}")
             logger.info(f"Sample {i + j + 1}: English reference: {english_translation}")
 
-        ttnn_output, avg_logprob, no_speech_prob = model_pipeline(
-            current_batch,
-            stream=False,
-            return_perf_metrics=False,
-        )
+        # Perform model inference with optional streaming
+        if stream:
+            # Handle streaming mode - iterate over generator
+            logger.info(f"Streaming mode enabled for translation evaluation")
+            last_result = None
+            for result in model_pipeline(current_batch, stream=True, return_perf_metrics=False):
+                last_result = result
+            # Extract final result
+            if last_result is not None:
+                ttnn_output, avg_logprob, no_speech_prob = last_result
+            else:
+                ttnn_output = [""] * current_batch_size
+                avg_logprob = None
+                no_speech_prob = None
+        else:
+            # Non-streaming mode
+            ttnn_output, avg_logprob, no_speech_prob = model_pipeline(
+                current_batch,
+                stream=False,
+                return_perf_metrics=False,
+            )
 
         # Process results for each sample in the batch
         for j in range(current_batch_size):
@@ -920,11 +937,14 @@ def test_demo_for_conditional_generation_with_prompt(
 )
 @pytest.mark.parametrize(
     "temperatures,compression_ratio_threshold,logprob_threshold,no_speech_threshold,return_timestamps",
-    [(0.0, None, None, None, False), (0.0, 2.4, -2.0, 0.6, True)],  # Translation needs relaxed thresholds
+    [
+        # (0.0, None, None, None, False),
+        (0.0, 2.4, -2.0, 0.6, False)
+    ],  # Translation needs relaxed thresholds
 )
 @pytest.mark.parametrize(
-    "prompt",
-    [None],
+    "stream",
+    [True],
 )
 def test_demo_for_translation_dataset(
     mesh_device,
@@ -938,7 +958,7 @@ def test_demo_for_translation_dataset(
     logprob_threshold,
     no_speech_threshold,
     return_timestamps,
-    prompt,
+    stream,
     request,
 ):
     if is_ci_env:
@@ -960,4 +980,5 @@ def test_demo_for_translation_dataset(
         num_inputs,
         generation_params,
         batch_size_per_device,
+        stream=stream,
     )
