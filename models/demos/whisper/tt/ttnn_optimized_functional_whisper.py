@@ -206,7 +206,8 @@ def functional_sdpa(
             exp_approx_mode=True,  # NOTE: False is more correct
         )
 
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            query_states.device().arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=True,
             fp32_dest_acc_en=False,
