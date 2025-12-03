@@ -1511,7 +1511,7 @@ void pytensor_module(nb::module_& mod) {
                     },
                     self.storage());
             },
-            nb::keep_alive<0, 1>(),  // test
+            nb::rv_policy::reference_internal,  // test
             R"doc(
             Get the address of the underlying buffer.
 
