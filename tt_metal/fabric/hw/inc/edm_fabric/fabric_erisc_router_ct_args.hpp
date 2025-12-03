@@ -414,6 +414,7 @@ constexpr size_t local_receiver_completion_counters_base_address =
 constexpr size_t local_receiver_credits_base_address = std::min(local_receiver_ack_counters_base_address, local_receiver_completion_counters_base_address);
 // the two arrays are contiguous in memory. so we take the size of the first and then double it
 constexpr size_t total_number_of_receiver_to_sender_credit_num_bytes = (std::max(local_receiver_ack_counters_base_address, local_receiver_completion_counters_base_address) - local_receiver_credits_base_address) * 2;
+static_assert(tt::align(total_number_of_receiver_to_sender_credit_num_bytes, ETH_WORD_SIZE_BYTES) == total_number_of_receiver_to_sender_credit_num_bytes, "total_number_of_receiver_to_sender_credit_num_bytes must be aligned to ETH_WORD_SIZE_BYTES");
 
 static_assert(
     !multi_txq_enabled || to_sender_remote_ack_counters_base_address != 0,
