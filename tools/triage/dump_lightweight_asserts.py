@@ -79,10 +79,11 @@ def dump_callstacks(
                 previous_instruction = read_word_from_device(location, pc - 4)
 
         # Check if core hit ebreak
+        ebreak_instruction = 0x00100073
         rewind_pc_for_ebreak = False
-        if previous_instruction == 0x00100073:
+        if previous_instruction == ebreak_instruction:
             rewind_pc_for_ebreak = True
-        elif current_instruction != 0x00100073:
+        elif current_instruction != ebreak_instruction:
             return None
 
         callstack_data = callstack_provider.get_callstacks(location, risc_name, rewind_pc_for_ebreak)
