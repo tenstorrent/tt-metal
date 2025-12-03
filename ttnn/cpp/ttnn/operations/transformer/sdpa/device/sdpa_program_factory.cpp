@@ -347,6 +347,13 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     } scale_union{};
     scale_union.f = scale.value_or(1.0f);
 
+    /**
+     * Create semaphores for L1-L1 sharing of KV
+     */
+    auto sender_semahpore_id = CreateSemaphore(program, core_grid, INVALID);
+    auto receiver_semahpore_id = CreateSemaphore(program, core_grid, INVALID);
+    auto valid_semahpore_id = CreateSemaphore(program, core_grid, VALID);
+
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
                                                       B,
                                                       NQH,
@@ -369,7 +376,11 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                                                       (uint32_t)is_chunked,
                                                       block_size_t,
                                                       page_table_stick_size,
-                                                      (std::uint32_t)use_attention_sink};
+                                                      (std::uint32_t)use_attention_sink,
+                                                      q_per_core,
+                                                      sender_semahpore_id,
+                                                      receiver_semahpore_id,
+                                                      valid_semahpore_id};
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -628,11 +639,21 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     uint32_t read_offset = 0;
     uint32_t write_offset = 0;
 
-    // Set reader rt args
+    struct CoreAssignment {
+        CoreCoord logical_core;
+        CoreCoord physical_core;
+        uint32_t local_batch_start;
+        uint32_t local_batch_end;
+        uint32_t local_nh_start;
+        uint32_t local_nh_end;
+        uint32_t local_q_start;
+        uint32_t local_q_end;
+    };
+
+    std::vector<CoreAssignment> core_assignments;
+    core_assignments.reserve(num_cores);
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
-
-        // log_debug(tt::LogOp, "core: {} getting runtime args for idx {i}", core, i);
         uint32_t local_batch_start = (i / (nh_parallel_factor * q_parallel_factor)) * batch_per_core;
         uint32_t local_batch_end = local_batch_start + batch_per_core;
         uint32_t local_nh_start = ((i / q_parallel_factor) % nh_parallel_factor) * nh_per_core;
@@ -640,7 +661,6 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         uint32_t local_q_start = (i % q_parallel_factor) * q_per_core;
         uint32_t local_q_end = local_q_start + q_per_core;
 
-        // clamp all to max values for non-even partitioning
         local_batch_start = std::min(local_batch_start, B);
         local_batch_end = std::min(local_batch_end, B);
         local_nh_start = std::min(local_nh_start, NQH);
@@ -648,15 +668,147 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         local_q_start = std::min(local_q_start, q_num_chunks);
         local_q_end = std::min(local_q_end, q_num_chunks);
 
-        // log the above
+        core_assignments.push_back(CoreAssignment{
+            .logical_core = core,
+            .physical_core = device->worker_core_from_logical_core(core),
+            .local_batch_start = local_batch_start,
+            .local_batch_end = local_batch_end,
+            .local_nh_start = local_nh_start,
+            .local_nh_end = local_nh_end,
+            .local_q_start = local_q_start,
+            .local_q_end = local_q_end});
+    }
+
+    struct BatchHeadKey {
+        uint32_t batch_start;
+        uint32_t batch_end;
+        uint32_t nh_start;
+        uint32_t nh_end;
+
+        bool operator<(const BatchHeadKey& other) const {
+            if (batch_start != other.batch_start) {
+                return batch_start < other.batch_start;
+            }
+            if (batch_end != other.batch_end) {
+                return batch_end < other.batch_end;
+            }
+            if (nh_start != other.nh_start) {
+                return nh_start < other.nh_start;
+            }
+            return nh_end < other.nh_end;
+        }
+    };
+
+    struct CoreLinkInfo {
+        bool is_injector = false;
+        bool is_sink = false;
+        CoreCoord prev_physical = CoreCoord{0, 0};
+        CoreCoord next_physical = CoreCoord{0, 0};
+        uint32_t next_core_q_chunks = 0;
+    };
+
+    std::vector<CoreLinkInfo> core_link_info(num_cores);
+    std::map<BatchHeadKey, std::vector<uint32_t>> batch_head_groups;
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const auto& assignment = core_assignments.at(i);
+        const bool has_batch_work = assignment.local_batch_start < assignment.local_batch_end;
+        const bool has_head_work = assignment.local_nh_start < assignment.local_nh_end;
+        const bool has_q_work = assignment.local_q_start < assignment.local_q_end;
+        if (!(has_batch_work && has_head_work && has_q_work)) {
+            continue;
+        }
+        BatchHeadKey key{
+            assignment.local_batch_start,
+            assignment.local_batch_end,
+            assignment.local_nh_start,
+            assignment.local_nh_end};
+        batch_head_groups[key].push_back(i);
+    }
+
+    for (auto& [key, group] : batch_head_groups) {
+        std::sort(group.begin(), group.end(), [&](uint32_t lhs, uint32_t rhs) {
+            const auto& lhs_assignment = core_assignments.at(lhs);
+            const auto& rhs_assignment = core_assignments.at(rhs);
+            if (lhs_assignment.local_q_start != rhs_assignment.local_q_start) {
+                return lhs_assignment.local_q_start < rhs_assignment.local_q_start;
+            }
+            if (lhs_assignment.local_q_end != rhs_assignment.local_q_end) {
+                return lhs_assignment.local_q_end < rhs_assignment.local_q_end;
+            }
+            return lhs < rhs;
+        });
+
+        for (std::size_t idx = 0; idx < group.size(); ++idx) {
+            const uint32_t core_idx = group.at(idx);
+            const auto& assignment = core_assignments.at(core_idx);
+            auto& link = core_link_info.at(core_idx);
+
+            link.is_injector = assignment.local_q_start == 0;
+            link.is_sink = (assignment.local_q_end == q_num_chunks) && (assignment.local_q_start < q_num_chunks);
+
+            if (idx > 0) {
+                const auto& prev_assignment = core_assignments.at(group.at(idx - 1));
+                link.prev_physical = prev_assignment.physical_core;
+            }
+            if (idx + 1 < group.size()) {
+                const auto& next_assignment = core_assignments.at(group.at(idx + 1));
+                link.next_physical = next_assignment.physical_core;
+                link.next_core_q_chunks = next_assignment.local_q_end - next_assignment.local_q_start;
+            }
+        }
+
+        if (!group.empty()) {
+            // Ensure the sink core reports zero next-core chunks
+            const uint32_t sink_core_idx = group.back();
+            core_link_info.at(sink_core_idx).next_core_q_chunks = 0;
+        }
+
+        log_debug(
+            tt::LogOp,
+            "SDPA group: batch[{}:{}) head[{}:{}) q_chunks={}",
+            key.batch_start,
+            key.batch_end,
+            key.nh_start,
+            key.nh_end,
+            group.size());
+        for (const auto core_idx : group) {
+            [[maybe_unused]] const auto& assignment = core_assignments.at(core_idx);
+            [[maybe_unused]] const auto& link = core_link_info.at(core_idx);
+            log_debug(
+                tt::LogOp,
+                "  core_id={} logical=({}, {}) physical=({}, {}) q_range=[{}:{}) injector={} sink={} prev=({}, {}) "
+                "next=({}, {}) next_q_chunks={}",
+                core_idx,
+                assignment.logical_core.x,
+                assignment.logical_core.y,
+                assignment.physical_core.x,
+                assignment.physical_core.y,
+                assignment.local_q_start,
+                assignment.local_q_end,
+                link.is_injector,
+                link.is_sink,
+                link.prev_physical.x,
+                link.prev_physical.y,
+                link.next_physical.x,
+                link.next_physical.y,
+                link.next_core_q_chunks);
+        }
+    }
+
+    // Set reader rt args
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const auto& assignment = core_assignments.at(i);
+        const auto& link = core_link_info.at(i);
+        const auto& core = assignment.logical_core;
+
         log_debug(tt::LogOp, "core: {}", i);
         log_debug(tt::LogOp, "x={},y={}", core.x, core.y);
-        log_debug(tt::LogOp, "local_batch_start: {}", local_batch_start);
-        log_debug(tt::LogOp, "local_batch_end: {}", local_batch_end);
-        log_debug(tt::LogOp, "local_nh_start: {}", local_nh_start);
-        log_debug(tt::LogOp, "local_nh_end: {}", local_nh_end);
-        log_debug(tt::LogOp, "local_q_start: {}", local_q_start);
-        log_debug(tt::LogOp, "local_q_end: {}", local_q_end);
+        log_debug(tt::LogOp, "local_batch_start: {}", assignment.local_batch_start);
+        log_debug(tt::LogOp, "local_batch_end: {}", assignment.local_batch_end);
+        log_debug(tt::LogOp, "local_nh_start: {}", assignment.local_nh_start);
+        log_debug(tt::LogOp, "local_nh_end: {}", assignment.local_nh_end);
+        log_debug(tt::LogOp, "local_q_start: {}", assignment.local_q_start);
+        log_debug(tt::LogOp, "local_q_end: {}", assignment.local_q_end);
 
         SetRuntimeArgs(
             program,
@@ -670,15 +822,22 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
                 is_chunked ? page_table.value().buffer()->address() : 0,
                 attention_sink_addr,
                 i,
-                local_batch_start,
-                local_batch_end,
-                local_nh_start,
-                local_nh_end,
-                local_q_start,
-                local_q_end,
+                assignment.local_batch_start,
+                assignment.local_batch_end,
+                assignment.local_nh_start,
+                assignment.local_nh_end,
+                assignment.local_q_start,
+                assignment.local_q_end,
                 num_phases,
                 chunked_q_chunk_offset,
-                read_offset  // read_offset
+                read_offset,
+                static_cast<uint32_t>(link.is_injector),
+                static_cast<uint32_t>(link.is_sink),
+                static_cast<uint32_t>(link.prev_physical.x),
+                static_cast<uint32_t>(link.prev_physical.y),
+                static_cast<uint32_t>(link.next_physical.x),
+                static_cast<uint32_t>(link.next_physical.y),
+                link.next_core_q_chunks,
             });
         SetRuntimeArgs(
             program,
@@ -686,12 +845,12 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             core,
             {out_addr,
              i,
-             local_batch_start,
-             local_batch_end,
-             local_nh_start,
-             local_nh_end,
-             local_q_start,
-             local_q_end,
+             assignment.local_batch_start,
+             assignment.local_batch_end,
+             assignment.local_nh_start,
+             assignment.local_nh_end,
+             assignment.local_q_start,
+             assignment.local_q_end,
              num_phases,
              chunked_q_chunk_offset,
              write_offset});  // write_offset
@@ -700,12 +859,12 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
             compute_kernels_id,
             core,
             {i,
-             local_batch_start,
-             local_batch_end,
-             local_nh_start,
-             local_nh_end,
-             local_q_start,
-             local_q_end,
+             assignment.local_batch_start,
+             assignment.local_batch_end,
+             assignment.local_nh_start,
+             assignment.local_nh_end,
+             assignment.local_q_start,
+             assignment.local_q_end,
              num_phases,
              chunked_q_chunk_offset});
     }

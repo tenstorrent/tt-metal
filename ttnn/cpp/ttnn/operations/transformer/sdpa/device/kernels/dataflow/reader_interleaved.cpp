@@ -60,6 +60,28 @@ void kernel_main() {
         chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(argidx++);
         read_offset_phase_2 = get_arg_val<uint32_t>(argidx++);
     }
+    const uint32_t is_injector = get_arg_val<uint32_t>(argidx++);
+    const uint32_t is_sink = get_arg_val<uint32_t>(argidx++);
+    const uint32_t prev_physical_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t prev_physical_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t next_physical_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t next_physical_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t next_core_q_chunks = get_arg_val<uint32_t>(argidx++);
+
+    // VALID sem used to write L1-L1 valid semaphore
+    volatile tt_l1_ptr uint32_t* valid_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(valid_semaphore_addr);
+    *(valid_semaphore_addr_ptr) = VALID;
+
+    volatile tt_l1_ptr uint32_t* receiver_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_semaphore_addr);
+
+    volatile tt_l1_ptr uint32_t* sender_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
+    const uint64_t sender_semaphore_noc_addr = get_noc_addr(prev_physical_x, prev_physical_y, sender_semaphore_addr);
+
+    const uint64_t receiver_semaphore_noc_addr =
+        get_noc_addr(next_physical_x, next_physical_y, receiver_semaphore_addr);
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
@@ -155,6 +177,7 @@ void kernel_main() {
                     cb_push_back(cb_attention_sink, Sq_chunk_t);
                 }
                 for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
+                    DPRINT << "q_iter: " << q_iter << ENDL();
                     /*
                     Read a chunk of Q. BALANCED_Q_PARALLEL evenly distributes Q chunks
                     across cores when causal and other conditions are met.
@@ -206,35 +229,62 @@ void kernel_main() {
                         const uint32_t k_row_tile_count = k_row_end_tile - k_row_start_tile;
                         const uint32_t k_start_tile_id = k_tile_shape.id_of(nb, kv_head, k_row_start_tile, 0);
 
-                        if constexpr (is_chunked) {
-                            // Use page table to read K chunk
-                            const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
-                            read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
-                                k_reader,
-                                cb_k_in,
-                                kv_head,
-                                k_chunk_start_row_num,
-                                k_row_tile_count,
-                                DHt,
-                                Sk_chunk_t,
-                                DHt,
-                                k_tile_bytes,
-                                barrier_threshold,
-                                page_table_ptr,
-                                true  // transpose=true for K reads
-                            );
+                        cb_reserve_back(cb_k_in, k_chunk_tiles);
+                        uint32_t cb_k_start_address = get_write_ptr(cb_k_in);
+                        if (is_injector) {
+                            DPRINT << "reading K chunk " << k_chunk << " for Q chunk " << q_chunk << ENDL();
+                            if constexpr (is_chunked) {
+                                // Use page table to read K chunk
+                                const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
+                                read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
+                                    k_reader,
+                                    cb_k_in,
+                                    kv_head,
+                                    k_chunk_start_row_num,
+                                    k_row_tile_count,
+                                    DHt,
+                                    Sk_chunk_t,
+                                    DHt,
+                                    k_tile_bytes,
+                                    barrier_threshold,
+                                    page_table_ptr,
+                                    true  // transpose=true for K reads
+                                );
+                            } else {
+                                read_chunk_with_padding<k_tile_bytes>(
+                                    k_reader,
+                                    cb_k_in,
+                                    k_start_tile_id,
+                                    k_row_tile_count,
+                                    DHt,
+                                    Sk_chunk_t,
+                                    DHt,
+                                    barrier_threshold,
+                                    true  // transpose=true for K reads
+                                );
+                            }
                         } else {
-                            read_chunk_with_padding<k_tile_bytes>(
-                                k_reader,
-                                cb_k_in,
-                                k_start_tile_id,
-                                k_row_tile_count,
-                                DHt,
-                                Sk_chunk_t,
-                                DHt,
-                                barrier_threshold,
-                                true  // transpose=true for K reads
-                            );
+                            noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
+                            noc_semaphore_inc(sender_semaphore_noc_addr, 1);
+                            DPRINT << "waiting for k chunk from " << prev_physical_x << ", " << prev_physical_y
+                                   << ENDL();
+                            noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
+                            cb_push_back(cb_k_in, k_chunk_tiles);
+                        }
+
+                        if (!is_sink && q_iter < next_core_q_chunks) {
+                            // TODO: and the receiver can process this Q iter!
+                            DPRINT << "waiting for sender semaphore to be valid" << ENDL();
+                            noc_semaphore_wait(sender_semaphore_addr_ptr, 1);
+                            noc_semaphore_set(sender_semaphore_addr_ptr, 0);
+
+                            uint64_t unicast_data_addr =
+                                get_noc_addr(next_physical_x, next_physical_y, cb_k_start_address);
+                            noc_async_write(cb_k_start_address, unicast_data_addr, k_chunk_tiles * k_tile_bytes);
+                            noc_async_writes_flushed();
+
+                            DPRINT << "setting remote valid semaphore to " << receiver_semaphore_noc_addr << ENDL();
+                            noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
                         }
 
                         if constexpr (use_provided_mask) {
@@ -270,35 +320,58 @@ void kernel_main() {
                             cb_push_back(cb_mask_in, mask_chunk_tiles);
                         }
 
-                        if constexpr (is_chunked) {
-                            // Use page table to read V chunk
-                            const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
-                            read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
-                                v_reader,
-                                cb_v_in,
-                                kv_head,
-                                k_chunk_start_row_num,
-                                k_row_tile_count,
-                                vDHt,
-                                Sk_chunk_t,
-                                vDHt,
-                                v_tile_bytes,
-                                barrier_threshold,
-                                page_table_ptr,
-                                false,
-                                DHt - vDHt /* src_skip_cols */);
+                        cb_reserve_back(cb_v_in, v_chunk_tiles);
+                        uint32_t cb_v_start_address = get_write_ptr(cb_v_in);
+                        if (is_injector) {
+                            if constexpr (is_chunked) {
+                                // Use page table to read V chunk
+                                const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
+                                read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
+                                    v_reader,
+                                    cb_v_in,
+                                    kv_head,
+                                    k_chunk_start_row_num,
+                                    k_row_tile_count,
+                                    vDHt,
+                                    Sk_chunk_t,
+                                    vDHt,
+                                    v_tile_bytes,
+                                    barrier_threshold,
+                                    page_table_ptr,
+                                    false,
+                                    DHt - vDHt /* src_skip_cols */);
+                            } else {
+                                read_chunk_with_padding<v_tile_bytes>(
+                                    v_reader,
+                                    cb_v_in,
+                                    k_start_tile_id,
+                                    k_row_tile_count,
+                                    vDHt,
+                                    Sk_chunk_t,
+                                    vDHt,
+                                    barrier_threshold,
+                                    false,
+                                    DHt - vDHt /* src_skip_cols */);
+                            }
                         } else {
-                            read_chunk_with_padding<v_tile_bytes>(
-                                v_reader,
-                                cb_v_in,
-                                k_start_tile_id,
-                                k_row_tile_count,
-                                vDHt,
-                                Sk_chunk_t,
-                                vDHt,
-                                barrier_threshold,
-                                false,
-                                DHt - vDHt /* src_skip_cols */);
+                            // Receive forwarded V chunk from previous core
+                            noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
+                            noc_semaphore_inc(sender_semaphore_noc_addr, 1);
+                            noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
+                            cb_push_back(cb_v_in, v_chunk_tiles);
+                        }
+
+                        if (!is_sink && q_iter < next_core_q_chunks) {
+                            // Forward V chunk to next core
+                            noc_semaphore_wait(sender_semaphore_addr_ptr, 1);
+                            noc_semaphore_set(sender_semaphore_addr_ptr, 0);
+
+                            uint64_t v_unicast_data_addr =
+                                get_noc_addr(next_physical_x, next_physical_y, cb_v_start_address);
+                            noc_async_write(cb_v_start_address, v_unicast_data_addr, v_chunk_tiles * v_tile_bytes);
+                            noc_async_writes_flushed();
+
+                            noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
                         }
                     }
                 }
