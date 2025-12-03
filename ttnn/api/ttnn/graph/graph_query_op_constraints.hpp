@@ -41,32 +41,32 @@ private:
 // supported and a new overload should be added
 
 // 2025-11-10: extract_output_tensor now becomes extract_output_tensors so that multiple output tensors can be returned.
+// 2025-12-03: the overloads are now unified to use visit_object_of_type to extract tensors
 
-// most ops just return a tensor
-inline std::vector<Tensor> extract_output_tensors(const Tensor& result) { return {result}; }
-
-// multi-output ops like sort
-inline std::vector<Tensor> extract_output_tensors(const std::vector<Tensor>& result) { return result; }
-
-// split_query_key_value_and_split_heads returns 3 tensors in a tuple
-inline std::vector<Tensor> extract_output_tensors(const std::tuple<Tensor, Tensor, Tensor>& t) {
-    return {std::get<0>(t), std::get<1>(t), std::get<2>(t)};
+// Generic function to extract all tensors from most return types using reflection. The return type could be:
+// - A single Tensor (Most ops)
+// - std::vector<Tensor> or std::tuple<Tensor, Tensor, ...> (multi-output ops, e.g., sort,
+// split_query_key_value_and_split_heads)
+template <typename T>
+inline std::vector<Tensor> extract_output_tensors(const T& result) {
+    std::vector<Tensor> tensors;
+    tt::stl::reflection::visit_object_of_type<Tensor>([&tensors](auto&& tensor) { tensors.push_back(tensor); }, result);
+    return tensors;
 }
 
-// conv2d output
-// TODO: add support for other output tensors, i.e., weights and biases
-template <typename... Args1, typename... Args2>
-std::vector<Tensor> extract_output_tensors(
-    const std::variant<
-        ttnn::Tensor,
-        std::tuple<ttnn::Tensor, Args1...>,
-        std::tuple<ttnn::Tensor, Args2...>,
-        std::tuple<ttnn::Tensor, Args1..., Args2...>>& result) {
-    return {std::visit<Tensor>(
-        tt::stl::overloaded{
-            [](const ttnn::Tensor& arg) { return arg; }, [](const auto& arg) { return std::get<0>(arg); }},
-        result)};
+// Specialized overload for conv2d output (std::variant with different tuple combinations)
+template <typename... Ts>
+inline std::vector<Tensor> extract_output_tensors(const std::variant<Ts...>& result) {
+    std::vector<Tensor> tensors;
+    std::visit(
+        [&tensors](auto&& value) {
+            tt::stl::reflection::visit_object_of_type<Tensor>(
+                [&tensors](auto&& tensor) { tensors.push_back(tensor); }, value);
+        },
+        result);
+    return tensors;
 }
+
 }  // namespace detail
 
 struct ResourceUsage {
