@@ -495,3 +495,6 @@ tests:
 
   610:
     name: "Transaction ID - Write After Read"
+
+  611:
+    name: "Transaction ID - Write After Read One Packet Stateful"
