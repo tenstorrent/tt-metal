@@ -23,6 +23,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/set.h>
 #include <nanobind/stl/tuple.h>
+#include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/bfloat_dtype_traits.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
@@ -479,7 +480,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
 
     auto pyCoreRangeSet = static_cast<nb::class_<CoreRangeSet>>(m_tensor.attr("CoreRangeSet"));
     pyCoreRangeSet
-        .def(
+        .def(  // NANOBIND_TODO: see which overload was being used in prefetcher test
             "__init__",
             [](CoreRangeSet* t, const std::set<CoreRange>& core_ranges) { new (t) CoreRangeSet(core_ranges); })
         .def(
