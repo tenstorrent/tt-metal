@@ -185,25 +185,15 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
 
 UntilizeDeviceOperation::spec_return_value_t UntilizeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    using namespace tt::constants;
     const auto& input_tensor = tensor_args.input;
-    if (input_tensor.memory_config().is_sharded()) {
-        auto mem_config =
-            operation_attributes.output_mem_config.with_shard_spec(input_tensor.memory_config().shard_spec());
-        return {TensorSpec(
-            input_tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
-                input_tensor.dtype(),
-                PageConfig(Layout::TILE),
-                mem_config,
-                input_tensor.logical_shape(),
-                input_tensor.padded_shape()))};
-    }
+    DataType output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
 
     return {TensorSpec(
         input_tensor.logical_shape(),
         TensorLayout::fromPaddedShape(
-            input_tensor.dtype(),
-            PageConfig(Layout::TILE),
+            output_dtype,
+            PageConfig(Layout::ROW_MAJOR),
             operation_attributes.output_mem_config,
             input_tensor.logical_shape(),
             input_tensor.padded_shape()))};
