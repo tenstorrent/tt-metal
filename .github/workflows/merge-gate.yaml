@@ -317,7 +317,7 @@ jobs:
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
-    cpp-merge-gate-tests:
+  cpp-merge-gate-tests:
     needs: [build, find-changes]
     # if: ${{ github.ref_name == 'main' ||
     #         needs.find-changes.outputs.cmake-changed == 'true' ||
