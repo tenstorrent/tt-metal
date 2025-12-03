@@ -48,6 +48,9 @@ inline uint32_t get_unpadded_linear_row_index_for_tile(
 }
 
 void kernel_main() {
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
     // ------------------------------------------------------------------------
     // 0) Read compile-time constants
     // ------------------------------------------------------------------------
@@ -330,4 +333,8 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(tt::CBIndex::c_1, 1);
     }
+
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
 }

@@ -8,6 +8,9 @@
 
 // split REDUCE across cores
 void kernel_main() {
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
     uint32_t reduce_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(1));
     constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
     constexpr uint32_t block_h = get_compile_time_arg_val(3);
@@ -58,4 +61,8 @@ void kernel_main() {
     cb_push_back(cb_ex_global, stats_tiles * block_h);
     cb_pop_front(cb_stats_reduced, stats_tiles * block_h);
     global_semaphore_set();
+
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
 }

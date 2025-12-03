@@ -8,6 +8,9 @@
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
     const uint32_t packed_scalar = get_arg_val<uint32_t>(0);
     const uint32_t dst_addr = get_arg_val<uint32_t>(1);
     const uint32_t start_tile_id = get_arg_val<uint32_t>(2);
@@ -67,4 +70,8 @@ void kernel_main() {
         cb_pop_front(cb_id_dst, onetile);
     }
 #endif
+
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
 }

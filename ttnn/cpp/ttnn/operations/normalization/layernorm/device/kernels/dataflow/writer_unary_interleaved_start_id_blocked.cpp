@@ -5,6 +5,9 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t num_tiles = get_arg_val<uint32_t>(1);
     uint32_t tile_offset = get_arg_val<uint32_t>(2);
@@ -30,4 +33,8 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(cb_id_out0, blk);
     }
+
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
 }

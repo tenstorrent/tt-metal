@@ -6,6 +6,9 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t N = get_arg_val<uint32_t>(1);
     const uint32_t C = get_arg_val<uint32_t>(2);
@@ -46,4 +49,8 @@ void kernel_main() {
             }
         }
     }
+
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
 }

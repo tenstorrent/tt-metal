@@ -10,6 +10,9 @@
 #include "reshard_writer.hpp"
 
 void kernel_main() {
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
     constexpr bool fuse_gamma = get_compile_time_arg_val(1) == 1;
     constexpr bool fuse_beta = get_compile_time_arg_val(2) == 1;
@@ -118,4 +121,8 @@ void kernel_main() {
         storage_core_stride_w_bytes,
         block_ht);
 #endif
+
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
 }

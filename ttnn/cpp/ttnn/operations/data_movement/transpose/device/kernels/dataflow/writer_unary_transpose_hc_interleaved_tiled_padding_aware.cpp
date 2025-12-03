@@ -6,6 +6,9 @@
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
     // Retrieve arguments
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t start_tile_idx = get_arg_val<uint32_t>(1);
@@ -197,4 +200,8 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(tt::CBIndex::c_1, 1);
     }
+
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
 }

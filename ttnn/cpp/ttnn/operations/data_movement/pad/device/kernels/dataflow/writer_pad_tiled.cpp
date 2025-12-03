@@ -15,6 +15,9 @@
 // [0:2, 0:2, 0:1, 0:1] we wait for the reader to send us the correct tile, and then write it, otherwise we
 // write padding.
 void kernel_main() {
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t output_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t pad_val_cb_id = get_compile_time_arg_val(2);
@@ -80,4 +83,8 @@ void kernel_main() {
         advance_tensor_index(output_id_per_dim, output_page_shape, num_dims);
         output_page_offset++;
     }
+
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
 }

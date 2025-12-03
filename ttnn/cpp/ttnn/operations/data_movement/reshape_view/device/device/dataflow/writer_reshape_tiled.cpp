@@ -11,6 +11,9 @@ using namespace tt::data_movement::common;
 using ttnn::operations::data_movement::reshape::detail::SegmentMapData;
 
 void kernel_main() {
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
     const uint32_t output_base_addr = get_arg_val<uint32_t>(0);
 
     const uint32_t start_output_page = get_arg_val<uint32_t>(1);
@@ -73,4 +76,8 @@ void kernel_main() {
         cb_pop_front(cb_id_mapping, 1);
     }
     cb_push_back(cb_id_working, 1);
+
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
 }

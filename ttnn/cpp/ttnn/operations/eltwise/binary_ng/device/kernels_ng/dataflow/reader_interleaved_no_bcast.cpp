@@ -7,6 +7,9 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_tile_id = get_arg_val<uint32_t>(1);
     const uint32_t src_num_tiles = get_arg_val<uint32_t>(2);
@@ -133,4 +136,8 @@ void kernel_main() {
         tile_offset_b += next_nd_shift_b;
     }
 #endif
+
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
 }

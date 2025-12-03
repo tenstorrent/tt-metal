@@ -6,6 +6,9 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t num_dims = get_compile_time_arg_val(1);
     constexpr auto src_args = TensorAccessorArgs<2>();
@@ -44,4 +47,8 @@ void kernel_main() {
             }
         }
     }
+
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
 }

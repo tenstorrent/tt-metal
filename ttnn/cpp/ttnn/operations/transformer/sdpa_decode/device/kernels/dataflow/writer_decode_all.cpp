@@ -11,6 +11,9 @@
 #include "dataflow_common.hpp"
 
 void kernel_main() {
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
     constexpr uint32_t B = get_compile_time_arg_val(0);     // batch size
     constexpr uint32_t PNHt = get_compile_time_arg_val(1);  // padded number of heads in tiles
     constexpr uint32_t St = get_compile_time_arg_val(2);    // full sequence length of kv cache in tiles
@@ -310,4 +313,8 @@ void kernel_main() {
             cb_pop_front(cb_out, out_chunk_tiles);
         }
     }
+
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
 }

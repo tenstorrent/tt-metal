@@ -10,6 +10,9 @@
 #include "ckernel_defs.h"
 
 void kernel_main() {
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
     // in0 mcast args
     const uint32_t in0_mcast_sender_noc_x = get_arg_val<uint32_t>(0);
     const uint32_t in0_mcast_sender_noc_y = get_arg_val<uint32_t>(1);
@@ -84,4 +87,8 @@ void kernel_main() {
             }
         }
     }
+
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
 }

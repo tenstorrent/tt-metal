@@ -10,6 +10,9 @@
 #include "dataflow_common.hpp"
 
 void kernel_main() {
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
     /*
     In DRAM, Q is (B, PNHt, DHt), K is (B, St, DHt), V is (B, St, DHt), mask is (B, PNHt, PSt)
     We want to read for a particular batch cur_batch, and sequence length up to padded layer length.
@@ -396,4 +399,8 @@ void kernel_main() {
                 PSt);
         }
     }
+
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
 }

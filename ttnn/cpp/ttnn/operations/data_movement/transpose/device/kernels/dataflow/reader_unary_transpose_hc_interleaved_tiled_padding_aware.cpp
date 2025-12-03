@@ -7,6 +7,9 @@
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t num_tiles = get_arg_val<uint32_t>(1);
     uint32_t start_id = get_arg_val<uint32_t>(2);
@@ -72,4 +75,8 @@ void kernel_main() {
         tt::data_movement::common::fill_with_val(l1_write_addr, num_writes, padding_val_packed);
         cb_push_back(tt::CBIndex::c_1, 1);
     }
+
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
 }

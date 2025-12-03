@@ -9,6 +9,9 @@
 // Writes to Specified Circular Buffers in L1
 // Expects n provided src_addr, src_noc_x, src_noc_y, and cb_id_in
 void kernel_main() {
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
     const uint32_t num_tiles = get_arg_val<uint32_t>(0);
     const uint32_t start_tensor = get_arg_val<uint32_t>(1);
     const uint32_t start_tensor_id = get_arg_val<uint32_t>(2);
@@ -60,4 +63,8 @@ void kernel_main() {
             }
         }
     }
+
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
 }

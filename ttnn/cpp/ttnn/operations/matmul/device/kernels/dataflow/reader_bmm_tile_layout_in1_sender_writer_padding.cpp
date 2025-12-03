@@ -9,6 +9,9 @@
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
 void kernel_main() {
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
     // READER
     uint32_t rt_args_idx = 0;
     // in1 tensor args
@@ -574,4 +577,8 @@ void kernel_main() {
         cb_id_out0,
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
 #endif
+
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
 }

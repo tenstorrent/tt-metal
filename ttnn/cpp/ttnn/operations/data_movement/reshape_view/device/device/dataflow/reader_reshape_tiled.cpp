@@ -14,6 +14,9 @@ using ttnn::operations::data_movement::reshape::detail::SegmentMapData;
 constexpr uint32_t One_Tile_Reserve = 1;
 
 void kernel_main() {
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
     uint32_t input_addr = get_arg_val<uint32_t>(0);
     uint32_t map_addr = get_arg_val<uint32_t>(1);
     uint32_t start_output_page_idx = get_arg_val<uint32_t>(2);
@@ -69,4 +72,8 @@ void kernel_main() {
             cb_push_back(input_cb_id, 1);
         }
     }
+
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
 }

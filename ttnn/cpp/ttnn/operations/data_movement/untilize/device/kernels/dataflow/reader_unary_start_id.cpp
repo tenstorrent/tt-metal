@@ -7,6 +7,9 @@
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 void kernel_main() {
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
     // run-time args
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_tiles = get_arg_val<uint32_t>(1);
@@ -46,4 +49,8 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_id_in0, 1);
     }
+
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
 }

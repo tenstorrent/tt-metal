@@ -12,6 +12,9 @@
 #include "ckernel_defs.h"
 
 void kernel_main() {
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
     uint32_t rt_args_idx = 0;
     // in0 tensor args
     const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
@@ -344,4 +347,8 @@ void kernel_main() {
         cb_wait_front(cb_id_sparsity, 1);
         cb_pop_front(cb_id_sparsity, 1);
     }
+
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
 }

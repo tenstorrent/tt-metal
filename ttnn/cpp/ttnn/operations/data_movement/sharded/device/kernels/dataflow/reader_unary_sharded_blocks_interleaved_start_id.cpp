@@ -16,6 +16,9 @@ constexpr uint32_t get_barrier_read_threshold() {
 }
 
 void kernel_main() {
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t block_height_tiles = get_arg_val<uint32_t>(1);
     const uint32_t block_width_tiles = get_arg_val<uint32_t>(2);
@@ -55,4 +58,8 @@ void kernel_main() {
     }
     noc_async_read_barrier();
     cb_push_back(cb_id_in0, block_num_tiles);
+
+    noc_async_atomic_barrier();
+    noc_async_read_barrier();
+    noc_async_write_barrier();
 }
