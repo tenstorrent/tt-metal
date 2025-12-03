@@ -152,17 +152,17 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             }
             break;
         case UnaryOpType::POWER: {
-            uint32_t power_bits;
+            uint32_t exponent;
             if constexpr (std::is_same_v<T, uint32_t>) {
-                power_bits = params[0];
+                exponent = params[0];
             } else if constexpr (std::is_same_v<T, float>) {
-                power_bits = std::bit_cast<uint32_t>(params[0]);
+                exponent = std::bit_cast<uint32_t>(params[0]);
             } else {
                 // For other types (int32_t), convert to float first, then to bits
                 float temp = static_cast<float>(params[0]);
-                power_bits = std::bit_cast<uint32_t>(temp);
+                exponent = std::bit_cast<uint32_t>(temp);
             }
-            op_init_and_name = {"power_tile_init();", fmt::format("power_tile({}, {:#x}u);", idst, power_bits)};
+            op_init_and_name = {"power_tile_init();", fmt::format("power_tile({}, {:#x}u);", idst, exponent)};
             break;
         }
         case UnaryOpType::LEAKY_RELU:
