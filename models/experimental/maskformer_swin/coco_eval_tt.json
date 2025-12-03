@@ -1,7 +1,0 @@
-{
-  "dataset": "/workdir/coco/val2017",
-  "num_images": 10,
-  "miou": 0.00030005092179721213,
-  "pq": null,
-  "device": "wormhole_n300"
-}
