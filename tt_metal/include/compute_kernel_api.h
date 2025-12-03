@@ -629,33 +629,24 @@ ALWI void max_reduce_with_indices_init() {
 template <PoolType pool_type, DataFormat format, ReduceDim reduce_dim = ReduceDim::REDUCE_COL>
 ALWI void sfpu_reduce(uint32_t idst) {
     static_assert(reduce_dim == ReduceDim::REDUCE_COL, "Only column reduction (REDUCE_COL) is currently supported");
+    static_assert(pool_type != PoolType::MAX, "MAX pool type is not supported for reduce operations");
     static_assert(
-        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32 || format == DataFormat::UInt16 || format == DataFormat::Float16_b,
-        "Unsupported data format. Supported formats: Float32, Int32, UInt32, UInt16, Float16_b");
-    static_assert(
-        pool_type == PoolType::SUM || pool_type == PoolType::AVG || pool_type == PoolType::MAX || pool_type == PoolType::MIN,
-        "Unsupported pool type. Supported pool types: SUM, AVG, MAX, MIN");
+        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32,
+        "Unsupported data format. Supported formats: Float32, Int32, UInt32");
 
     // This kernel is optimized for 32x32 tiles and uses RC_custom vector mode for custom reduction
     MATH((llk_math_eltwise_unary_sfpu_reduce<true, pool_type, reduce_dim, format>(idst, VectorMode::RC_custom)));
 }
 
 /**
- * @brief Initialization for SFPU reduce kernel.
- *        Must be called before sfpu_reduce() to set up the necessary configurations for reduction operations.
- * @tparam pool_type The reduction operation, currently supported: (SUM, AVG, MAX, MIN)
- * @tparam format The data format, currently supported: (Float32, Int32, UInt32, UInt16, Float16_b)
+ * Please refer to documentation for any_init.
  */
-template <PoolType pool_type, DataFormat format>
+template <DataFormat format>
 ALWI void sfpu_reduce_init() {
     static_assert(
-        pool_type == PoolType::SUM || pool_type == PoolType::AVG || pool_type == PoolType::MAX || pool_type == PoolType::MIN,
-        "Unsupported pool type. Supported pool types: SUM, AVG, MAX, MIN");
-    static_assert(
-        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32 || format == DataFormat::UInt16 || format == DataFormat::Float16_b,
-        "Unsupported data format. Supported formats: Float32, Int32, UInt32, UInt16, Float16_b");
-
-    MATH((llk_math_eltwise_unary_sfpu_reduce_init<true, pool_type, format>()));
+        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32,
+        "Unsupported data format. Supported formats: Float32, Int32, UInt32");
+    MATH((llk_math_eltwise_unary_sfpu_reduce_init<true, format>()));
 }
 
 // clang-format off

@@ -204,22 +204,6 @@ jobs:
               "co-owner-2-id": "U08CEGF78ET"
             },
             {
-              "name": "[WH-T3K][v1] Qwen2.5-VL-72B-Instruct",
-              "model": "Qwen/Qwen2.5-VL-72B-Instruct",
-              "server-timeout": 10,
-              "benchmark-timeout": 5,
-              "runner-label": "config-t3000",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "T3K",
-              "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
-              "use-vllm-v1": true,
-              "structured-output": true,
-              "multimodal": true,
-              "additional-server-args": "--max_model_len 2048",
-              "co-owner-1-id": "U07RY6B5FLJ",
-            },
-            {
               "name": "[BH-LB][v1] Llama-3.1-8B-Instruct",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 35,
@@ -396,9 +380,9 @@ jobs:
             ADDITIONAL_SERVER_ARGS=()
           fi
 
-          export MESH_DEVICE="${{ matrix.test-group.mesh-device }}"
+          export MESH_DEVICE=${{ matrix.test-group.mesh-device }}
           if [ -n "${{ matrix.test-group.tt-llama-text-ver }}" ]; then
-            export TT_LLAMA_TEXT_VER="${{ matrix.test-group.tt-llama-text-ver }}"
+            export TT_LLAMA_TEXT_VER=${{ matrix.test-group.tt-llama-text-ver }}
           fi
 
           # Keep TT cache separate from HF hub

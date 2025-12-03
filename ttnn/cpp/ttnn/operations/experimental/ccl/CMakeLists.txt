@@ -93,8 +93,8 @@ target_sources(
         reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.cpp
         reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_program.cpp
         send_recv_async/send_async/send_async.cpp
-        send_recv_async/send_async/device/send_async_op_device_operation.cpp
-        send_recv_async/send_async/device/send_async_op_program_factory.cpp
+        send_recv_async/send_async/device/send_async_op.cpp
+        send_recv_async/send_async/device/send_async_program.cpp
         send_recv_async/recv_async/recv_async.cpp
         send_recv_async/recv_async/device/recv_async_op.cpp
         send_recv_async/recv_async/device/recv_async_program.cpp

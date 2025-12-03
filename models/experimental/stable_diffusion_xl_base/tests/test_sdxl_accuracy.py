@@ -175,6 +175,10 @@ def test_accuracy_sdxl(
     else:
         logger.info("FID score is not calculated for less than 2 prompts.")
 
+    print(f"FID score: {fid_score}")
+    print(f"Average CLIP Score: {average_clip_score}")
+    print(f"Standard Deviation of CLIP Scores: {deviation_clip_score}")
+
     avg_gen_end_to_end = profiler.get("end_to_end_generation")
     model_name = "sdxl-tp" if use_cfg_parallel else "sdxl"
 
@@ -269,7 +273,6 @@ def test_accuracy_sdxl(
         json.dump(data, f, indent=4)
 
     logger.info(f"Test results saved to {OUT_ROOT}/{RESULTS_FILE_NAME}")
-    print(json.dumps(data, indent=4))
 
     check_clip_scores(start_from, num_prompts, prompts, clip_scores)
 

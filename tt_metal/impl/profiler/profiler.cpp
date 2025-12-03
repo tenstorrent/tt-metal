@@ -421,21 +421,18 @@ bool compareCoalescedMarkersByCoreAndTimestamp(
 }
 
 auto coalesceFabricEvents(
-    std::unordered_map<experimental::ProgramExecutionUID, std::vector<tracy::TTDeviceMarker>>&
-        timestamped_datapoints_by_op,
+    std::unordered_map<RuntimeID, std::vector<tracy::TTDeviceMarker>>& timestamped_datapoints_by_opname,
     ChipId device_id) {
-    std::unordered_map<
-        experimental::ProgramExecutionUID,
-        std::vector<std::variant<FabricEventMarkers, tracy::TTDeviceMarker>>>
-        coalesced_events_by_op;
+    std::unordered_map<RuntimeID, std::vector<std::variant<FabricEventMarkers, tracy::TTDeviceMarker>>>
+        coalesced_events_by_opname;
     using EMD = KernelProfilerNocEventMetadata;
 
     // Need to sort noc events in each opname group by x, y, proc, timestamp for proper coalescing
-    for (auto& [program_execution_uid, markers] : timestamped_datapoints_by_op) {
+    for (auto& [runtime_id, markers] : timestamped_datapoints_by_opname) {
         std::sort(markers.begin(), markers.end(), compareMarkersByCoreAndTimestamp);
     }
 
-    for (auto& [program_execution_uid, markers] : timestamped_datapoints_by_op) {
+    for (auto& [runtime_id, markers] : timestamped_datapoints_by_opname) {
         // temporary queue to store events on fabric muxes
         std::unordered_map<CoreCoord, std::queue<tracy::TTDeviceMarker>> fabric_mux_markers;
 
@@ -541,24 +538,24 @@ auto coalesceFabricEvents(
                 // Advance past all fabric event markers (fabric_event, fabric_routing_fields,
                 // local_noc_write_event)
                 i += 3;
-                coalesced_events_by_op[program_execution_uid].push_back(fabric_event_markers);
+                coalesced_events_by_opname[runtime_id].push_back(fabric_event_markers);
             } else {
                 // If not a fabric event group, simply copy existing event as-is
-                coalesced_events_by_op[program_execution_uid].push_back(markers[i]);
+                coalesced_events_by_opname[runtime_id].push_back(markers[i]);
                 i += 1;
             }
         }
 
         // remove fabric mux events since they are now part of the coalesced fabric events
         for (auto& [fabric_mux_core, _] : fabric_mux_markers) {
-            removeFabricMuxEvents(coalesced_events_by_op[program_execution_uid], fabric_mux_core);
+            removeFabricMuxEvents(coalesced_events_by_opname[runtime_id], fabric_mux_core);
         }
     }
 
-    return coalesced_events_by_op;
+    return coalesced_events_by_opname;
 }
 
-std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> convertNocTracePacketsToJson(
+std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJson(
     const std::map<CoreCoord, std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>>&
         device_markers_per_core_risc_map,
     ChipId device_id,
@@ -566,64 +563,59 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
     double device_sync_freq_scale,
     int64_t device_sync_shift) {
     if (!MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
-        return std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t>();
+        return std::unordered_map<RuntimeID, nlohmann::json::array_t>();
     }
 
     using EMD = KernelProfilerNocEventMetadata;
-    std::unordered_map<experimental::ProgramExecutionUID, std::vector<tracy::TTDeviceMarker>>
-        timestamped_datapoints_by_op;
-    std::unordered_map<experimental::ProgramExecutionUID, std::vector<tracy::TTDeviceMarker>> zones_by_op;
+    std::unordered_map<RuntimeID, std::vector<tracy::TTDeviceMarker>> timestamped_datapoints_by_opname;
+    std::unordered_map<RuntimeID, std::vector<tracy::TTDeviceMarker>> zones_by_opname;
     // Separate out zones and noc events, and group by runtime id
     for (const auto& [core, risc_map] : device_markers_per_core_risc_map) {
         for (const auto& [risc, device_markers] : risc_map) {
             for (const tracy::TTDeviceMarker& marker : device_markers) {
-                experimental::ProgramExecutionUID program_execution_uid(
-                    marker.runtime_host_id, marker.trace_id, marker.trace_id_counter);
                 if (isMarkerAZoneEndpoint(marker)) {
                     if (marker.marker_name != "SYNC-ZONE-SENDER" && marker.marker_name != "SYNC-ZONE-RECEIVER" &&
                         marker.marker_name != "PROFILER-NOC-QUICK-SEND" && !marker.marker_name.ends_with("-FW") &&
                         (!marker.marker_name.ends_with("-KERNEL") || marker.risc == tracy::RiscType::BRISC ||
                          marker.risc == tracy::RiscType::NCRISC)) {
-                        zones_by_op[program_execution_uid].push_back(marker);
+                        zones_by_opname[marker.runtime_host_id].push_back(marker);
                     }
                 } else if (isMarkerATimestampedDatapoint(marker)) {
-                    timestamped_datapoints_by_op[program_execution_uid].push_back(marker);
+                    timestamped_datapoints_by_opname[marker.runtime_host_id].push_back(marker);
                 }
             }
         }
     }
 
     // Adjust timestamps based on device sync info
-    for (auto& [program_execution_uid, markers] : timestamped_datapoints_by_op) {
+    for (auto& [runtime_id, markers] : timestamped_datapoints_by_opname) {
         for (tracy::TTDeviceMarker& marker : markers) {
             marker.timestamp = marker.timestamp * device_sync_freq_scale + device_sync_shift;
         }
     }
-    for (auto& [program_execution_uid, markers] : zones_by_op) {
+    for (auto& [runtime_id, markers] : zones_by_opname) {
         for (tracy::TTDeviceMarker& marker : markers) {
             marker.timestamp = marker.timestamp * device_sync_freq_scale + device_sync_shift;
         }
     }
 
     // Group fabric event markers into a single struct to process later
-    std::unordered_map<
-        experimental::ProgramExecutionUID,
-        std::vector<std::variant<FabricEventMarkers, tracy::TTDeviceMarker>>>
-        coalesced_events_by_op = coalesceFabricEvents(timestamped_datapoints_by_op, device_id);
+    std::unordered_map<RuntimeID, std::vector<std::variant<FabricEventMarkers, tracy::TTDeviceMarker>>>
+        coalesced_events_by_opname = coalesceFabricEvents(timestamped_datapoints_by_opname, device_id);
 
     // Add zones back and sort by x, y, proc, timestamp
-    for (auto& [program_execution_uid, markers] : zones_by_op) {
+    for (auto& [runtime_id, markers] : zones_by_opname) {
         for (auto marker : markers) {
-            coalesced_events_by_op[program_execution_uid].push_back(marker);
+            coalesced_events_by_opname[runtime_id].push_back(marker);
         }
     }
-    for (auto& [program_execution_uid, markers] : coalesced_events_by_op) {
+    for (auto& [runtime_id, markers] : coalesced_events_by_opname) {
         std::sort(markers.begin(), markers.end(), compareCoalescedMarkersByCoreAndTimestamp);
     }
 
     // Convert to json
-    std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> json_events_by_op;
-    for (auto& [program_execution_uid, markers] : coalesced_events_by_op) {
+    std::unordered_map<RuntimeID, nlohmann::json::array_t> json_events_by_opname;
+    for (auto& [runtime_id, markers] : coalesced_events_by_opname) {
         for (auto marker : markers) {
             if (std::holds_alternative<tracy::TTDeviceMarker>(marker)) {
                 auto device_marker = std::get<tracy::TTDeviceMarker>(marker);
@@ -633,7 +625,7 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                         (device_marker.marker_type == tracy::TTDeviceMarkerType::ZONE_END)
                             ? tracy::TTDeviceMarkerType::ZONE_END
                             : tracy::TTDeviceMarkerType::ZONE_START;
-                    json_events_by_op[program_execution_uid].push_back(nlohmann::ordered_json{
+                    json_events_by_opname[runtime_id].push_back(nlohmann::ordered_json{
                         {"run_host_id", device_marker.runtime_host_id},
                         {"op_name", device_marker.op_name},
                         {"proc", enchantum::to_string(device_marker.risc)},
@@ -689,7 +681,7 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                         data["dy"] = phys_coord.y;
                     }
 
-                    json_events_by_op[program_execution_uid].push_back(data);
+                    json_events_by_opname[runtime_id].push_back(data);
                 }
             } else if (std::holds_alternative<FabricEventMarkers>(marker)) {
                 // coalesce fabric event markers into a single logical trace event with extra 'fabric_send' metadata
@@ -872,16 +864,16 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                     continue;
                 }
 
-                json_events_by_op[program_execution_uid].push_back(fabric_event_json);
+                json_events_by_opname[runtime_id].push_back(fabric_event_json);
             }
         }
     }
 
-    return json_events_by_op;
+    return json_events_by_opname;
 }
 
 void dumpJsonNocTraces(
-    const std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t>& noc_trace_data,
+    const std::unordered_map<RuntimeID, nlohmann::json::array_t>& noc_trace_data,
     ChipId device_id,
     const std::filesystem::path& output_dir) {
     // create output directory if it does not exist
@@ -894,22 +886,15 @@ void dumpJsonNocTraces(
         return;
     }
 
-    for (const auto& [program_execution_uid, events] : noc_trace_data) {
+    for (const auto& [runtime_id, events] : noc_trace_data) {
         // dump events to a json file inside directory output_dir named after the op_name
         std::filesystem::path rpt_path = output_dir;
         const std::string op_name = events.front().value("op_name", "UnknownOP");
-        // add trace id to name, extract on npe side then group using this as well,
-        // include when getting data in report
-        rpt_path /= fmt::format(
-            "noc_trace{}{}{}{}.json",
-            "_dev" + std::to_string(device_id),
-            op_name.empty() ? "" : "_" + op_name,
-            "_ID" + std::to_string(program_execution_uid.runtime_id),
-            program_execution_uid.trace_id_counter == tracy::TTDeviceMarker::INVALID_NUM
-                ? ""
-                : "_traceID" +
-                      std::to_string((program_execution_uid.trace_id << 32) | program_execution_uid.trace_id_counter));
-
+        if (!op_name.empty()) {
+            rpt_path /= fmt::format("noc_trace_dev{}_{}_ID{}.json", device_id, op_name, runtime_id);
+        } else {
+            rpt_path /= fmt::format("noc_trace_dev{}_ID{}.json", device_id, runtime_id);
+        }
         std::ofstream file(rpt_path);
         if (file.is_open()) {
             // Write the final processed events for this op
@@ -2018,9 +2003,8 @@ void DeviceProfiler::writeDeviceResultsToFiles() const {
         log_warning(
             tt::LogAlways, "Profiler NoC events are enabled; this can add 1-15% cycle overhead to typical operations!");
         FabricRoutingLookup routing_lookup;
-        std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> noc_trace_data =
-            convertNocTracePacketsToJson(
-                device_markers_per_core_risc_map, device_id, routing_lookup, freq_scale, shift);
+        std::unordered_map<RuntimeID, nlohmann::json::array_t> noc_trace_data = convertNocTracePacketsToJson(
+            device_markers_per_core_risc_map, device_id, routing_lookup, freq_scale, shift);
 
         if (!noc_trace_data.empty()) {
             dumpJsonNocTraces(noc_trace_data, device_id, noc_trace_data_output_dir);

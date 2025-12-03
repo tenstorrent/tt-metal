@@ -1,51 +1,52 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "reduce_op_single_core_hw_program_factory.hpp"
-#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <string>
+#include <cmath>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <cmath>
+#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
 using namespace tt::constants;
 
-namespace ttnn::operations::reduction::generic::program {
+namespace tt {
 
-ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    using namespace tt;
-    using namespace tt::tt_metal;
-    const auto& a = tensor_args.input_tensor;
-    auto& output = tensor_return_value;
+namespace tt_metal {
+
+operation::ProgramWithCallbacks reduce_single_core_hw(
+    const Tensor& a,
+    Tensor& output,
+    ReduceOpMath reduce_op,
+    const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
+    float scaler,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     const auto& shape = a.padded_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
+        get_compute_kernel_config_args(a.device()->arch(), compute_kernel_config);
 
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
-    float scaler = std::sqrt(operation_attributes.scaler);
+    scaler = std::sqrt(scaler);
 
     uint32_t num_tensor_tiles = NC * H * W / TILE_HW;
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreCoord selected_core_coord = {0, 0};
-    if (operation_attributes.sub_core_grids.has_value() && !operation_attributes.sub_core_grids->ranges().empty()) {
-        const auto& r = operation_attributes.sub_core_grids->ranges().front();
+    if (sub_core_grids.has_value() && !sub_core_grids->ranges().empty()) {
+        // Pick the start of the first range
+        const auto& r = sub_core_grids->ranges().front();
         selected_core_coord = r.start_coord;
     }
     CoreRange core(selected_core_coord, selected_core_coord);
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
-
     // Scaler datatype is hardcoded bfloat16 due to tile creation in reader
     tt::DataFormat scaler_cb_data_format = tt::DataFormat::Float16_b;
     uint32_t scaler_single_tile_size = tt::tile_size(scaler_cb_data_format);
@@ -55,6 +56,7 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     tt_metal::Buffer* src0_buffer = a.buffer();
 
     // This should allocate a DRAM buffer on the device
+
     tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device");
 
@@ -113,7 +115,7 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .compile_args = compute_kernel_args,
-            .defines = reduce_op_utils::get_defines(operation_attributes.math_op, tt::tt_metal::ReduceOpDim::HW)});
+            .defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::HW)});
 
     tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {a.buffer()->address(), num_tensor_tiles, 0});
 
@@ -122,31 +124,32 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     tt_metal::SetRuntimeArgs(
         program, writer_kernel_id, core, {output.buffer()->address(), num_tensor_tiles / out_dim_divider, 0});
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, selected_core_coord}};
+    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, selected_core_coord](
+                                              const void* operation,
+                                              const Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto* src_dram_buffer = input_tensors.at(0).buffer();
+
+        auto* dst_dram_buffer = output_tensors.at(0).buffer();
+
+        CoreCoord core = selected_core_coord;
+
+        {
+            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            runtime_args[0] = src_dram_buffer->address();
+        }
+
+        {
+            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            runtime_args[0] = dst_dram_buffer->address();
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
 }
 
-void ReduceSingleCoreHwProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    using namespace tt;
-    using namespace tt::tt_metal;
-    auto* src_dram_buffer = tensor_args.input_tensor.buffer();
-    auto* dst_dram_buffer = tensor_return_value.buffer();
-    CoreCoord core = cached_program.shared_variables.selected_core_coord;
+}  // namespace tt_metal
 
-    {
-        auto& runtime_args =
-            GetRuntimeArgs(cached_program.program, cached_program.shared_variables.reader_kernel_id, core);
-        runtime_args[0] = src_dram_buffer->address();
-    }
-
-    {
-        auto& runtime_args =
-            GetRuntimeArgs(cached_program.program, cached_program.shared_variables.writer_kernel_id, core);
-        runtime_args[0] = dst_dram_buffer->address();
-    }
-}
-
-}  // namespace ttnn::operations::reduction::generic::program
+}  // namespace tt

@@ -35,13 +35,11 @@ void kernel_main() {
     // For read test, we use a separate notification address to avoid conflicts
     uint32_t local_read_addr = source_l1_buffer_address;
     uint32_t remote_read_addr = target_address;
-    uint32_t local_notification_addr = notification_mailbox_address;  // Where we receive notifications
+    uint32_t local_notification_addr = notification_mailbox_address;  // Where we prepare notifications
+    uint32_t remote_notification_addr =
+        notification_mailbox_address;  // Where to send notifications (same offset on receiver)
     bool match = true;
     uint32_t mismatch_addr, mismatch_val, expected_val;
-
-    // Wait for notification from receiver that all data is ready
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header =
-        wait_for_notification(local_notification_addr, time_seed_init, req_notification_size_bytes);
 
     for (uint32_t i = 0; i < num_packets; i++) {
         time_seed = prng_next(time_seed);
@@ -55,6 +53,19 @@ void kernel_main() {
                     get_noc_addr(noc_x_start, noc_y_start, remote_read_addr),
                     local_read_addr,
                     packet_payload_size_bytes);
+
+                // Notify the receiver that a read request has been issued
+                uint32_t notification_buffer_addr = local_notification_addr + i * req_notification_size_bytes;
+                uint32_t remote_notification_dest = remote_notification_addr + i * req_notification_size_bytes;
+                notify_receiver(
+                    dst_dev_id,
+                    dst_mesh_id,
+                    noc_x_start,
+                    noc_y_start,
+                    notification_buffer_addr,
+                    remote_notification_dest,
+                    time_seed,
+                    req_notification_size_bytes);
 
                 // wait for the read to complete
                 tt::tt_fabric::udm::fabric_read_barrier();
@@ -79,10 +90,6 @@ void kernel_main() {
             default: {
                 ASSERT(false);
             } break;
-        }
-
-        if (!match) {
-            break;
         }
 
         noc_async_writes_flushed();

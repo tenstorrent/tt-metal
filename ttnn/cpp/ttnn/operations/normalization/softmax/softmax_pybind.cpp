@@ -104,11 +104,9 @@ void bind_normalization_softmax_operation(py::module& module) {
                     :header-rows: 1
 
                     * - Dtypes
-                      - Layouts
+                        - Layouts
                     * - BFLOAT16, FLOAT32, BFLOAT8_B
-                      - TILE
-
-                The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
+                        - TILE
 
             Memory Support:
                 - Interleaved: DRAM and L1
@@ -149,9 +147,9 @@ void bind_normalization_softmax_scale_mask_operation(py::module& module) {
             Computes a fused scale-mask-softmax operation along the last dimension of the input tensor.
 
             This operation performs the following sequence:
-                1. Optionally scales the input: ``scaled = input_tensor * scale`` (if scale is provided)
-                2. Optionally applies mask: ``masked = scaled + mask`` (if mask is provided, with broadcasting)
-                3. Computes softmax: ``output = softmax(masked)``
+            1. Optionally scales the input: ``scaled = input_tensor * scale`` (if scale is provided)
+            2. Optionally applies mask: ``masked = scaled + mask`` (if mask is provided, with broadcasting)
+            3. Computes softmax: ``output = softmax(masked)``
 
             This fused operation is commonly used in attention mechanisms where scaling and masking
             are applied before the softmax operation for efficiency.
@@ -177,19 +175,17 @@ void bind_normalization_softmax_scale_mask_operation(py::module& module) {
                     :header-rows: 1
 
                     * - Dtypes
-                      - Layouts
+                        - Layouts
                     * - BFLOAT16, FLOAT32, BFLOAT8_B
-                      - TILE
+                        - TILE
 
                 .. list-table:: Mask Tensor (optional)
                     :header-rows: 1
 
                     * - Dtypes
-                      - Layouts
+                        - Layouts
                     * - BFLOAT16, BFLOAT8_B
-                      - TILE, ROW_MAJOR
-
-                The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
+                        - TILE, ROW_MAJOR
 
             Limitations:
                 * All tensors must be on-device.
@@ -253,11 +249,9 @@ void bind_normalization_softmax_inplace_operation(py::module& module) {
                     :header-rows: 1
 
                     * - Dtypes
-                      - Layouts
+                        - Layouts
                     * - BFLOAT16, FLOAT32, BFLOAT8_B
-                      - TILE
-
-                The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
+                        - TILE
 
             Limitations:
                 * The input tensor is modified in-place to save memory. Must already be on the device.
@@ -295,9 +289,9 @@ void bind_normalization_softmax_scale_mask_inplace_operation(py::module& module)
             Computes a fused scale-mask-softmax operation along the last dimension in-place.
 
             This operation modifies the input tensor directly and performs the following sequence:
-                1. Optionally scales the input: ``input_tensor *= scale`` (if scale is provided)
-                2. Optionally applies mask: ``input_tensor += mask`` (if mask is provided, with broadcasting)
-                3. Computes softmax: ``input_tensor = softmax(input_tensor)``
+            1. Optionally scales the input: ``input_tensor *= scale`` (if scale is provided)
+            2. Optionally applies mask: ``input_tensor += mask`` (if mask is provided, with broadcasting)
+            3. Computes softmax: ``input_tensor = softmax(input_tensor)``
 
             This in-place fused operation is commonly used in attention mechanisms and is memory-efficient
             as it reuses the input tensor for output, avoiding additional memory allocation.
@@ -323,21 +317,19 @@ void bind_normalization_softmax_scale_mask_inplace_operation(py::module& module)
                     :header-rows: 1
 
                     * - Dtypes
-                      - Layouts
+                        - Layouts
                     * - BFLOAT16, FLOAT32, BFLOAT8_B
-                      - TILE
+                        - TILE
 
                 .. list-table:: Mask Tensor (optional)
                     :header-rows: 1
 
                     * - Dtypes
-                      - Layouts
-                      - Ranks
+                        - Layouts
+                        - Ranks
                     * - BFLOAT16, BFLOAT8_B
-                      - TILE, ROW_MAJOR
-                      - 2, 3, 4
-
-                The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
+                        - TILE, ROW_MAJOR
+                        - 2, 3, 4
 
             Limitations:
                 * All tensors must be on-device.
@@ -419,11 +411,9 @@ void bind_normalization_softmax_scale_casual_mask_HW_inplace_operation(py::modul
                     :header-rows: 1
 
                     * - Dtypes
-                      - Layouts
+                        - Layouts
                     * - BFLOAT16, BFLOAT8_B
-                      - TILE (interleaved)
-
-                The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
+                        - TILE (interleaved)
 
             Limitations:
                 * This is an experimental/specialized feature optimized for specific transformer attention patterns.

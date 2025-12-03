@@ -344,7 +344,6 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         auto srcs = jit_build_query.srcs(params);
         this->srcs_.insert(this->srcs_.end(), std::move_iterator(srcs.begin()), std::move_iterator(srcs.end()));
     }
-    this->firmware_is_kernel_object_ = jit_build_query.firmware_is_kernel_object(params);
 
     // Create the objs from the srcs
     for (const string& src : srcs_) {
@@ -503,12 +502,9 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
     // 2. Weakened firmware elf (for kernels)
     std::vector<std::string> link_deps = {this->linker_script_};
     if (!this->is_fw_) {
-        std::string weakened = weakened_firmware_name();
-        link_deps.push_back(weakened);
-        if (!this->firmware_is_kernel_object_) {
-            cmd += "-Wl,--just-symbols=";
-        }
-        cmd += weakened + " ";
+        std::string weakened_elf = weakened_firmeware_elf_name();
+        cmd += "-Wl,--just-symbols=" + weakened_elf + " ";
+        link_deps.push_back(weakened_elf);
     }
 
     // Append common args provided by the build state
@@ -542,21 +538,17 @@ void JitBuildState::weaken(const string& out_dir) const {
     // ZoneScoped;
 
     std::string pathname_in = out_dir + target_name_ + ".elf";
-    std::string pathname_out = weakened_firmware_name();
+    std::string pathname_out = out_dir + target_name_ + "_weakened.elf";
 
     ll_api::ElfFile elf;
     elf.ReadImage(pathname_in);
     static std::string_view const strong_names[] = {"__fw_export_*", "__global_pointer$"};
     elf.WeakenDataSymbols(strong_names);
-    if (this->firmware_is_kernel_object_) {
-        elf.ObjectifyExecutable();
-    }
     elf.WriteImage(pathname_out);
 }
 
-std::string JitBuildState::weakened_firmware_name() const {
-    std::string_view name = this->firmware_is_kernel_object_ ? "object.o" : "weakened.elf";
-    return fmt::format("{}{}/{}_{}", this->env_.out_firmware_root_, this->target_name_, this->target_name_, name);
+std::string JitBuildState::weakened_firmeware_elf_name() const {
+    return fmt::format("{}{}/{}_weakened.elf", this->env_.out_firmware_root_, this->target_name_, this->target_name_);
 }
 
 void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const {

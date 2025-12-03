@@ -29,7 +29,7 @@ class SamplingGenerator:
     Typical usage:
         generator = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=tt_ccl)
         generator.reset_sampling_params(k=..., p=..., temp=...)
-        tokens = generator.sample(logits, enable_trace=True)
+        tokens = generator.sample(logits, seed=seed, enable_trace=True)
     """
 
     _DEFAULT_PENALTIES = {
@@ -137,17 +137,19 @@ class SamplingGenerator:
         logits,
         *,
         penalties_on: bool,
+        seed: Optional[int],
         tt_out_tok: Optional[ttnn.Tensor],
     ):
         if penalties_on:
             self.tt_penalties.apply(logits)
-        tt_tokens = self.tt_sampling(logits, tt_out_tok=tt_out_tok)
+        tt_tokens = self.tt_sampling(logits, seed=seed, tt_out_tok=tt_out_tok)
         return tt_tokens
 
     def capture_trace(
         self,
         logits: ttnn.Tensor,
         *,
+        seed: Optional[int] = None,
         tt_out_tok: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
@@ -161,6 +163,7 @@ class SamplingGenerator:
         self._run_sampling(
             logits,
             penalties_on=penalties_on,
+            seed=seed,
             tt_out_tok=tt_out_tok,
         )
 
@@ -168,6 +171,7 @@ class SamplingGenerator:
         sampled = self._run_sampling(
             logits,
             penalties_on=penalties_on,
+            seed=seed,
             tt_out_tok=tt_out_tok,
         )
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=self.cq_id)
@@ -176,7 +180,7 @@ class SamplingGenerator:
         slot["id"] = trace_id
         slot["input"] = logits
         slot["output"] = tt_out_tok or sampled
-        slot["kwargs"] = {"tt_out_tok": tt_out_tok}
+        slot["kwargs"] = {"seed": seed, "tt_out_tok": tt_out_tok}
 
         return slot["output"]
 
@@ -196,6 +200,7 @@ class SamplingGenerator:
         logits: ttnn.Tensor,
         *,
         enable_trace: bool = True,
+        seed: Optional[int] = None,
         tt_out_tok: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
@@ -210,6 +215,7 @@ class SamplingGenerator:
             tt_out = self._run_sampling(
                 logits,
                 penalties_on=penalties_on,
+                seed=seed,
                 tt_out_tok=tt_out_tok,
             )
         else:
@@ -217,6 +223,7 @@ class SamplingGenerator:
             if slot["id"] is None:
                 return self.capture_trace(
                     logits,
+                    seed=seed,
                     tt_out_tok=tt_out_tok,
                 )
 

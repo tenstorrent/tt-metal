@@ -7,7 +7,7 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-namespace operations::experimental::nlp_concat_heads_decode {
+namespace operations::experimental::transformer {
 
 struct NLPConcatHeadsDecodeOperation {
     static ttnn::Tensor invoke(
@@ -17,13 +17,13 @@ struct NLPConcatHeadsDecodeOperation {
         std::optional<Tensor> optional_output_tensor = std::nullopt,
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
-}  // namespace operations::experimental::nlp_concat_heads_decode
+}  // namespace operations::experimental::transformer
 
 namespace experimental {
 
 constexpr auto nlp_concat_heads_decode = ttnn::register_operation<
     "ttnn::experimental::nlp_concat_heads_decode",
-    ttnn::operations::experimental::nlp_concat_heads_decode::NLPConcatHeadsDecodeOperation>();
+    ttnn::operations::experimental::transformer::NLPConcatHeadsDecodeOperation>();
 
 }  // namespace experimental
 

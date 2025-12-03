@@ -49,13 +49,10 @@ class DeprecatedItem(NamedTuple):
         return self.age_days is not None and self.age_days >= Config.MIN_DEPRECATION_DAYS
 
 
-def find_removed_deprecations(files: List[str], base_ref: str = "origin/main") -> List[DeprecatedItem]:
+def find_removed_deprecations(base_ref: str = "origin/main") -> List[DeprecatedItem]:
     # Get all C++ files that changed (including deleted ones)
     changed_files = git_utils.get_changed_file_paths(base_ref)
-
-    # Only check changed files that are in the provided file list
-    files_set = set(files)
-    changed_cpp_files = [f for f in changed_files if f in files_set]
+    changed_cpp_files = [f for f in changed_files if is_cpp_source(f)]
 
     if not changed_cpp_files:
         return []
@@ -179,7 +176,7 @@ def main() -> int:
 
     source_files = find_cpp_sources(directory)
     existing = find_existing_deprecations(source_files)
-    removed = find_removed_deprecations(source_files, base_ref)
+    removed = find_removed_deprecations(base_ref)
 
     return print_report(existing, removed)
 

@@ -66,7 +66,6 @@ target_sources(
         nlp_concat_heads/nlp_concat_heads.cpp
         nlp_concat_heads_decode/device/nlp_concat_heads_decode_device_operation.cpp
         nlp_concat_heads_decode/device/nlp_concat_heads_decode_program_factory.cpp
-        nlp_concat_heads_decode/device/nlp_concat_heads_decode_subcoregrids_program_factory.cpp
         nlp_concat_heads_decode/nlp_concat_heads_decode.cpp
         nlp_concat_heads_boltz/device/nlp_concat_heads_boltz_device_operation.cpp
         nlp_concat_heads_boltz/device/nlp_concat_heads_boltz_program_factory.cpp

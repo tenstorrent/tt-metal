@@ -92,7 +92,6 @@ protected:
 
     bool is_fw_;
     bool process_defines_at_compile_{};
-    bool firmware_is_kernel_object_{};
     uint32_t dispatch_message_addr_;
 
     std::string out_path_;
@@ -128,7 +127,7 @@ protected:
     bool need_link(const std::string& out_dir) const;
     void link(const std::string& out_path, const JitBuildSettings* settings) const;
     void weaken(const std::string& out_path) const;
-    std::string weakened_firmware_name() const;
+    std::string weakened_firmeware_elf_name() const;
     void extract_zone_src_locations(const std::string& out_dir) const;
 
 public:

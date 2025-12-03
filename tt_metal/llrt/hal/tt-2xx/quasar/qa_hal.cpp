@@ -63,20 +63,17 @@ class HalJitBuildQueryQuasar : public hal_2xx::HalJitBuildQueryBase {
 public:
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
-        std::string_view cpu = params.processor_class == HalProcessorClassType::DM ? "tt-qsr64" : "tt-qsr-32";
-        std::string_view dir = "runtime/hw/lib/quasar";
-        objs.push_back(fmt::format("{}/{}-crt0-tls.o", dir, cpu));
         if (params.is_fw) {
-            objs.push_back(fmt::format("{}/{}-crt0.o", dir, cpu));
+            objs.push_back("runtime/hw/lib/quasar/tmu-crt0.o");
         }
         if ((params.core_type == HalProgrammableCoreType::TENSIX and
              params.processor_class == HalProcessorClassType::DM and params.processor_id == 0) or
             (params.core_type == HalProgrammableCoreType::IDLE_ETH and
              params.processor_class == HalProcessorClassType::DM and params.processor_id == 0)) {
             // Brisc and Idle Erisc.
-            objs.push_back(fmt::format("{}/{}-noc.o", dir, cpu));
+            objs.push_back("runtime/hw/lib/quasar/noc.o");
         }
-        objs.push_back(fmt::format("{}/{}-substitutes.o", dir, cpu));
+        objs.push_back("runtime/hw/lib/quasar/substitutes.o");
         return objs;
     }
 
@@ -135,12 +132,12 @@ public:
     }
 
     std::string common_flags(const Params& params) const override {
-        // TODO: Use correct tt-qsr cpu options #32893
         std::string cflags =
-            params.processor_class == HalProcessorClassType::DM ? "-mcpu=tt-qsr64-rocc " : "-mcpu=tt-qsr32-tensixbh ";
-        cflags += "-mno-tt-tensix-optimize-replay ";
-        cflags += "-fno-extern-tls-init ";
-        cflags += "-ftls-model=local-exec ";
+            "-mcpu=tt-bh "
+            // TODO: change to -mcpu=tt-qsr64{,-rocc},
+            // -mcpu=tt-qsr32{,-tensixbh}, once
+            // https://github.com/tenstorrent/tt-metal/issues/29186 is ready
+            "-mno-tt-tensix-optimize-replay ";
         if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
               params.processor_class == HalProcessorClassType::COMPUTE)) {
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
@@ -148,7 +145,6 @@ public:
         return cflags;
     }
 
-    bool firmware_is_kernel_object(const Params&) const override { return true; }
     std::string linker_script(const Params& params) const override {
         switch (params.core_type) {
             case HalProgrammableCoreType::TENSIX:
@@ -157,7 +153,7 @@ public:
                         return fmt::format(
                             "runtime/hw/toolchain/quasar/{}_dm{}.ld",
                             params.is_fw ? "firmware" : "kernel",
-                            params.is_fw ? "" : std::to_string(params.processor_id));
+                            params.processor_id);
                     }
                     case HalProcessorClassType::COMPUTE:
                         return fmt::format(

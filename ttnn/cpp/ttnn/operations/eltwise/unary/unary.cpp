@@ -26,7 +26,7 @@ inline Tensor unary_impl(
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
     TT_FATAL(!op_chain.empty(), "Op chain cannot be empty");
     DataType input_dtype = input_tensor.dtype();
-    DataType output_dtype = (op_chain[0].type() == UnaryOpType::TYPECAST || op_chain[0].type() == UnaryOpType::BITCAST)
+    DataType output_dtype = (op_chain[0].type() == UnaryOpType::TYPECAST)
                                 ? static_cast<DataType>(*op_chain[0].get_param_if<float>(1))
                                 : input_dtype;
     bool preserve_fp32_precision = input_dtype == DataType::FLOAT32;
@@ -267,23 +267,6 @@ Tensor Unary_chain::invoke(
     const std::optional<Tensor>& optional_output_tensor) {
     TT_FATAL(!ops_chain.empty(), "Op chain cannot be empty");
     return detail::unary_impl(input_tensor, ops_chain, memory_config, optional_output_tensor);
-}
-
-Tensor Bitcast::invoke(
-    const Tensor& input_tensor,
-    const DataType& output_dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    if (optional_output_tensor.has_value()) {
-        TT_FATAL(
-            output_dtype == optional_output_tensor.value().dtype(),
-            "If both output dtype and output tensor provided dtype should match");
-    }
-    // Use unary infrastructure with BITCAST op type
-    // BITCAST uses identity kernel (copy_tile + pack_tile) with output format for both CBs
-    EltwiseUnaryWithParam bitcast_op(
-        UnaryOpType::BITCAST, {static_cast<float>(input_tensor.dtype()), static_cast<float>(output_dtype)});
-    return Unary_chain::invoke(input_tensor, {bitcast_op}, memory_config, optional_output_tensor);
 }
 
 Tensor Selu::invoke(

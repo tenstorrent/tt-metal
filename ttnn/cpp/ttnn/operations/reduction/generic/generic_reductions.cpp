@@ -282,7 +282,7 @@ static Tensor reduce_impl(
                                          : input_tensor_arg;
 
         if constexpr (reduce_type == ReduceType::Sum) {
-            output_tensor = ttnn::operations::reduction::generic::detail::reduce(
+            output_tensor = tt::tt_metal::reduce(
                 input_tensor,
                 tt::tt_metal::ReduceOpMath::SUM,
                 reduce_op_dim,
@@ -292,7 +292,7 @@ static Tensor reduce_impl(
                 compute_kernel_config,
                 sub_core_grids);
         } else if constexpr (reduce_type == ReduceType::Mean) {
-            output_tensor = ttnn::operations::reduction::generic::detail::reduce(
+            output_tensor = tt::tt_metal::reduce(
                 input_tensor,
                 tt::tt_metal::ReduceOpMath::SUM,
                 reduce_op_dim,
@@ -302,7 +302,7 @@ static Tensor reduce_impl(
                 compute_kernel_config,
                 sub_core_grids);
         } else if constexpr (reduce_type == ReduceType::Max) {
-            output_tensor = ttnn::operations::reduction::generic::detail::reduce(
+            output_tensor = tt::tt_metal::reduce(
                 input_tensor,
                 tt::tt_metal::ReduceOpMath::MAX,
                 reduce_op_dim,
@@ -312,7 +312,7 @@ static Tensor reduce_impl(
                 compute_kernel_config,
                 sub_core_grids);
         } else if constexpr (reduce_type == ReduceType::Min) {
-            output_tensor = ttnn::operations::reduction::generic::detail::reduce(
+            output_tensor = tt::tt_metal::reduce(
                 input_tensor,
                 tt::tt_metal::ReduceOpMath::MIN,
                 reduce_op_dim,

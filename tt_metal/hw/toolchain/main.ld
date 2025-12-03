@@ -242,11 +242,10 @@ SECTIONS
 #endif
 #endif
 
-  /* The loader uses this data to trim segments and check for size overflows.
-     SEGMENT_ADDR:TRIM_BOUND:SIZE_LIMIT */
-  .segments 0 (INFO) :
+  /* The loader uses this data to check for size overflows.
+     We don't do it here, as the failure mode would be bad (no executable to examine).  */
+  .phdrs 0 (INFO) :
   {
-    LONG(ADDR(.text)) LONG(ADDR(.text))
     LONG(TEXT_SIZE
 #if defined(TYPE_KERNEL) && !(defined(COMPILE_FOR_NCRISC) && defined(ARCH_WORMHOLE)) \
     && !defined(COMPILE_FOR_AERISC) && !defined(COMPILE_FOR_SUBORDINATE_AERISC) \
@@ -254,7 +253,7 @@ SECTIONS
          - (__fw_export_text_end - TEXT_START)
 #endif
          )
-   LONG(ADDR(.data)) LONG(ADDR(.data)) LONG(DATA_SIZE - STACK_MIN_SIZE
+    LONG(DATA_SIZE - STACK_MIN_SIZE
 #if defined(TYPE_KERNEL)
          - (__fw_export_ldm_end - DATA_START)
 #endif

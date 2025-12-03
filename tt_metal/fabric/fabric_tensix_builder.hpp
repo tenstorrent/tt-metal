@@ -22,7 +22,7 @@
 namespace tt::tt_fabric {
 
 // Core type enum for fabric tensix datamover (identifies MUX vs RELAY cores)
-enum class FabricTensixCoreType : uint32_t {
+enum class FabricTensixCoreType : uint8_t {
     MUX = 0,   // BRISC - runs MUX kernel
     RELAY = 1  // NCRISC - runs Relay kernel (UDM mode only)
 };
@@ -46,7 +46,7 @@ public:
     // Getters for core and channel configuration
     size_t get_num_configs_per_core() const { return num_configs_per_core_; }
     size_t get_num_riscs_per_core() const { return num_used_riscs_per_tensix_; }
-    size_t get_num_buffers_per_channel() const { return num_buffers_per_channel_; }
+    uint8_t get_num_buffers_per_channel() const { return num_buffers_per_channel_; }
     size_t get_buffer_size_bytes_full_size_channel() const { return buffer_size_bytes_full_size_channel_; }
 
     // Get base L1 address for a core type
@@ -56,7 +56,7 @@ public:
     std::pair<uint32_t, uint32_t> get_noc_xy(tt::tt_metal::IDevice* device, uint32_t eth_chan_id) const;
 
     // Get channel base address for mux channel ID
-    size_t get_channels_base_address(FabricTensixCoreType core_id, size_t tensix_channel_id) const;
+    size_t get_channels_base_address(FabricTensixCoreType core_id, uint8_t tensix_channel_id) const;
 
     // Get the core type for a given ethernet channel on a specific device
     FabricTensixCoreType get_core_id_for_channel(ChipId device_id, uint32_t eth_chan_id) const;
@@ -97,11 +97,6 @@ public:
 
     std::pair<uint32_t, uint32_t> get_termination_address_and_signal(FabricTensixCoreType core_id) const;
 
-    // Get router NOC coordinates for a specific fabric node, routing plane, and direction
-    // Returns pointer to pair (noc_x, noc_y) if router exists, nullptr otherwise
-    const std::pair<uint32_t, uint32_t>* get_router_noc_coords(
-        const FabricNodeId& fabric_node_id, routing_plane_id_t routing_plane_id, eth_chan_directions direction) const;
-
 private:
     std::vector<CoreCoord> logical_fabric_mux_cores_;
     std::vector<CoreCoord> logical_dispatch_mux_cores_;
@@ -117,7 +112,6 @@ private:
     size_t num_channels_for_mux_{};  // Number of channels for MUX configuration
     size_t num_buffers_per_channel_{};
     size_t buffer_size_bytes_full_size_channel_{};
-    size_t space_per_risc_{};  // L1 space allocated per RISC
 
     // Base L1 addresses for each RISC ID, [risc id] -> [base addr] mapping
     std::unordered_map<FabricTensixCoreType, size_t> base_l1_addresses_;
@@ -133,57 +127,7 @@ private:
     // In UDM mode: both MUX and RELAY have configs
     std::unordered_map<FabricTensixCoreType, std::shared_ptr<FabricTensixDatamoverBaseConfig>> configs_;
 
-    // Mapping: [fabric_node_id] -> [routing_plane_id] -> [direction (E/W/N/S)] -> (noc_x, noc_y)
-    // If an entry exists, the router/tensix is active in that direction; otherwise it doesn't exist
-    std::unordered_map<
-        FabricNodeId,
-        std::unordered_map<routing_plane_id_t, std::unordered_map<eth_chan_directions, std::pair<uint32_t, uint32_t>>>>
-        fabric_router_noc_coords_map_;
-
-    // Channel type configuration maps (sorted by ChannelTypes enum)
-    // [channel type] -> [number of channels of that type]
-    std::map<ChannelTypes, uint32_t> mux_channel_counts_;
-    // [channel type] -> [number of buffers per channel of that type]
-    std::map<ChannelTypes, uint32_t> mux_channel_buffer_counts_;
-
-    // Cached min/max ethernet channels across all devices
-    size_t min_eth_channels_ = 0;
-    size_t max_eth_channels_ = 0;
-
     // Helper methods for initialization
-
-    /**
-     * Computes the minimum and maximum number of non-dispatch active ethernet channels
-     * across all active devices in the system.
-     *
-     * For each device, this function:
-     * 1. Gathers active fabric ethernet channels in each routing direction
-     * 2. Filters out channels reserved for dispatch tunnels
-     * 3. Counts the remaining non-dispatch channels
-     *
-     * The results are stored in min_eth_channels_ and max_eth_channels_ member variables,
-     * which are later used by calculate_buffer_allocations() to determine buffer sizing
-     * and channel configuration.
-     */
-    void find_min_max_eth_channels(const std::vector<tt_metal::IDevice*>& all_active_devices);
-
-    /**
-     * Builds per-device channel mappings using real ethernet channel IDs.
-     *
-     * For each device, creates round-robin mapping of ethernet channels to tensix cores,
-     * populating eth_chan_to_core_index_ and eth_chan_to_core_id_ maps.
-     */
-    void build_per_device_channel_mappings(const std::vector<tt_metal::IDevice*>& all_active_devices);
-
-    /**
-     * Builds the fabric_router_noc_coords_map_ to track which routers/tensix exist in each direction
-     * for each fabric node and routing plane (link index).
-     *
-     * For each active device and its ethernet channels, this function records the tensix NOC
-     * coordinates in the map, keyed by fabric node ID, routing plane ID, and direction.
-     */
-    void build_fabric_router_noc_coords_map(const std::vector<tt_metal::IDevice*>& all_active_devices);
-
     bool initialize_channel_mappings();
     void calculate_buffer_allocations();
     void create_configs();  // Creates mode-aware configs based on FabricTensixConfig
