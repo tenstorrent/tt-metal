@@ -229,6 +229,10 @@ def create_tt_model(
                 "temperature": torch.linspace(0.0, 1.0, steps=32).tolist(),
                 "top_p": torch.linspace(0.08, 1.0, steps=32).tolist(),
                 "top_k": torch.arange(1, 33).tolist(),  # 1 to 32 inclusive
+                "presence_penalty": torch.linspace(-2.0, 2.0, steps=32).tolist(),
+                "frequency_penalty": torch.linspace(-2.0, 2.0, steps=32).tolist(),
+                "repetition_penalty": torch.linspace(0.8, 1.5, steps=32).tolist(),
+                "seed": torch.randint(0, 33, size=(32,)).tolist(),
             },  # sampling_params (non-uniform)
             False,  # stop_at_eos
             False,  # apc_test
@@ -807,7 +811,19 @@ def test_demo_text(
         temperature = sampling_params["temperature"]
         top_k = sampling_params.get("top_k", 32)
         top_p = sampling_params["top_p"]
-        device_sampling_params = SamplingParams(temperature=temperature, top_k=top_k, top_p=top_p)
+        presence_penalty = sampling_params.get("presence_penalty", 0.0)
+        frequency_penalty = sampling_params.get("frequency_penalty", 0.0)
+        repetition_penalty = sampling_params.get("repetition_penalty", 1.0)
+        seed = sampling_params.get("seed", 0)
+        device_sampling_params = SamplingParams(
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            repetition_penalty=repetition_penalty,
+            seed=seed,
+        )
         if batch_idx == 0:
             logger.info("Starting prefill warmup...")
             profiler.start(f"compile_prefill", iteration=batch_idx)
@@ -953,6 +969,8 @@ def test_demo_text(
                     tt_out_logits_saved=tt_out_logits_saved,
                     is_cur_pos_sharded=is_cur_pos_sharded,
                     is_page_table_sharded=is_page_table_sharded,
+                    prompt_tokens=input_tokens_prefill_pt,
+                    output_tokens=prefilled_token,
                 )
                 read_events.append(read_event)
                 tt_out_toks.append(tt_out_tok)

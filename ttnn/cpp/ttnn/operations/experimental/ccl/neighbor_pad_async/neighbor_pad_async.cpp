@@ -29,7 +29,7 @@ ttnn::Tensor ExecuteNeighborPadAsync::invoke(
     const std::optional<std::vector<uint32_t>>& secondary_mesh_shape) {
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
 
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     uint32_t num_devices;
     const auto& mesh_view = mesh_device->get_view();
     // Use the mesh dimensions to determine the ring size
