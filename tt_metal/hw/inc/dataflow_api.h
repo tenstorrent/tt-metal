@@ -1505,6 +1505,7 @@ inline void noc_semaphore_set_multicast_loopback_src(
         linked,
         num_dests,
         true /* multicast_path_reserve */);
+    noc_async_write_barrier();
     WAYPOINT("NSLD");
 }
 
