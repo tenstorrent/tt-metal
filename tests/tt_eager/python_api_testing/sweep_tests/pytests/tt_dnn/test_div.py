@@ -24,7 +24,7 @@ mem_configs = [
 ]
 
 
-@pytest.mark.parametrize("accurate_mode", [False, True])
+@pytest.mark.parametrize("approx_mode", [True, False])
 @pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
@@ -41,7 +41,7 @@ mem_configs = [
 class TestDiv:
     def test_run_div(
         self,
-        accurate_mode,
+        approx_mode,
         round_mode,
         input_shapes,
         dst_mem_config,
@@ -50,7 +50,7 @@ class TestDiv:
         if is_grayskull():
             if round_mode in ["trunc", "floor"]:
                 pytest.skip("does not work for Grayskull -skipping")
-        if accurate_mode == False:  # If input_b is non-zero tensor
+        if approx_mode == True:  # If input_b is non-zero tensor (fast/approximate mode)
             datagen_func = [
                 generation_funcs.gen_func_with_cast(
                     partial(generation_funcs.gen_rand, low=-1e6, high=1e6), torch.bfloat16
@@ -69,7 +69,7 @@ class TestDiv:
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update(
             {
-                "accurate_mode": accurate_mode,
+                "approx_mode": approx_mode,
                 "round_mode": round_mode,
             }
         )
