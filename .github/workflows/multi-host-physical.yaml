@@ -7,10 +7,15 @@ on:
         required: false
         default: true
         type: boolean
-      galaxy_multihost:
-        description: 'Run Galaxy multi-host job'
+      glx_2x_multihost:
+        description: 'Run Galaxy 2x multi-host job'
         required: false
         default: true
+        type: boolean
+      glx_4x_multihost:
+        description: 'Run Galaxy 4x multi-host job (timeshare)'
+        required: false
+        default: false
         type: boolean
   schedule:
     - cron: '0 4 * * *'  # 8 PM PST (4 AM UTC)
@@ -80,7 +85,7 @@ jobs:
             ./tests/scripts/multihost/run_dual_t3k_tests.sh
 
   multi-host-glx-2x:
-    if: ${{ (github.event_name != 'workflow_dispatch' || github.event.inputs.galaxy_multihost == 'true') && github.event_name != 'schedule' }}
+    if: ${{ (github.event_name != 'workflow_dispatch' || github.event.inputs.glx_2x_multihost == 'true') && github.event_name != 'schedule' }}
     runs-on:
       # A physical, multi-host WH Galaxy that's in service
       - multi-host-galaxy
@@ -135,7 +140,7 @@ jobs:
             ./tests/scripts/multihost/run_dual_galaxy_tests.sh
 
   multi-host-glx-4x:
-    # if: ${{ github.event_name == 'schedule' }}
+    # if: ${{ github.event_name == 'schedule' || github.event.inputs.glx_4x_multihost == 'true' }}
     runs-on:
       # A physical, multi-host WH Galaxy that's in service
       - multi-host-glx-4x
