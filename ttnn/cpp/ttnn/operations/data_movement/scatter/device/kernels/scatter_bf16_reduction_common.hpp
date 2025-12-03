@@ -4,52 +4,10 @@
 
 #pragma once
 
+#include "common.hpp"
+
 #include <array>
 #include <cstdint>
-
-constexpr uint32_t ONE_PAGE = 1;
-
-// supported reduction methods for scatter to be applied for source values coming from recurring indices
-enum class ScatterReductionType : uint8_t { INVALID, ADD, MULTIPLY, AMIN, AMAX };
-
-// choose the right C++ POD type at compile-time
-template <DataFormat df>
-struct df_to_std {
-    using std_type = void;
-};
-
-template <>
-struct df_to_std<DataFormat::Float32> {
-    using std_type = float;
-};
-
-template <>
-struct df_to_std<DataFormat::Float16_b> {
-    using std_type = uint16_t;
-};
-
-template <>
-struct df_to_std<DataFormat::Int32> {
-    using std_type = uint32_t;
-};
-
-template <>
-struct df_to_std<DataFormat::UInt32> {
-    using std_type = uint32_t;
-};
-
-template <>
-struct df_to_std<DataFormat::UInt16> {
-    using std_type = uint16_t;
-};
-
-template <>
-struct df_to_std<DataFormat::UInt8> {
-    using std_type = uint8_t;
-};
-
-template <DataFormat df>
-using std_type_t = typename df_to_std<df>::std_type;
 
 template <
     typename InputAccessorArgs,
@@ -110,14 +68,4 @@ FORCE_INLINE constexpr auto get_ctas() {
         source_args,
         output_args,
     };
-}
-
-template <uint32_t N>
-std::array<uint32_t, N> make_shape_array_from_runtime_args(const uint32_t& C) {
-    std::array<uint32_t, N> ret{};
-    for (uint32_t i = C; i < C + N; ++i) {
-        ret[i - C] = get_arg_val<uint32_t>(i);
-    }
-
-    return ret;
 }
