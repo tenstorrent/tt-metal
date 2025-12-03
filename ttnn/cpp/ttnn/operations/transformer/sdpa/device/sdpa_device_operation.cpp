@@ -375,7 +375,7 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> SDPAOp
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
-    auto& input_tensor_v = args.use_mla ? tensor_args.k : tensor_args.v.value();
+    const auto& input_tensor_v = args.use_mla ? tensor_args.k : tensor_args.v.value();
 
     if (output_tensor.storage_type() != StorageType::DEVICE) {
         log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
