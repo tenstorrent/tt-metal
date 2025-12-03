@@ -1,4 +1,4 @@
-name: "[impl] TM Fabric Perf Tests impl"
+name: "[internal] TM Fabric Perf Tests impl"
 
 on:
   workflow_call:
