@@ -1,0 +1,64 @@
+name: "(TM-Fabric) Fabric Tests"
+
+on:
+  push:
+    branches: ["mchiou/31319-create-consolidated-fabric-test-pipeline"]
+  workflow_dispatch:
+    inputs:
+      run-wh-n300-fabric-tests:
+        description: 'Run Wormhole N300 fabric tests'
+        required: false
+        default: true
+        type: boolean
+      run-wh-t3k-fabric-tests:
+        description: 'Run Wormhole T3K fabric tests'
+        required: false
+        default: true
+        type: boolean
+      run-wh-t3k-perf-tests:
+        description: 'Run Wormhole T3K performance tests'
+        required: false
+        default: true
+        type: boolean
+      run-wh-6u-fabric-tests:
+        description: 'Run Wormhole 6U fabric tests'
+        required: false
+        default: true
+        type: boolean
+      run-bh-multi-card-unit-tests:
+        description: 'Run Blackhole multi-card unit tests'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-wheel: true
+      version: 22.04
+
+  fabric-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tm-fabric-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      run-wh-n300-fabric-tests: ${{ inputs.run-wh-n300-fabric-tests != false }}
+      run-wh-t3k-fabric-tests: ${{ inputs.run-wh-t3k-fabric-tests != false }}
+      run-wh-6u-fabric-tests: ${{ inputs.run-wh-6u-fabric-tests != false }}
+      run-bh-multi-card-unit-tests: ${{ inputs.run-bh-multi-card-unit-tests != false }}
+  fabric-perf-tests:
+    if: ${{ inputs.run-wh-t3k-perf-tests != false }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tm-fabric-tests-perf-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
