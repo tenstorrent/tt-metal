@@ -82,7 +82,6 @@ Matrix Multiplication
 
    ttnn.matmul
    ttnn.linear
-   ttnn.matmul_batched_weights
    ttnn.addmm
    ttnn.sparse_matmul
 
@@ -415,6 +414,7 @@ Reduction
    :template: function.rst
 
    ttnn.cumprod
+   ttnn.ema
    ttnn.max
    ttnn.mean
    ttnn.min
@@ -426,6 +426,7 @@ Reduction
    ttnn.topk
    ttnn.cumsum
    ttnn.manual_seed
+   ttnn.moe
 
 Data Movement
 =============
@@ -463,7 +464,11 @@ Normalization
 
    ttnn.group_norm
    ttnn.layer_norm
+   ttnn.layer_norm_pre_all_gather
+   ttnn.layer_norm_post_all_gather
    ttnn.rms_norm
+   ttnn.rms_norm_pre_all_gather
+   ttnn.rms_norm_post_all_gather
    ttnn.batch_norm
    ttnn.softmax
    ttnn.scale_mask_softmax
