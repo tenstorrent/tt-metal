@@ -222,7 +222,7 @@ On the first execution of each model, TTNN will create weight cache files for th
 
 1. `TT_CACHE_PATH` if you have set it.
 2. `HF_MODEL/device_name` if a path to downloaded weights was specified using `HF_MODEL`.
-4. `model_cache/HF_MODEL/device_name` if a HuggingFace model name was specified using `HF_MODEL`.
+3. `model_cache/HF_MODEL/device_name` if a HuggingFace model name was specified using `HF_MODEL`.
 
 The device name used is:
 
