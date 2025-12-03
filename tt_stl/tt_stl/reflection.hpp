@@ -526,7 +526,7 @@ struct visit_object_of_type_t<T> {
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
     void operator()(auto&& /*callback*/, T&& /*value*/) const {
-        throw std::runtime_error("Unsupported visit of object of type: " + get_type_name<T>());
+        throw std::runtime_error(fmt::format("Unsupported visit of object of type: {}", get_type_name<T>()));
     }
 
     template <typename object_t>
@@ -538,7 +538,7 @@ struct visit_object_of_type_t<T> {
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
     void operator()(auto&& /*callback*/, const T& /*value*/) const {
-        throw std::runtime_error("Unsupported visit of object of type: " + get_type_name<T>());
+        throw std::runtime_error(fmt::format("Unsupported visit of object of type: {}", get_type_name<T>()));
     }
 };
 
