@@ -11,6 +11,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
+#include "llk_assert.h"
 #include "llk_defs.h"
 
 namespace ckernel::packer
@@ -199,6 +200,7 @@ inline void set_packer_strides(const uint pack_src_format, [[maybe_unused]] cons
 template <bool is_fp32_dest_acc_en>
 inline void set_packer_config(const uint pack_src_format, const uint pack_dst_format, const uint num_faces = 4, const bool partial_face = false)
 {
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     // Get pointer to registers for current state ID
     volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
 
@@ -300,6 +302,7 @@ inline void reconfig_packer_data_format(
     const uint num_faces,
     const bool partial_face)
 {
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     const uint pack_output_src_format = (uint)pack_src_format & 0xF;
     const uint pack_output_dst_format = (uint)pack_dst_format & 0xF;
 
@@ -398,6 +401,8 @@ inline void configure_pack(
     [[maybe_unused]] const bool narrow_tile = false,
     const uint relu_config                  = 0)
 {
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(!narrow_tile, "narrow_tile: this parameter is unused");
     // Get pointer to registers for current state ID
     volatile uint* cfg = get_cfg_pointer();
 

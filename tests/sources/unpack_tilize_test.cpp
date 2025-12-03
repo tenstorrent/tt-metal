@@ -27,11 +27,13 @@ void run_kernel()
 
     uint32_t read_offset = 0;
 
+    const std::uint32_t block_ct_dim = is_blackhole ? 0 : BLOCK_CT_DIM;
+
     for (uint32_t i = 0; i < BLOCK_RT_DIM; i++)
     {
         for (uint32_t j = 0; j < BLOCK_CT_DIM; j++)
         {
-            _llk_unpack_tilize_(L1_ADDRESS(buffer_A[read_offset]), j, formats.unpack_src, BLOCK_CT_DIM, FACE_R_DIM, 4, false);
+            _llk_unpack_tilize_(L1_ADDRESS(buffer_A[read_offset]), j, formats.unpack_src, block_ct_dim, FACE_R_DIM, 4, false);
         }
         read_offset += BLOCK_RT_DIM;
     }

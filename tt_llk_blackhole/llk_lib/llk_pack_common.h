@@ -10,6 +10,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_ops.h"
 #include "cpack_common.h"
+#include "llk_assert.h"
 #include "llk_defs.h"
 
 using namespace ckernel;
@@ -60,6 +61,8 @@ template <DstSync Dst, DstTileFaceLayout FaceLayout>
 inline void _llk_init_packer_dest_offset_registers_(
     [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM, [[maybe_unused]] const bool narrow_tile = false)
 {
+    LLK_ASSERT(face_r_dim == FACE_R_DIM, "face_r_dim: this parameter is unused");
+    LLK_ASSERT(!narrow_tile, "narrow_tile: this parameter is unused");
     TTI_STALLWAIT(p_stall::STALL_TDMA | p_stall::STALL_THCON, p_stall::PACK); // wait for pack to finish
 
     // RowMajor order

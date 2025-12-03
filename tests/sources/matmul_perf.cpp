@@ -130,8 +130,7 @@ void run_kernel()
                         /* dest_index */ 0,
                         /* transpose */ false,
                         CT_DIM,
-                        RT_DIM,
-                        KT_DIM);
+                        RT_DIM);
                 }
             }
         }
@@ -146,8 +145,7 @@ void run_kernel()
                         /* dest_index */ 0,
                         /* transpose */ false,
                         CT_DIM,
-                        RT_DIM,
-                        KT_DIM);
+                        RT_DIM);
                 }
                 _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }

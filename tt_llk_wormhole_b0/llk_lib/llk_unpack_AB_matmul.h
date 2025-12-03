@@ -12,6 +12,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "llk_assert.h"
 #include "lltt.h"
 #include "sfpi.h"
 
@@ -170,6 +171,8 @@ inline void _llk_unpack_AB_matmul_hw_configure_(
     const std::uint32_t unpA_tile_size              = 0,
     const std::uint32_t unpB_tile_size              = 0)
 {
+    LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");
+    LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
     constexpr bool is_row_pool  = false;
     constexpr bool stoch_rnd_en = (stoch_rnd_mode == StochRndType::All);
     constexpr bool fpu_srnd_en  = stoch_rnd_en || (stoch_rnd_mode == StochRndType::Fpu);
@@ -210,6 +213,8 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     const bool unpA_partial_face        = false,
     const bool unpB_partial_face        = false)
 {
+    LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");
+    LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
     // also turn on within_face_16x16_transpose if it was turned off by datacopy at runtime
     // on WH, the unpacker performs both transpose of faces as well as transpose each face.
     // the former is configured in mop, the latter is configured in cfg register in hw_configure
@@ -265,6 +270,8 @@ inline void _llk_unpack_AB_matmul_(
     const std::uint32_t rt_dim                           = 1,
     const std::uint32_t kt_dim                           = 1)
 {
+    LLK_ASSERT(unpA_face_r_dim == FACE_R_DIM, "unpA_face_r_dim: this parameter is unused");
+    LLK_ASSERT(unpB_face_r_dim == FACE_R_DIM, "unpB_face_r_dim: this parameter is unused");
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
 

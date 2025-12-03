@@ -12,6 +12,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "llk_assert.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -59,6 +60,7 @@ inline void _llk_unpack_untilize_hw_configure_(
     const std::uint32_t within_face_16x16_transpose = 0,
     const std::uint32_t num_faces                   = 4)
 {
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     constexpr bool is_row_pool  = false;
     constexpr bool stoch_rnd_en = (stoch_rnd_mode == StochRndType::All);
     constexpr bool fpu_srnd_en  = stoch_rnd_en || (stoch_rnd_mode == StochRndType::Fpu);
@@ -73,6 +75,7 @@ inline void _llk_unpack_untilize_init_(
     const std::uint32_t face_r_dim                 = FACE_R_DIM,
     [[maybe_unused]] const std::uint32_t num_faces = 4)
 {
+    LLK_ASSERT(num_faces == 4, "num_faces: this parameter is unused");
     // Always include setup calls first for safety (as recommended by maintainer)
     // Disable transpose when unused
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
