@@ -1884,7 +1884,7 @@ process_gather_in0_program_and_create_override_variables(
     uint32_t in1_shard_width_in_tiles = 0;
     uint32_t in1_CB_tiles = 0;
 
-    const auto& bshape = ttnn::operations::matmul::get_matmul_tensor_padded_shape(b, /*transpose_b=*/false);
+    const auto& bshape = ttnn::operations::matmul::get_matmul_tensor_padded_shape(b, /*transpose=*/false);
     uint32_t in1_tensor_width_in_tiles = bshape[-1] / in1_tile.get_width();
 
     if (in1_is_dram_sharded || in1_is_dram_interleaved) {
@@ -3296,7 +3296,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
-    const auto& a_shape_logical = get_matmul_tensor_logical_shape(a, /*transpose_a=*/false);
+    const auto& a_shape_logical = get_matmul_tensor_logical_shape(a, /*transpose=*/false);
     const auto in0_last_ktile_w = a_shape_logical[-1] % in0_tile.get_width();
 
     // We don't support transpose for this program configuration. However, we retain the logic here

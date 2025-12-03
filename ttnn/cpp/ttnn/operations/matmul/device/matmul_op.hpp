@@ -35,6 +35,35 @@ struct matmul_mcast_1d_common_override_variables_t {
 constexpr uint32_t MCAST_INPUT_BUFFERING_DEPTH = 2;
 
 /**
+ * @brief Calculate the M dimension for matmul operations
+ *
+ * @param padded_shape The padded shape of the tensor
+ * @param tile The tile for the tensor (optional)
+ * @param fuse_batch Whether to fuse batch dimensions
+ * @return uint32_t The calculated M dimension
+ */
+uint32_t get_M_dim(
+    const tt::tt_metal::Shape& padded_shape, const std::optional<tt::tt_metal::Tile>& tile, const bool fuse_batch);
+
+/**
+ * @brief Calculate the K dimension for matmul operations
+ *
+ * @param padded_shape The padded shape of the tensor
+ * @param tile The tile for the tensor (optional)
+ * @return uint32_t The calculated K dimension
+ */
+uint32_t get_K_dim(const tt::tt_metal::Shape& padded_shape, const std::optional<tt::tt_metal::Tile>& tile);
+
+/**
+ * @brief Calculate the N dimension for matmul operations
+ *
+ * @param padded_shape The padded shape of the tensor
+ * @param tile The tile for the tensor (optional)
+ * @return uint32_t The calculated N dimension
+ */
+uint32_t get_N_dim(const tt::tt_metal::Shape& padded_shape, const std::optional<tt::tt_metal::Tile>& tile);
+
+/**
  * @brief Get the tile shape of a tensor, with optional transpose.
  *
  * Returns a tuple representing the height and width of the tensor's tile. If transpose is true,
@@ -422,7 +451,7 @@ namespace bmm_op_utils {
 
 using ttnn::operations::matmul::Matmul;
 
-inline ttnn::operations::matmul::MatmulProgramConfig get_program_config(
+ttnn::operations::matmul::MatmulProgramConfig get_program_config(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const bool transpose_a,
