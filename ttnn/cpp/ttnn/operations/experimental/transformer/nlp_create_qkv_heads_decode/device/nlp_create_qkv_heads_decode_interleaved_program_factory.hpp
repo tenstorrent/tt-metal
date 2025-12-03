@@ -18,13 +18,13 @@ struct NLPCreateQKVHeadsDecodeInterleavedProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id{};
         tt::tt_metal::KernelHandle writer_kernel_id{};
-        uint32_t num_cores;
+        uint32_t num_cores{};
         tt::tt_metal::CBHandle cb_q_output{};
         tt::tt_metal::CBHandle cb_k_output{};
         tt::tt_metal::CBHandle cb_v_output{};
         std::vector<CoreCoord> cores;
-        uint32_t element_size;
-        uint32_t sub_tile_line_bytes;
+        uint32_t element_size{};
+        uint32_t sub_tile_line_bytes{};
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

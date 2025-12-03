@@ -20,17 +20,17 @@ struct NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory {
         tt::tt_metal::KernelHandle q_writer_kernel_id{};
         tt::tt_metal::KernelHandle k_reader_kernel_id{};
         tt::tt_metal::KernelHandle k_writer_kernel_id{};
-        uint32_t q_num_cores;
-        uint32_t k_num_cores;
+        uint32_t q_num_cores{};
+        uint32_t k_num_cores{};
         tt::tt_metal::CBHandle cb_q_output{};
         tt::tt_metal::CBHandle cb_k_output{};
         tt::tt_metal::CBHandle cb_v_output{};
         std::vector<CoreCoord> q_cores_vector;
         std::vector<CoreCoord> k_cores_vector;
-        uint32_t element_size;
-        uint32_t sub_tile_line_bytes;
-        bool overlap_qk_coregrid;
-        bool use_batch_offset;
+        uint32_t element_size{};
+        uint32_t sub_tile_line_bytes{};
+        bool overlap_qk_coregrid{};
+        bool use_batch_offset{};
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
