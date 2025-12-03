@@ -57,36 +57,35 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks SliceReshardAsync::create_mes
 
 tt::tt_metal::operation::ProgramWithCallbacks SliceReshardAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    auto* mesh_device = input_tensors[0].device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
-    std::vector<IDevice*> devices_to_use = {};
     const auto& mesh_view = input_tensors[0].device()->get_view();
+    const auto target_fabric_node_id = mesh_view.get_fabric_node_id(coord);
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids = {};
     // User specified the cluster-axis. Derive devices based on the current coordinate
     // and the cluster-axis.
-    devices_to_use =
-        (this->cluster_axis == 0) ? mesh_view.get_devices_on_column(coord[1]) : mesh_view.get_devices_on_row(coord[0]);
-    uint32_t target_ring_size = devices_to_use.size();
+    fabric_node_ids = (this->cluster_axis == 0) ? mesh_view.get_fabric_node_ids_on_column(coord[1])
+                                                : mesh_view.get_fabric_node_ids_on_row(coord[0]);
+    uint32_t target_ring_size = fabric_node_ids.size();
 
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
+    std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
+    std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
     uint32_t device_index = 0;  // Initialize device index
     for (uint32_t i = 0; i < target_ring_size; ++i) {
-        if (devices_to_use.at(i) == target_device) {
+        if (fabric_node_ids.at(i) == target_fabric_node_id) {
             device_index = i;
             if (i != 0) {
-                backward_device = devices_to_use.at(i - 1);
+                backward_fabric_node_id = fabric_node_ids.at(i - 1);
             }
             if (i != target_ring_size - 1) {
-                forward_device = devices_to_use.at(i + 1);
+                forward_fabric_node_id = fabric_node_ids.at(i + 1);
             }
         }
     }
 
     return slice_reshard_async_minimal(
         input_tensors[0],
-        target_device,
-        forward_device,
-        backward_device,
+        target_fabric_node_id,
+        forward_fabric_node_id,
+        backward_fabric_node_id,
         output_tensors[0],
         this->dim,
         this->output_dim_offset,

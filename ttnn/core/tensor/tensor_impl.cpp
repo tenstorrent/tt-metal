@@ -504,8 +504,11 @@ std::string to_string_impl(const Tensor& tensor) {
                 std::stringstream ss;
                 for (size_t i = 0; i < buffers.size(); i++) {
                     const distributed::MeshCoordinate coord = *coords_it++;
+                    // TODO(p1-0tr): get_fabric_node_id works on remote devices. Should this check be removed?
                     if (mesh_device->is_local(coord)) {
-                        ss << "device_id: " << mesh_device->get_device(coord)->id() << ", " << coord << std::endl;
+                        // TODO(p1-0tr): Make chip_id matches device_id.
+                        ss << "device_id: " << mesh_device->get_fabric_node_id(coord).chip_id << ", " << coord
+                           << std::endl;
                         detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
                     }
                     if (i + 1 != buffers.size()) {

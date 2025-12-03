@@ -23,16 +23,16 @@
 namespace tt::tt_metal::distributed {
 namespace {
 
-std::vector<IDevice*> get_devices_from_coordinates(
+/*std::vector<IDevice*> get_devices_from_coordinates(
     const MeshDeviceView& mesh, const std::vector<MeshCoordinate>& coords) {
     std::vector<IDevice*> devices;
     for (const auto& coord : coords) {
-        if (auto* device = mesh.get_device(coord)) {
+        if (auto* device = mesh.get_device_private(coord)) {
             devices.push_back(device);
         }
     }
     return devices;
-}
+}*/
 
 std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids_from_coordinates(
     const MeshDeviceView& mesh, const std::vector<MeshCoordinate>& coords) {
@@ -153,7 +153,17 @@ bool MeshDeviceView::contains(const MeshCoordinate& coord) const noexcept {
     return devices_.coord_range().contains(coord);
 }
 
-IDevice* MeshDeviceView::get_device(const MeshCoordinate& coord) const {
+// TODO(p1-0tr): Deprecate this function, rather than delete it immediately.
+/*IDevice* MeshDeviceView::get_device(const MeshCoordinate& coord) const {
+    if (!contains(coord)) {
+        return nullptr;
+    }
+    const auto& maybe_device = devices_.at(coord);
+    TT_FATAL(maybe_device.is_local(), "Cannot get device for remote device at coordinate {}", coord);
+    return *maybe_device;
+}*/
+
+IDevice* MeshDeviceView::get_device_private(const MeshCoordinate& coord) const {
     if (!contains(coord)) {
         return nullptr;
     }
@@ -265,12 +275,26 @@ std::vector<MeshCoordinate> MeshDeviceView::get_ring_coordinates() const {
     return get_ring_coordinates(*shape_2d_, *shape_2d_);
 }
 
+// TODO(p1-0tr): can this be deprecated?
 std::vector<IDevice*> MeshDeviceView::get_line_devices() const {
-    return get_devices_from_coordinates(*this, get_line_coordinates());
+    std::vector<IDevice*> devices;
+    for (const auto& coord : get_line_coordinates()) {
+        if (auto* device = get_device_private(coord)) {
+            devices.push_back(device);
+        }
+    }
+    return devices;
 }
 
+// TODO(p1-0tr): can this be deprecated?
 std::vector<IDevice*> MeshDeviceView::get_ring_devices() const {
-    return get_devices_from_coordinates(*this, get_ring_coordinates());
+    std::vector<IDevice*> devices;
+    for (const auto& coord : get_ring_coordinates()) {
+        if (auto* device = get_device_private(coord)) {
+            devices.push_back(device);
+        }
+    }
+    return devices;
 }
 
 std::vector<tt::tt_fabric::FabricNodeId> MeshDeviceView::get_line_fabric_node_ids() const {

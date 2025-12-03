@@ -102,7 +102,8 @@ std::
         std::optional<uint32_t> num_workers_per_link,
         std::optional<uint32_t> num_buffers_per_channel) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
+    // std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
+    std::vector<IDevice*> devices = {};  // TODO(p1-0tr): Unused?
     if (bias.has_value()) {
         optional_input_tensors.push_back(bias);
     } else {

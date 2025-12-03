@@ -65,6 +65,7 @@ TEST_F(MeshDevice2x4Test, ViewIs2D) {
     std::vector<IDevice*> devices;
     std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        // TODO(p1-0tr): may require removal of devices from view?
         devices.push_back(mesh_device_->get_view().get_device(coord));
         fabric_node_ids.push_back(mesh_device_->get_view().get_fabric_node_id(coord));
     }
@@ -102,9 +103,11 @@ TEST_F(MeshDevice2x4Test, CreateSubmesh) {
     EXPECT_THAT(submesh->get_submeshes(), IsEmpty());
 
     // Verify coordinates are correct.
-    EXPECT_EQ(mesh_device_->get_device(MeshCoordinate{1, 1})->id(), submesh->get_device(MeshCoordinate{0, 0})->id());
-    EXPECT_EQ(mesh_device_->get_device(MeshCoordinate{1, 2})->id(), submesh->get_device(MeshCoordinate{0, 1})->id());
-    EXPECT_EQ(submesh->get_device(MeshCoordinate{1, 1}), nullptr);
+    EXPECT_EQ(
+        mesh_device_->get_fabric_node_id(MeshCoordinate{1, 1}), submesh->get_fabric_node_id(MeshCoordinate{0, 0}));
+    EXPECT_EQ(
+        mesh_device_->get_fabric_node_id(MeshCoordinate{1, 2}), submesh->get_fabric_node_id(MeshCoordinate{0, 1}));
+    EXPECT_THROW(submesh->get_fabric_node_id(MeshCoordinate{1, 1}), std::runtime_error);
 }
 
 TEST_F(MeshDevice2x4Test, CreateSubmeshesNonDivisibleSubshape) {
@@ -194,6 +197,7 @@ TEST_F(MeshDeviceTest, CheckFabricNodeIds) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     EXPECT_EQ(mesh_device_->shape().dims(), 2);
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        // TODO(p1-0tr): can delete this test?
         tt_fabric::FabricNodeId fabric_node_id = mesh_device_->get_fabric_node_id(coord);
         EXPECT_EQ(
             control_plane.get_fabric_node_id_from_physical_chip_id(mesh_device_->get_device(coord)->id()),

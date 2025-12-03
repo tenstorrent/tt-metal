@@ -220,8 +220,8 @@ AllToAllAsyncDeviceOperation::invoke(
     TT_FATAL(norm_out_dim >= 0 && norm_out_dim < rank, "Invalid out_dim: {}", out_dim);
 
     // Compute ring_size from number of devices
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
-    uint32_t num_devices = devices.size();
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids = ttnn::ccl::get_active_fabric_node_ids(input_tensor);
+    uint32_t num_devices = fabric_node_ids.size();
     TT_FATAL(num_devices > 0, "all_to_all_async requires at least one device, but has {}", num_devices);
 
     ttnn::ccl::Topology ccl_topology = topology;

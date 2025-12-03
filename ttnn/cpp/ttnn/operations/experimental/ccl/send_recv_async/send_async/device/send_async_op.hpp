@@ -46,7 +46,7 @@ struct SendAsync {
 
 tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
     const Tensor& input_tensor,
-    tt::tt_metal::IDevice* target_device,
+    const tt::tt_fabric::FabricNodeId& target_fabric_node_id,
     const tt::tt_metal::distributed::MeshSocket& mesh_socket);
 
 namespace operations::experimental::ccl {

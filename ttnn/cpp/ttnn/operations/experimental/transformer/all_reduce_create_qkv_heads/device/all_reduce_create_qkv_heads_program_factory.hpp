@@ -32,9 +32,9 @@ CoreRangeSet cores_to_corerangeset(const std::vector<CoreCoord>& cores);
 
 tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minimal_multi_core_with_workers(
     const std::vector<Tensor>& input_tensors,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    tt::tt_fabric::FabricNodeId target_fabric_node_id,
+    std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id,
+    std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id,
     std::vector<Tensor>& output_tensors,
     DataType dtype,
     uint32_t num_links,

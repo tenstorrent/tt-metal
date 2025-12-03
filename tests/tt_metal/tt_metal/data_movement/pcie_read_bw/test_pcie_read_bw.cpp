@@ -34,9 +34,7 @@ struct PCIeReadBwConfig {
 /// @param test_config Configuration for the test
 /// @return true if test passes, false otherwise
 bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const PCIeReadBwConfig& test_config) {
-    // Get the actual device for this single-device test
-    IDevice* device = mesh_device->get_device(0);
-    auto device_id = device->id();
+    auto device_id = mesh_device->get_fabric_node_id(distributed::MeshCoordinate(0, 0)).chip_id;
 
     // Program
     Program program = CreateProgram();

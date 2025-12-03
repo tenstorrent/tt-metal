@@ -18,10 +18,15 @@
 #include <tt-metalium/maybe_remote.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 
+namespace tt::tt_metal::experimental {
+class PinnedMemory;
+}  // namespace tt::tt_metal::experimental
+
 namespace tt::tt_metal::distributed {
 
 // Forward declaration of MeshDevice
 class MeshDevice;
+class MeshDeviceView;
 
 /**
  * @brief The MeshDeviceView class provides a view of a specific sub-region within the MeshDevice.
@@ -41,6 +46,9 @@ class MeshDevice;
  */
 
 class MeshDeviceView {
+    friend class experimental::PinnedMemory;
+    friend class MeshDevice;
+
 public:
     // Constructors for MeshDeviceView for fully and partially local meshes.
     explicit MeshDeviceView(
@@ -67,7 +75,8 @@ public:
 
     // Returns `IDevice*` instance for `coord`.
     // In multi-host context, throws if `coord` is querying a remote device.
-    [[nodiscard]] IDevice* get_device(const MeshCoordinate& coord) const;
+    // TODO(p1-0tr): Deprecate this function, rather than delete it immediately.
+    //[[nodiscard]] IDevice* get_device(const MeshCoordinate& coord) const;
 
     // Returns `tt::tt_fabric::FabricNodeId` for `coord`.
     // In multi-host context, fabric node IDs are always available, even for remote devices.
@@ -127,6 +136,9 @@ private:
     // Set if the view is 2D to enable row/col APIs, otherwise nullopt.
     // TODO: #17477 - Remove this?
     std::optional<Shape2D> shape_2d_;
+
+    // TODO(p1-0tr): Rename to get_device once the deprecated functions are deleted.
+    [[nodiscard]] IDevice* get_device_private(const MeshCoordinate& coord) const;
 };
 
 }  // namespace tt::tt_metal::distributed

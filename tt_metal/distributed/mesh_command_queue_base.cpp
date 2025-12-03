@@ -179,7 +179,8 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
         for (const auto& coord : device_range) {
             if (mesh_device_->is_local(coord)) {
                 dispatch_thread_pool_->enqueue(
-                    [&dispatch_lambda, coord]() { dispatch_lambda(coord); }, mesh_device_->get_device(coord)->id());
+                    [&dispatch_lambda, coord]() { dispatch_lambda(coord); },
+                    mesh_device_->get_fabric_node_id(coord).chip_id);
             }
         }
         dispatch_thread_pool_->wait();
@@ -236,7 +237,7 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
         if (mesh_device_->is_local(shard_coord)) {
             dispatch_thread_pool_->enqueue(
                 [&dispatch_lambda, shard_idx]() { dispatch_lambda(shard_idx); },
-                mesh_device_->get_device(shard_coord)->id());
+                mesh_device_->get_fabric_node_id(shard_coord).chip_id);
         }
     }
     dispatch_thread_pool_->wait();

@@ -23,7 +23,6 @@
 namespace ttnn {
 
 struct SliceReshardAsync {
-    std::vector<IDevice*> devices;
     const uint32_t dim;
     const uint32_t output_dim_offset;
     const uint32_t output_dim_shape;
@@ -36,7 +35,6 @@ struct SliceReshardAsync {
     const uint32_t ring_size;
 
     SliceReshardAsync(
-        std::vector<IDevice*> devices,
         uint32_t dim,
         uint32_t output_dim_offset,
         uint32_t output_dim_shape,
@@ -47,7 +45,6 @@ struct SliceReshardAsync {
         MemoryConfig output_mem_config,
         ccl::Topology topology,
         uint32_t ring_size) :
-        devices(std::move(devices)),
         dim(dim),
         output_dim_offset(output_dim_offset),
         output_dim_shape(output_dim_shape),

@@ -12,9 +12,9 @@ namespace ttnn {
 
 tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
     const Tensor& input_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    tt::tt_fabric::FabricNodeId target_fabric_node_id,
+    std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id,
+    std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id,
     Tensor& output_tensor,
     uint32_t dim,
     uint32_t padding_left,

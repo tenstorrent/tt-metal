@@ -552,6 +552,7 @@ inline std::string op_meta_data_serialized_json(
         tt::tt_metal::op_profiler::tracy_message(op_message);                                                       \
     }
 
+// TODO(p1-0tr): Make chip_id matches device_id.
 #define TracyOpMeshWorkload(                                                                                       \
     mesh_device, mesh_workload, operation, operation_attributes, tensor_args, tensor_return_value)                 \
     if (tt::tt_metal::op_profiler::is_op_profiler_env_var_set()) {                                                 \
@@ -565,7 +566,7 @@ inline std::string op_meta_data_serialized_json(
                     continue;                                                                                      \
                 }                                                                                                  \
                 ZoneScopedN("TT_DNN_DEVICE_OP");                                                                   \
-                auto device_id = (mesh_device)->get_device(coord)->id();                                           \
+                auto device_id = (mesh_device)->get_fabric_node_id(coord).chip_id;                                 \
                 auto op_id = tt::tt_metal::detail::EncodePerDeviceProgramID(base_program_id, device_id);           \
                 std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(                  \
                     operation, op_id, device_id, program, operation_attributes, tensor_args, tensor_return_value); \
