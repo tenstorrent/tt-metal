@@ -4,6 +4,7 @@
 
 #include "fabric_router_builder.hpp"
 #include "tt_metal/fabric/compute_mesh_router_builder.hpp"
+#include "tt_metal/fabric/switch_mesh_router_builder.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -20,8 +21,7 @@ std::unique_ptr<FabricRouterBuilder> FabricRouterBuilder::create(
     bool is_switch_mesh = fabric_context.is_switch_mesh(local_node.mesh_id);
 
     if (is_switch_mesh) {
-        // TODO: Create SwitchMeshRouterBuilder when implemented
-        TT_FATAL(false, "Switch mesh router builder not yet implemented");
+        return SwitchMeshRouterBuilder::build(device, program, local_node, location);
     }
 
     // Create compute mesh router - it handles its own config lookup
