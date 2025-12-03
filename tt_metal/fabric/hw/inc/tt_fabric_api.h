@@ -113,6 +113,10 @@ void fabric_set_mcast_route(
     uint16_t s_num_hops) {
     uint32_t spine_hops = 0;
     uint32_t mcast_branch = 0;
+    DPRINT << "fabric_set_mcast_route"
+           << " dst_dev_id:" << dst_dev_id << " dst_mesh_id:" << dst_mesh_id << " E:" << e_num_hops
+           << " W:" << w_num_hops << " N:" << n_num_hops << " S:" << s_num_hops << "\n";
+
     packet_header->routing_fields.value = 0;
     int num_cmd = fabric_set_unicast_route<called_from_router, my_direction>(packet_header, dst_dev_id, dst_mesh_id);
     spine_hops = num_cmd - 1;

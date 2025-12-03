@@ -2571,41 +2571,62 @@ void Fabric2DMulticastCommon(
     std::vector<std::array<uint32_t, 4>> connection_ranges;  // [e, w, n, s] per connection
 
     // Helper lambda to traverse neighbors in a given direction
-    auto traverse_direction =
-        [&](FabricNodeId start_node, RoutingDirection dir, uint32_t range, const std::string& context) {
-            auto curr_fabric_node_id = start_node;
-            for (uint32_t hop = 0; hop < range; hop++) {
-                auto neighbors = control_plane.get_intra_chip_neighbors(curr_fabric_node_id, dir);
-                if (!neighbors.empty()) {
-                    auto neighbor_fabric_node_id = FabricNodeId(curr_fabric_node_id.mesh_id, neighbors[0]);
-                    auto neighbor_physical_chip_id =
-                        control_plane.get_physical_chip_id_from_fabric_node_id(neighbor_fabric_node_id);
+    auto traverse_direction = [&](FabricNodeId start_node,
+                                  RoutingDirection dir,
+                                  uint32_t start_distance,
+                                  uint32_t range,
+                                  const std::string& context) {
+        auto curr_fabric_node_id = start_node;
+        uint32_t total_hops = start_distance + range;
+        for (uint32_t hop = 0; hop < total_hops; hop++) {
+            auto neighbors = control_plane.get_intra_chip_neighbors(curr_fabric_node_id, dir);
+            if (!neighbors.empty()) {
+                auto neighbor_fabric_node_id = FabricNodeId(curr_fabric_node_id.mesh_id, neighbors[0]);
+                auto neighbor_physical_chip_id =
+                    control_plane.get_physical_chip_id_from_fabric_node_id(neighbor_fabric_node_id);
+                curr_fabric_node_id = neighbor_fabric_node_id;
+                if (hop + 1 > start_distance) {
                     receiver_device_ids.insert(neighbor_physical_chip_id);
-                    curr_fabric_node_id = neighbor_fabric_node_id;
-                } else {
-                    log_warning(
-                        tt::LogTest,
-                        "Not enough {} neighbors at {}, expected {} hops but only got {}",
-                        dir,
-                        context,
-                        range,
-                        hop);
-                    break;
                 }
+            } else {
+                log_warning(
+                    tt::LogTest,
+                    "Not enough {} neighbors at {}, expected {} hops but only got {}",
+                    dir,
+                    context,
+                    range + start_distance,
+                    hop);
+                break;
             }
-        };
+        }
+    };
 
     for (const auto& dir_configs : connection_configs) {
         TT_FATAL(!dir_configs.empty(), "Each connection must have at least 1 direction");
 
         // Extract E/W/N/S ranges for this connection
         uint32_t e_range = 0, w_range = 0, n_range = 0, s_range = 0;
+        uint32_t e_start_distance = 0, w_start_distance = 0, n_start_distance = 0, s_start_distance = 0;
+        (void)n_start_distance;
+        (void)s_start_distance;
         for (auto [dir, start_distance, range] : dir_configs) {
             switch (dir) {
-                case RoutingDirection::E: e_range = range; break;
-                case RoutingDirection::W: w_range = range; break;
-                case RoutingDirection::N: n_range = range; break;
-                case RoutingDirection::S: s_range = range; break;
+                case RoutingDirection::E:
+                    e_range = range;
+                    e_start_distance = start_distance;
+                    break;
+                case RoutingDirection::W:
+                    w_range = range;
+                    w_start_distance = start_distance;
+                    break;
+                case RoutingDirection::N:
+                    n_range = range;
+                    n_start_distance = start_distance;
+                    break;
+                case RoutingDirection::S:
+                    s_range = range;
+                    s_start_distance = start_distance;
+                    break;
                 default: GTEST_SKIP() << "Invalid direction in connection configuration: " << static_cast<int>(dir);
             }
         }
@@ -2666,6 +2687,7 @@ void Fabric2DMulticastCommon(
                     traverse_direction(
                         trunk_fabric_node_id,
                         RoutingDirection::E,
+                        e_start_distance,
                         e_range,
                         "trunk position " + std::to_string(trunk_hop));
                 }
@@ -2673,6 +2695,7 @@ void Fabric2DMulticastCommon(
                     traverse_direction(
                         trunk_fabric_node_id,
                         RoutingDirection::W,
+                        w_start_distance,
                         w_range,
                         "trunk position " + std::to_string(trunk_hop));
                 }
@@ -2680,10 +2703,10 @@ void Fabric2DMulticastCommon(
         } else {
             // E/W only mode: multicast from source chip in E/W directions
             if (e_range > 0) {
-                traverse_direction(src_fabric_node_id, RoutingDirection::E, e_range, "source");
+                traverse_direction(src_fabric_node_id, RoutingDirection::E, e_start_distance, e_range, "source");
             }
             if (w_range > 0) {
-                traverse_direction(src_fabric_node_id, RoutingDirection::W, w_range, "source");
+                traverse_direction(src_fabric_node_id, RoutingDirection::W, w_start_distance, w_range, "source");
             }
         }
     }
@@ -2739,6 +2762,7 @@ void Fabric2DMulticastCommon(
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = compile_time_args});
+    fprintf(stderr, "Sender fabric node ID: %u, phy: %u\n", src_fabric_node_id.chip_id, src_physical_device_id);
 
     // Append connection manager args for all connections at once
     // Using default (std::nullopt) for auto-detection: if N/S connections exist, validates no N+S mixing
@@ -2758,7 +2782,9 @@ void Fabric2DMulticastCommon(
     std::vector<std::pair<std::shared_ptr<tt_metal::distributed::MeshDevice>, tt_metal::Program>> receiver_programs;
     std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
     for (auto physical_end_device_id : receiver_device_ids) {
-        // auto recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_end_device_id);
+        auto recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(physical_end_device_id);
+        fprintf(stderr, "Receiver fabric node ID: %u, phy: %u\n", recv_fabric_node_id.chip_id, physical_end_device_id);
+
         auto receiver_device = fixture->get_device(physical_end_device_id);
         auto receiver_program = tt_metal::CreateProgram();
         auto receiver_kernel = tt_metal::CreateKernel(

@@ -552,6 +552,33 @@ TEST_F(NightlyFabric2DFixture, TestMeshFabricMulticastNocUnicastWrite) {
         },
         false);
 }
+TEST_F(NightlyFabric2DFixture, TestMeshFabricSkippedMulticastNocUnicastWrite1) {
+    Fabric2DMulticastCommon(
+        this,
+        NOC_UNICAST_WRITE,
+        {
+            {std::make_tuple(RoutingDirection::E, 1, 2)},
+        },
+        false);
+}
+TEST_F(NightlyFabric2DFixture, TestMeshFabricSkippedMulticastNocUnicastWrite2) {
+    Fabric2DMulticastCommon(
+        this,
+        NOC_UNICAST_WRITE,
+        {
+            {std::make_tuple(RoutingDirection::W, 1, 2)},
+        },
+        false);
+}
+TEST_F(NightlyFabric2DFixture, TestMeshFabricSkippedMulticastNocUnicastWrite3) {
+    Fabric2DMulticastCommon(
+        this,
+        NOC_UNICAST_WRITE,
+        {
+            {std::make_tuple(RoutingDirection::N, 0, 1), std::make_tuple(RoutingDirection::W, 1, 2)},
+        },
+        false);
+}
 
 TEST_F(NightlyFabric2DFixture, TestMeshFabricMulticastNocInlineUnicastWrite) {
     Fabric2DMulticastCommon(

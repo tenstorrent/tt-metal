@@ -63,6 +63,7 @@ void kernel_main() {
         poll_addr += packet_payload_size_bytes / 4;
         bytes_received += packet_payload_size_bytes;
     }
+    DPRINT << "recv DONE\n";
 
     if (!match) {
         test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_DATA_MISMATCH;
