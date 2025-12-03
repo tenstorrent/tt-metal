@@ -12,6 +12,7 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include <utility>
 #include <llrt/tt_cluster.hpp>
+#include <tt-metalium/experimental/pinned_memory.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -30,7 +31,7 @@ void SDMeshCommandQueue::write_shard_to_device(
     const void* src,
     const std::optional<BufferRegion>& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    std::shared_ptr<PinnedMemory> pinned_memory) {
+    [[maybe_unused]] std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_memory) {
     auto device_buffer = buffer.get_device_buffer(device_coord);
     auto region_value = region.value_or(BufferRegion(0, device_buffer->size()));
     auto shard_view = device_buffer->view(region_value);

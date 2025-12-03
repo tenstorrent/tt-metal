@@ -16,6 +16,7 @@
 #include "mesh_trace.hpp"
 #include "tt_metal/impl/dispatch/ringbuffer_cache.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
+#include <tt-metalium/experimental/pinned_memory.hpp>
 
 // Forward declaration of the FDMeshCQTestAccessor class
 // This is used to access the system memory manager from cq test fixtures
@@ -206,7 +207,7 @@ protected:
         const void* src,
         const std::optional<BufferRegion>& region,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-        std::shared_ptr<PinnedMemory> pinned_memory = nullptr) override;
+        std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_memory = nullptr) override;
     void read_shard_from_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,

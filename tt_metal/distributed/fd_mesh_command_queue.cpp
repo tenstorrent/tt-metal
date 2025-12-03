@@ -533,7 +533,7 @@ void FDMeshCommandQueue::write_shard_to_device(
     const void* src,
     const std::optional<BufferRegion>& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    std::shared_ptr<PinnedMemory> pinned_memory) {
+    std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_memory) {
     if (!mesh_device_->is_local(device_coord)) {
         return;
     }

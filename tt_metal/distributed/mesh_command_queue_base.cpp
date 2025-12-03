@@ -6,7 +6,7 @@
 
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
-#include <pinned_memory.hpp>
+#include <tt-metalium/experimental/pinned_memory.hpp>
 #include <optional>
 
 #include "buffer.hpp"
@@ -170,7 +170,7 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
     const MeshCoordinateRange& device_range,
     bool blocking,
     std::optional<BufferRegion> region,
-    std::shared_ptr<tt_metal::PinnedMemory> pinned_memory) {
+    std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_memory) {
     auto lock = lock_api_function_();
     if (buffer.global_layout() == MeshBufferLayout::REPLICATED) {
         // Multi-Threaded writes supported for Replicated buffers.
@@ -199,7 +199,7 @@ void MeshCommandQueueBase::enqueue_write_mesh_buffer(
     const std::shared_ptr<MeshBuffer>& buffer,
     const void* host_data,
     bool blocking,
-    std::shared_ptr<tt_metal::PinnedMemory> pinned_memory) {
+    std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_memory) {
     MeshCoordinateRange mesh_device_extent(buffer->device()->shape());
     this->enqueue_write_shard_to_sub_grid(
         *buffer, host_data, mesh_device_extent, blocking, std::nullopt, pinned_memory);

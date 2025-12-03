@@ -21,14 +21,16 @@
 
 namespace tt {
 namespace tt_metal {
+namespace experimental {
+class PinnedMemory;
+}
+
 class IDevice;
 enum class TensorMemoryLayout;
 }  // namespace tt_metal
 }  // namespace tt
 
 namespace tt::tt_metal {
-
-class PinnedMemory;
 
 // Used so the host knows how to properly copy data into user space from the completion queue (in hugepages)
 struct ReadBufferDescriptor {

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace tt::umd {
 class SysmemBuffer;
@@ -190,7 +191,7 @@ private:
  * @param mesh_device The mesh device to get the memory pinning parameters for
  * @return Memory pinning parameters
  */
-experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::MeshDevice& mesh_device);
+MemoryPinningParameters GetMemoryPinningParameters(distributed::MeshDevice& mesh_device);
 
 struct PinnedMemoryWrapper {
     distributed::MeshCoordinateRangeSet device_range;

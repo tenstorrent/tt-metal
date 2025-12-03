@@ -63,9 +63,9 @@ struct BufferWriteDispatchParams {
     bool issue_wait = false;
     IDevice* device = nullptr;
     uint32_t cq_id = 0;
-    bool use_pinned_transfer = false;
     uint32_t pinned_src_noc_xy = 0;
     uint32_t pinned_src_addr_lo = 0;
+    bool use_pinned_transfer = false;
 
     BufferWriteDispatchParams() = default;
     BufferWriteDispatchParams(uint32_t src_noc_xy, uint32_t src_addr_32B, bool src_pinned = false) :
@@ -820,7 +820,7 @@ void write_to_device_buffer(
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     CoreType dispatch_core_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    std::shared_ptr<tt_metal::PinnedMemory> pinned_memory) {
+    std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_memory) {
     SystemMemoryManager& sysmem_manager = buffer.device()->sysmem_manager();
     auto& hal = tt::tt_metal::MetalContext::instance().hal();
 

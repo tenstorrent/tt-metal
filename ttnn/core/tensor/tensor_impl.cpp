@@ -689,7 +689,7 @@ Tensor to_device(
 }
 
 // TODO: remove from cache when tensor (or torch tensor) is destroyed.
-std::deque<PinnedMemoryWrapper> pinned_memories_cache;
+std::deque<experimental::PinnedMemoryWrapper> pinned_memories_cache;
 
 template <typename T>
 void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blocking, std::optional<ttnn::QueueId> cq_id) {
@@ -802,7 +802,7 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
     const auto& device_storage = device_tensor.device_storage();
     auto mesh_buffer = device_storage.mesh_buffer;
     ttnn::MeshDevice* device = mesh_buffer->device();
-    std::vector<tt_metal::PinnedMemoryWrapper> pinned_memories_to_cache;
+    std::vector<experimental::PinnedMemoryWrapper> pinned_memories_to_cache;
     bool use_pinned = device->get_memory_pinning_parameters().can_map_to_noc;
     const DistributedHostBuffer& distributed_host_buffer = host_tensor.host_storage().buffer();
     for (const auto& device_coord : device_storage.coords) {
@@ -811,13 +811,14 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
             if (shard.has_value()) {
                 auto range_set =
                     distributed::MeshCoordinateRangeSet{distributed::MeshCoordinateRange{device_coord, device_coord}};
-                std::function<bool(const tt_metal::PinnedMemoryWrapper&)> predicate =
-                    [&](const tt_metal::PinnedMemoryWrapper& pinned_memory_wrapper) {
+                std::function<bool(const experimental::PinnedMemoryWrapper&)> predicate =
+                    [&](const experimental::PinnedMemoryWrapper& pinned_memory_wrapper) {
                         return pinned_memory_wrapper.device_range == range_set &&
                                pinned_memory_wrapper.pinned_memory->get_host_ptr() == shard->view_bytes().data() &&
                                pinned_memory_wrapper.pinned_memory->get_buffer_size() == shard->view_bytes().size();
                     };
-                std::shared_ptr<tt_metal::PinnedMemory> pinned_memory = tt_metal::find_matching_pin_in_cache(predicate);
+                std::shared_ptr<experimental::PinnedMemory> pinned_memory =
+                    tt_metal::experimental::find_matching_pin_in_cache(predicate);
                 if (pinned_memory == nullptr) {
                     // TODO: on blackhole, limit size of cache to avoid pinning arbitrarily many buffers.
                     try {
@@ -832,7 +833,7 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
                         }
                     }
                     if (pinned_memory != nullptr) {
-                        pinned_memories_to_cache.push_back(tt_metal::PinnedMemoryWrapper{range_set, pinned_memory});
+                        pinned_memories_to_cache.push_back(experimental::PinnedMemoryWrapper{range_set, pinned_memory});
                     }
                 } else {
                     // to ensure strict memory ordering

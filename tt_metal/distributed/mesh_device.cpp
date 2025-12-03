@@ -9,7 +9,6 @@
 #include <mesh_device.hpp>
 #include <mesh_device_view.hpp>
 #include <tt_stl/small_vector.hpp>
-#include <tt-metalium/pinned_memory.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <sub_device.hpp>
 #include <system_mesh.hpp>
@@ -63,6 +62,7 @@
 
 #include <umd/device/types/core_coordinates.hpp>
 #include <llrt/tt_cluster.hpp>
+#include <tt-metalium/experimental/pinned_memory.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -1176,7 +1176,7 @@ const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_i
 
 std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }
 
-std::unique_ptr<PinnedMemory> MeshDevice::pin_memory(
+std::unique_ptr<tt_metal::experimental::PinnedMemory> MeshDevice::pin_memory(
     const MeshCoordinateRangeSet& coordinate_range_set, HostBuffer& host_buffer, bool map_to_noc) {
     if (map_to_noc and memory_pinning_params_.can_map_to_noc) {
         // Extract all coordinates from the range set
@@ -1202,7 +1202,8 @@ std::unique_ptr<PinnedMemory> MeshDevice::pin_memory(
         void* host_ptr = static_cast<void*>(bytes.data());
         size_t buffer_size = bytes.size();
 
-        return std::unique_ptr<PinnedMemory>(new PinnedMemory(devices, host_ptr, buffer_size, map_to_noc));
+        return std::unique_ptr<tt_metal::experimental::PinnedMemory>(
+            new tt_metal::experimental::PinnedMemory(devices, host_ptr, buffer_size, map_to_noc));
     } else {
         log_debug(
             tt::LogMetal,

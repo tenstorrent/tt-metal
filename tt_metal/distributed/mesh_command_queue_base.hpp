@@ -7,7 +7,7 @@
 #include "mesh_command_queue.hpp"
 
 #include "tt_metal/common/thread_pool.hpp"
-
+#include <tt-metalium/experimental/pinned_memory.hpp>
 #include <mutex>
 #include <functional>
 
@@ -26,7 +26,7 @@ protected:
         const void* src,
         const std::optional<BufferRegion>& region,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-        std::shared_ptr<PinnedMemory> pinned_memory = nullptr) = 0;
+        std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr) = 0;
     virtual void read_shard_from_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
@@ -74,12 +74,12 @@ public:
         const MeshCoordinateRange& device_range,
         bool blocking,
         std::optional<BufferRegion> region = std::nullopt,
-        std::shared_ptr<tt_metal::PinnedMemory> pinned_memory = nullptr) override;
+        std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr) override;
     void enqueue_write_mesh_buffer(
         const std::shared_ptr<MeshBuffer>& buffer,
         const void* host_data,
         bool blocking,
-        std::shared_ptr<tt_metal::PinnedMemory> pinned_memory = nullptr) override;
+        std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr) override;
     void enqueue_write_shards(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         const std::vector<ShardDataTransfer>& shard_data_transfers,

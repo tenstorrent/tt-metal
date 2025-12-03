@@ -843,7 +843,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRange) {
             coordinate_range_set,
             host_buffer,
             /*map_to_noc=*/true);
-        std::shared_ptr<PinnedMemory> pinned_shared = std::move(pinned_unique);
+        std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_shared = std::move(pinned_unique);
 
         auto write_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
             .shard_coord = coord,

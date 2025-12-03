@@ -40,12 +40,15 @@ class Allocator;
 class CommandQueue;
 class SubDevice;
 class SystemMemoryManager;
-class PinnedMemory;
 namespace program_cache {
 namespace detail {
 struct ProgramCache;
 }  // namespace detail
 }  // namespace program_cache
+
+namespace experimental {
+class PinnedMemory;
+}
 }  // namespace tt_metal
 }  // namespace tt
 
@@ -352,7 +355,7 @@ public:
      * @param map_to_noc Whether to map the buffer to the NOC
      * @return Unique pointer to the created PinnedMemory instance
      */
-    std::unique_ptr<PinnedMemory> pin_memory(
+    std::unique_ptr<tt_metal::experimental::PinnedMemory> pin_memory(
         const MeshCoordinateRangeSet& coordinate_range_set, HostBuffer& host_buffer, bool map_to_noc = false);
 
     MemoryPinningParameters get_memory_pinning_parameters() const;

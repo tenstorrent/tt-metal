@@ -29,6 +29,7 @@
 #include "context/metal_context.hpp"
 #include "mesh_coord.hpp"
 #include <llrt/tt_cluster.hpp>
+#include <tt-metalium/experimental/pinned_memory.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -230,7 +231,7 @@ static void BM_write_pinned_memory(benchmark::State& state, std::shared_ptr<Mesh
     auto coord = MeshCoordinate(0, 0);
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
     auto pinned_unique = mesh_device->pin_memory(coordinate_range_set, host_buffer, /*map_to_noc=*/true);
-    std::shared_ptr<PinnedMemory> pinned_mem = std::move(pinned_unique);
+    std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_mem = std::move(pinned_unique);
 
     // Prepare the read transfer using pinned memory
     MeshCommandQueue::ShardDataTransfer write_transfer = {
@@ -282,14 +283,6 @@ int main(int argc, char** argv) {
             ->ComputeStatistics("max", compute_max);
 
         benchmark::RegisterBenchmark("Read", BM_read, device)
-            ->ArgsProduct(benchmark_args)
-            ->UseRealTime()
-            ->Repetitions(num_test_repetitions)
-            ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
-            ->ComputeStatistics("min", compute_min)
-            ->ComputeStatistics("max", compute_max);
-
-        benchmark::RegisterBenchmark("ReadPinnedMemory", BM_read_pinned_memory, device)
             ->ArgsProduct(benchmark_args)
             ->UseRealTime()
             ->Repetitions(num_test_repetitions)
