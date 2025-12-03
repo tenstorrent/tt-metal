@@ -189,9 +189,10 @@ def test_attention_inference(
             prefetcher.run()
 
         tt_attention_input = pt_attention_input.clone()
+        breakpoint()
         attention_input = model_args.prepare_residual_tensor_decode(
             tt_attention_input,
-            model_args.model_config["PREFETCHER_SHARDED_ATTN_INPUT_MEMCFG"]
+            model_args.model_config["PREFETCHER_SHARDED_ATTN_INPUT_RING_MEMCFG"]
             if prefetcher is not None and mode == "decode"
             else model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
             force_replicated=False if model_args.is_galaxy else True,

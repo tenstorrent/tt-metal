@@ -561,7 +561,6 @@ class RotarySetup(LightweightModule):
         else:
             mem_config = None
 
-        breakpoint()
         cos = ttnn.embedding(
             rot_idxs, self.cos_matrix, layout=embedding_layout, memory_config=mem_config
         )  # [1, batch, head_dim]
@@ -572,7 +571,6 @@ class RotarySetup(LightweightModule):
         cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, head_dim]
         sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch, head_dim]
 
-        breakpoint()
         if prefetcher is None:
             cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], head_dim]
             sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], head_dim]

@@ -119,6 +119,7 @@ class RMSNorm(LightweightModule):
 
     def forward(self, x: ttnn.Tensor, mode, in_sharded=False, out_sharded=False) -> ttnn.Tensor:
         # If input is sharded do sharded RMSNorm and optionally return sharded output
+        breakpoint()
         program_config = self.sharded_program_config if in_sharded else None
         memory_config = self.sharded_output_config if out_sharded else None
         distributed = self.is_distributed and self.is_distributed(mode)
@@ -130,6 +131,7 @@ class RMSNorm(LightweightModule):
         else:
             assert not out_sharded, "Non-sharded version of RMSNorm cannot output a sharded tensor"
 
+        breakpoint()
         x = norm(
             x,
             epsilon=self.eps,
@@ -138,10 +140,13 @@ class RMSNorm(LightweightModule):
             memory_config=memory_config,
             compute_kernel_config=self.compute_kernel_config_hifi2,
         )
-
+        breakpoint()
         if in_sharded and not out_sharded:
             return ttnn.sharded_to_interleaved(x)
         else:
+            if self.output_mem_config is not None:
+                x = ttnn.to_memory_config(x, self.output_mem_config)
+            breakpoint()
             return x
 
     def _distributed_rmsnorm(

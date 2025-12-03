@@ -8,10 +8,11 @@ from models.tt_transformers.tt.ccl import tt_distributed_rmsnorm, tt_sharded_dis
 
 
 class DistributedNorm(LightweightModule):
-    def __init__(self, norm, args, tt_ccl, TG=False):
+    def __init__(self, norm, args, tt_ccl, prefetcher=None, TG=False):
         self.norm = norm
         self.args = args
         self.tt_ccl = tt_ccl
+        self.prefetcher = prefetcher
 
         if TG:
             core_grid_ln = (
@@ -68,9 +69,9 @@ class DistributedNorm(LightweightModule):
                     tt_ccl=self.tt_ccl,
                     compute_kernel_config=self.ln_cfg,
                 )
-
+        breakpoint()
         input_mem_cfg = self.norm.sharded_output_config if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
-
+        breakpoint()
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
             x = ttnn.experimental.all_gather_async(
@@ -85,12 +86,13 @@ class DistributedNorm(LightweightModule):
                 chunks_per_sync=10,
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
+                subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )
         else:
             x = ttnn.to_memory_config(x, input_mem_cfg)
-
+        breakpoint()
         x = self.norm(x, mode=mode, in_sharded=(mode == "decode"), out_sharded=(mode == "decode"))
-
+        breakpoint()
         # Distributed norm requires a gather
         if self.args.is_distributed_norm(mode):
             x = ttnn.experimental.all_gather_async(

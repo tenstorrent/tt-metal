@@ -410,6 +410,7 @@ class Attention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
+        breakpoint()
         xqkv_fused_sharded = ttnn.linear(
             x,
             self.wqkv,
@@ -572,11 +573,16 @@ class Attention(LightweightModule):
             else self.model_config["PREFETCHER_SCORES_BATCHED_MM_OUTPUT_MEMCFG"](self.batch_size_per_device_group),
         )
         # attn_output_11BH shape: [1, 1, 16, 128]
-
+        breakpoint()
+        nlp_concat_heads_core_range_set = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 3)),
+            ]
+        )
         attn_output_cat = ttnn.experimental.nlp_concat_heads_decode(
             attn_output_11BH,
             num_heads=self.n_local_heads,
-            sub_core_grids=self.prefetcher.all_worker_cores_range_set if self.prefetcher is not None else None,
+            sub_core_grids=nlp_concat_heads_core_range_set if self.prefetcher is not None else None,
         )
         # attn_output_cat shape: [1, 1, 32, 2048]
         ttnn.deallocate(attn_output_11BH)
@@ -627,6 +633,10 @@ class Attention(LightweightModule):
                     num_buffers_per_channel=2,
                     subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
                 )
+
+                # Right after all gather
+                breakpoint()
+
                 dense_out_sharded = ttnn.linear(
                     all_gather_output,
                     self.wo,
@@ -717,7 +727,7 @@ class Attention(LightweightModule):
                     if self.prefetcher is None:
                         return self.model_config["DECODE_RESIDUAL_MEMCFG"]
                     else:
-                        return self.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"]
+                        return self.model_config["PREFETCHER_DECODE_RESIDUAL_ALL_REDUCE_MEMCFG"]
 
             dense_out_reduced = tt_all_reduce(
                 dense_out_sharded,

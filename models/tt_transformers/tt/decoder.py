@@ -33,7 +33,7 @@ class TransformerBlock(LightweightModule):
 
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
-
+        self.prefetcher = prefetcher
         self.num_devices = args.num_devices
         self.args = args
         self.hidden_size = args.dim
@@ -110,12 +110,18 @@ class TransformerBlock(LightweightModule):
                 is_distributed=self.args.is_distributed_norm,
                 add_unit_offset=self.args.rms_norm_add_unit_offset,
                 sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
-                sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
+                sharded_output_config=self.model_config["PREFETCHER_SHARDED_ATTN_INPUT_MEMCFG"]
+                if self.prefetcher is not None and self.prefetcher.mode == "decode"
+                else self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
+                output_mem_config=self.model_config["PREFETCHER_SHARDED_ATTN_INPUT_RING_MEMCFG"]
+                if self.prefetcher is not None and self.prefetcher.mode == "decode"
+                else None,
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
             ),
             args,
             tt_ccl=self.tt_ccl,
+            prefetcher=self.prefetcher,
             TG=args.is_galaxy,
         )
         self.ff_norm = DistributedNorm(
@@ -131,12 +137,18 @@ class TransformerBlock(LightweightModule):
                 is_distributed=self.args.is_distributed_norm,
                 add_unit_offset=self.args.rms_norm_add_unit_offset,
                 sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
-                sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
+                sharded_output_config=self.model_config["PREFETCHER_SHARDED_MLP_INPUT_MEMCFG"]
+                if self.prefetcher is not None and self.prefetcher.mode == "decode"
+                else self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
+                output_mem_config=self.model_config["PREFETCHER_SHARDED_MLP_INPUT_RING_MEMCFG"]
+                if self.prefetcher is not None and self.prefetcher.mode == "decode"
+                else None,
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
             ),
             args,
             tt_ccl=self.tt_ccl,
+            prefetcher=self.prefetcher,
             TG=args.is_galaxy,
         )
         if f"layers.{layer_num}.pre_feedforward_layernorm.weight" in state_dict:
@@ -159,6 +171,7 @@ class TransformerBlock(LightweightModule):
                 ),
                 args,
                 tt_ccl=self.tt_ccl,
+                prefetcher=self.prefetcher,
                 TG=args.is_galaxy,
             )
         else:
@@ -185,6 +198,7 @@ class TransformerBlock(LightweightModule):
                 ),
                 args,
                 tt_ccl=self.tt_ccl,
+                prefetcher=self.prefetcher,
                 TG=args.is_galaxy,
             )
         else:
@@ -207,7 +221,16 @@ class TransformerBlock(LightweightModule):
         TG = self.args.is_galaxy
         residual = x
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
-        skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+
+        def get_skip_mem_cfg():
+            if self.prefetcher is None:
+                return self.model_config["DECODE_RESIDUAL_MEMCFG"]
+            else:
+                return self.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"]
+
+        skip_mem_cfg = get_skip_mem_cfg() if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+
+        breakpoint()
         assert (
             x.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
@@ -216,9 +239,12 @@ class TransformerBlock(LightweightModule):
         rot_mats = (
             rot_mats_local if (hasattr(self.attention, "is_sliding") and self.attention.is_sliding) else rot_mats_global
         )
-
+        breakpoint()
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode)
+
+        breakpoint()
+
         # Attention takes replicated inputs and produces fractured outputs
         attn_out = self.attention.forward(
             attn_in,
@@ -231,7 +257,7 @@ class TransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
-
+        breakpoint()
         if self.pre_ff_norm is None:
             hidden_states = ttnn.add(
                 residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None

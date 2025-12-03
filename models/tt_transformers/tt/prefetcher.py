@@ -179,7 +179,6 @@ class Prefetcher(LightweightModule):
         # Only ring size of 24 has been tested on WH
 
         ### Prefetcher Subdevices
-        self.prefetcher_sub_device = PrefetcherSubDevice(self.mesh_device)
 
         ### Prefetched Tensors
         self.prefetched_tensors = []
@@ -254,13 +253,16 @@ class Prefetcher(LightweightModule):
         )
         match mode:
             case "decode":
+                self.prefetcher_sub_device = PrefetcherSubDevice(self.mesh_device)
                 self.prefetcher_sub_device.add_sub_device(self.to_core_range_set(self.sender_cores(active=True)))
                 self.prefetcher_sub_device.add_sub_device(self.all_worker_cores_range_set)
                 self.prefetcher_sub_device.init_sub_device_manager()
             case "prefill":
+                self.prefetcher_sub_device = PrefetcherSubDevice(self.mesh_device)
                 self.prefetcher_sub_device.add_sub_device(self.all_core_range_set)
                 self.prefetcher_sub_device.init_sub_device_manager()
 
+        self.worker_sub_device_id = self.prefetcher_sub_device.sub_devices_id[-1]
         logger.info("=" * 50)
         logger.info("[Prefetcher Initialization]")
         logger.info(f"  Mode: {mode}")
@@ -271,7 +273,6 @@ class Prefetcher(LightweightModule):
         logger.info(f"  Number of tensors to prefetch: {self.num_tensors}")
         logger.info(f"  Number of layers: {self.num_layers}")
         logger.info("=" * 50)
-        # self.worker_sub_device_id = self.prefetcher_sub_device.sub_devices_id[-1]
 
     def create_address_tensor(self):
         """

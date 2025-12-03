@@ -13,11 +13,16 @@ from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import PagedAttentionConfig
 from models.tt_transformers.tt.decoder import TransformerBlock
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.model_config import CheckpointType, ModelArgs
+from models.tt_transformers.tt.prefetcher import Prefetcher
 from models.tt_transformers.tt.rope import RotarySetup
 
 
 @torch.no_grad()
+@pytest.mark.parametrize(
+    "use_prefetcher",
+    (True, False),
+)
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -56,15 +61,31 @@ from models.tt_transformers.tt.rope import RotarySetup
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_decoder_inference(
-    max_seq_len, batch_size, paged_attention, page_params, mesh_device, reset_seeds, ensure_gc, generation_length
+    max_seq_len,
+    batch_size,
+    paged_attention,
+    page_params,
+    mesh_device,
+    reset_seeds,
+    ensure_gc,
+    generation_length,
+    use_prefetcher,
 ):
     dtype = ttnn.bfloat8_b
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
+    num_tensors = 5 if use_prefetcher else 0
+    prefetcher = Prefetcher(mesh_device, num_tensors=num_tensors, num_layers=1) if use_prefetcher else None
+
+    if use_prefetcher:
+        prefetcher.init(mode="decode")
+
+    model_args = ModelArgs(
+        mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True, prefetcher=prefetcher
+    )
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
-
+    breakpoint()
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = model_args.get_state_dict_prefix("TransformerBlock", 0)
     partial_state_dict = {
@@ -84,6 +105,7 @@ def test_decoder_inference(
         model_args.max_seq_len,
         model_args.rope_theta,
         model_args.rope_scaling,
+        rot_mats_layout=ttnn.ROW_MAJOR_LAYOUT if use_prefetcher else ttnn.TILE_LAYOUT,
     )
 
     if model_args.rope_theta_local is not None:
@@ -140,7 +162,9 @@ def test_decoder_inference(
         weight_cache_path=model_args.weight_cache_path(dtype),
         transformation_mats=transformation_mats,
         paged_attention_config=paged_attention_config,
+        prefetcher=prefetcher,
     )
+    breakpoint()
 
     seqlen = 1
 
@@ -161,6 +185,9 @@ def test_decoder_inference(
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
 
+        if prefetcher is not None:
+            prefetcher.run()
+        breakpoint()
         # input = torch.randn(1, 32, 4096)
         pt_decode_input = (
             torch.rand(
@@ -169,16 +196,20 @@ def test_decoder_inference(
             * 2
         ) - 1
         tt_decode_input = pt_decode_input.clone()
-
+        breakpoint()
         decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
             # ttnn.DRAM_MEMORY_CONFIG,
-            model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
+            model_args.model_config["PREFETCHER_DECODE_RESIDUAL_MEMCFG"]
+            if use_prefetcher
+            else model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
         )
 
         # Get cos/sin matrices for the current position of each user
-        rot_mats = rope_setup.get_rot_mats(current_pos)
+        rot_mats = rope_setup.get_rot_mats(current_pos, prefetcher=prefetcher if use_prefetcher else None)
         rot_mats_local = None if rope_setup_local is None else rope_setup_local.get_rot_mats(current_pos)
+        breakpoint()
+
         # Run TT model
         tt_out = tt_model(
             decode_input,
@@ -188,6 +219,7 @@ def test_decoder_inference(
             mode="decode",
             page_table=page_table_tt,
         )
+        breakpoint()
         tt_out = ttnn.to_torch(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),

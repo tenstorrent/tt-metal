@@ -104,7 +104,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
             return tt_model.model_config["MLP_ACT_MEMCFG"]
 
         if prefetcher is not None:
-            return model_args.model_config["SHARDED_MLP_INPUT_RING_MEMCFG"]
+            return model_args.model_config["PREFETCHER_SHARDED_MLP_INPUT_RING_MEMCFG"]
 
         return model_args.model_config["SHARDED_MLP_INPUT_MEMCFG"]
 
