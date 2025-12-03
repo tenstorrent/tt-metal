@@ -1156,6 +1156,7 @@ eth_chan_directions ControlPlane::routing_direction_to_eth_direction(RoutingDire
         case RoutingDirection::S: dir = eth_chan_directions::SOUTH; break;
         case RoutingDirection::E: dir = eth_chan_directions::EAST; break;
         case RoutingDirection::W: dir = eth_chan_directions::WEST; break;
+        case RoutingDirection::Z: return static_cast<eth_chan_directions>(eth_chan_magic_values::INVALID_DIRECTION);
         default: TT_FATAL(false, "Invalid Routing Direction");
     }
     return dir;
@@ -2170,9 +2171,7 @@ void ControlPlane::populate_fabric_connection_info(
         auto core_id = tensix_config.get_core_id_for_channel(physical_chip_id, eth_channel_id);
         // In UDM mode, get the first channel for worker connection for now.
         // TODO: have a vector of worker channels based on the current core and connected eth_channel_id
-        uint32_t tensix_sender_channel = (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM)
-                                             ? static_cast<uint32_t>(UdmMuxChannelId::WORKER_CHANNEL_BASE)
-                                             : sender_channel;
+        uint32_t tensix_sender_channel = sender_channel;
 
         fill_tensix_connection_info_fields(
             tensix_connection_info, mux_core_virtual, tensix_config, tensix_sender_channel, core_id);
@@ -2305,10 +2304,22 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
         auto exit_node_hash = (*exit_node.src_exit_node) + (*exit_node.dst_exit_node);
         auto src_eth_chan = exit_node.eth_conn.src_chan;
         auto exit_node_chip = exit_node_fabric_node_id.chip_id;
+
+        // Check if this is BLACKHOLE and channel 8 or 9, which should use Z direction
+        const auto& chip_spec = this->mesh_graph_->get_chip_spec();
+        bool is_blackhole_z_channel =
+            (chip_spec.arch == tt::ARCH::BLACKHOLE) && (src_eth_chan == 8 || src_eth_chan == 9);
+
         for (const auto& [port_id, chip_id] : mesh_edge_ports_to_chip_id[*my_mesh_id]) {
             if (exit_node_chip == chip_id) {
                 auto port_direction = port_id.first;
                 auto logical_chan_id = port_id.second;
+
+                // If this is a Z channel on BLACKHOLE, prefer Z direction ports
+                if (is_blackhole_z_channel && port_direction != RoutingDirection::Z) {
+                    continue;
+                }
+
                 port_id_t port_id = {port_direction, logical_chan_id};
                 // Assign this port id to the exit node if it is not already assigned
                 bool valid_direction =
@@ -2317,9 +2328,11 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
                 if (assigned_port_ids.find(port_id) == assigned_port_ids.end() && valid_direction) {
                     assigned_port_ids.insert(port_id);
                     ports_to_neighbor.push_back(PortDescriptor{port_id, assoc_connection_hash});
-                    exit_node_directions_[exit_node_fabric_node_id][src_eth_chan] = port_direction;
+                    // Override direction to Z if this is a Z channel on BLACKHOLE
+                    RoutingDirection final_direction = is_blackhole_z_channel ? RoutingDirection::Z : port_direction;
+                    exit_node_directions_[exit_node_fabric_node_id][src_eth_chan] = final_direction;
                     logical_port_to_eth_chan_[exit_node_fabric_node_id][port_id] = src_eth_chan;
-                    curr_exit_node_direction[exit_node_hash] = port_direction;
+                    curr_exit_node_direction[exit_node_hash] = final_direction;
                     break;
                 }
             }
@@ -2808,7 +2821,7 @@ void ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
         all_hostnames,
         gsd_yaml,
         false,  // strict_validation
-        false   // assert_on_connection_mismatch
+        true    // assert_on_connection_mismatch
     );
 
     log_debug(tt::LogFabric, "Torus validation passed for configuration: {}", enchantum::to_string(fabric_config));
