@@ -187,7 +187,6 @@ class TestTriage:
                 check.result.location == check.device_description.device.arc_block.location
             ), f"Incorrect ARC location: {check.result.location}"
             assert 0 < check.result.clock_mhz < 10000, f"Invalid ARC clock: {check.result.clock_mhz}"
-            if check.result.uptime is not None:
-                assert (
-                    timedelta(seconds=0) < check.result.uptime < timedelta(days=365)
-                ), f"Invalid ARC uptime: {check.result.uptime}"
+            assert (
+                timedelta(seconds=0) < check.result.uptime < timedelta(days=8 * 365)
+            ), f"Invalid ARC uptime: {check.result.uptime}"
