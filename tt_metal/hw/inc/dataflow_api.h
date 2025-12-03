@@ -1486,6 +1486,7 @@ inline void noc_semaphore_set_multicast(
  * | noc                    | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
  */
 // clang-format on
+template <bool barrier = true>
 inline void noc_semaphore_set_multicast_loopback_src(
     uint32_t src_local_l1_addr,
     uint64_t dst_noc_addr_multicast,
@@ -1505,7 +1506,9 @@ inline void noc_semaphore_set_multicast_loopback_src(
         linked,
         num_dests,
         true /* multicast_path_reserve */);
-    noc_async_write_barrier();
+    if constexpr (barrier) {
+        noc_async_write_barrier();
+    }
     WAYPOINT("NSLD");
 }
 
