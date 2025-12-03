@@ -11,10 +11,68 @@
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB_matmul_api.h"
 #endif
+// defines the default throttle level for matmul kernels (default 0)
 #ifndef MM_THROTTLE
 #define MM_THROTTLE 0
 #endif
 namespace ckernel {
+
+#ifdef ARCH_BLACKHOLE
+// defines the FW-controlled throttle level for block matmul kernels on Blackhole
+#define MM_THROTTLE_MAX 5
+// 4-byte word at MEM_L1_ARC_FW_SCRATCH written by FW - even means no throttle, odd means throttle
+volatile tt_l1_ptr uint32_t* throttle_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MEM_L1_ARC_FW_SCRATCH);
+// tracks the state of the currently programmed matmul MOP (0: default throttle level, 1: max throttle level)
+static uint32_t throttled_mop_status = 0;
+
+// clang-format off
+/**
+ * Performs matmul block operation with dynamic throttling.
+ * This function is only available on Blackhole architecture and implements
+ * firmware-controlled dynamic throttling for block matmul operations.
+ * The throttle level is controlled by firmware via MEM_L1_ARC_FW_SCRATCH.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                             | Type     | Valid Range                                    | Required |
+ * |----------------|-------------------------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | in0_cb_id      | The identifier of the first input circular buffer (CB)                  | uint32_t | 0 to 31                                        | True     |
+ * | in1_cb_id      | The identifier of the second input circular buffer (CB)                 | uint32_t | 0 to 31                                        | True     |
+ * | idst           | The index of the tile in DST REG to which the result C will be written. | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * | transpose      | The transpose flag for performing transpose operation on tiles in B.    | bool     | Must be true or false                          | True     |
+ * | ct_dim         | The coloumn dimension for the output block.                             | uint32_t | Must be equal to block B column dimension      | True     |
+ * | rt_dim         | The row dimension for the output block.                                 | uint32_t | Must be equal to block A row dimension         | True     |
+ * | kt_dim         | The inner dimension.                                                    | uint32_t | Must be equal to block A column dimension      | True     |
+ */
+// clang-format on
+ALWI void matmul_block_math_dynamic_throttle(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    uint32_t idst,
+    const uint32_t transpose,
+    uint32_t ct_dim,
+    uint32_t rt_dim,
+    uint32_t kt_dim) {
+    // Dynamic throttling is only available on Blackhole architecture
+    // Check firmware-controlled throttle enable flag (even = no throttle, odd = throttle)
+    volatile uint32_t mm_throttle_en = *(throttle_ptr) % 2;
+    if (mm_throttle_en) {
+        if (throttled_mop_status != 1) {
+            MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE_MAX>(
+                in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+            throttled_mop_status = 1;
+        }
+        MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE_MAX>(idst, transpose, ct_dim, rt_dim, kt_dim)));
+    } else {
+        if (throttled_mop_status != 0) {
+            MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(
+                in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+            throttled_mop_status = 0;
+        }
+        MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, transpose, ct_dim, rt_dim, kt_dim)));
+    }
+}
+#endif
 
 // clang-format off
 /**
@@ -162,6 +220,10 @@ ALWI void mm_block_init(
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure_disaggregated(in0_cb_id, in1_cb_id)));
+#ifdef ARCH_BLACKHOLE
+    // Dynamic throttling is only available on Blackhole architecture
+    MATH((throttled_mop_status = 0));
+#endif
 
     PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(out_cb_id)));
     PACK((llk_pack_init<false, false>(out_cb_id)));
@@ -201,7 +263,12 @@ ALWI void matmul_block(
     uint32_t rt_dim,
     uint32_t kt_dim) {
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
+#ifdef ARCH_BLACKHOLE
+    // Dynamic throttling is only available on Blackhole architecture
+    MATH((matmul_block_math_dynamic_throttle(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim, kt_dim)));
+#else
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, transpose, ct_dim, rt_dim, kt_dim)));
+#endif
 }
 
 // clang-format off
@@ -230,6 +297,10 @@ ALWI void mm_block_init_short(
     uint32_t kt_dim = 1) {
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+#ifdef ARCH_BLACKHOLE
+    // Dynamic throttling is only available on Blackhole architecture
+    MATH((throttled_mop_status = 0));
+#endif
 }
 
 // clang-format off
