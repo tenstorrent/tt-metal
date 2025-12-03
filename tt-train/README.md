@@ -60,12 +60,11 @@ Training loss example from [wandb project](https://wandb.ai/tenstorrent-ml/tt_tr
 ![NanoGPT training wandb chart](./images/nano-gpt-training-example.png)
 
 
-### Evaluation
-```
-# Navigate to the root directory of the repository
-TT_LOGGER_LEVEL=FATAL ./build/sources/examples/nano_gpt/nano_gpt --model_path nano_gpt.msgpack -e 1 --data_path sources/examples/nano_gpt/data/shakespeare.txt
+For more information on training with the C++ version, please see the [NanoGPT Example README](sources/examples/nano_gpt/README.md).
 
-```
+For both training and evaluation, we encourage you to use the Python version of NanoGPT, which can be used via Jupyter Notebook found in the NanoGPT example directory.
+
+More information on available configuration options can be found in the [configs directory](configs/README.md).
 
 ### Nightly only tests
 If CI fails, but local tests pass as expected, please consider changing the

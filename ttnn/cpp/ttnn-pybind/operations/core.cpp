@@ -110,12 +110,6 @@ void py_module(py::module& module) {
 
             Returns:
                 ttnn.Tensor: The device tensor copy.
-
-            Example:
-                >>> device_id = 0
-                >>> device = ttnn.open_device(device_id=device_id)
-                >>> tensor = ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16))
-                >>> device_tensor = ttnn.to_device(tensor=tensor, device=device)
         )doc");
 
     module.def(
@@ -137,13 +131,6 @@ void py_module(py::module& module) {
 
             Returns:
                 ttnn.Tensor: the host tensor copy.
-
-            Example:
-                >>> device = ttnn.open_device(0)
-                >>> tensor = ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16))
-                >>> device_tensor = ttnn.to_device(tensor=tensor, device=device)
-                >>> # non-blocking mode
-                >>> host_tensor = ttnn.from_device(tensor=device_tensor, blocking=False)
         )doc");
 
     module.def(
@@ -160,13 +147,6 @@ void py_module(py::module& module) {
 
         Returns:
             `None`: deallocates the tensor.
-
-        Example:
-            >>> device_id = 0
-            >>> device = ttnn.open_device(device_id=device_id)
-            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-            >>> tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
-            >>> ttnn.deallocate(tensor=tensor, force=False)
     )doc");
 
     module.def(
@@ -184,12 +164,6 @@ void py_module(py::module& module) {
 
             Returns:
                 ttnn.Tensor: the reallocated tensor.
-
-            Example:
-                >>> device_id = 0
-                >>> device = ttnn.open_device(device_id=device_id)
-                >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-                >>> new_tensor = ttnn.reallocate(tensor, memory_config=my_memory_config)
         )doc");
 
     bind_registered_operation(
@@ -206,12 +180,6 @@ void py_module(py::module& module) {
 
         Returns:
             ttnn.Tensor: the converted tensor.
-
-        Example:
-            >>> device_id = 0
-            >>> device = ttnn.open_device(device_id=device_id)
-            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-            >>> tensor = ttnn.to_memory_config(tensor, memory_config)
         )doc",
         ttnn::pybind_arguments_t{
             py::arg("tensor"),
@@ -335,27 +303,21 @@ void py_module(py::module& module) {
 
         Returns:
             ttnn.Tensor: the tensor with the requested layout.
-
-        Example:
-            >>> device_id = 0
-            >>> device = ttnn.open_device(device_id=device_id)
-            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-            >>> tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
-            >>> print(tensor[0,0,:3])
-            Tensor([1.42188, -1.25, -0.398438], dtype=bfloat16)
         )doc",
         ttnn::pybind_overload_t{
             [](const std::decay_t<decltype(ttnn::to_layout)> self,
                const ttnn::Tensor& tensor,
                const ttnn::Layout layout,
                const std::optional<ttnn::DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(tensor, layout, dtype, memory_config);
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
+                return self(tensor, layout, dtype, memory_config, sub_core_grids);
             },
             py::arg("tensor"),
             py::arg("layout"),
             py::arg("dtype") = std::nullopt,
-            py::arg("memory_config") = std::nullopt});
+            py::arg("memory_config") = std::nullopt,
+            py::arg("sub_core_grids") = std::nullopt});
 
     module.def(
         "num_cores_to_corerangeset",

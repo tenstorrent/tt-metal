@@ -47,7 +47,7 @@ void RingDistributedScaledDotProductAttention::validate(const std::vector<Tensor
     }
 
     // Validate storage types and buffers
-    for (auto& tensor : input_tensors) {
+    for (const auto& tensor : input_tensors) {
         TT_FATAL(
             tensor.storage_type() == StorageType::DEVICE, "Operands to ring-distributed SDPA need to be on device");
         TT_FATAL(
@@ -189,9 +189,9 @@ operation::ProgramWithCallbacks RingDistributedScaledDotProductAttention::create
     const ttnn::MeshCoordinate& coord,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto& input_tensor_q = input_tensors.at(0);
-    auto& input_tensor_k = input_tensors.at(1);
-    auto& input_tensor_v = input_tensors.at(2);
+    const auto& input_tensor_q = input_tensors.at(0);
+    const auto& input_tensor_k = input_tensors.at(1);
+    const auto& input_tensor_v = input_tensors.at(2);
     auto& output_tensor = output_tensors.at(0);
 
     auto scale = this->scale;
@@ -209,7 +209,7 @@ operation::ProgramWithCallbacks RingDistributedScaledDotProductAttention::create
         ring_id = this->ring_id.value();
     } else {
         // Infer ring_id from device coordinate (similar to ring_joint_sdpa)
-        auto mesh_device = input_tensors[0].device();
+        auto* mesh_device = input_tensors[0].device();
         IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
 
         // Get all devices in the ring (assuming linear layout along one axis)

@@ -160,6 +160,8 @@ tt::ARCH Board::get_arch() const { return arch_; }
 
 BoardType Board::get_board_type() const { return board_type_; }
 
+const std::unordered_set<uint32_t>& Board::get_asic_locations() const { return asic_locations_; }
+
 const std::vector<PortId>& Board::get_available_port_ids(PortType port_type) const {
     auto it = available_port_ids_.find(port_type);
     if (it == available_port_ids_.end()) {

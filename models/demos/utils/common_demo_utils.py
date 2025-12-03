@@ -396,15 +396,15 @@ class Ensemble(nn.ModuleList):
         return y, None
 
 
-def attempt_download(file, repo="ultralytics/assets"):
+def attempt_download(file, repo=None):
     tests = Path(__file__).parent.parent
     file_path = tests / Path(str(file).strip().replace("'", "").lower())
 
     if not file_path.exists():
-        name = "yolov8s-world.pt"
+        name = Path(file).name
         msg = f"{file_path} missing, try downloading from https://github.com/{repo}/releases/"
         try:
-            url = f"https://github.com/{repo}/releases/download/v8.3.0/{name}"
+            url = f"https://github.com/{repo}/releases/download/latest/{name}"
             logger.info(f"Downloading {url} to {file_path}...")
             torch.hub.download_url_to_file(url, file_path)
 

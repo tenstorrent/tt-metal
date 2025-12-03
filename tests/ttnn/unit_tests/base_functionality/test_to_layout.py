@@ -420,6 +420,47 @@ def test_to_layout_wh1(shape, input_layout, output_layout, device):
     assert_with_pcc(input_a, output_tensor)
 
 
+@pytest.mark.parametrize("shape", [[32, 128 * 1024]])
+@pytest.mark.parametrize(
+    "sub_core_grids",
+    (
+        # single core
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        # multiple disjoint cores
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+            ]
+        ),
+    ),
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint16])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+        }
+    ],
+    indirect=True,
+)
+def test_to_layout_low_perf(shape, device, sub_core_grids, dtype):
+    torch.manual_seed(0)
+    if dtype == ttnn.int32:
+        input_a = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+    elif dtype == ttnn.uint16:
+        input_a = torch.randint(0, 1000, shape, dtype=torch.int32)
+    else:
+        input_a = torch.randn(shape, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype)
+    output_tensor = ttnn.tilize(input_tensor, sub_core_grids=sub_core_grids, use_low_perf=True)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(input_a, output_tensor)
+
+
 @pytest.mark.parametrize("shape", [[11432, 11021]])
 @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
@@ -513,3 +554,75 @@ def test_sigmoid_fruit(device, h, w, memory_type, shard_shape, vector_mode, appr
         approx_mode=approx_mode,
         pcc=0.999,
     )
+
+
+def test_shard_untilize(device):
+    torch.manual_seed(2005)
+
+    torch_tensor = torch.rand(1, 1, 29640, 128, dtype=torch.bfloat16)
+
+    sharded_memory_config = ttnn.create_sharded_memory_config(
+        [
+            480,
+            128,
+        ],
+        core_grid=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(7, 6),
+                ),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 7),
+                    ttnn.CoreCoord(5, 7),
+                ),
+            }
+        ),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    input_tensor = ttnn.from_torch(
+        torch_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_memory_config
+    )
+
+    output_tensor = ttnn.to_layout(input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    assert output_tensor.memory_config() == ttnn.DRAM_MEMORY_CONFIG, "Memory config is not DRAM"
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert torch_tensor.shape == output_tensor.shape
+    assert torch.allclose(torch_tensor, output_tensor, 0.9999)
+
+
+def test_shard_untilize2(device):
+    torch.manual_seed(2005)
+
+    torch_tensor = torch.rand(1, 1, 256, 32768, dtype=torch.bfloat16)
+
+    sharded_memory_config = ttnn.create_sharded_memory_config(
+        [
+            256,
+            1024,
+        ],
+        core_grid=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(3, 7),
+                ),
+            }
+        ),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    input_tensor = ttnn.from_torch(
+        torch_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_memory_config
+    )
+
+    output_tensor = ttnn.to_layout(input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    assert output_tensor.memory_config() == ttnn.DRAM_MEMORY_CONFIG, "Memory config is not DRAM"
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert torch_tensor.shape == output_tensor.shape
+    assert torch.allclose(torch_tensor, output_tensor, 0.9999)

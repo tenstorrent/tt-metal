@@ -99,5 +99,7 @@ struct NdShardSpec {
     bool operator!=(const NdShardSpec& other) const = default;
 };
 
+using PadValue = std::variant<uint32_t, float>;
+
 }  // namespace tt_metal
 }  // namespace tt

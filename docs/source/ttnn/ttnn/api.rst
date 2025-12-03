@@ -15,8 +15,6 @@ Device
    ttnn.synchronize_device
    ttnn.SetDefaultDevice
    ttnn.GetDefaultDevice
-   ttnn.format_input_tensor
-   ttnn.format_output_tensor
    ttnn.pad_to_tile_shape
 
 Memory Config
@@ -72,6 +70,7 @@ Tensor Creation
    ttnn.full
    ttnn.full_like
    ttnn.rand
+   ttnn.from_buffer
 
 Matrix Multiplication
 =====================
@@ -113,6 +112,7 @@ Pointwise Unary
    ttnn.asinh
    ttnn.atan
    ttnn.atanh
+   ttnn.bitcast
    ttnn.bitwise_not
    ttnn.bitwise_left_shift
    ttnn.bitwise_right_shift
@@ -425,6 +425,7 @@ Reduction
    ttnn.prod
    ttnn.topk
    ttnn.cumsum
+   ttnn.manual_seed
 
 Data Movement
 =============
@@ -566,6 +567,7 @@ Pooling
 
    ttnn.global_avg_pool2d
    ttnn.max_pool2d
+   ttnn.avg_pool2d
 
 Vision
 ========

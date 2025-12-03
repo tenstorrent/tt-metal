@@ -227,7 +227,14 @@ class Model:
         return logits
 
     def ttnn_decode_forward(
-        self, tokens, current_pos, rot_mat_idxs=None, page_table=None, kv_cache=None, sampling_on_device=False
+        self,
+        tokens,
+        current_pos,
+        rot_mat_idxs=None,
+        page_table=None,
+        kv_cache=None,
+        sampling_on_device=False,
+        capture_sampling_trace=False,
     ):
         """
         Decode forward pass - processes single tokens.
@@ -365,21 +372,41 @@ class Model:
 
         return tokens, current_pos_tt, rope_idxs, page_table
 
-    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
+    def prepare_inputs_prefill_trace(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
+        """Prepare inputs on host so we later send them to device"""
+        host_inputs = self.prepare_inputs_prefill(
+            tokens, start_pos=start_pos, page_table=page_table, chunk_page_table=chunk_page_table, trace_enabled=True
+        )
+        return host_inputs
+
+    def transform_and_embed_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table):
+        """Transform and embed tokens on device"""
+        tokens_embd = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        tokens.deallocate(True)
+        if len(tokens_embd.shape) == 3:
+            tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
+        return tokens_embd, tt_page_table, tt_chunk_page_table
+
+    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False):
         """Prepare inputs for prefill mode"""
         # Embed the tokens
         if tokens.dim() == 2:
             tokens = tokens.reshape(1, 1, 1, -1)
 
-        tokens = ttnn.from_torch(tokens, device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        tokens_embd = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-        tokens.deallocate(True)
-        # Ensure proper 4D shape
-        if len(tokens_embd.shape) == 3:
-            tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
+        device = None if trace_enabled else self.mesh_device
+
+        tokens = ttnn.from_torch(tokens, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        if not trace_enabled:
+            tokens_embd = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+            tokens.deallocate(True)
+
+            # Ensure proper 4D shape
+            if len(tokens_embd.shape) == 3:
+                tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
         # Prepare rotation matrices (slice from rope_setup like tt-transformers model.py lines 156-159)
-        seq_len = tokens_embd.shape[-2] if len(tokens_embd.shape) == 4 else tokens_embd.shape[-2]
+        seq_len = self.args.max_seq_len if trace_enabled else tokens_embd.shape[-2]
         rot_mats_global = [
             self.rope_setup.cos_matrix[:, :, :seq_len, :],
             self.rope_setup.sin_matrix[:, :, :seq_len, :],
@@ -390,15 +417,19 @@ class Model:
         tt_page_table = None
         tt_chunk_page_table = None
         if page_table is not None:
-            tt_page_table = ttnn.from_torch(
-                page_table, device=self.mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
-            )
+            tt_page_table = ttnn.from_torch(page_table, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
         if chunk_page_table is not None:
             tt_chunk_page_table = ttnn.from_torch(
-                chunk_page_table, device=self.mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
+                chunk_page_table, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
             )
 
-        return tokens_embd, rot_mats_global, rot_mats_local, tt_page_table, tt_chunk_page_table
+        return (
+            tokens if trace_enabled else tokens_embd,
+            rot_mats_global,
+            rot_mats_local,
+            tt_page_table,
+            tt_chunk_page_table,
+        )
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False):
         """Process decode output and convert to torch tensors"""

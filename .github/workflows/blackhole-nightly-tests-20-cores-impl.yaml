@@ -76,6 +76,3 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: ${{ matrix.test-group.owner_id }}
-
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-        if: always()

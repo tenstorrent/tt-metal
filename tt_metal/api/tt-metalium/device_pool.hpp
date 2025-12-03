@@ -17,7 +17,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -108,6 +108,9 @@ private:
     void wait_for_fabric_router_sync(uint32_t timeout_ms = 5000) const;
     tt_metal::IDevice* get_device(ChipId id) const;
     void teardown_fd(const std::unordered_set<ChipId>& devices_to_close);
+
+    // Retrieves the fabric router sync timeout value from configuration or returns a default
+    static uint32_t get_fabric_router_sync_timeout_ms();
 
     static DevicePool* _inst;
 };

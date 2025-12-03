@@ -37,7 +37,7 @@ Each configuration directory (e.g., `configurations/2loudboxes/`) contains three
 configurations/
 └── <hardware_setup_name>/
     ├── hosts.txt
-    ├── mgd.yaml
+    ├── mgd.textproto
     └── rank_bindings.yaml
 ```
 
@@ -70,54 +70,70 @@ metal-wh-06 slots=1
 
 This file is used by MPI (via `mpirun --hostfile`) to distribute processes across the cluster.
 
-#### 2. `mgd.yaml` (Mesh Graph Descriptor)
-Defines the hardware topology and connectivity of the distributed system, including chip specifications, device meshes, and inter-mesh connections.
+#### 2. `mgd.textproto` (Mesh Graph Descriptor)
+Defines the hardware topology and connectivity of the distributed system using the textproto format. The YAML format (MGD 1.0) has been deprecated.
+
+**Note:** If you have an existing `mgd.yaml` file, you need to convert it to `mgd.textproto` format. See the conversion guide in [`tt_metal/fabric/MGD_README.md`](../../../../tt_metal/fabric/MGD_README.md) (section: Converting from MGD 1.0 to MGD).
 
 **Key Sections:**
 
-- **`ChipSpec`**: Specifies the chip architecture (e.g., `wormhole_b0`) and ethernet port configuration
-- **`Board`**: Defines board types and their mesh topology (e.g., `[1, 8]` for 1×8 device layout)
-- **`Mesh`**: Lists all device meshes with their IDs, device topology, and host topology
-- **`RelaxedGraph`**: Defines connectivity between meshes (e.g., `[M0, M1, 2]` means Mesh 0 and Mesh 1 are connected with bandwidth weight 2)
+- **`mesh_descriptors`**: Defines reusable mesh templates with architecture, device topology, host topology, and channel configuration
+- **`graph_descriptors`**: Defines logical groupings and connectivity across meshes
+- **`top_level_instance`**: Specifies the root instance to instantiate
 
 **Example Structure:**
-```yaml
-ChipSpec: {
-  arch: wormhole_b0,
-  ethernet_ports: {
-    N: 2, E: 2, S: 2, W: 2,
+```proto
+# --- Meshes ---------------------------------------------------------------
+
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 8 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 2
+    policy: STRICT
   }
 }
 
-Board: [
-  { name: lbox, type: Mesh, topology: [1, 8]}
-]
-
-Mesh: [
-  {
-    id: 0,
-    board: lbox,
-    device_topology: [1, 8],
-    host_topology: [1, 1],
-  },
-  {
-    id: 1,
-    board: lbox,
-    device_topology: [1, 8],
-    host_topology: [1, 1],
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 8 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 2
+    policy: STRICT
   }
-]
+}
 
-RelaxedGraph: [
-  [M0, M1, 2],
-]
+# --- Graphs ---------------------------------------------------------------
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 2 }
+  }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 ```
 
 **Mesh ID Assignment:**
-- Each mesh has a unique `id` (0, 1, 2, etc.)
-- `device_topology: [1, 8]` means 1 row × 8 devices per mesh
-- `host_topology: [1, 1]` means 1 host per mesh
-- The `RelaxedGraph` defines which meshes can communicate and their connection bandwidth
+- Each mesh descriptor has a unique `name` (e.g., "M0", "M1")
+- `device_topology { dims: [ 1, 8 ] }` means 1 row × 8 devices per mesh
+- `host_topology { dims: [ 1, 1 ] }` means 1 host per mesh
+- `channels.count` specifies the number of ethernet channels per direction
+- The `graph_descriptors` with `connections` defines which meshes can communicate and their connection bandwidth
+
+For more examples and detailed documentation, see [`tt_metal/fabric/MGD_README.md`](../../../../tt_metal/fabric/MGD_README.md).
 
 #### 3. `rank_bindings.yaml`
 Maps MPI ranks to mesh IDs and sets global environment variables for the distributed execution.
@@ -134,7 +150,7 @@ rank_bindings:
 global_env:
   TT_METAL_HOME: "<path_to_tt_metal>"
 
-mesh_graph_desc_path: "configurations/<config_name>/mgd.yaml"
+mesh_graph_desc_path: "configurations/<config_name>/mgd.textproto"
 ```
 
 **Example (`2loudboxes/rank_bindings.yaml`):**
@@ -147,13 +163,13 @@ rank_bindings:
 
 global_env:
   TT_METAL_HOME: "/home/ttuser/git/tt-metal"
-mesh_graph_desc_path: "configurations/2loudboxes/mgd.yaml"
+mesh_graph_desc_path: "configurations/2loudboxes/mgd.textproto"
 ```
 
 **Key Fields:**
-- **`rank_bindings`**: Maps each MPI rank to a specific mesh ID from `mgd.yaml`
+- **`rank_bindings`**: Maps each MPI rank to a specific mesh ID from `mgd.textproto`
 - **`global_env`**: Environment variables set for all processes (typically `TT_METAL_HOME`)
-- **`mesh_graph_desc_path`**: Relative path to the corresponding `mgd.yaml` file
+- **`mesh_graph_desc_path`**: Relative path to the corresponding `mgd.textproto` file
 
 ## Creating a New Configuration
 
@@ -172,15 +188,17 @@ To create a new configuration for your hardware setup:
    EOF
    ```
 
-3. **Create `mgd.yaml`** describing your hardware topology:
-   - Define chip architecture and specifications
-   - List all device meshes with their IDs and topologies
-   - Specify connectivity in the `RelaxedGraph`
+3. **Create `mgd.textproto`** describing your hardware topology:
+   - Define mesh descriptors with architecture, device topology, and host topology
+   - Create graph descriptors to define connectivity between meshes
+   - Specify the top-level instance
+   - See [`tt_metal/fabric/MGD_README.md`](../../../../tt_metal/fabric/MGD_README.md) for detailed format documentation
+   - If you have an existing `mgd.yaml` file, see the conversion guide in the same README
 
 4. **Create `rank_bindings.yaml`** mapping ranks to meshes:
    - Assign each MPI rank to a mesh ID
    - Set necessary environment variables
-   - Point to your `mgd.yaml` file
+   - Point to your `mgd.textproto` file
 
 5. **Update the runner script** to use your configuration:
    ```bash
