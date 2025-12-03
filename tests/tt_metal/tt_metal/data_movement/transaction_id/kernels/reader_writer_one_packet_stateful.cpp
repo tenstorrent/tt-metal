@@ -30,7 +30,7 @@ void kernel_main() {
 
         uint32_t tmp_local_addr = l1_local_addr;
 
-        // Send out writes with transaction ids
+        // Send out reads with transaction ids
         // Avoid using transaction id 0 in case fast dispatch breaks it in the future
         noc_async_read_one_packet_set_state(sub1_src_noc_addr, bytes_per_transaction);
         for (uint32_t i = 1; i <= num_of_transactions; i++) {  // Using 1-(num_of_transactions) as the transaction ids
