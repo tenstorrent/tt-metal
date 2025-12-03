@@ -31,7 +31,5 @@ jobs:
           job-name: ${{ inputs.job_name }}
           copilot-pat: ${{ secrets.TESTING_COPILOT_PAT }}
         env:
-          OPENCODE_API_KEY: ${{ secrets.AUTO_TRIAGE_FREE_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_TESTING_CHANNEL }}
