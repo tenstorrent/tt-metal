@@ -1068,7 +1068,8 @@ void pytensor_module(nb::module_& mod) {
                float pad_value) {
                 return self.pad(ttnn::Shape(output_tensor_shape), ttnn::Shape(input_tensor_start), pad_value);
             },
-            nb::rv_policy::take_ownership,  // test
+            // nb::rv_policy::take_ownership,  // test
+            nb::rv_policy::automatic_reference,  // test
             R"doc(
             Pad TT Tensor with given pad value ``arg2``.
 
@@ -1142,7 +1143,8 @@ void pytensor_module(nb::module_& mod) {
                const ttnn::SmallVector<uint32_t>& output_tensor_end) {
                 return self.unpad(ttnn::Shape(output_tensor_start), ttnn::Shape(output_tensor_end));
             },
-            nb::rv_policy::take_ownership,  // test
+            // nb::rv_policy::take_ownership,  // test: segfaults distilbert host_slice_with_unpad
+            nb::rv_policy::automatic_reference,  // test
             R"doc(
             Unpad this TT Tensor.
 
@@ -1207,7 +1209,8 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "pad_to_tile",
             [](const Tensor& self, float pad_value) { return self.pad_to_tile(pad_value); },
-            nb::rv_policy::take_ownership,  // test
+            // nb::rv_policy::take_ownership,  // test
+            nb::rv_policy::automatic_reference,  // test
             R"doc(
             Pads TT Tensor with given pad value ``arg0``.
 
@@ -1268,7 +1271,8 @@ void pytensor_module(nb::module_& mod) {
             [](const Tensor& self, const ttnn::SmallVector<uint32_t>& output_tensor_shape) {
                 return self.unpad_from_tile(ttnn::Shape(output_tensor_shape));
             },
-            nb::rv_policy::take_ownership,
+            // nb::rv_policy::take_ownership, // test
+            nb::rv_policy::automatic_reference,  // test
             R"doc(
             Unpads TT Tensor from given input tensor ``arg0``.
 
@@ -1331,7 +1335,8 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "__repr__",
             [](const Tensor& self) { return self.write_to_string(); },
-            nb::rv_policy::take_ownership,  // test
+            // nb::rv_policy::take_ownership,  // test
+            nb::rv_policy::copy,  // test
             R"doc(
             Prints the tensor as list of nested lists. Number of levels of nesting is equal to tensor rank.
 
@@ -1421,7 +1426,8 @@ void pytensor_module(nb::module_& mod) {
                 return convert_tt_tensor_to_framework_tensor<nb::pytorch>(buffer);
             },
             // nb::rv_policy::copy,
-            nb::rv_policy::take_ownership,  // test
+            // nb::rv_policy::take_ownership,  // test
+            nb::rv_policy::move,  // test
             R"doc(
             Convert tensor to torch tensor using legacy padded shape.
             WARNING: Will be deprecated soon!
@@ -1443,7 +1449,8 @@ void pytensor_module(nb::module_& mod) {
                 return convert_tt_tensor_to_framework_tensor<nb::pytorch>(buffer);
             },
             // nb::rv_policy::copy,
-            nb::rv_policy::take_ownership,  // test
+            // nb::rv_policy::take_ownership,  // test
+            nb::rv_policy::move,  // test
             nb::arg("mesh_composer") = nullptr,
             R"doc(
             Convert tensor to torch tensor.
@@ -1465,7 +1472,8 @@ void pytensor_module(nb::module_& mod) {
                 return convert_tt_tensor_to_framework_tensor<nb::numpy>(buffer);
             },
             // nb::rv_policy::copy,
-            nb::rv_policy::take_ownership,  // test
+            // nb::rv_policy::take_ownership,  // test
+            nb::rv_policy::move,  // test
             nb::arg("mesh_composer") = nullptr,
             R"doc(
             Convert tensor to numpy tensor.
@@ -1511,7 +1519,8 @@ void pytensor_module(nb::module_& mod) {
                     },
                     self.storage());
             },
-            nb::rv_policy::reference_internal,  // test
+            // nb::rv_policy::reference_internal,  // test: falcon7b had an OOM
+            nb::rv_policy::copy,  // test
             R"doc(
             Get the address of the underlying buffer.
 
