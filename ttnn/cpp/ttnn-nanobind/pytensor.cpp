@@ -772,7 +772,7 @@ void pytensor_module(nb::module_& mod) {
                     std::nullopt,
                     pad_value));
             },
-            nb::keep_alive<1, 7>(),
+            nb::keep_alive<1, 7>(),  // 1,6?
             nb::arg("data"),
             nb::arg("shape"),
             nb::arg("data_type"),
@@ -856,6 +856,7 @@ void pytensor_module(nb::module_& mod) {
             nb::arg("cq_id") = nb::none(),
             nb::arg("pad_value") = nb::none(),
             nb::arg("mesh_mapper") = nullptr,
+            nb::keep_alive<1, 4>(),  // test: matches other k_a
             nb::rv_policy::move,
             R"doc(
                 +--------------+--------------------------------+
