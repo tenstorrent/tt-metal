@@ -15,6 +15,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
+from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.deepseek_v3.utils.run_config import WeightConfig
 
 # Constants
@@ -575,6 +576,9 @@ def get_state_dicts(
 
 def sub_state_dict(state_dict: dict[str, torch.Tensor], prefix: str, num_layers: int | None = None):
     """Get a subset of the state dict with a given prefix."""
+    # Preserve laziness when applicable by returning a LazyStateDict view.
+    if isinstance(state_dict, LazyStateDict):
+        return state_dict.view_with_prefix(prefix, num_layers)
     if num_layers is None:
         return {k[len(prefix) :]: v for k, v in state_dict.items() if k.startswith(prefix)}
     else:

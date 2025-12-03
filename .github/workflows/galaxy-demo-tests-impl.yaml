@@ -45,6 +45,7 @@ jobs:
           # Radoica Draskic - llama3_8b_dp, llama3_70b_dp
           # Salar Hosseini - falcon7b (For Falcon7b, please see issue #31939)
           # Ashai Reddy - sentence_bert
+          # Aniruddha Tupe - whisper
           # Colman Glagovich - sd35, wan22
           # Samuel Adesoye - flux1, motif
           # Stuti Raizada - gpt-oss
@@ -58,6 +59,7 @@ jobs:
             { "name": "Galaxy Llama3 70B data-parallel demo tests", "arch": "wormhole_b0", "model": "llama3_70b_dp", "timeout": 30, "owner_id": "U08BH66EXAL" },
             { "name": "Galaxy Falcon7b demo tests", "arch": "wormhole_b0", "model": "falcon7b", "timeout": 30, "owner_id": "U05RWH3QUPM" },
             { "name": "Galaxy SentenceBert demo tests", "arch": "wormhole_b0", "model": "sentence_bert", "timeout": 30, "owner_id": "U088413NP0Q" },
+            { "name": "Galaxy Whisper demo tests", "arch": "wormhole_b0", "model": "whisper", "timeout": 30, "owner_id": "U08HL8X1ECD" },
             { "name": "Galaxy Stable Diffusion 3.5 Large demo tests", "arch": "wormhole_b0", "model": "sd35", "timeout": 30, "owner_id": "U03FJB5TM5Y" },
             { "name": "Galaxy Flux.1-dev demo tests", "arch": "wormhole_b0", "model": "flux1", "timeout": 30, "owner_id": "U08TED0JM9D" },
             { "name": "Galaxy GPT-OSS demo tests", "arch": "wormhole_b0", "model": "gpt-oss", "timeout": 30, "owner_id": "U06F3ER8X9A" },
@@ -106,7 +108,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@3bff0b099b2124dafd84f618268c1c58eeb5dc28
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -151,6 +153,7 @@ jobs:
           pytest -n auto models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full" --timeout 1000
           pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat" --timeout 1000
           pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "pcc-80L" --timeout 1000
+          pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "batch-32-non-uniform-sampling" --timeout 500
       - name: Run Llama3 long context demo tests (direct pytest)
         if: ${{ matrix.test-group.model == 'llama3_long_context' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
@@ -210,6 +213,11 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           pytest models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py --timeout=1500
+      - name: Run Whisper demo tests (direct pytest)
+        if: ${{ matrix.test-group.model == 'whisper' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          pytest models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation --timeout 1500
       - name: Run Stable Diffusion 3.5 demo tests (direct pytest)
         if: ${{ matrix.test-group.model == 'sd35' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
