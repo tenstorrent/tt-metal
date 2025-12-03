@@ -48,6 +48,16 @@
           "BUILD_TT_TRAIN": {"value": "OFF"}
         },
         "toolchainFile": "cmake/x86_64-linux-gcc-12-toolchain.cmake"
+      },
+      {
+        "name": "libcpp",
+        "inherits": "default",
+        "description": "Build using libc++",
+        "binaryDir": "${sourceDir}/.build/libcpp",
+        "cacheVariables": {
+          "BUILD_TT_TRAIN": {"value": "OFF"}
+        },
+        "toolchainFile": "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
       }
     ],
     "buildPresets": [
