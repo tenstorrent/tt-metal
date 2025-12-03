@@ -241,6 +241,53 @@ def assert_equal(expected_pytorch_result, actual_pytorch_result):
     return equal_passed, equal_message
 
 
+def assert_relative_frobenius(expected_pytorch_result, actual_pytorch_result, threshold=0.01):
+    """
+    Assert that the relative Frobenius norm of the difference between two tensors is below a specified threshold.
+    Uses relative Frobenius norm: ||error||_F / ||expected||_F. If ||expected||_F == 0, uses absolute Frobenius error.
+
+    Args:
+        expected_pytorch_result (torch.Tensor or ttnn.Tensor): The expected reference tensor.
+        actual_pytorch_result (torch.Tensor or ttnn.Tensor): The actual tensor to compare against the reference.
+        threshold (float): The maximum allowed relative Frobenius norm of the error.
+
+    Returns:
+        float: The (relative or absolute) Frobenius norm of the error.
+
+    Raises:
+        AssertionError: If the tensor shapes don't match or if the relative Frobenius norm is above the threshold.
+    """
+    if isinstance(expected_pytorch_result, ttnn.Tensor):
+        expected_pytorch_result = ttnn.to_torch(expected_pytorch_result)
+    if isinstance(actual_pytorch_result, ttnn.Tensor):
+        actual_pytorch_result = ttnn.to_torch(actual_pytorch_result)
+
+    assert list(expected_pytorch_result.shape) == list(
+        actual_pytorch_result.shape
+    ), f"Shape mismatch: expected {list(expected_pytorch_result.shape)} vs actual {list(actual_pytorch_result.shape)}"
+
+    error = expected_pytorch_result - actual_pytorch_result
+    frob_error = torch.norm(error, p="fro")
+    frob_expected = torch.norm(expected_pytorch_result, p="fro")
+
+    if frob_expected == 0:
+        norm_value = float(frob_error)
+        assert norm_value <= threshold, (
+            f"Frobenius norm of expected is 0. Absolute error {norm_value} exceeds threshold {threshold}.\n"
+            f"Expected: {expected_pytorch_result}\n"
+            f"Actual:   {actual_pytorch_result}\n"
+        )
+    else:
+        relative_frob = float(frob_error / frob_expected)
+        assert relative_frob <= threshold, (
+            f"Relative Frobenius norm of error {relative_frob} exceeds threshold {threshold}.\n"
+            f"Expected: {expected_pytorch_result}\n"
+            f"Actual:   {actual_pytorch_result}\n"
+        )
+        norm_value = relative_frob
+    return norm_value
+
+
 def check_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
     if expected_pytorch_result.shape != actual_pytorch_result.shape:
         return (
