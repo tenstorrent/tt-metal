@@ -2172,9 +2172,7 @@ void ControlPlane::populate_fabric_connection_info(
         auto core_id = tensix_config.get_core_id_for_channel(physical_chip_id, eth_channel_id);
         // In UDM mode, get the first channel for worker connection for now.
         // TODO: have a vector of worker channels based on the current core and connected eth_channel_id
-        uint32_t tensix_sender_channel = (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM)
-                                             ? static_cast<uint32_t>(UdmMuxChannelId::WORKER_CHANNEL_BASE)
-                                             : sender_channel;
+        uint32_t tensix_sender_channel = sender_channel;
 
         fill_tensix_connection_info_fields(
             tensix_connection_info, mux_core_virtual, tensix_config, tensix_sender_channel, core_id);
