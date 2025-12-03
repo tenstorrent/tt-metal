@@ -181,8 +181,12 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         program,
         all_cores,
         output_weights.buffer()->page_size(),
-        n_activated_expert_tiles,
+        2 * n_activated_expert_tiles,
         scores_data_format);
+
+    auto reduce_scalar_cb_index = tt::CBIndex::c_18;
+    tt::tt_metal::create_cb(
+        reduce_scalar_cb_index, program, all_cores, scores.buffer()->page_size(), 1, scores_data_format);
 
     // Reader kernel compile time arguments
     std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
@@ -240,6 +244,7 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         {"intermediate_local_sort_cb_index", intermediate_local_sort_cb_index},
         {"intermediate_local_sort_indices_cb_index", intermediate_local_sort_indices_cb_index},
         {"pre_normalized_scores_cb_index", pre_normalized_scores_cb_index},
+        {"reduce_scalar_cb_index", reduce_scalar_cb_index},
     };
 
     std::vector<uint32_t> compute_compile_time_args = {};
@@ -281,6 +286,9 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         {"sorted_group_indices_cb_index", sorted_group_indices_cb_index},
         {"scores_cb_index", scores_cb_index},
         {"sigmoid_input_cb_index", sigmoid_input_cb_index},
+        {"reduce_scalar_cb_index", reduce_scalar_cb_index},
+        {"n_activated_experts", operation_attributes.n_activated_experts},
+        {"packed_one_scalar", static_cast<uint32_t>(std::bit_cast<uint16_t>(bfloat16(1.0f))) << 16},
     };
 
     std::vector<uint32_t> writer_compile_time_args = {};

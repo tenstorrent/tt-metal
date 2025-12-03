@@ -127,6 +127,59 @@ FORCE_INLINE void generate_group_indices_tiles(
     cb_push_back(group_indices_cb_index, 1);
 }
 
+void zero_buffer(uint32_t write_addr, int bytes) {
+    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+    while (bytes > 0) {
+        uint32_t curr_bytes = std::min(bytes, MEM_ZEROS_SIZE);
+        noc_async_read(zeros_noc_addr, write_addr, curr_bytes);
+        write_addr += curr_bytes;
+        bytes -= curr_bytes;
+    }
+    noc_async_read_barrier();
+}
+
+FORCE_INLINE void generate_reduce_scalar(
+    const uint32_t reduce_scalar_cb_index, const uint32_t packed_scalar, const uint32_t n_activated_experts) {
+    // 32x32 tile where a num_selected_experts x tokens_per_tile subset of the tile needs to be {1.0bf16, 1.0bf16,
+    // ..., 1.0bf16} the rest should be {0.0bf16, 0.0bf16, ..., 0.0bf16}
+    cb_reserve_back(reduce_scalar_cb_index, 1);
+    uint32_t write_addr = get_write_ptr(reduce_scalar_cb_index);
+    tt_l1_ptr uint16_t* write_ptr = reinterpret_cast<tt_l1_ptr uint16_t*>(write_addr);
+    // the uint32_t contains two bf16 values, so we write one face line/2 elements through pointer access:
+    uint16_t scalar = packed_scalar >> 16;
+    for (uint32_t i = 0; i < 16; i++) {
+        write_ptr[i] = scalar;
+    }
+    // then we can use noc_async_read to write the rest of the ones
+    constexpr uint32_t face_line_bytes = 32;
+    constexpr uint32_t face_size_bytes = 512;
+    for (uint32_t i = 1; i < 32; i++) {
+        if (i < n_activated_experts) {
+            if (i > 15) {
+                noc_async_read(
+                    get_noc_addr(write_addr), write_addr + i * face_line_bytes + face_size_bytes, face_line_bytes);
+            } else {
+                noc_async_read(get_noc_addr(write_addr), write_addr + i * face_line_bytes, face_line_bytes);
+            }
+        } else {
+            // write zeros
+            if (i == 16) {
+                // one full face
+                zero_buffer(write_addr + i * face_line_bytes + face_size_bytes, face_size_bytes);
+                break;
+            } else {
+                zero_buffer(write_addr + i * face_line_bytes, face_line_bytes);
+            }
+        }
+    }
+    noc_async_read_barrier();
+    // face 1 and face 3 are written, now we need to write face 2 and face 4, where face 2 = face 1 and face 4 = face 3
+    noc_async_read(get_noc_addr(write_addr), write_addr + face_size_bytes, face_size_bytes);
+    noc_async_read(get_noc_addr(write_addr) + 2 * face_size_bytes, write_addr + 3 * face_size_bytes, face_size_bytes);
+    noc_async_read_barrier();
+    cb_push_back(reduce_scalar_cb_index, 1);
+}
+
 FORCE_INLINE void generate_summed_experts_tiles(
     const uint32_t summed_experts_cb_index,
     const uint32_t topk_input_cb_index,
@@ -359,6 +412,9 @@ void kernel_main() {
     constexpr uint32_t n_groups = get_named_compile_time_arg_val("n_groups");
     constexpr uint32_t summed_experts_per_group = get_named_compile_time_arg_val("summed_experts_per_group");
     constexpr uint32_t num_group_tiles = get_named_compile_time_arg_val("num_group_tiles");
+    constexpr uint32_t reduce_scalar_cb_index = get_named_compile_time_arg_val("reduce_scalar_cb_index");
+    constexpr uint32_t packed_one_scalar = get_named_compile_time_arg_val("packed_one_scalar");
+    constexpr uint32_t n_activated_experts = get_named_compile_time_arg_val("n_activated_experts");
 
     const uint32_t weights_addr = get_arg_val<uint32_t>(0);
     const uint32_t indices_addr = get_arg_val<uint32_t>(1);
@@ -377,6 +433,7 @@ void kernel_main() {
     // I see no performance difference generating these internally inside the writer kernel
     generate_index_tiles(topk_index_creation_cb_index, width_tiles, indices_page_size);
     generate_group_indices_tiles(group_indices_cb_index, width_tiles, n_groups);
+    generate_reduce_scalar(reduce_scalar_cb_index, packed_one_scalar, n_activated_experts);
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
         generate_summed_experts_tiles(

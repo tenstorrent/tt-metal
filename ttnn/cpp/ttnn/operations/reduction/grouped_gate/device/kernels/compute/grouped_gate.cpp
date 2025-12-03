@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#define REDUCE_OP PoolType::SUM  // wtf why do we need to define this here?
+#define REDUCE_DIM ReduceDim::REDUCE_COL
+
 #include <cstdint>
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/common.h"
@@ -11,6 +14,8 @@
 #include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/pack.h"
 #include "ttnn/operations/reduction/topk/device/kernels/compute/topk_common_funcs.hpp"
+#include "compute_kernel_api/reduce.h"
+#include "compute_kernel_api/eltwise_unary/recip.h"
 
 #include "debug/dprint_tensix.h"
 
@@ -188,13 +193,13 @@ void topk_group_scores(
 }
 
 void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_index, const uint32_t tiles) {
-    UNPACK(DPRINT << "Transpose and pack tiles: " << tiles << ENDL());
+    // UNPACK(DPRINT << "Transpose and pack tiles: " << tiles << ENDL());
     reconfig_data_format_srca(input_cb_index);
     transpose_wh_init_short(input_cb_index);
     pack_reconfig_data_format(input_cb_index);
     for (uint32_t i = 0; i < tiles; i++) {
         cb_wait_front(input_cb_index, 1);
-        UNPACK(DPRINT << "Waiting for input cb DONE" << ENDL());
+        // UNPACK(DPRINT << "Waiting for input cb DONE" << ENDL());
 
         cb_reserve_back(output_cb_index, 1);
 
@@ -209,19 +214,14 @@ void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_
         cb_push_back(output_cb_index, 1);
 
         cb_pop_front(input_cb_index, 1);
-        UNPACK(DPRINT << "Popped input cb DONE" << ENDL());
     }
-    UNPACK(DPRINT << "Transpose and pack done" << ENDL());
-
-    UNPACK(DPRINT << "Popped input cb" << ENDL());
 }
 
 void topk(
     const uint32_t winning_group_scores_cb_index,
     const uint32_t winning_group_indices_cb_index,
-    const uint32_t intermediate_local_sort_cb_index,
+    const uint32_t unnormalized_scores_cb_index,
     const uint32_t intermediate_local_sort_indices_cb_index,
-    const uint32_t output_cb_index,
     const uint32_t output_indices_cb_index,
     const uint32_t tiles,
     const uint32_t log_tiles,
@@ -272,26 +272,40 @@ void topk(
     tile_regs_commit();
 
     tile_regs_wait();
-    pack_reconfig_data_format(intermediate_local_sort_cb_index);
-    pack_tile(0, intermediate_local_sort_cb_index);
-    // pack_tile(1, intermediate_local_sort_cb_index);
+    cb_reserve_back(unnormalized_scores_cb_index, 1);
+    pack_reconfig_data_format(unnormalized_scores_cb_index);
+    pack_tile(0, unnormalized_scores_cb_index);
+    cb_push_back(unnormalized_scores_cb_index, 1);
 
-    // PACK(print_tile(intermediate_local_sort_cb_index, 0, true, 0, 32, 0, 1));
-    // PACK(print_tile(intermediate_local_sort_cb_index, 1, true, 0, 32, 0, 1));
-
-    cb_push_back(intermediate_local_sort_cb_index, 1);
-
+    cb_reserve_back(intermediate_local_sort_indices_cb_index, 1);
     pack_reconfig_data_format(intermediate_local_sort_indices_cb_index);
     pack_tile(2, intermediate_local_sort_indices_cb_index);
     tile_regs_release();
-    // pack_tile(3, intermediate_local_sort_indices_cb_index);
-
-    // PACK(print_tile(intermediate_local_sort_indices_cb_index, 0, true, 0, 32, 0, 1));
-    // PACK(print_tile(intermediate_local_sort_indices_cb_index, 1, true, 0, 32, 0, 1));
     cb_push_back(intermediate_local_sort_indices_cb_index, 1);
 
-    // transpose_and_pack(intermediate_local_sort_cb_index, output_cb_index, 1);
     transpose_and_pack(intermediate_local_sort_indices_cb_index, output_indices_cb_index, 1);
+}
+
+void normalize_scores(
+    const uint32_t unnormalized_scores_cb_index,
+    const uint32_t reduce_scalar_cb_index,
+    const uint32_t normalized_scores_cb_index) {
+    reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL>(
+        unnormalized_scores_cb_index, reduce_scalar_cb_index, unnormalized_scores_cb_index);
+    cb_wait_front(unnormalized_scores_cb_index, 1);
+    cb_wait_front(reduce_scalar_cb_index, 1);
+    UNPACK(print_tile(unnormalized_scores_cb_index, 0, true, 0, 8, 0, 1));
+    UNPACK(print_tile(reduce_scalar_cb_index, 0, true, 0, 8, 0, 1));
+    acquire_dst();
+    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL>(unnormalized_scores_cb_index, reduce_scalar_cb_index, 0, 0, 0);
+    // recip_tile_init();
+    // recip_tile(0);  // DST[0] = 1/sum(unnormalized_scores)
+    cb_reserve_back(normalized_scores_cb_index, 1);
+    pack_tile(0, normalized_scores_cb_index);
+    // PACK(print_tile(normalized_scores_cb_index, 0, true, 0, 8, 0, 1));
+    cb_push_back(normalized_scores_cb_index, 1);
+    release_dst();
+    reduce_uninit();
 }
 
 }  // namespace blocks
@@ -333,6 +347,7 @@ void MAIN {
         get_named_compile_time_arg_val("intermediate_local_sort_indices_cb_index");
     constexpr uint32_t pre_normalized_scores_cb_index =
         get_named_compile_time_arg_val("pre_normalized_scores_cb_index");
+    constexpr uint32_t reduce_scalar_cb_index = get_named_compile_time_arg_val("reduce_scalar_cb_index");
 
     constexpr uint32_t n_groups = get_named_compile_time_arg_val("n_groups");
     constexpr uint32_t log_n_groups = get_named_compile_time_arg_val("log_n_groups");
@@ -403,14 +418,15 @@ void MAIN {
         blocks::topk(
             winning_group_scores_cb_index,
             winning_group_indices_cb_index,
-            intermediate_local_sort_cb_index,
-            intermediate_local_sort_indices_cb_index,
             pre_normalized_scores_cb_index,
+            intermediate_local_sort_indices_cb_index,
             indices_cb_index,
             topk_groups,
             log_topk_groups,
             n_activated_experts,
             log_n_activated_experts);
+
+        blocks::normalize_scores(pre_normalized_scores_cb_index, reduce_scalar_cb_index, scores_cb_index);
     }
 }
 }  // namespace NAMESPACE
