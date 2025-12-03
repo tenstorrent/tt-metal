@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import RMSNorm
+from models.demos.qwen3_vl.tt.vision_rmsnorm import LayerNorm
 from models.demos.qwen3_vl.tt.vision_attention import VisionAttention
 from models.demos.qwen3_vl.tt.vision_mlp import MLP
 
@@ -52,26 +52,24 @@ class VisionBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
         )
-        self.attention_norm = RMSNorm(
+        self.attention_norm = LayerNorm(
             device=mesh_device,
             dim=args.dim,
             eps=1e-6,  # Qwen2_5_VLVisionBlock hard-codes this
             state_dict=state_dict,
-            state_dict_prefix=args.get_state_dict_prefix("", layer_num),
+            state_dict_prefix=args.get_state_dict_prefix("norm1", layer_num),
             weight_cache_path=None if args.dummy_weights else weight_cache_path,
             weight_dtype=ttnn.bfloat16,
-            weight_key="norm1",
         )
         # args.dim = 1280
-        self.ff_norm = RMSNorm(
+        self.ff_norm = LayerNorm(
             device=mesh_device,
             dim=args.dim,
             eps=1e-6,  # Qwen2_5_VLVisionBlock hard-codes this
             state_dict=state_dict,
-            state_dict_prefix=args.get_state_dict_prefix("", layer_num),
+            state_dict_prefix=args.get_state_dict_prefix("norm2", layer_num),
             weight_cache_path=None if args.dummy_weights else weight_cache_path,
             weight_dtype=ttnn.bfloat16,
-            weight_key="norm2",
         )
 
     def forward(
@@ -86,7 +84,7 @@ class VisionBlock(LightweightModule):
         ), f"VisionBlock input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
         # Norms take fractured inputs and output replicated across devices
 
-        attn_in = self.attention_norm(x, mode="prefill")
+        attn_in = self.attention_norm(x)
         # Attention takes replicated inputs and produces fractured outputs
         attn_out = self.attention.forward(
             attn_in,
@@ -99,7 +97,7 @@ class VisionBlock(LightweightModule):
         ttnn.deallocate(x)
 
         # Norms take fractured inputs and output replicated across devices
-        ff_in = self.ff_norm(h, mode="prefill")
+        ff_in = self.ff_norm(h)
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in, mode="prefill")
         ttnn.deallocate(ff_in)

@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.rmsnorm import RMSNorm as RMSNorm
+from models.demos.qwen3_vl.tt.vision_rmsnorm import LayerNorm
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -51,23 +51,21 @@ def test_rms_norm_inference(
     reference_model = model_args.reference_rms_norm()
 
     state_dict = reference_model.state_dict()
-    state_dict = {f"norm1.{k}": v for k, v in state_dict.items()}
+    state_dict = {f"norm2.{k}": v for k, v in state_dict.items()}
 
     # Create the inner RMSNorm
-    tt_ccl = TT_CCL(mesh_device)
-    tt_inner_norm = RMSNorm(
+    tt_model= LayerNorm(
         device=mesh_device,
         dim=model_args.dim,
-        eps=1e-6,  # Qwen2_5_VLVisionBlock hard-codes this
+        eps=1e-6,  # Qwen3_VLVisionBlock hard-codes this
         state_dict=state_dict,
-        state_dict_prefix="",
-        weight_key="norm1",
+        state_dict_prefix="norm2",
+        weight_cache_path=model_args.weight_cache_path(dtype),
         weight_dtype=dtype,
-        is_distributed=False,
     )
 
-    # Wrap it in DistributedNorm
-    tt_model = DistributedNorm(tt_inner_norm, model_args, tt_ccl=tt_ccl, TG=model_args.is_galaxy)
+    # # Not sure if distributed norm is supported for layer norm
+    # tt_model = DistributedNorm(tt_inner_norm, model_args, tt_ccl=tt_ccl, TG=model_args.is_galaxy)
 
     input = torch.rand(1, 1, max_seq_len, model_args.dim)
     reference_output = reference_model(input)
@@ -76,13 +74,13 @@ def test_rms_norm_inference(
     tt_input = ttnn.from_torch(
         input,
         device=mesh_device,
-        dtype=dtype,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape),
-        memory_config=(ttnn.DRAM_MEMORY_CONFIG),
     )
 
-    tt_output = tt_model(tt_input, mode="prefill")
+    tt_output = tt_model(tt_input)
 
     # DistributedNorm outputs are replicated across devices
     tt_output_torch = ttnn.to_torch(

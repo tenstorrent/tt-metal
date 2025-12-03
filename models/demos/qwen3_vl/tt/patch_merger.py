@@ -6,11 +6,11 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.qwen3_vl.tt.vision_rmsnorm import RMSNorm
+from models.demos.qwen3_vl.tt.vision_rmsnorm import LayerNorm
 
 
 class PatchMerger(LightweightModule):
-    def __init__(self, mesh_device, args, state_dict, weight_cache_path, dtype, postshuffle_norm=False):
+    def __init__(self, mesh_device, args, state_dict, state_dict_prefix, weight_cache_path, dtype, postshuffle_norm=False):
         super().__init__()
 
         self.state_dict = state_dict
@@ -20,15 +20,15 @@ class PatchMerger(LightweightModule):
         self.mlp_size = args.hf_config.vision_config.hidden_size * (
             args.hf_config.vision_config.spatial_merge_size**2
         )
-        state_dict_prefix = args.get_state_dict_prefix(self.__class__.__name__)
+        state_dict_prefix = args.get_state_dict_prefix(self.__class__.__name__) if state_dict_prefix is None else state_dict_prefix
 
-        # Create the RMSNorm layer
-        self.norm = RMSNorm(
+        # Create the LayerNorm layer
+        self.norm = LayerNorm(
             device=mesh_device,
-            dim=args.hf_config.vision_config.hidden_size,
+            dim=args.hf_config.vision_config.hidden_size if not postshuffle_norm else self.mlp_size,
             state_dict=state_dict,
-            state_dict_prefix=state_dict_prefix + ".",
-            weight_key="norm",
+            state_dict_prefix=state_dict_prefix + ".norm",
+            weight_cache_path=None if args.dummy_weights else weight_cache_path,
             weight_dtype=ttnn.bfloat16,
             eps=1e-6,  # Qwen3_VLPatchMerger hard-codes this
         )
@@ -51,7 +51,7 @@ class PatchMerger(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name(name),
         )
-        as_bias_tensor = lambda name, dim: ttnn.as_tensor(
+        as_bias_tensor = lambda name, type, dim: ttnn.as_tensor(
             torch_bias(name),
             dtype=type,
             device=self.mesh_device,
@@ -65,8 +65,8 @@ class PatchMerger(LightweightModule):
         self.w1 = as_weight_tensor("linear_fc1", dtype, self.mlp_size, self.mlp_size)
         # Second layer: hidden_size -> out_dim
         self.w2 = as_weight_tensor("linear_fc2", dtype, self.mlp_size, args.hf_config.vision_config.out_hidden_size)
-        self.b1 = as_bias_tensor("linear_fc1_bias", self.mlp_size)
-        self.b2 = as_bias_tensor("linear_fc2_bias", args.hf_config.vision_config.out_hidden_size)
+        self.b1 = as_bias_tensor("linear_fc1", dtype, self.mlp_size)
+        self.b2 = as_bias_tensor("linear_fc2", dtype, args.hf_config.vision_config.out_hidden_size)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # Apply RMSNorm
@@ -89,7 +89,7 @@ class PatchMerger(LightweightModule):
             x,
             self.w1,
             bias=self.b1,
-            activation=[ttnn.UnaryOpType.GELU],
+            activation="gelu",
             compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

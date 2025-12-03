@@ -40,7 +40,7 @@ class MLP(LightweightModule):
 
         # Create bias tensors
         as_bias_tensor = lambda name, pad: ttnn.as_tensor(
-            pad_hidden_dim(torch_bias(name[:]), dim=-1) if pad else torch_bias(name[:2]),
+            pad_hidden_dim(torch_bias(name[:]), dim=-1) if pad else torch_bias(name[:]),
             dtype=ttnn.bfloat16,
             device=self.mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -58,8 +58,8 @@ class MLP(LightweightModule):
         # self.linear_fc2_weight.shape = [1152, 4304] each device of N300 sharded on dim=1
 
         # Create bias
-        self.linear_fc1_bias = as_bias_tensor("linear_fc1_bias", pad=True)
-        self.linear_fc2_bias = as_bias_tensor("linear_fc2_bias", pad=False)
+        self.linear_fc1_bias = as_bias_tensor("linear_fc1", pad=True)
+        self.linear_fc2_bias = as_bias_tensor("linear_fc2", pad=False)
         
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
@@ -75,7 +75,7 @@ class MLP(LightweightModule):
             x,
             self.linear_fc1_weight,
             bias=self.linear_fc1_bias,
-            activation=[ttnn.UnaryOpType.SILU],
+            activation="gelu",
             compute_kernel_config=self.args.compute_kernel_config_lofi
             if self.four_bit_mlp
             else self.args.compute_kernel_config_hifi2_fp16,

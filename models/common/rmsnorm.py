@@ -60,15 +60,18 @@ class RMSNorm(LightweightModule):
         self.is_distributed = is_distributed
         self.ccl_topology = ccl_topology
         self.tt_ccl = tt_ccl
+        print(layer_num)
 
         if state_dict_prefix:
             weight_name = f"{state_dict_prefix}{weight_key}.weight"
         else:
             if layer_num is None:
                 weight_name = f"{weight_key}.weight"
+                print(weight_name)
             else:
                 weight_name = f"layers.{layer_num}.{weight_key}.weight"
 
+        print(state_dict.keys())
         torch_weight = (
             state_dict[weight_name].unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT])
         )

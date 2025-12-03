@@ -9,7 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.qwen3_vl.reference.functional import qwen2_5_vision_transformer_preprocess
+from models.demos.qwen3_vl.reference.functional import qwen3_vision_transformer_preprocess
 from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
 from models.demos.qwen3_vl.tt.vision_attention import VisionAttention
 from models.tt_transformers.tt.common import get_rot_transformation_mat
@@ -64,13 +64,12 @@ def test_vision_attention_inference(
     # Example inputs and preprocessing
     pt_attention_input = torch.randn(1, 1, ref_seq_len, model_args.dim)
     # pt_attention_input = torch.load("ref_1_attn_norm.pt").unsqueeze(0).unsqueeze(0)
-    cu_seqlens, cu_window_seqlens, position_embeddings, window_index = qwen2_5_vision_transformer_preprocess(
+    print("model_args.head_dim", model_args.head_dim)
+    cu_seqlens, position_embeddings = qwen3_vision_transformer_preprocess(
         seq_len=ref_seq_len,
         grid_thw=image_grid_thw,
         head_dim=model_args.head_dim,
         spatial_merge_size=model_args.hf_config.vision_config.spatial_merge_size,
-        window_size=model_args.hf_config.vision_config.window_size,
-        patch_size=model_args.hf_config.vision_config.patch_size,
     )
 
     # pre-compute the rotational embedding matrix and send to device
@@ -133,7 +132,6 @@ def test_vision_attention_inference(
 
     tt_out = tt_model(
         attention_input,
-        cu_seqlens=ttnn.from_torch(cu_seqlens, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device),
         rot_mats=rot_mats,
     )
     tt_out = ttnn.to_torch(
