@@ -4,15 +4,19 @@
 import os
 from pathlib import Path
 
+import pytest
+
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json, run_demo
 
 MODEL_PATH = Path(os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528"))
 CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache"))
 
 
-def dual_glx_stress_test():
+@pytest.mark.parametrize("repeat_batches", [2])
+def test_demo_dual(repeat_batches):
     """
-    Stress test for dual GLX setup.
+    Stress test the DeepSeek v3 demo with prompts loaded from JSON file, 2x runs.
+    Uses only 5 layers (override_num_layers=5) for faster CI execution.
     """
     # Path to the external JSON file containing prompts
     json_path = "models/demos/deepseek_v3/demo/test_prompts.json"
@@ -20,26 +24,16 @@ def dual_glx_stress_test():
     # Load prompts from JSON file
     prompts = load_prompts_from_json(json_path, max_prompts=56)
 
-    result = run_demo(
+    # Run demo with only 5 layers for faster CI execution
+    results = run_demo(
         prompts=prompts,
         model_path=MODEL_PATH,
         cache_dir=CACHE_DIR,
         random_weights=False,
         max_new_tokens=128,
-        repeat_batches=2,
+        override_num_layers=5,
+        repeat_batches=repeat_batches,
     )
 
-    # Check that we got generations back
-    assert "generations" in result, "Result should contain 'generations' key"
-    assert isinstance(result["generations"], list), "Generations should be a list"
-    assert len(result["generations"]) > 0, "Should have at least one generation"
-
-    # Check the first generation's tokens
-    first_gen = result["generations"][0]
-    tokens = first_gen.get("tokens")
-    assert isinstance(tokens, list), "Tokens should be a list"
-    assert len(tokens) in (128, 256), f"Expected 128 or 256 tokens depending on batch accumulation, got {len(tokens)}"
-
-
-if __name__ == "__main__":
-    dual_glx_stres_test()
+    # Check output
+    assert len(results["generations"][0]["tokens"]) == 128
