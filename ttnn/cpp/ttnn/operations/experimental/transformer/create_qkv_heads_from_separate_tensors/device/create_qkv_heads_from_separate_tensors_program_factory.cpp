@@ -145,11 +145,11 @@ void CreateQKVHeadsSeparateTensorsProgramFactory::override_runtime_arguments(
     auto& output_k = std::get<1>(tensor_return_value);
     auto& output_v = std::get<2>(tensor_return_value);
 
-    auto in0_buffer = input_tensor_q.buffer();
-    auto in1_buffer = input_tensor_kv.buffer();
-    auto out0_buffer = output_q.buffer();
-    auto out1_buffer = output_k.buffer();
-    auto out2_buffer = output_v.buffer();
+    auto* in0_buffer = input_tensor_q.buffer();
+    auto* in1_buffer = input_tensor_kv.buffer();
+    auto* out0_buffer = output_q.buffer();
+    auto* out1_buffer = output_k.buffer();
+    auto* out2_buffer = output_v.buffer();
 
     UpdateDynamicCircularBufferAddress(program, shared_variables.cb_in0_id, *in0_buffer);
     UpdateDynamicCircularBufferAddress(program, shared_variables.cb_in1_id, *in1_buffer);

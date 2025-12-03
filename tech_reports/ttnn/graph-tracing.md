@@ -48,6 +48,7 @@ First, each node has these parameters
 * `node_type`: node type, available types are listed below
 * `params`: the map of parameters \[mapping a string string property name to a string value\]
 * `connections`: An array of connections to subsequent nodes.
+* `input_tensors`: An array of incoming nodes. Useful for determining the order of args.
 
 ### Node Connections
 Each node in the graph maintains a list of connections to other nodes. These connections represent the flow of data and control through the various operations and memory events during the execution of the network.
@@ -1253,12 +1254,6 @@ The `LevelizedGraph` is particularly useful for:
 
 ### Limitations
 
-1. **Argument Order**: Graph capture cannot always distinguish the order of arguments in operations like `subtract(%a, %b)` vs `subtract(%b, %a)`. While the `in_edges` array preserves the order tensors are used, this may not always match the exact call-site argument order, especially when multiple tensors are created in quick succession.
-
-2. **Incomplete Binary Ops**: In rare cases, graph capture might produce nodes for binary operations with only one input (e.g., when `digamma` is decomposed). This can sometimes be inferred as using the same tensor twice, but may lead to incorrect behavior.
-
-3. **Output Info Availability**: Complete `output_info` for operations without a consumer cannot be inferred from the graph trace. As a result, the return type and layout information of the top-level function may not always be available. Tensor vertices also have empty `output_info` since they don't produce outputs in the traditional sense.
-
-4. **Tensor Vertex Ordering**: The order of tensor vertices in the levelized graph is determined by when they are first used in the trace, not by their creation order or the order they appear as function parameters. This is a consequence of how the graph trace records tensor usage.
+1. **Output Info Availability**: Complete `output_info` for operations without a consumer cannot be inferred from the graph trace. As a result, the return type and layout information of the top-level function may not always be available. Tensor vertices also have empty `output_info` since they don't produce outputs in the traditional sense.
 
 We're working to fix these limitations soon.

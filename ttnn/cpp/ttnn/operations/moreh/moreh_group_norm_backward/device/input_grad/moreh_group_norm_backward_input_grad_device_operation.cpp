@@ -14,9 +14,9 @@ void MorehGroupNormBackwardInputGradOperation::validate_tensors(
     const auto& mean = tensor_args.mean;
     const auto& rstd = tensor_args.rstd;
 
-    auto& input_grad = tensor_args.input_grad;
+    const auto& input_grad = tensor_args.input_grad;
 
-    auto& gamma = tensor_args.gamma;
+    const auto& gamma = tensor_args.gamma;
 
     auto num_groups = operation_attributes.num_groups;
 

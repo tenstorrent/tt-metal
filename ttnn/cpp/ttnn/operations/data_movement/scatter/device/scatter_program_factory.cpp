@@ -53,10 +53,10 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const auto& src_shape{src_tensor.logical_shape()};
     const auto& output_shape{output_tensor.logical_shape()};
 
-    auto input_buffer = input_tensor.buffer();
-    auto index_buffer = index_tensor.buffer();
-    auto src_buffer = src_tensor.buffer();
-    auto output_buffer = output_tensor.buffer();
+    auto* input_buffer = input_tensor.buffer();
+    auto* index_buffer = index_tensor.buffer();
+    auto* src_buffer = src_tensor.buffer();
+    auto* output_buffer = output_tensor.buffer();
 
     const uint32_t& input_stick_size = input_shape[-1];
     const uint32_t& index_stick_size = index_shape[-1];
@@ -125,7 +125,7 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*output_buffer).append_to(compile_time_args);
 
-    auto device = input_tensor.device();
+    auto* device = input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t work_units = input_tensor.logical_volume() / input_stick_size;
     const auto

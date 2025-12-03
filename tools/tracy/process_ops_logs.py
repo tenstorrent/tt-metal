@@ -530,6 +530,25 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
                     deviceOp["avg_fpu_count"] = avg_fpu_count.get((global_call_count, trace_id_counter), nan)
                     deviceOp["avg_math_count"] = avg_math_count.get((global_call_count, trace_id_counter), nan)
 
+            # if enabled, analyze noc trace files present in log folder and add
+            # relevant statistics to devicesOps dict
+            if analyze_noc_traces:
+                npe_stats = analyzeNoCTraces(logFolder)
+                if npe_stats is not None:
+                    ops_found = 0
+                    for deviceOp in devicesOps[device]:
+                        metal_trace_id = deviceOp.get("metal_trace_id", None)
+                        metal_trace_replay_session_id = deviceOp.get("metal_trace_replay_session_id", None)
+                        op_npe_stats = npe_stats.getDatapointByID(
+                            deviceOp["global_call_count"], metal_trace_id, metal_trace_replay_session_id
+                        )
+                        if op_npe_stats is not None:
+                            ops_found += 1
+                            deviceOp["NOC UTIL (%)"] = round(op_npe_stats.result.overall_avg_link_util, 1)
+                            deviceOp["DRAM BW UTIL (%)"] = round(op_npe_stats.result.dram_bw_util, 1)
+                            deviceOp["NPE CONG IMPACT (%)"] = round(op_npe_stats.result.getCongestionImpact(), 2)
+                    logger.info(f"Analyzed {ops_found} operations with tt-npe trace data.")
+
             # Tag trace ops with a UID
             for device in devicesOps:
                 for deviceOp in devicesOps[device]:
@@ -542,21 +561,6 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
                     else:
                         # Update host reported device op with device populated version
                         ops[deviceOp["global_call_count"]] = deviceOp
-
-    # if enabled, analyze noc trace files present in log folder and add
-    # relevant statistics to 'ops' dict
-    if analyze_noc_traces:
-        npe_stats = analyzeNoCTraces(logFolder)
-        if npe_stats is not None:
-            ops_found = 0
-            for op_id in ops:
-                op_npe_stats = npe_stats.getDatapointByID(op_id)
-                if op_npe_stats is not None:
-                    ops_found += 1
-                    ops[op_id]["NOC UTIL (%)"] = round(op_npe_stats.result.overall_avg_link_util, 1)
-                    ops[op_id]["DRAM BW UTIL (%)"] = round(op_npe_stats.result.dram_bw_util, 1)
-                    ops[op_id]["NPE CONG IMPACT (%)"] = round(op_npe_stats.result.getCongestionImpact(), 2)
-            logger.info(f"Analyzed {ops_found} operations with tt-npe trace data.")
 
     return devicesOps, traceOps
 
