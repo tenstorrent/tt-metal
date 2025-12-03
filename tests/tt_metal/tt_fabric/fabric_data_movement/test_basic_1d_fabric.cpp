@@ -2608,7 +2608,6 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
 
     // Determine kernel paths based on operation type
     const bool is_read = (noc_send_type == NOC_UNICAST_READ);
-    log_info(tt::LogTest, "All-to-all test read {}", is_read);
     const char* sender_kernel_path =
         is_read ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_read_sender_all_to_all.cpp"
                 : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_sender_all_to_all.cpp";
