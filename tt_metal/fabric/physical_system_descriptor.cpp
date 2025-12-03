@@ -911,6 +911,15 @@ uint32_t PhysicalSystemDescriptor::get_rank_for_hostname(const std::string& host
     return host_to_rank_.at(host_name);
 }
 
+std::string PhysicalSystemDescriptor::get_hostname_for_rank(uint32_t rank) const {
+    for (const auto& [host, host_rank] : host_to_rank_) {
+        if (host_rank == rank) {
+            return host;
+        }
+    }
+    TT_FATAL(false, "Hostname for rank {} not found", rank);
+}
+
 std::string PhysicalSystemDescriptor::get_host_name_for_asic(AsicID asic_id) const {
     TT_FATAL(
         asic_descriptors_.find(asic_id) != asic_descriptors_.end(), "No ASIC descriptor found for asic_id {}", asic_id);
