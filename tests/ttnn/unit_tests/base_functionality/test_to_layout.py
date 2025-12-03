@@ -24,8 +24,6 @@ def test_failure(mesh_device):
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None, None]),
     )
-    print("input_tensor:", input_tensor)
-
     output_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
     torch_output_tensor = ttnn.to_torch(
         output_tensor, dtype=torch.bfloat16, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
