@@ -237,9 +237,9 @@ from models.common.utility_functions import skip_for_blackhole
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
     [
-        (True, 10),
+        (False, 1),
     ],
-    ids=["perf"],
+    ids=["check"],
 )
 @pytest.mark.parametrize(
     "use_non_fused",

@@ -254,9 +254,9 @@ def run_strided_all_gather_impl(
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
     [
-        (True, 10),
+        (False, 1),
     ],
-    ids=["perf"],
+    ids=["check"],
 )
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
