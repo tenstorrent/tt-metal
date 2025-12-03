@@ -326,7 +326,6 @@ def _generate_with_temperature(
     """
     # Input ids - use forced decoder IDs for translation
     forced_decoder_ids = processor.get_decoder_prompt_ids(language=language, task=task)
-    logger.debug(f"forced_decoder_ids from processor: {forced_decoder_ids}")
 
     # Keep forced_decoder_ids as tuples with positions
     # When return_timestamps=True, remove <|notimestamps|> to allow timestamp generation
@@ -368,24 +367,19 @@ def _generate_with_temperature(
         for pos, tok in forced_decoder_ids:
             forced_tokens_dict[pos + prompt_offset] = tok
 
-        logger.debug(f"Prompt tokens ({len(prompt_tokens)}): {prompt_tokens}")
     else:
         # Create a position-to-token mapping
         forced_tokens_dict = {pos: token_id for pos, token_id in forced_decoder_ids}
         # Add decoder_start_token at position 0
         forced_tokens_dict[0] = config.decoder_start_token_id
 
-    logger.debug(f"forced_tokens_dict after manipulation: {forced_tokens_dict}")
-
     # Calculate where actual transcription starts (after all forced tokens including prompt)
     # This is the first position that is NOT a forced token
     transcription_start_pos = max(forced_tokens_dict.keys()) + 1 if forced_tokens_dict else 0
-    logger.debug(f"Transcription starts at position: {transcription_start_pos}")
 
     # Build the full prefix sequence from forced_tokens_dict
     prefix_sequence = [forced_tokens_dict[pos] for pos in sorted(forced_tokens_dict.keys())]
     prefix_len = len(prefix_sequence)
-    logger.debug(f"Prefix sequence length: {prefix_len}, tokens: {prefix_sequence}")
 
     # Initialize input_ids with the full prefix sequence for proper conditioning
     input_ids = torch.tensor([prefix_sequence]).repeat(input_features.shape[0], 1).to(torch.long)
@@ -457,7 +451,6 @@ def _generate_with_temperature(
         )
         # Set input_ids to the second-to-last prefix token (the last one processed by prefill)
         input_ids = input_ids[:, -2:-1]
-        logger.debug(f"Prefill complete, starting generation from position {prefix_len - 1}")
     else:
         # Initial decode position for non-KV-cache mode or no prompt
         current_decode_pos = (
