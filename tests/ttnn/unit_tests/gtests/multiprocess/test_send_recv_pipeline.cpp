@@ -33,8 +33,8 @@ struct LogicalPipelineStageConfig {
 };
 
 // Determine how the Multi Mesh Coordinate system is instantiated on the physical cluster.
-std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> get_asic_id_to_mesh_coord_map(
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device) {
+std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> generate_asic_id_to_mesh_coord_map(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> asic_id_to_mesh_coord_map;
 
@@ -44,7 +44,8 @@ std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> get_asic_i
         asic_id_to_mesh_coord_map.emplace(asic_id, coord);
     }
     // Exchange this map across all hosts using distributed context
-    auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    // Follow MPI broadcast semantics for this (sender + receivers all call the broadcast API)
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     for (auto rank = 0; rank < *(distributed_context->size()); rank++) {
         if (rank == *(distributed_context->rank())) {
             // Loop over all entries of the map and send them to the other hosts
@@ -145,6 +146,12 @@ PhysicalSystemDescriptor create_physical_system_descriptor() {
     return tt::tt_metal::PhysicalSystemDescriptor(driver, distributed_context, &hal, rtoptions, run_discovery);
 }
 
+// This test does the following:
+// - Split a single galaxy into 4 meshes (each mesh is on a single tray). Assign 1 process to each mesh.
+// - Setup sockets (sender, intermediate send/recv and final receiver) to build a 4 stage pipelne
+// - Write data to the to the first pipeline stage (14K) from the first process
+// - This data is streamed through the pipeline for 10 iterations
+// - Final pipeline stage validates data correctness
 TEST_F(MeshDevice4StagePipelineSendRecvFixture, TestSendRecvPipeline) {
     constexpr uint32_t XFER_SIZE = 14 * 1024;
     constexpr uint32_t NUM_ITERATIONS = 10;
@@ -159,7 +166,7 @@ TEST_F(MeshDevice4StagePipelineSendRecvFixture, TestSendRecvPipeline) {
     const uint32_t socket_fifo_size = XFER_SIZE * 8;
 
     auto physical_system_descriptor = create_physical_system_descriptor();
-    auto asic_id_to_mesh_coord = get_asic_id_to_mesh_coord_map(mesh_device_);
+    auto asic_id_to_mesh_coord = generate_asic_id_to_mesh_coord_map(mesh_device_);
     auto pipeline_stages = build_2x4_pipeline(physical_system_descriptor, asic_id_to_mesh_coord);
 
     const auto my_mesh_id = *distributed_context->rank();
