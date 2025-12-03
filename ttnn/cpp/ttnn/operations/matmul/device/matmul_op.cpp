@@ -21,6 +21,29 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 using ttnn::operations::unary::UnaryWithParam;
 
+namespace ttnn::operations::matmul {
+
+uint32_t get_M_dim(
+    const tt::tt_metal::Shape& padded_shape, const std::optional<tt::tt_metal::Tile>& tile, const bool fuse_batch) {
+    uint32_t tile_height = tile.has_value() ? tile.value().get_height() : 1;
+    if (fuse_batch) {
+        return padded_shape.volume() / padded_shape[-1] / tile_height;
+    }
+
+    // Batch dims not fused, so take the height dimension
+    return padded_shape[-2] / tile_height;
+}
+
+uint32_t get_K_dim(const tt::tt_metal::Shape& padded_shape, const std::optional<tt::tt_metal::Tile>& tile) {
+    return padded_shape[-1] / (tile.has_value() ? tile.value().get_width() : 1);
+}
+
+uint32_t get_N_dim(const tt::tt_metal::Shape& padded_shape, const std::optional<tt::tt_metal::Tile>& tile) {
+    return padded_shape[-1] / (tile.has_value() ? tile.value().get_width() : 1);
+}
+
+}  // namespace ttnn::operations::matmul
+
 namespace {
 
 using namespace ttnn::operations::matmul;
@@ -82,47 +105,6 @@ uint32_t estimate_interm_tile_size(
     uint32_t output_tile_size = tt::tile_size(output_data_format);
     result = std::max(output_tile_size, result);
     return result;
-}
-
-/**
- * @brief Calculate the M dimension for matmul operations
- *
- * @param padded_shape The padded shape of the tensor
- * @param tile The tile for the tensor (optional)
- * @param fuse_batch Whether to fuse batch dimensions
- * @return uint32_t The calculated M dimension
- */
-uint32_t get_M_dim(
-    const tt::tt_metal::Shape& padded_shape, const std::optional<tt::tt_metal::Tile>& tile, const bool fuse_batch) {
-    uint32_t tile_height = tile.has_value() ? tile.value().get_height() : 1;
-    if (fuse_batch) {
-        return padded_shape.volume() / padded_shape[-1] / tile_height;
-    }
-
-    // Batch dims not fused, so take the height dimension
-    return padded_shape[-2] / tile_height;
-}
-
-/**
- * @brief Calculate the K dimension for matmul operations
- *
- * @param padded_shape The padded shape of the tensor
- * @param tile The tile for the tensor (optional)
- * @return uint32_t The calculated K dimension
- */
-uint32_t get_K_dim(const tt::tt_metal::Shape& padded_shape, const std::optional<tt::tt_metal::Tile>& tile) {
-    return padded_shape[-1] / (tile.has_value() ? tile.value().get_width() : 1);
-}
-
-/**
- * @brief Calculate the N dimension for matmul operations
- *
- * @param padded_shape The padded shape of the tensor
- * @param tile The tile for the tensor (optional)
- * @return uint32_t The calculated N dimension
- */
-uint32_t get_N_dim(const tt::tt_metal::Shape& padded_shape, const std::optional<tt::tt_metal::Tile>& tile) {
-    return padded_shape[-1] / (tile.has_value() ? tile.value().get_width() : 1);
 }
 
 bool get_broadcast_batch(
@@ -1345,7 +1327,7 @@ namespace bmm_op_utils {
 
 using ttnn::operations::matmul::Matmul;
 
-inline MatmulProgramConfig get_program_config(
+MatmulProgramConfig get_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const bool transpose_a,
