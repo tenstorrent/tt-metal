@@ -397,6 +397,8 @@ jobs:
     with:
       python-version: ${{ inputs.version == '22.04' && '3.10' || '3.12' }}
       docker-image: ${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
+      ref: ${{ inputs.ref || '' }}
+      tracy: ${{ inputs.tracy }}
 
   build-evaluation-image:
     name: "📦 Build Evaluation Docker Image"

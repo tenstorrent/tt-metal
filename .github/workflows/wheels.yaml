@@ -14,6 +14,15 @@ on:
         required: false
         type: string
         default: "Release"
+      tracy:
+        required: false
+        type: boolean
+        default: true
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: 'Commit SHA to test (default: HEAD)'
     outputs:
       artifact-name:
         description: "Name to give download-artifact to get the Wheel"
@@ -77,7 +86,7 @@ jobs:
             CCACHE_REMOTE_ONLY=true
             CCACHE_TEMPDIR=/tmp/ccache
             CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
-            CIBW_ENABLE_TRACY="ON"
+            CIBW_ENABLE_TRACY="${{ inputs.tracy && 'ON' || 'OFF' }}"
             CIBW_BUILD_TYPE="${{ inputs.build-type }}"
           CIBW_BEFORE_BUILD: "mkdir -p /tmp/ccache && ccache -z && ccache -p"
           CIBW_BEFORE_TEST: ccache -s
