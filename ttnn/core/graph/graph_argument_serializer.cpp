@@ -185,12 +185,9 @@ void GraphArgumentSerializer::register_small_vector() {
     registry()[typeid(std::reference_wrapper<ttsl::SmallVector<T, N>>)] = conversion_function;
     registry()[typeid(std::reference_wrapper<const ttsl::SmallVector<T, N>>)] = conversion_function;
     registry()[typeid(const std::reference_wrapper<ttsl::SmallVector<T, N>>)] = conversion_function;
-    // Skip SmallVector<const T, N> registration for fundamental types to avoid overload collision
-    // in llvm_small_vector.hpp when T is const-qualified (e.g., const bool, const int)
-    if constexpr (!std::is_fundamental_v<T>) {
-        registry()[typeid(std::reference_wrapper<ttsl::SmallVector<const T, N>>)] = conversion_function;
-    }
-    registry()[typeid(std::reference_wrapper<const ttsl::SmallVector<T, N>>)] = conversion_function;
+    // Skip SmallVector<const T, N> registration to avoid compilation errors with std::reference_wrapper
+    // when used with certain types (e.g., std::string, tt::tt_metal::Layout, tt::tt_metal::MemoryConfig,
+    // tt::tt_metal::Shape, tt::tt_metal::DataType) due to protected member access issues in llvm_small_vector.hpp
 }
 
 template <typename T, std::size_t N>
