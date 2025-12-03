@@ -6,23 +6,18 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import skip_for_blackhole
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_vae
-from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
-    MIDBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
-    MIDBLOCK_RESNET_NORM_NUM_BLOCKS,
-)
+from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import MIDBLOCK_RESNET_NORM_NUM_BLOCKS
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_midblock import MidBlock
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@skip_for_blackhole("Blackhole PCC bad until GN issues fixed (#20760)")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
-    "input_channels, input_height, input_width, norm_num_blocks, conv_in_channel_split_factors",
+    "input_channels, input_height, input_width, norm_num_blocks",
     [
-        (512, 64, 64, MIDBLOCK_RESNET_NORM_NUM_BLOCKS, MIDBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS),
+        (512, 64, 64, MIDBLOCK_RESNET_NORM_NUM_BLOCKS),
     ],
 )
 def test_vae_midblock(
@@ -31,7 +26,6 @@ def test_vae_midblock(
     input_height,
     input_width,
     norm_num_blocks,
-    conv_in_channel_split_factors,
     is_ci_env,
     is_ci_v2_env,
     model_location_generator,
@@ -52,7 +46,6 @@ def test_vae_midblock(
         input_height,
         input_width,
         norm_num_blocks,
-        conv_in_channel_split_factors,
     )
 
     # Prepare ttnn input

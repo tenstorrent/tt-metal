@@ -4,17 +4,12 @@
 
 #pragma once
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wundefined-inline"
-#pragma GCC diagnostic ignored "-Wdeprecated-volatile"
-#pragma GCC diagnostic ignored "-Wdeprecated-this-capture"
-
 #include <hostdevcommon/common_values.hpp>                                                                 // NOLINT
 #include <tt-metalium/base_types.hpp>                                                                      // NOLINT
 #include <tt-metalium/bfloat16.hpp>                                                                        // NOLINT
 #include <tt-metalium/device.hpp>                                                                          // NOLINT
 #include <tt-metalium/distributed_context.hpp>                                                             // NOLINT
-#include <tt-metalium/fabric.hpp>                                                                          // NOLINT
+#include <tt-metalium/experimental/fabric/fabric.hpp>                                                      // NOLINT
 #include <tt-metalium/host_api.hpp>                                                                        // NOLINT
 #include <tt-metalium/math.hpp>                                                                            // NOLINT
 #include <tt-metalium/mesh_device_view.hpp>                                                                // NOLINT
@@ -27,6 +22,10 @@
 #include <ttnn/distributed/distributed_tensor.hpp>                                                         // NOLINT
 #include <ttnn/distributed/isocket.hpp>                                                                    // NOLINT
 #include <ttnn/distributed/types.hpp>                                                                      // NOLINT
+#include <ttnn/operations/ccl/all_gather/all_gather.hpp>                                                   // NOLINT
+#include <ttnn/operations/ccl/all_reduce/all_reduce.hpp>                                                   // NOLINT
+#include <ttnn/operations/ccl/common/host/moe_utils.hpp>                                                   // NOLINT
+#include <ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp>                                           // NOLINT
 #include <ttnn/operations/copy/typecast/typecast.hpp>                                                      // NOLINT
 #include <ttnn/operations/core/compute_kernel/compute_kernel_config.hpp>                                   // NOLINT
 #include <ttnn/operations/core/core.hpp>                                                                   // NOLINT
@@ -84,4 +83,3 @@
 #include <ttnn/tensor/xtensor/conversion_utils.hpp>                                                        // NOLINT
 #include <ttnn/tensor/xtensor/xtensor_all_includes.hpp>                                                    // NOLINT
 #include <ttnn/types.hpp>                                                                                  // NOLINT
-#pragma GCC diagnostic pop

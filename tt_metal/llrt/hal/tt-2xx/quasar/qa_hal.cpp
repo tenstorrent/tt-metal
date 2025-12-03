@@ -63,17 +63,20 @@ class HalJitBuildQueryQuasar : public hal_2xx::HalJitBuildQueryBase {
 public:
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
+        std::string_view cpu = params.processor_class == HalProcessorClassType::DM ? "tt-qsr64" : "tt-qsr-32";
+        std::string_view dir = "runtime/hw/lib/quasar";
+        objs.push_back(fmt::format("{}/{}-crt0-tls.o", dir, cpu));
         if (params.is_fw) {
-            objs.push_back("runtime/hw/lib/quasar/tmu-crt0.o");
+            objs.push_back(fmt::format("{}/{}-crt0.o", dir, cpu));
         }
         if ((params.core_type == HalProgrammableCoreType::TENSIX and
              params.processor_class == HalProcessorClassType::DM and params.processor_id == 0) or
             (params.core_type == HalProgrammableCoreType::IDLE_ETH and
              params.processor_class == HalProcessorClassType::DM and params.processor_id == 0)) {
             // Brisc and Idle Erisc.
-            objs.push_back("runtime/hw/lib/quasar/noc.o");
+            objs.push_back(fmt::format("{}/{}-noc.o", dir, cpu));
         }
-        objs.push_back("runtime/hw/lib/quasar/substitutes.o");
+        objs.push_back(fmt::format("{}/{}-substitutes.o", dir, cpu));
         return objs;
     }
 
@@ -132,9 +135,12 @@ public:
     }
 
     std::string common_flags(const Params& params) const override {
+        // TODO: Use correct tt-qsr cpu options #32893
         std::string cflags =
-            "-mcpu=tt-bh -fno-rvtt-sfpu-replay ";  // TODO: change to -mcpu=tt-qa once
-                                                   // https://github.com/tenstorrent/tt-metal/issues/29186 is ready
+            params.processor_class == HalProcessorClassType::DM ? "-mcpu=tt-qsr64-rocc " : "-mcpu=tt-qsr32-tensixbh ";
+        cflags += "-mno-tt-tensix-optimize-replay ";
+        cflags += "-fno-extern-tls-init ";
+        cflags += "-ftls-model=local-exec ";
         if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
               params.processor_class == HalProcessorClassType::COMPUTE)) {
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
@@ -142,6 +148,7 @@ public:
         return cflags;
     }
 
+    bool firmware_is_kernel_object(const Params&) const override { return true; }
     std::string linker_script(const Params& params) const override {
         switch (params.core_type) {
             case HalProgrammableCoreType::TENSIX:
@@ -150,7 +157,7 @@ public:
                         return fmt::format(
                             "runtime/hw/toolchain/quasar/{}_dm{}.ld",
                             params.is_fw ? "firmware" : "kernel",
-                            params.processor_id);
+                            params.is_fw ? "" : std::to_string(params.processor_id));
                     }
                     case HalProcessorClassType::COMPUTE:
                         return fmt::format(
@@ -243,7 +250,7 @@ void Hal::initialize_qa() {
     this->mem_alignments_with_pcie_[static_cast<std::size_t>(HalMemType::HOST)] =
         std::lcm(PCIE_ALIGNMENT, PCIE_ALIGNMENT);
 
-    this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr, bool has_shared_local_mem) {
+    this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr, bool /*has_shared_local_mem*/) {
         if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
             // For RISC0 we have a shared local memory with base firmware so offset by that
             // if (has_shared_local_mem) {
@@ -261,7 +268,7 @@ void Hal::initialize_qa() {
 
     this->erisc_iram_relocate_func_ = [](uint64_t addr) { return addr; };
 
-    this->valid_reg_addr_func_ = [](uint32_t addr) {
+    this->valid_reg_addr_func_ = [](uint32_t /*addr*/) {
         return true;  // used to program start addr for eth FW TODO: add correct value
     };
 
@@ -313,7 +320,6 @@ void Hal::initialize_qa() {
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
     this->eth_fw_is_cooperative_ = false;
-    this->intermesh_eth_links_enabled_ = false;  // Intermesh routing is not enabled on Quasar
     this->virtualized_core_types_ = {
         dev_msgs::AddressableCoreType::TENSIX,
         dev_msgs::AddressableCoreType::ETH,
@@ -330,6 +336,11 @@ void Hal::initialize_qa() {
     this->noc_y_id_translate_table_ = {};
 
     this->jit_build_query_ = std::make_unique<HalJitBuildQueryQuasar>();
+
+    this->verify_eth_fw_version_func_ = [](tt::umd::semver_t /*eth_fw_version*/) {
+        // No checks
+        return true;
+    };
 }
 
 }  // namespace tt_metal

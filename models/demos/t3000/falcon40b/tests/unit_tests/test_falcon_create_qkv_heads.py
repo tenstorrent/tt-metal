@@ -132,13 +132,12 @@ def run_test_FalconMLP_inference(
 
 
 @pytest.mark.parametrize("pcc", [(0.99)])
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 1), id="1x1_grid")], indirect=True)
 def test_FalconMatmul_inference(
     pcc,
-    all_devices,
+    mesh_device,
 ):
-    device = all_devices[0]
-
     run_test_FalconMLP_inference(
         pcc,
-        device,
+        mesh_device,
     )

@@ -153,14 +153,16 @@ def run_slice_reshard_impl(
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "num_devices, input_shape, dim, layout, input_dtype, output_offset, output_shape",
+    "num_devices, input_shape, dim, layout, input_dtype, output_offset, output_shape, enable_trace, num_iters",
     [
-        (8, [96, 120, 212, 512], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 88),  # (1,8)
-        (4, [84, 120, 106, 512], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 84),  # (1,4)
+        (8, [96, 120, 212, 512], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 0, 88, False, 1),  # (1,8), check
+        (8, [96, 120, 212, 512], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 88, True, 10),  # (1,8), perf
+        (4, [84, 120, 106, 512], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 84, False, 1),  # (1,4), check
     ],
     ids=[
-        "8mochi_vae_1",
-        "4mochi_vae_1",
+        "8mochi_vae_1_offset0-check",
+        "8mochi_vae_1_offset2-perf",
+        "4mochi_vae_1_offset2-check",
     ],
 )
 @pytest.mark.parametrize(
@@ -173,14 +175,6 @@ def run_slice_reshard_impl(
     ],
 )
 @pytest.mark.parametrize(
-    "enable_trace,num_iters",
-    [
-        (True, 10),
-        (False, 1),
-    ],
-    ids=["perf", "check"],
-)
-@pytest.mark.parametrize(
     "device_params, slice_reshard_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
@@ -190,19 +184,19 @@ def run_slice_reshard_impl(
 )
 def test_slice_reshard_async(
     mesh_device,
+    num_links,
     num_devices,
     input_shape,
     dim,
+    layout,
+    input_dtype,
     output_offset,
     output_shape,
-    num_links,
-    input_dtype,
-    layout,
+    enable_trace,
+    num_iters,
     mem_config_input,
     mem_config_output,
-    enable_trace,
     slice_reshard_topology,
-    num_iters,
 ):
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape([1, num_devices]))
 

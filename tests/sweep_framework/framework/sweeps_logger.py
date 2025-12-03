@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import sys
 from loguru import logger
 
@@ -19,11 +20,12 @@ sweeps_format = (
     "<level>{message}</level>"
 )
 
+LOGURU_ENV_VAR = "LOGURU_LEVEL"
+LOGURU_DEFAULT_LEVEL = "INFO"
+
+level = os.environ.get(LOGURU_ENV_VAR, LOGURU_DEFAULT_LEVEL)
+
 logger.remove()
-logger.add(
-    sys.stderr, level="INFO", format=logger_format, filter=lambda record: record["extra"].get("name") != "sweeps"
-)
-logger.add(
-    sys.stderr, level="INFO", format=sweeps_format, filter=lambda record: record["extra"].get("name") == "sweeps"
-)
+logger.add(sys.stderr, level=level, format=logger_format, filter=lambda record: record["extra"].get("name") != "sweeps")
+logger.add(sys.stderr, level=level, format=sweeps_format, filter=lambda record: record["extra"].get("name") == "sweeps")
 sweeps_logger = logger.bind(name="sweeps")

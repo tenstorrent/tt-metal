@@ -57,6 +57,10 @@ jobs:
         id: generate-tag-name
         run: |
           echo "WHEEL_FILENAME=$(ls -1 *.whl)" >> $GITHUB_ENV
+          OS_VERSION="${{ matrix.os }}"
+          UBUNTU_VERSION="${OS_VERSION#ubuntu-}"
+          echo "UBUNTU_VERSION=$UBUNTU_VERSION" >> $GITHUB_ENV
+          echo "UBUNTU_VERSION=$UBUNTU_VERSION" >> $GITHUB_OUTPUT
           REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-${{ matrix.image }}-amd64
           echo "REPO_IMAGE_NAME=$REPO_IMAGE_NAME" >> $GITHUB_ENV
           TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
@@ -69,6 +73,8 @@ jobs:
           push: true
           build-args: |
             WHEEL_FILENAME=${{ env.WHEEL_FILENAME }}
+            UBUNTU_VERSION=${{ steps.generate-tag-name.outputs.UBUNTU_VERSION }}
+            GIT_REF=${{ github.ref_name || 'main' }}
           tags: ${{ env.TAG_NAME }}
           context: .
           file: dockerfile/Dockerfile
@@ -127,7 +133,8 @@ jobs:
       - name: Run frequent regression tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-            pip install 'torch==2.7.1+cpu' 'numpy>=1.24.4,<2' pytest
+            pip install --index-url https://download.pytorch.org/whl/cpu 'torch>=2.7.1'
+            pip install 'numpy>=1.24.4,<2' pytest
             ${{ matrix.test_group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

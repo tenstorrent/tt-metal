@@ -125,14 +125,6 @@ class WanAttention:
             packer_l1_acc=True,
         )
 
-        self.rmsnorm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,  # NOTE: Should be fp32
-            packer_l1_acc=True,
-        )
-
     def to_cached_state_dict(self, path_prefix):
         cache_dict = {}
 
@@ -198,6 +190,12 @@ class WanAttention:
         spatial_1BND: fractured N on SP, fractured D on TP
         """
 
+        if rope_cos is not None:
+            # If ROPE is given, this is self-attention
+            assert rope_sin is not None
+            assert trans_mat is not None
+            assert prompt_1BLP is None
+
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
@@ -206,42 +204,30 @@ class WanAttention:
         kv_input = prompt_1BLP if prompt_1BLP is not None else spatial_1BND
 
         # Project spatial
-        q_1BNF = self.to_q(spatial_1BND, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config)
-        k_1BNF = self.to_k(kv_input, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config)
-        v_1BNF = self.to_v(kv_input, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config)
+        q_1BNF = self.to_q(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
+        k_1BNF = self.to_k(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
+        v_1BNF = self.to_v(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
 
         # Norm spatial before splitting heads
-        q_1BNF = self.norm_q(q_1BNF, compute_kernel_config=self.rmsnorm_compute_kernel_config)
-        k_1BNF = self.norm_k(k_1BNF, compute_kernel_config=self.rmsnorm_compute_kernel_config)
+        q_BHNE = self.norm_q(
+            q_1BNF, num_heads_per_device=self.n_local_heads, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat
+        )
+        k_BHNE = self.norm_k(
+            k_1BNF, num_heads_per_device=self.n_local_heads, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat
+        )
 
         def create_heads(inp):
-            # Unfortunate hack - we don't have a split_heads operation that takes unfused qkv
-            # Can pass None kv input and 0 KV heads to create_qkv_heads to create just Q heads, but it's suspicious
             out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
                 inp,
-                ttnn.concat([inp, inp], dim=-1),
                 num_heads=self.n_local_heads,
-                num_kv_heads=self.n_local_heads,
+                num_kv_heads=0,
                 transpose_k_heads=False,
             )
             return out
 
-        q_BHNE = create_heads(q_1BNF)
-        k_BHNE = create_heads(k_1BNF)
         v_BHNE = create_heads(v_1BNF)
 
         # Rope
-        if rope_cos is not None:
-            assert rope_sin is not None
-            assert trans_mat is not None
-            assert prompt_1BLP is None
-
-            q_BHNE = ttnn.experimental.rotary_embedding_llama(
-                q_BHNE, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
-            )
-            k_BHNE = ttnn.experimental.rotary_embedding_llama(
-                k_BHNE, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
-            )
 
         if prompt_1BLP is None:
             # Self attention
@@ -271,7 +257,7 @@ class WanAttention:
                     num_links=self.ccl_manager.num_links,
                     cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
                     mesh_device=self.mesh_device,
-                    topology=self.ccl_manager.topology,
+                    topology=ttnn.Topology.Linear,  # RJA always uses Linear topology
                     subdevice_id=self.ccl_manager.ccl_sub_device_id,
                     ccl_core_grid_offset=(0, self.sdpa_worker_grid[1]),
                 )
@@ -304,8 +290,6 @@ class WanAttention:
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
-        spatial_1BND = self.to_out(
-            spatial_1BND, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config
-        )
+        spatial_1BND = self.to_out(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
 
         return spatial_1BND

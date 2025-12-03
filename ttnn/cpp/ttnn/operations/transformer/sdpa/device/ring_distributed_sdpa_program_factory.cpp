@@ -47,11 +47,11 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    auto q_buffer = input_tensor_q.buffer();
-    auto k_buffer = input_tensor_k.buffer();
-    auto v_buffer = input_tensor_v.buffer();
+    auto* q_buffer = input_tensor_q.buffer();
+    auto* k_buffer = input_tensor_k.buffer();
+    auto* v_buffer = input_tensor_v.buffer();
 
-    auto out0_buffer = output_tensor.buffer();
+    auto* out0_buffer = output_tensor.buffer();
 
     CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
                                                      : device->compute_with_storage_grid_size();
@@ -210,13 +210,15 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
         false,  //(std::uint32_t)use_padded_mask,
         false,  //(uint32_t)is_chunked,
         0,      // block_size_t,
-        0       // page_table_stick_size
+        0,      // page_table_stick_size
+        0       // use_attention_sink
     };
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs().append_to(reader_compile_time_args);  // mask tensor (not used in ring)
     TensorAccessorArgs().append_to(reader_compile_time_args);  // page table (not used in ring)
+    TensorAccessorArgs().append_to(reader_compile_time_args);  // attention sink (not used in ring)
 
     std::vector<uint32_t> writer_compile_time_args = {
         // interleaved accessor args
@@ -239,6 +241,7 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
         false,  //(std::uint32_t)use_provided_mask,
         false,  //(std::uint32_t)use_padded_mask,
         true,   //(uint32_t)is_chunked,
+        0,      //(uint32_t)sliding_window_size,
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
@@ -272,6 +275,8 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
         false,  //(std::uint32_t)use_padded_mask,
         true,   //(uint32_t)is_chunked,
         scale_union.u,
+        0,  //(uint32_t)sliding_window_size,
+        0,  //(std::uint32_t)use_attention_sink,
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
 
@@ -448,6 +453,7 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
              v_addr,
              0,  // mask_addr,
              0,
+             0,  // attention sink addr,
              i,
              local_batch_start,
              local_batch_end,
@@ -500,11 +506,11 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            auto q_buffer = input_tensors.at(0).buffer();
-            auto k_buffer = input_tensors.at(1).buffer();
-            auto v_buffer = input_tensors.at(2).buffer();
+            auto* q_buffer = input_tensors.at(0).buffer();
+            auto* k_buffer = input_tensors.at(1).buffer();
+            auto* v_buffer = input_tensors.at(2).buffer();
 
-            auto out0_buffer = output_tensors.at(0).buffer();
+            auto* out0_buffer = output_tensors.at(0).buffer();
             uint32_t q_addr = q_buffer->address();
             uint32_t k_addr = k_buffer->address();
             uint32_t v_addr = v_buffer->address();

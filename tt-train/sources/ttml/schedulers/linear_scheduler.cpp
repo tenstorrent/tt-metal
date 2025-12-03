@@ -12,11 +12,11 @@ LinearScheduler::LinearScheduler(
     optimizers::OptimizerBase* optimizer, float start_factor, float end_factor, size_t total_steps) :
     LRSchedulerBase(optimizer),
     m_base_lr(optimizer->get_lr()),
-    m_last_lr(m_base_lr),
     m_start_factor(start_factor),
     m_end_factor(end_factor),
     m_total_steps(total_steps),
-    m_last_step(0) {
+    m_last_step(0),
+    m_last_lr(m_base_lr) {
 }
 
 void LinearScheduler::step() {

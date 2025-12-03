@@ -9,13 +9,12 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/experimental/ccl/slice_reshard_async/device/slice_reshard_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/slice_reshard_async/device/slice_reshard_async_program.hpp"
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
@@ -31,7 +30,6 @@
 #include <cstdint>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn {
@@ -61,7 +59,7 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
     tt::tt_metal::Buffer* input_buffer = input_tensor.buffer();
     tt::tt_metal::Buffer* output_buffer = output_tensor.buffer();
 
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
 
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();
@@ -71,13 +69,13 @@ tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
     bool is_first_device = !backward_device.has_value();
     bool is_last_device = !forward_device.has_value();
     // output coords for this device, in the input space
-    uint32_t global_output_outer_dim_start = output_dim_offset + output_outer_dim_size * ring_index;
-    uint32_t global_output_outer_dim_end = output_dim_offset + output_outer_dim_size * (ring_index + 1) - 1;
+    uint32_t global_output_outer_dim_start = output_dim_offset + (output_outer_dim_size * ring_index);
+    uint32_t global_output_outer_dim_end = output_dim_offset + (output_outer_dim_size * (ring_index + 1)) - 1;
     // input coords for this device, in the input space
     uint32_t global_input_outer_dim_start = input_outer_dim_size * ring_index;
-    uint32_t global_input_outer_dim_end = input_outer_dim_size * (ring_index + 1) - 1;
+    uint32_t global_input_outer_dim_end = (input_outer_dim_size * (ring_index + 1)) - 1;
 
-    int32_t backward_device_end = std::max((int32_t)global_input_outer_dim_start - 1, 0);
+    int32_t backward_device_end = (int32_t)global_input_outer_dim_start - 1;
     uint32_t outer_dims_from_backward = std::max(backward_device_end - (int32_t)global_output_outer_dim_start + 1, 0);
     int32_t forward_device_start = global_input_outer_dim_end + 1;
     uint32_t outer_dims_from_forward = std::max((int32_t)global_output_outer_dim_end - forward_device_start + 1, 0);

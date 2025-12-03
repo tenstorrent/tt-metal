@@ -13,14 +13,14 @@ namespace tt_metal {
 
 void RotaryEmbeddingLlamaFusedQK::validate(const std::vector<Tensor>& input_tensors) const {
     using namespace tt::constants;
-    TT_FATAL(input_tensors.size() == 5, "Error");
+    TT_FATAL(input_tensors.size() == 5, "Expected 5 input tensors but got {}", input_tensors.size());
     const auto& q_input_tensor = input_tensors.at(0);
     const auto& k_input_tensor = input_tensors.at(1);
     const auto& cos = input_tensors.at(2);
     const auto& sin = input_tensors.at(3);
     const auto& trans_mat = input_tensors.at(4);
 
-    auto ref_device = q_input_tensor.device();
+    auto* ref_device = q_input_tensor.device();
     for (const auto& input : input_tensors) {
         TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
         TT_FATAL(input.buffer() != nullptr, "Operands to rotary embedding need to be allocated in buffers on device!");

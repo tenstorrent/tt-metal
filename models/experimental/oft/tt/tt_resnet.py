@@ -69,6 +69,8 @@ class TTBasicBlock:
     def forward(self, device, x, gn_shard="HS", num_splits=1):
         if use_signpost:
             signpost(header=f"TTBasicBlock {self.block_id} forward started")
+        if x.layout != ttnn.ROW_MAJOR_LAYOUT and self.is_sliced:
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         out = self.conv1(x)
         logger.debug(
             f"FORWARD X Input shape: {x.shape}, dtype: {x.dtype}, layout: {x.layout} memory_config: {x.memory_config()}"
@@ -79,6 +81,8 @@ class TTBasicBlock:
         logger.debug(f"BN1 output shape: {out.shape}")
         ttnn.relu(out, output_tensor=out)
 
+        if out.layout != ttnn.ROW_MAJOR_LAYOUT and self.is_sliced:
+            out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
         out = self.conv2(out)
         logger.debug(f"Conv2 output shape: {out.shape}")
         out = ttnn.move(out)
@@ -115,7 +119,7 @@ class TTBasicBlock:
 class TTResNetFeatures:
     def __init__(self, device, parameters, conv_pt, block, layers, return_intermediates=False):
         self.conv1 = TtConv2d(conv_pt.conv1["optimized_configuration"], device)
-        self.bn1 = GroupNormDRAM(parameters.bn1, conv_pt.bn1)
+        self.bn1 = GroupNorm(parameters.bn1, conv_pt.bn1)
         self.maxpool = TtMaxPool2d(
             configuration=MaxPool2dConfiguration(
                 input_height=conv_pt.maxpool.input_height,
@@ -127,7 +131,8 @@ class TTResNetFeatures:
                 padding=(conv_pt.maxpool.padding, conv_pt.maxpool.padding),
                 dilation=(conv_pt.maxpool.dilation, conv_pt.maxpool.dilation),
                 deallocate_input=True,
-                in_place=True,
+                output_layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
             ),
             device=device,
         )
@@ -143,6 +148,9 @@ class TTResNetFeatures:
             layers[3],
         )
         self.return_intermediates = return_intermediates
+
+        self.num_splits_gn = 2  # Number of splits for GroupNorm to fit into L1
+        self.num_slices = 2  # Number of slices used for partial sharding during concatenation of GN outputs
 
     def _make_layer(self, device, parameters, conv_pt, block, blocks):
         layers = []
@@ -190,13 +198,64 @@ class TTResNetFeatures:
         conv1 = self.conv1(x)
         host_conv1f = ttnn.to_torch(conv1).permute(0, 3, 1, 2)
 
-        conv1 = ttnn.to_layout(conv1, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        conv1 = self.bn1(device, conv1, num_splits=10)
-        conv1 = ttnn.to_layout(conv1, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Split the tensor into multiple slices to fit into L1 for GN
+        splits = ttnn.split(conv1, conv1.shape[-1] // self.num_splits_gn, dim=3)
+        compute_grid = device.compute_with_storage_grid_size()
+        core_grid = ttnn.CoreGrid(y=compute_grid.y, x=compute_grid.x)
+
+        # GN on each split
+        processed_splits = []
+        for split in splits:
+            split = self.bn1(device, split, shard="HS", num_splits=self.num_splits_gn, negative_mask=True)
+            split = ttnn.to_layout(split, ttnn.TILE_LAYOUT)
+            split = ttnn.to_memory_config(split, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            processed_splits.append(split)
+
+        # Concat back the splits and ReLU
+        shard_height = conv1.shape[2] // (core_grid.x * core_grid.y * self.num_slices)
+        shard_width = conv1.shape[3]
+
+        sharded_mem_config = ttnn.create_sharded_memory_config(
+            shape=[shard_height, shard_width],
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        for i in range(self.num_slices):
+            slice_0 = ttnn.interleaved_to_sharded_partial(
+                processed_splits[0],
+                (core_grid.x, core_grid.y),
+                [shard_height, shard_width // self.num_splits_gn],
+                self.num_slices,
+                i,
+                ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            slice_1 = ttnn.interleaved_to_sharded_partial(
+                processed_splits[1],
+                (core_grid.x, core_grid.y),
+                [shard_height, shard_width // self.num_splits_gn],
+                self.num_slices,
+                i,
+                ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+
+            slice_1 = ttnn.concat([slice_0, slice_1], dim=3, memory_config=sharded_mem_config)
+            slice_1 = ttnn.relu(slice_1, output_tensor=slice_1)
+
+            ttnn.sharded_to_interleaved_partial(slice_1, conv1, self.num_slices, i, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(slice_1)
+        ttnn.deallocate(slice_0)
+
         host_gn = ttnn.to_torch(conv1).permute(0, 3, 1, 2)
-        conv1 = ttnn.relu(conv1, output_tensor=conv1)
         host_relu = ttnn.to_torch(conv1).permute(0, 3, 1, 2).reshape(1, 64, 192, 640)
 
+        # typecast to bfloat8_b for maxpool to stay in L1
+        # cannot change previous op output, as groupnorm uses bfloat16-only
+        conv1 = ttnn.typecast(conv1, ttnn.bfloat8_b)
         conv_1 = self.maxpool(conv1)
 
         conv_1 = ttnn.to_memory_config(

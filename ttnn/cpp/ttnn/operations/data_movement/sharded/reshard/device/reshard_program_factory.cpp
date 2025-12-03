@@ -28,7 +28,7 @@ std::unordered_map<CoreCoord, std::vector<detail::PageStride>> create_map_for_re
     auto output_cores = output_buffer->get_buffer_page_mapping()->all_cores;
     ret_map.reserve(output_cores.size());
 
-    auto device = input_buffer->device();
+    auto* device = input_buffer->device();
     auto full_grid = device->compute_with_storage_grid_size();
     uint32_t output_core_id = 0;
     for (auto output_core : output_cores) {
@@ -604,7 +604,7 @@ std::vector<uint32_t> get_runtime_args_for_given_ranges(
 
 template <bool is_reader>
 operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& input, Tensor& output) {
-    auto device = input.device();
+    auto* device = input.device();
 
     tt::tt_metal::Program program{};
 
@@ -648,7 +648,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
             ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_reader.cpp"
             : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_writer.cpp";
 
-    bool interface_with_dram = (remote_core_type == CoreType::DRAM);
+    bool interface_with_dram = (remote_core_type == tt::CoreType::DRAM);
     tt::tt_metal::KernelHandle kernel_id_0 = tt::tt_metal::CreateKernel(
         program,
         kernel_name,
@@ -762,7 +762,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
 }
 
 operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, Tensor& output) {
-    auto device = input.device();
+    auto* device = input.device();
 
     tt::tt_metal::Program program{};
 
@@ -903,7 +903,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
 
 template <bool is_reader>
 operation::ProgramWithCallbacks reshard_multi_core_same_height(const Tensor& input, Tensor& output) {
-    auto device = input.device();
+    auto* device = input.device();
 
     tt::tt_metal::Program program{};
 
@@ -915,7 +915,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_height(const Tensor& inp
     const auto& all_cores = local_shard_spec.grid;
 
     const auto remote_core_type = remote_tensor.buffer()->core_type();
-    bool interface_with_dram = (remote_core_type == CoreType::DRAM);
+    bool interface_with_dram = (remote_core_type == tt::CoreType::DRAM);
     const auto local_cores = corerange_to_cores(
         local_shard_spec.grid, std::nullopt, local_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
     const auto remote_cores = corerange_to_cores(

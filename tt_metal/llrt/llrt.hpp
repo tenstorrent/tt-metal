@@ -57,14 +57,14 @@ const ll_api::memory& get_risc_binary(
     ll_api::memory::Loading loading = ll_api::memory::Loading::DISCRETE,
     const std::function<void(ll_api::memory&)>& update_callback = nullptr);
 
-CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, CoreCoord& ethernet_core);
+CoreCoord logical_core_from_ethernet_core(ChipId chip_id, CoreCoord& ethernet_core);
 
-tt_metal::HalProgrammableCoreType get_core_type(chip_id_t chip_id, const CoreCoord& virtual_core);
+tt_metal::HalProgrammableCoreType get_core_type(ChipId chip_id, const CoreCoord& virtual_core);
 
-void send_reset_go_signal(chip_id_t chip, const CoreCoord& virtual_core);
+void send_reset_go_signal(ChipId chip, const CoreCoord& virtual_core);
 
 void write_launch_msg_to_core(
-    chip_id_t chip,
+    ChipId chip,
     CoreCoord core,
     tt_metal::dev_msgs::launch_msg_t::View msg,
     tt_metal::dev_msgs::go_msg_t::ConstView go_msg,
@@ -72,23 +72,23 @@ void write_launch_msg_to_core(
 
 bool test_load_write_read_risc_binary(
     const ll_api::memory& mem,
-    chip_id_t chip_id,
+    ChipId chip_id,
     const CoreCoord& core,
     uint32_t core_type_idx,
     uint32_t processor_class_idx,
     uint32_t processor_type_idx);
-void write_binary_to_address(const ll_api::memory& mem, chip_id_t chip_id, const CoreCoord& core, uint32_t address);
+void write_binary_to_address(const ll_api::memory& mem, ChipId chip_id, const CoreCoord& core, uint32_t address);
 
 namespace internal_ {
 
 void wait_until_cores_done(
-    chip_id_t device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms = 0);
+    ChipId device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms = 0);
 
 // Send a message to the ethernet firmware mailbox, if supported
 // Possible message types can be queried from the Hal. See tt::tt_metal::FWMailboxMsg
 // Maximum number of args depends on the architecture. Args not provided will be set to zero.
 void send_msg_to_eth_mailbox(
-    chip_id_t device_id,
+    ChipId device_id,
     const CoreCoord& virtual_core,
     tt_metal::FWMailboxMsg msg_type,
     int mailbox_index,
@@ -99,9 +99,9 @@ void send_msg_to_eth_mailbox(
 // Return to base firmware and wait for a heartbeat from the active ethernet core, if supported
 // Default timeout time empirically chosen to be 10 seconds to avoid timeouts
 void return_to_base_firmware_and_wait_for_heartbeat(
-    chip_id_t device_id, const CoreCoord& virtual_core, int timeout_ms = 10000);
+    ChipId device_id, const CoreCoord& virtual_core, int timeout_ms = 10000);
 
-void set_metal_eth_fw_run_flag(chip_id_t device_id, const CoreCoord& virtual_core, bool enable);
+void set_metal_eth_fw_run_flag(ChipId device_id, const CoreCoord& virtual_core, bool enable);
 
 }  // namespace internal_
 

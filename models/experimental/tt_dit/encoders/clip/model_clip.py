@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import torch
 import ttnn
 
@@ -12,6 +14,7 @@ from ...parallel.config import EncoderParallelConfig
 from ...layers.feedforward import ParallelFeedForward, FeedForward
 from ...layers.linear import ColParallelLinear, Linear
 from ttnn.distributed.distributed import ConcatMeshToTensor
+from ...layers.module import Module
 
 
 class CLIPConfig:
@@ -68,7 +71,7 @@ class CLIPConfig:
             self.hidden_act = hidden_act
 
 
-class CLIPEncoder:
+class CLIPEncoder(Module):
     def __init__(
         self,
         config: CLIPConfig,
@@ -77,6 +80,7 @@ class CLIPEncoder:
         parallel_config: EncoderParallelConfig,
         eos_token_id: int,
     ) -> None:
+        super().__init__()
         self.config = config
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
@@ -92,10 +96,11 @@ class CLIPEncoder:
         self.embeddings = TextEmbeddings(config, mesh_device)
         self.eos_token_id = eos_token_id
         self.encoder = CLIPStack(config, self.mesh_device, self.ccl_manager, self.parallel_config)
+        self.text_projection = None
 
-    def load_state_dict(self, state_dict):
-        self.embeddings.load_state_dict(substate(state_dict, "text_model.embeddings"))
-        self.encoder.load_state_dict(substate(state_dict, "text_model.encoder"))
+    def load_torch_state_dict(self, state_dict):
+        self.embeddings.load_torch_state_dict(substate(state_dict, "text_model.embeddings"))
+        self.encoder.load_torch_state_dict(substate(state_dict, "text_model.encoder"))
 
         self.final_layer_norm = bf16_tensor(
             state_dict["text_model.final_layer_norm.weight"], device=self.mesh_device, layout=ttnn.TILE_LAYOUT
@@ -107,10 +112,20 @@ class CLIPEncoder:
             self.text_projection = bf16_tensor(
                 state_dict["text_projection.weight"], device=self.mesh_device, layout=ttnn.TILE_LAYOUT
             )
+        else:
+            self.text_projection = None
 
-    def __call__(
-        self, prompt_tokenized: ttnn.Tensor, mesh_device: ttnn.Device, with_projection: bool = True
-    ) -> ttnn.Tensor:
+    def forward(
+        self,
+        prompt_tokenized: ttnn.Tensor,
+        mesh_device: ttnn.Device,
+        *,
+        with_projection: bool | None = None,
+        return_normalized_state: bool = False,
+    ) -> tuple[ttnn.Tensor, ...]:
+        if with_projection is None:
+            with_projection = self.text_projection is not None
+
         hidden_states = self.embeddings(prompt_tokenized, mesh_device)
 
         causal_attention_mask = create_4d_causal_attention_mask(
@@ -149,14 +164,14 @@ class CLIPEncoder:
             if self.text_projection is None:
                 raise ValueError("projection weights are not loaded")
             text_projection_transposed = ttnn.transpose(self.text_projection, -2, -1)
-            projected_output = ttnn.matmul(
+            pooled_output = ttnn.matmul(
                 pooled_output, text_projection_transposed, compute_kernel_config=self.compute_kernel_config
             )
-            # sequence embedding, pooled embedding with projection
-            return encoder_output, projected_output
-        else:
-            # sequence embedding, pooled embedding without projection
-            return encoder_output, pooled_output
+
+        if return_normalized_state:
+            return encoder_output, pooled_output, normalized_final_state
+
+        return encoder_output, pooled_output
 
     def _pool_eos_from_torch_tensors(self, ids_t: torch.Tensor, seq_t: torch.Tensor, eos_token_id: int) -> torch.Tensor:
         """Helper function to pool EOS tokens from torch tensors.
@@ -219,7 +234,7 @@ class CLIPEncoder:
             )
 
 
-class CLIPStack:
+class CLIPStack(Module):
     def __init__(
         self,
         config: CLIPConfig,
@@ -227,6 +242,7 @@ class CLIPStack:
         ccl_manager: CCLManager,
         parallel_config: EncoderParallelConfig,
     ) -> None:
+        super().__init__()
         self.config = config
         self.mesh_device = mesh_device
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -240,12 +256,12 @@ class CLIPStack:
             CLIPEncoderLayer(config, mesh_device, ccl_manager, parallel_config) for _ in range(config.num_hidden_layers)
         ]
 
-    def load_state_dict(self, state_dict):
+    def load_torch_state_dict(self, state_dict):
         layer_states = indexed_substates(state_dict, "layers")
         for layer, layer_state in zip(self.layers, layer_states):
-            layer.load_state_dict(layer_state)
+            layer.load_torch_state_dict(layer_state)
 
-    def __call__(
+    def forward(
         self,
         hidden_states: ttnn.Tensor,
         causal_attention_mask: ttnn.Tensor,
@@ -263,7 +279,7 @@ class CLIPStack:
         return all_hidden_states  # list of hidden states from each layer
 
 
-class CLIPEncoderLayer:
+class CLIPEncoderLayer(Module):
     def __init__(
         self,
         config: CLIPConfig,
@@ -271,6 +287,7 @@ class CLIPEncoderLayer:
         ccl_manager: CCLManager,
         parallel_config: EncoderParallelConfig,
     ) -> None:
+        super().__init__()
         self.config = config
         self.mesh_device = mesh_device
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -303,7 +320,7 @@ class CLIPEncoderLayer:
             )
         self.ccl_manager = ccl_manager
 
-    def load_state_dict(self, state_dict):
+    def load_torch_state_dict(self, state_dict):
         self.layer_norm1 = bf16_tensor(
             state_dict["layer_norm1.weight"], device=self.mesh_device, layout=ttnn.TILE_LAYOUT
         )
@@ -317,7 +334,7 @@ class CLIPEncoderLayer:
             state_dict["layer_norm2.bias"], device=self.mesh_device, layout=ttnn.TILE_LAYOUT
         )
 
-        self.self_attn.load_state_dict(substate(state_dict, "self_attn"))
+        self.self_attn.load_torch_state_dict(substate(state_dict, "self_attn"))
 
         # remap MLP keys from fc1/fc2 to ff1/ff2 format
         mlp_state = substate(state_dict, "mlp")
@@ -327,9 +344,9 @@ class CLIPEncoderLayer:
             "ff2.weight": mlp_state["fc2.weight"],
             "ff2.bias": mlp_state["fc2.bias"],
         }
-        self.mlp.load_state_dict(remapped_mlp_state)
+        self.mlp.load_torch_state_dict(remapped_mlp_state)
 
-    def __call__(
+    def forward(
         self,
         hidden_states: ttnn.Tensor,
         causal_attention_mask: ttnn.Tensor,
@@ -387,7 +404,7 @@ class CLIPEncoderLayer:
         return hidden_states
 
 
-class CLIPAttention:
+class CLIPAttention(Module):
     def __init__(
         self,
         config: CLIPConfig,
@@ -395,6 +412,7 @@ class CLIPAttention:
         ccl_manager: CCLManager,
         parallel_config: EncoderParallelConfig,
     ) -> None:
+        super().__init__()
         self.config = config
         self.mesh_device = mesh_device
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -448,13 +466,13 @@ class CLIPAttention:
             self.v_proj = Linear(in_features=self.embed_dim, out_features=self.embed_dim, mesh_device=self.mesh_device)
             self.o_proj = Linear(in_features=self.embed_dim, out_features=self.embed_dim, mesh_device=self.mesh_device)
 
-    def load_state_dict(self, state_dict):
-        self.q_proj.load_state_dict(substate(state_dict, "q_proj"))
-        self.k_proj.load_state_dict(substate(state_dict, "k_proj"))
-        self.v_proj.load_state_dict(substate(state_dict, "v_proj"))
-        self.o_proj.load_state_dict(substate(state_dict, "out_proj"))
+    def load_torch_state_dict(self, state_dict):
+        self.q_proj.load_torch_state_dict(substate(state_dict, "q_proj"))
+        self.k_proj.load_torch_state_dict(substate(state_dict, "k_proj"))
+        self.v_proj.load_torch_state_dict(substate(state_dict, "v_proj"))
+        self.o_proj.load_torch_state_dict(substate(state_dict, "out_proj"))
 
-    def __call__(self, hidden_states, causal_attention_mask):
+    def forward(self, hidden_states, causal_attention_mask):
         batch_size, seq_length, _ = hidden_states.shape
 
         q = self.q_proj(hidden_states, compute_kernel_config=self.compute_kernel_config)
@@ -531,7 +549,7 @@ class CLIPAttention:
         return ttnn.reshape(dense_out, tuple(dense_out.shape)[1:])
 
 
-class TextEmbeddings:
+class TextEmbeddings(Module):
     """
     Implements text token embeddings with absolute positional encoding
 
@@ -547,13 +565,14 @@ class TextEmbeddings:
     """
 
     def __init__(self, config, mesh_device: ttnn.Device) -> None:
+        super().__init__()
         self.config = config
         self.mesh_device = mesh_device
 
         self.token_embedding = None
         self.position_embedding = None
 
-    def load_state_dict(self, state_dict):
+    def load_torch_state_dict(self, state_dict):
         self.token_embedding = bf16_tensor(
             state_dict["token_embedding.weight"], device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT
         )
@@ -561,7 +580,23 @@ class TextEmbeddings:
             state_dict["position_embedding.weight"], device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT
         )
 
-    def __call__(self, prompt: ttnn.Tensor, device: ttnn.Device) -> ttnn.Tensor:
+    # TODO: Move to parameters to reuse module functionality
+    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
+        cache_dict = {}
+        token_embedding_weights_path = path_prefix + "token_embedding_weights" + path_suffix
+        position_embedding_weights_path = path_prefix + "position_embedding_weights" + path_suffix
+        ttnn.dump_tensor(token_embedding_weights_path, self.token_embedding)
+        ttnn.dump_tensor(position_embedding_weights_path, self.position_embedding)
+        cache_dict["token_embedding"] = token_embedding_weights_path
+        cache_dict["position_embedding"] = position_embedding_weights_path
+
+        return cache_dict
+
+    def from_cached_state_dict(self, cache_dict):
+        self.token_embedding = ttnn.load_tensor(cache_dict["token_embedding"], device=self.mesh_device)
+        self.position_embedding = ttnn.load_tensor(cache_dict["position_embedding"], device=self.mesh_device)
+
+    def forward(self, prompt: ttnn.Tensor, device: ttnn.Device) -> ttnn.Tensor:
         seq_len = prompt.shape[-1]
 
         if seq_len > self.config.max_prompt_length:

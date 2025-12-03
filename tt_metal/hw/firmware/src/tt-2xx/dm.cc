@@ -82,12 +82,18 @@ inline void wait_subordinates() {
 
 inline void trigger_sync_register_init() { mailboxes->subordinate_sync.trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
 
-int main() {
+extern "C" uint32_t _start1() {
     configure_csr();
     std::uint64_t hartid;
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
+    if (hartid == 0) {
+        extern uint32_t __ldm_data_start[];
+        do_crt1(__ldm_data_start);
+    }
+    extern uint32_t __ldm_tdata_init[];
+    do_thread_crt1(__ldm_tdata_init);
     WAYPOINT("I");
-    // clear bss
+
     // handle noc_tobank ???
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
     noc_index = 0;
@@ -120,11 +126,15 @@ int main() {
                 // While the go signal for kernel execution is not sent, check if the worker was signalled
                 // to reset its launch message read pointer.
                 if ((go_message_signal == RUN_MSG_RESET_READ_PTR) ||
-                    (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST)) {
+                    (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) ||
+                    (go_message_signal == RUN_MSG_REPLAY_TRACE)) {
                     // Set the rd_ptr on workers to specified value
                     mailboxes->launch_msg_rd_ptr = 0;
-                    if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
-                        DeviceTraceProfilerInit();
+                    if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_REPLAY_TRACE) {
+                        if (go_message_signal == RUN_MSG_REPLAY_TRACE) {
+                            DeviceIncrementTraceCount();
+                            DeviceTraceOnlyProfilerInit();
+                        }
                         uint32_t go_message_index = mailboxes->go_message_index;
                         // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently
                         // guaranteed to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid

@@ -10,8 +10,10 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/sharded/reshard/device/reshard_op.hpp"
-#include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp"
+
+#include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.hpp"
+
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 
@@ -68,31 +70,31 @@ struct ToMemoryConfig {
                 } else {
                     // for row-major tensors where shard-spec[1] is different for input shard and output shard
 
-                    TT_FATAL(memory_config.is_sharded(), "Error");
+                    TT_FATAL(memory_config.is_sharded(), "Memory config must be sharded for this operation");
                     Tensor temp = tt::tt_metal::operation::run(
                                       data_movement::ShardedToInterleavedDeviceOperation{
                                           .output_mem_config = ttnn::DRAM_MEMORY_CONFIG,
                                           .output_dtype = dtype.value_or(tensor.dtype())},
                                       {tensor})
                                       .at(0);
-                    return tt::tt_metal::operation::run(
-                               data_movement::InterleavedToShardedDeviceOperation{
-                                   .output_mem_config = memory_config, .output_dtype = dtype.value_or(temp.dtype())},
-                               {temp},
-                               {},
-                               optional_output_tensors)
-                        .at(0);
+                    const bool keep_l1_aligned = false;
+                    return ttnn::interleaved_to_sharded(
+                        temp,
+                        memory_config,
+                        dtype.value_or(temp.dtype()),
+                        keep_l1_aligned,
+                        optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
                 }
             } else {
                 auto bbox = memory_config.shard_spec().value().grid.bounding_box();
                 CoreCoord grid_size(bbox.end_coord.x + 1, bbox.end_coord.y + 1);
-                return tt::tt_metal::operation::run(
-                           data_movement::InterleavedToShardedDeviceOperation{
-                               .output_mem_config = memory_config, .output_dtype = dtype.value_or(tensor.dtype())},
-                           {tensor},
-                           {},
-                           optional_output_tensors)
-                    .at(0);
+                const bool keep_l1_aligned = false;
+                return ttnn::interleaved_to_sharded(
+                    tensor,
+                    memory_config,
+                    dtype.value_or(tensor.dtype()),
+                    keep_l1_aligned,
+                    optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
             }
         } else {
             // to_interleaved path

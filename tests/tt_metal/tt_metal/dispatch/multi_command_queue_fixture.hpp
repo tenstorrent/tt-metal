@@ -4,12 +4,12 @@
 
 #pragma once
 
-#include "fabric_types.hpp"
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "gtest/gtest.h"
 #include "mesh_dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -36,10 +36,10 @@ protected:
         }
 
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
+        auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
 
         // Check to deal with TG systems
-        const chip_id_t device_id =
+        const ChipId device_id =
             (enable_remote_chip or tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster())
                 ? *tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids().begin()
                 : *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
@@ -50,7 +50,7 @@ protected:
 
     bool validate_dispatch_mode() {
         this->slow_dispatch_ = false;
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = true;
@@ -71,10 +71,10 @@ protected:
         return dispatch_core_type;
     }
 
-    void create_device(const chip_id_t device_id, const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
+    void create_device(const ChipId device_id, const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        std::vector<chip_id_t> chip_id = {device_id};
+        std::vector<ChipId> chip_id = {device_id};
 
         auto reserved_devices = distributed::MeshDevice::create_unit_meshes(
             chip_id, DEFAULT_L1_SMALL_SIZE, trace_region_size, 2, dispatch_core_config);
@@ -114,7 +114,7 @@ class UnitMeshMultiCQMultiDeviceFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override {
         this->slow_dispatch_ = false;
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = true;
@@ -129,15 +129,15 @@ protected:
 
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        const chip_id_t mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
-        std::vector<chip_id_t> chip_ids;
-        auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
+        const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
+        std::vector<ChipId> chip_ids;
+        auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
 
         // Check to deal with TG systems
         if (enable_remote_chip or
             tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == BoardType::UBB or
             tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
-            for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
+            for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
                 chip_ids.push_back(id);
             }
         } else {
@@ -164,32 +164,5 @@ protected:
 class UnitMeshMultiCQMultiDeviceBufferFixture : public UnitMeshMultiCQMultiDeviceFixture {};
 
 class UnitMeshMultiCQMultiDeviceEventFixture : public UnitMeshMultiCQMultiDeviceFixture {};
-
-class DISABLED_UnitMeshMultiCQMultiDeviceOnFabricFixture
-    : public UnitMeshMultiCQMultiDeviceFixture,
-      public ::testing::WithParamInterface<tt::tt_fabric::FabricConfig> {
-private:
-    // Save the result to reduce UMD calls
-    inline static bool should_skip_ = false;
-
-protected:
-    void SetUp() override {
-        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
-            GTEST_SKIP() << "Dispatch on Fabric tests only applicable on Wormhole B0";
-        }
-        // Skip for TG as it's still being implemented
-        if (tt::tt_metal::IsGalaxyCluster()) {
-            GTEST_SKIP();
-        }
-        // This will force dispatch init to inherit the FabricConfig param
-        tt::tt_fabric::SetFabricConfig(GetParam(), tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, 1);
-        UnitMeshMultiCQMultiDeviceFixture::SetUp();
-    }
-
-    void TearDown() override {
-        UnitMeshMultiCQMultiDeviceFixture::TearDown();
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
-    }
-};
 
 }  // namespace tt::tt_metal

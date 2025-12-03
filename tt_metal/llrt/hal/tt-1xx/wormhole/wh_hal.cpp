@@ -18,6 +18,7 @@
 #include "wormhole/wh_hal.hpp"
 #include "impl/context/metal_context.hpp"
 #include "hal_1xx_common.hpp"
+#include "impl/dispatch/dispatch_settings.hpp"
 
 namespace {
 
@@ -201,6 +202,8 @@ public:
             enchantum::to_string(params.processor_class),
             enchantum::to_string(params.core_type));
     }
+
+    bool firmware_is_kernel_object(const Params&) const override { return false; }
 };
 
 void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
@@ -286,6 +289,7 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->noc_multicast_encoding_func_ = [](uint32_t x_start, uint32_t y_start, uint32_t x_end, uint32_t y_end) {
         return NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end);
     };
+    this->noc_xy_pcie64_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_PCIE_ENCODING(x, y) >> 32; };
     this->noc_mcast_addr_start_x_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_START_X(addr); };
     this->noc_mcast_addr_start_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_START_Y(addr); };
     this->noc_mcast_addr_end_x_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_END_X(addr); };
@@ -324,7 +328,6 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
     this->eth_fw_is_cooperative_ = true;
-    this->intermesh_eth_links_enabled_ = true;  // Intermesh routing is enabled on Wormhole
     this->virtualized_core_types_ = {dev_msgs::AddressableCoreType::TENSIX, dev_msgs::AddressableCoreType::ETH};
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
 
@@ -336,6 +339,7 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     // https://github.com/tenstorrent/tt-isa-documentation/tree/main/WormholeB0/PCIExpressTile for more details.
     this->pcie_addr_lower_bound_ = 0x8'0000'0000ULL;
     this->pcie_addr_upper_bound_ = 0x8'FFFE'0000ULL - 1ULL;
+    this->supports_64_bit_pcie_addressing_ = false;
 
     this->noc_x_id_translate_table_ = {
         NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_0),
@@ -362,6 +366,15 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
             launch_msg.kernel_config().ncrisc_kernel_size16() = (iram_text_size + 15) >> 4;
         }
     };
+
+    this->verify_eth_fw_version_func_ = [](tt::umd::semver_t /*eth_fw_version*/) {
+        // No checks
+        return true;
+    };
+
+    this->max_pinned_memory_count_ = 12;
+    this->total_pinned_memory_size_ =
+        4ULL * 1024ULL * 1024ULL * 1024ULL - static_cast<uint64_t>(tt::tt_metal::DispatchSettings::MAX_HUGEPAGE_SIZE);
 }
 
 }  // namespace tt_metal

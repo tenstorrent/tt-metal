@@ -57,9 +57,9 @@ operation::ProgramWithCallbacks bcast_multi_core_h(
     auto [num_cores, all_cores, core_group_1, core_group_2, Ht_per_core_group_1, Ht_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, Ht);
 
-    auto src0_buffer = a.buffer();
-    auto src1_buffer = b.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src0_buffer = a.buffer();
+    auto* src1_buffer = b.buffer();
+    auto* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = 0;
@@ -191,10 +191,10 @@ operation::ProgramWithCallbacks bcast_multi_core_h(
             uint32_t num_cores_x = compute_with_storage_grid_size.x;
             uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-            auto src_dram_buffer_a = input_tensors.at(0).buffer();
-            auto src_dram_buffer_b = input_tensors.at(1).buffer();
+            auto* src_dram_buffer_a = input_tensors.at(0).buffer();
+            auto* src_dram_buffer_b = input_tensors.at(1).buffer();
 
-            auto dst_dram_buffer = output_tensors.at(0).buffer();
+            auto* dst_dram_buffer = output_tensors.at(0).buffer();
 
             const auto ashape = input_tensors.at(0).padded_shape();
             const auto bshape = input_tensors.at(1).padded_shape();

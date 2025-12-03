@@ -75,7 +75,6 @@ target_link_libraries(
 target_link_libraries(
     run_cluster_validation
     PRIVATE
-        TT::ScaleoutTools
         enchantum::enchantum
         protobuf::libprotobuf
         tt_metal
@@ -84,3 +83,66 @@ target_compile_features(scaleout_tools PUBLIC cxx_std_20)
 target_precompile_headers(scaleout_tools REUSE_FROM TT::CommonPCH)
 
 install(TARGETS scaleout_tools EXPORT Metalium LIBRARY COMPONENT metalium-runtime FILE_SET api COMPONENT metalium-dev)
+
+add_executable(2d_big_mesh_cabling_gen src/2d_big_mesh_cabling_gen.cpp)
+
+set_target_properties(
+    2d_big_mesh_cabling_gen
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${CMAKE_BINARY_DIR}/tools/scaleout
+)
+
+add_dependencies(2d_big_mesh_cabling_gen scaleout_generated_protos)
+
+target_include_directories(2d_big_mesh_cabling_gen SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
+target_link_libraries(
+    2d_big_mesh_cabling_gen
+    PRIVATE
+        scaleout_tools
+        protobuf::libprotobuf
+        cxxopts::cxxopts
+)
+
+add_executable(run_cabling_generator src/run_cabling_generator.cpp)
+
+set_target_properties(
+    run_cabling_generator
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${CMAKE_BINARY_DIR}/tools/scaleout
+)
+
+add_dependencies(run_cabling_generator scaleout_generated_protos)
+
+target_include_directories(run_cabling_generator SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
+target_link_libraries(
+    run_cabling_generator
+    PRIVATE
+        scaleout_tools
+        protobuf::libprotobuf
+        cxxopts::cxxopts
+)
+
+add_executable(generate_cluster_descriptor src/generate_cluster_descriptor.cpp)
+
+set_target_properties(
+    generate_cluster_descriptor
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${CMAKE_BINARY_DIR}/tools/scaleout
+)
+
+add_dependencies(generate_cluster_descriptor scaleout_generated_protos)
+
+target_include_directories(generate_cluster_descriptor SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
+target_link_libraries(
+    generate_cluster_descriptor
+    PRIVATE
+        scaleout_tools
+        protobuf::libprotobuf
+        cxxopts::cxxopts
+)

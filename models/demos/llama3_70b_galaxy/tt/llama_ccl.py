@@ -858,23 +858,14 @@ class TT_CCL:
                 if seqlen not in self.persistent_buffers.keys()
                 else self.persistent_buffers[seqlen].get(buffer_key, None)
             )
-            ttnn_tensor_out = ttnn.experimental.reduce_scatter_async(
+            ttnn_tensor_out = ttnn.reduce_scatter(
                 input_tensor_mesh,
                 dim,
                 cluster_axis=cluster_axis,
-                mesh_device=self.mesh_device,
-                from_remote_multi_device_global_semaphore=self.from_semaphore_handles[cluster_axis][
-                    self.gather_idx[cluster_axis]
-                ],
-                to_remote_multi_device_global_semaphore=self.to_semaphore_handles[cluster_axis][
-                    self.gather_idx[cluster_axis]
-                ],
-                math_op=math_op,
                 memory_config=memory_config,
                 topology=ttnn.Topology.Linear,
                 num_links=num_links,
                 subdevice_id=self.worker_sub_device_id,
-                persistent_output_tensors=persistent_buffers,
             )
             # reshape input back
             ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))

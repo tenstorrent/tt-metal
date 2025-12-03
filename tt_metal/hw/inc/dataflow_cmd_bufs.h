@@ -7,13 +7,13 @@
 #include "noc_nonblocking_api.h"
 
 #if defined(KERNEL_BUILD)
-#if defined(COMPILE_FOR_BRISC)
+#if (defined(COMPILE_FOR_BRISC)) || (defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0))
 constexpr uint32_t read_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? BRISC_RD_CMD_BUF : DYNAMIC_NOC_BRISC_RD_CMD_BUF;
 constexpr uint32_t write_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? BRISC_WR_CMD_BUF : DYNAMIC_NOC_BRISC_WR_CMD_BUF;
 constexpr uint32_t write_reg_cmd_buf =
     NOC_MODE == DM_DEDICATED_NOC ? BRISC_WR_REG_CMD_BUF : DYNAMIC_NOC_BRISC_WR_REG_CMD_BUF;
 constexpr uint32_t write_at_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? BRISC_AT_CMD_BUF : DYNAMIC_NOC_BRISC_AT_CMD_BUF;
-#elif defined(COMPILE_FOR_NCRISC)
+#elif (defined(COMPILE_FOR_NCRISC)) || (defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 1))
 constexpr uint32_t read_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_RD_CMD_BUF : DYNAMIC_NOC_NCRISC_RD_CMD_BUF;
 constexpr uint32_t write_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_WR_CMD_BUF : DYNAMIC_NOC_NCRISC_WR_CMD_BUF;
 constexpr uint32_t write_reg_cmd_buf =

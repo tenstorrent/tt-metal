@@ -24,7 +24,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_downblock2d(device, block_id, input_shape, pcc, is_ci_env, reset_seeds):
+def test_downblock2d(device, block_id, input_shape, pcc, debug_mode, is_ci_env, reset_seeds):
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
@@ -45,6 +45,7 @@ def test_downblock2d(device, block_id, input_shape, pcc, is_ci_env, reset_seeds)
         model_config=model_config,
         has_downsample=block_id < 3,
         has_shortcut=block_id > 0 and block_id < 3,
+        debug_mode=debug_mode,
     )
     logger.info("Loaded weights")
 

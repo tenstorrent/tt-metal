@@ -22,7 +22,7 @@ from models.tt_transformers.tt.common import (
     num_blocks_in_seq,
     get_block_size,
 )
-
+from models.common.sampling.generator import format_sampling_params
 from models.tt_transformers.tt.generator import SamplingParams
 
 
@@ -66,6 +66,11 @@ class Generator:
         self.trace_output_prefill = defaultdict(lambda: None)
         self.prev_page_table = None
         self.prefill_traces_warmup = False
+        self.trace_ids_decode = defaultdict(lambda: None)  # {return_logits: {device_id: trace_id}}
+        self.trace_inputs_decode = defaultdict(lambda: None)
+        self.trace_output_decode = defaultdict(lambda: None)
+        self.enable_split_sampling = True
+        self.model.enable_internal_trace = self.enable_split_sampling
 
     def warmup_prefill_traces(
         self,
@@ -246,7 +251,11 @@ class Generator:
                 tt_out_logits_all_users[id] = tt_out_logits_saved
 
         if return_logits:
+            # TODO: the current solution runs the argmax even if we are returning logits
+            # This is inefficient and should be fixed
             # Return logits instead of tokens
+            # batch x seq x padded_vocab_size -> batch x seq x vocab_size
+            tt_out_logits_all_users = tt_out_logits_all_users[:, :, : self.model.vocab_size]
             return tt_out_logits_all_users
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
@@ -294,6 +303,8 @@ class Generator:
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
         """
+        # Trace is independent of whether we are returning logits or sampling on device
+        # The difference happens outside of the trace, in process_output_prefill
         trace_key = f"{prefill_seq_len}_{batch_size}"
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
@@ -328,7 +339,7 @@ class Generator:
         batch_size=1,
     ):
         """
-        Captures a trace for the decode_forward method.
+        Captures a trace for the prefill_forward method.
         """
 
         # Compile run
@@ -367,7 +378,7 @@ class Generator:
         batch_size=1,
     ):
         """
-        Executes the trace for the decode_forward method but does not read back outputs.
+        Executes the trace for the prefill_forward method but does not read back outputs.
         """
         host_inputs = self.model.prepare_prefill_inputs_host(tokens, user_id, page_table, batch_size=batch_size)
 
@@ -394,19 +405,25 @@ class Generator:
         tt_out_logits_saved=None,
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
+        reset_batch=True,
+        prompt_tokens: torch.Tensor | None = None,
+        output_tokens: torch.Tensor | None = None,
     ):
         if sampling_params is None:
             return_logits = True
-            read_from_device = False
             reset_inputs = True
         else:
             return_logits = False
 
         if self.prev_page_table is None:
-            self.prev_page_table = page_table
+            self.prev_page_table = (
+                page_table.clone()
+            )  # Make sure we reference a fresh page table, in case it has changed
         if torch.any(self.prev_page_table != page_table).item():
             reset_inputs = True
-            self.prev_page_table = page_table
+            self.prev_page_table = (
+                page_table.clone()
+            )  # Make sure we reference a fresh page table, in case it has changed
 
         if self.model.is_decode_setup is False:
             self.model.switch_mode("decode")
@@ -421,19 +438,28 @@ class Generator:
             "is_page_table_sharded": is_page_table_sharded,
         }
         if reset_inputs and sampling_params is not None:
-            if sampling_params.temperature == 0:  # argmax
-                sampling_params = SamplingParams(temperature=1.0, top_k=1, top_p=0.0)
-            self.model.tt_sampling.reset_params(
-                k=[sampling_params.top_k] * 32,
-                p=[sampling_params.top_p] * 32,
-                temp=[1 / sampling_params.temperature] * 32,
-            )
+            sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
+
+            sampling_module = self.model.sampling
+            sampling_module.reset_sampling_params(sampling_params)
+            if reset_batch:
+                sampling_module.reset_prompt_tokens(prompt_tokens)
+                sampling_module.reset_output_state(output_tokens)
+                sampling_module.reset_seed(sampling_params.seed)
+
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
         if enable_trace:
-            tt_tok = self._easy_trace_text(**decode_kwargs, reset_inputs=reset_inputs, return_logits=return_logits)
+            tt_tok = self._decode_easy_trace_text(
+                **decode_kwargs,
+                reset_inputs=reset_inputs,
+                return_logits=return_logits,
+            )
         else:
-            tt_tok = self._decode_forward_no_trace_text(**decode_kwargs, return_logits=return_logits)
+            tt_tok = self._decode_forward_no_trace_text(
+                **decode_kwargs,
+                return_logits=return_logits,
+            )
 
         if read_from_device:
             tt_out = self.read_decode_output(tt_tok, async_read=async_read)
@@ -472,6 +498,7 @@ class Generator:
             tt_out_logits_saved=tt_out_logits_saved,
             is_cur_pos_sharded=is_cur_pos_sharded,
             return_logits=return_logits,
+            capture_sampling_trace=self.enable_split_sampling,
         )
         return tt_tok
 
@@ -516,11 +543,13 @@ class Generator:
             kv_cache=kv_cache,
             is_cur_pos_sharded=is_cur_pos_sharded,
             return_logits=return_logits,
+            capture_sampling_trace=self.enable_split_sampling,
         )
 
         # Try allocating our persistent tensors here and verifying it matches the address that trace captured
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
+
         return trace_id, tt_out_tok, tokens_tt, current_pos_tt, rope_idxs_tt, page_table_tt
 
     def _decode_forward_trace_text(
@@ -539,7 +568,7 @@ class Generator:
 
         return tt_out_trace
 
-    def _easy_trace_text(
+    def _decode_easy_trace_text(
         self,
         tokens,
         current_pos,
@@ -551,11 +580,11 @@ class Generator:
         return_logits=False,
     ):
         """
-        Tracing is easy! Just call this method and we'll handle tracing for you.
+        Run decode forward text with tracing
         """
         tokens = tokens.view(-1, 1)
-
-        if not hasattr(self, "trace_id_text"):
+        # The trace is different depending on whether we are returning logits or sampling on device
+        if not self.trace_ids_decode[return_logits]:
             trace_id, tt_out_tok, *device_inputs = self._capture_trace_text(
                 tokens,
                 current_pos,
@@ -565,9 +594,9 @@ class Generator:
                 is_page_table_sharded=is_page_table_sharded,
                 return_logits=return_logits,
             )
-            self.trace_id_text = trace_id
-            self.trace_inputs_text = device_inputs
-            self.trace_output_text = tt_out_tok
+            self.trace_ids_decode[return_logits] = trace_id
+            self.trace_inputs_decode[return_logits] = device_inputs
+            self.trace_output_decode[return_logits] = tt_out_tok
         if reset_inputs:
             host_inputs = self.model.prepare_decode_inputs_host(
                 tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
@@ -575,17 +604,23 @@ class Generator:
             shard_specs = self.model.prepare_decode_shard_configs(is_cur_pos_sharded, is_page_table_sharded)
             device_inputs = copy_host_to_device(
                 host_tensors=host_inputs,
-                device_tensors=self.trace_inputs_text,
+                device_tensors=self.trace_inputs_decode[return_logits],
                 shard_specs=shard_specs,
             )
         trace_tok_rm = self._decode_forward_trace_text(
-            self.trace_id_text,
-            self.trace_inputs_text,
-            self.trace_output_text,
+            self.trace_ids_decode[return_logits],
+            self.trace_inputs_decode[return_logits],
+            self.trace_output_decode[return_logits],
             tokens,
             current_pos,
             page_table=page_table,
         )
+
+        if self.enable_split_sampling and not return_logits:
+            return self.model.sampling.sample(
+                logits=trace_tok_rm[0],
+                tt_out_tok=self.trace_inputs_decode[return_logits][0],
+            )
 
         return trace_tok_rm
 

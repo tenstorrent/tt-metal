@@ -69,6 +69,9 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
                 routing/tt_fabric_test_config.cpp
                 routing/tt_fabric_test_results.cpp
                 routing/tt_fabric_test_context.cpp
+                routing/tt_fabric_test_device_setup.cpp
+                routing/tt_fabric_test_progress_monitor.cpp
+                routing/tt_fabric_test_eth_readback.cpp
         )
         target_link_libraries(${TEST_TARGET} PRIVATE yaml-cpp::yaml-cpp)
     endif()
@@ -80,6 +83,7 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
             ${PROJECT_SOURCE_DIR}/ttnn/cpp/ttnn/deprecated # this all should go away and be replaced with link to ttnn
             ${PROJECT_SOURCE_DIR}/tests
             ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
+            ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
             ${CMAKE_CURRENT_SOURCE_DIR}
     )
     set_target_properties(

@@ -5,7 +5,7 @@
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check]
+    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [-v ...]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
@@ -15,6 +15,11 @@ Options:
     --verbosity=<verbosity>          Choose output verbosity. 1: ERROR, 2: WARN, 3: INFO, 4: VERBOSE, 5: DEBUG. [default: 3]
     --run=<script>                   Run specific script(s) by name. If not provided, all scripts will be run. [default: all]
     --skip-version-check             Do not enforce debugger version check. [default: False]
+    -v                               Increase verbosity level (can be repeated: -v, -vv, -vvv).
+                                     Controls which columns/fields are displayed:
+                                     Level 0 (default): Essential fields (Kernel ID:Name, Go Message, Subdevice, Preload, Waypoint, PC, Callstack)
+                                     Level 1 (-v): Include detailed dispatcher fields (Firmware/Kernel Path, Host Assigned ID, Kernel Offset, Previous Kernel)
+                                     Level 2 (-vv): Include internal debug fields (RD PTR, Base, Offset, Kernel XIP Path)
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -29,6 +34,7 @@ Description:
 # Check if tt-exalens is installed
 import inspect
 import os
+import traceback
 import utils
 from collections.abc import Iterable
 from pathlib import Path
@@ -67,6 +73,7 @@ import sys
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.elf import ElfVariable
 from typing import Any, Callable, Iterable, TypeVar
 from types import ModuleType
 
@@ -123,6 +130,11 @@ def default_serializer(value) -> str:
         return str(value._id)
     elif isinstance(value, OnChipCoordinate):
         return value.to_user_str()
+    elif isinstance(value, ElfVariable):
+        try:
+            return serialize_collection(value.as_list())
+        except:
+            return str(value)
     elif isinstance(value, Iterable) and not isinstance(value, str):
         return serialize_collection(value)
     else:
@@ -142,37 +154,35 @@ def collection_serializer(separator: str):
     return serializer
 
 
-def triage_field(serialized_name: str | None = None, serializer: Callable[[Any], str] | None = None):
+def triage_field(serialized_name: str | None = None, serializer: Callable[[Any], str] | None = None, verbose: int = 0):
     if serializer is None:
         serializer = default_serializer
-    return field(metadata={"recurse": False, "serialized_name": serialized_name, "serializer": serializer})
-
-
-def combined_field(
-    additional_fields: str | list[str] | None = None, serialized_name: str | None = None, serializer=None
-):
-    if additional_fields is None and serialized_name is None and serializer is None:
-        return field(metadata={"recurse": False, "dont_serialize": True})
-    assert (
-        additional_fields is not None and serialized_name is not None
-    ), "additional_fields and serialized_name must be provided."
-    if serializer is None:
-        serializer = default_serializer
-    # TODO: If serializer accepts single value, it should be wrapped around method that converts arguments to list and passes them to serializer
-    if not isinstance(additional_fields, list):
-        additional_fields = [additional_fields]
     return field(
-        metadata={
-            "recurse": False,
-            "additional_fields": additional_fields,
-            "serialized_name": serialized_name,
-            "serializer": serializer,
-        }
+        metadata={"recurse": False, "serialized_name": serialized_name, "serializer": serializer, "verbose": verbose}
     )
 
 
-def recurse_field():
-    return field(metadata={"recurse": True})
+def recurse_field(verbose: int = 0):
+    return field(metadata={"recurse": True, "verbose": verbose})
+
+
+# Module-level flag to control verbose field output
+# Level 0 (default): Essential fields for triage
+# Level 1 (-v): Include detailed fields
+# Level 2 (-vv): Include internal debug fields
+_verbose_level = 0
+
+
+def set_verbose_level(level: int):
+    """Set the global verbose level for field serialization."""
+    global _verbose_level
+    _verbose_level = level
+
+
+def get_verbose_level() -> int:
+    """Get the current verbose level for field serialization."""
+    global _verbose_level
+    return _verbose_level
 
 
 @dataclass
@@ -199,7 +209,7 @@ class TriageScript:
         except Exception as e:
             if log_error:
                 self.failed = True
-                self.failure_message = str(e)
+                self.failure_message = traceback.format_exc()
                 return None
             else:
                 raise
@@ -312,7 +322,9 @@ def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScri
     return script_queue
 
 
-def parse_arguments(scripts: dict[str, TriageScript], script_path: str | None = None) -> ScriptArguments:
+def parse_arguments(
+    scripts: dict[str, TriageScript], script_path: str | None = None, argv: list[str] | None = None
+) -> ScriptArguments:
     from docopt import (
         parse_defaults,
         parse_pattern,
@@ -350,11 +362,13 @@ def parse_arguments(scripts: dict[str, TriageScript], script_path: str | None = 
             utils.ERROR(f"Error parsing arguments for script {script_name}: {e}")
             continue
 
-    argv = parse_argv(TokenStream(sys.argv[1:], DocoptExit), list(combined_options), options_first=False)
+    if argv is None:
+        argv = sys.argv[1:]
+    parsed_argv = parse_argv(TokenStream(argv, DocoptExit), list(combined_options), options_first=False)
     pattern_options = set(combined_pattern.flat(Option))
     for ao in combined_pattern.flat(AnyOptions):
         ao.children = list(set(combined_options) - pattern_options)
-    matched, left, collected = combined_pattern.fix().match(argv)
+    matched, left, collected = combined_pattern.fix().match(parsed_argv)
     if matched and left == []:
         return ScriptArguments(dict((a.name, a.value) for a in (combined_pattern.flat() + collected)))
 
@@ -373,6 +387,8 @@ def parse_arguments(scripts: dict[str, TriageScript], script_path: str | None = 
                 script_options = parse_defaults(script.module.__doc__)
                 if len(script_options) > 0:
                     help_message += f"\n{script.module.__doc__}\n"
+        print(help_message)
+        sys.exit(0)
     else:
         help_message = printable_usage(doc)
         for script in scripts.values():
@@ -395,6 +411,24 @@ def log_check(success: bool, message: str) -> None:
         FAILURE_CHECKS.append(message)
 
 
+def log_check_device(device: Device, success: bool, message: str) -> None:
+    formatted_message = f"Device {device._id}: {message}"
+    log_check(success, formatted_message)
+
+
+def log_check_location(location: OnChipCoordinate, success: bool, message: str) -> None:
+    device = location.device
+    block_type = device.get_block_type(location)
+    location_str = location.to_user_str()
+    formatted_message = f"{block_type} [{location_str}]: {message}"
+    log_check_device(device, success, formatted_message)
+
+
+def log_check_risc(risc_name: str, location: OnChipCoordinate, success: bool, message: str) -> None:
+    formatted_message = f"{risc_name}: {message}"
+    log_check_location(location, success, formatted_message)
+
+
 def serialize_result(script: TriageScript | None, result):
     from dataclasses import fields, is_dataclass
 
@@ -406,10 +440,12 @@ def serialize_result(script: TriageScript | None, result):
     failures = FAILURE_CHECKS
     FAILURE_CHECKS = []
     if result is None:
-        if len(failures) > 0:
+        if len(failures) > 0 or script.failed:
             utils.ERROR("  fail")
             for failure in failures:
                 utils.ERROR(f"    {failure}")
+            if script.failed:
+                utils.ERROR(f"    {script.failure_message}")
         else:
             utils.INFO("  pass")
         return
@@ -429,6 +465,9 @@ def serialize_result(script: TriageScript | None, result):
         def generate_header(header: list[str], obj, flds):
             for field in flds:
                 metadata = field.metadata
+                # Skip field if it requires higher verbosity level
+                if metadata.get("verbose", 0) > _verbose_level:
+                    continue
                 if "dont_serialize" in metadata and metadata["dont_serialize"]:
                     continue
                 elif "recurse" in metadata and metadata["recurse"]:
@@ -441,6 +480,9 @@ def serialize_result(script: TriageScript | None, result):
         def generate_row(row: list[str], obj, flds):
             for field in flds:
                 metadata = field.metadata
+                # Skip field if it requires higher verbosity level
+                if metadata.get("verbose", 0) > _verbose_level:
+                    continue
                 if "dont_serialize" in metadata and metadata["dont_serialize"]:
                     continue
                 elif "recurse" in metadata and metadata["recurse"]:
@@ -566,7 +608,11 @@ def _init_ttexalens(args: ScriptArguments) -> Context:
 
 
 def run_script(
-    script_path: str | None = None, args: ScriptArguments | None = None, context: Context | None = None
+    script_path: str | None = None,
+    args: ScriptArguments | None = None,
+    context: Context | None = None,
+    argv: list[str] | None = None,
+    return_result: bool = False,
 ) -> Any:
     # Resolve script path
     if script_path is None:
@@ -593,7 +639,7 @@ def run_script(
 
     # Parse arguments
     if args is None:
-        args = parse_arguments(scripts, script_path)
+        args = parse_arguments(scripts, script_path, argv)
 
         # Setting verbosity level
         try:
@@ -618,6 +664,8 @@ def run_script(
             if script.config.data_provider and result is None:
                 raise TTTriageError(f"{script.name}: Data provider script did not return any data.")
     script = scripts[script_path] if script_path in scripts else None
+    if return_result:
+        return result
     serialize_result(script, result)
 
 

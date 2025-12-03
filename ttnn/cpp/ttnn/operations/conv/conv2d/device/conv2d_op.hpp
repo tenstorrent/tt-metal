@@ -13,12 +13,14 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
 
 namespace ttnn {
 
 namespace operations::conv {
 namespace conv2d {
 
+using Conv2dSliceConfig = op_slicing::Op2DSliceConfig;
 struct Conv2dConfig {
     // If set, the weights & bias tensors will be converted to this dtype after preprocessing.
     // prepare_conv_bias needs this to always be set to the same dtype as the weights.
@@ -27,7 +29,7 @@ struct Conv2dConfig {
     // Fused activation function as UnaryWithParam
     std::optional<ttnn::operations::unary::UnaryWithParam> activation = std::nullopt;
 
-    // If user tensor will be deallocated if it's on device.
+    // If user tensor will be deallocated if it's on device in L1 (will have no effect if input tensor is in DRAM).
     bool deallocate_activation = false;
 
     // If true && dellocate_activation is true, then after halo device op is done,
@@ -57,7 +59,7 @@ struct Conv2dConfig {
 
     std::optional<tt::tt_metal::TensorMemoryLayout> shard_layout;
 
-    // used only if override_sharding_config is true
+    // used only if override_sharding_config or override_output_sharding_config is true
     std::optional<CoreRangeSet> core_grid = std::nullopt;
 
     // used only if override_sharding_config is true and shard_layout is set to BLOCK_SHARDED
@@ -80,9 +82,6 @@ struct Conv2dConfig {
     // If L1 constraints allowed it we can use full inner dim.
     // This will increase perf, but it will take more L1 space.
     bool full_inner_dim = false;
-
-    // Re-use input tensor storage when creating output tensor
-    bool in_place = false;
 
     // ==================== EXPERIMENTAL FEATURES ====================
     // Features in this section are under development.
@@ -116,6 +115,12 @@ struct Conv2dConfig {
     // If not Height sharded and activation block size height is not greater than 32, then this is ignored.
     // If not set, then split reader heuristic is used to determine if it should be enabled.
     std::optional<bool> force_split_reader = std::nullopt;
+
+    // override_output_sharding_config enables the user to specify the memory config of the output tensor
+    // This impacts the core grid that executes matmul part of conv2d
+    // Feature is currently supported only for BLOCK_SHARDED layout, without DRAM slicing
+    // Additionally, NHW number of cores must match between input and output tensors
+    bool override_output_sharding_config = false;
     // ===============================================================
 
     static constexpr auto attribute_names = std::make_tuple(
@@ -135,10 +140,10 @@ struct Conv2dConfig {
         "enable_act_double_buffer",
         "enable_weights_double_buffer",
         "full_inner_dim",
-        "in_place",
         "enable_kernel_stride_folding",
         "enable_activation_reuse",
-        "force_split_reader");
+        "force_split_reader",
+        "override_output_sharding_config");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->weights_dtype),
@@ -157,30 +162,11 @@ struct Conv2dConfig {
             std::cref(this->enable_act_double_buffer),
             std::cref(this->enable_weights_double_buffer),
             std::cref(this->full_inner_dim),
-            std::cref(this->in_place),
             std::cref(this->enable_kernel_stride_folding),
             std::cref(this->enable_activation_reuse),
-            std::cref(this->force_split_reader));
+            std::cref(this->force_split_reader),
+            std::cref(this->override_output_sharding_config));
     }
-};
-
-struct Conv2dSliceConfig {
-    // Determines the dimension along which the input & output tensors are sliced.
-    // Slices based on [N, H, W, C] shape.
-    // Using width slicing is more efficient as it reduces memory usage. This is because the overlap of data between
-    // cores is minimized in width slicing, reducing the size of the Halo output. If the Height & Width dimensions are
-    // similar, then use Width slicing. Use Height slicing if the Height dimension is significantly larger than the
-    // Width dimension.
-    enum class SliceType : uint8_t {
-        DRAM_HEIGHT,
-        DRAM_WIDTH,
-        L1_FULL  // This option can be used to force conv2d with a DRAM Input to move it to L1, and output will be in
-                 // L1.
-    };
-    SliceType slice_type = SliceType::DRAM_WIDTH;
-
-    // Number of slices that the output tensor should be divided into.
-    uint32_t num_slices = 0;
 };
 
 // TODO: Accept parallelization
@@ -209,7 +195,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
     const Tensor& a,
     const Tensor& b,
     const ttnn::Shape& ashape,
-    std::optional<const Tensor> bias,
+    const std::optional<const Tensor>& bias,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     const sliding_window::ParallelConfig& parallel_config,
     const std::vector<uint32_t>& op_trace_metadata,
@@ -293,14 +279,14 @@ struct Conv2d {
         bool enable_activation_reuse,
         bool config_tensors_in_dram,
         std::optional<bool> force_split_reader) :
+        parallelization_config(p_config),
+        block_config(b_config),
+        sliding_window_config(sliding_window_config),
         output_channels(output_channels),
         groups(groups),
-        sliding_window_config(sliding_window_config),
         untilize_out(untile_out),
         has_bias(has_bias),
         activation(std::move(activation)),
-        parallelization_config(p_config),
-        block_config(b_config),
         memory_config(std::move(memory_config)),
         dtype(dtype),
         input_tensor_shape(input_tensor_shape),
@@ -366,7 +352,7 @@ struct Conv2d {
 Tensor conv2d(
     const Tensor& a,
     const Tensor& b,
-    std::optional<const Tensor> bias,
+    const std::optional<const Tensor>& bias,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t output_channels,
     uint32_t groups,

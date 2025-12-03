@@ -19,7 +19,7 @@ namespace ttnn::operations::normalization {
 
 void LayerNormPreAllGather::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 1, "Must have 1 input tensor");
-    auto& tensor = input_tensors.at(0);
+    const auto& tensor = input_tensors.at(0);
 
     TT_FATAL(tensor.layout() == Layout::TILE, "Only tilized inputs supported.");
     TT_FATAL(
@@ -52,7 +52,7 @@ operation::ProgramWithCallbacks LayerNormPreAllGather::create_program(
     auto& output_tensor = output_tensors.at(0);
 
     return layernorm_pre_allgather_multi_core(
-        a, output_tensor, this->norm_type, this->compute_kernel_config, this->use_2d_core_grid);
+        a, output_tensor, this->norm_type, this->compute_kernel_config, this->use_2d_core_grid, this->program_config);
 }
 
 }  // namespace ttnn::operations::normalization

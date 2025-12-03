@@ -30,7 +30,8 @@ void py_module_types(nb::module_& m) {
     nb::class_<SGDConfig>(m, "SGDConfig");
     nb::class_<SGD, OptimizerBase>(m, "SGD");
     nb::class_<AdamWConfig>(m, "AdamWConfig");
-    nb::class_<MorehAdamW, OptimizerBase>(m, "AdamW");
+    nb::class_<AdamW, OptimizerBase>(m, "AdamW");
+    nb::class_<MorehAdamW, OptimizerBase>(m, "MorehAdamW");
     nb::class_<RemoteOptimizer, OptimizerBase>(m, "RemoteOptimizer");
 }
 
@@ -92,8 +93,14 @@ void py_module(nb::module_& m) {
     }
 
     {
-        auto py_adamw = static_cast<nb::class_<MorehAdamW, OptimizerBase>>(m.attr("AdamW"));
+        auto py_adamw = static_cast<nb::class_<AdamW, OptimizerBase>>(m.attr("AdamW"));
         py_adamw.def(
+            nb::init<serialization::NamedParameters, const AdamWConfig&>(), nb::arg("parameters"), nb::arg("config"));
+    }
+
+    {
+        auto py_moreh_adamw = static_cast<nb::class_<MorehAdamW, OptimizerBase>>(m.attr("MorehAdamW"));
+        py_moreh_adamw.def(
             nb::init<serialization::NamedParameters, const AdamWConfig&>(), nb::arg("parameters"), nb::arg("config"));
     }
 

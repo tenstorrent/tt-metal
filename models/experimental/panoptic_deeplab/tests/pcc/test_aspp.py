@@ -13,12 +13,12 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
 from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.panoptic_deeplab.tt.common import (
     PDL_L1_SMALL_SIZE,
     get_panoptic_deeplab_weights_path,
     get_panoptic_deeplab_config,
 )
+from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
@@ -51,7 +51,7 @@ def test_ttnn_aspp(device, model_location_generator):
 
     pytorch_input = torch.randn(batch_size, input_channels, input_height, input_width, dtype=torch.bfloat16)
     ttnn_input = ttnn.from_torch(
-        pytorch_input.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        pytorch_input.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
     )
 
     try:
@@ -63,7 +63,6 @@ def test_ttnn_aspp(device, model_location_generator):
             decoder_channels=decoder_channels,
             sem_seg_head_channels=sem_seg_head_channels,
             ins_embed_head_channels=ins_embed_head_channels,
-            norm="SyncBN",
             train_size=train_size,
             weights_path=complete_weights_path,
         )
@@ -83,6 +82,8 @@ def test_ttnn_aspp(device, model_location_generator):
             conv_act_dtype=ttnn.bfloat8_b,
             conv_w_dtype=ttnn.bfloat8_b,
         )
+        # Setup ASPP layer overrides to enable channel slicing for dilated convolutions
+        model_configs.setup_aspp()
 
         # Create TTNN model with fused parameters and centralized configuration
         ttnn_model = TtPanopticDeepLab(
@@ -94,7 +95,6 @@ def test_ttnn_aspp(device, model_location_generator):
             decoder_channels=decoder_channels,
             sem_seg_head_channels=sem_seg_head_channels,
             ins_embed_head_channels=ins_embed_head_channels,
-            norm="",
             train_size=train_size,
             model_configs=model_configs,
         )
@@ -112,11 +112,20 @@ def test_ttnn_aspp(device, model_location_generator):
     ttnn_aspp_output = ttnn_model.semantic_head.decoder["res5"]["project_conv"](ttnn_input)
 
     ttnn_aspp_output_torch = ttnn.to_torch(ttnn_aspp_output).permute(0, 3, 1, 2)
+    ttnn_aspp_output_torch = torch.reshape(ttnn_aspp_output_torch, (1, 256, 32, 64))
 
-    pcc_passed, pcc_message = assert_with_pcc(pytorch_aspp_output, ttnn_aspp_output_torch, pcc=0.99)
+    passed = check_ttnn_output(
+        "aspp_output",
+        pytorch_aspp_output,
+        ttnn_aspp_output,
+        to_channel_first=True,
+        output_shape=(1, 256, 32, 64),
+        exp_pcc=0.99,
+        exp_abs_err=0.03,
+        exp_rel_err=0.4,
+    )
 
-    logger.info(f"ASPP PCC: {pcc_message}")
-    assert pcc_passed, f"ASPP PCC test failed: {pcc_message}"
+    assert passed, f"ASPP PCC and tolerance test failed"
     assert (
         pytorch_aspp_output.shape == ttnn_aspp_output_torch.shape
     ), f"Shape mismatch: {pytorch_aspp_output.shape} vs {ttnn_aspp_output_torch.shape}"

@@ -73,13 +73,16 @@ private:
     tt::ARCH device_arch{tt::ARCH::Invalid};
 
     // Device ID
-    chip_id_t device_id{};
+    ChipId device_id{};
 
     // Device frequency
     int device_core_frequency{};
 
+    // Device max compute cores
+    uint32_t max_compute_cores;
+
     // Thread pool used for processing data when dumping results
-    std::shared_ptr<ThreadPool> thread_pool{};
+    std::shared_ptr<ThreadPool> thread_pool;
 
     // Last fast dispatch read performed flag
     bool is_last_fd_read_done{};
@@ -88,14 +91,13 @@ private:
     uint64_t smallest_timestamp = (1lu << 63);
 
     // Output directory for device profiler logs
-    std::filesystem::path output_dir;
+    std::filesystem::path device_logs_output_dir;
 
     // Hash to zone source locations
     std::unordered_map<uint16_t, tracy::MarkerDetails> hash_to_zone_src_locations;
 
     // Device-Core tracy context
-    std::unordered_map<std::pair<chip_id_t, CoreCoord>, TracyTTCtx, pair_hash<chip_id_t, CoreCoord>>
-        device_tracy_contexts;
+    std::unordered_map<std::pair<ChipId, CoreCoord>, TracyTTCtx, pair_hash<ChipId, CoreCoord>> device_tracy_contexts;
 
     // (cpu time, device time, frequency) for sync propagated from root device
     SyncInfo device_sync_info;
@@ -108,13 +110,6 @@ private:
 
     // Storage for all core's L1 data buffers
     std::unordered_map<CoreCoord, std::vector<uint32_t>> core_l1_data_buffers;
-
-    // Storage for all noc trace data
-    std::vector<std::unordered_map<RuntimeID, nlohmann::json::array_t>> noc_trace_data;
-
-    // Storage for all noc trace markers that have been converted to json to ensure that the same marker isn't processed
-    // twice
-    std::unordered_set<tracy::TTDeviceMarker> noc_trace_markers_processed;
 
     // Output directory for noc trace data
     std::filesystem::path noc_trace_data_output_dir;
@@ -174,7 +169,7 @@ private:
         uint32_t run_host_id,
         uint32_t device_trace_counter,
         const std::string& op_name,
-        chip_id_t device_id,
+        ChipId device_id,
         const CoreCoord& physical_core,
         tracy::RiscType risc_type,
         uint64_t data,
@@ -183,6 +178,10 @@ private:
 
     // Track the smallest timestamp read
     void updateFirstTimestamp(uint64_t timestamp);
+
+    // Generate programs analysis results for device markers
+    void generateAnalysesForDeviceMarkers(
+        const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers) const;
 
     // Dump device results to files
     void writeDeviceResultsToFiles() const;
@@ -198,7 +197,7 @@ private:
         const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec);
 
     // Update tracy context for the core
-    void updateTracyContext(const std::pair<chip_id_t, CoreCoord>& device_core);
+    void updateTracyContext(const std::pair<ChipId, CoreCoord>& device_core);
 
     // Iterate over all markers and update their data if needed
     void processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& device_markers);

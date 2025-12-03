@@ -173,9 +173,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            auto dst_buffer_query = output_tensors.at(0).buffer();
-            auto dst_buffer_key = output_tensors.at(1).buffer();
-            auto dst_buffer_value = output_tensors.at(2).buffer();
+            auto* dst_buffer_query = output_tensors.at(0).buffer();
+            auto* dst_buffer_key = output_tensors.at(1).buffer();
+            auto* dst_buffer_value = output_tensors.at(2).buffer();
 
             UpdateDynamicCircularBufferAddress(program, cb_q_output, *dst_buffer_query);
             UpdateDynamicCircularBufferAddress(program, cb_k_output, *dst_buffer_key);
@@ -433,9 +433,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            auto dst_buffer_query = output_tensors.at(0).buffer();
-            auto dst_buffer_key = output_tensors.at(1).buffer();
-            auto dst_buffer_value = output_tensors.at(2).buffer();
+            auto* dst_buffer_query = output_tensors.at(0).buffer();
+            auto* dst_buffer_key = output_tensors.at(1).buffer();
+            auto* dst_buffer_value = output_tensors.at(2).buffer();
 
             UpdateDynamicCircularBufferAddress(program, cb_q_output, *dst_buffer_query);
             UpdateDynamicCircularBufferAddress(program, cb_k_output, *dst_buffer_key);
@@ -714,9 +714,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            auto dst_buffer_query = output_tensors.at(0).buffer();
-            auto dst_buffer_key = output_tensors.at(1).buffer();
-            auto dst_buffer_value = output_tensors.at(2).buffer();
+            auto* dst_buffer_query = output_tensors.at(0).buffer();
+            auto* dst_buffer_key = output_tensors.at(1).buffer();
+            auto* dst_buffer_value = output_tensors.at(2).buffer();
 
             UpdateDynamicCircularBufferAddress(program, cb_q_output, *dst_buffer_query);
             UpdateDynamicCircularBufferAddress(program, cb_k_output, *dst_buffer_key);

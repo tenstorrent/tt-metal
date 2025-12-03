@@ -239,7 +239,7 @@ TEST_F(MeshEndToEnd2x4Tests, UntracedEltwiseAddTest) {
     std::vector<uint32_t> result_data(a_data.size(), 0);
     EnqueueReadMeshBuffer(cq, result_data, out_buffer, true /* blocking */);
 
-    auto transform_to_golden = [kValToAdd](const bfloat16& a) { return bfloat16(static_cast<float>(a) + kValToAdd); };
+    auto transform_to_golden = [](const bfloat16& a) { return bfloat16(static_cast<float>(a) + kValToAdd); };
     std::vector<bfloat16> result_vec = unpack_uint32_vec_into_bfloat16_vec(result_data, bfloat16_identity_transform);
     std::vector<bfloat16> golden_vec = unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden);
 
@@ -312,7 +312,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseAddTest) {
     std::vector<uint32_t> result_data(a_data.size(), 0);
     EnqueueReadMeshBuffer(cq, result_data, out_buffer, true /* blocking */);
 
-    auto transform_to_golden = [kValToAdd](const bfloat16& a) { return bfloat16(static_cast<float>(a) + kValToAdd); };
+    auto transform_to_golden = [](const bfloat16& a) { return bfloat16(static_cast<float>(a) + kValToAdd); };
 
     std::vector<bfloat16> result_vec = unpack_uint32_vec_into_bfloat16_vec(result_data, bfloat16_identity_transform);
     std::vector<bfloat16> golden_vec = unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden);
@@ -376,7 +376,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseMulTest) {
     std::vector<uint32_t> result_data(a_data.size(), 0);
     EnqueueReadMeshBuffer(cq, result_data, out_buffer, true /* blocking */);
 
-    auto transform_to_golden = [kValToMul](const bfloat16 a) { return bfloat16(a * bfloat16(kValToMul)); };
+    auto transform_to_golden = [](const bfloat16 a) { return bfloat16(a * bfloat16(kValToMul)); };
     std::vector<bfloat16> result_vec = unpack_uint32_vec_into_bfloat16_vec(result_data, bfloat16_identity_transform);
     std::vector<bfloat16> golden_vec = unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden);
 

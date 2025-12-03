@@ -5,6 +5,13 @@
 #pragma once
 
 #include <string>
+#include <set>
+#include <cabling_generator/cabling_generator.hpp>
+#include <vector>
+
+namespace YAML {
+    class Node;
+}
 
 namespace tt::scaleout_tools {
 
@@ -17,10 +24,27 @@ namespace tt::scaleout_tools {
 //                        If false, only checks that GSD connections exist in FSD
 //   - assert_on_connection_mismatch: If true, throws an error if there are connection mismatches
 //                                    If false, missing connections are logged without an error being thrown
-void validate_fsd_against_gsd(
+std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
     const std::string& fsd_filename,
     const std::string& gsd_filename,
     bool strict_validation = true,
-    bool assert_on_connection_mismatch = true);
+    bool assert_on_connection_mismatch = true,
+    bool log_output = true);
+
+// Validate cabling descriptor against discovered system topology
+std::set<PhysicalChannelConnection> validate_cabling_descriptor_against_gsd(
+    const std::string& cabling_descriptor_path,
+    const std::vector<std::string>& hostnames,
+    const YAML::Node& gsd_yaml_node,
+    bool strict_validation = true,
+    bool assert_on_connection_mismatch = true,
+    bool log_output = true);
+
+// Generate cluster descriptor(s) from a factory system descriptor
+// For single-host systems, a single YAML file is generated with the cluster configuration.
+// For multi-host systems, one YAML file is generated per host
+// along with a mapping file that maps each rank to its corresponding cluster descriptor file.
+std::string generate_cluster_descriptor_from_fsd(
+    const std::string& fsd_filename, const std::string& output_dir, const std::string& base_filename);
 
 }  // namespace tt::scaleout_tools
