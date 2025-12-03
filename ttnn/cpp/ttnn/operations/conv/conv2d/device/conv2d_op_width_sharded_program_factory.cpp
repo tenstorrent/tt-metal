@@ -75,7 +75,7 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
     const auto config_tensors_in_dram = operation_attributes.config_tensors_in_dram;
 
     tt::tt_metal::IDevice* device = a.device();
-    TT_FATAL(a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Conv activation should be in row major layxsout");
+    TT_FATAL(a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
     TT_FATAL(output_channels <= b.padded_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
     uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
