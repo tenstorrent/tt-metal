@@ -124,6 +124,7 @@ def test_conv_features(
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4])
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("in_place", [True, False])
 def test_conv_dram_config(
     device,
     torch_tensor_map,
@@ -141,6 +142,7 @@ def test_conv_dram_config(
     stride,
     padding,
     output_layout,
+    in_place,
     input_dtype,
 ):
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and output_dtype == ttnn.bfloat8_b:
@@ -169,6 +171,7 @@ def test_conv_dram_config(
         run_twice=True,
         input_layout=ttnn.TILE_LAYOUT if input_dtype == ttnn.bfloat8_b else None,
         input_dtype=input_dtype,
+        in_place=in_place,
         config_tensors_in_dram=True,
     )
 

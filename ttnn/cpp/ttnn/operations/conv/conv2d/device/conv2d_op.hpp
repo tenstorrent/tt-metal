@@ -83,6 +83,9 @@ struct Conv2dConfig {
     // This will increase perf, but it will take more L1 space.
     bool full_inner_dim = false;
 
+    // Re-use input tensor storage when creating output tensor
+    bool in_place = false;
+
     // ==================== EXPERIMENTAL FEATURES ====================
     // Features in this section are under development.
     // Use with caution.
@@ -140,6 +143,7 @@ struct Conv2dConfig {
         "enable_act_double_buffer",
         "enable_weights_double_buffer",
         "full_inner_dim",
+        "in_place",
         "enable_kernel_stride_folding",
         "enable_activation_reuse",
         "force_split_reader",
@@ -162,6 +166,7 @@ struct Conv2dConfig {
             std::cref(this->enable_act_double_buffer),
             std::cref(this->enable_weights_double_buffer),
             std::cref(this->full_inner_dim),
+            std::cref(this->in_place),
             std::cref(this->enable_kernel_stride_folding),
             std::cref(this->enable_activation_reuse),
             std::cref(this->force_split_reader),
