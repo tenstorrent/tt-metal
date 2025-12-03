@@ -11,13 +11,13 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include <tt-metalium/global_semaphore.hpp>
-#include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
 namespace ttnn::operations::experimental::ccl {
@@ -92,7 +92,6 @@ struct tensor_args_t {
     Tensor input0;
     Tensor input1;
     Tensor intermediate;
-    std::optional<tensor_return_value_t> preallocated_outputs;
 };
 
 }  // namespace llama_all_gather_matmul_async

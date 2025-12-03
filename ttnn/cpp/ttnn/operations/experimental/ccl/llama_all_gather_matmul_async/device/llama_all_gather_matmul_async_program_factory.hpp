@@ -6,7 +6,6 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_device_operation_types.hpp"
-#include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_1d_mm_fusion.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 namespace llama_all_gather_matmul_async::program {

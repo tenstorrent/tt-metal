@@ -11,13 +11,13 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include <tt-metalium/global_semaphore.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_device_operation_types.hpp"
@@ -46,17 +46,19 @@ struct LlamaAllGatherMatmulAsyncDeviceOperation {
         const Tensor& input0,
         const Tensor& input1,
         const Tensor& intermediate_tensor,
-        const std::vector<IDevice*>& devices,
         int32_t dim,
-        size_t num_links,
-        size_t ring_size,
-        const tt::tt_metal::MemoryConfig& output_memory_config,
+        uint32_t cluster_axis,
+        const MeshDevice& mesh_device,
         ttnn::ccl::Topology topology,
         const GlobalSemaphore& global_semaphore,
-        const operations::matmul::Matmul& matmul_struct,
+        const std::optional<tt::tt_metal::MemoryConfig>& ag_memory_config,
+        const std::optional<tt::tt_metal::MemoryConfig>& mm_memory_config,
+        std::optional<size_t> num_preferred_links = std::nullopt,
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-        std::optional<uint32_t> cluster_axis = std::nullopt,
-        const std::optional<tensor_return_value_t>& preallocated_output_tensors = std::nullopt);
+        const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
+        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        std::optional<const DataType> dtype = std::nullopt,
+        const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt);
 };
 
 }  // namespace llama_all_gather_matmul_async

@@ -22,11 +22,12 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/math.hpp"
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
-#include "cpp/ttnn/operations/ccl/common/uops/command_lowering.hpp"
-#include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
-#include "cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "ttnn/operations/ccl/common/uops/command_lowering.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
+#include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
+#include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_1d_mm_fusion.hpp"
 
 using namespace tt::constants;
 
@@ -62,12 +63,6 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
     auto& output_tensor = tensor_return_value.mm;
     const auto& aggregated_tensor = tensor_return_value.aggregated;
 
-    const auto& dim = args.dim;
-    const auto& num_links = args.num_links;
-    const auto& ring_size = args.ring_size;
-    auto& topology = args.topology;
-    const auto& semaphore = args.semaphore;
-    const auto& sub_device_id = args.sub_device_id;
     auto& compute_kernel_config = args.matmul_struct.compute_kernel_config.value();
     const auto& program_config = args.matmul_struct.program_config.value();
     const auto& global_cb = args.matmul_struct.global_cb;
@@ -110,8 +105,9 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
     tt::tt_metal::Program program{};
 
     // Section for fusion signaler initialization
-    auto tensor_slicer = ttnn::ccl::InterleavedRingAllGatherTensorSlicer(input0, intermediate_tensor, dim, ring_index);
-    const uint32_t num_transfers = ring_size;
+    auto tensor_slicer =
+        ttnn::ccl::InterleavedRingAllGatherTensorSlicer(input0, intermediate_tensor, args.dim, ring_index);
+    const uint32_t num_transfers = args.ring_size;
     const uint32_t weight_tensor_width = input1.padded_shape()[3] / 32;
 
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_fused_op_signaler =
@@ -120,7 +116,7 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
 
     matmul_fused_op_signaler->init_llama_all_gather(
         num_transfers,
-        ring_size,
+        args.ring_size,
         ring_index,
         tensor_slicer.num_cols,
         tensor_slicer.output_page_offset,
@@ -137,7 +133,7 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
     // Section end for fusion signaler initialization
 
     [[maybe_unused]] bool is_first_chip = ring_index == 0;
-    [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
+    [[maybe_unused]] bool is_last_chip = ring_index == args.ring_size - 1;
     log_trace(
         tt::LogOp,
         "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
@@ -148,11 +144,11 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input0};
     std::vector<Tensor> intermediate_tensors = {intermediate_tensor};
-    const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, intermediate_tensors, topology);
+    const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, intermediate_tensors, args.topology);
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
-        ttnn::ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
-    if (topology == ttnn::ccl::Topology::Ring) {
-        num_targets_forward = ring_size - 1;
+        ttnn::ccl::get_forward_backward_configuration(args.ring_size, ring_index, args.topology);
+    if (args.topology == ttnn::ccl::Topology::Ring) {
+        num_targets_forward = args.ring_size - 1;
         num_targets_backward = 0;
     }
 
@@ -161,7 +157,8 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
 
     // Cannot have CCL workers on the same cores as the worker_receiver (for now!)
     auto sub_device_core_range_set = mesh_device->worker_cores(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0)));
+        tt::tt_metal::HalProgrammableCoreType::TENSIX,
+        args.sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0)));
     // auto bbox = sub_device_core_range_set.bounding_box();
     // CoreRangeSet bbox_crs(bbox);
 
@@ -176,7 +173,7 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
     available_cores = available_cores.subtract(output_tensor_cores);
 
     const auto [sender_worker_core_range, sender_worker_cores] =
-        ar_choose_worker_cores(num_links, num_workers_per_link, available_cores);
+        ar_choose_worker_cores(args.num_links, num_workers_per_link, available_cores);
 
     // Tensor Info
     const auto input_tensor_num_pages = input0.buffer()->num_pages();
@@ -201,7 +198,7 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages =
-        (input_tensor_num_pages / num_links) +
+        (input_tensor_num_pages / args.num_links) +
         1;  // We are dealing with small shapes, so assuming all pages for a worker can be fit into the CB
     uint32_t src0_cb_index = tt::CB::c_in0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input0.dtype());
@@ -277,10 +274,10 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
     // uint32_t semaphore_id_to_notify_to_start_mcast = CreateSemaphore(program, intermediate_tensor_cores, 0);
     auto receiver_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
     receiver_kernel_config.compile_args = {
-        num_links,                                                         // sem_wait_val
+        args.num_links,                                                    // sem_wait_val
         inter_cb_index,                                                    // intermediate cb index
         op_config.get_page_size(),                                         // tensor0_page_size
-        ring_size,                                                         // ring_size
+        args.ring_size,                                                    // ring_size
         matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[0],  // semaphore id to notify to start mcast
         matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[1],  // semaphore id to notify to start mcast
         matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[2],  // semaphore id to notify to start mcast
@@ -296,7 +293,7 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
         program,
         worker_receiver_kernel_id,
         intermediate_tensor_cores,
-        {semaphore.address(),  // sem_address
+        {args.semaphore.address(),  // sem_address
          0,           // core id, corresponds to the id of which device it expect data from, will be reset later
          ring_index,  // device id
          aggregated_tensor.buffer()->address(),
@@ -314,19 +311,19 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
 
     auto input_cores_vec = corerange_to_cores(input_tensor_cores, std::nullopt, true);
     auto intermediate_cores_vec = corerange_to_cores(intermediate_tensor_cores, std::nullopt, true);
-    auto cores_per_device = (intermediate_cores_vec.size() + ring_size - 1) / ring_size;
+    auto cores_per_device = (intermediate_cores_vec.size() + args.ring_size - 1) / args.ring_size;
 
     // Set runtime args for each core
     for (uint32_t i = 0; i < intermediate_cores_vec.size(); i++) {
-        uint32_t mm_core_offset = (ring_index + ring_size - i) % ring_size;
-        uint32_t next_core_to_left = (i - 1 + ring_size) % ring_size;
-        uint32_t next_core_to_right = (i + 1 + ring_size) % ring_size;
+        uint32_t mm_core_offset = (ring_index + args.ring_size - i) % args.ring_size;
+        uint32_t next_core_to_left = (i - 1 + args.ring_size) % args.ring_size;
+        uint32_t next_core_to_right = (i + 1 + args.ring_size) % args.ring_size;
 
         tt::tt_metal::SetRuntimeArgs(
             program,
             worker_receiver_kernel_id,
             {intermediate_cores_vec[i]},
-            {semaphore.address(),
+            {args.semaphore.address(),
              i,
              ring_index,
              aggregated_tensor.buffer()->address(),
@@ -340,7 +337,7 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
              next_core_to_left,
              next_core_to_right});
     }
-    uint32_t start_core_index_for_device = intermediate_cores_vec.size() / ring_size * ring_index;
+    uint32_t start_core_index_for_device = intermediate_cores_vec.size() / args.ring_size * ring_index;
     uint32_t end_core_index_for_device = start_core_index_for_device + cores_per_device;
 
     // Since each intermediate tensor core maps to a device in the ring,
@@ -348,21 +345,21 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
     CoreCoord drain_sync_core = mesh_device->worker_core_from_logical_core(intermediate_cores_vec[ring_index]);
 
     TT_FATAL(
-        intermediate_cores_vec.size() % ring_size == 0 || intermediate_cores_vec.size() == 1,
+        intermediate_cores_vec.size() % args.ring_size == 0 || intermediate_cores_vec.size() == 1,
         "intermediate sharded cores ( {} ) must be divisible by num_links ( {} ) or 1 for this work distribution "
         "scheme",
         intermediate_cores_vec.size(),
-        ring_size);
+        args.ring_size);
     auto intermediate_cores_this_device = std::vector<CoreCoord>(
         intermediate_cores_vec.begin() + start_core_index_for_device,
         intermediate_cores_vec.begin() + end_core_index_for_device);
     log_trace(tt::LogOp, "intermediate_cores_this_device: {}", intermediate_cores_this_device);
-    for (uint32_t link = 0; link < num_links; link++) {
+    for (uint32_t link = 0; link < args.num_links; link++) {
         CoreCoord core = sender_worker_cores[link];
 
         // construct input and intermediate core x and y
-        uint32_t base_pages_per_worker = input_tensor_num_pages / num_links;
-        uint32_t remainder = input_tensor_num_pages % num_links;
+        uint32_t base_pages_per_worker = input_tensor_num_pages / args.num_links;
+        uint32_t remainder = input_tensor_num_pages % args.num_links;
         uint32_t input_tile_id_start = (link * base_pages_per_worker) + std::min(link, remainder);
         uint32_t input_tile_id_end = ((link + 1) * base_pages_per_worker) + std::min(link + 1, remainder);
 
@@ -411,7 +408,7 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
             intermediate_first_core_tile_start_offset,  // intermediate_first_core_tile_start_offset
             input_tensor_cores_x.size(),                // num_cores it reads from
             ring_index,                                 // ring_index
-            semaphore.address(),                        // out_ready_sem_bank_addr (absolute address)
+            args.semaphore.address(),                   // out_ready_sem_bank_addr (absolute address)
             drain_sync_core.x,                          // out_ready_sem_noc0_x
             drain_sync_core.y,                          // out_ready_sem_noc0_y
         };
@@ -431,7 +428,7 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
         // Set writer runtime args
         std::vector<uint32_t> writer_rt_args = {
             intermediate_tensor.buffer()->address(),    // tensor_address0
-            semaphore.address(),                        // out_ready_sem_bank_addr (absolute address)
+            args.semaphore.address(),                   // out_ready_sem_bank_addr (absolute address)
             intermediate_tensor_shard_num_pages,        // num_tiles_per_core
             worker_num_tiles_to_read,                   // num_tiles_to_read
             intermediate_first_core_tile_start_offset,  // first_core_tile_start_offset
@@ -484,7 +481,7 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
             false,                     // untilize_out
             matmul_fused_op_signaler,  // fused_op_signaler
             global_cb,                 // global_cb
-            sub_device_id);            // sub_device_id
+            args.sub_device_id);       // sub_device_id
 
     std::optional<tt::tt_metal::operation::OverrideRuntimeArgumentsCallback<std::vector<Tensor>>>
         matmul_override_runtime_arguments_callback = matmul_program_with_callbacks->override_runtime_arguments_callback;
