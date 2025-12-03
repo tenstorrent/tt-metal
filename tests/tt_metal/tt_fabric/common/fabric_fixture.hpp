@@ -158,7 +158,10 @@ protected:
 };
 
 // Template base class for Tensix fixtures with Galaxy skip logic
-template <tt::tt_fabric::FabricConfig FabricConfigValue, tt::tt_fabric::FabricTensixConfig TensixConfigValue>
+template <
+    tt::tt_fabric::FabricConfig FabricConfigValue,
+    tt::tt_fabric::FabricTensixConfig TensixConfigValue,
+    tt::tt_fabric::FabricUDMMode UDMModeValue = tt::tt_fabric::FabricUDMMode::DISABLED>
 class FabricTensixFixtureTemplate : public BaseFabricFixture {
 private:
     inline static bool should_skip_ = false;
@@ -170,7 +173,7 @@ protected:
             should_skip_ = true;
             return;
         }
-        BaseFabricFixture::DoSetUpTestSuite(FabricConfigValue, std::nullopt, TensixConfigValue);
+        BaseFabricFixture::DoSetUpTestSuite(FabricConfigValue, std::nullopt, TensixConfigValue, UDMModeValue);
     }
 
     static void TearDownTestSuite() {
@@ -191,8 +194,11 @@ protected:
 using Fabric1DTensixFixture =
     FabricTensixFixtureTemplate<tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricTensixConfig::MUX>;
 
-using NightlyFabric2DTensixUdmFixture =
-    FabricTensixFixtureTemplate<tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricTensixConfig::UDM>;
+using NightlyFabric1DTensixFixture =
+    FabricTensixFixtureTemplate<tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricTensixConfig::MUX>;
+
+using NightlyFabric2DTensixFixture =
+    FabricTensixFixtureTemplate<tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricTensixConfig::MUX>;
 
 class NightlyFabric1DFixture : public BaseFabricFixture {
 protected:
@@ -212,7 +218,7 @@ protected:
         BaseFabricFixture::DoSetUpTestSuite(
             tt::tt_fabric::FabricConfig::FABRIC_2D,
             std::nullopt,
-            tt_fabric::FabricTensixConfig::DISABLED,
+            tt_fabric::FabricTensixConfig::UDM,
             tt_fabric::FabricUDMMode::ENABLED);
     }
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
@@ -224,7 +230,7 @@ protected:
         BaseFabricFixture::DoSetUpTestSuite(
             tt::tt_fabric::FabricConfig::FABRIC_2D,
             std::nullopt,
-            tt_fabric::FabricTensixConfig::DISABLED,
+            tt_fabric::FabricTensixConfig::UDM,
             tt_fabric::FabricUDMMode::ENABLED);
     }
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
@@ -320,7 +326,10 @@ void FabricUnicastCommon(
 void UDMFabricUnicastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
-    const std::tuple<RoutingDirection, uint32_t /*num_hops*/>& pair_ordered_dir);
+    const std::variant<
+        std::tuple<RoutingDirection, uint32_t /*num_hops*/>,
+        std::tuple<uint32_t /*src_node*/, uint32_t /*dest_node*/>>& routing_info,
+    std::optional<RoutingDirection> override_initial_direction = std::nullopt);
 
 void FabricMulticastCommon(
     BaseFabricFixture* fixture,

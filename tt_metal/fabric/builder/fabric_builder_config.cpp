@@ -15,27 +15,24 @@ uint32_t get_sender_channel_count(const bool is_2D_routing) {
 }
 
 uint32_t get_num_tensix_sender_channels(Topology topology, tt::tt_fabric::FabricTensixConfig fabric_tensix_config) {
+    // TODO: once we support inserting tensix as downstream in UDM mode, add back the channel count for UDM mode
+    TT_FATAL(
+        fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX,
+        "get_num_tensix_sender_channels only supports MUX mode, got {}",
+        static_cast<uint32_t>(fabric_tensix_config));
+
     uint32_t num_channels = 0;
-    if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
-        // UDM mode: MUX temporarily has 3 channels (one for worker, one for relay, one for forwarding channel between
-        // mux)
-        // TODO: later need to calculate the number of channels based on the number of worker served, plus one relay
-        // channel, plus one forwarding channel between mux. RELAY permanently has 1 channel (configured separately in
-        // its constructor)
-        num_channels = static_cast<uint32_t>(UdmMuxChannelId::NUM_CHANNELS);
-    } else {
-        // MUX mode: use topology-based channel count
-        switch (topology) {
-            case tt::tt_fabric::Topology::Linear:
-            case tt::tt_fabric::Topology::Ring:
-                num_channels = tt::tt_fabric::builder_config::num_sender_channels_1d_linear;
-                break;
-            case tt::tt_fabric::Topology::Mesh:
-            case tt::tt_fabric::Topology::Torus:
-                num_channels = tt::tt_fabric::builder_config::num_sender_channels_2d_mesh;
-                break;
-            default: TT_THROW("unknown fabric topology: {}", topology); break;
-        }
+    // MUX mode: use topology-based channel count
+    switch (topology) {
+        case tt::tt_fabric::Topology::Linear:
+        case tt::tt_fabric::Topology::Ring:
+            num_channels = tt::tt_fabric::builder_config::num_sender_channels_1d_linear;
+            break;
+        case tt::tt_fabric::Topology::Mesh:
+        case tt::tt_fabric::Topology::Torus:
+            num_channels = tt::tt_fabric::builder_config::num_sender_channels_2d_mesh;
+            break;
+        default: TT_THROW("unknown fabric topology: {}", topology); break;
     }
     return num_channels;
 }
