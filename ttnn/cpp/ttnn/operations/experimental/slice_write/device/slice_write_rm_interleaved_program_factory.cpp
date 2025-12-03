@@ -13,7 +13,7 @@
 
 #include "slice_write_device_operation_types.hpp"
 #include "tt-metalium/math.hpp"
-#include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
 using namespace tt::tt_metal;
 
@@ -34,8 +34,8 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     uint32_t num_sticks_per_core_group_1,
     uint32_t num_sticks_per_core_group_2,
     uint32_t max_read_size) {
-    auto input_buffer = input_tensor.buffer();
-    auto output_buffer = output_tensor.buffer();
+    auto* input_buffer = input_tensor.buffer();
+    auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
 
