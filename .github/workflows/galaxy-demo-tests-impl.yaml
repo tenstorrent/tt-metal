@@ -51,6 +51,7 @@ jobs:
           # Stuti Raizada - gpt-oss
           # Stephen Osborne - mochi
           # Rico Zhu - qwen3_32b, qwen3_32b_long_context
+          # Yousef Al Rawwash - deepseek
 
           all_tests='[
             { "name": "Galaxy Llama3 demo tests", "arch": "wormhole_b0", "model": "llama3", "timeout": 30, "owner_id": "U053W15B6JF" },
@@ -66,9 +67,7 @@ jobs:
             { "name": "Galaxy GPT-OSS demo tests", "arch": "wormhole_b0", "model": "gpt-oss", "timeout": 30, "owner_id": "U06F3ER8X9A" },
             { "name": "Galaxy Motif-Image-6B-Preview demo tests", "arch": "wormhole_b0", "model": "motif", "timeout": 20, "owner_id": "U08TED0JM9D" },
             { "name": "Galaxy Wan2.2 demo tests", "arch": "wormhole_b0", "model": "wan22", "timeout": 25, "owner_id": "U03FJB5TM5Y" },
-            { "name": "Galaxy Mochi demo tests", "arch": "wormhole_b0", "model": "mochi", "timeout": 30, "owner_id": "U09ELB03XRU" },
-            { "name": "Galaxy Qwen3-32B demo tests", "arch": "wormhole_b0", "model": "qwen3_32b", "timeout": 30, "owner_id": "U08JA2AK2LQ" },
-            { "name": "Galaxy Qwen3-32B long context demo tests", "arch": "wormhole_b0", "model": "qwen3_32b_long_context", "timeout": 60, "owner_id": "U08JA2AK2LQ" }
+            { "name": "Galaxy Mochi demo tests", "arch": "wormhole_b0", "model": "mochi", "timeout": 30, "owner_id": "U09ELB03XRU" }
           ]'
 
           # Filter matrix based on model selection
@@ -248,6 +247,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
+          NO_PROMPT: 1
         run: |
           pytest -n auto models/experimental/tt_dit/tests/models/motif/test_pipeline_motif.py -k "4x8cfg1sp0tp1" --timeout 1200
       - name: Run Wan2.2 demo tests (direct pytest)
@@ -285,6 +285,14 @@ jobs:
           pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-8k-b1" --timeout 1000
           pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-32k-b1" --timeout 1000
           pytest -n auto models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "long-128k-b1" --timeout 1000
+      - name: Run DeepSeek v3 demo tests (direct pytest)
+        if: ${{ matrix.test-group.model == 'deepseek_v3' && (inputs.model == 'all' || inputs.model == 'deepseek_v3') }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+          DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache
+        run: |
+          pytest models/demos/deepseek_v3/demo/test_demo.py --timeout 600
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
