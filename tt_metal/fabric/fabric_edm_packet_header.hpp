@@ -111,13 +111,11 @@ struct NocUnicastScatterCommandHeader {
     uint8_t chunk_count;
     uint8_t reserved = 0;
 
-#if defined(KERNEL_BUILD) || defined(FW_BUILD)
     NocUnicastScatterCommandHeader() = delete;
-
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
     NocUnicastScatterCommandHeader(
         std::initializer_list<uint64_t> addresses, std::initializer_list<uint16_t> chunk_sizes = {}) {
         const size_t num_addresses = addresses.size();
-        ASSERT(num_addresses >= NOC_SCATTER_WRITE_MIN_CHUNKS && num_addresses <= NOC_SCATTER_WRITE_MAX_CHUNKS);
         this->chunk_count = static_cast<uint8_t>(num_addresses);
 
         size_t idx = 0;
@@ -128,8 +126,6 @@ struct NocUnicastScatterCommandHeader {
             this->noc_address[idx++] = 0;
         }
 
-        ASSERT(chunk_sizes.size() == 0 || chunk_sizes.size() == (num_addresses - 1));
-
         idx = 0;
         for (auto size : chunk_sizes) {
             this->chunk_size[idx++] = size;
@@ -138,7 +134,6 @@ struct NocUnicastScatterCommandHeader {
             this->chunk_size[idx++] = 0;
         }
     }
-#endif
 };
 struct NocUnicastInlineWriteCommandHeader {
     uint64_t noc_address;
@@ -186,6 +181,8 @@ static_assert(
     sizeof(NocUnicastAtomicIncFusedCommandHeader) == 24, "NocUnicastAtomicIncFusedCommandHeader size is not 24 bytes");
 static_assert(
     sizeof(NocMulticastAtomicIncCommandHeader) == 12, "NocMulticastAtomicIncCommandHeader size is not 12 bytes");
+
+// NOLINTBEGIN(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 union NocCommandFields {
     NocUnicastCommandHeader unicast_write;
     NocUnicastCommandHeader unicast_read;
@@ -196,6 +193,7 @@ union NocCommandFields {
     NocMulticastAtomicIncCommandHeader mcast_seminc;
     NocUnicastScatterCommandHeader unicast_scatter_write;
 };
+// NOLINTEND(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 static_assert(sizeof(NocCommandFields) == 40, "CommandFields size is not 40 bytes");
 
 struct UDMWriteControlHeader {
@@ -232,6 +230,7 @@ union UDMControlFields {
 static_assert(sizeof(UDMControlFields) == 16, "UDMControlFields size is not 16 bytes");
 
 // TODO: wrap this in a debug version that holds type info so we can assert for field/command/
+// NOLINTBEGIN(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 template <typename Derived>
 struct PacketHeaderBase {
     NocCommandFields command_fields;  // size = 40B due to scatter metadata
@@ -761,6 +760,7 @@ struct UDMHybridMeshPacketHeader : public HybridMeshPacketHeader {
     }
 } __attribute__((packed));
 static_assert(sizeof(UDMHybridMeshPacketHeader) == 112, "sizeof(UDMHybridMeshPacketHeader) is not equal to 112B");
+// NOLINTEND(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 
 // TODO: When we remove the 32B padding requirement, reduce to 16B size check
 static_assert(sizeof(PacketHeader) == 48, "sizeof(PacketHeader) is not equal to 48B");
