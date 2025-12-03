@@ -92,17 +92,22 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
 
     const auto tile_spec = input_tensor.tensor_spec().tile();
 
-    const uint32_t tiles_num_per_cb = 48;
+    const uint32_t tiles_num_per_full_block_depth_cb = BLOCK_DEPTH;
+    const uint32_t tiles_num_per_small_cb = 2;
     const auto core_range_set = CoreRangeSet{{{0, 0}, {CORES_X - 1, CORES_Y - 1}}};
-    create_cb(program, input_tensor.dtype(), IntImgCB::START, core_range_set, 4);
-    create_cb(program, input_tensor.dtype(), IntImgCB::INPUT, core_range_set, tiles_num_per_cb);
-    create_cb(program, input_tensor.dtype(), IntImgCB::ACC, core_range_set, tiles_num_per_cb);
-    create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_0, core_range_set, tiles_num_per_cb);
-    create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_1, core_range_set, tiles_num_per_cb);
-    create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_2, core_range_set, tiles_num_per_cb);
-    create_cb(program, input_tensor.dtype(), IntImgCB::OUTPUT, core_range_set, tiles_num_per_cb);
-    create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_2_BUFFER, core_range_set, 4);
-    create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER, core_range_set, tiles_num_per_cb);
+    create_cb(program, input_tensor.dtype(), IntImgCB::START, core_range_set, tiles_num_per_small_cb);
+    create_cb(program, input_tensor.dtype(), IntImgCB::INPUT, core_range_set, tiles_num_per_full_block_depth_cb);
+    create_cb(program, input_tensor.dtype(), IntImgCB::ACC, core_range_set, tiles_num_per_small_cb);
+    create_cb(
+        program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_0, core_range_set, tiles_num_per_full_block_depth_cb);
+    create_cb(
+        program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_1, core_range_set, tiles_num_per_full_block_depth_cb);
+    create_cb(
+        program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_2, core_range_set, tiles_num_per_full_block_depth_cb);
+    create_cb(program, input_tensor.dtype(), IntImgCB::OUTPUT, core_range_set, tiles_num_per_full_block_depth_cb);
+    create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_2_BUFFER, core_range_set, tiles_num_per_small_cb);
+    create_cb(
+        program, input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER, core_range_set, tiles_num_per_full_block_depth_cb);
     // create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER_1, core_range_set, tiles_num_per_cb);
 
     std::vector<uint32_t> compute_compile_time_args{
