@@ -17,6 +17,12 @@ struct OperationInfo {
     std::vector<std::string> arguments;
 };
 
+struct PeakMemoryUsagePerCore {
+    size_t peak_cb = 0;
+    size_t peak_l1 = 0;
+    size_t peak_total = 0;
+};
+
 enum class ExecutionStatus { Success, Error };
 
 uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace);
@@ -26,13 +32,18 @@ uint32_t extract_l1_output_buffer_allocation_size_per_core(
     const ttnn::Tensor& output_tensor, size_t interleaved_storage_cores);
 
 // Returns the worst-case memory allocation per core for the peak L1 usage. Ignores DRAM buffers.
+[[deprecated("Use extract_resource_usage_per_core instead")]]
 uint32_t extract_l1_buffer_allocation_peak_size_per_core(const nlohmann::json& trace, size_t interleaved_storage_cores);
 
 // Returns peak size of circular buffer allocations for a given trace
+[[deprecated("Use extract_resource_usage_per_core instead")]]
 uint32_t extract_circular_buffers_peak_size_per_core(const nlohmann::json& trace);
 
 // Returns peak size of memory (circular buffers + L1) allocated per core for a given trace
+[[deprecated("Use extract_resource_usage_per_core instead")]]
 uint32_t extract_peak_memory_usage(const nlohmann::json& trace, size_t interleaved_storage_cores);
+
+PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& trace, size_t interleaved_storage_cores);
 
 // Returns count of intermediate and output tensors
 std::pair<uint32_t, uint32_t> count_intermediate_and_output_tensors(const nlohmann::json& trace);

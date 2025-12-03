@@ -103,6 +103,7 @@ class TransformerConfig:
             tc = yaml_config.get("transformer_config", {})
 
         # Base parameters
+        self.model_type = tc.get("model_type", "gpt2")
         self.runner_type = tc.get("runner_type", "default")
         self.num_heads = int(tc.get("num_heads", 6))
         self.embedding_dim = int(tc.get("embedding_dim", 384))

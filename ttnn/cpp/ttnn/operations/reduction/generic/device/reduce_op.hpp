@@ -10,71 +10,24 @@
 #include "ttnn/tensor/tensor.hpp"
 
 #include "ttnn/operation.hpp"
-
 #include "common.hpp"
-#include <tt-metalium/core_coord.hpp>
-#include <optional>
 
-namespace tt {
-
-namespace tt_metal {
-
-// TODO: Accept parallelization
-tt::tt_metal::operation::ProgramWithCallbacks reduce_single_core_hw(
-    const Tensor& input_tensor,
-    Tensor& output_tensor,
-    ReduceOpMath reduce_math,
-    const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-    float scaler = 1.0f,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-tt::tt_metal::operation::ProgramWithCallbacks reduce_multi_core_h(
-    const Tensor& input_tensor,
-    Tensor& output_tensor,
-    ReduceOpMath reduce_math,
-    const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-    float scaler = 1.0f,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-tt::tt_metal::operation::ProgramWithCallbacks reduce_multi_core_w(
-    const Tensor& input_tensor,
-    Tensor& output_tensor,
-    ReduceOpMath reduce_math,
-    const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-    float scaler = 1.0f,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-
-struct Reduce {
-    const ReduceOpMath math_op;
-    const ReduceOpDim dim;
-    const float scaler;
-    const MemoryConfig output_mem_config;
-    const DataType output_dtype;
-    ttnn::DeviceComputeKernelConfig compute_kernel_config;
-    std::optional<CoreRangeSet> sub_core_grids;
-
-    void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
-    ReduceOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const;
-};
+namespace ttnn::operations::reduction::generic::detail {
 
 Tensor reduce(
     const Tensor& input_tensor,
-    ReduceOpMath reduce_math,
-    ReduceOpDim reduce_dim,
+    tt::tt_metal::ReduceOpMath reduce_math,
+    tt::tt_metal::ReduceOpDim reduce_dim,
     float scaler = 1.0f,
-    const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::optional<DataType>& output_dtype = std::nullopt,
+    const tt::tt_metal::MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const std::optional<tt::tt_metal::DataType>& output_dtype = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt);
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace ttnn::operations::reduction::generic::detail
 
 namespace reduce_op_utils {
 
 std::map<std::string, std::string> get_defines(
     tt::tt_metal::ReduceOpMath reduce_op, tt::tt_metal::ReduceOpDim reduce_dim);
-
 }  // namespace reduce_op_utils

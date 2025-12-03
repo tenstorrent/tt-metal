@@ -263,72 +263,15 @@ uint32_t extract_l1_output_buffer_allocation_size_per_core(
 
 uint32_t extract_l1_buffer_allocation_peak_size_per_core(
     const nlohmann::json& trace, size_t interleaved_storage_cores) {
-    uint32_t current_size_per_core = 0;
-    uint32_t peak_size_per_core = 0;
-
-    for (const auto& node : trace) {
-        // process only buffer allocation and deallocation nodes
-        if (node.at(kNodeType) != kNodeBufferAllocate && node.at(kNodeType) != kNodeBufferDeallocate) {
-            continue;
-        }
-
-        // skip dram buffer allocation/deallocation
-        if (node.at(kParams).at(kType) == "DRAM") {
-            continue;
-        }
-
-        uint32_t page_size = std::stoi(node.at(kParams).at(kPageSize).get<std::string>());
-        uint32_t num_of_cores = std::stoi(node.at(kParams).at(kNumCores).get<std::string>());
-        if (num_of_cores == 0) {
-            num_of_cores = interleaved_storage_cores;
-        }
-
-        if (node.at(kNodeType) == kNodeBufferAllocate) {
-            auto total_size = std::stoi(node.at(kParams).at(kSize).get<std::string>());
-            auto alloc_size = detail::worst_case_per_core_allocation(total_size, page_size, num_of_cores);
-            current_size_per_core += alloc_size;
-            peak_size_per_core = std::max(peak_size_per_core, current_size_per_core);
-        } else  // kNodeBufferDeallocate
-        {
-            auto total_size = std::stoi(node.at(kParams).at(kSize).get<std::string>());
-            auto alloc_size = detail::worst_case_per_core_allocation(total_size, page_size, num_of_cores);
-            current_size_per_core -= alloc_size;
-        }
-    }
-
-    return peak_size_per_core;
+    const auto& [cb_peak_size_per_core, l1_buffers_peak_per_core, peak_memory_usage_per_core] =
+        extract_resource_usage_per_core(trace, interleaved_storage_cores);
+    return l1_buffers_peak_per_core;
 }
 
 uint32_t extract_circular_buffers_peak_size_per_core(const nlohmann::json& trace) {
-    uint32_t current_size_per_core = 0;
-    uint32_t peak_size_per_core = 0;
-
-    size_t counter_expected = 0;
-    for (const auto& node : trace) {
-        // expect a trace to be sorted by counter (execution order)
-        if (node.at(kCounter).get<size_t>() == counter_expected) {
-            counter_expected++;
-        } else {
-            TT_THROW("Graph trace counter/execution out of order");
-        }
-
-        // process only circular buffer allocation and deallocation nodes
-        if (node.at(kNodeType) != kNodeCBAllocate && node.at(kNodeType) != kNodeCBDeallocateAll) {
-            continue;
-        }
-
-        if (node.at(kNodeType) == kNodeCBAllocate) {
-            bool is_globally_allocated = std::stoi(node.at(kParams).at(kGloballyAllocated).get<std::string>()) == 1;
-            if (!is_globally_allocated) {
-                current_size_per_core += std::stoi(node.at(kParams).at(kSize).get<std::string>());
-                peak_size_per_core = std::max(peak_size_per_core, current_size_per_core);
-            }
-        } else {  // kNodeCBDeallocateAll
-            current_size_per_core = 0;
-        }
-    }
-
-    return peak_size_per_core;
+    const auto& [cb_peak_size_per_core, l1_buffers_peak_per_core, peak_memory_usage_per_core] =
+        extract_resource_usage_per_core(trace, 1);
+    return cb_peak_size_per_core;
 }
 
 // calculate the size of buffer allocated/deallocated on each core
@@ -344,37 +287,54 @@ static uint32_t calculate_buffer_allocation_size(const nlohmann::json& node, siz
 }
 
 uint32_t extract_peak_memory_usage(const nlohmann::json& trace, size_t interleaved_storage_cores) {
-    uint32_t current_size = 0;
-    uint32_t cb_size = 0;
-    uint32_t peak_size = 0;
+    const auto& [cb_peak_size_per_core, l1_buffers_peak_per_core, peak_memory_usage_per_core] =
+        extract_resource_usage_per_core(trace, interleaved_storage_cores);
+    return peak_memory_usage_per_core;
+}
 
+PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& trace, size_t interleaved_storage_cores) {
+    size_t current_cb = 0, peak_cb = 0;
+    size_t current_l1 = 0, peak_l1 = 0;
+    size_t current_total = 0, peak_total = 0;
+
+    size_t counter_expected = 0;
     for (const auto& node : trace) {
+        // expect a trace to be sorted by counter (execution order)
+        if (node.at(kCounter).get<size_t>() == counter_expected) {
+            counter_expected++;
+        } else {
+            TT_THROW("Graph trace counter/execution out of order");
+        }
+
         if (node.at(kNodeType) == kNodeCBAllocate) {
             bool is_globally_allocated = std::stoi(node.at(kParams).at(kGloballyAllocated).get<std::string>()) == 1;
             if (!is_globally_allocated) {
                 uint32_t alloc_size = std::stoi(node.at(kParams).at(kSize).get<std::string>());
-                current_size += alloc_size;
-                cb_size += alloc_size;
-                peak_size = std::max(peak_size, current_size);
+                current_cb += alloc_size;
+                peak_cb = std::max(peak_cb, current_cb);
+                current_total += alloc_size;
+                peak_total = std::max(peak_total, current_total);
             }
         } else if (node.at(kNodeType) == kNodeCBDeallocateAll) {
-            current_size -= cb_size;
-            cb_size = 0;
-        } else if (node.at(kNodeType) == kNodeBufferAllocate) {
+            current_total -= current_cb;
+            current_cb = 0;
+        } else if (node.at(kNodeType) == kNodeBufferAllocate || node.at(kNodeType) == kNodeBufferDeallocate) {
             if (node.at(kParams).at(kType) == "DRAM") {
                 continue;
             }
-            current_size += calculate_buffer_allocation_size(node, interleaved_storage_cores);
-            peak_size = std::max(peak_size, current_size);
-        } else if (node.at(kNodeType) == kNodeBufferDeallocate) {
-            if (node.at(kParams).at(kType) == "DRAM") {
-                continue;
+            size_t alloc_size = calculate_buffer_allocation_size(node, interleaved_storage_cores);
+            if (node.at(kNodeType) == kNodeBufferAllocate) {
+                current_l1 += alloc_size;
+                peak_l1 = std::max(peak_l1, current_l1);
+                current_total += alloc_size;
+                peak_total = std::max(peak_total, current_total);
+            } else {  // kNodeBufferDeallocate
+                current_l1 -= alloc_size;
+                current_total -= alloc_size;
             }
-            current_size -= calculate_buffer_allocation_size(node, interleaved_storage_cores);
         }
     }
-
-    return peak_size;
+    return PeakMemoryUsagePerCore{.peak_cb = peak_cb, .peak_l1 = peak_l1, .peak_total = peak_total};
 }
 
 }  // namespace ttnn::graph

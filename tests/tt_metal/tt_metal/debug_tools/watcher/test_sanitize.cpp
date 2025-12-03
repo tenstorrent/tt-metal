@@ -34,6 +34,7 @@
 // Do we really want to expose Hal like this?
 // This looks like an API level test
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -159,28 +160,28 @@ void RunTestOnCore(
 
     // A copy kernel, we'll feed it incorrect inputs to test sanitization.
     KernelHandle dram_copy_kernel;
+    int noc = 0;
     if (is_eth_core) {
         std::map<std::string, std::string> dram_copy_kernel_defines = {
             {"SIGNAL_COMPLETION_TO_DISPATCHER", "1"},
         };
+        tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0, .defines = dram_copy_kernel_defines};
+        eth_test_common::set_arch_specific_eth_config(config);
+        noc = static_cast<int>(config.noc);
         dram_copy_kernel = tt_metal::CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_to_noc_coord.cpp",
-            core,
-            tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .defines = dram_copy_kernel_defines});
+            program_, "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_to_noc_coord.cpp", core, config);
     } else {
         std::map<std::string, std::string> dram_copy_kernel_defines = {
             {"SIGNAL_COMPLETION_TO_DISPATCHER", "1"},
         };
+        tt_metal::DataMovementConfig config{
+            .processor =
+                (use_ncrisc) ? tt_metal::DataMovementProcessor::RISCV_1 : tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = (use_ncrisc) ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default,
+            .defines = dram_copy_kernel_defines};
         dram_copy_kernel = tt_metal::CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_to_noc_coord.cpp",
-            core,
-            tt_metal::DataMovementConfig{
-                .processor =
-                    (use_ncrisc) ? tt_metal::DataMovementProcessor::RISCV_1 : tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = (use_ncrisc) ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default,
-                .defines = dram_copy_kernel_defines});
+            program_, "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_to_noc_coord.cpp", core, config);
+        noc = static_cast<int>(config.noc);
     }
 
     // Write to the input buffer
@@ -251,7 +252,6 @@ void RunTestOnCore(
 
     // We should be able to find the expected watcher error in the log as well.
     std::string expected;
-    int noc = (use_ncrisc) ? 1 : 0;
     CoreCoord input_core_virtual_coords = device->virtual_noc0_coordinate(noc, input_buf_noc_xy);
     CoreCoord output_core_virtual_coords = device->virtual_noc0_coordinate(noc, output_buf_noc_xy);
     std::string risc_name = (is_eth_core) ? "erisc" : " brisc";
@@ -261,7 +261,7 @@ void RunTestOnCore(
     switch(feature) {
         case SanitizeNOCAddress:
             expected = fmt::format(
-                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc0 tried to unicast write {} "
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write {} "
                 "bytes from local L1[{:#08x}] to Unknown core w/ virtual coords {} [addr=0x{:08x}] (NOC target "
                 "address did not map to any known Tensix/Ethernet/DRAM/PCIE core).",
                 device->id(),
@@ -271,6 +271,7 @@ void RunTestOnCore(
                 virtual_core.x,
                 virtual_core.y,
                 risc_name,
+                noc,
                 buffer_size,
                 buffer_addr,
                 output_buf_noc_xy.str(),
@@ -333,7 +334,7 @@ void RunTestOnCore(
         } break;
         case SanitizeNOCMailboxWrite: {
             expected = fmt::format(
-                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc0 tried to unicast read {} "
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast read {} "
                 "bytes to local L1[{:#08x}] from Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (Local L1 "
                 "overwrites mailboxes).",
                 device->id(),
@@ -343,6 +344,7 @@ void RunTestOnCore(
                 virtual_core.x,
                 virtual_core.y,
                 risc_name,
+                noc,
                 buffer_size,
                 buffer_addr,
                 input_buf_noc_xy.str(),
@@ -366,7 +368,7 @@ void RunTestOnCore(
         } break;
         case SanitizeNOCLinkedTransaction: {
             expected = fmt::format(
-                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc0 tried to unicast write {} "
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write {} "
                 "bytes from local L1[{:#08x}] to Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (submitting a "
                 "non-mcast transaction when there's a linked transaction).",
                 device->id(),
@@ -376,6 +378,7 @@ void RunTestOnCore(
                 virtual_core.x,
                 virtual_core.y,
                 risc_name,
+                noc,
                 buffer_size,
                 buffer_addr,
                 output_core_virtual_coords.str(),

@@ -1,28 +1,27 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <string>
-
+#include "reduce_op_multi_core_h_program_factory.hpp"
+#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
+#include <cmath>
 
 using namespace tt::constants;
-using uint32_t = std::uint32_t;
-namespace tt {
 
-namespace tt_metal {
+namespace ttnn::operations::reduction::generic::program {
 
-operation::ProgramWithCallbacks reduce_multi_core_h(
-    const Tensor& a,
-    Tensor& output,
-    ReduceOpMath reduce_op,
-    const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-    float scaler,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    using namespace tt;
+    using namespace tt::tt_metal;
+    const auto& a = tensor_args.input_tensor;
+    auto& output = tensor_return_value;
     const auto& shape = a.padded_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
 
@@ -31,7 +30,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     uint32_t HtWt = Ht * Wt;
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(a.device()->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -52,10 +51,10 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     uint32_t num_cores;
     CoreRangeSet all_cores, core_group_1, core_group_2;
     uint32_t num_cols_per_core_group_1, num_cols_per_core_group_2;
-    if (sub_core_grids.has_value()) {
+    if (operation_attributes.sub_core_grids.has_value()) {
         std::tie(
             num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2) =
-            tt::tt_metal::split_work_to_cores(*sub_core_grids, num_cols);
+            tt::tt_metal::split_work_to_cores(*operation_attributes.sub_core_grids, num_cols);
     } else {
         std::tie(
             num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2) =
@@ -106,7 +105,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
 
     uint32_t output_cb_index = CBIndex::c_3;
-    CBHandle cb_output;
+    CBHandle cb_output = 0;
     if (use_width_sharding) {
         uint32_t num_output_tiles = output.shard_spec().value().numel() / TILE_HW;
         tt_metal::CircularBufferConfig cb_output_config =
@@ -114,7 +113,6 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
                 num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
                 .set_page_size(output_cb_index, dst_single_tile_size)
                 .set_globally_allocated_address(*output.buffer());
-        ;
         cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
     } else {
         uint32_t num_output_tiles = 2;
@@ -126,10 +124,10 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     }
     tt_metal::Buffer* src0_buffer = a.buffer();
     tt_metal::KernelHandle reader_kernel_id;
-    bfloat16 bfloat_scaler_value = bfloat16::truncate(scaler);
+    bfloat16 bfloat_scaler_value = bfloat16::truncate(operation_attributes.scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
 
-    uint32_t chunk_size = use_width_sharding ? 1 : ttnn::get_dest_reg_count(compute_kernel_config);
+    uint32_t chunk_size = use_width_sharding ? 1 : ttnn::get_dest_reg_count(operation_attributes.compute_kernel_config);
 
     if (use_width_sharding) {
         std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index};
@@ -175,7 +173,8 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             all_cores,
             tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }
-    std::map<std::string, std::string> reduce_defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::H);
+    std::map<std::string, std::string> reduce_defines =
+        reduce_op_utils::get_defines(operation_attributes.math_op, tt::tt_metal::ReduceOpDim::H);
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         Ht,                         // Ht
         num_cols_per_core_group_1,  // Wt
@@ -213,7 +212,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     }
 
     std::vector<CoreCoord> cores;
-    if (sub_core_grids.has_value()) {
+    if (operation_attributes.sub_core_grids.has_value()) {
         for (const auto& range : all_cores.ranges()) {
             for (int y = range.start_coord.y; y <= range.end_coord.y; ++y) {
                 for (int x = range.start_coord.x; x <= range.end_coord.x; ++x) {
@@ -267,46 +266,43 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
         }
     }
 
-    auto override_runtime_arguments_callback = [reader_kernel_id = reader_kernel_id,
-                                                writer_kernel_id = writer_kernel_id,
-                                                cb_src1 = cb_src1,
-                                                cb_output = cb_output,
-                                                cores = cores](
-                                                   const void* operation,
-                                                   Program& program,
-                                                   const std::vector<Tensor>& input_tensors,
-                                                   const std::vector<std::optional<const Tensor>>&,
-                                                   const std::vector<Tensor>& output_tensors) {
-        auto* src_buffer = input_tensors.at(0).buffer();
-        auto* dst_buffer = output_tensors.at(0).buffer();
-
-        bool use_width_sharding =
-            input_tensors.at(0).memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
-            output_tensors.at(0).memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
-
-        if (use_width_sharding) {
-            UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer);
-            UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
-        } else {
-            auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
-            for (const auto& core : cores) {
-                {
-                    auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
-                    runtime_args[0] = src_buffer->address();
-                }
-
-                {
-                    auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
-                    runtime_args[0] = dst_buffer->address();
-                }
-            }
-        }
-    };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return {std::move(program), {reader_kernel_id, writer_kernel_id, cb_src1, cb_output, cores}};
 }
 
-}  // namespace tt_metal
+void ReduceMultiCoreHProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto* src_buffer = tensor_args.input_tensor.buffer();
+    auto* dst_buffer = tensor_return_value.buffer();
 
-}  // namespace tt
+    bool use_width_sharding =
+        tensor_args.input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+        tensor_return_value.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+
+    if (use_width_sharding) {
+        UpdateDynamicCircularBufferAddress(
+            cached_program.program, cached_program.shared_variables.cb_src1, *src_buffer);
+        UpdateDynamicCircularBufferAddress(
+            cached_program.program, cached_program.shared_variables.cb_output, *dst_buffer);
+    } else {
+        auto& reader_runtime_args_by_core =
+            GetRuntimeArgs(cached_program.program, cached_program.shared_variables.reader_kernel_id);
+        auto& writer_runtime_args_by_core =
+            GetRuntimeArgs(cached_program.program, cached_program.shared_variables.writer_kernel_id);
+        for (const auto& core : cached_program.shared_variables.cores) {
+            {
+                auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
+                runtime_args[0] = src_buffer->address();
+            }
+
+            {
+                auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
+                runtime_args[0] = dst_buffer->address();
+            }
+        }
+    }
+}
+
+}  // namespace ttnn::operations::reduction::generic::program

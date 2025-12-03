@@ -17,10 +17,13 @@ void kernel_main() {
     std::uint32_t dram_buffer_size = get_arg_val<uint32_t>(2);
     std::uint32_t local_eth_l1_addr_base = get_arg_val<uint32_t>(3);
 
-    std::uint32_t dram_buffer_src_addr = dram_buffer_src_addr_base;
-    // DRAM NOC src address
-    std::uint64_t dram_buffer_src_noc_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, dram_buffer_src_addr);
-
-    noc_async_read(dram_buffer_src_noc_addr, local_eth_l1_addr_base, dram_buffer_size);
-    noc_async_read_barrier();
+    experimental::CoreLocalMem<std::uint32_t> local_buffer(local_eth_l1_addr_base);
+    experimental::Noc noc;
+    noc.async_read(
+        experimental::AllocatorBank<experimental::AllocatorBankType::DRAM>{},
+        local_buffer,
+        dram_buffer_size,
+        {.bank_id = dram_bank_id, .addr = dram_buffer_src_addr_base},
+        {});
+    noc.async_read_barrier();
 }

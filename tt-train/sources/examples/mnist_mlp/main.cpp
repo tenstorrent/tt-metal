@@ -48,6 +48,7 @@ struct TrainingConfig {
     float momentum = 0.9F;
     float weight_decay = 0.F;
     int model_save_interval = 500;
+    std::string model_config = "configs/model_configs/mlp_config.yaml";
     std::string model_path = "/tmp/mnist_mlp.msgpack";
     ttml::modules::MultiLayerPerceptronParameters mlp_config;
 };
@@ -55,6 +56,7 @@ struct TrainingConfig {
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
     TrainingConfig config;
     auto training_config = yaml_config["training_config"];
+    auto model_config = YAML::LoadFile(training_config["model_config"].as<std::string>())["mlp_config"];
 
     config.batch_size = training_config["batch_size"].as<uint32_t>();
     config.logging_interval = training_config["logging_interval"].as<int>();
@@ -63,7 +65,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.momentum = training_config["momentum"].as<float>();
     config.weight_decay = training_config["weight_decay"].as<float>();
     config.model_save_interval = training_config["model_save_interval"].as<int>();
-    config.mlp_config = ttml::models::mlp::read_config(training_config["mlp_config"]);
+    config.mlp_config = ttml::models::mlp::read_config(model_config);
     return config;
 }
 

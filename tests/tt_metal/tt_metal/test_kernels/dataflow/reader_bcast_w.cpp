@@ -23,10 +23,10 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     // single-tile ublocks
-    uint32_t tile_bytes = get_tile_size(cb_id_in0);
-
-    uint32_t l1_write_addr_in0;
-    uint32_t l1_write_addr_in1;
+    experimental::CircularBuffer cb_in0(cb_id_in0);
+    experimental::CircularBuffer cb_in1(cb_id_in1);
+    experimental::Noc noc;
+    uint32_t tile_bytes = cb_in0.get_tile_size();
 
     uint32_t num_tiles = src0_num_tiles;
     uint32_t i1 = 0;
@@ -35,22 +35,28 @@ void kernel_main() {
             {
                 // only read one tile in H per W-line of tiles
                 // So we push a total of NC*H tiles from src1
-                cb_reserve_back(cb_id_in1, onetile);
-                uint64_t src1_noc_addr = get_noc_addr(src1_noc_x, src1_noc_y, src1_addr);
-                l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-                noc_async_read(src1_noc_addr, l1_write_addr_in1, tile_bytes);
-                noc_async_read_barrier();
-                cb_push_back(cb_id_in1, onetile);
+                cb_in1.reserve_back(onetile);
+                noc.async_read(
+                    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM>{},
+                    cb_in1,
+                    tile_bytes,
+                    {.bank_id = src1_bank_id, .addr = src1_addr},
+                    {});
+                noc.async_read_barrier();
+                cb_in1.push_back(onetile);
                 src1_addr += tile_bytes;
             }
 
             for (uint32_t wt = 0; wt < Wt; wt++) {
-                uint64_t src0_noc_addr = get_noc_addr(src0_noc_x, src0_noc_y, src0_addr);
-                cb_reserve_back(cb_id_in0, onetile);
-                l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                noc_async_read(src0_noc_addr, l1_write_addr_in0, tile_bytes);
-                noc_async_read_barrier();
-                cb_push_back(cb_id_in0, onetile);
+                cb_in0.reserve_back(onetile);
+                noc.async_read(
+                    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM>{},
+                    cb_in0,
+                    tile_bytes,
+                    {.bank_id = src0_bank_id, .addr = src0_addr},
+                    {});
+                noc.async_read_barrier();
+                cb_in0.push_back(onetile);
                 src0_addr += tile_bytes;
             }  // Wt loop
         }  // Ht loop
