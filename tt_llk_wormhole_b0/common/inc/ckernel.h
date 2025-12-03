@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ckernel_instr_params.h"
+#include "llk_assert.h"
 #include "llk_defs.h"
 #include "risc_attribs.h"
 
