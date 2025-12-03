@@ -732,7 +732,7 @@ void SDPAProgramFactory::override_runtime_arguments(
     auto *attention_sink_buffer =
         tensor_args.attention_sink.has_value() ? tensor_args.attention_sink->buffer() : nullptr;
 
-    auto out0_buffer = tensor_return_value.buffer();
+    auto *out0_buffer = tensor_return_value.buffer();
     uint32_t q_addr = q_buffer->address();
     uint32_t k_addr = k_buffer->address();
     uint32_t v_addr = v_buffer->address();
