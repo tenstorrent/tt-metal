@@ -3,6 +3,14 @@
 
 import ttnn
 import torch
+from models.tt_cnn.tt.builder import (
+    Conv2dConfiguration,
+    TtConv2d,
+    BlockShardedStrategyConfiguration,
+    AutoShardedStrategyConfiguration,
+    L1FullSliceStrategyConfiguration,
+    WidthSliceStrategyConfiguration,
+)
 
 
 def extras_backbone(cfg, input_channels=1024, batch_norm=False, device=None):
@@ -176,7 +184,6 @@ def apply_extras_backbone(input_tensor, layers_with_weights, device=None, dtype=
             use_l1_for_this_layer = (
                 input_height <= 128 and input_width <= 128 and tensor_size_estimate <= 2 * 1024 * 1024
             )
-            layer_memory_config = ttnn.L1_MEMORY_CONFIG
 
             is_1x1_conv = kernel_size == (1, 1) or (kernel_size[0] == 1 and kernel_size[1] == 1)
 
@@ -186,165 +193,167 @@ def apply_extras_backbone(input_tensor, layers_with_weights, device=None, dtype=
                 and not is_1x1_conv
             )
 
-            if use_dram_slicing:
-                conv_bias = None
-                slice_count = max(1, (batch_size * input_height * input_width) // (1024))
-                slice_count = min(slice_count, 64)
-                x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
-                if hasattr(x, "memory_config") and x.memory_config() is not None:
-                    if x.memory_config().is_sharded():
-                        x = ttnn.sharded_to_interleaved(x, memory_config=memory_config)
+            if is_1x1_conv and stride == (1, 1) and padding == (0, 0):
+                if isinstance(weight, torch.Tensor):
+                    weight_torch = weight
+                else:
+                    weight_torch = ttnn.to_torch(weight)
+
+                weight_2d_torch = weight_torch.reshape(out_channels, in_channels).permute(1, 0)
+
+                layer_memory_config = ttnn.L1_MEMORY_CONFIG if use_l1_for_this_layer else memory_config
+
+                if device is not None:
+                    weight_2d = ttnn.from_torch(
+                        weight_2d_torch,
+                        device=device,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=layer_memory_config,
+                    )
+                else:
+                    weight_2d = ttnn.from_torch(weight_2d_torch, device=None, dtype=dtype, layout=ttnn.TILE_LAYOUT)
 
                 if x.layout != ttnn.TILE_LAYOUT:
-                    x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
                     x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
-                if hasattr(weight, "memory_config") and weight.memory_config() is not None:
-                    if weight.memory_config().is_sharded():
-                        weight = ttnn.sharded_to_interleaved(weight, memory_config=memory_config)
+                x_flat = ttnn.reshape(x, (batch_size * current_h * current_w, in_channels))
 
-                if weight.layout != ttnn.ROW_MAJOR_LAYOUT:
-                    weight = ttnn.to_layout(weight, ttnn.ROW_MAJOR_LAYOUT)
+                out_flat = ttnn.matmul(x_flat, weight_2d, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-                slice_config = ttnn.Conv2dSliceConfig(
-                    slice_type=ttnn.Conv2dDRAMSliceWidth,
-                    num_slices=slice_count,
-                )
+                output_tensor = ttnn.reshape(out_flat, (batch_size, current_h, current_w, out_channels))
+
+                if bias is not None:
+                    if isinstance(bias, torch.Tensor):
+                        bias_torch = bias
+                    else:
+                        bias_torch = ttnn.to_torch(bias)
+
+                    bias_reshaped = bias_torch.reshape((out_channels,))
+
+                    if device is not None:
+                        bias_1d = ttnn.from_torch(
+                            bias_reshaped,
+                            device=device,
+                            dtype=ttnn.bfloat16,
+                            layout=ttnn.TILE_LAYOUT,
+                            memory_config=layer_memory_config,
+                        )
+                    else:
+                        bias_1d = ttnn.from_torch(bias_reshaped, device=None, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+                    output_tensor = ttnn.add(output_tensor, bias_1d, memory_config=layer_memory_config)
+
+                output_height = current_h
+                output_width = current_w
             else:
-                conv_bias = bias
-                slice_config = ttnn.Conv2dL1FullSliceConfig
+                if isinstance(weight, ttnn.Tensor):
+                    weight_ttnn = weight
+                    if bias is not None:
+                        bias_ttnn = bias if isinstance(bias, ttnn.Tensor) else None
+                        if bias_ttnn is None:
+                            bias_torch = bias if isinstance(bias, torch.Tensor) else ttnn.to_torch(bias)
+                            bias_reshaped = bias_torch.reshape((1, 1, 1, -1))
+                            bias_ttnn = ttnn.from_torch(bias_reshaped, dtype=ttnn.float32)
+                    else:
+                        bias_ttnn = None
+                else:
+                    weight_torch = weight if isinstance(weight, torch.Tensor) else ttnn.to_torch(weight)
+                    bias_torch = None
+                    if bias is not None:
+                        bias_torch = bias if isinstance(bias, torch.Tensor) else ttnn.to_torch(bias)
+                    weight_ttnn, bias_ttnn = Conv2dConfiguration.convert_torch_weight_and_bias_to_ttnn(
+                        weight_torch, bias_torch
+                    )
 
-            compute_config = None
-            if device is not None:
-                compute_config = ttnn.init_device_compute_kernel_config(
-                    device.arch(),
+                estimated_memory_bytes = input_height * input_width * in_channels
+
+                if use_dram_slicing:
+                    slice_count = max(1, (batch_size * input_height * input_width) // (1024))
+                    slice_count = min(slice_count, 64)
+                    slice_strategy = WidthSliceStrategyConfiguration(num_slices=slice_count)
+                    sharding_strategy = AutoShardedStrategyConfiguration()
+                    enable_act_double_buffer = False
+                    deallocate_activation = False
+                elif use_l1_for_this_layer and estimated_memory_bytes < 1024 * 1024:
+                    if in_channels > 256 or out_channels > 512:
+                        sharding_strategy = AutoShardedStrategyConfiguration()
+                        slice_strategy = None
+                        enable_act_double_buffer = False
+                        deallocate_activation = False
+                    elif input_height <= 32:
+                        act_block_h = 32
+                        enable_act_double_buffer = True
+                        sharding_strategy = BlockShardedStrategyConfiguration(
+                            act_block_h_override=act_block_h,
+                            act_block_w_div=1,
+                            reshard_if_not_optimal=True,
+                        )
+                        slice_strategy = L1FullSliceStrategyConfiguration()
+                        deallocate_activation = False
+                    else:
+                        if in_channels <= 128 and out_channels <= 256:
+                            act_block_h = 32
+                            enable_act_double_buffer = False
+                            sharding_strategy = BlockShardedStrategyConfiguration(
+                                act_block_h_override=act_block_h,
+                                act_block_w_div=1,
+                                reshard_if_not_optimal=True,
+                            )
+                            slice_strategy = L1FullSliceStrategyConfiguration()
+                            deallocate_activation = False
+                        else:
+                            sharding_strategy = AutoShardedStrategyConfiguration()
+                            slice_strategy = None
+                            enable_act_double_buffer = False
+                            deallocate_activation = False
+                else:
+                    sharding_strategy = AutoShardedStrategyConfiguration()
+                    slice_strategy = None
+                    enable_act_double_buffer = False
+                    deallocate_activation = False
+
+                conv_config = Conv2dConfiguration(
+                    input_height=input_height,
+                    input_width=input_width,
+                    in_channels=in_channels,
+                    out_channels=out_channels,
+                    batch_size=batch_size,
+                    kernel_size=kernel_size,
+                    weight=weight_ttnn,
+                    stride=stride,
+                    padding=padding,
+                    dilation=dilation,
+                    groups=groups,
+                    bias=bias_ttnn,
+                    activation_dtype=dtype,
+                    weights_dtype=dtype,
+                    output_dtype=dtype,
+                    sharding_strategy=sharding_strategy,
+                    slice_strategy=slice_strategy,
                     math_fidelity=ttnn.MathFidelity.HiFi4,
                     fp32_dest_acc_en=True,
                     packer_l1_acc=False,
-                    math_approx_mode=False,
-                )
-
-            estimated_memory_bytes = input_height * input_width * in_channels  # 1 byte per element, bfloat8_b
-
-            if use_l1_for_this_layer and not use_dram_slicing and estimated_memory_bytes < 1024 * 1024:
-                if in_channels > 256 or out_channels > 512:
-                    use_l1_for_this_layer = True
-                    layer_memory_config = memory_config
-                    conv_config = ttnn.Conv2dConfig(
-                        weights_dtype=dtype,
-                        shard_layout=None,
-                        deallocate_activation=False,
-                        enable_act_double_buffer=False,
-                        enable_weights_double_buffer=False,
-                        reshard_if_not_optimal=False,
-                    )
-                elif input_height <= 32:
-                    act_block_h = 32
-                    enable_double_buffer = True
-                    conv_config = ttnn.Conv2dConfig(
-                        weights_dtype=dtype,
-                        shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                        deallocate_activation=False,
-                        enable_act_double_buffer=enable_double_buffer,
-                        enable_weights_double_buffer=False,
-                        reshard_if_not_optimal=True,
-                        act_block_h_override=act_block_h,
-                        act_block_w_div=1,
-                    )
-                else:
-                    # For 64x64 or larger, only use L1 if channels are small
-                    if in_channels <= 128 and out_channels <= 256:
-                        act_block_h = 32
-                        enable_double_buffer = False
-                        conv_config = ttnn.Conv2dConfig(
-                            weights_dtype=dtype,
-                            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                            deallocate_activation=False,
-                            enable_act_double_buffer=enable_double_buffer,
-                            enable_weights_double_buffer=False,
-                            reshard_if_not_optimal=True,
-                            act_block_h_override=act_block_h,
-                            act_block_w_div=1,
-                        )
-                    else:
-                        use_l1_for_this_layer = True
-                        layer_memory_config = memory_config
-                        conv_config = ttnn.Conv2dConfig(
-                            weights_dtype=dtype,
-                            shard_layout=None,
-                            deallocate_activation=False,
-                            enable_act_double_buffer=False,
-                            enable_weights_double_buffer=False,
-                            reshard_if_not_optimal=False,
-                        )
-            else:
-                use_l1_for_this_layer = True
-                layer_memory_config = memory_config
-                conv_config = ttnn.Conv2dConfig(
-                    weights_dtype=dtype,
-                    shard_layout=None,
-                    deallocate_activation=False,
-                    enable_act_double_buffer=False,
+                    enable_act_double_buffer=enable_act_double_buffer,
                     enable_weights_double_buffer=False,
-                    reshard_if_not_optimal=False,
+                    deallocate_activation=deallocate_activation,
+                    reallocate_halo_output=True,
+                    config_tensors_in_dram=not use_l1_for_this_layer,
                 )
 
-            conv2d_kwargs = {
-                "input_tensor": x,
-                "weight_tensor": weight,
-                "bias_tensor": conv_bias,
-                "in_channels": in_channels,
-                "out_channels": out_channels,
-                "kernel_size": kernel_size,
-                "stride": stride,
-                "padding": padding,
-                "dilation": dilation,
-                "groups": groups,
-                "batch_size": batch_size,
-                "input_height": input_height,
-                "input_width": input_width,
-                "device": device,
-                "return_output_dim": True,
-                "return_weights_and_bias": True,
-                "dtype": dtype,
-                "slice_config": slice_config,
-                "compute_config": compute_config,
-                "conv_config": conv_config,
-            }
+                conv_layer = TtConv2d(conv_config, device)
+                output_tensor = conv_layer(x)
 
-            if layer_memory_config != ttnn.DRAM_MEMORY_CONFIG:
-                conv2d_kwargs["memory_config"] = ttnn.L1_MEMORY_CONFIG
+                padding_h, padding_w = padding
+                dilation_h, dilation_w = dilation
+                stride_h, stride_w = stride
+                kernel_h, kernel_w = kernel_size
 
-            output_tensor, [output_height, output_width], [prepared_weight, prepared_bias] = ttnn.conv2d(
-                **conv2d_kwargs
-            )
+                output_height = (input_height + 2 * padding_h - dilation_h * (kernel_h - 1) - 1) // stride_h + 1
+                output_width = (input_width + 2 * padding_w - dilation_w * (kernel_w - 1) - 1) // stride_w + 1
 
-            output_tensor = ttnn.to_memory_config(output_tensor, ttnn.L1_MEMORY_CONFIG)
-            if slice_config != ttnn.Conv2dL1FullSliceConfig and output_tensor.layout != ttnn.TILE_LAYOUT:
-                output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
-
-            if bias is not None and use_dram_slicing:
-                output_tensor = output_tensor.reshape([batch_size, output_height, output_width, out_channels])
-                bias_torch = ttnn.to_torch(bias)
-                bias_expanded = bias_torch.expand(batch_size, output_height, output_width, out_channels)
-                bias_full = ttnn.from_torch(
-                    bias_expanded,
-                    device=device,
-                    dtype=dtype,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    memory_config=layer_memory_config,
-                )
-
-                output_tensor = ttnn.add(output_tensor, bias_full, memory_config=layer_memory_config)
-
-            layer["weight"] = prepared_weight
-            if prepared_bias is not None and not use_dram_slicing:
-                layer["bias"] = prepared_bias
-
-            if bias is None or not use_dram_slicing:
-                x = output_tensor.reshape([batch_size, output_height, output_width, out_channels])
-            else:
-                x = output_tensor
+            if output_tensor.is_sharded():
+                output_tensor = ttnn.sharded_to_interleaved(output_tensor, memory_config)
+            x = output_tensor.reshape([batch_size, output_height, output_width, out_channels])
 
             current_h = output_height
             current_w = output_width

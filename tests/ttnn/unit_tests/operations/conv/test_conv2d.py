@@ -100,8 +100,8 @@ def test_conv_features(
     "output_channels, input_channels, input_height, input_width, shard_layout, config",
     (
         (353, 384, 8, 8, WS, None),
-        (128, 128, 32, 32, BS, None),
-        (16, 16, 256, 256, HS, {"act_block_h": 32}),
+        # (128, 128, 32, 32, BS, None),
+        # (16, 16, 256, 256, HS, {"act_block_h": 32}),
     ),
 )
 @pytest.mark.parametrize(

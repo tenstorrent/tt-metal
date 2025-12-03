@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+
 import torch
 import ttnn
 from models.experimental.SSD512.tt.layers.tt_vgg_backbone import (
@@ -16,6 +17,13 @@ from models.experimental.SSD512.tt.layers.tt_multibox_heads import (
 )
 from models.experimental.SSD512.tt.layers.tt_l2norm import TtL2Norm
 from models.common.utility_functions import tt_to_torch_tensor
+from models.tt_cnn.tt.builder import (
+    Conv2dConfiguration,
+    TtConv2d,
+    AutoShardedStrategyConfiguration,
+    L1FullSliceStrategyConfiguration,
+    WidthSliceStrategyConfiguration,
+)
 
 
 # Extra layers configuration for SSD
@@ -299,63 +307,96 @@ def forward_extras(
             dilation = config["dilation"]
             groups = config["groups"]
 
-            # Prepare weight and bias
-            if isinstance(weight, torch.Tensor):
-                weight_torch = weight
+            if isinstance(weight, ttnn.Tensor):
+                weight_ttnn = weight
+                if bias is not None:
+                    bias_ttnn = bias if isinstance(bias, ttnn.Tensor) else None
+                    if bias_ttnn is None:
+                        bias_torch = bias if isinstance(bias, torch.Tensor) else ttnn.to_torch(bias)
+                        bias_reshaped = bias_torch.reshape((1, 1, 1, -1))
+                        bias_ttnn = ttnn.from_torch(bias_reshaped, dtype=ttnn.float32)
+                else:
+                    bias_ttnn = None
             else:
-                weight_torch = ttnn.to_torch(weight)
+                weight_torch = weight if isinstance(weight, torch.Tensor) else ttnn.to_torch(weight)
+                bias_torch = None
+                if bias is not None:
+                    bias_torch = bias if isinstance(bias, torch.Tensor) else ttnn.to_torch(bias)
+                weight_ttnn, bias_ttnn = Conv2dConfiguration.convert_torch_weight_and_bias_to_ttnn(
+                    weight_torch, bias_torch
+                )
 
-            weight = ttnn.from_torch(
-                weight_torch,
-                device=None,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+            tensor_size_estimate = batch_size * current_h * current_w * in_channels
+            is_very_small = current_h <= 2 or current_w <= 2
+            is_1x1_conv = kernel_size == (1, 1) or (kernel_size[0] == 1 and kernel_size[1] == 1)
+            is_l1_memory = memory_config is not None and memory_config.buffer_type == ttnn.BufferType.L1
+            force_l1_slice = is_very_small or is_1x1_conv
+
+            use_dram_slicing = (
+                not force_l1_slice
+                and not is_l1_memory
+                and ((tensor_size_estimate > 1024 * 1024 or current_h > 64 or current_w > 64))
             )
 
-            if bias is not None:
-                if isinstance(bias, torch.Tensor):
-                    bias_torch = bias
-                else:
-                    bias_torch = ttnn.to_torch(bias)
-                bias_reshaped = bias_torch.reshape((1, 1, 1, -1))
-                bias = ttnn.from_torch(
-                    bias_reshaped,
-                    device=None,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                )
+            if use_dram_slicing:
+                slice_count = max(1, (batch_size * current_h * current_w) // (1024))
+                slice_count = min(slice_count, 64)
+                slice_strategy = WidthSliceStrategyConfiguration(num_slices=slice_count)
+                sharding_strategy = AutoShardedStrategyConfiguration()
+                enable_act_double_buffer = False
+                deallocate_activation = False
+            elif is_l1_memory or force_l1_slice:
+                sharding_strategy = AutoShardedStrategyConfiguration()
+                slice_strategy = L1FullSliceStrategyConfiguration()
+                enable_act_double_buffer = False
+                deallocate_activation = False
+            else:
+                sharding_strategy = AutoShardedStrategyConfiguration()
+                slice_strategy = None
+                enable_act_double_buffer = False
+                deallocate_activation = False
 
-            compute_config = None
-            if device is not None:
-                compute_config = ttnn.init_device_compute_kernel_config(
-                    device.arch(),
-                    math_fidelity=ttnn.MathFidelity.HiFi4,
-                    fp32_dest_acc_en=True,
-                    packer_l1_acc=False,
-                    math_approx_mode=False,
-                )
-
-            # Conv2d
-            output_tensor, [output_height, output_width] = ttnn.conv2d(
-                input_tensor=x,
-                weight_tensor=weight,
-                bias_tensor=bias,
+            conv_config = Conv2dConfiguration(
+                input_height=current_h,
+                input_width=current_w,
                 in_channels=in_channels,
                 out_channels=out_channels,
+                batch_size=batch_size,
                 kernel_size=kernel_size,
+                weight=weight_ttnn,
                 stride=stride,
                 padding=padding,
                 dilation=dilation,
                 groups=groups,
-                batch_size=batch_size,
-                input_height=current_h,
-                input_width=current_w,
-                device=device,
-                return_output_dim=True,
-                dtype=ttnn.bfloat8_b,
-                memory_config=memory_config,
-                compute_config=compute_config,
+                bias=bias_ttnn,
+                activation_dtype=dtype,
+                weights_dtype=ttnn.bfloat16,
+                output_dtype=dtype,
+                sharding_strategy=sharding_strategy,
+                slice_strategy=slice_strategy,
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+                enable_act_double_buffer=enable_act_double_buffer,
+                enable_weights_double_buffer=False,
+                deallocate_activation=deallocate_activation,
+                reallocate_halo_output=True,
+                config_tensors_in_dram=not is_l1_memory and not force_l1_slice,
             )
+
+            conv_layer = TtConv2d(conv_config, device)
+            output_tensor = conv_layer(x)
+
+            if output_tensor.is_sharded():
+                output_tensor = ttnn.sharded_to_interleaved(output_tensor, memory_config)
+
+            padding_h, padding_w = padding
+            dilation_h, dilation_w = dilation
+            stride_h, stride_w = stride
+            kernel_h, kernel_w = kernel_size
+
+            output_height = (current_h + 2 * padding_h - dilation_h * (kernel_h - 1) - 1) // stride_h + 1
+            output_width = (current_w + 2 * padding_w - dilation_w * (kernel_w - 1) - 1) // stride_w + 1
 
             x = output_tensor.reshape([batch_size, output_height, output_width, out_channels])
             current_h = output_height
