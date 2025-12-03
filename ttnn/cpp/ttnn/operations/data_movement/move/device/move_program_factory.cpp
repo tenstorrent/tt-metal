@@ -96,8 +96,8 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
 
     auto semaphore_id = CreateSemaphore(program, all_cores, 0);
 
-    auto src_buffer = input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
 
     std::vector<uint32_t> compile_time_args = {cb_index};
     if (!tilized) {
@@ -183,8 +183,8 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* src_buffer = input_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
 
         for (uint32_t i = 0; i < num_cores; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -270,8 +270,8 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Ten
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* src_buffer = input_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
         UpdateDynamicCircularBufferAddress(program, src_sharded_cb, *src_buffer);
         UpdateDynamicCircularBufferAddress(program, dst_sharded_cb, *dst_buffer);
         auto input_buffer_address = src_buffer->address();
