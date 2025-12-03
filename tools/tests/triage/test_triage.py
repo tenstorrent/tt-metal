@@ -59,17 +59,12 @@ def cause_hang_with_app(request):
 
         # Check if the process has exited
         if proc.returncode != 0:
+            # Print process output for debugging
             print("The application did not hang as expected.")
             print_process_output(proc)
             raise RuntimeError("The application did not hang as expected.")
     else:
         time.sleep(timeout)
-
-        # Check if the process has exited
-        if proc.returncode != 0:
-            print("The application did not hang as expected.")
-            print_process_output(proc)
-            raise RuntimeError("The application did not hang as expected.")
 
     request.cls.app_configuration = app_configuration
     request.cls.exalens_context = init_ttexalens()
@@ -83,6 +78,8 @@ def cause_hang_with_app(request):
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
+
+        print_process_output(proc)
 
         # Reset the device state after the hang if set in environment
         if os.environ.get("TT_METAL_RESET_DEVICE_AFTER_HANG", "0") == "1":
