@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <flatbuffers/flatbuffers.h>
 #include <fmt/format.h>
 
 #include <cstdint>
@@ -13,8 +14,18 @@
 #include <string>
 #include <string_view>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/memory_pin.hpp>
+#include <ttnn/tensor/tensor.hpp>
 #include <variant>
 #include <vector>
+
+// Define FLATBUFFERS_LARGE_SIZE before generated header
+#ifndef FLATBUFFERS_LARGE_SIZE
+#define FLATBUFFERS_LARGE_SIZE 1
+#endif
+
+// Include generated FlatBuffer code
+#include "ttml_metadata_generated.h"
 
 namespace ttml::serialization {
 
@@ -79,6 +90,9 @@ public:
 
     void put(std::string_view key, const ValueType& value);
 
+    // Tensor support
+    void put(std::string_view key, const tt::tt_metal::Tensor& tensor);
+
     // Serialization method
     void serialize(std::string_view filename);
 
@@ -95,22 +109,15 @@ public:
     [[nodiscard]] size_t get_size_t(std::string_view key) const;
     [[nodiscard]] bfloat16 get_bfloat16(std::string_view key) const;
     [[nodiscard]] std::string get_string(std::string_view key) const;
-
-    // Methods to get vectors
     [[nodiscard]] std::vector<uint8_t> get_vector_uint8(std::string_view key) const;
 
     [[nodiscard]] ValueType get_value_type(std::string_view key) const;
 
-    [[nodiscard]] const std::filesystem::path& get_base_dir() const;
+    // Tensor support
+    [[nodiscard]] tt::tt_metal::Tensor get_tensor(std::string_view key) const;
 
 private:
-    std::vector<uint8_t> build_flatbuffer(const std::unordered_map<std::string, ValueType>& data_subset) const;
-    std::string get_prefix(std::string_view key) const;
-    std::vector<std::pair<std::string, std::vector<uint8_t>>> build_flatbuffer_files() const;
-    void do_serialize(
-        std::string_view dirname, const std::vector<std::pair<std::string, std::vector<uint8_t>>>& flatbuffer_files);
-    void deserialize_flatbuffer(const std::vector<uint8_t>& buffer, std::string_view prefix);
-    void do_deserialize(std::string_view filename);
+    void deserialize_flatbuffer(std::span<const uint8_t> buffer);
     // Helper function to get value from m_data
     template <typename T>
     T get_value(std::string_view key) const {
@@ -126,7 +133,18 @@ private:
         }
     }
 
+    // Store data that needs to be kept until serialize() (strings, vectors)
+    // Store only non-scalar data (strings, vectors) that need to be kept until serialize()
     std::unordered_map<std::string, ValueType> m_data;
+    std::unordered_map<std::string, tt::tt_metal::Tensor> m_tensors;
+
+    // FlatBufferBuilder for incremental building - scalars are built directly
+    flatbuffers::FlatBufferBuilder m_builder;
+    std::vector<flatbuffers::Offset<ttml::flatbuffer::KeyValuePair>> m_pairs;
+
+    // For deserialization
+    std::vector<std::byte> m_tensor_data;                   // Keep tensor data alive
+    std::shared_ptr<tt::tt_metal::MemoryPin> m_memory_pin;  // Keep memory pin alive
 };
 
 }  // namespace ttml::serialization

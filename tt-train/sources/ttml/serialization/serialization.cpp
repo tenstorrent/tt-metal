@@ -73,43 +73,16 @@ void get_enum(FlatBufferFile& file, std::string_view name, T& value) {
 }
 
 void write_ttnn_tensor(FlatBufferFile& file, std::string_view name, const tt::tt_metal::Tensor& tensor) {
-    // Use tt-metal's flatbuffer serialization methods directly
-    std::string tensor_filename = std::string(name) + ".tensorbin";
+    // Store tensor in m_tensors - it will be written to file during serialize()
+    // This ensures tensors are written to the correct directory
+    file.put(name, tensor);
 
-    // Store metadata before any conversion
+    // Store metadata needed to restore tensor properties (layout, shape, storage_type) on deserialization
     auto shape = tensor.logical_shape();
     auto data_type = tensor.dtype();
     auto layout = tensor.layout();
     auto storage_type = tensor.storage_type();
 
-    // For device tensors with ROW_MAJOR layout, we cannot read the buffer without converting layouts
-    // The device buffer read API (enqueue_read) requires TILE layout for non-sharded tensors
-    // This is a fundamental limitation - there is no way to get/set the buffer without converting layouts
-    // for ROW_MAJOR device tensors
-    tt::tt_metal::Tensor tensor_to_dump = tensor;
-    if (tensor.storage_type() == tt::tt_metal::StorageType::DEVICE &&
-        tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
-        TT_THROW(
-            "ROW_MAJOR device tensors cannot be serialized using dump_tensor_flatbuffer. "
-            "The device buffer read API requires TILE layout for non-sharded tensors. "
-            "Please convert the tensor to TILE layout or CPU before serialization: "
-            "tensor.to_layout(Layout::TILE) or tensor.cpu()");
-    }
-
-    // Write tensor file directly to the output directory
-    std::filesystem::path tensor_path = tensor_filename;
-    std::filesystem::path tensor_parent = tensor_path.parent_path();
-    if (!tensor_parent.empty()) {
-        std::filesystem::create_directories(tensor_parent);
-    }
-
-    std::string tensor_file_path = tensor_path.string();
-    tt::tt_metal::dump_tensor_flatbuffer(tensor_file_path, tensor_to_dump);
-
-    // Store the relative path in metadata
-    file.put(std::string(name) + "/tensor_file", std::string_view(tensor_filename));
-
-    // Store metadata needed to restore tensor properties (layout, shape, storage_type) on deserialization
     file.put(std::string(name) + "/shape", to_bytes(shape));
     file.put(std::string(name) + "/data_type", static_cast<int>(data_type));
     file.put(std::string(name) + "/layout", static_cast<int>(layout));
@@ -117,20 +90,8 @@ void write_ttnn_tensor(FlatBufferFile& file, std::string_view name, const tt::tt
 }
 
 void read_ttnn_tensor(FlatBufferFile& file, std::string_view name, tt::tt_metal::Tensor& tensor) {
-    // Use tt-metal's flatbuffer deserialization methods directly
-    std::string tensor_filename = file.get_string(std::string(name) + "/tensor_file");
-
-    // Resolve tensor file path relative to the flatbuffer file directory
-    std::filesystem::path tensor_path = tensor_filename;
-    std::string tensor_file_path = tensor_path.string();
-
-    // Check if tensor file exists on disk
-    if (!std::filesystem::exists(tensor_path)) {
-        throw std::runtime_error(fmt::format("Tensor file not found: {}", tensor_file_path));
-    }
-
-    // Use tt-metal's load_tensor_flatbuffer to read tensor from file
-    tensor = tt::tt_metal::load_tensor_flatbuffer(tensor_file_path, &ttml::autograd::ctx().get_device());
+    // Read tensor directly from m_tensors (loaded during deserialize)
+    tensor = file.get_tensor(name);
 
     // Restore original layout and shape if needed
     tt::tt_metal::Layout original_layout{};

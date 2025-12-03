@@ -79,7 +79,7 @@ class FlatBufferFileTest : public ::testing::Test {
 protected:
     void SetUp() override {
         temp_dir = create_unique_temp_dir();
-        test_filename = (temp_dir / "test_data.flatbuffer").string();
+        test_filename = temp_dir.string();  // Use directory path
     }
 
     void TearDown() override {
@@ -102,10 +102,14 @@ TEST_F(FlatBufferFileTest, SerializeDeserializePrimitives) {
     serializer.put("uint_key", static_cast<uint32_t>(123456789));
     serializer.put("string_key", "Hello, World!");
 
-    // Serialize to file
+    // Serialize to directory
     ASSERT_NO_THROW(serializer.serialize(test_filename));
 
-    // Deserialize from file
+    // Verify metadata file exists
+    std::filesystem::path metadata_file = std::filesystem::path(test_filename) / "metadata.flatbuffer";
+    ASSERT_TRUE(std::filesystem::exists(metadata_file)) << "Metadata file should exist: " << metadata_file;
+
+    // Deserialize from directory
     ttml::serialization::FlatBufferFile deserializer;
     ASSERT_NO_THROW(deserializer.deserialize(test_filename));
 
@@ -185,12 +189,15 @@ TEST_F(FlatBufferFileTest, EmptySerializerSerialization) {
 
 TEST_F(FlatBufferFileTest, NonExistentFileDeserialization) {
     ttml::serialization::FlatBufferFile deserializer;
-    EXPECT_THROW(deserializer.deserialize("nonexistent_file.flatbuffer"), std::runtime_error);
+    // Try to deserialize from non-existent directory
+    EXPECT_THROW(deserializer.deserialize("/nonexistent/directory/path"), std::runtime_error);
 }
 
 TEST_F(FlatBufferFileTest, InvalidDataDeserialization) {
-    // Write invalid data to file (not a valid tarball)
-    std::ofstream ofs(test_filename, std::ios::binary);
+    // Create directory and write invalid data to metadata file
+    std::filesystem::create_directories(test_filename);
+    std::filesystem::path metadata_file = std::filesystem::path(test_filename) / "metadata.flatbuffer";
+    std::ofstream ofs(metadata_file, std::ios::binary);
     ofs << "Invalid Data";
     ofs.close();
 
@@ -537,19 +544,20 @@ TEST_P(FlatBufferFileSerializationTest, ScopedTempDirWriteReadRoundTrip) {
     serializer.put(test_case.name + "/layout", static_cast<int>(tensor.layout()));
     serializer.put(test_case.name + "/storage_type", static_cast<int>(tensor.storage_type()));
 
-    std::filesystem::path output_file = temp_dir / "test_data";
-    ASSERT_NO_THROW(serializer.serialize(output_file.string()));
+    std::filesystem::path output_dir = temp_dir / "test_data";
+    ASSERT_NO_THROW(serializer.serialize(output_dir.string()));
 
-    std::filesystem::path base_file = temp_dir / "test_data_data.flatbuffer";
-    ASSERT_TRUE(std::filesystem::exists(base_file)) << "Individual flatbuffer file should exist: " << base_file;
-    EXPECT_GT(std::filesystem::file_size(base_file), 0);
+    // Check that metadata file exists
+    std::filesystem::path metadata_file = output_dir / "metadata.flatbuffer";
+    ASSERT_TRUE(std::filesystem::exists(metadata_file)) << "Metadata file should exist: " << metadata_file;
+    EXPECT_GT(std::filesystem::file_size(metadata_file), 0);
+
+    // Check that tensor files exist (if any tensors were written)
+    // Note: This test might not have tensors, so we just check metadata
 
     ttml::serialization::FlatBufferFile deserializer;
-    // For non-tarball mode, deserialize expects the base filename (without extension)
-    // The actual files are created with _data suffix (e.g., test_data_data.flatbuffer)
-    // but deserialize_non_tarball looks for files matching the pattern base_filename_*.flatbuffer
-    std::string deserialize_filename = (temp_dir / "test_data").string();
-    ASSERT_NO_THROW(deserializer.deserialize(deserialize_filename));
+    // Deserialize from directory
+    ASSERT_NO_THROW(deserializer.deserialize(output_dir.string()));
 
     int int_value = 0;
     EXPECT_NO_THROW(int_value = deserializer.get_int("int_key"));

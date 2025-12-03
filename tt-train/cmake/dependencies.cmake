@@ -93,29 +93,6 @@ CPMAddPackage(
 
 include(${PROJECT_SOURCE_DIR}/cmake/fetch_cli11.cmake)
 
-# gersemi: off
-CPMAddPackage(
-    NAME msgpack
-    GIT_REPOSITORY https://github.com/msgpack/msgpack-c.git
-    GIT_TAG cpp-6.1.0
-    PATCH_COMMAND
-        patch --dry-run -p1 -R < ${CMAKE_CURRENT_LIST_DIR}/msgpack.patch || patch -p1 < ${CMAKE_CURRENT_LIST_DIR}/msgpack.patch
-    OPTIONS
-        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
-        "MSGPACK_BUILD_EXAMPLES OFF"
-        "MSGPACK_BUILD_TESTS OFF"
-        "MSGPACK_BUILD_DOCS OFF"
-        "MSGPACK_ENABLE_CXX ON"
-        "MSGPACK_USE_BOOST OFF"
-        "MSGPACK_BUILD_HEADER_ONLY ON"
-        "MSGPACK_ENABLE_SHARED OFF"
-        "MSGPACK_ENABLE_STATIC OFF"
-        "MSGPACK_CXX20 ON"
-        "MSGPACK_NO_BOOST ON"
-)
-
-# gersemi: on
-
 ####################################################################################################################
 # spdlog
 ####################################################################################################################

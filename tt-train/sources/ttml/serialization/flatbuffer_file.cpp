@@ -4,7 +4,6 @@
 
 // Define FLATBUFFERS_LARGE_SIZE before any flatbuffers includes
 // This must be defined before flatbuffers.h is included (including in generated headers)
-// Define it as 1 to ensure it's treated as defined
 #ifndef FLATBUFFERS_LARGE_SIZE
 #define FLATBUFFERS_LARGE_SIZE 1
 #endif
@@ -13,6 +12,7 @@
 
 #include <flatbuffers/flatbuffers.h>
 
+#include <algorithm>
 #include <bit>
 #include <cstdint>
 #include <cstring>
@@ -21,6 +21,10 @@
 #include <stdexcept>
 #include <string>
 #include <tt-metalium/bfloat16.hpp>
+#include <ttnn/api/ttnn/tensor/serialization.hpp>
+#include <ttnn/core/tensor/flatbuffer/tensor_flatbuffer.hpp>
+#include <ttnn/tensor/tensor.hpp>
+#include <type_traits>
 #include <unordered_map>
 #include <variant>
 #include <vector>
@@ -28,48 +32,84 @@
 // Include generated FlatBuffer code
 #include "ttml_metadata_generated.h"
 
-namespace {
-
-constexpr const char flatbuffer_ext[] = ".flatbuffer";
-constexpr size_t flatbuffer_ext_len = sizeof(flatbuffer_ext) - 1;
-static_assert(flatbuffer_ext_len == 11);
-
-}  // namespace
-
 namespace ttml::serialization {
 FlatBufferFile::~FlatBufferFile() {
+    // Builder will be cleared automatically
+}
+
+FlatBufferFile::FlatBufferFile(FlatBufferFile&& other) noexcept :
+    m_data(std::move(other.m_data)),
+    m_tensors(std::move(other.m_tensors)),
+    m_builder(std::move(other.m_builder)),
+    m_pairs(std::move(other.m_pairs)),
+    m_tensor_data(std::move(other.m_tensor_data)),
+    m_memory_pin(std::move(other.m_memory_pin)) {
 }
 
 void FlatBufferFile::put(std::string_view key, bool value) {
-    m_data[std::string(key)] = value;
+    // Build directly into flatbuffer - no need to store in m_data
+    auto key_offset = m_builder.CreateString(key);
+    auto bool_val = ttml::flatbuffer::CreateBoolValue(m_builder, value);
+    auto kv_pair = ttml::flatbuffer::CreateKeyValuePair(
+        m_builder, key_offset, ttml::flatbuffer::SerializableType::BoolValue, bool_val.Union());
+    m_pairs.push_back(kv_pair);
 }
 
 void FlatBufferFile::put(std::string_view key, char value) {
-    m_data[std::string(key)] = value;
+    auto key_offset = m_builder.CreateString(key);
+    auto char_val = ttml::flatbuffer::CreateCharValue(m_builder, static_cast<int8_t>(value));
+    auto kv_pair = ttml::flatbuffer::CreateKeyValuePair(
+        m_builder, key_offset, ttml::flatbuffer::SerializableType::CharValue, char_val.Union());
+    m_pairs.push_back(kv_pair);
 }
 
 void FlatBufferFile::put(std::string_view key, int value) {
-    m_data[std::string(key)] = value;
+    auto key_offset = m_builder.CreateString(key);
+    auto int_val = ttml::flatbuffer::CreateIntValue(m_builder, value);
+    auto kv_pair = ttml::flatbuffer::CreateKeyValuePair(
+        m_builder, key_offset, ttml::flatbuffer::SerializableType::IntValue, int_val.Union());
+    m_pairs.push_back(kv_pair);
 }
 
 void FlatBufferFile::put(std::string_view key, float value) {
-    m_data[std::string(key)] = value;
+    auto key_offset = m_builder.CreateString(key);
+    auto float_val = ttml::flatbuffer::CreateFloatValue(m_builder, value);
+    auto kv_pair = ttml::flatbuffer::CreateKeyValuePair(
+        m_builder, key_offset, ttml::flatbuffer::SerializableType::FloatValue, float_val.Union());
+    m_pairs.push_back(kv_pair);
 }
 
 void FlatBufferFile::put(std::string_view key, double value) {
-    m_data[std::string(key)] = value;
+    auto key_offset = m_builder.CreateString(key);
+    auto double_val = ttml::flatbuffer::CreateDoubleValue(m_builder, value);
+    auto kv_pair = ttml::flatbuffer::CreateKeyValuePair(
+        m_builder, key_offset, ttml::flatbuffer::SerializableType::DoubleValue, double_val.Union());
+    m_pairs.push_back(kv_pair);
 }
 
 void FlatBufferFile::put(std::string_view key, uint32_t value) {
-    m_data[std::string(key)] = value;
+    auto key_offset = m_builder.CreateString(key);
+    auto uint32_val = ttml::flatbuffer::CreateUInt32Value(m_builder, value);
+    auto kv_pair = ttml::flatbuffer::CreateKeyValuePair(
+        m_builder, key_offset, ttml::flatbuffer::SerializableType::UInt32Value, uint32_val.Union());
+    m_pairs.push_back(kv_pair);
 }
 
 void FlatBufferFile::put(std::string_view key, size_t value) {
-    m_data[std::string(key)] = value;
+    auto key_offset = m_builder.CreateString(key);
+    auto size_t_val = ttml::flatbuffer::CreateSizeTValue(m_builder, static_cast<uint64_t>(value));
+    auto kv_pair = ttml::flatbuffer::CreateKeyValuePair(
+        m_builder, key_offset, ttml::flatbuffer::SerializableType::SizeTValue, size_t_val.Union());
+    m_pairs.push_back(kv_pair);
 }
 
 void FlatBufferFile::put(std::string_view key, bfloat16 value) {
-    m_data[std::string(key)] = value;
+    auto key_offset = m_builder.CreateString(key);
+    uint16_t bf16_bits = std::bit_cast<uint16_t>(value);
+    auto bf16_val = ttml::flatbuffer::CreateBFloat16Value(m_builder, bf16_bits);
+    auto kv_pair = ttml::flatbuffer::CreateKeyValuePair(
+        m_builder, key_offset, ttml::flatbuffer::SerializableType::BFloat16Value, bf16_val.Union());
+    m_pairs.push_back(kv_pair);
 }
 
 void FlatBufferFile::put(std::string_view key, std::string_view value) {
@@ -117,305 +157,155 @@ void FlatBufferFile::put(std::string_view key, const ValueType& value) {
     m_data[std::string(key)] = value;
 }
 
-// Helper function to build a flatbuffer from a subset of data
-std::vector<uint8_t> FlatBufferFile::build_flatbuffer(
-    const std::unordered_map<std::string, ValueType>& data_subset) const {
-    // Use a smaller initial buffer size to avoid hitting the 2GB limit
-    // FlatBuffers has a hard limit of ~2GB due to 32-bit signed offsets
-    // If data exceeds this, we need to split it further upstream
-    constexpr size_t INITIAL_BUFFER_SIZE = 512UL * 1024 * 1024;  // 512MB initial size
-    flatbuffers::FlatBufferBuilder builder(INITIAL_BUFFER_SIZE);
-    std::vector<flatbuffers::Offset<ttml::flatbuffer::KeyValuePair>> kv_pairs;
+void FlatBufferFile::put(std::string_view key, const tt::tt_metal::Tensor& tensor) {
+    m_tensors[std::string(key)] = tensor;
+}
 
-    for (const auto& [key, value] : data_subset) {
-        auto key_str = builder.CreateString(key);
-        flatbuffers::Offset<void> union_offset;
-        ttml::flatbuffer::SerializableType union_type;
+void FlatBufferFile::serialize(std::string_view file_path) {
+    // Always treat file_path as a directory path
+    // Create metadata.flatbuffer inside it
+    std::filesystem::path tensor_dir(file_path);
+    std::filesystem::path metadata_file = tensor_dir / "metadata.flatbuffer";
 
+    // Create directory if needed
+    std::error_code ec;
+    std::filesystem::create_directories(tensor_dir, ec);
+    if (ec) {
+        throw std::runtime_error(fmt::format("Failed to create directory {}: {}", tensor_dir.string(), ec.message()));
+    }
+
+    // Write each tensor to its own file
+    for (const auto& [key, tensor] : m_tensors) {
+        // Sanitize key for filename (replace / with _, remove invalid chars)
+        std::string sanitized_key = std::string(key);
+        std::replace(sanitized_key.begin(), sanitized_key.end(), '/', '_');
+        std::replace(sanitized_key.begin(), sanitized_key.end(), '\\', '_');
+
+        std::filesystem::path tensor_file = tensor_dir / (sanitized_key + ".tensorbin");
+
+        // Convert tensor to CPU if needed
+        tt::tt_metal::Tensor cpu_tensor = tensor.cpu();
+
+        // Write tensor to file using tt-metal's dump function
+        tt::tt_metal::dump_tensor_flatbuffer(tensor_file.string(), cpu_tensor);
+    }
+
+    // Build KeyValuePair for each entry in m_data (strings and vectors only)
+    for (const auto& [key, value] : m_data) {
+        auto key_offset = m_builder.CreateString(key);
+        flatbuffers::Offset<void> value_offset;
+        ttml::flatbuffer::SerializableType value_type;
+
+        // Create the appropriate value type based on the variant
         std::visit(
-            [&builder, &union_offset, &union_type](const auto& val) {
-                using T = std::decay_t<decltype(val)>;
-                if constexpr (std::is_same_v<T, bool>) {
-                    auto offset = ttml::flatbuffer::CreateBoolValue(builder, val);
-                    union_offset = offset.Union();
-                    union_type = ttml::flatbuffer::SerializableType::BoolValue;
-                } else if constexpr (std::is_same_v<T, char>) {
-                    auto offset = ttml::flatbuffer::CreateCharValue(builder, static_cast<int8_t>(val));
-                    union_offset = offset.Union();
-                    union_type = ttml::flatbuffer::SerializableType::CharValue;
-                } else if constexpr (std::is_same_v<T, int>) {
-                    auto offset = ttml::flatbuffer::CreateIntValue(builder, val);
-                    union_offset = offset.Union();
-                    union_type = ttml::flatbuffer::SerializableType::IntValue;
-                } else if constexpr (std::is_same_v<T, float>) {
-                    auto offset = ttml::flatbuffer::CreateFloatValue(builder, val);
-                    union_offset = offset.Union();
-                    union_type = ttml::flatbuffer::SerializableType::FloatValue;
-                } else if constexpr (std::is_same_v<T, double>) {
-                    auto offset = ttml::flatbuffer::CreateDoubleValue(builder, val);
-                    union_offset = offset.Union();
-                    union_type = ttml::flatbuffer::SerializableType::DoubleValue;
-                } else if constexpr (std::is_same_v<T, uint32_t>) {
-                    auto offset = ttml::flatbuffer::CreateUInt32Value(builder, val);
-                    union_offset = offset.Union();
-                    union_type = ttml::flatbuffer::SerializableType::UInt32Value;
-                } else if constexpr (std::is_same_v<T, size_t>) {
-                    auto offset = ttml::flatbuffer::CreateSizeTValue(builder, static_cast<uint64_t>(val));
-                    union_offset = offset.Union();
-                    union_type = ttml::flatbuffer::SerializableType::SizeTValue;
-                } else if constexpr (std::is_same_v<T, bfloat16>) {
-                    uint16_t bf16_bits = std::bit_cast<uint16_t>(val);
-                    auto offset = ttml::flatbuffer::CreateBFloat16Value(builder, bf16_bits);
-                    union_offset = offset.Union();
-                    union_type = ttml::flatbuffer::SerializableType::BFloat16Value;
-                } else if constexpr (std::is_same_v<T, std::string>) {
-                    auto str_offset = builder.CreateString(val);
-                    auto offset = ttml::flatbuffer::CreateStringValue(builder, str_offset);
-                    union_offset = offset.Union();
-                    union_type = ttml::flatbuffer::SerializableType::StringValue;
+            [&](auto&& arg) {
+                using T = std::decay_t<decltype(arg)>;
+                if constexpr (std::is_same_v<T, std::string>) {
+                    auto str_offset = m_builder.CreateString(arg);
+                    auto str_val = ttml::flatbuffer::CreateStringValue(m_builder, str_offset);
+                    value_offset = str_val.Union();
+                    value_type = ttml::flatbuffer::SerializableType::StringValue;
                 } else if constexpr (std::is_same_v<T, std::vector<char>>) {
-                    std::vector<int8_t> int8_vec(val.begin(), val.end());
-                    auto vec_offset = builder.CreateVector(int8_vec);
-                    auto offset = ttml::flatbuffer::CreateVectorChar(builder, vec_offset);
-                    union_offset = offset.Union();
-                    union_type = ttml::flatbuffer::SerializableType::VectorChar;
+                    std::vector<int8_t> int8_vec(arg.begin(), arg.end());
+                    auto vec_offset = m_builder.CreateVector(int8_vec);
+                    auto vec_val = ttml::flatbuffer::CreateVectorChar(m_builder, vec_offset);
+                    value_offset = vec_val.Union();
+                    value_type = ttml::flatbuffer::SerializableType::VectorChar;
                 } else if constexpr (std::is_same_v<T, std::vector<int>>) {
-                    auto vec_offset = builder.CreateVector(val);
-                    auto offset = ttml::flatbuffer::CreateVectorInt(builder, vec_offset);
-                    union_offset = offset.Union();
-                    union_type = ttml::flatbuffer::SerializableType::VectorInt;
+                    auto vec_offset = m_builder.CreateVector(arg);
+                    auto vec_val = ttml::flatbuffer::CreateVectorInt(m_builder, vec_offset);
+                    value_offset = vec_val.Union();
+                    value_type = ttml::flatbuffer::SerializableType::VectorInt;
                 } else if constexpr (std::is_same_v<T, std::vector<float>>) {
-                    auto vec_offset = builder.CreateVector(val);
-                    auto offset = ttml::flatbuffer::CreateVectorFloat(builder, vec_offset);
-                    union_offset = offset.Union();
-                    union_type = ttml::flatbuffer::SerializableType::VectorFloat;
+                    auto vec_offset = m_builder.CreateVector(arg);
+                    auto vec_val = ttml::flatbuffer::CreateVectorFloat(m_builder, vec_offset);
+                    value_offset = vec_val.Union();
+                    value_type = ttml::flatbuffer::SerializableType::VectorFloat;
                 } else if constexpr (std::is_same_v<T, std::vector<double>>) {
-                    auto vec_offset = builder.CreateVector(val);
-                    auto offset = ttml::flatbuffer::CreateVectorDouble(builder, vec_offset);
-                    union_offset = offset.Union();
-                    union_type = ttml::flatbuffer::SerializableType::VectorDouble;
+                    auto vec_offset = m_builder.CreateVector(arg);
+                    auto vec_val = ttml::flatbuffer::CreateVectorDouble(m_builder, vec_offset);
+                    value_offset = vec_val.Union();
+                    value_type = ttml::flatbuffer::SerializableType::VectorDouble;
                 } else if constexpr (std::is_same_v<T, std::vector<uint8_t>>) {
-                    auto vec_offset = builder.CreateVector(val);
-                    auto offset = ttml::flatbuffer::CreateVectorUInt8(builder, vec_offset);
-                    union_offset = offset.Union();
-                    union_type = ttml::flatbuffer::SerializableType::VectorUInt8;
+                    auto vec_offset = m_builder.CreateVector(arg);
+                    auto vec_val = ttml::flatbuffer::CreateVectorUInt8(m_builder, vec_offset);
+                    value_offset = vec_val.Union();
+                    value_type = ttml::flatbuffer::SerializableType::VectorUInt8;
                 } else if constexpr (std::is_same_v<T, std::vector<uint32_t>>) {
-                    auto vec_offset = builder.CreateVector(val);
-                    auto offset = ttml::flatbuffer::CreateVectorUInt32(builder, vec_offset);
-                    union_offset = offset.Union();
-                    union_type = ttml::flatbuffer::SerializableType::VectorUInt32;
+                    auto vec_offset = m_builder.CreateVector(arg);
+                    auto vec_val = ttml::flatbuffer::CreateVectorUInt32(m_builder, vec_offset);
+                    value_offset = vec_val.Union();
+                    value_type = ttml::flatbuffer::SerializableType::VectorUInt32;
                 } else if constexpr (std::is_same_v<T, std::vector<bfloat16>>) {
-                    std::vector<uint16_t> uint16_vec;
-                    uint16_vec.reserve(val.size());
-                    for (bfloat16 bf16 : val) {
-                        uint16_vec.push_back(std::bit_cast<uint16_t>(bf16));
+                    std::vector<uint16_t> bf16_vec;
+                    bf16_vec.reserve(arg.size());
+                    for (const auto& bf16 : arg) {
+                        bf16_vec.push_back(std::bit_cast<uint16_t>(bf16));
                     }
-                    auto vec_offset = builder.CreateVector(uint16_vec);
-                    auto offset = ttml::flatbuffer::CreateVectorBFloat16(builder, vec_offset);
-                    union_offset = offset.Union();
-                    union_type = ttml::flatbuffer::SerializableType::VectorBFloat16;
+                    auto vec_offset = m_builder.CreateVector(bf16_vec);
+                    auto vec_val = ttml::flatbuffer::CreateVectorBFloat16(m_builder, vec_offset);
+                    value_offset = vec_val.Union();
+                    value_type = ttml::flatbuffer::SerializableType::VectorBFloat16;
                 } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
-                    std::vector<flatbuffers::Offset<flatbuffers::String>> string_offsets;
-                    for (const auto& s : val) {
-                        string_offsets.push_back(builder.CreateString(s));
+                    std::vector<flatbuffers::Offset<flatbuffers::String>> str_offsets;
+                    str_offsets.reserve(arg.size());
+                    for (const auto& s : arg) {
+                        str_offsets.push_back(m_builder.CreateString(s));
                     }
-                    auto vec_offset = builder.CreateVector(string_offsets);
-                    auto offset = ttml::flatbuffer::CreateVectorString(builder, vec_offset);
-                    union_offset = offset.Union();
-                    union_type = ttml::flatbuffer::SerializableType::VectorString;
+                    auto vec_offset = m_builder.CreateVector(str_offsets);
+                    auto vec_val = ttml::flatbuffer::CreateVectorString(m_builder, vec_offset);
+                    value_offset = vec_val.Union();
+                    value_type = ttml::flatbuffer::SerializableType::VectorString;
                 }
             },
             value);
 
-        auto kv_pair = ttml::flatbuffer::CreateKeyValuePair(builder, key_str, union_type, union_offset);
-        kv_pairs.push_back(kv_pair);
+        auto kv_pair = ttml::flatbuffer::CreateKeyValuePair(m_builder, key_offset, value_type, value_offset);
+        m_pairs.push_back(kv_pair);
     }
 
-    auto pairs_vector = builder.CreateVector(kv_pairs);
-    auto root = ttml::flatbuffer::CreateTTMLData(builder, pairs_vector);
-    builder.Finish(root);
+    // Build KeyValuePair for each tensor - store file path as string
+    for (const auto& [key, tensor] : m_tensors) {
+        auto key_offset = m_builder.CreateString(key);
 
-    // Copy flatbuffer data to vector
-    const void* flatbuffer_data = builder.GetBufferPointer();
-    size_t flatbuffer_size = builder.GetSize();
-    return std::vector<uint8_t>(
-        reinterpret_cast<const uint8_t*>(flatbuffer_data),
-        reinterpret_cast<const uint8_t*>(flatbuffer_data) + flatbuffer_size);
+        // Sanitize key for filename (same as above)
+        std::string sanitized_key = std::string(key);
+        std::replace(sanitized_key.begin(), sanitized_key.end(), '/', '_');
+        std::replace(sanitized_key.begin(), sanitized_key.end(), '\\', '_');
+
+        // Store relative path to tensor file
+        std::string tensor_file_path = sanitized_key + ".tensorbin";
+        auto tensor_path_offset = m_builder.CreateString(tensor_file_path);
+        auto str_val = ttml::flatbuffer::CreateStringValue(m_builder, tensor_path_offset);
+        auto kv_pair = ttml::flatbuffer::CreateKeyValuePair(
+            m_builder, key_offset, ttml::flatbuffer::SerializableType::StringValue, str_val.Union());
+        m_pairs.push_back(kv_pair);
+    }
+
+    // Create the TTMLData table and finish the builder
+    auto pairs_offset = m_builder.CreateVector(m_pairs);
+    auto ttml_data = ttml::flatbuffer::CreateTTMLData(m_builder, pairs_offset);
+    m_builder.Finish(ttml_data);
+
+    // Write flatbuffer to file
+    std::ofstream file(metadata_file.string(), std::ios::binary);
+    if (!file.is_open()) {
+        throw std::runtime_error(fmt::format("Failed to open file for writing: {}", metadata_file.string()));
+    }
+
+    auto data = m_builder.GetBufferSpan();
+    file.write(std::bit_cast<const char*>(data.data()), data.size());
+
+    if (!file.good()) {
+        throw std::runtime_error(fmt::format("Failed to write flatbuffer data to file: {}", metadata_file.string()));
+    }
+
+    // Clear builder and pairs for next use
+    m_builder.Clear();
+    m_pairs.clear();
 }
 
-// Extract top-level prefix from a key (everything before first '/')
-std::string FlatBufferFile::get_prefix(std::string_view key) const {
-    size_t pos = key.find('/');
-    if (pos != std::string::npos) {
-        return std::string(key.substr(0, pos));
-    }
-    return "data";  // Default prefix for keys without '/'
-}
-
-// Helper function to group data by prefix and build flatbuffer files
-std::vector<std::pair<std::string, std::vector<uint8_t>>> FlatBufferFile::build_flatbuffer_files() const {
-    // Group data by top-level prefix
-    std::unordered_map<std::string, std::unordered_map<std::string, ValueType>> grouped_data;
-
-    for (const auto& [key, value] : m_data) {
-        std::string prefix = get_prefix(key);
-        std::string suffix = key;
-        size_t pos = key.find('/');
-        if (pos != std::string::npos) {
-            suffix = key.substr(pos + 1);  // Remove prefix from key
-        }
-        grouped_data[prefix][suffix] = value;
-    }
-
-    // Build a flatbuffer file for each prefix group
-    // Split large groups to avoid exceeding FlatBuffers' 2GB limit
-    std::vector<std::pair<std::string, std::vector<uint8_t>>> flatbuffer_files;
-    constexpr size_t MAX_ESTIMATED_SIZE = 1500UL * 1024 * 1024;  // ~1.5GB safety limit
-
-    for (const auto& [prefix, data_subset] : grouped_data) {
-        if (data_subset.empty()) {
-            continue;  // Skip empty groups
-        }
-
-        // Estimate total size of data_subset
-        size_t estimated_size = 0;
-        for (const auto& [key, value] : data_subset) {
-            estimated_size += key.size() + 100;  // Key + overhead
-            if (std::holds_alternative<std::vector<uint8_t>>(value)) {
-                estimated_size += std::get<std::vector<uint8_t>>(value).size();
-            } else if (std::holds_alternative<std::vector<int>>(value)) {
-                estimated_size += std::get<std::vector<int>>(value).size() * sizeof(int);
-            } else if (std::holds_alternative<std::vector<float>>(value)) {
-                estimated_size += std::get<std::vector<float>>(value).size() * sizeof(float);
-            } else if (std::holds_alternative<std::vector<double>>(value)) {
-                estimated_size += std::get<std::vector<double>>(value).size() * sizeof(double);
-            } else if (std::holds_alternative<std::vector<uint32_t>>(value)) {
-                estimated_size += std::get<std::vector<uint32_t>>(value).size() * sizeof(uint32_t);
-            } else if (std::holds_alternative<std::vector<bfloat16>>(value)) {
-                estimated_size += std::get<std::vector<bfloat16>>(value).size() * sizeof(uint16_t);
-            } else if (std::holds_alternative<std::string>(value)) {
-                estimated_size += std::get<std::string>(value).size();
-            }
-        }
-
-        // If estimated size is too large, split into chunks
-        if (estimated_size > MAX_ESTIMATED_SIZE) {
-            std::vector<std::pair<std::string, ValueType>> items(data_subset.begin(), data_subset.end());
-            size_t chunk_index = 0;
-            size_t current_chunk_size = 0;
-            std::unordered_map<std::string, ValueType> chunk;
-
-            for (const auto& [key, value] : items) {
-                size_t item_size = key.size() + 100;
-                if (std::holds_alternative<std::vector<uint8_t>>(value)) {
-                    item_size += std::get<std::vector<uint8_t>>(value).size();
-                } else if (std::holds_alternative<std::vector<int>>(value)) {
-                    item_size += std::get<std::vector<int>>(value).size() * sizeof(int);
-                } else if (std::holds_alternative<std::vector<float>>(value)) {
-                    item_size += std::get<std::vector<float>>(value).size() * sizeof(float);
-                } else if (std::holds_alternative<std::vector<double>>(value)) {
-                    item_size += std::get<std::vector<double>>(value).size() * sizeof(double);
-                } else if (std::holds_alternative<std::vector<uint32_t>>(value)) {
-                    item_size += std::get<std::vector<uint32_t>>(value).size() * sizeof(uint32_t);
-                } else if (std::holds_alternative<std::string>(value)) {
-                    item_size += std::get<std::string>(value).size();
-                }
-
-                // If adding this item would exceed limit, finalize current chunk
-                if (!chunk.empty() && current_chunk_size + item_size > MAX_ESTIMATED_SIZE) {
-                    auto chunk_data = build_flatbuffer(chunk);
-                    if (!chunk_data.empty()) {
-                        flatbuffer_files.emplace_back(
-                            fmt::format("{}_cunk{}", prefix, chunk_index), std::move(chunk_data));
-                        chunk_index++;
-                    }
-                    chunk.clear();
-                    current_chunk_size = 0;
-                }
-
-                chunk[key] = value;
-                current_chunk_size += item_size;
-            }
-
-            // Finalize last chunk
-            if (!chunk.empty()) {
-                auto chunk_data = build_flatbuffer(chunk);
-                if (!chunk_data.empty()) {
-                    flatbuffer_files.emplace_back(
-                        fmt::format("{}_chunk{}", prefix, chunk_index), std::move(chunk_data));
-                }
-            }
-        } else {
-            // Size is acceptable, build normally
-            auto flatbuffer_data = build_flatbuffer(data_subset);
-            if (flatbuffer_data.empty()) {
-                // This shouldn't happen if data_subset is not empty, but check anyway
-                continue;
-            }
-            flatbuffer_files.emplace_back(fmt::format("{}{}", prefix, flatbuffer_ext), std::move(flatbuffer_data));
-        }
-    }
-
-    return flatbuffer_files;
-}
-
-void FlatBufferFile::do_serialize(
-    std::string_view dirname, const std::vector<std::pair<std::string, std::vector<uint8_t>>>& flatbuffer_files) {
-    // Extract directory from the command-line dirname
-    std::filesystem::path dirname_path(dirname);
-    if (dirname_path.empty()) {
-        dirname_path = std::filesystem::current_path();
-    }
-
-    // Write individual files
-    std::string base_filename = dirname_path.string();
-    if (base_filename.size() >= flatbuffer_ext_len &&
-        base_filename.substr(base_filename.size() - flatbuffer_ext_len) == flatbuffer_ext) {
-        base_filename = base_filename.substr(0, base_filename.size() - flatbuffer_ext_len);
-    }
-
-    // Write flatbuffer metadata files
-    for (const auto& [file_name, flatbuffer_data] : flatbuffer_files) {
-        // Construct individual filename: base_filename_prefix.flatbuffer
-        const std::string individual_filename = fmt::format("{}_{}", base_filename, file_name);
-
-        {
-            std::ofstream file(individual_filename, std::ios::binary);
-            if (!file.is_open()) {
-                throw std::runtime_error(fmt::format("Failed to open file for writing: {}", individual_filename));
-            }
-
-            file.write(reinterpret_cast<const char*>(flatbuffer_data.data()), flatbuffer_data.size());
-            if (!file.good()) {
-                throw std::runtime_error(
-                    fmt::format("Failed to write flatbuffer data to file: {}", individual_filename));
-            }
-        }  // File automatically flushed and closed here
-    }
-}
-
-void FlatBufferFile::serialize(std::string_view filename) {
-    // Set output directory first (in case tensors are written after this call)
-    // This ensures tensor files written before serialize are in the right place
-
-    auto flatbuffer_files = build_flatbuffer_files();
-
-    // If no files were created (empty serializer), create an empty file with default "data" prefix
-    if (flatbuffer_files.empty()) {
-        if (!m_data.empty()) {
-            throw std::runtime_error("Failed to create any flatbuffer files during serialization");
-        }
-        // Create an empty flatbuffer file for empty serializer
-        std::unordered_map<std::string, ValueType> empty_data;
-        auto empty_flatbuffer = build_flatbuffer(empty_data);
-        flatbuffer_files.emplace_back(fmt::format("data{}", flatbuffer_ext), std::move(empty_flatbuffer));
-    }
-
-    do_serialize(filename, flatbuffer_files);
-}
-
-// Helper function to deserialize a flatbuffer and merge into m_data with prefix
-void FlatBufferFile::deserialize_flatbuffer(const std::vector<uint8_t>& buffer, std::string_view prefix) {
+void FlatBufferFile::deserialize_flatbuffer(std::span<const uint8_t> buffer) {
     if (buffer.empty()) {
         return;
     }
@@ -437,17 +327,7 @@ void FlatBufferFile::deserialize_flatbuffer(const std::vector<uint8_t>& buffer, 
             continue;
         }
 
-        std::string suffix(kv_pair->key()->c_str());
-        std::string key;
-        if (prefix.empty() || prefix == "data") {
-            // Keys without '/' were stored with default prefix "data" or empty prefix
-            // Don't add prefix back to preserve original key structure
-            key = suffix;
-        } else {
-            // Keys with '/' were stored with their actual prefix
-            key = std::string(prefix) + "/" + suffix;
-        }
-
+        const std::string key(kv_pair->key()->c_str());
         switch (kv_pair->value_type()) {
             case ttml::flatbuffer::SerializableType::BoolValue: {
                 auto* val = kv_pair->value_as_BoolValue();
@@ -584,75 +464,99 @@ void FlatBufferFile::deserialize_flatbuffer(const std::vector<uint8_t>& buffer, 
     }
 }
 
-void FlatBufferFile::do_deserialize(std::string_view filename) {
-    // Read individual flatbuffer files
-    const auto path = std::filesystem::path(filename);
-    std::string base_path = path.parent_path().string();
-    if (base_path.empty()) {
-        base_path = ".";
-    }
+void FlatBufferFile::deserialize(std::string_view filename) {
+    m_data.clear();
+    m_tensors.clear();
+    m_tensor_data.clear();
+    m_memory_pin.reset();
+    m_builder.Clear();
+    m_pairs.clear();
 
-    // Extract just the filename part (without extension) for pattern matching
-    std::string base_name = path.string();
-    // Remove .flatbuffer extension if present
-    if (base_name.size() >= flatbuffer_ext_len &&
-        base_name.substr(base_name.size() - flatbuffer_ext_len) == flatbuffer_ext) {
-        base_name = base_name.substr(0, base_name.size() - flatbuffer_ext_len);
-    }
-    const std::string base_filename = std::filesystem::path(base_name).filename().string();
-    const std::string search_pattern = fmt::format("{}_", base_filename);
+    // Determine metadata file path - can be directory or file
+    std::filesystem::path path(filename);
+    std::filesystem::path metadata_file;
+    std::filesystem::path tensor_dir;
 
-    bool found_any_files = false;
-
-    // Search for files matching the pattern: base_name_*.flatbuffer
-    try {
-        for (const auto& entry : std::filesystem::directory_iterator(base_path)) {
-            if (!entry.is_regular_file()) {
-                continue;
-            }
-
-            std::string entry_name = entry.path().filename().string();
-
-            // Check if filename starts with search_pattern and ends with .flatbuffer
-            if (entry_name.size() >= search_pattern.size() + flatbuffer_ext_len &&
-                entry_name.substr(0, search_pattern.size()) == search_pattern &&
-                entry_name.substr(entry_name.size() - flatbuffer_ext_len) == flatbuffer_ext) {
-                // Extract prefix from filename: remove base_name_ prefix and .flatbuffer extension
-                std::string prefix = entry_name.substr(
-                    search_pattern.size(), entry_name.size() - search_pattern.size() - flatbuffer_ext_len);
-
-                // Read the file
-                std::ifstream file(entry.path(), std::ios::binary | std::ios::ate);
-                if (!file.is_open()) {
-                    continue;  // Skip files we can't open
-                }
-
-                size_t file_size = file.tellg();
-                file.seekg(0, std::ios::beg);
-
-                std::vector<uint8_t> buffer(file_size);
-                file.read(reinterpret_cast<char*>(buffer.data()), file_size);
-                if (file.good() || file_size == 0) {
-                    deserialize_flatbuffer(buffer, prefix);
-                    found_any_files = true;
+    if (std::filesystem::exists(path) && std::filesystem::is_directory(path)) {
+        // Path is a directory, look for metadata.flatbuffer
+        tensor_dir = path;
+        metadata_file = tensor_dir / "metadata.flatbuffer";
+        if (!std::filesystem::exists(metadata_file)) {
+            // Try to find any .flatbuffer file in the directory
+            for (const auto& entry : std::filesystem::directory_iterator(tensor_dir)) {
+                if (entry.is_regular_file() && entry.path().extension() == ".flatbuffer") {
+                    metadata_file = entry.path();
+                    break;
                 }
             }
         }
-    } catch (const std::filesystem::filesystem_error& e) {
-        throw std::runtime_error(fmt::format("Failed to read directory for flatbuffer files: {}", e.what()));
+    } else {
+        // Path is a file, use it as metadata file
+        metadata_file = path;
+        tensor_dir = metadata_file.parent_path();
+        if (tensor_dir.empty()) {
+            tensor_dir = std::filesystem::current_path();
+        }
     }
 
-    if (!found_any_files) {
-        throw std::runtime_error(
-            fmt::format("No flatbuffer files found matching pattern: {}_*.flatbuffer in {}", base_filename, base_path));
+    if (!std::filesystem::exists(metadata_file)) {
+        throw std::runtime_error(fmt::format("Metadata file not found: {}", metadata_file.string()));
     }
-}
 
-void FlatBufferFile::deserialize(std::string_view filename) {
-    // Clear existing data
-    m_data.clear();
+    std::ifstream file(metadata_file.string(), std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+        throw std::runtime_error(fmt::format("Failed to open file for reading: {}", metadata_file.string()));
+    }
 
-    do_deserialize(filename);
+    size_t file_size = file.tellg();
+    file.seekg(0, std::ios::beg);
+
+    if (file_size == 0) {
+        return;
+    }
+
+    // Read entire flatbuffer (new format doesn't use header_size prefix)
+    std::vector<uint8_t> buffer(file_size);
+    file.read(reinterpret_cast<char*>(buffer.data()), file_size);
+
+    // Deserialize flatbuffer metadata
+    deserialize_flatbuffer(buffer);
+
+    // Load tensors from separate files
+    // Get TTMLData to find tensor file paths stored as StringValue
+    auto* ttml_data = ttml::flatbuffer::GetTTMLData(buffer.data());
+    if (ttml_data && ttml_data->pairs()) {
+        for (const auto* kv_pair : *ttml_data->pairs()) {
+            if (!kv_pair || !kv_pair->key()) {
+                continue;
+            }
+
+            const std::string key(kv_pair->key()->c_str());
+
+            // Check if this is a tensor file path (stored as StringValue ending in .tensorbin)
+            if (kv_pair->value_type() == ttml::flatbuffer::SerializableType::StringValue) {
+                auto* str_val = kv_pair->value_as_StringValue();
+                if (str_val && str_val->value()) {
+                    std::string file_path_str(str_val->value()->c_str());
+                    // Check if it's a tensor file (ends with .tensorbin)
+                    if (file_path_str.ends_with(".tensorbin")) {
+                        // Resolve tensor file path relative to metadata file directory
+                        std::filesystem::path tensor_file = tensor_dir / file_path_str;
+
+                        if (!std::filesystem::exists(tensor_file)) {
+                            throw std::runtime_error(fmt::format(
+                                "Tensor file not found: {} (resolved from {})", tensor_file.string(), file_path_str));
+                        }
+
+                        // Load tensor from file using tt-metal's load function
+                        tt::tt_metal::Tensor tensor =
+                            tt::tt_metal::load_tensor_flatbuffer(tensor_file.string(), nullptr);
+                        m_tensors[key] = tensor;
+                    }
+                }
+            }
+        }
+    }
 }
 
 // Methods to get values
@@ -702,6 +606,15 @@ ValueType FlatBufferFile::get_value_type(std::string_view key) const {
         return it->second;
     } else {
         throw std::runtime_error(fmt::format("Key not found: {}", key));
+    }
+}
+
+tt::tt_metal::Tensor FlatBufferFile::get_tensor(std::string_view key) const {
+    auto it = m_tensors.find(std::string(key));
+    if (it != m_tensors.end()) {
+        return it->second;
+    } else {
+        throw std::runtime_error(fmt::format("Tensor key not found: {}", key));
     }
 }
 

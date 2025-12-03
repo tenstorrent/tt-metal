@@ -56,7 +56,7 @@ class TensorFileTest : public ::testing::Test {
 protected:
     void SetUp() override {
         temp_dir = create_unique_temp_dir();
-        test_filename = (temp_dir / "test_tensor.flatbuffer").string();
+        test_filename = temp_dir.string();  // Use directory path
 
         ttml::autograd::ctx().open_device();
     }
@@ -84,9 +84,20 @@ TEST_F(TensorFileTest, SerializeDeserializeTensor) {
 
     // Write tensor to file
     ttml::serialization::write_ttnn_tensor(serializer, "tensor", tensor_ones);
-    serializer.serialize(test_filename);
+    // Use directory path for serialization
+    std::filesystem::path output_dir = temp_dir / "model_data";
+    serializer.serialize(output_dir.string());
+
+    // Verify metadata file exists
+    std::filesystem::path metadata_file = output_dir / "metadata.flatbuffer";
+    ASSERT_TRUE(std::filesystem::exists(metadata_file)) << "Metadata file should exist: " << metadata_file;
+
+    // Verify tensor file was created
+    std::filesystem::path tensor_file = output_dir / "tensor.tensorbin";
+    ASSERT_TRUE(std::filesystem::exists(tensor_file)) << "Tensor file should exist: " << tensor_file;
+
     ttml::serialization::FlatBufferFile deserializer;
-    deserializer.deserialize(test_filename);
+    deserializer.deserialize(output_dir.string());
 
     // Read tensor from file
     tt::tt_metal::Tensor tensor_read = tensor_zeros;
