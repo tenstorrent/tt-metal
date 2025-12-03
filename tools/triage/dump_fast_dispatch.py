@@ -169,6 +169,9 @@ def read_wait_globals(
     Returns a populated DumpWaitGlobalsData if any relevant values were found; otherwise None.
     """
 
+    if location == OnChipCoordinate.create("1,7", location.device):
+        return None
+
     # If no kernel loaded, nothing to read
     dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
     if dispatcher_core_data.kernel_path is None:
