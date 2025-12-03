@@ -12,6 +12,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_static_channels_ct_args.hpp"
+#include "tt_metal/api/tt-metalium/tt_align.hpp"
 
 #include <array>
 #include <utility>
@@ -399,11 +400,20 @@ constexpr size_t to_sender_remote_ack_counters_base_address =
 constexpr size_t to_sender_remote_completion_counters_base_address =
     conditional_get_compile_time_arg<multi_txq_enabled, TO_SENDER_CREDIT_COUNTERS_START_IDX + 1>();
 
+// To optimize for CPU bottlneck instructions, instead of sending acks individually, based on the specific credit addresses, the router instead
+// will send all credits at once. This eliminates a handful of instructions per ack. This behaviour is completely safe when using these unbounded counter
+// credits because the credits are unbounded unsigned counters. Any overflow materializes as a roll back to zero, and subtractions are safe with unsigned. 
+constexpr size_t to_senders_credits_base_address = std::min(to_sender_remote_ack_counters_base_address, to_sender_remote_completion_counters_base_address);
+
 constexpr size_t local_receiver_ack_counters_base_address =
     conditional_get_compile_time_arg<multi_txq_enabled, TO_SENDER_CREDIT_COUNTERS_START_IDX + 2>();
 
 constexpr size_t local_receiver_completion_counters_base_address =
     conditional_get_compile_time_arg<multi_txq_enabled, TO_SENDER_CREDIT_COUNTERS_START_IDX + 3>();
+
+constexpr size_t local_receiver_credits_base_address = std::min(local_receiver_ack_counters_base_address, local_receiver_completion_counters_base_address);
+constexpr size_t total_number_of_receiver_to_sender_credit_num_bytes = (std::max(local_receiver_ack_counters_base_address, local_receiver_completion_counters_base_address) - local_receiver_credits_base_address) * 2;
+constexpr size_t total_number_of_receiver_to_sender_credit_eth_words = tt::align(total_number_of_receiver_to_sender_credit_num_bytes, ETH_WORD_SIZE_BYTES);
 
 static_assert(
     !multi_txq_enabled || to_sender_remote_ack_counters_base_address != 0,

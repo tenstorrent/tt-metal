@@ -22,29 +22,18 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
             ack_counters[i] = 0;
         }
     }
-
-    static FORCE_INLINE uint32_t round_down_to_eth_word_alignment(uint32_t addr) { return addr & ~0xF; }
-
+    
     FORCE_INLINE void send_completion_credit(uint8_t src_id) {
         completion_counters[src_id]++;
         completion_counters_base_ptr[src_id] = completion_counters[src_id];
-        internal_::eth_send_packet_bytes_unsafe(
-            receiver_txq_id,
-            round_down_to_eth_word_alignment(reinterpret_cast<uint32_t>(this->completion_counters_base_ptr + src_id)),
-            round_down_to_eth_word_alignment(
-                to_sender_remote_completion_counters_base_address + src_id * sizeof(uint32_t)),
-            ETH_WORD_SIZE_BYTES);
+        update_sender_side_credits();
     }
 
     // Assumes !eth_txq_is_busy() -- PLEASE CHECK BEFORE CALLING
     FORCE_INLINE void send_ack_credit(uint8_t src_id) {
         ack_counters[src_id]++;
         ack_counters_base_ptr[src_id] = ack_counters[src_id];
-        internal_::eth_send_packet_bytes_unsafe(
-            receiver_txq_id,
-            round_down_to_eth_word_alignment(reinterpret_cast<uint32_t>(this->ack_counters_base_ptr + src_id)),
-            round_down_to_eth_word_alignment(to_sender_remote_ack_counters_base_address + src_id * sizeof(uint32_t)),
-            ETH_WORD_SIZE_BYTES);
+        update_sender_side_credits();
     }
 
     volatile tt_l1_ptr uint32_t* completion_counters_base_ptr;
@@ -52,6 +41,15 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
     // Local memory copy to save an L1 load
     std::array<uint32_t, NUM_SENDER_CHANNELS> completion_counters;
     std::array<uint32_t, NUM_SENDER_CHANNELS> ack_counters;
+
+private:
+    FORCE_INLINE void update_sender_side_credits() const {
+        internal_::eth_send_packet_bytes_unsafe(
+            receiver_txq_id,
+            local_receiver_credits_base_address,
+            to_senders_credits_base_address,
+            total_number_of_receiver_to_sender_credit_eth_words);
+    }
 };
 
 struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
