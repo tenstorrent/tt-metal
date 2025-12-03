@@ -28,6 +28,14 @@ from ttexalens.context import Context
 from ttexalens.tt_exalens_init import init_ttexalens
 
 
+def print_process_output(proc):
+    stdout, stderr = proc.communicate(input=None, timeout=0)
+    print("\n=== Process stdout ===")
+    print(stdout.decode("utf-8") if stdout else "(empty)")
+    print("\n=== Process stderr ===")
+    print(stderr.decode("utf-8") if stderr else "(empty)")
+
+
 @pytest.fixture(scope="class")
 def cause_hang_with_app(request):
     global metal_home
@@ -51,16 +59,14 @@ def cause_hang_with_app(request):
 
         # Check if the process has exited
         if proc.returncode != 0:
-            # Print process output for debugging
             print("The application did not hang as expected.")
-            stdout, stderr = proc.communicate(input=None, timeout=0)
-            print("\n=== Process stdout ===")
-            print(stdout.decode("utf-8") if stdout else "(empty)")
-            print("\n=== Process stderr ===")
-            print(stderr.decode("utf-8") if stderr else "(empty)")
+            print_process_output(proc)
             raise RuntimeError("The application did not hang as expected.")
     else:
         time.sleep(timeout)
+        # Pytest will only print the output if the test fails, so we print can always print it here
+        print_process_output(proc)
+
     request.cls.app_configuration = app_configuration
     request.cls.exalens_context = init_ttexalens()
     try:
