@@ -4,6 +4,7 @@
 import math
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.gpt_oss.config import MeshConfig, Mode, ModeConfig
@@ -334,6 +335,12 @@ class Experts:
                     dtype=ttnn.bfloat8_b,
                 )
 
+                logger.warning(f"down.shape: {down.shape}")
+                logger.warning(f"batch_size: {batch_size}")
+                logger.warning(f"self.num_experts: {self.num_experts}")
+                logger.warning(f"seq_len: {seq_len}")
+                logger.warning(f"SPLIT_SIZE: {SPLIT_SIZE}")
+                logger.warning(f"self.hidden_size: {self.hidden_size}")
                 down_in0.deallocate(True)
                 next_states = ttnn.reshape(
                     down,
