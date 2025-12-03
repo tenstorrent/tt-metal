@@ -56,8 +56,8 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
     def initialize_vllm_model(
         cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, optimizations: str = None
     ):
-        model_path = "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528"
-        cache_dir = "~/yalrawwash/DeepSeek-R1-0528-Cache"
+        model_path = os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/deepseek_v3/reference")
+        cache_dir = os.getenv("DEEPSEEK_V3_CACHE", "generated/deepseek_v3")
         tokenizer = load_tokenizer(model_path)
 
         model = cls(
