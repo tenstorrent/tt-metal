@@ -10,7 +10,7 @@ from models.experimental.vadv2.tt.tt_transformer import TtVADPerceptionTransform
 from models.experimental.vadv2.reference.base_box3d import LiDARInstance3DBoxes
 from models.experimental.vadv2.tt.tt_utils import inverse_sigmoid, bbox_xyxy_to_cxcywh
 from models.experimental.vadv2.reference.nms_free_coder import MapNMSFreeCoder, CustomNMSFreeCoder
-from models.experimental.vadv2.tt.common import advanced_indexing, boolean_indexing
+from models.experimental.vadv2.tt.common import advanced_indexing
 
 import os
 
@@ -1026,15 +1026,16 @@ class TtVADHead:
         for i in range(query_score.shape[0]):
             dim = query.shape[-1]
             valid_qnum = ttnn.sum(query_idx[i])
-            # query = ttnn.to_torch(query)
-            # query_pos = ttnn.to_torch(query_pos)
-            # query_idx = ttnn.to_torch(query_idx, dtype=torch.bool)
-            # valid_query = query[i, query_idx[i]]
-            # valid_query_pos = query_pos[i, query_idx[i]]
-            # valid_query = ttnn.from_torch(valid_query, dtype=ttnn.bfloat16, device=self.device)
-            # valid_query_pos = ttnn.from_torch(valid_query_pos, dtype=ttnn.bfloat16, device=self.device)
-            valid_query = boolean_indexing(query, query_idx[i])
-            valid_query_pos = boolean_indexing(query_pos, query_idx[i])
+            query = ttnn.to_torch(query)
+            query_pos = ttnn.to_torch(query_pos)
+            query_idx = ttnn.to_torch(query_idx, dtype=torch.bool)
+            valid_query = query[i, query_idx[i]]
+            valid_query_pos = query_pos[i, query_idx[i]]
+            valid_query = ttnn.from_torch(valid_query, dtype=ttnn.bfloat16, device=self.device)
+            valid_query_pos = ttnn.from_torch(valid_query_pos, dtype=ttnn.bfloat16, device=self.device)
+            # Disabling as might cause issue with edge cases as torch.cat does not work with ttnn.tensor as input
+            # valid_query = boolean_indexing(query, query_idx[i])
+            # valid_query_pos = boolean_indexing(query_pos, query_idx[i])
 
             pad_qnum = batch_max_qnum - valid_qnum
             padding_mask = torch.tensor([False])
