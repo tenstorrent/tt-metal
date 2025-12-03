@@ -12,14 +12,14 @@
 namespace ttnn::operations::data_movement::program {
 
 struct TransposeCNSharedVariables {
-    tt::tt_metal::KernelHandle reader_kernel_id;
-    tt::tt_metal::KernelHandle writer_kernel_id;
+    tt::tt_metal::KernelHandle reader_kernel_id{};
+    tt::tt_metal::KernelHandle writer_kernel_id{};
     CoreRangeSet core_group_1;
     CoreRangeSet core_group_2;
-    uint32_t num_cores_total;
-    uint32_t num_cores_y;
-    uint32_t num_tiles_per_core_group_1;
-    uint32_t num_tiles_per_core_group_2;
+    uint32_t num_cores_total{};
+    uint32_t num_cores_y{};
+    uint32_t num_tiles_per_core_group_1{};
+    uint32_t num_tiles_per_core_group_2{};
 };
 
 struct TransposeCNProgramFactory {
