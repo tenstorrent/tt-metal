@@ -49,12 +49,12 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      run-wh-n300-fabric-tests: ${{ inputs.run-wh-n300-fabric-tests != false }}
-      run-wh-t3k-fabric-tests: ${{ inputs.run-wh-t3k-fabric-tests != false }}
-      run-wh-6u-fabric-tests: ${{ inputs.run-wh-6u-fabric-tests != false }}
-      run-bh-multi-card-unit-tests: ${{ inputs.run-bh-multi-card-unit-tests != false }}
+      run-wh-n300-fabric-tests: ${{ github.event_name == 'workflow_dispatch' && inputs.run-wh-n300-fabric-tests != false || github.event_name == 'push' }}
+      run-wh-t3k-fabric-tests: ${{ github.event_name == 'workflow_dispatch' && inputs.run-wh-t3k-fabric-tests != false || github.event_name == 'push' }}
+      run-wh-6u-fabric-tests: ${{ github.event_name == 'workflow_dispatch' && inputs.run-wh-6u-fabric-tests != false || github.event_name == 'push' }}
+      run-bh-multi-card-unit-tests: ${{ github.event_name == 'workflow_dispatch' && inputs.run-bh-multi-card-unit-tests != false || github.event_name == 'push' }}
   fabric-perf-tests:
-    if: ${{ inputs.run-wh-t3k-perf-tests != false }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run-wh-t3k-perf-tests != false || github.event_name == 'push' }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tm-fabric-tests-perf-impl.yaml
