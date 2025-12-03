@@ -65,10 +65,7 @@ class Attention:
 
         # Determine sliding window based on layer index
         self.use_sliding_window = self.layer_idx % 2 == 0
-        if self.use_sliding_window:
-            # Update config's sliding window based on layer
-            object.__setattr__(config, "sliding_window", config.sliding_window)
-        else:
+        if not self.use_sliding_window:
             object.__setattr__(config, "sliding_window", None)
 
         # Load weights

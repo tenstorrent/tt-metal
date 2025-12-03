@@ -65,7 +65,6 @@ def _process_prefill_chunk(
     # Prepare sparsity
     # Note: prefill_sparsity is cached and reused, don't deallocate it
     sparsity_repeated = ttnn.repeat(prefill_sparsity, (1, 1, group_size, 1))
-    routing_weights_4d = ttnn.unsqueeze_to_4D(routing_weights)
     sparsity_layout = sparsity_repeated
 
     num_experts_per_tok = (config.num_experts // ep) * group_size
