@@ -1,29 +1,27 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <string>
-
+#include "reduce_op_multi_core_w_program_factory.hpp"
+#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
+#include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
+#include <cmath>
 
 using namespace tt::constants;
-using uint32_t = std::uint32_t;
 
-namespace tt {
+namespace ttnn::operations::reduction::generic::program {
 
-namespace tt_metal {
-
-operation::ProgramWithCallbacks reduce_multi_core_w(
-    const Tensor& a,
-    Tensor& output,
-    ReduceOpMath reduce_op,
-    const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-    float scaler,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    using namespace tt;
+    using namespace tt::tt_metal;
+    const auto& a = tensor_args.input_tensor;
+    auto& output = tensor_return_value;
     const auto& shape = a.padded_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
 
@@ -31,12 +29,13 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     uint32_t Ht = H / TILE_HEIGHT;
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(a.device()->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(a.device()->arch(), operation_attributes.compute_kernel_config);
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
+
     // Scaler datatype is hardcoded bfloat16 due to tile creation in reader
     tt::DataFormat scaler_cb_data_format = tt::DataFormat::Float16_b;
     uint32_t scaler_single_tile_size = tt::tile_size(scaler_cb_data_format);
@@ -50,10 +49,10 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     uint32_t num_cores;
     CoreRangeSet all_cores, core_group_1, core_group_2;
     uint32_t num_rows_per_core_group_1, num_rows_per_core_group_2;
-    if (sub_core_grids.has_value()) {
+    if (operation_attributes.sub_core_grids.has_value()) {
         std::tie(
             num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2) =
-            tt::tt_metal::split_work_to_cores(*sub_core_grids, num_rows);
+            tt::tt_metal::split_work_to_cores(*operation_attributes.sub_core_grids, num_rows);
     } else {
         std::tie(
             num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2) =
@@ -80,7 +79,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
             .set_page_size(output_cb_index, dst_single_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    bfloat16 bfloat_scaler_value = bfloat16::truncate(scaler);
+    bfloat16 bfloat_scaler_value = bfloat16::truncate(operation_attributes.scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     tt_metal::Buffer* src_buffer = a.buffer();
     std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
@@ -89,7 +88,8 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
-    std::map<std::string, std::string> reduce_defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::W);
+    std::map<std::string, std::string> reduce_defines =
+        reduce_op_utils::get_defines(operation_attributes.math_op, ReduceOpDim::W);
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
@@ -139,7 +139,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
 
     uint32_t out_dim_divider = Wt;
     std::vector<CoreCoord> cores;
-    if (sub_core_grids.has_value()) {
+    if (operation_attributes.sub_core_grids.has_value()) {
         for (const auto& range : all_cores.ranges()) {
             for (int y = range.start_coord.y; y <= range.end_coord.y; ++y) {
                 for (int x = range.start_coord.x; x <= range.end_coord.x; ++x) {
@@ -183,34 +183,34 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
         num_tiles_read += num_tensor_tiles_per_core;
     }
 
-    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, cores](
-                                              const void* operation,
-                                              const Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto* src_dram_buffer = input_tensors.at(0).buffer();
-
-        auto* dst_dram_buffer = output_tensors.at(0).buffer();
-
-        auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-        auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
-        for (const auto& core : cores) {
-            {
-                auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
-                runtime_args[0] = src_dram_buffer->address();
-            }
-
-            {
-                auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
-                runtime_args[0] = dst_dram_buffer->address();
-            }
-        }
-    };
-
-    return {std::move(program), override_runtime_args_callback};
+    return {std::move(program), {reader_kernel_id, writer_kernel_id, cores}};
 }
 
-}  // namespace tt_metal
+void ReduceMultiCoreWProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    using namespace tt;
+    using namespace tt::tt_metal;
+    auto* src_dram_buffer = tensor_args.input_tensor.buffer();
+    auto* dst_dram_buffer = tensor_return_value.buffer();
 
-}  // namespace tt
+    auto& reader_runtime_args_by_core =
+        GetRuntimeArgs(cached_program.program, cached_program.shared_variables.reader_kernel_id);
+    auto& writer_runtime_args_by_core =
+        GetRuntimeArgs(cached_program.program, cached_program.shared_variables.writer_kernel_id);
+    for (const auto& core : cached_program.shared_variables.cores) {
+        {
+            auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
+            runtime_args[0] = src_dram_buffer->address();
+        }
+
+        {
+            auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
+            runtime_args[0] = dst_dram_buffer->address();
+        }
+    }
+}
+
+}  // namespace ttnn::operations::reduction::generic::program
