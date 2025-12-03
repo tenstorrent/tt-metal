@@ -11,7 +11,7 @@
 
 namespace ttnn::operations::data_movement::transpose::program {
 
-struct TransposeHCSharedVariables {
+struct TransposeHCTiledSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
     tt::tt_metal::KernelHandle writer_kernel_id{};
     CoreRangeSet core_group_1;
@@ -20,12 +20,10 @@ struct TransposeHCSharedVariables {
     uint32_t num_cores_y{};
     uint32_t num_tiles_per_core_group_1{};
     uint32_t num_tiles_per_core_group_2{};
-    bool is_row_major{};
-    bool is_tiled_interleaved{};
 };
 
-struct TransposeHCProgramFactory {
-    using shared_variables_t = TransposeHCSharedVariables;
+struct TransposeHCTiledProgramFactory {
+    using shared_variables_t = TransposeHCTiledSharedVariables;
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
