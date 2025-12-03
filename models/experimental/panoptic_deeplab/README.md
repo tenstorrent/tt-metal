@@ -1,7 +1,7 @@
 # Panoptic DeepLab
 
 ## Platforms:
-    Made for BOS chips, mostly tested on Blackhole with a core grid of 20 cores.
+    Made for BOS chips, tested on Blackhole with both 20-core (5x4 grid) and all-core configurations.
 
 ## Introduction
 Panoptic DeepLab is a unified model for panoptic segmentation that combines semantic segmentation and instance segmentation into a single framework. The model uses a shared ResNet backbone with separate heads for semantic segmentation and instance embedding prediction, enabling comprehensive scene understanding by simultaneously identifying both "stuff" (background regions like road, sky) and "things" (countable objects like cars, people).
@@ -21,15 +21,22 @@ Place the downloaded `model_final_bd324a.pkl` file in `models/experimental/panop
 
 ## How to Run
 
+The model supports both optimized 20-core (5x4 grid) and all-core configurations:
+- **20 cores (optimized)**: Set `TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3"`
+- **All cores**: Omit/Unset `TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE` for device default core grid
+
 ### Run the Full Model Test
 ```bash
-# From tt-metal root directory
+# 20-core optimized configuration
 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py
+
+# All cores full grid configuration (13x10 on blackhole)
+pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py
 ```
 
 ### Run Component Tests
 ```bash
-# Test ASPP component
+# Test ASPP component (works on any core configuration)
 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panoptic_deeplab/tests/pcc/test_aspp.py
 
 # Test ResNet backbone
@@ -41,6 +48,8 @@ TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panopti
 # Test instance embedding head
 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panoptic_deeplab/tests/pcc/test_insemb.py
 ```
+
+**Note**: All tests automatically adapt to the available core grid. The 20-core configuration uses optimized matmul configs, while other configurations use auto-config for flexibility.
 
 ### Run Device Performance Tests
 ```bash
