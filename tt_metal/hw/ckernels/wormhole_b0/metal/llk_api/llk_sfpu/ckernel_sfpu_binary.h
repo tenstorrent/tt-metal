@@ -54,8 +54,9 @@ inline void calculate_sfpu_binary_mul(const uint dst_index_in0, const uint dst_i
         sfpi::vFloat result = in0 * in1;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            // Software RNE approach (kept for reference):
+            // software RNE approach:
             result = float32_to_bf16_rne(result);
+
             // To match FPU behaviour for bfloat16 multiplication, 0 * x = 0 and x * 0 = 0
             v_if(in0 == 0 || in1 == 0) { result = 0.0f; }
             v_endif;

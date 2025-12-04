@@ -8,7 +8,7 @@
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_sigmoid.h"
-#include "llk_defs.h
+#include "llk_defs.h"
 
 namespace ckernel::sfpu {
 
@@ -134,7 +134,7 @@ inline void calculate_tanh() {
         l_reg[sfpi::LRegs::LReg0] = l0;
         l_reg[sfpi::LRegs::LReg1] = l1;
         l_reg[sfpi::LRegs::LReg2] = l2;
-    } else {  // APPROX_MODE is Precise
+    } else {  // APPROXIMATION_MODE is false
 
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
