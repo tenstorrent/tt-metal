@@ -6,7 +6,7 @@
 import pytest
 from loguru import logger
 
-from models.demos.mobilenetv2.common import MOBILENETV2_BATCH_SIZE
+from models.demos.vision.classification.mobilenetv2.common import MOBILENETV2_BATCH_SIZE
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 
 
@@ -21,7 +21,7 @@ def test_perf_device_mobilenetv2(batch_size, expected_perf):
     subdir = "ttnn_mobilenetv2"
     num_iterations = 1
     margin = 0.03
-    command = f"pytest models/demos/mobilenetv2/tests/pcc/test_mobilenetv2.py"
+    command = f"pytest models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
     expected_perf_cols = {inference_time_key: expected_perf}
