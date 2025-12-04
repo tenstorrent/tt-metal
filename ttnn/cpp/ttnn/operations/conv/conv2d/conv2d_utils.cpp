@@ -15,7 +15,8 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -1416,26 +1417,11 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
 
         output_slice_dim_start += output_slice_size;
         slice_index++;
-        if (conv_config.in_place) {
-            if (params.stride[0] > params.kernel_size[0] || params.stride[1] > params.kernel_size[1]) {
-                log_warning(
-                    tt::LogOp,
-                    "conv_config has in-place halo enabled, but it may be disabled as the halo output is smaller than "
-                    "the "
-                    "input. This may lead to OOM errors with auto-slicing. If so, please disable in-place halo in the "
-                    "Conv2dConfig.");
-            }
-            max_memory_consumed = std::max(
-                max_memory_consumed,
-                this_slice_approx_max_halo_size + this_slice_l1_usage.tensor_allocation_size +
-                    this_slice_l1_usage.CB_allocation_size);
-        } else {
-            max_memory_consumed = std::max(
-                {max_memory_consumed,
-                 this_slice_approx_max_halo_size + this_slice_l1_usage.tensor_allocation_size +
-                     this_slice_l1_usage.CB_allocation_size,
-                 this_slice_input_size + this_slice_approx_max_halo_size});
-        }
+        max_memory_consumed = std::max(
+            {max_memory_consumed,
+             this_slice_approx_max_halo_size + this_slice_l1_usage.tensor_allocation_size +
+                 this_slice_l1_usage.CB_allocation_size,
+             this_slice_input_size + this_slice_approx_max_halo_size});
         if (max_memory_consumed > old_max_memory_consumed) {
             old_max_memory_consumed = max_memory_consumed;
             max_memory_index = slice_index;

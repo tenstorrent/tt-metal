@@ -83,6 +83,9 @@ target_sources(
         all_gather_matmul_async/all_gather_matmul_async.cpp
         all_gather_matmul_async/device/all_gather_matmul_async_op.cpp
         all_gather_matmul_async/device/multi_core/all_gather_matmul_async_op_multi_core.cpp
+        strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async.cpp
+        strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.cpp
+        strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_program.cpp
         matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp
         matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_op.cpp
         matmul_reduce_scatter_async/device/multi_core/matmul_reduce_scatter_async_op_multi_core.cpp
@@ -90,17 +93,20 @@ target_sources(
         reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.cpp
         reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_program.cpp
         send_recv_async/send_async/send_async.cpp
-        send_recv_async/send_async/device/send_async_op.cpp
-        send_recv_async/send_async/device/send_async_program.cpp
+        send_recv_async/send_async/device/send_async_op_device_operation.cpp
+        send_recv_async/send_async/device/send_async_op_program_factory.cpp
         send_recv_async/recv_async/recv_async.cpp
-        send_recv_async/recv_async/device/recv_async_op.cpp
-        send_recv_async/recv_async/device/recv_async_program.cpp
+        send_recv_async/recv_async/device/recv_async_op_device_operation.cpp
+        send_recv_async/recv_async/device/recv_async_op_program_factory.cpp
         neighbor_pad_async/neighbor_pad_async.cpp
-        neighbor_pad_async/device/neighbor_pad_async_op.cpp
-        neighbor_pad_async/device/neighbor_pad_async_program.cpp
+        neighbor_pad_async/device/neighbor_pad_async_device_operation.cpp
+        neighbor_pad_async/device/neighbor_pad_async_program_factory.cpp
         slice_reshard_async/slice_reshard_async.cpp
         slice_reshard_async/device/slice_reshard_async_op.cpp
         slice_reshard_async/device/slice_reshard_async_program.cpp
+        strided_all_gather_async/strided_all_gather_async.cpp
+        strided_all_gather_async/device/strided_all_gather_async_op.cpp
+        strided_all_gather_async/device/strided_all_gather_async_program.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})

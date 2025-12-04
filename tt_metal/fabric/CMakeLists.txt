@@ -38,6 +38,8 @@ target_sources(
         erisc_datamover_builder.cpp
         fabric_router_channel_mapping.cpp
         fabric_router_builder.cpp
+        builder/fabric_builder_config.cpp
+        builder/fabric_builder_helpers.cpp
         builder/fabric_core_placement.cpp
         builder/fabric_channel_allocator.cpp
         builder/fabric_static_sized_channels_allocator.cpp
@@ -61,7 +63,6 @@ target_sources(
         serialization/physical_system_descriptor_serialization.cpp
         serialization/intermesh_connections_serialization.cpp
         serialization/port_descriptor_serialization.cpp
-        erisc_datamover_builder_helper.cpp
         ccl/ccl_common.cpp
         physical_system_descriptor.cpp
         topology_mapper.cpp

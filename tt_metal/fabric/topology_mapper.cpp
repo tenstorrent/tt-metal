@@ -1029,7 +1029,6 @@ void TopologyMapper::rebuild_lookup_maps() {
 std::map<FabricNodeId, ChipId> TopologyMapper::get_local_logical_mesh_chip_id_to_physical_chip_id_mapping() const {
     std::map<FabricNodeId, ChipId> mapping;
     const auto& my_host = physical_system_descriptor_.my_host_name();
-    // Only include ASICs that are part of the current fabric mapping and reside on this host
     // Use chip_topology_mapping_ for centralized access
     for (const auto& info : chip_topology_mapping_) {
         if (info.is_mapped && !info.hostname.empty() && info.hostname == my_host) {

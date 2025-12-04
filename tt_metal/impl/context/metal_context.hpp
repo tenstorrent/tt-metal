@@ -122,7 +122,7 @@ private:
     void clear_dram_state(ChipId device_id);
     void clear_launch_messages_on_eth_cores(ChipId device_id);
     void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
-    void construct_control_plane();
+    void initialize_control_plane_impl();  // Private implementation without mutex
     void teardown_fabric_config();
     void teardown_base_objects();
 
@@ -167,6 +167,10 @@ private:
 
     // Used to track which FW has been built already
     std::unordered_set<uint64_t> firmware_built_keys_;
+    std::mutex firmware_built_keys_mutex_;
+
+    // Mutex to protect control_plane_ for thread-safe access
+    std::mutex control_plane_mutex_;
 
     // Written to device as part of FW init, device-specific
     std::unordered_map<ChipId, std::vector<int32_t>> dram_bank_offset_map_;

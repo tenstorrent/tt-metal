@@ -251,6 +251,8 @@ public:
     virtual std::string common_flags(const Params& params) const = 0;
     // Returns the path to the linker script, relative to the tt-metal root.
     virtual std::string linker_script(const Params& params) const = 0;
+    // Returns true if firmware should be linked into the kernel as an object.
+    virtual bool firmware_is_kernel_object(const Params& params) const = 0;
     // Returns the target name for the build.
     // Note: this is added only to keep the target names consistent with the previous
     // implementation of build, to avoid breaking users / tools.
@@ -314,9 +316,9 @@ private:
     float nan_ = 0.0f;
     float inf_ = 0.0f;
 
-    void initialize_wh(bool is_base_routing_fw_enabled);
-    void initialize_bh(bool enable_2_erisc_mode);
-    void initialize_qa();
+    void initialize_wh(bool is_base_routing_fw_enabled, uint32_t profiler_dram_bank_size_per_risc_bytes);
+    void initialize_bh(bool enable_2_erisc_mode, uint32_t profiler_dram_bank_size_per_risc_bytes);
+    void initialize_qa(uint32_t profiler_dram_bank_size_per_risc_bytes);
 
     // Functions where implementation varies by architecture
     RelocateFunc relocate_func_;
@@ -339,7 +341,10 @@ private:
     VerifyFwVersionFunc verify_eth_fw_version_func_;
 
 public:
-    Hal(tt::ARCH arch, bool is_base_routing_fw_enabled, bool enable_2_erisc_mode);
+    Hal(tt::ARCH arch,
+        bool is_base_routing_fw_enabled,
+        bool enable_2_erisc_mode,
+        uint32_t profiler_dram_bank_size_per_risc_bytes);
 
     tt::ARCH get_arch() const { return arch_; }
 

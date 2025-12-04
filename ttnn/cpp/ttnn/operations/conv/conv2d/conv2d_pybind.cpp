@@ -17,7 +17,7 @@
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "ttnn/types.hpp"
@@ -247,7 +247,6 @@ void py_bind_conv2d(py::module& module) {
             bool,
             bool,
             bool,
-            bool,
             std::optional<bool>,
             bool,
             std::optional<bool>,
@@ -269,7 +268,6 @@ void py_bind_conv2d(py::module& module) {
         py::arg("enable_act_double_buffer") = false,
         py::arg("enable_weights_double_buffer") = false,
         py::arg("full_inner_dim") = false,
-        py::arg("in_place") = false,
         py::arg("enable_kernel_stride_folding") = std::nullopt,
         py::arg("enable_activation_reuse") = false,
         py::arg("force_split_reader") = std::nullopt,
@@ -363,11 +361,6 @@ void py_bind_conv2d(py::module& module) {
             By default inner dim of activation matrix will be sliced by kernel_h.
             If L1 constraints allowed it we can use full inner dim.
             This will increase perf, but it will take more L1 space.
-        )doc");
-    py_conv_config.def_readwrite("in_place", &Conv2dConfig::in_place, R"doc(
-            Enables support for in_place halo.
-            This re-uses the input tensor as the output for halo, overwriting the input tensor.
-            This can be used if the input tensor is not used by any other op after the conv op.
         )doc");
 
     py_conv_config.def_readwrite("enable_kernel_stride_folding", &Conv2dConfig::enable_kernel_stride_folding, R"doc(

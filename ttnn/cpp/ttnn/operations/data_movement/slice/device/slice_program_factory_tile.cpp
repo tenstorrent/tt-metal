@@ -34,8 +34,8 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tile(
     const tt::tt_metal::KernelHandle& unary_reader_kernel_id,
     const tt::tt_metal::KernelHandle& unary_writer_kernel_id,
     std::vector<uint32_t>& accumulated_total_per_dim) {
-    const auto input_buffer = input_tensor.buffer();
-    const auto output_buffer = output_tensor.buffer();
+    auto* const input_buffer = input_tensor.buffer();
+    auto* const output_buffer = output_tensor.buffer();
     const auto& input_shape = input_tensor.padded_shape();
     const auto& output_shape = output_tensor.padded_shape();
 

@@ -301,8 +301,8 @@ void SliceRmShardedProgramFactory::override_runtime_arguments(
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    auto src_buffer_a = tensor_args.input.buffer();
-    auto dst_buffer = output.buffer();
+    auto* src_buffer_a = tensor_args.input.buffer();
+    auto* dst_buffer = output.buffer();
 
     UpdateDynamicCircularBufferAddress(cached_program.program, cached_program.shared_variables.cb_src0, *src_buffer_a);
     UpdateDynamicCircularBufferAddress(cached_program.program, cached_program.shared_variables.cb_output, *dst_buffer);
