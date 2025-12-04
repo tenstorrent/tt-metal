@@ -14,7 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.gemma3.tt.model_config import determine_device_name, parse_decoder_json
+from models.demos.multimodal.gemma3.tt.model_config import determine_device_name, parse_decoder_json
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill, sample_host
@@ -79,7 +79,7 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
 ):
-    from models.demos.gemma3.tt.model_config import ModelArgs
+    from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
     from models.tt_transformers.tt.model import Transformer
 
     tt_model_args = ModelArgs(

@@ -45,7 +45,7 @@ from transformers.utils import (
     torch_int,
 )
 
-from models.demos.gemma3.reference.siglip_vision.reference.instrument import instrument
+from models.demos.multimodal.gemma3.reference.siglip_vision.reference.instrument import instrument
 
 if is_flash_attn_2_available():
     from transformers.modeling_flash_attention_utils import _flash_attention_forward
