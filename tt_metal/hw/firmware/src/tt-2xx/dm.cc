@@ -82,12 +82,18 @@ inline void wait_subordinates() {
 
 inline void trigger_sync_register_init() { mailboxes->subordinate_sync.trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
 
-int main() {
+extern "C" uint32_t _start1() {
     configure_csr();
     std::uint64_t hartid;
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
+    if (hartid == 0) {
+        extern uint32_t __ldm_data_start[];
+        do_crt1(__ldm_data_start);
+    }
+    extern uint32_t __ldm_tdata_init[];
+    do_thread_crt1(__ldm_tdata_init);
     WAYPOINT("I");
-    // clear bss
+
     // handle noc_tobank ???
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
     noc_index = 0;

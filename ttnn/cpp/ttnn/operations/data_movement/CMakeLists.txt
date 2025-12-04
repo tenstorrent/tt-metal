@@ -64,9 +64,7 @@ target_sources(
             sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
             sharded/interleaved_to_sharded/interleaved_to_sharded.hpp
             sharded/reshard/device/reshard_op.hpp
-            sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation_types.hpp
-            sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.hpp
-            sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp
+            sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.hpp
             slice/slice.hpp
             tilize_with_val_padding/tilize_with_val_padding.hpp
             tilize_with_val_padding/device/tilize_with_val_padding_op.hpp
@@ -98,11 +96,11 @@ target_sources(
         bcast/bcast.cpp
         bcast/bcast_types.cpp
         bcast/device/bcast_device_operation.cpp
-        bcast/device/multi_core_h/bcast_op_multi_core_h.cpp
-        bcast/device/multi_core_h/bcast_op_sharded_h.cpp
-        bcast/device/multi_core_h/bcast_op_sharded_h_optimised.cpp
-        bcast/device/multi_core_hw/bcast_op_multi_core_hw.cpp
-        bcast/device/multi_core_w/bcast_op_multi_core_w.cpp
+        bcast/device/bcast_multi_core_h_program_factory.cpp
+        bcast/device/bcast_sharded_h_program_factory.cpp
+        bcast/device/bcast_sharded_h_optimised_program_factory.cpp
+        bcast/device/bcast_multi_core_w_program_factory.cpp
+        bcast/device/bcast_multi_core_hw_program_factory.cpp
         chunk/chunk.cpp
         clone/clone.cpp
         clone/device/clone_device_operation.cpp
@@ -173,14 +171,13 @@ target_sources(
         sharded/reshard/device/nd_reshard_program_factory.cpp
         sharded/reshard/reshard.cpp
         sharded/sharded_common.cpp
-        sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.cpp
+        sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.cpp
         sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.cpp
         sharded/sharded_to_interleaved/sharded_to_interleaved.cpp
         sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op.cpp
         sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_program_factory.cpp
         sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial.cpp
-        sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_device_operation.cpp
-        sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_program_factory.cpp
+        sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.cpp
         sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial.cpp
         slice/device/slice_device_operation.cpp
         slice/device/slice_program_factory_rm.cpp
