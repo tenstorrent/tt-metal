@@ -335,12 +335,6 @@ jobs:
       run-metal-cpp-unit-tests: true
 
   triage-tests:
-    if: ${{ false && (
-        github.ref_name == 'main' ||
-        needs.find-changes.outputs.cmake-changed == 'true' ||
-        needs.find-changes.outputs.any-code-changed == 'true'
-        )
-      }}
     needs: [ build, find-changes ]
     strategy:
       fail-fast: false
