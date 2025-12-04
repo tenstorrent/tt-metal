@@ -105,16 +105,19 @@ tt::stl::hash::hash_t AllReduceAsyncDeviceOperation::compute_program_hash(
     auto input_memory_config = input_tensor.memory_config();
     auto output_dtype = args.dtype;
 
+    bool has_sub_device_id = args.sub_device_id.has_value();
+    auto worker_cores = has_sub_device_id
+                            ? input_tensor.device()->worker_cores(
+                                  tt::tt_metal::HalProgrammableCoreType::TENSIX, args.sub_device_id.value())
+                            : CoreRangeSet(CoreRange({0, 0}, {0, 0}));
     return tt::tt_metal::operation::hash_operation<AllReduceAsyncDeviceOperation>(
         args.num_links,
         args.ring_size,
         args.output_mem_config,
         args.topology,
         args.cluster_axis,
-        args.sub_device_id.has_value(),
-        args.sub_device_id.has_value() ? input_tensor.device()->worker_cores(
-                                             tt::tt_metal::HalProgrammableCoreType::TENSIX, args.sub_device_id.value())
-                                       : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
+        has_sub_device_id,
+        worker_cores,
         input_shape,
         input_memory_layout,
         input_dtype,
