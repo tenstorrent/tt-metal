@@ -59,19 +59,19 @@ ALWI void untilize_init(uint32_t icb) {
 // clang-format on
 template <uint32_t block_ct_dim = 1>
 ALWI void untilize_block(uint32_t icb, uint32_t full_ct_dim, uint32_t ocb) {
-    UNPACK((llk_unpack_untilize(icb, full_ct_dim)));
+    // UNPACK((llk_unpack_untilize(icb, full_ct_dim)));
 
     for (uint32_t t = 0; t < full_ct_dim / block_ct_dim; t++) {
-        MATH((llk_math_wait_for_dest_available()));
+        // MATH((llk_math_wait_for_dest_available()));
 
-        // Datacopy
-        for (uint32_t reg_id = 0; reg_id < block_ct_dim; reg_id++) {
-            MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(reg_id)));
-        }
+        // // Datacopy
+        // for (uint32_t reg_id = 0; reg_id < block_ct_dim; reg_id++) {
+        //     MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(reg_id)));
+        // }
 
-        MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+        // MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
 
-        PACK((llk_packer_wait_for_math_done()));
+        // PACK((llk_packer_wait_for_math_done()));
 
         // Datacopy
         for (uint32_t reg_id = 0; reg_id < block_ct_dim; reg_id++) {
@@ -79,7 +79,7 @@ ALWI void untilize_block(uint32_t icb, uint32_t full_ct_dim, uint32_t ocb) {
         }
 
         // Release dest
-        PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+        // PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
     }
 }
 

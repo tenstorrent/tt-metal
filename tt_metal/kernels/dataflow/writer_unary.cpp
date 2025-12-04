@@ -19,15 +19,15 @@ void kernel_main() {
     experimental::Noc noc;
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
-        cb.wait_front(ublock_size_tiles);
-        noc.async_write(
-            cb,
-            experimental::AllocatorBank<experimental::AllocatorBankType::DRAM>{},
-            ublock_size_bytes,
-            {},
-            {.bank_id = bank_id, .addr = dst_addr});
-        noc.async_write_barrier();
-        cb.pop_front(ublock_size_tiles);
-        dst_addr += ublock_size_bytes;
+        // cb.wait_front(ublock_size_tiles);
+        // noc.async_write(
+        //     cb,
+        //     experimental::AllocatorBank<experimental::AllocatorBankType::DRAM>{},
+        //     ublock_size_bytes,
+        //     {},
+        //     {.bank_id = bank_id, .addr = dst_addr});
+        // noc.async_write_barrier();
+        // cb.pop_front(ublock_size_tiles);
+        // dst_addr += ublock_size_bytes;
     }
 }
