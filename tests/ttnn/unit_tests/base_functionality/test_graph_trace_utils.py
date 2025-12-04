@@ -14,7 +14,7 @@ def test_extract_peak_L1_memory_usage():
         input_tensor = ttnn.from_torch(
             torch.rand(1, 1, 32, 32, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
-        output = ttnn.relu(input_tensor)
+        ttnn.relu(input_tensor)
         captured_graph = ttnn.graph.end_graph_capture()
 
         peak_l1 = ttnn.graph.extract_peak_L1_memory_usage(captured_graph)
