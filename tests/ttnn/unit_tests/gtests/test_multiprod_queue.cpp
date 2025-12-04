@@ -32,7 +32,6 @@ namespace tt::tt_metal {
 namespace {
 
 using ::testing::Eq;
-using ::testing::FloatEq;
 using ::testing::Pointwise;
 using ::tt::tt_metal::is_device_tensor;
 
