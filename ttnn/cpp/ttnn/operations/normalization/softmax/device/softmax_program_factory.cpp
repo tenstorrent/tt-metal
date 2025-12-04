@@ -1274,6 +1274,11 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
     tt::tt_metal::Program program{};
     auto* device = tensor_args.input_tensor.device();
 
+    // Guard against non-sharded inputs when using a sharded program config
+    TT_FATAL(
+        tensor_args.input_tensor.is_sharded() && tensor_args.input_tensor.shard_spec().has_value(),
+        "Input tensor must be sharded when using SoftmaxShardedMultiCoreProgramConfig");
+
     // convert data format
     tt::DataFormat in0_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());

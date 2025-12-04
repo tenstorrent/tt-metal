@@ -301,8 +301,14 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 FORCE_INLINE void update_packet_header_for_next_hop(
     volatile tt_l1_ptr tt::tt_fabric::LowLatencyPacketHeader* packet_header,
     tt::tt_fabric::LowLatencyRoutingFields cached_routing_fields) {
-    packet_header->routing_fields.value =
-        cached_routing_fields.value >> tt::tt_fabric::LowLatencyRoutingFields::FIELD_WIDTH;
+    uint64_t routing_value = cached_routing_fields.value;
+    if ((routing_value >> 32) == 0) [[likely]] {
+        uint32_t lower_bits = static_cast<uint32_t>(routing_value);
+        packet_header->routing_fields.value =
+            static_cast<uint64_t>(lower_bits >> tt::tt_fabric::LowLatencyRoutingFields::FIELD_WIDTH);
+    } else {
+        packet_header->routing_fields.value = routing_value >> tt::tt_fabric::LowLatencyRoutingFields::FIELD_WIDTH;
+    }
 }
 
 FORCE_INLINE void update_packet_header_for_next_hop(
