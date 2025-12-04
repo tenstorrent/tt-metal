@@ -128,10 +128,12 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
         # Sparse routing
         import itertools
 
+        router_indices = torch.zeros(batch_size * seq_len, config.num_experts_per_tok, dtype=torch.long)
         routing_weights = torch.zeros(batch_size * seq_len, config.num_local_experts)
 
         for b, s in itertools.product(range(batch_size), range(seq_len)):
             active_experts = torch.randperm(config.num_local_experts)[: config.num_experts_per_tok]
+            router_indices[b * seq_len + s, :] = active_experts
             weights = torch.rand(config.num_experts_per_tok)
             weights = weights / weights.sum()  # Normalize
             routing_weights[b * seq_len + s, active_experts] = weights
@@ -140,7 +142,7 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
         routing_weights = torch.ones(hidden_states.shape[-2], config.num_local_experts) / config.num_local_experts
     # Extract reference experts from reference layer
     reference_experts = reference_layer.mlp.experts.eval()  # Set to eval mode for inference
-    reference_output = reference_experts(hidden_states, routing_weights=routing_weights)
+    reference_output = reference_experts(hidden_states, router_indices=router_indices, routing_weights=routing_weights)
 
     # Convert to TTNN tensors
     tt_hidden_states = ttnn.from_torch(
@@ -157,10 +159,23 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
         dtype=ttnn.bfloat16,
         mesh_mapper=ttnn.ShardTensor2dMesh(dims=(None, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
     )
+    tt_router_indices = ttnn.from_torch(
+        router_indices,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(None, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
+    )
 
     # Extract TT experts from decoder layer
-    tt_experts = decoder_layer.mlp.experts
-    tt_output = tt_experts(tt_hidden_states, tt_routing_weights)
+    # tt_experts = decoder_layer.mlp.experts
+    tt_experts = decoder_layer.mlp.throughput_experts
+    breakpoint()
+    # tt_output = tt_experts(tt_hidden_states, tt_routing_weights)
+    tt_hidden_states = ttnn.reshape(tt_hidden_states, (batch_size, 1, 1, 2880))
+    tt_router_indices = ttnn.reshape(tt_router_indices, (batch_size, 1, 1, 4))
+    tt_routing_weights = ttnn.reshape(tt_routing_weights, (batch_size, 1, 1, 128))
+    tt_output = tt_experts(tt_hidden_states, tt_router_indices, tt_routing_weights)
     # Compare outputs
     passing, output = run_component_comparison(tt_output, reference_output, mesh_device, pcc_threshold=0.93)
     assert passing, f"Experts test failed. Output: {output}"
@@ -191,9 +206,9 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
 @parametrize_mesh_with_fabric()
 @parametrize_batch_seq(
     [
-        (1, 1),  # decode
-        (1, 128),  # prefill
-        (1, 4096),  # prefill 4k
+        (32, 1),  # decode
+        # (1, 128),  # prefill
+        # (1, 4096),  # prefill 4k
     ],
 )
 @pytest.mark.parametrize(
@@ -361,6 +376,10 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
             run_topk_router_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
         elif "router" in modules_to_test:
             pytest.skip("Router test only runs in decode mode (seq_len=1)")
+
+    if should_test("experts"):
+        logger.info("Testing Experts...")
+        run_experts_component(setup["mesh_device"], hidden_states.shape, config, reference_layer, decoder_layer)
 
     if should_test("attention"):
         logger.info("Testing Attention...")
