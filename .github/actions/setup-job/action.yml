@@ -21,6 +21,10 @@ inputs:
     description: 'Skip download and installation of build artifacts and wheel as theyre pre-installed in evaluation image'
     default: false
     type: boolean
+  fetch-depth:
+    description: 'Fetch depth for git'
+    default: 1
+    type: integer
   auto-triage:
     description: 'Enable detection of timeout on fast dispatch and automatically call tt-triage'
     default: true
@@ -32,6 +36,14 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: 🧬 Checkout Repository
+      if: ${{ inputs.use-evaluation-image == 'false' }}
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: ${{ inputs.fetch-depth }}
+        submodules: recursive
+        path: ${{ inputs.path }}
+
     - name: 🧪 Check Required Tools
       run: |
         echo "🔍 Verifying tools..."
