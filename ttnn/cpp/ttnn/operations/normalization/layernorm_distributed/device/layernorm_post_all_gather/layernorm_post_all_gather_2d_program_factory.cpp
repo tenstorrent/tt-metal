@@ -482,14 +482,7 @@ LayerNormPostAllGather2DProgramFactory::cached_program_t LayerNormPostAllGather2
 
     return cached_program_t{
         std::move(program),
-        {.reader_kernel_id = reader_kernels_id,
-         .writer_kernel_id = writer_kernels_id,
-         .compute_kernel_id = compute_kernels_id,
-         .cores = std::move(cores),
-         .tiles_per_core_x = tiles_per_core_x,
-         .tiles_per_core_y = tiles_per_core_y,
-         .Wt = Wt,
-         .stats_tiles_cols = stats_tiles_cols}};
+        {.reader_kernel_id = reader_kernels_id, .writer_kernel_id = writer_kernels_id, .cores = std::move(cores)}};
 }
 
 void LayerNormPostAllGather2DProgramFactory::override_runtime_arguments(
