@@ -77,8 +77,6 @@ target_link_libraries(
     PRIVATE
         enchantum::enchantum
         protobuf::libprotobuf
-        yaml-cpp::yaml-cpp
-        scaleout_tools
         tt_metal
 )
 target_compile_features(scaleout_tools PUBLIC cxx_std_20)
