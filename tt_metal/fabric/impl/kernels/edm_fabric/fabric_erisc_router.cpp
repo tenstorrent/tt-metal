@@ -311,10 +311,13 @@ static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_fr
     sender_channel_4_free_slots_stream_id,
     sender_channel_5_free_slots_stream_id,
     sender_channel_6_free_slots_stream_id};
-static_assert(sender_channel_free_slots_stream_ids[0] == 17);
-static_assert(sender_channel_free_slots_stream_ids[1] == 18);
-static_assert(sender_channel_free_slots_stream_ids[2] == 19);
-static_assert(sender_channel_free_slots_stream_ids[3] == 20);
+static_assert(sender_channel_free_slots_stream_ids[0] == 19);
+static_assert(sender_channel_free_slots_stream_ids[1] == 20);
+static_assert(sender_channel_free_slots_stream_ids[2] == 21);
+static_assert(sender_channel_free_slots_stream_ids[3] == 22);
+static_assert(sender_channel_free_slots_stream_ids[4] == 23);
+static_assert(sender_channel_free_slots_stream_ids[5] == 24);
+static_assert(sender_channel_free_slots_stream_ids[6] == 25);
 
 // For 2D fabric: maps compact index to downstream direction for each my_direction
 // For 1D fabric: only 1 downstream direction per router (EAST forwards to WEST in 1D linear topology)

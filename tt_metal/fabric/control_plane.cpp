@@ -58,6 +58,7 @@
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 
 namespace tt::tt_fabric {
 
@@ -2138,7 +2139,8 @@ void ControlPlane::populate_fabric_connection_info(
     tt::tt_fabric::fabric_connection_info_t& tensix_connection_info,
     ChipId physical_chip_id,
     chan_id_t eth_channel_id) const {
-    constexpr uint16_t WORKER_FREE_SLOTS_STREAM_ID = 17;
+    constexpr uint16_t WORKER_FREE_SLOTS_STREAM_ID =
+        tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id;
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& fabric_context = this->get_fabric_context();
     // Sender channel 0 is always for local worker in the new design

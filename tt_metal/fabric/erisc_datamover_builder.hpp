@@ -112,28 +112,28 @@ struct StreamRegAssignments {
     static constexpr uint32_t to_sender_1_pkts_acked_id = 3;
     static constexpr uint32_t to_sender_2_pkts_acked_id = 4;
     static constexpr uint32_t to_sender_3_pkts_acked_id = 5;
-    static constexpr uint32_t to_sender_0_pkts_completed_id = 7;
-    static constexpr uint32_t to_sender_1_pkts_completed_id = 8;
-    static constexpr uint32_t to_sender_2_pkts_completed_id = 9;
-    static constexpr uint32_t to_sender_3_pkts_completed_id = 10;
-    static constexpr uint32_t to_sender_4_pkts_completed_id = 11;
-    static constexpr uint32_t to_sender_5_pkts_completed_id = 15;
-    static constexpr uint32_t to_sender_6_pkts_completed_id = 16;
+    static constexpr uint32_t to_sender_0_pkts_completed_id = 6;
+    static constexpr uint32_t to_sender_1_pkts_completed_id = 7;
+    static constexpr uint32_t to_sender_2_pkts_completed_id = 8;
+    static constexpr uint32_t to_sender_3_pkts_completed_id = 9;
+    static constexpr uint32_t to_sender_4_pkts_completed_id = 10;
+    static constexpr uint32_t to_sender_5_pkts_completed_id = 11;
+    static constexpr uint32_t to_sender_6_pkts_completed_id = 12;
     // Receiver channel free slots stream IDs
-    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_1 = 12;
-    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_2 = 13;
-    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_3 = 14;
-    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_1 = 24;
-    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_2 = 25;
-    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_3 = 26;
+    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_1 = 13;
+    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_2 = 14;
+    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_3 = 15;
+    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_1 = 16;
+    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_2 = 17;
+    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_3 = 18;
     // Sender channel free slots stream IDs
-    static constexpr uint32_t sender_channel_0_free_slots_stream_id = 17;  // for tensix worker
-    static constexpr uint32_t sender_channel_1_free_slots_stream_id = 18;  // for upstream edge on: 1D->VC0, 2D->VC0
-    static constexpr uint32_t sender_channel_2_free_slots_stream_id = 19;  // for upstream edge on: 2D->VC0
-    static constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;  // for upstream edge on: 2D->VC0
-    static constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;  // for upstream edge on: 2D->VC1
-    static constexpr uint32_t sender_channel_5_free_slots_stream_id = 22;  // for upstream edge on: 2D->VC1
-    static constexpr uint32_t sender_channel_6_free_slots_stream_id = 23;  // for upstream edge on: 2D->VC1
+    static constexpr uint32_t sender_channel_0_free_slots_stream_id = 19;  // for tensix worker
+    static constexpr uint32_t sender_channel_1_free_slots_stream_id = 20;  // for upstream edge on: 1D->VC0, 2D->VC0
+    static constexpr uint32_t sender_channel_2_free_slots_stream_id = 21;  // for upstream edge on: 2D->VC0
+    static constexpr uint32_t sender_channel_3_free_slots_stream_id = 22;  // for upstream edge on: 2D->VC0
+    static constexpr uint32_t sender_channel_4_free_slots_stream_id = 23;  // for upstream edge on: 2D->VC1
+    static constexpr uint32_t sender_channel_5_free_slots_stream_id = 24;  // for upstream edge on: 2D->VC1
+    static constexpr uint32_t sender_channel_6_free_slots_stream_id = 25;  // for upstream edge on: 2D->VC1
 
     // Local tensix relay free slots stream ID (UDM mode only)
     static constexpr uint32_t tensix_relay_local_free_slots_stream_id = 29;
