@@ -38,6 +38,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
+#include "tt_metal/llrt/rtoptions.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -723,12 +724,39 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         config.num_used_sender_channels,
         config.num_used_receiver_channels,
         static_cast<int>(direction));
+
+    configure_telemetry_settings();
 }
 
-void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(std::vector<uint32_t>& ct_args) const {
+void FabricEriscDatamoverBuilder::configure_telemetry_settings() {
+    auto& telemetry_rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& telemetry_settings = telemetry_rtoptions.get_fabric_telemetry_settings();
+    const bool telemetry_globally_enabled = telemetry_rtoptions.get_enable_fabric_telemetry() &&
+                                            telemetry_settings.enabled && telemetry_settings.stats_mask != 0;
+    const auto local_physical_chip_id =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_chip_id_from_fabric_node_id(
+            this->local_fabric_node_id);
+    for (uint32_t risc_id = 0; risc_id < this->config.num_riscv_cores; risc_id++) {
+        bool telemetry_enabled_on_erisc =
+            telemetry_globally_enabled &&
+            telemetry_settings.is_telemetry_enabled(
+                static_cast<uint32_t>(local_physical_chip_id), static_cast<uint32_t>(this->my_eth_channel), risc_id);
+        this->config.risc_configs[risc_id].set_telemetry_enabled(telemetry_enabled_on_erisc);
+        this->config.risc_configs[risc_id].set_telemetry_stats_mask(telemetry_settings.stats_mask);
+    }
+}
+
+void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
+    uint32_t risc_id, std::vector<uint32_t>& ct_args) const {
+    const auto& risc_config = config.risc_configs[risc_id];
+    const bool telemetry_enabled = risc_config.telemetry_enabled();
+
     auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    uint32_t telemetry_mode = static_cast<uint32_t>(rtoptions.get_enable_fabric_telemetry() ? 1 : 0);
-    ct_args.push_back(telemetry_mode);
+    ct_args.push_back(static_cast<uint32_t>(telemetry_enabled));
+
+    // Add telemetry statistic mask (per ERISC)
+    const uint8_t stats_mask = telemetry_enabled ? risc_config.telemetry_stats_mask() : 0;
+    ct_args.push_back(static_cast<uint32_t>(stats_mask));
 
     uint32_t bw_telemetry_mode = static_cast<uint32_t>(rtoptions.get_enable_fabric_bw_telemetry() ? 1 : 0);
     ct_args.push_back(bw_telemetry_mode);
@@ -1029,7 +1057,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     // Special marker to help with identifying misalignment bugs
     ct_args.push_back(0x10c0ffee);
 
-    get_telemetry_compile_time_args(ct_args);
+    get_telemetry_compile_time_args(risc_id, ct_args);
 
     // Special marker 2
     ct_args.push_back(0x20c0ffee);
