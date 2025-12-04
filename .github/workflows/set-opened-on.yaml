@@ -35,7 +35,13 @@ jobs:
               projectV2(number:$number){
                 id
                 fields(first:200){
-                  nodes { id name dataType }
+                  nodes {
+                    ... on ProjectV2FieldCommon {
+                      id
+                      name
+                      dataType
+                    }
+                  }
                 }
               }
             }
