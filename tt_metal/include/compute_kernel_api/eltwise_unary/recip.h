@@ -16,7 +16,7 @@ namespace ckernel {
  * Please refer to documentation for any_init.
  */
 template <bool legacy_compat = true>
-ALWI void recip_tile_init() { MATH(SFPU_TWO_TEMPLATE_PARAM_INIT(reciprocal, sfpu::recip_init, APPROX, legacy_compat)); }
+ALWI void recip_tile_init() { MATH(SFPU_TWO_PARAM_KERNEL_INIT(reciprocal, sfpu::recip_init, APPROX, DST_ACCUM_MODE, legacy_compat)); }
 // clang-format off
 /**
  * Performs element-wise computation of the reciprocal on each element of a tile
