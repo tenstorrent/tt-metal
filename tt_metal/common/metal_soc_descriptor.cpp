@@ -110,7 +110,7 @@ CoreCoord metal_SocDescriptor::get_dram_grid_size() const { return CoreCoord(thi
 void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
     // Get architecture from device descriptor file path
     tt::ARCH arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(this->device_descriptor_file_path);
-    
+
     // Get static dram metadata based on architecture
     const tt::metal_soc_descriptor_data::DramMetadata* dram_metadata = nullptr;
     switch (arch) {

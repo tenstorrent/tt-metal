@@ -11,7 +11,7 @@
 namespace tt {
 namespace metal_soc_descriptor_data {
 
-// Structure to hold dram_view data from YAML files
+// Structure to hold dram_view data for each architecture
 struct DramView {
     size_t channel;
     std::vector<int> eth_endpoint;
