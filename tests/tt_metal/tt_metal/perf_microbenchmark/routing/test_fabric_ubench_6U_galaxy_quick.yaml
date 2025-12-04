@@ -18,6 +18,7 @@ Tests:
 
     patterns:
       - type: all_to_all
+        iterations: 3
 
   - name: "FullRingMulticast"
     benchmark_mode: true
@@ -51,6 +52,7 @@ Tests:
 
     patterns:
       - type: all_to_all
+        iterations: 3
 
   - name: "TorusAllToAllMulticast"
     benchmark_mode: true
@@ -68,3 +70,4 @@ Tests:
 
     patterns:
       - type: all_to_all
+        iterations: 3

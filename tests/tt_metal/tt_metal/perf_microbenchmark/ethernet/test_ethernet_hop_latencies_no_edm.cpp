@@ -38,8 +38,9 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include "common/tt_backend_api_types.hpp"
+#include <llrt/tt_cluster.hpp>
 
 using tt::tt_metal::IDevice;
 using tt::tt_metal::distributed::MeshCoordinate;
@@ -50,7 +51,7 @@ using tt::tt_metal::distributed::MeshShape;
 class T3000TestDevice {
 public:
     T3000TestDevice() : device_open(false) {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             TT_THROW("This suite can only be run without TT_METAL_SLOW_DISPATCH_MODE set");
         }

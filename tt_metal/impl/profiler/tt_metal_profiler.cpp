@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core_descriptor.hpp>
 #include <device.hpp>
-#include <device_pool.hpp>
 #include <dispatch_core_common.hpp>
 #include <host_api.hpp>
 #include <profiler.hpp>
@@ -47,13 +46,19 @@
 #include "profiler_types.hpp"
 #include "profiler_state_manager.hpp"
 #include "tt-metalium/program.hpp"
-#include <tt-metalium/device_pool.hpp>
+#include "tt_metal/impl/device/device_pool.hpp"
 #include "rtoptions.hpp"
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyTTDevice.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <llrt/tt_cluster.hpp>
+
+#if !defined(TRACY_ENABLE) && defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-parameter"
+#endif
 
 namespace tt {
 
@@ -619,12 +624,12 @@ void ProfilerSync(ProfilerSyncState state) {
                 if (!tt::DevicePool::instance().is_device_active(sender_device_id)) {
                     continue;
                 }
-                auto sender_device = tt::DevicePool::instance().get_active_device(sender_device_id);
+                auto* sender_device = tt::DevicePool::instance().get_active_device(sender_device_id);
                 const auto& active_eth_cores = sender_device->get_active_ethernet_cores(false);
 
                 ChipId receiver_device_id;
                 tt_xy_pair receiver_eth_core;
-                for (auto& sender_eth_core : active_eth_cores) {
+                for (const auto& sender_eth_core : active_eth_cores) {
                     if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
                             sender_device_id, sender_eth_core)) {
                         continue;
@@ -654,7 +659,7 @@ void ProfilerSync(ProfilerSyncState state) {
     // something to sync with)
     if (state == ProfilerSyncState::INIT) {
         for (auto [root_device_id, num_devices] : num_connected_devices) {
-            auto root_device = tt::DevicePool::instance().get_active_device(root_device_id);
+            auto* root_device = tt::DevicePool::instance().get_active_device(root_device_id);
             syncDeviceHost(root_device, ProfilerStateManager::SYNC_CORE, true);
             if (num_devices > 1) {
                 syncAllDevices(root_device->id());
@@ -664,7 +669,7 @@ void ProfilerSync(ProfilerSyncState state) {
     if (state == ProfilerSyncState::CLOSE_DEVICE and profiler_state_manager->do_sync_on_close) {
         profiler_state_manager->do_sync_on_close = false;
         for (auto [root_device_id, num_devices] : num_connected_devices) {
-            auto root_device = tt::DevicePool::instance().get_active_device(root_device_id);
+            auto* root_device = tt::DevicePool::instance().get_active_device(root_device_id);
             syncDeviceHost(root_device, ProfilerStateManager::SYNC_CORE, false);
             if (num_devices > 1) {
                 syncAllDevices(root_device->id());
@@ -705,7 +710,7 @@ void InitDeviceProfiler(IDevice* device) {
         }
     }
 
-    auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
+    const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
 
     const uint32_t num_cores_per_dram_bank = soc_desc.profiler_ceiled_core_count_perf_dram_bank;
     const uint32_t bank_size_bytes = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC *
@@ -846,6 +851,11 @@ bool dumpDeviceProfilerDataMidRun(const ProfilerReadState state) {
 
     return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_mid_run_dump() &&
            state == ProfilerReadState::NORMAL;
+}
+
+bool getProgramsPerfDataMidRun() {
+    return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_mid_run_dump() &&
+           tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_cpp_post_process();
 }
 
 void ProcessDeviceProfilerResults(
@@ -1052,6 +1062,63 @@ void ReadMeshDeviceProfilerResults(
 #endif
 }
 
+namespace experimental {
+
+std::map<ChipId, std::set<ProgramAnalysisData>> GetLatestProgramsPerfData() {
+    std::map<ChipId, std::set<ProgramAnalysisData>> latest_programs_perf_data;
+#if defined(TRACY_ENABLE)
+    ZoneScoped;
+
+    if (!getDeviceProfilerState() || !detail::getProgramsPerfDataMidRun()) {
+        return {};
+    }
+
+    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
+        tt::tt_metal::MetalContext::instance().profiler_state_manager();
+
+    for (const auto& [device_id, device_programs_perf_analyses] :
+         profiler_state_manager->device_programs_perf_analyses_map) {
+        if (device_programs_perf_analyses.empty()) {
+            latest_programs_perf_data[device_id] = {};
+        } else {
+            latest_programs_perf_data[device_id] = device_programs_perf_analyses.back();
+        }
+    }
+
+#endif
+    return latest_programs_perf_data;
+}
+
+std::map<ChipId, std::set<ProgramAnalysisData>> GetAllProgramsPerfData() {
+    std::map<ChipId, std::set<ProgramAnalysisData>> all_programs_perf_data;
+#if defined(TRACY_ENABLE)
+    ZoneScoped;
+
+    if (!getDeviceProfilerState() || !detail::getProgramsPerfDataMidRun()) {
+        return {};
+    }
+
+    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
+        tt::tt_metal::MetalContext::instance().profiler_state_manager();
+
+    for (const auto& [device_id, device_programs_perf_analyses] :
+         profiler_state_manager->device_programs_perf_analyses_map) {
+        std::set<ProgramAnalysisData>& device_all_programs_perf_data = all_programs_perf_data[device_id];
+        for (const auto& programs_perf_analysis : device_programs_perf_analyses) {
+            device_all_programs_perf_data.insert(programs_perf_analysis.begin(), programs_perf_analysis.end());
+        }
+    }
+
+#endif
+    return all_programs_perf_data;
+}
+
+}  // namespace experimental
+
 }  // namespace tt_metal
 
 }  // namespace tt
+
+#if !defined(TRACY_ENABLE) && defined(__clang__)
+#pragma clang diagnostic pop
+#endif

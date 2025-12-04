@@ -1,1 +1,0 @@
-../../../../models/demos/yolov8s_world/tests/pcc/test_ttnn_yolov8s_world.py

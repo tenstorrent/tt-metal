@@ -23,7 +23,8 @@ struct WhereOperation {
         const TensorScalarVariant& value_true,
         const TensorScalarVariant& value_false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& output = std::nullopt);
+        const std::optional<Tensor>& output = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     template <typename T>
         requires std::same_as<T, int32_t> || std::same_as<T, uint32_t>
@@ -32,13 +33,26 @@ struct WhereOperation {
         const T& value_true,
         const T& value_false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& output = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+};
+
+// Addcmul Operation
+struct AddcmulOperation {
+    static Tensor invoke(
+        const Tensor& input_a,
+        const Tensor& input_b,
+        const Tensor& input_c,
+        float value = 1.0f,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& output = std::nullopt);
 };
 
 }  // namespace ternary
 }  // namespace operations
 
-// Register the where operation
+// Register the operations
 constexpr auto where = ttnn::register_operation<"ttnn::where", operations::ternary::WhereOperation>();
+constexpr auto addcmul = ttnn::register_operation<"ttnn::addcmul", operations::ternary::AddcmulOperation>();
 
 }  // namespace ttnn

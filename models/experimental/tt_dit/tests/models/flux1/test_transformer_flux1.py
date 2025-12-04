@@ -25,7 +25,8 @@ from time import time
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "id"),
     [
-        pytest.param((1, 4), (1, 4), 0, 1, 1, "1x4sp0tp1", id="1x4sp0tp1"),
+        pytest.param((1, 2), (1, 2), 0, 1, 2, "1x2sp0tp1", id="1x2sp0tp1"),
+        pytest.param((2, 2), (2, 2), 0, 1, 2, "2x2sp0tp1", id="2x2sp0tp1"),
         pytest.param((2, 4), (2, 4), 0, 1, 1, "2x4sp0tp1", id="2x4sp0tp1"),
         pytest.param((2, 4), (2, 4), 1, 0, 1, "2x4sp1tp0", id="2x4sp1tp0"),
         pytest.param((4, 8), (4, 4), 0, 1, 4, "4x4sp0tp1", id="4x4sp0tp1"),
@@ -114,7 +115,8 @@ def test_single_transformer_block(
 
     with torch.no_grad():
         torch_combined = torch_model.forward(
-            combined,
+            hidden_states=combined[:, prompt_seq_len:],
+            encoder_hidden_states=combined[:, :prompt_seq_len],
             temb=time_embed,
             image_rotary_emb=(rope_cos, rope_sin),
         )
@@ -167,6 +169,7 @@ def test_single_transformer_block(
     )[:batch_size]
 
     tt_combined_torch = torch.concat([tt_prompt_torch, tt_spatial_torch], dim=1)
+    torch_combined = torch.concat(torch_combined, dim=1)
 
     assert_quality(torch_combined, tt_combined_torch, pcc=0.99959, relative_rmse=6.3)
 
@@ -174,7 +177,8 @@ def test_single_transformer_block(
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "id"),
     [
-        pytest.param((1, 4), (1, 4), 0, 1, 1, "1x4sp0tp1", id="1x4sp0tp1"),
+        pytest.param((1, 2), (1, 2), 0, 1, 2, "1x2sp0tp1", id="1x2sp0tp1"),
+        pytest.param((2, 2), (2, 2), 0, 1, 2, "2x2sp0tp1", id="2x2sp0tp1"),
         pytest.param((2, 4), (2, 4), 0, 1, 1, "2x4sp0tp1", id="2x4sp0tp1"),
         pytest.param((2, 4), (2, 4), 1, 0, 1, "2x4sp1tp0", id="2x4sp1tp0"),
         pytest.param((4, 8), (4, 4), 0, 1, 4, "4x4sp0tp1", id="4x4sp0tp1"),
@@ -260,7 +264,13 @@ def test_transformer(
     )
 
     if not cache.initialize_from_cache(
-        tt_model, torch_model, "flux.1-dev", "transformer", parallel_config, tuple(submesh_device.shape), "bf16"
+        tt_model,
+        torch_model.state_dict(),
+        "Flux.1-dev",
+        "transformer",
+        parallel_config,
+        tuple(submesh_device.shape),
+        "bf16",
     ):
         logger.info(
             "Loading transformer weights from PyTorch state dict. To use cache, set TT_DIT_CACHE_DIR environment variable."

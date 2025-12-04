@@ -8,7 +8,7 @@ ResNet Tests for Panoptic DeepLab using real weights from model_final_bd324a.pkl
 import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc
 from loguru import logger
 
 from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
@@ -24,6 +24,7 @@ from models.experimental.panoptic_deeplab.tt.common import (
     get_panoptic_deeplab_config,
     preprocess_nchw_input_tensor,
 )
+from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
 
 
 def create_panoptic_models(device, weights_path):
@@ -117,6 +118,8 @@ def test_resnet_stem_pcc(device, input_shape_nchw, reset_seeds, model_location_g
     except FileNotFoundError:
         pytest.fail("model_final_bd324a.pkl file not found. Please place the weights file in the weights folder.")
 
+    # Both models have ImageNet normalization fused into conv1 weights
+    # so they both receive unnormalized input (no explicit normalization needed)
     torch_input = torch.randn(batch_size, C, height, width, dtype=torch.bfloat16)
     ttnn_input = preprocess_nchw_input_tensor(device, torch_input)
 
@@ -233,6 +236,8 @@ def test_resnet_full_pcc(device, batch_size, height, width, reset_seeds, model_l
     except FileNotFoundError:
         pytest.fail("model_final_bd324a.pkl file not found. Please place the weights file in the weights folder.")
 
+    # Both models have ImageNet normalization fused into conv1 weights
+    # so they both receive unnormalized input (no explicit normalization needed)
     torch_input = torch.randn(batch_size, 3, height, width, dtype=torch.bfloat16)
     ttnn_input = preprocess_nchw_input_tensor(device, torch_input)
 
@@ -249,16 +254,40 @@ def test_resnet_full_pcc(device, batch_size, height, width, reset_seeds, model_l
         "res5": 0.9945,
     }
 
+    layer_exp_abs_err = {
+        "res2": 0.1,
+        "res3": 0.04,
+        "res4": 0.02,
+        "res5": 0.01,
+    }
+
+    layer_exp_rel_err = {
+        "res2": 0.3,
+        "res3": 0.6,
+        "res4": 0.3,
+        "res5": 0.6,
+    }
+
     for layer_name in ["res2", "res3", "res4", "res5"]:
         torch_output = torch_outputs[layer_name]
         ttnn_output = ttnn_outputs[layer_name]
-        ttnn_output_torch = ttnn.to_torch(ttnn_output).permute(0, 3, 1, 2).reshape(torch_output.shape)
 
         pcc_threshold = layer_pcc_thresholds[layer_name]
-        pcc_passed, pcc_message = check_with_pcc(torch_output, ttnn_output_torch, pcc_threshold)
-        logger.info(f"ResNet {layer_name} PCC: {pcc_message}")
+        exp_abs_err = layer_exp_abs_err[layer_name]
+        exp_rel_err = layer_exp_rel_err[layer_name]
 
-        if not pcc_passed:
+        passed = check_ttnn_output(
+            layer_name,
+            torch_output,
+            ttnn_output,
+            to_channel_first=True,
+            output_shape=torch_output.shape,
+            exp_pcc=pcc_threshold,
+            exp_abs_err=exp_abs_err,
+            exp_rel_err=exp_rel_err,
+        )
+
+        if not passed:
             failed_layers.append(layer_name)
 
-    assert len(failed_layers) == 0, f"ResNet full PCC test failed for layers: {failed_layers}"
+    assert len(failed_layers) == 0, f"ResNet full PCC and tolerance tests failed for layers: {failed_layers}"

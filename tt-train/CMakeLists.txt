@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.18..3.30)
+cmake_minimum_required(VERSION 3.18...3.30)
 include(cmake/compilers.cmake)
 
 if(DEFINED ENV{CMAKE_C_COMPILER} AND DEFINED ENV{CMAKE_CXX_COMPILER})

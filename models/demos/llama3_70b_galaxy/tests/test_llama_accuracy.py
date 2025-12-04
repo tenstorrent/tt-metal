@@ -11,7 +11,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
     PagedAttentionConfig,
 )
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
-from models.demos.llama3_70b_galaxy.tt.sampling import TTSampling
+from models.common.sampling.tt_sampling import TTSampling
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from tqdm import tqdm
@@ -239,7 +239,7 @@ def test_tt_model_acc(
         )
 
         # Sampling
-        tt_out_tok = tt_sampling(tt_out[0], seed)
+        tt_out_tok = tt_sampling(tt_out[0])
 
         # Update the idxs
         ttnn.plus_one(

@@ -251,8 +251,8 @@ def SetDefaultDevice(device: Optional["ttnn.device.Device"]):
 # afuller
 GetDefaultDevice = ttnn._ttnn.device.GetDefaultDevice
 
-format_input_tensor = ttnn._ttnn.device.format_input_tensor
-format_output_tensor = ttnn._ttnn.device.format_output_tensor
+# format_input_tensor = ttnn._ttnn.device.format_input_tensor
+# format_output_tensor = ttnn._ttnn.device.format_output_tensor
 pad_to_tile_shape = ttnn._ttnn.device.pad_to_tile_shape
 
 SubDevice = ttnn._ttnn.device.SubDevice

@@ -24,6 +24,7 @@ from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...utils.padding import PaddingConfig
 from ...utils import cache
+from models.common.utility_functions import is_blackhole
 import os
 
 
@@ -157,7 +158,7 @@ class Flux1Pipeline:
             model_name = os.path.basename(checkpoint_name)
             if not cache.initialize_from_cache(
                 tt_transformer,
-                torch_transformer,
+                torch_transformer.state_dict(),
                 model_name,
                 "transformer",
                 parallel_config,
@@ -238,7 +239,7 @@ class Flux1Pipeline:
 
                 if not cache.initialize_from_cache(
                     self._t5_text_encoder,
-                    torch_t5_text_encoder,
+                    torch_t5_text_encoder.state_dict(),
                     model_name,
                     "t5_text_encoder",
                     encoder_parallel_config,
@@ -260,6 +261,11 @@ class Flux1Pipeline:
             ccl_manager=self._ccl_managers[self.vae_submesh_idx],
         )
 
+        # warmup for safe tracing.
+        logger.info("warming up for tracing...")
+        self.run_single_prompt(prompt="", num_inference_steps=1, seed=0, traced=False)
+        self.synchronize_devices()
+
     @staticmethod
     def create_pipeline(
         checkpoint_name,
@@ -274,12 +280,18 @@ class Flux1Pipeline:
         num_links=None,
         topology=ttnn.Topology.Linear,
     ):
-        default_config = {
+        wh_config = {
             (1, 4): {"sp": (1, 0), "tp": (4, 1), "encoder_tp": (4, 1), "vae_tp": (4, 1), "num_links": 1},
             (2, 4): {"sp": (2, 0), "tp": (4, 1), "encoder_tp": (4, 1), "vae_tp": (4, 1), "num_links": 1},
             (4, 4): {"sp": (4, 0), "tp": (4, 1), "encoder_tp": (4, 1), "vae_tp": (4, 1), "num_links": 1},
             (4, 8): {"sp": (4, 0), "tp": (8, 1), "encoder_tp": (4, 0), "vae_tp": (4, 0), "num_links": 4},
         }
+        bh_config = {
+            (1, 2): {"sp": (1, 0), "tp": (2, 1), "encoder_tp": (2, 1), "vae_tp": (2, 1), "num_links": 2},
+            (2, 2): {"sp": (2, 0), "tp": (2, 1), "encoder_tp": (2, 1), "vae_tp": (2, 1), "num_links": 2},
+        }
+
+        default_config = bh_config if is_blackhole() else wh_config
         sp_factor, sp_axis = dit_sp or default_config[tuple(mesh_device.shape)]["sp"]
         tp_factor, tp_axis = dit_tp or default_config[tuple(mesh_device.shape)]["tp"]
         encoder_tp_factor, encoder_tp_axis = encoder_tp or default_config[tuple(mesh_device.shape)]["encoder_tp"]
@@ -715,24 +727,6 @@ class Flux1Pipeline:
             for submesh_id, submesh_device in enumerate(self._submesh_devices):
                 timestep_device = timestep[submesh_id].to(submesh_device)
                 sigma_difference_device = sigma_difference[submesh_id].to(submesh_device)
-
-                pred = self._step_inner(
-                    cfg_enabled=cfg_enabled,
-                    latent=latents[submesh_id],
-                    prompt=prompt_embeds[submesh_id],
-                    pooled=pooled_prompt_embeds[submesh_id],
-                    timestep=timestep_device,
-                    guidance=guidance[submesh_id],
-                    spatial_rope_cos=spatial_rope_cos[submesh_id],
-                    spatial_rope_sin=spatial_rope_sin[submesh_id],
-                    prompt_rope_cos=prompt_rope_cos[submesh_id],
-                    prompt_rope_sin=prompt_rope_sin[submesh_id],
-                    spatial_sequence_length=spatial_sequence_length,
-                    prompt_sequence_length=prompt_sequence_length,
-                    submesh_index=submesh_id,
-                )
-
-                self.synchronize_devices()
 
                 trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
                 pred = self._step_inner(

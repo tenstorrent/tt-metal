@@ -13,7 +13,7 @@ import pytest
 from nbconvert.preprocessors import ExecutePreprocessor
 
 # Constants
-TUTORIALS_NOTEBOOK_PATH = Path("ttnn/tutorials/2025_dx_rework")
+TUTORIALS_NOTEBOOK_PATH = Path("ttnn/tutorials")
 TUTORIALS_PYTHON_PATH = Path("ttnn/tutorials/basic_python")
 """
 The TUTORIALS_DATA_PATHS section contains paths for data needed by tutorials but stored
@@ -36,13 +36,19 @@ TUTORIALS_DATA_PATHS = {
         LOCAL_SOURCE_PATH_KEY: "./ttnn_clip_zero_shot_image_classification",
         EXTERNAL_SOURCE_PATH_KEY: "ttnn_clip_zero_shot_image_classification",
         ENVIRONMENT_VARIABLE_MODEL: "TTNN_TUTORIALS_MODELS_CLIP_PATH",  # Send model path as environment variable (avoids hard-coding values in notebook)
-    }
+    },
+    "ttnn_tracer_model": {
+        LOCAL_SOURCE_PATH_KEY: "./ttnn_tracer_model",
+        EXTERNAL_SOURCE_PATH_KEY: "ttnn_tracer_model",
+        ENVIRONMENT_VARIABLE_MODEL: "TTNN_TUTORIALS_MODELS_TRACER_PATH",
+    },
     # NOTE: Add entries here for new tutorials that require external data
 }
 
 EXCLUDED_TUTORIALS = [
     "train_and_export_mlp.py",
     "train_and_export_cnn.py",
+    "ttnn_tracer_model.py"
     # NOTE: Add tutorial file names here that should be excluded from tests
 ]
 

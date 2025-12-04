@@ -22,11 +22,12 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/allocator/allocator_types.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "distributed/mesh_trace.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "vector_aligned.hpp"
+#include <impl/dispatch/dispatch_query_manager.hpp>
 
 using MeshTraceId = tt::tt_metal::distributed::MeshTraceId;
 using MeshTraceBuffer = tt::tt_metal::distributed::MeshTraceBuffer;
@@ -284,7 +285,6 @@ void SubDeviceManager::populate_sub_allocators() {
              .l1_unreserved_base = global_allocator_config.l1_unreserved_base,
              .worker_grid = compute_cores,
              .worker_l1_size = global_allocator_config.l1_unreserved_base + local_l1_size_,
-             .storage_core_bank_size = std::nullopt,
              .l1_small_size = 0,
              .trace_region_size = 0,
              .core_type_from_noc_coord_table = {},  // Populated later
@@ -295,9 +295,7 @@ void SubDeviceManager::populate_sub_allocators() {
              .l1_alignment = global_allocator_config.l1_alignment,
              .disable_interleaved = true});
         TT_FATAL(
-            config.l1_small_size < (config.storage_core_bank_size.has_value()
-                                        ? config.storage_core_bank_size.value()
-                                        : config.worker_l1_size - config.l1_unreserved_base),
+            config.l1_small_size < config.worker_l1_size - config.l1_unreserved_base,
             "Reserved size must be less than bank size");
         TT_FATAL(
             config.l1_small_size % config.l1_alignment == 0,
