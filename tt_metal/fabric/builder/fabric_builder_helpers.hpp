@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <utility>
+#include <vector>
+
 #include "hostdevcommon/fabric_common.h"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -15,18 +18,20 @@ namespace builder {
 bool is_east_or_west(eth_chan_directions direction);
 bool is_north_or_south(eth_chan_directions direction);
 eth_chan_directions get_sender_channel_direction(eth_chan_directions my_direction, size_t sender_channel_index);
+
+// Helper function to determine perpendicular directions
+// E/W direction returns N/S as perpendicular; N/S direction returns E/W as perpendicular
+std::pair<eth_chan_directions, eth_chan_directions> get_perpendicular_directions(eth_chan_directions direction);
+
+// Helper function to get directions for inter-mux connections
+// Returns all directions except the current direction, in E,W,N,S order
+std::vector<eth_chan_directions> get_all_other_directions(eth_chan_directions direction);
+
 }  // namespace builder
 
 inline uint32_t get_worker_connected_sender_channel() {
     // Sender channel 0 is always for local worker in the new design
     return 0;
-}
-
-inline size_t get_dateline_sender_channel_skip_idx(const bool is_2D_routing) {
-    // Dateline channel skip indices
-    static constexpr size_t dateline_sender_channel_skip_idx = 2;
-    static constexpr size_t dateline_sender_channel_skip_idx_2d = 4;
-    return is_2D_routing ? dateline_sender_channel_skip_idx_2d : dateline_sender_channel_skip_idx;
 }
 
 // This helper returns the sender channel on the downstream router that should receive traffic from the upstream router.
