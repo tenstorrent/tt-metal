@@ -28,7 +28,7 @@ allclose_thresholds = {
 }
 
 
-def assert_passes(torch_output, ttnn_output, rel_fro_norm_threshold=0.01):
+def assert_passes(torch_output, ttnn_output):
     dtype = ttnn_output.dtype
     if dtype == torch.bfloat16:
         return assert_allclose(
@@ -39,7 +39,7 @@ def assert_passes(torch_output, ttnn_output, rel_fro_norm_threshold=0.01):
         # (see https://github.com/tenstorrent/tt-metal/issues/33621).
         # So we'll use relative Frobenius norm of the error instead, which is
         # looser than allclose (since it's a global metric), but better than PCC.
-        return assert_relative_frobenius(torch_output, ttnn_output, threshold=rel_fro_norm_threshold)
+        return assert_relative_frobenius(torch_output, ttnn_output, threshold=0.01)
     else:
         raise ValueError(f"Robust checks are not implemented for dtype: {dtype}")
 
@@ -205,14 +205,7 @@ def test_large_layer_norm(device, h, w, use_welford, dtype):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    if dtype == torch.float32 and not use_welford and w == 3200:
-        # This case has error sub-1% when using sum-then-divide
-        # when computing the mean and variance. Using divide-then-sum
-        # causes it to slip just above the threshold, so we'll give
-        # it some slack up to 1.5%.
-        assert_passes(torch_output_tensor, output_tensor, rel_fro_norm_threshold=0.015)
-    else:
-        assert_passes(torch_output_tensor, output_tensor)
+    assert_passes(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("h", [2048])
@@ -342,6 +335,7 @@ def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_
     residual_input_tensor = ttnn.from_torch(torch_residual_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
+
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
     output_tensor = ttnn.layer_norm(
         input_tensor,

@@ -33,6 +33,7 @@ void MAIN {
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(4) == 1;
     constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(5) == 1;
     constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(6) == 1;
+    constexpr uint32_t one_over_W = get_compile_time_arg_val(7);
 
     constexpr uint32_t onetile = 1;
     // reserve one tile for zeros on cb_in2
@@ -83,9 +84,10 @@ void MAIN {
         //         n
 #ifdef FUSE_PRE_ADD
         numeric::row_wise_mean_with_pre_add<FLOAT32_REDUCTION, policies::PopInputPolicy::POP>(
-            cb_in, cb_inb, cb_scaler, cb_ex, Wt, blk);
+            cb_in, cb_inb, cb_scaler, cb_ex, one_over_W, Wt, blk);
 #else
-        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::PopInputPolicy::POP>(cb_in, cb_scaler, cb_ex, Wt, blk);
+        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::PopInputPolicy::POP>(
+            cb_in, cb_scaler, cb_ex, one_over_W, Wt, blk);
 #endif
 #endif  // !RMS ifdef end
         // Start of
@@ -154,12 +156,18 @@ void MAIN {
 
             cb_pop_front(cb_xmm2, blk);
 
+            const auto final_iter = wt == Wt - blk;
+            const auto pack_cb = final_iter ? cb_ex2 : cb_accumulate;
+            if (final_iter) {
+                // Divide by W
+                binop_with_scalar_tile_init();
+                mul_unary_tile(dst0, one_over_W);
+            }
+
             reduce_uninit<FLOAT32_REDUCTION>();
             tile_regs_commit();
             tile_regs_wait();
 
-            const auto final_iter = wt == Wt - blk;
-            const auto pack_cb = final_iter ? cb_ex2 : cb_accumulate;
             cb_reserve_back(pack_cb, onetile);
             pack_reconfig_data_format(pack_cb);
             pack_tile(dst0, pack_cb);

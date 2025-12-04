@@ -32,6 +32,7 @@ void MAIN {
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(4) == 1;
     constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(5) == 1;
     constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(6) == 1;
+    constexpr uint32_t one_over_W = get_compile_time_arg_val(7);
 
     constexpr uint32_t onetile = 1;
     // reserve one tile for zeros on cb_in2
@@ -117,7 +118,7 @@ void MAIN {
 
 #ifndef RMSNORM
         // E[x]
-        numeric::row_wise_mean<FLOAT32_REDUCTION>(cb_x, cb_scaler, cb_ex, Wt, blk);
+        numeric::row_wise_mean<FLOAT32_REDUCTION>(cb_x, cb_scaler, cb_ex, one_over_W, Wt, blk);
 
         // x - E[x]
         reconfig_data_format(cb_x, cb_ex);
@@ -161,7 +162,8 @@ void MAIN {
 #endif
 
         // Var[x]
-        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::PopInputPolicy::POP>(cb_xmm2, cb_scaler, cb_ex2, Wt, blk);
+        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::PopInputPolicy::POP>(
+            cb_xmm2, cb_scaler, cb_ex2, one_over_W, Wt, blk);
 
         // Var[x] + eps
         reconfig_data_format(cb_ex2, cb_eps);
