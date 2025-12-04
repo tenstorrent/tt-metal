@@ -241,8 +241,14 @@ std::map<std::string, std::string> get_defines_fp32(
             break;
         case BinaryOpType::RSUB:
             if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
-                new_defines.insert({"BINOP_INIT", fmt::format("rsub_int32_tile_init();")});
+                new_defines.insert({"BINOP_INIT", fmt::format("rsub_int_tile_init();")});
                 op_name = "rsub_int32_tile";
+            } else if (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) {
+                new_defines.insert({"BINOP_INIT", fmt::format("rsub_int_tile_init();")});
+                op_name = "rsub_uint32_tile";
+            } else if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
+                new_defines.insert({"BINOP_INIT", fmt::format("rsub_int_tile_init();")});
+                op_name = "rsub_uint16_tile";
             } else {
                 new_defines.insert({"BINOP_INIT", fmt::format("rsub_binary_tile_init();")});
                 op_name = "rsub_binary_tile";

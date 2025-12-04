@@ -627,3 +627,77 @@ def test_binary_squared_difference_uint32_edge_cases(device):
     # Torch output: tensor([    0,     1,     1,    25,    64,     0, 4294836225, 4294836225, 4294836225, 4294705156])
     # TT output: ttnn.Tensor([    0,     1,     1,    25,    64,     0, 4294836225, 4294836225, 4294836225, 4294705156],
     #               shape=Shape([10]), dtype=DataType::UINT32, layout=Layout::TILE)
+
+
+@pytest.mark.parametrize(
+    "low_a, high_a, low_b, high_b",
+    [(0, 100, 200, 400), (50000, 100000, 0, 40000), (0, 10000, 20000, 2147483647)],
+)
+@pytest.mark.parametrize("use_legacy", [True, False])
+def test_binary_rsub_uint32(low_a, high_a, low_b, high_b, use_legacy, device):
+    torch_input_tensor_a = torch.randint(low_a, high_a, torch.Size([1, 3, 320, 384]), dtype=torch.int32)
+    torch_input_tensor_b = torch.randint(low_b, high_b, torch.Size([1, 3, 320, 384]), dtype=torch.int32)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.rsub(input_tensor_a, input_tensor_b, use_legacy=use_legacy)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    golden_function = ttnn.get_golden_function(ttnn.rsub)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+def test_binary_rsub_uint32_edge_cases(device):
+    torch_input_tensor_a = torch.tensor([0, 0, 2147483647, 2147483646, 2147483640, 4294967292, 6])
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    torch_input_tensor_b = torch.tensor([0, 1, 2147483647, 2147483647, 4294967295, 4294967295, 4294967295])
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.rsub(input_tensor_a, input_tensor_b)
+
+    golden_function = ttnn.get_golden_function(ttnn.rsub)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
+    # Since ttnn.to_torch does not support uint32 to int64 conversion, we convert torch_output_tensor to uint32 and compare the results using ttnn.eq
+    torch_output_tensor = ttnn.from_torch(
+        torch_output_tensor,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    comparison_result = ttnn.eq(output_tensor, torch_output_tensor)
+    comparison_torch = ttnn.to_torch(comparison_result)
+    ttnn.set_printoptions(profile="full")
+    torch.set_printoptions(linewidth=200, threshold=10000, precision=5, sci_mode=False, edgeitems=17)
+    print(output_tensor)
+    print(torch_output_tensor)
+    # Verify all comparisons are True (all elements match)
+    assert torch.all(comparison_torch), f"Mismatch found in uint32 rsub results"
+    # Torch output: tensor([      0,     1,     0,     1, 2147483655,     3, 4294967289])
+    # TT output: ttnn.Tensor([      0,     1,     0,     1, 2147483655,     3, 4294967289],
+    #               shape=Shape([7]), dtype=DataType::UINT32, layout=Layout::TILE)

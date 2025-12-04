@@ -12,10 +12,10 @@ namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_rsub_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    // size of each tile in Dest is 64 rows
+    constexpr uint dst_tile_size = 64;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        // size of each tile in Dest is 64 rows
-        constexpr uint dst_tile_size = 64;
         // operand A - int32
         TT_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_7, dst_index_in0 * dst_tile_size);
         // operand B - int32 (offset by dst_offset * dest tile size)
@@ -25,6 +25,25 @@ inline void calculate_rsub_int32(const uint dst_index_in0, const uint dst_index_
         TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 6);
         // Store result from LREG_0 to dest
         TT_SFPSTORE(p_sfpu::LREG0, INT32, ADDR_MOD_7, dst_index_out * dst_tile_size);
+        sfpi::dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_rsub_uint16(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    // size of each tile in Dest is 64 rows
+    constexpr uint dst_tile_size = 64;
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        // operand A - uint16
+        TT_SFPLOAD(p_sfpu::LREG0, LO16, ADDR_MOD_7, dst_index_in0 * dst_tile_size);
+        // operand B - uint16 (offset by dst_offset * dest tile size)
+        TT_SFPLOAD(p_sfpu::LREG1, LO16, ADDR_MOD_7, dst_index_in1 * dst_tile_size);
+        // Reverse subtraction is performed using 2's complement by adding B to the negation of A: LREG1 + (-LREG0)
+        // Use 6 as imod to convert operand A to 2's complement
+        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 6);
+        // Store result from LREG_0 to dest
+        TT_SFPSTORE(p_sfpu::LREG0, LO16, ADDR_MOD_7, dst_index_out * dst_tile_size);
         sfpi::dst_reg++;
     }
 }
