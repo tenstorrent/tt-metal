@@ -11,6 +11,8 @@
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+#include <bit>
+
 using namespace tt::constants;
 
 namespace ttnn::operations::normalization::layernorm_post_all_gather::program {
@@ -406,11 +408,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     float winv = 1.0f / (W * num_devices);  // bcast-w scaler
     auto bfloat_winv_value = bfloat16(winv);
     uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
-    union {
-        float f;
-        uint32_t u;
-    } e{};
-    e.f = operation_attributes.eps;  // epsilon
+    uint32_t eps_bits = std::bit_cast<uint32_t>(operation_attributes.eps);
 
     // Set runtime arguments
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -439,7 +437,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
              tile_offset,
              stats_offset,
              packed_winv_value,
-             e.u,  // 0-5
+             eps_bits,
              gamma_dram_addr,
              beta_dram_addr,
              stats_addr,
