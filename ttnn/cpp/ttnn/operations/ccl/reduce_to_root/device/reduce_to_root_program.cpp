@@ -662,7 +662,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     if (is_sender_device) {
         printf("is sender device satrt\n");
-        reader_ct_args = {input_num_tiles, sender_cb_l, sender_cb_s, sender_cb_m, input_page_size_bytes};
+        reader_ct_args = {input_num_tiles, sender_cb_l, sender_cb_s, sender_cb_m, input_page_size_bytes, packet_cb_id};
         reader_kernel = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/sender_reader_kernel.cpp",
@@ -808,16 +808,14 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
         auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
             get_compute_kernel_config_args(input_tensor_l.device()->arch(), compute_kernel_configuration);
 
-        compute_ct_args = {
-            compute_out_cb_l, compute_cb_l,     compute_cb_2_l,    compute_cb_s,   compute_cb_2_m,
-            compute_cb_m,     compute_out_cb_m, cb_exp_max_diff_2, compute_cb_2_s, cb_exp_max_diff,
-            compute_out_cb_s, cb_m_temp,        cb_s_temp,         cb_s1_temp,     cb_s2_temp,
-            cb_l1_temp,       cb_l2_temp,       scale_fp32,        Sq_chunk_t,     vDHt,
-            loop_size,
-        };
+        compute_ct_args = {compute_out_cb_l, compute_cb_l,      compute_cb_2_l,    compute_cb_s,     compute_cb_2_m,
+                           compute_cb_m,     compute_out_cb_m,  cb_exp_max_diff_2, compute_cb_2_s,   cb_exp_max_diff,
+                           compute_out_cb_s, cb_m_temp,         cb_s_temp,         cb_s1_temp,       cb_s2_temp,
+                           cb_l1_temp,       cb_l2_temp,        scale_fp32,        Sq_chunk_t,       vDHt,
+                           loop_size,        intermediate_cb_l, intermediate_cb_s, intermediate_cb_m};
         tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/compute_kernel2.cpp",
+            "ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/compute_kernel.cpp",
             all_cores,
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity,

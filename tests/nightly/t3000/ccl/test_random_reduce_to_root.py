@@ -396,6 +396,7 @@ def test_reduce_to_root(bh_2d_mesh_device, num_iters):
 
         # Check L tensor
         l_match = torch.allclose(out_l_root, l_ref, rtol=rtol, atol=atol)
+        print("L ref vs out:", l_ref, out_l_root)
         if not l_match:
             l_diff = torch.abs(out_l_root - l_ref)
             l_max_diff = torch.max(l_diff)
@@ -416,6 +417,7 @@ def test_reduce_to_root(bh_2d_mesh_device, num_iters):
         s_ref_col0 = s_ref[:, s_cols_to_check]
 
         s_match = torch.allclose(s_output_col0, s_ref_col0, rtol=rtol, atol=atol)
+        print("S ref vs out (col 0):", s_ref_col0, s_output_col0)
         if not s_match:
             s_diff = torch.abs(s_output_col0 - s_ref_col0)
             s_max_diff = torch.max(s_diff)
@@ -433,6 +435,7 @@ def test_reduce_to_root(bh_2d_mesh_device, num_iters):
         m_ref_col0 = m_ref[:, m_cols_to_check]
 
         m_match = torch.allclose(m_output_col0, m_ref_col0, rtol=rtol, atol=atol)
+        print("M ref vs out (col 0):", m_ref_col0, m_output_col0)
         if not m_match:
             m_diff = torch.abs(m_output_col0 - m_ref_col0)
             m_max_diff = torch.max(m_diff)

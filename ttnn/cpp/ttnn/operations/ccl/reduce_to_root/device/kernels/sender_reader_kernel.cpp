@@ -7,13 +7,14 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    DPRINT << "sender reader kernel started\n";
+    // DPRINT << "sender reader kernel started\n";
 
     constexpr uint32_t num_tiles_l = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_in_l = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_in_s = get_compile_time_arg_val(2);
     constexpr uint32_t cb_id_in_m = get_compile_time_arg_val(3);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(4);
+    constexpr uint32_t packet_cb_id = get_compile_time_arg_val(5);
 
     const uint32_t src_addr_l = get_arg_val<uint32_t>(0);
     const uint32_t src_addr_s = get_arg_val<uint32_t>(1);
@@ -26,33 +27,16 @@ void kernel_main() {
     // m and s are [1, 8] so read one tile to the cb
     constexpr uint32_t onetile = 1;
 
-    DPRINT << "num tiles l: " << (uint32_t)num_tiles_l << "\n";
-    // for tensor l
-    cb_reserve_back(cb_id_in_l, num_tiles_l);
-    uint32_t l1_write_addr = get_write_ptr(cb_id_in_l);
+    cb_reserve_back(packet_cb_id, 1);
+    uint32_t l1_write_addr = get_write_ptr(packet_cb_id);
     uint64_t read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_l);
-    DPRINT << "read addr l: " << (uint64_t)read_addr << "\n";
     noc_async_read(read_addr, l1_write_addr, num_tiles_l * page_bytes);
-    noc_async_read_barrier();
-    DPRINT << "printing l from compute cb l\n";
-    cb_push_back(cb_id_in_l, num_tiles_l);
-
-    // for tensor s
-    cb_reserve_back(cb_id_in_s, onetile);
-    l1_write_addr = get_write_ptr(cb_id_in_s);
+    // noc_async_read_barrier();
     read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_s);
-    DPRINT << "read addr s: " << (uint64_t)read_addr << "\n";
-    noc_async_read(read_addr, l1_write_addr, onetile * page_bytes);
-    noc_async_read_barrier();
-    cb_push_back(cb_id_in_s, onetile);
-
-    // for tensor m
-    cb_reserve_back(cb_id_in_m, onetile);
-    l1_write_addr = get_write_ptr(cb_id_in_m);
+    noc_async_read(read_addr, l1_write_addr + num_tiles_l * page_bytes, onetile * page_bytes);
+    // noc_async_read_barrier();
     read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_m);
-    DPRINT << "read addr m: " << (uint64_t)read_addr << "\n";
-    noc_async_read(read_addr, l1_write_addr, onetile * page_bytes);
+    noc_async_read(read_addr, l1_write_addr + (num_tiles_l + onetile) * page_bytes, onetile * page_bytes);
     noc_async_read_barrier();
-    cb_push_back(cb_id_in_m, onetile);
-    DPRINT << "sender reader kernel completed\n";
+    cb_push_back(packet_cb_id, 1);
 }
