@@ -1108,7 +1108,7 @@ void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
                 kernel_profiler::PROFILER_L1_BUFFER_SIZE * num_risc_processors,
                 true);
     } else {
-
+        TT_FATAL(false, "Fast dispatch read from L1 buffer requires mesh device support");
     }
 }
 
@@ -1169,7 +1169,7 @@ void DeviceProfiler::readControlBufferForCore(IDevice* device, const CoreCoord& 
                 kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
                 true);
         } else {
-         TT_FATAL(false, "Fast dispatch read contro buffer requires mesh device support");
+            TT_FATAL(false, "Fast dispatch read from control buffer requires mesh device support");
         }
     } else {
         core_control_buffers[virtual_core] = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
