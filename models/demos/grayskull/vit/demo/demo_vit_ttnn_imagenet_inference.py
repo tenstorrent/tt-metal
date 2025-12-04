@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,21 +6,15 @@ import ast
 
 import pytest
 import torch
+import transformers
 from loguru import logger
 from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
-from models.demos.vision.classification.vit.common.common import load_torch_model
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch2tt_tensor
+from models.demos.grayskull.vit.tt import ttnn_optimized_sharded_vit_gs
 from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import get_batch, get_data_loader
-from models.demos.vision.classification.vit.common.tt import ttnn_functional_vit
-
-
-def get_expected_times(functional_vit):
-    return {
-        ttnn_functional_vit: (12, 17),
-    }[functional_vit]
 
 
 def get_imagenet_label_dict():
@@ -30,34 +24,25 @@ def get_imagenet_label_dict():
     return class_labels
 
 
-@pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
-@pytest.mark.models_performance_bare_metal
-@pytest.mark.models_performance_virtual_machine
-@pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
-@pytest.mark.parametrize("batch_size", [8])
-@pytest.mark.parametrize("image_size", [224])
-@pytest.mark.parametrize("sequence_size", [224])
-@pytest.mark.parametrize("functional_vit", [ttnn_functional_vit])
-def test_accuracy(
-    device,
-    model_name,
-    batch_size,
-    image_size,
-    sequence_size,
-    functional_vit,
-    model_location_generator,
-):
-    model = load_torch_model(model_location_generator)
-    config = model.config
+def test_vit(device):
+    torch.manual_seed(0)
 
-    image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
-    torch_attention_mask = torch.ones(config.num_hidden_layers, sequence_size, dtype=torch.float32)
+    model_name = "google/vit-base-patch16-224"
+    batch_size = 8
+    sequence_size = 224
+    iterations = 100
+
+    config = transformers.ViTConfig.from_pretrained(model_name)
+    config.num_hidden_layers = 12
+    model = transformers.ViTForImageClassification.from_pretrained(model_name, config=config)
+    config = ttnn_optimized_sharded_vit_gs.update_model_config(config, batch_size)
+    image_processor = AutoImageProcessor.from_pretrained(model_name)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        custom_preprocessor=functional_vit.custom_preprocessor,
         device=device,
+        custom_preprocessor=ttnn_optimized_sharded_vit_gs.custom_preprocessor,
     )
 
     # cls_token & position embeddings expand to batch_size
@@ -71,11 +56,12 @@ def test_accuracy(
     else:
         torch_cls_token = torch.nn.Parameter(torch_cls_token)
         torch_position_embeddings = torch.nn.Parameter(torch_position_embeddings)
-    cls_token = ttnn.from_torch(torch_cls_token, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    cls_token = ttnn.from_torch(torch_cls_token, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     position_embeddings = ttnn.from_torch(
-        torch_position_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        torch_position_embeddings, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
     )
 
+    torch_attention_mask = torch.ones(config.num_hidden_layers, sequence_size, dtype=torch.float32)
     if torch_attention_mask is not None:
         head_masks = [
             ttnn.from_torch(
@@ -90,31 +76,57 @@ def test_accuracy(
     else:
         head_masks = [None for _ in range(config.num_hidden_layers)]
 
-    iterations = 50
+    # IMAGENET INFERENCE
+    #####################
     imagenet_label_dict = get_imagenet_label_dict()
-
     data_loader = get_data_loader("ImageNet_data", batch_size, iterations)
+
     correct = 0
     for iter in range(iterations):
         predictions = []
-        inputs, labels = get_batch(data_loader, image_processor)
 
-        inputs = torch.permute(inputs, (0, 2, 3, 1))
-        inputs = torch.nn.functional.pad(inputs, (0, 1, 0, 0, 0, 0, 0, 0))
-        tt_inputs = ttnn.from_torch(inputs, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        torch_pixel_values, labels = get_batch(data_loader, image_processor)
 
-        tt_output = functional_vit.vit(
+        torch_pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
+        torch_pixel_values = torch.nn.functional.pad(torch_pixel_values, (0, 1, 0, 0, 0, 0, 0, 0))
+        batch_size, img_h, img_w, img_c = torch_pixel_values.shape  # permuted input NHWC
+        patch_size = 16
+        torch_pixel_values = torch_pixel_values.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
+        N, H, W, C = torch_pixel_values.shape
+        shard_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(7, 0),
+                ),
+            }
+        )
+        n_cores = 8
+        shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
+
+        output = None
+        pixel_values = torch2tt_tensor(
+            torch_pixel_values,
+            device,
+            ttnn.ROW_MAJOR_LAYOUT,
+            tt_memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                shard_spec,
+            ),
+            tt_dtype=ttnn.bfloat16,
+        )
+
+        output = ttnn_optimized_sharded_vit_gs.vit(
             config,
-            tt_inputs,
+            pixel_values,
             head_masks,
             cls_token,
             position_embeddings,
             parameters=parameters,
         )
-        tt_output = ttnn.from_device(tt_output)
-        print(tt_output.shape)
-
-        prediction = ttnn.to_torch(tt_output[:, 0]).argmax(dim=-1)
+        output = ttnn.to_torch(output)
+        prediction = output[:, 0, :1000].argmax(dim=-1)
 
         for i in range(batch_size):
             predictions.append(imagenet_label_dict[prediction[i].item()])
@@ -123,7 +135,8 @@ def test_accuracy(
             )
             if imagenet_label_dict[labels[i]] == predictions[-1]:
                 correct += 1
-        del tt_output, tt_inputs, inputs, labels, predictions
+
+        # del tt_output, tt_inputs, inputs, labels, predictions
 
     accuracy = correct / (batch_size * iterations)
-    logger.info(f"Accuracy for {batch_size}x{iterations} inputs: {accuracy}")
+    print("ImageNet Inference ACCURACY=", accuracy)

@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.vit.tests.vit_test_infra import create_test_infra
+from models.demos.vision.classification.vit.common.tests.vit_test_infra import create_test_infra
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 
 try:
@@ -51,7 +51,7 @@ def test_vit_device_ops(
 )
 @pytest.mark.models_device_performance_bare_metal
 def test_vit_perf_device(batch_size, expected_kernel_samples_per_sec):
-    command = f"pytest models/demos/wormhole/vit/tests/test_vit_device_perf.py::test_vit_device_ops[{batch_size}-device_params0]"
+    command = f"pytest models/demos/vision/classification/vit/wormhole/tests/test_vit_device_perf.py::test_vit_device_ops[{batch_size}-device_params0]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,21 +6,20 @@ import time
 
 import pytest
 import torch
+import transformers
 from loguru import logger
 from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import is_blackhole, torch2tt_tensor
-from models.demos.vision.classification.vit.blackhole.tt import ttnn_optimized_sharded_vit_bh
-from models.demos.vision.classification.vit.common.common import load_torch_model
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch2tt_tensor
+from models.demos.grayskull.vit.tt import ttnn_optimized_sharded_vit_gs
 from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import get_batch, get_data_loader
-from models.perf.perf_utils import prep_perf_report
 
 
 def get_expected_times(functional_vit):
     return {
-        ttnn_optimized_sharded_vit_bh: (11, 0.02),
+        ttnn_optimized_sharded_vit_gs: (12, 0.08),
     }[functional_vit]
 
 
@@ -29,23 +28,26 @@ import os
 os.environ["TTNN_CONFIG_OVERRIDES"] = '{"enable_fast_runtime_mode": true}'
 
 
-@pytest.mark.skipif(is_blackhole(), reason="Unsupported on BH")
-def test_vit(device, model_location_generator):
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
+@pytest.mark.models_performance_bare_metal
+@pytest.mark.models_performance_virtual_machine
+def test_vit(device):
     torch.manual_seed(0)
 
     model_name = "google/vit-base-patch16-224"
-    batch_size = 10
+    batch_size = 8
     sequence_size = 224
 
-    model = load_torch_model(model_location_generator, embedding=True)
-    config = model.config
-    config = ttnn_optimized_sharded_vit_bh.update_model_config(config, batch_size)
+    config = transformers.ViTConfig.from_pretrained(model_name)
+    config.num_hidden_layers = 12
+    model = transformers.ViTForImageClassification.from_pretrained(model_name, config=config)
+    config = ttnn_optimized_sharded_vit_gs.update_model_config(config, batch_size)
     image_processor = AutoImageProcessor.from_pretrained(model_name)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         device=device,
-        custom_preprocessor=ttnn_optimized_sharded_vit_bh.custom_preprocessor,
+        custom_preprocessor=ttnn_optimized_sharded_vit_gs.custom_preprocessor,
     )
 
     # cls_token & position embeddings expand to batch_size
@@ -84,24 +86,24 @@ def test_vit(device, model_location_generator):
     data_loader = get_data_loader("ImageNet_data", batch_size, 2)
 
     durations = []
-    for iter in range(2):
+    for iter in range(1):
         torch_pixel_values, labels = get_batch(data_loader, image_processor)
         start = time.time()
         torch_pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
         torch_pixel_values = torch.nn.functional.pad(torch_pixel_values, (0, 1, 0, 0, 0, 0, 0, 0))
         batch_size, img_h, img_w, img_c = torch_pixel_values.shape  # permuted input NHWC
-        patch_size = config.patch_size
+        patch_size = 16
         torch_pixel_values = torch_pixel_values.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
         N, H, W, C = torch_pixel_values.shape
         shard_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
                     ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(11, 1),
+                    ttnn.CoreCoord(7, 0),
                 ),
             }
         )
-        n_cores = 16
+        n_cores = 8
         shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
 
         output = None
@@ -117,9 +119,10 @@ def test_vit(device, model_location_generator):
             tt_dtype=ttnn.bfloat16,
         )
 
-        output = ttnn_optimized_sharded_vit_bh.vit(
+        output = ttnn_optimized_sharded_vit_gs.vit(
             config,
             pixel_values,
+            head_masks,
             cls_token,
             position_embeddings,
             parameters=parameters,
@@ -129,20 +132,5 @@ def test_vit(device, model_location_generator):
         end = time.time()
         durations.append(end - start)
 
-    inference_and_compile_time, inference_time, *_ = durations
-
-    expected_compile_time, expected_inference_time = get_expected_times(ttnn_optimized_sharded_vit_bh)
-    prep_perf_report(
-        model_name="vit_ttnn_optim_sharded",
-        batch_size=batch_size,
-        inference_and_compile_time=inference_and_compile_time,
-        inference_time=inference_time,
-        expected_compile_time=expected_compile_time,
-        expected_inference_time=expected_inference_time,
-        comments="",
-        inference_time_cpu=0.0,
-    )
-
-    logger.info(f"Compile time: {inference_and_compile_time - inference_time}")
+    inference_time, *_ = durations
     logger.info(f"Inference time: {inference_time}")
-    logger.info(f"Samples per second: {1 / inference_time * batch_size}")
