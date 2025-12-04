@@ -569,6 +569,10 @@ on:
         description: "Measure device performance using device profiler (--device-perf flag)."
         type: boolean
         default: true
+      measure_e2e_perf:
+        description: "Measure end-to-end performance with cold/cached comparison (--perf-with-cache flag)"
+        type: boolean
+        default: false
       arch:
         required: true
         type: choice
@@ -601,10 +605,6 @@ on:
           - WARNING
           - CRITICAL
         default: "INFO"
-      measure_e2e_perf:
-        description: "Measure end-to-end performance with cold/cached comparison (--perf-with-cache flag)"
-        type: boolean
-        default: false
 
   schedule:
     - cron: "0 4 * * 1,2,4,5" # This cron schedule runs the workflow at 4:00 AM UTC on Mon, Tue, Thu, Fri (nightly runs)
