@@ -143,6 +143,12 @@ class Transformer(LightweightModule):
         else:
             self.sampling = None
 
+        self.rot_mat_sin_trace_global = ttnn.clone(self.rope_setup.sin_matrix)
+        self.rot_mat_cos_trace_global = ttnn.clone(self.rope_setup.cos_matrix)
+        if hasattr(self, "rope_local_setup"):
+            self.rot_mat_sin_trace_local = ttnn.clone(self.rope_local_setup.sin_matrix)
+            self.rot_mat_cos_trace_local = ttnn.clone(self.rope_local_setup.cos_matrix)
+
     def process_logits_after_prefill_trace(self, logits, last_token_idx):
         get_last_token = (last_token_idx // 32) * 32
         logits = ttnn.slice(
@@ -207,10 +213,25 @@ class Transformer(LightweightModule):
         # We set the end_pos to max_seq_len so that we don't create a new tensor for the whole cos_matrix and sin_matrix ; in case of trace, we will use the whole matrix for all seq_lens supported by trace
         start_pos = 0 if trace_enabled else start_pos
         end_pos = self.args.max_seq_len if trace_enabled else start_pos + S
+        slice_len = end_pos - start_pos
+
+        if trace_enabled:
+            ttnn.copy(
+                self.rope_setup.cos_matrix[:, :, start_pos:end_pos, :],
+                self.rot_mat_cos_trace_global[:, :, 0:slice_len, :],
+            )
+            ttnn.copy(
+                self.rope_setup.sin_matrix[:, :, start_pos:end_pos, :],
+                self.rot_mat_sin_trace_global[:, :, 0:slice_len, :],
+            )
 
         tt_rot_mats_prefill_global = [
-            self.rope_setup.cos_matrix[:, :, start_pos:end_pos, :],
-            self.rope_setup.sin_matrix[:, :, start_pos:end_pos, :],
+            self.rope_setup.cos_matrix[:, :, start_pos:end_pos, :]
+            if not trace_enabled
+            else self.rot_mat_cos_trace_global[:, :, 0:slice_len, :],
+            self.rope_setup.sin_matrix[:, :, start_pos:end_pos, :]
+            if not trace_enabled
+            else self.rot_mat_sin_trace_global[:, :, 0:slice_len, :],
         ]
 
         if hasattr(self, "rope_local_setup"):

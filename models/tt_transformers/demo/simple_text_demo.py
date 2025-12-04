@@ -281,9 +281,9 @@ def prepare_generator_args(
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            1024,  # max_seq_len
+            8 * 1024,  # max_seq_len
             1,  # batch_size
-            200,  # max_generated_tokens
+            50,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)

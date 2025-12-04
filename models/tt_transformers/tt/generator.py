@@ -135,10 +135,13 @@ class Generator:
         self,
         prefill_ids,
         page_table=None,
+        chunk_page_table=None,
         kv_cache=None,
         model_id=-1,
     ):
-        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table)
+        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(
+            prefill_ids, page_table=page_table, chunk_page_table=chunk_page_table
+        )
         # These matrices will actually be pointing to the whole cos_matrix and sin_matrix that was allocated on device in the RotarySetup class
         tt_rot_mats_prefill_global = host_inputs[1]
         tt_rot_mats_prefill_local = host_inputs[2]
@@ -177,6 +180,7 @@ class Generator:
         self,
         prefill_ids,
         page_table=None,
+        chunk_page_table=None,
         user_id=0,
         last_token_idx=None,
         kv_cache=None,
@@ -190,6 +194,7 @@ class Generator:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
                 prefill_ids,
                 page_table=page_table,
+                chunk_page_table=chunk_page_table,
                 kv_cache=kv_cache,
                 model_id=model_id,
             )
@@ -203,6 +208,7 @@ class Generator:
             self.trace_output_prefill[trace_key],
             prefill_ids,
             page_table=page_table,
+            chunk_page_table=chunk_page_table,
             model_id=model_id,
         )
 
@@ -216,9 +222,12 @@ class Generator:
         prefill_ids,
         user_id=0,
         page_table=None,
+        chunk_page_table=None,
         model_id=-1,
     ):
-        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table)
+        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(
+            prefill_ids, page_table=page_table, chunk_page_table=chunk_page_table
+        )
         host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
 
         device_inputs = copy_host_to_device(
@@ -247,11 +256,11 @@ class Generator:
             # Only paged attention is supported for prefill
             enable_trace = False
 
-        self.warmup_prefill_traces(
+        """self.warmup_prefill_traces(
             page_table,
             kv_cache,
             enable_trace,
-        )
+        )"""
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
@@ -306,28 +315,18 @@ class Generator:
                 if "image_grid_thw" in local_kwargs:
                     local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
 
-            if enable_trace_current_prompt:
-                logits = self._easy_trace_prefill(
-                    prefill_ids,
-                    page_table=page_table_user,
-                    user_id=group_user_id,
-                    last_token_idx=last_token_idx,
-                    kv_cache=model_kv_cache,
-                    model_id=model_id,
-                    prefill_seq_len=prefill_seq_len,
-                    **local_kwargs,
-                )
-            else:
-                logits = self.prefill_forward_single_user_text(
-                    prefill_ids,
-                    page_table=page_table_user,
-                    user_id=group_user_id,
-                    last_token_idx=last_token_idx,
-                    kv_cache=model_kv_cache,
-                    model_id=model_id,
-                    **local_kwargs,
-                )
-            if enable_trace_current_prompt:
+            logits = self.prefill_forward_single_user_text(
+                prefill_ids,
+                page_table=page_table_user,
+                user_id=group_user_id,
+                last_token_idx=last_token_idx,
+                kv_cache=model_kv_cache,
+                model_id=model_id,
+                enable_trace=enable_trace,
+                **local_kwargs,
+            )
+
+            if enable_trace and self.model_args[model_id].can_enable_trace(prefill_seq_len):
                 # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
                 # We need to do this here, because we can't do this part in forward() if we have trace enabled
                 # The reason we can't do it in trace is because we can't pass the correct get_last_token to trace
@@ -360,7 +359,7 @@ class Generator:
         return output_logits
 
     def prefill_forward_single_user_text(
-        self, tokens, page_table, user_id, last_token_idx, kv_cache=None, model_id=-1, **kwargs
+        self, tokens, page_table, user_id, last_token_idx, kv_cache=None, model_id=-1, enable_trace=True, **kwargs
     ):
         seq_len = tokens.shape[-1]
         use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
@@ -400,31 +399,45 @@ class Generator:
                 chunk_tokens = tokens[:, chunk_start:chunk_end]
                 chunk_page_table = page_table_user[:, chunk_start // block_size : chunk_end // block_size]
 
-                (
-                    chunk_prefill_input,
-                    chunk_rot_mats_global_prefill,
-                    chunk_rot_mats_local_prefill,
-                    page_table_tt,
-                    chunk_page_table_tt,
-                ) = self.model[model_id].prepare_inputs_prefill(
-                    chunk_tokens,
-                    start_pos=chunk_start,
-                    page_table=page_table_user_padded,
-                    chunk_page_table=chunk_page_table,
-                    **kwargs,
-                )
-                tt_logits = self.model[model_id].ttnn_prefill_forward(
-                    chunk_prefill_input,
-                    rot_mats_global=chunk_rot_mats_global_prefill,
-                    rot_mats_local=chunk_rot_mats_local_prefill,
-                    user_id=CHUNK_USER_ID,
-                    page_table=page_table_tt,
-                    chunk_page_table=chunk_page_table_tt,
-                    chunk_start_idx=chunk_start,
-                    get_last_token=(last_token_idx_in_chunk // 32) * 32,
-                    kv_cache=kv_cache,
-                    **kwargs,
-                )
+                tt_logits = None
+                if enable_trace and self.model_args[model_id].can_enable_trace(chunk_tokens.shape[-1]):
+                    tt_logits = self._easy_trace_prefill(
+                        chunk_tokens,
+                        page_table=page_table_user_padded,
+                        chunk_page_table=chunk_page_table,
+                        user_id=None,
+                        last_token_idx=None,
+                        kv_cache=kv_cache[model_id] if kv_cache is not None else None,
+                        model_id=model_id,
+                        prefill_seq_len=chunk_tokens.shape[-1],
+                        **kwargs,
+                    )
+                else:
+                    (
+                        chunk_prefill_input,
+                        chunk_rot_mats_global_prefill,
+                        chunk_rot_mats_local_prefill,
+                        page_table_tt,
+                        chunk_page_table_tt,
+                    ) = self.model[model_id].prepare_inputs_prefill(
+                        chunk_tokens,
+                        start_pos=chunk_start,
+                        page_table=page_table_user_padded,
+                        chunk_page_table=chunk_page_table,
+                        **kwargs,
+                    )
+                    tt_logits = self.model[model_id].ttnn_prefill_forward(
+                        chunk_prefill_input,
+                        rot_mats_global=chunk_rot_mats_global_prefill,
+                        rot_mats_local=chunk_rot_mats_local_prefill,
+                        user_id=CHUNK_USER_ID,
+                        page_table=page_table_tt,
+                        chunk_page_table=chunk_page_table_tt,
+                        chunk_start_idx=chunk_start,
+                        get_last_token=(last_token_idx_in_chunk // 32) * 32,
+                        kv_cache=kv_cache,
+                        **kwargs,
+                    )
 
                 if chunk_start == last_chunk_start:
                     return tt_logits
