@@ -194,7 +194,7 @@ class SamplingGenerator:
         slot["id"] = trace_id
         slot["input"] = logits
         slot["output"] = output
-        slot["kwargs"] = {"seed": seed, "tt_out_tok": tt_out_tok}
+        slot["kwargs"] = {"tt_out_tok": tt_out_tok}
 
         return slot["output"]
 
