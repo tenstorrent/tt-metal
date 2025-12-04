@@ -84,7 +84,7 @@ jobs:
             requested_cpp_tests=$(jq '[.[] | select(.name == "CCL")]' <<< "$requested_cpp_tests")
             echo "[info] after filtering for merge-gate-call (CCL only): $requested_cpp_tests"
           # Exclude CCL if both nightly-run and merge-gate-call are false
-          elif [[ "${{ inputs.nightly-run }}" == "false" && ("${{ inputs.runner-label }}" == "N150" || "${{ inputs.runner-label }}" == "N300") ]]; then
+          elif [[ "${{ inputs.nightly-run }}" == "false" && ( "${{ inputs.runner-label }}" == "N150" || "${{ inputs.runner-label }}" == "N300" ) ]]; then
             requested_cpp_tests=$(jq '[.[] | select(.name != "CCL")]' <<< "$requested_cpp_tests")
             echo "[info] after filtering out CCL for regular post-commit: $requested_cpp_tests"
           fi
