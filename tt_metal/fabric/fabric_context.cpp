@@ -59,11 +59,6 @@ bool FabricContext::is_2D_topology(tt::tt_fabric::Topology topology) {
     return topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Torus;
 }
 
-std::ostream& operator<<(std::ostream& os, const tt::tt_fabric::Topology& topology) {
-    tt::stl::reflection::operator<<(os, topology);
-    return os;
-}
-
 size_t FabricContext::compute_packet_header_size_bytes() const {
     bool udm_enabled =
         tt::tt_metal::MetalContext::instance().get_fabric_udm_mode() == tt::tt_fabric::FabricUDMMode::ENABLED;
