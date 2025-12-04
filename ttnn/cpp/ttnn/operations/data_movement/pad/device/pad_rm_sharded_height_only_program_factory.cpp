@@ -1,5 +1,5 @@
 
-#include "pad_rm_reader_writer_multi_core_v2_program_factory.hpp"
+#include "pad_rm_sharded_height_only_program_factory.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>
 
@@ -182,7 +182,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     return ret_val;
 }
 
-PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMultiCoreV2ProgramFactory::create(
+PadRmShardedHeightOnlyProgramFactory::cached_program_t PadRmShardedHeightOnlyProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
@@ -351,16 +351,16 @@ PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMu
     return cached_program_t{std::move(program), {cb_src0, cb_output}};
 }
 
-void PadRmReaderWriterMultiCoreV2ProgramFactory::override_runtime_arguments(
+void PadRmShardedHeightOnlyProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto* src_buffer_a = tensor_args.input.buffer();
-    auto* dst_buffer = tensor_return_value.output.buffer();
+    auto* dst_buffer = tensor_return_value.buffer();
 
-    UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_src0, *src_buffer_a);
-    UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_output, *dst_buffer);
+    UpdateDynamicCircularBufferAddress(cached_program.program, cached_program.shared_variables.cb_src0, *src_buffer_a);
+    UpdateDynamicCircularBufferAddress(cached_program.program, cached_program.shared_variables.cb_output, *dst_buffer);
 }
 
 }  // namespace ttnn::operations::data_movement::pad::program

@@ -12,8 +12,8 @@
 namespace ttnn::operations::data_movement::pad::program {
 
 struct PadRmShardedHeightOnlySharedVariables {
-    tt::tt_metal::KernelHandle unary_reader_kernel_id{};
-    tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+    tt::tt_metal::CBHandle cb_src0{};
+    tt::tt_metal::CBHandle cb_output{};
 };
 
 struct PadRmShardedHeightOnlyProgramFactory {

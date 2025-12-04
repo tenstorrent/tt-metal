@@ -146,12 +146,14 @@ void PadRmReaderWriterMultiCoreProgramFactory::override_runtime_arguments(
     auto* dst_buffer = tensor_return_value.buffer();
     CoreCoord core = {0, 0};
     {
-        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(cached_program, reader_kernel_id, core);
+        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(
+            cached_program.program, cached_program.shared_variables.reader_kernel_id, core);
         runtime_args[0] = src_buffer->address();
         runtime_args[1] = dst_buffer->address();
     }
     {
-        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(cached_program, writer_kernel_id, core);
+        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(
+            cached_program.program, cached_program.shared_variables.writer_kernel_id, core);
         runtime_args[0] = src_buffer->address();
         runtime_args[1] = dst_buffer->address();
     }

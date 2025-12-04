@@ -1,5 +1,5 @@
 
-#include "pad_rm_reader_writer_multi_core_v2_program_factory.hpp"
+#include "pad_rm_sharded_width_only_program_factory.hpp"
 
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -8,7 +8,7 @@ using namespace tt::tt_metal;
 using namespace tt::constants;
 
 namespace ttnn::operations::data_movement::pad::program {
-PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMultiCoreV2ProgramFactory::create(
+PadRmShardedWidthOnlyProgramFactory::cached_program_t PadRmShardedWidthOnlyProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
@@ -79,7 +79,7 @@ PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMu
         uint16_t bfloat_pad_value_bits = std::bit_cast<uint16_t>(bfloat16(pad_value));
         padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&bfloat_pad_value_bits);
     } else if (input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) {
-        padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&pad_value);
+        padding_value_as_u32 = *reinterpret_cast<const uint32_t*>(&pad_value);
     } else if (input_tensor.dtype() == tt::tt_metal::DataType::UINT16) {
         padding_value_as_u32 = pack_two_uint16_into_uint32({0, float_to_uint16(pad_value)});
     } else if (
@@ -135,7 +135,7 @@ PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMu
     return cached_program_t{std::move(program), {input_shard_cb, output_shard_cb}};
 }
 
-void PadRmReaderWriterMultiCoreV2ProgramFactory::override_runtime_arguments(
+void PadRmShardedWidthOnlyProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -143,8 +143,10 @@ void PadRmReaderWriterMultiCoreV2ProgramFactory::override_runtime_arguments(
     auto* input_buffer = tensor_args.input.buffer();
     auto* output_buffer = tensor_return_value.buffer();
 
-    UpdateDynamicCircularBufferAddress(cached_program, input_shard_cb, *input_buffer);
-    UpdateDynamicCircularBufferAddress(cached_program, output_shard_cb, *output_buffer);
+    UpdateDynamicCircularBufferAddress(
+        cached_program.program, cached_program.shared_variables.input_shard_cb, *input_buffer);
+    UpdateDynamicCircularBufferAddress(
+        cached_program.program, cached_program.shared_variables.output_shard_cb, *output_buffer);
 }
 
 }  // namespace ttnn::operations::data_movement::pad::program

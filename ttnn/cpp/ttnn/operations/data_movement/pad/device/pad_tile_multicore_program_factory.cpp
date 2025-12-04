@@ -213,19 +213,19 @@ PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory:
         // The input and output id_per_dim should now be set correctly for the next core
     }
 
-    return cached_program_t{std::move(program), {}};
+    return cached_program_t{std::move(program), {reader_kernel_id, writer_kernel_id, compute_with_storage_grid_size}};
 }
 
 void PadTileMulticoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    auto* src_buffer = input_tensors.at(0).buffer();
-    auto* dst_buffer = output_tensors.at(0).buffer();
+    tensor_return_value_t& output) {
+    auto* src_buffer = tensor_args.input.buffer();
+    auto* dst_buffer = output.buffer();
 
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    uint32_t num_cores_x = cached_program.shared_variables.compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = cached_program.shared_variables.compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;
 
     for (uint32_t i = 0; i < num_cores_total; i++) {
@@ -233,13 +233,15 @@ void PadTileMulticoreProgramFactory::override_runtime_arguments(
 
         // Update reader kernel runtime args
         {
-            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            auto& runtime_args =
+                GetRuntimeArgs(cached_program.program, cached_program.shared_variables.reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
         }
 
         // Update writer kernel runtime args
         {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            auto& runtime_args =
+                GetRuntimeArgs(cached_program.program, cached_program.shared_variables.writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
         }
     }

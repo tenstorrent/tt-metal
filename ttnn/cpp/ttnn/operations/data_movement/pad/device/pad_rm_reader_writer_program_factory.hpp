@@ -12,8 +12,10 @@
 namespace ttnn::operations::data_movement::pad::program {
 
 struct PadRmReaderWriterSharedVariables {
-    tt::tt_metal::KernelHandle unary_reader_kernel_id{};
-    tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+    int ncores_h{};
+    int ncores_w{};
+    tt::tt_metal::KernelHandle reader_kernel_id{};
+    tt::tt_metal::KernelHandle writer_kernel_id{};
 };
 
 struct PadRmReaderWriterProgramFactory {

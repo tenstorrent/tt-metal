@@ -258,7 +258,7 @@ PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMu
         std::move(program), {reader_kernel_id, writer_kernel_id, compute_with_storage_grid_size, input_tensor_start}};
 }
 
-void PadRmReaderWriterProgramFactory::override_runtime_arguments(
+void PadRmReaderWriterMultiCoreV2ProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -302,12 +302,18 @@ void PadRmReaderWriterProgramFactory::override_runtime_arguments(
 
         {
             SetRuntimeArgs(
-                cached_program, cached_program.shared_variables.reader_kernel_id, core, all_runtime_args[i].first);
+                cached_program.program,
+                cached_program.shared_variables.reader_kernel_id,
+                core,
+                all_runtime_args[i].first);
         }
 
         {
             SetRuntimeArgs(
-                cached_program, cached_program.shared_variables.writer_kernel_id, core, all_runtime_args[i].second);
+                cached_program.program,
+                cached_program.shared_variables.writer_kernel_id,
+                core,
+                all_runtime_args[i].second);
         }
     }
 }

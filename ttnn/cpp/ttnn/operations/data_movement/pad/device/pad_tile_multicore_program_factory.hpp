@@ -12,8 +12,9 @@
 namespace ttnn::operations::data_movement::pad::program {
 
 struct PadTileMulticoreSharedVariables {
-    tt::tt_metal::KernelHandle unary_reader_kernel_id{};
-    tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+    tt::tt_metal::KernelHandle reader_kernel_id{};
+    tt::tt_metal::KernelHandle writer_kernel_id{};
+    CoreCoord compute_with_storage_grid_size{};
 };
 
 struct PadTileMulticoreProgramFactory {

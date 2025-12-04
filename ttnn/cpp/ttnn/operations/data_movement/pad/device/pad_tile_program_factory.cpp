@@ -2,6 +2,7 @@
 #include "pad_tile_program_factory.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include <tt-metalium/host_api.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -131,14 +132,14 @@ void PadTileCoreProgramFactory::override_runtime_arguments(
     CoreCoord core = {0, 0};
 
     {
-        auto& runtime_args =
-            tt::tt_metal::GetRuntimeArgs(cached_program, cached_program.shared_variables.unary_reader_kernel_id, core);
+        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(
+            cached_program.program, cached_program.shared_variables.unary_reader_kernel_id, core);
         runtime_args[0] = src_dram_buffer->address();
     }
 
     {
-        auto& runtime_args =
-            tt::tt_metal::GetRuntimeArgs(cached_program, cached_program.shared_variables.unary_writer_kernel_id, core);
+        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(
+            cached_program.program, cached_program.shared_variables.unary_writer_kernel_id, core);
         runtime_args[0] = dst_dram_buffer->address();
     }
 }

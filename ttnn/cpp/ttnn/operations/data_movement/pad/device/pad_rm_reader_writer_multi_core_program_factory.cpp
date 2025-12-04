@@ -1,4 +1,4 @@
-#include "pad_rm_reader_writer_multi_core_v2_program_factory.hpp"
+#include "pad_rm_reader_writer_multi_core_program_factory.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 
@@ -147,7 +147,7 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint
         ncores_per_batch_h);
 }
 
-PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMultiCoreV2ProgramFactory::create(
+PadRmReaderWriterMultiCoreProgramFactory::cached_program_t PadRmReaderWriterMultiCoreProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
@@ -357,27 +357,29 @@ PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMu
         }  // for ncores_h
     }
 
-    return cached_program_t{std::move(program), {}};
+    return cached_program_t{std::move(program), {ncores_h, ncores_w, reader_kernel_id, writer_kernel_id}};
 }
 
-void PadRmReaderWriterProgramFactory::override_runtime_arguments(
+void PadRmReaderWriterMultiCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    auto* src_buffer = input_tensors.at(0).buffer();
-    auto* dst_buffer = output_tensors.at(0).buffer();
+    tensor_return_value_t& output) {
+    auto* src_buffer = tensor_args.input.buffer();
+    auto* dst_buffer = output.buffer();
 
-    for (uint32_t j = 0; j < ncores_h; ++j) {
-        for (uint32_t i = 0; i < ncores_w; ++i) {
+    for (uint32_t j = 0; j < cached_program.shared_variables.ncores_h; ++j) {
+        for (uint32_t i = 0; i < cached_program.shared_variables.ncores_w; ++i) {
             CoreCoord core = {i, j};
             {
-                auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
+                auto& runtime_args = tt::tt_metal::GetRuntimeArgs(
+                    cached_program.program, cached_program.shared_variables.reader_kernel_id, core);
                 runtime_args[0] = src_buffer->address();
                 runtime_args[1] = dst_buffer->address();
             }
             {
-                auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
+                auto& runtime_args = tt::tt_metal::GetRuntimeArgs(
+                    cached_program.program, cached_program.shared_variables.writer_kernel_id, core);
                 runtime_args[0] = src_buffer->address();
                 runtime_args[1] = dst_buffer->address();
             }

@@ -12,8 +12,10 @@
 namespace ttnn::operations::data_movement::pad::program {
 
 struct PadRmReaderWriterMultiCoreV2SharedVariables {
-    tt::tt_metal::KernelHandle unary_reader_kernel_id{};
-    tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+    tt::tt_metal::KernelHandle reader_kernel_id{};
+    tt::tt_metal::KernelHandle writer_kernel_id{};
+    CoreCoord compute_with_storage_grid_size{};
+    ttnn::Shape input_tensor_start{};
 };
 
 struct PadRmReaderWriterMultiCoreV2ProgramFactory {
