@@ -53,8 +53,10 @@ TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panopti
 
 ### Run Device Performance Tests
 ```bash
-# Test full model performance
-TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panoptic_deeplab/tests/test_device_perf_pdl.py
+# Test full model performance on 20 cores
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panoptic_deeplab/tests/test_device_perf_pdl.py::test_device_perf_pdl_20_cores
+# Test full model performance on all cores
+pytest models/experimental/panoptic_deeplab/tests/test_device_perf_pdl.py::test_device_perf_pdl_all_cores
 ```
 
 ### Run the Demo
