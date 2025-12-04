@@ -255,13 +255,112 @@ jobs:
           name: release-notes
           path: RELEASE_NOTES.txt
 
+  check-existing-release:
+    needs: [create-tag, create-release-notes, build-test-publish]
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+    concurrency: create_upload_draft_release
+    outputs:
+      should-skip-release: ${{ steps.check-release-conditions.outputs.should-skip-release }}
+    steps:
+      - name: Check release conditions and existing assets
+        id: check-release-conditions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="${{ needs.create-tag.outputs.version }}"
+
+          # First check all the original conditions from create-and-upload-draft-release
+          echo "Checking release creation conditions..."
+
+          # Check if we should create release based on git ref
+          should_create_for_ref=false
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]] || \
+             [[ "${{ github.ref }}" == "refs/heads/stable" ]] || \
+             [[ "${{ github.ref }}" == refs/tags/v* ]] || \
+             [[ "${{ inputs.dry-run }}" == "true" ]]; then
+            should_create_for_ref=true
+            echo "✓ Git ref condition met: ${{ github.ref }}"
+          else
+            echo "✗ Git ref condition not met: ${{ github.ref }}"
+          fi
+
+          # Check if required jobs succeeded
+          create_tag_success="${{ needs.create-tag.result == 'success' }}"
+          create_notes_success="${{ needs.create-release-notes.result == 'success' }}"
+
+          echo "Job results - create-tag: ${{ needs.create-tag.result }}, create-release-notes: ${{ needs.create-release-notes.result }}, build-test-publish: ${{ needs.build-test-publish.result }}"
+
+          if [[ "$create_tag_success" != "true" ]] || [[ "$create_notes_success" != "true" ]]; then
+            echo "✗ Required jobs (create-tag, create-release-notes) did not succeed. Skipping release creation."
+            echo "should-skip-release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$should_create_for_ref" != "true" ]]; then
+            echo "✗ Git ref conditions not met. Skipping release creation."
+            echo "should-skip-release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Now check if release already exists with assets
+          echo "All conditions met. Checking if release $TAG_NAME already exists with assets..."
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Release $TAG_NAME exists. Checking assets..."
+
+            # Get list of assets for this release
+            assets=$(gh release view "$TAG_NAME" --json assets --jq '.assets[].name' | tr '\n' ' ')
+            echo "Existing assets: $assets"
+
+            # Define required assets
+            required_assets=(
+              "VERSION"
+              "CHANGELOG.txt"
+              "README.md"
+              "INSTALLING.md"
+              "MODEL_UPDATES.md"
+              "tt-metalium.tar.gz"
+            )
+
+            # Check if all required assets exist
+            all_assets_exist=true
+            for asset in "${required_assets[@]}"; do
+              if ! echo "$assets" | grep -q "$asset"; then
+                echo "Missing asset: $asset"
+                all_assets_exist=false
+              else
+                echo "Found asset: $asset"
+              fi
+            done
+
+            # Check if at least one .deb package exists
+            if echo "$assets" | grep -q '\.deb$'; then
+              echo "Found .deb package(s)"
+            else
+              echo "Missing .deb packages"
+              all_assets_exist=false
+            fi
+
+            if [ "$all_assets_exist" = "true" ]; then
+              echo "All required assets exist. Skipping release creation."
+              echo "should-skip-release=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "Some assets are missing. Proceeding with release creation."
+              echo "should-skip-release=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "Release $TAG_NAME does not exist. Proceeding with release creation."
+            echo "should-skip-release=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # Candidate for breaking up
   create-and-upload-draft-release:
-    needs: [create-tag, create-release-notes, build-test-publish]
+    needs: [check-existing-release, create-tag]
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
-    if: ${{ always() && needs.create-tag.result == 'success' && needs.create-release-notes.result == 'success' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run) }}
+    if: ${{ needs.check-existing-release.outputs.should-skip-release != 'true' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -343,7 +442,7 @@ jobs:
     needs: [create-and-upload-draft-release, create-tag]
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
-    if: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) && !inputs.dry-run }}
+    if: ${{ !inputs.dry-run }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -351,10 +450,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          TAG_VERSION="${{ needs.create-tag.outputs.version }}"
+
           # Verify the draft release exists before attempting to edit it
-          echo "Checking if release ${{ needs.create-tag.outputs.version }} exists..."
-          if ! gh release view "${{ needs.create-tag.outputs.version }}" >/dev/null 2>&1; then
-            echo "ERROR: Release ${{ needs.create-tag.outputs.version }} not found"
+          echo "Checking if release $TAG_VERSION exists..."
+          if ! gh release view "$TAG_VERSION" >/dev/null 2>&1; then
+            echo "ERROR: Release $TAG_VERSION not found"
             echo "This could indicate a timing issue or failure in the create-and-upload-draft-release job"
             exit 1
           fi
@@ -362,11 +463,11 @@ jobs:
           # Use GitHub CLI to edit the existing release and convert it from draft to prerelease
           # This preserves all existing assets and metadata while only changing the release status
           echo "Converting draft release to prerelease..."
-          gh release edit "${{ needs.create-tag.outputs.version }}" \
+          gh release edit "$TAG_VERSION" \
             --draft=false \
             --prerelease
 
-          echo "Successfully converted release ${{ needs.create-tag.outputs.version }} to prerelease"
+          echo "Successfully converted release $TAG_VERSION to prerelease"
 
   check-stable-for-new-commits:
     runs-on: ubuntu-latest

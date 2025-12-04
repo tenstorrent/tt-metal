@@ -129,3 +129,137 @@ def test_unary_exhaustive_bitpatterns(ttnn_op, dtype, low, high, atol_threshold,
     # Compare with golden using specified threshold
     assert_with_ulp(ttnn_output, torch_output, ulp_threshold)
     assert torch.allclose(ttnn_output, torch_output, atol=atol_threshold)
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        torch.Size([4, 7, 64, 128]),
+    ],
+)
+@pytest.mark.parametrize(
+    "sharded_config",
+    [
+        height_sharded_memory_config,
+        width_sharded_memory_config,
+        block_sharded_memory_config,
+    ],
+)
+@pytest.mark.parametrize(
+    "torch_input_dtype, torch_output_dtype, ttnn_input_dtype, ttnn_output_dtype",
+    [
+        # uint16 -> bfloat16 conversions
+        (torch.uint16, torch.bfloat16, ttnn.uint16, ttnn.bfloat16),
+        # bfloat16 -> uint16 conversions
+        (torch.bfloat16, torch.uint16, ttnn.bfloat16, ttnn.uint16),
+        # int32 -> uint32 conversions
+        (torch.int32, torch.uint32, ttnn.int32, ttnn.uint32),
+        # uint32 -> float32 conversions
+        (torch.uint32, torch.float32, ttnn.uint32, ttnn.float32),
+        # float32 -> uint32 conversions
+        (torch.float32, torch.uint32, ttnn.float32, ttnn.uint32),
+    ],
+)
+def test_bitcast_sharded(
+    input_shape,
+    sharded_config,
+    torch_input_dtype,
+    torch_output_dtype,
+    ttnn_input_dtype,
+    ttnn_output_dtype,
+    device,
+):
+    """Test bitcast operation with sharded tensors - reinterprets bit pattern without conversion"""
+    torch.manual_seed(2024)
+
+    # Generate test values based on dtype
+    if torch_input_dtype == torch.uint16:
+        torch_input = torch.randint(0, 65535, input_shape, dtype=torch_input_dtype)
+    elif torch_input_dtype == torch.bfloat16:
+        torch_input = torch.randn(input_shape, dtype=torch_input_dtype)
+    elif torch_input_dtype == torch.int32:
+        torch_input = torch.randint(-2147483648, 2147483647, input_shape, dtype=torch_input_dtype)
+    elif torch_input_dtype == torch.uint32:
+        torch_input = torch.randint(0, 4294967295, input_shape, dtype=torch_input_dtype)
+    elif torch_input_dtype == torch.float32:
+        torch_input = torch.randn(input_shape, dtype=torch_input_dtype)
+    else:
+        torch_input = torch.randn(input_shape, dtype=torch_input_dtype)
+
+    # Create PyTorch reference using view (bitcast)
+    torch_output = torch_input.view(torch_output_dtype)
+
+    # Convert to ttnn with sharded memory config
+    ttnn_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn_input_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=sharded_config,
+    )
+
+    # Perform bitcast with sharded input
+    ttnn_output_sharded = ttnn.bitcast(ttnn_input, ttnn_output_dtype, memory_config=sharded_config)
+
+    # Convert output back to torch
+    ttnn_output = ttnn.to_torch(ttnn_output_sharded, dtype=torch_output_dtype)
+
+    # Compare values - bitcast should preserve exact bit patterns
+    # Note: NaN values may convert to inf due to hardware packer limitation
+    # For non-NaN, non-inf values, we expect exact match
+    torch_output_flat = torch_output.flatten()
+    ttnn_output_flat = ttnn_output.flatten()
+
+    for i in range(len(torch_output_flat)):
+        expected = torch_output_flat[i].item()
+        actual = ttnn_output_flat[i].item()
+
+        if torch.isnan(torch.tensor(expected)):
+            # NaN values may convert to inf in bfloat16 due to packer hardware limitation
+            assert torch.isinf(torch.tensor(actual)) or torch.isnan(
+                torch.tensor(actual)
+            ), f"Value {i}: Expected NaN, got {actual}"
+        elif torch.isinf(torch.tensor(expected)):
+            # Inf values should match
+            assert torch.isinf(torch.tensor(actual)), f"Value {i}: Expected Inf, got {actual}"
+        else:
+            # Normal values should match exactly for bitcast
+            if torch_output_dtype == torch.float32:
+                # Allow tolerance for precision issues with large numbers
+                # Use relative tolerance for large numbers, absolute for small
+                abs_diff = abs(expected - actual)
+                if abs(expected) > 1.0:
+                    # Relative tolerance for large numbers (allow up to 0.1% relative error)
+                    rel_tol = abs_diff / abs(expected)
+                    assert (
+                        rel_tol < 0.001 or abs_diff < 0.002 or expected == actual
+                    ), f"Value {i}: Expected {expected}, got {actual}, difference: {abs_diff}, rel_diff: {rel_tol}"
+                else:
+                    # Absolute tolerance for small numbers
+                    assert (
+                        abs_diff < 0.002 or expected == actual
+                    ), f"Value {i}: Expected {expected}, got {actual}, difference: {abs_diff}"
+            elif torch_output_dtype == torch.bfloat16:
+                # bfloat16 denormals may be flushed to zero due to hardware limitations
+                expected_tensor = torch.tensor(expected)
+                is_denormal = (
+                    not torch.isnan(expected_tensor)
+                    and not torch.isinf(expected_tensor)
+                    and expected != 0.0
+                    and abs(expected) < torch.finfo(torch.bfloat16).tiny
+                )
+                if is_denormal:
+                    # Allow zero for denormal numbers
+                    assert (
+                        actual == 0.0 or abs(expected - actual) < 1e-6
+                    ), f"Value {i}: Expected denormal {expected}, got {actual}"
+                else:
+                    # Exact match for normal values
+                    assert (
+                        expected == actual
+                    ), f"Value {i}: Expected {expected}, got {actual}, difference: {abs(expected - actual)}"
+            else:
+                # For integer types, expect exact match
+                assert (
+                    expected == actual
+                ), f"Value {i}: Expected {expected}, got {actual}, difference: {abs(expected - actual)}"

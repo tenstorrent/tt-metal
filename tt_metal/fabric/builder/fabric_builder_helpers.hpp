@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <utility>
+#include <vector>
+
 #include "hostdevcommon/fabric_common.h"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -15,6 +18,15 @@ namespace builder {
 bool is_east_or_west(eth_chan_directions direction);
 bool is_north_or_south(eth_chan_directions direction);
 eth_chan_directions get_sender_channel_direction(eth_chan_directions my_direction, size_t sender_channel_index);
+
+// Helper function to determine perpendicular directions
+// E/W direction returns N/S as perpendicular; N/S direction returns E/W as perpendicular
+std::pair<eth_chan_directions, eth_chan_directions> get_perpendicular_directions(eth_chan_directions direction);
+
+// Helper function to get directions for inter-mux connections
+// Returns all directions except the current direction, in E,W,N,S order
+std::vector<eth_chan_directions> get_all_other_directions(eth_chan_directions direction);
+
 }  // namespace builder
 
 inline uint32_t get_worker_connected_sender_channel() {

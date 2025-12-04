@@ -5,7 +5,7 @@
 #include <gtest/gtest.h>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/device_pool.hpp>
+#include "tt_metal/impl/device/device_pool.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <memory>
 #include <vector>

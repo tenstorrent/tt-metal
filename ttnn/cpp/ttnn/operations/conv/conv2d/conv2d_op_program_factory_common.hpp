@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <optional>
 
-#include "conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -110,5 +110,12 @@ bool is_split_reader_viable(
     bool fp32_dest_acc,
     DataType output_datatype,
     bool act_reuse_enabled);
+
+void post_conv2d_op_memory_checks(
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor);
+
 }  // namespace conv2d
 }  // namespace ttnn::operations::conv

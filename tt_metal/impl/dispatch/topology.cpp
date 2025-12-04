@@ -4,7 +4,7 @@
 
 #include "topology.hpp"
 
-#include <device_pool.hpp>
+#include "tt_metal/impl/device/device_pool.hpp"
 #include <host_api.hpp>
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>

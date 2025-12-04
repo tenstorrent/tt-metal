@@ -14,25 +14,25 @@ void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(6);
     uint32_t ublock_size_tiles = get_arg_val<uint32_t>(7);
 
-    uint32_t ublock0_size_bytes = get_tile_size(cb_id_out0) * ublock_size_tiles;
-    uint32_t ublock1_size_bytes = get_tile_size(cb_id_out1) * ublock_size_tiles;
+    experimental::CircularBuffer cb0(cb_id_out0);
+    experimental::CircularBuffer cb1(cb_id_out1);
+    experimental::Noc noc;
+    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_dst;
+
+    uint32_t ublock0_size_bytes = cb0.get_tile_size() * ublock_size_tiles;
+    uint32_t ublock1_size_bytes = cb1.get_tile_size() * ublock_size_tiles;
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
-        uint64_t dst0_noc_addr = get_noc_addr_from_bank_id<true>(dst0_dram_bank_id, dst0_addr);
-        uint64_t dst1_noc_addr = get_noc_addr_from_bank_id<true>(dst1_dram_bank_id, dst1_addr);
+        cb0.wait_front(ublock_size_tiles);
+        cb1.wait_front(ublock_size_tiles);
 
-        cb_wait_front(cb_id_out0, ublock_size_tiles);
-        cb_wait_front(cb_id_out1, ublock_size_tiles);
-        uint32_t l1_read_addr0 = get_read_ptr(cb_id_out0);
-        uint32_t l1_read_addr1 = get_read_ptr(cb_id_out1);
+        noc.async_write(cb0, dram_dst, ublock0_size_bytes, {}, {.bank_id = dst0_dram_bank_id, .addr = dst0_addr});
+        noc.async_write(cb1, dram_dst, ublock1_size_bytes, {}, {.bank_id = dst1_dram_bank_id, .addr = dst1_addr});
 
-        noc_async_write(l1_read_addr0, dst0_noc_addr, ublock0_size_bytes);
-        noc_async_write(l1_read_addr1, dst1_noc_addr, ublock1_size_bytes);
+        noc.async_write_barrier();
 
-        noc_async_write_barrier();
-
-        cb_pop_front(cb_id_out0, ublock_size_tiles);
-        cb_pop_front(cb_id_out1, ublock_size_tiles);
+        cb0.pop_front(ublock_size_tiles);
+        cb1.pop_front(ublock_size_tiles);
         dst0_addr += ublock0_size_bytes;
         dst1_addr += ublock1_size_bytes;
     }

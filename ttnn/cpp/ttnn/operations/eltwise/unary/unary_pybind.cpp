@@ -2487,6 +2487,56 @@ void py_module(py::module& module) {
 
         R"doc(BFLOAT16)doc",
         R"doc(System memory is not supported.)doc");
+
+    // Bind bitcast operation
+    auto bitcast_doc = fmt::format(
+        R"doc(
+        Bitcast reinterprets the bit pattern without conversion (unlike typecast which converts values).
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+            dtype (ttnn.DataType): output data type. Must have the same bit size as input dtype. Supported pairs: UINT16 <-> BFLOAT16 (both 16 bits), UINT32 <-> FLOAT32 (both 32 bits), UINT32 <-> INT32 (both 32 bits).
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - BFLOAT16, FLOAT32, INT32, UINT16, UINT32
+                 - TILE
+                 - 2, 3, 4
+        )doc",
+        ttnn::bitcast.base_name());
+
+    using BitcastType = decltype(ttnn::bitcast);
+    bind_registered_operation(
+        module,
+        ttnn::bitcast,
+        bitcast_doc,
+        ttnn::pybind_overload_t{
+            [](const BitcastType& self,
+               const ttnn::Tensor& input_tensor,
+               const DataType dtype,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
+                return self(input_tensor, dtype, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::arg("dtype"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::unary
