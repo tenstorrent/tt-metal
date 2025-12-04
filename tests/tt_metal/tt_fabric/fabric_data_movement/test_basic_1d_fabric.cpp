@@ -2533,7 +2533,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
     for (size_t i = 0; i < NUM_DEVICES; i++) {
         FabricNodeId fabric_node_id(MeshId{0}, static_cast<uint32_t>(i));
         ChipId physical_device_id = control_plane.get_physical_chip_id_from_fabric_node_id(fabric_node_id);
-        auto device_ptr = fixture->get_device(physical_device_id);
+        const auto& device_ptr = fixture->get_device(physical_device_id);
         if (!device_ptr) {
             continue;
         }
@@ -2583,7 +2583,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
     // Check if receiver has enough L1 space for N device slots (simple indexing: slot i for device i)
     // Note: slot receiver_device_idx is unused but we allocate it for simplicity
     uint32_t total_receiver_l1_needed = static_cast<uint32_t>(num_active_devices) * per_sender_l1_size;
-    auto& hal = tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt_metal::MetalContext::instance().hal();
     uint32_t l1_base = hal.get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
     uint32_t l1_size = hal.get_dev_size(
@@ -2617,6 +2617,7 @@ void UDMFabricUnicastAllToAllCommon(BaseFabricFixture* fixture, NocSendType noc_
 
     // Create programs for each device (each device has both sender and receiver programs)
     std::vector<tt_metal::Program> programs;
+    programs.reserve(num_active_devices);
     for (size_t dev_idx = 0; dev_idx < num_active_devices; dev_idx++) {
         programs.push_back(tt_metal::CreateProgram());
     }
