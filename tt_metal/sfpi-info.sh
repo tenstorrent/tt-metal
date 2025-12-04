@@ -15,8 +15,8 @@
 # $FILE CMAKE [$pkg] -- emit cmake script to set variables
 
 # For the realm of elves, releasing the toolchain
-# eval $($FILE RELEASE $version) -- generate sfpi variables for release
-# $FILE CREATE $dirs -- emit sfpi-version file from sha hash files
+# eval $($FILE VERSION $version) -- generate sfpi variables for release
+# $FILE CREATE [$dirs] -- emit sfpi-version file from hash files
 
 # For the realm of dwarves, building the toolchain
 # $FILE BUILD [$DIR]
@@ -27,7 +27,7 @@ if [[ ${#1} = 0 ]]; then
     cat >&2 <<EOF
 Usage:
 $0 CREATE [\$DIRS] - generate release information
-$0 RELEASE \$VER - generate release names
+$0 VERSION \$VER - generate release names
 $0 SHELL [\$PKG] - shell use for PKG
 $0 CMAKE [\$PKG] - CMAKE use for PKG
 $0 BUILD [\$DIR] - clone and build a toolchain
@@ -38,7 +38,7 @@ fi
 version_file="sfpi-version"
 hashtype=sha256
 if [[ ${1-} = CREATE ]]; then
-    # convert sha256 files into sfpi-version file
+    # create sfpi-version file
     version=
     exit_code=0
     echo '# sfpi version information' >$version_file
@@ -53,6 +53,10 @@ if [[ ${1-} = CREATE ]]; then
     do
 	for file in "$dir"/*.$hashtype
 	do
+	    if ! [[ -r "$file" ]]; then
+		echo "$dir contains no hash files" >&2
+		exit 1
+	    fi
 	    files+=("$file")
 	    ver="${file##*/sfpi_}"
 	    ver="${ver%%_*}"
@@ -71,7 +75,7 @@ if [[ ${1-} = CREATE ]]; then
     exit $exit_code
 fi
 
-if [[ ${1-} = RELEASE ]]; then
+if [[ ${1-} = VERSION ]]; then
     # releaser of sfpi
     sfpi_version=$2
     sfpi_hashtype=$hashtype
@@ -105,7 +109,7 @@ sfpi_arch=$(uname -m)
 sfpi_url=$sfpi_repo/releases/download/$sfpi_version
 sfpi_filename=sfpi_${sfpi_version}_${sfpi_arch}_${sfpi_dist}
 
-if [[ ${1-} != RELEASE ]]; then
+if [[ ${1-} != VERSION ]]; then
     # querier of sfpi-version
     if [[ ${1-} = BUILD ]]; then
 	sfpi_pkg=txz
