@@ -984,6 +984,8 @@ jobs:
           merge-multiple: true
       - name: Run ttnn sweeps (single sweep) ${{ github.event.inputs.runner_label }} ${{ github.event.inputs.sweep_name }} ${{ github.event.inputs.suite_name }}
         run: |
+          SUITE_NAME="${{ github.event.inputs.suite_name }}"
+
           SKIP_ON_TIMEOUT_FLAG=""
           if [[ "${{ github.event.inputs.skip_on_timeout }}" == "true" ]]; then
             SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
@@ -999,13 +1001,32 @@ jobs:
             E2E_PERF_FLAG="--perf-with-cache"
           fi
 
-          python3 tests/sweep_framework/sweeps_runner.py \
-          --module-name ${{ github.event.inputs.sweep_name }} \
-          --vector-source vectors_export \
-          --result-dest results_export \
-          --tag ci-main \
-          --summary $SKIP_ON_TIMEOUT_FLAG $DEVICE_PERF_FLAG $E2E_PERF_FLAG \
-          --suite-name ${{ github.event.inputs.suite_name }} \
+          CMD=(
+            python3 tests/sweep_framework/sweeps_runner.py
+            --module-name ${{ github.event.inputs.sweep_name }}
+            --vector-source vectors_export
+            --result-dest results_export
+            --tag ci-main
+            --summary
+          )
+
+          if [[ -n "$SKIP_ON_TIMEOUT_FLAG" ]]; then
+            CMD+=("$SKIP_ON_TIMEOUT_FLAG")
+          fi
+
+          if [[ -n "$DEVICE_PERF_FLAG" ]]; then
+            CMD+=("$DEVICE_PERF_FLAG")
+          fi
+
+          if [[ -n "$E2E_PERF_FLAG" ]]; then
+            CMD+=("$E2E_PERF_FLAG")
+          fi
+
+          if [[ -n "$SUITE_NAME" ]]; then
+            CMD+=(--suite-name "$SUITE_NAME")
+          fi
+
+          "${CMD[@]}"
       - name: Upload sweep results
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
