@@ -11,7 +11,7 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.demos.vgg.tt import ttnn_vgg
+from models.demos.vision.classification.vgg.tt import ttnn_vgg
 
 from PIL import Image
 import torchvision.transforms as transforms

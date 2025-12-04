@@ -13,7 +13,7 @@ The VGG model is a popular convolutional neural network architecture introduced 
 # How to Run
 To run the demo for image classification of the VGG model using ImageNet-1k Validation Dataset, use the following command:
 ```
-pytest models/demos/vgg/demo/demo.py::test_demo_imagenet_vgg
+pytest models/demos/vision/classification/vgg/demo/demo.py::test_demo_imagenet_vgg
 ```
 
 ## Details

@@ -57,6 +57,6 @@ pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vgg_
 ```
 
 ## Details
-- Entry point for the model is `models/demos/vgg_unet/ttnn/ttnn_vgg_unet.py`
+- Entry point for the model is `models/demos/vision/classification/vgg_unet/ttnn/ttnn_vgg_unet.py`
 - Batch Size: 1
 - Support Input Resolution: 256x256 (Height, Width)
