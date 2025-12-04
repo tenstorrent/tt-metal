@@ -168,56 +168,16 @@ jobs:
     permissions: read-all
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Get previous tag for changelog
-        id: get-previous-tag
+      - name: Create fake changelog for testing
         run: |
-          # Fetch all tags
-          git fetch --tags --force origin
-
-          release_type="${{ needs.release-precheck.outputs.tag-type }}"
-          echo "Release type: $release_type"
-
-          if [[ "$release_type" == "dev" ]]; then
-            # For dev releases, find the second latest dev tag (v*.*.0-dev followed by date) - skip the current one
-            previous_tag=$(git tag -l --sort=-version:refname | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+-dev[0-9]{8}$" | sed -n '2p' || echo "")
-          elif [[ "$release_type" == "rc" ]]; then
-            # For rc releases, find the second latest rc tag (v*.*.0-rc followed by number) - skip the current one
-            previous_tag=$(git tag -l --sort=-version:refname | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+$" | sed -n '2p' || echo "")
-          else
-            # For prod releases, find the second latest stable release (v*.*.* with no suffix) - skip the current one
-            previous_tag=$(git tag -l --sort=-version:refname | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+$" | sed -n '2p' || echo "")
-          fi
-
-          if [[ -z "$previous_tag" ]]; then
-            echo "No previous tag found for release type: $release_type"
-            echo "Using first commit as fallback"
-            previous_tag=$(git rev-list --max-parents=0 HEAD)
-          fi
-
-          echo "Previous tag: $previous_tag"
-          echo "previous-tag=$previous_tag" >> "$GITHUB_OUTPUT"
-      - name: Create changelog
-        if: ${{ !inputs.dry-run }}
-        id: create-changelog
-        uses: mikepenz/release-changelog-builder-action@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fromTag: ${{ steps.get-previous-tag.outputs.previous-tag }}
-          toTag: ${{ needs.create-tag.outputs.version }}
-          failOnError: true
-          outputFile: CHANGELOG.txt
-      - name: Create empty changelog for dry run
-        if: ${{ inputs.dry-run }}
-        run: echo "Changelog generation skipped for dry run" > CHANGELOG.txt
+          echo "# Changelog for test-tag1" > CHANGELOG.txt
+          echo "" >> CHANGELOG.txt
+          echo "## Testing Release Creation" >> CHANGELOG.txt
+          echo "- This is a test changelog for debugging release creation" >> CHANGELOG.txt
+          echo "- Using hardcoded test-tag1" >> CHANGELOG.txt
       - name: Output changelog
-        if: ${{ !inputs.dry-run }}
         run: cat CHANGELOG.txt
       - name: Upload changelog as artifact
-        if: ${{ !inputs.dry-run }}
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
