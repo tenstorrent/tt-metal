@@ -44,6 +44,8 @@ extern uint32_t traceCount;
 extern uint32_t sums[SUM_COUNT];
 extern uint32_t sumIDs[SUM_COUNT];
 
+constexpr uint32_t PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC / sizeof(uint32_t);
+constexpr uint32_t NOC_ALIGNMENT_FACTOR = 4;
 constexpr uint32_t QUICK_PUSH_MARKER_COUNT = 2;
 constexpr uint32_t DISPATCH_META_DATA_COUNT = 2;
 constexpr uint32_t DISPATCH_META_DATA_UINT32_SIZE = 4;
@@ -53,6 +55,11 @@ constexpr uint32_t DISPATCH_PARENT_ZONE_MARKER_COUNT = 2;
 constexpr bool TRACE_ON_TENSIX = true;
 #else
 constexpr bool TRACE_ON_TENSIX = false;
+#endif
+#if (PROFILE_KERNEL & PROFILER_OPT_DO_SUM)
+constexpr bool DO_SUM = true;
+#else
+constexpr bool DO_SUM = false;
 #endif
 constexpr uint32_t TRACE_MARK_FW_START = (1 << 31);
 constexpr uint32_t TRACE_MARK_KERNEL_START = (1 << 30);
@@ -534,11 +541,15 @@ struct profileScopeAccumulate {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
 
     inline __attribute__((always_inline)) profileScopeAccumulate() {
-        start_time = ((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX];
+        if constexpr (kernel_profiler::DO_SUM) {
+            start_time = ((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX];
+        }
     }
     inline __attribute__((always_inline)) ~profileScopeAccumulate() {
-        sumIDs[index] = timer_id;
-        sums[index] += (((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX]) - start_time;
+        if constexpr (kernel_profiler::DO_SUM) {
+            sumIDs[index] = timer_id;
+            sums[index] += (((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX]) - start_time;
+        }
     }
 };
 

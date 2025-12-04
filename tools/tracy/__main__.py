@@ -43,6 +43,13 @@ def main():
         default=True,
     )
     parser.add_option(
+        "--op-support-count",
+        dest="op_support_count",
+        action="store",
+        help="Maximum number of ops that can be supported by the profiler",
+        type="int",
+    )
+    parser.add_option(
         "--child-functions",
         type="string",
         help="Comma separated list of child function to have their duration included for parent OPs",
@@ -61,6 +68,13 @@ def main():
         dest="profile_dispatch_cores",
         action="store_true",
         help="Collect dispatch cores profiling data",
+        default=False,
+    )
+    parser.add_option(
+        "--enable-sum-profiling",
+        dest="do_sum",
+        action="store_true",
+        help="Enable sum profiling",
         default=False,
     )
     parser.add_option(
@@ -198,6 +212,9 @@ def main():
     if options.profile_dispatch_cores:
         os.environ["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "1"
 
+    if options.do_sum:
+        os.environ["TT_METAL_PROFILER_SUM"] = "1"
+
     if options.mid_run_device_data:
         os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
 
@@ -251,6 +268,9 @@ def main():
     if options.device_memory_profiler:
         os.environ["TT_METAL_MEM_PROFILER"] = "1"
 
+    if options.op_support_count:
+        os.environ["TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT"] = str(options.op_support_count)
+
     if len(args) > 0:
         doReport = False
         if options.report:
@@ -290,7 +310,7 @@ def main():
                 except ValueError as exc:
                     trySystem = True
                 if trySystem:
-                    subprocess.run(progname, shell=True, check=True)
+                    subprocess.run(" ".join(args), shell=True, check=True)
 
             if options.partial:
                 tracy_state.doPartial = True
