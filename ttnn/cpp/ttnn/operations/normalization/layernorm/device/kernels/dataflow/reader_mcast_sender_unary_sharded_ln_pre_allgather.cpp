@@ -101,7 +101,6 @@ void kernel_main() {
             noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_blocks - 1);
             noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
             noc_semaphore_set_multicast(reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks - 1);
-            noc_async_write_barrier();
         }
 
         // read data from other cores - first stage reduce
@@ -162,4 +161,5 @@ void kernel_main() {
         }
     };
     global_reduce_sender(cb_ex_partial2, cb_ex_external2, cb_ex2);
+    noc_async_write_barrier();
 }

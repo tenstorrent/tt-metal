@@ -56,7 +56,6 @@ void do_signaling(uint32_t& rt_args_idx) {
         noc_semaphore_wait(pv_semaphore_ptr, target_sem_value);
         noc_semaphore_set(pv_semaphore_ptr, 1);
         noc_semaphore_set_multicast(pv_semaphore, signalling_semaphore_address, num_signalling_semaphores);
-        noc_async_write_barrier();
     } else {
         const uint64_t sem_addr = get_noc_addr(pv_core_x, pv_core_y, pv_semaphore);
         noc_semaphore_inc(sem_addr, 1);
@@ -83,6 +82,7 @@ void kernel_main() {
     if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE || core_type == (uint32_t)CORE_TYPE::HOP_CORE) {
         if constexpr (needs_signaler) {
             do_signaling(rt_args_idx);
+            noc_async_write_barrier();
         }
         return;
     }
@@ -193,4 +193,5 @@ void kernel_main() {
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
     noc_async_atomic_barrier();
 #endif
+    noc_async_write_barrier();
 }

@@ -42,10 +42,10 @@ void kernel_main() {
 
         // Update the multicast address for the receiver semaphore, to allow the senders to write
         noc_semaphore_set_multicast(receiver_semaphore, mcast_receiver_semaphore_noc_addr, num_dests);
-        noc_async_write_barrier();
         noc_semaphore_wait(sender_semaphore_addr, Wt_final);
 
         cb_push_back(final_values_cb_index, Wt_final);
         cb_push_back(final_indices_cb_index, Wt_final);
     }
+    noc_async_write_barrier();
 }
