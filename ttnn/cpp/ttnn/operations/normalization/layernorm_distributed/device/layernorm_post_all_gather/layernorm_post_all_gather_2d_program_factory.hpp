@@ -14,12 +14,7 @@ namespace ttnn::operations::normalization::layernorm_post_all_gather::program {
 struct LayerNormPostAllGather2DSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
     tt::tt_metal::KernelHandle writer_kernel_id{};
-    tt::tt_metal::KernelHandle compute_kernel_id{};
     std::vector<CoreCoord> cores;
-    uint32_t tiles_per_core_x{};
-    uint32_t tiles_per_core_y{};
-    uint32_t Wt{};
-    uint32_t stats_tiles_cols{};
 };
 
 struct LayerNormPostAllGather2DProgramFactory {
