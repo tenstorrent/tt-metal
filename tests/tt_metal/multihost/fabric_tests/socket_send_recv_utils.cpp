@@ -61,7 +61,7 @@ bool test_socket_send_recv(
     auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
     auto packet_header_size_bytes = tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
-    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
     auto sender_rank = socket.get_config().sender_rank;
     auto recv_rank = socket.get_config().receiver_rank;
     std::set<CoreRange> sender_core_range;
@@ -78,17 +78,17 @@ bool test_socket_send_recv(
     if (!gen.has_value()) {
         // Exchange seed between sender and receiver and create local generator
         uint32_t seed;
-        if (distributed_context->rank() == sender_rank) {
+        if (distributed_context.rank() == sender_rank) {
             seed = std::chrono::steady_clock::now().time_since_epoch().count();
             log_info(tt::LogTest, "Sending seed {} to rank {}", seed, *recv_rank);
-            distributed_context->send(
+            distributed_context.send(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
                 recv_rank,                                    // send to receiver host
                 tt::tt_metal::distributed::multihost::Tag{0}  // exchange seed over tag 0
             );
-        } else if (distributed_context->rank() == recv_rank) {
+        } else if (distributed_context.rank() == recv_rank) {
             log_info(tt::LogTest, "Receiving seed from rank {}", *sender_rank);
-            distributed_context->recv(
+            distributed_context.recv(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
                 sender_rank,                                  // recv from sender host
                 tt::tt_metal::distributed::multihost::Tag{0}  // exchange seed over tag 0
@@ -109,7 +109,7 @@ bool test_socket_send_recv(
     const auto reserved_packet_header_CB_index = tt::CB::c_in0;
 
     for (int i = 0; i < num_txns; i++) {
-        if (distributed_context->rank() == sender_rank) {
+        if (distributed_context.rank() == sender_rank) {
             auto sender_data_shard_params = ShardSpecBuffer(
                 sender_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sender_core_range_set.num_cores(), 1});
 
@@ -174,7 +174,7 @@ bool test_socket_send_recv(
             // Run workload performing Data Movement over the socket
             EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), sender_mesh_workload, false);
             Finish(mesh_device_->mesh_command_queue());
-        } else if (distributed_context->rank() == recv_rank) {
+        } else if (distributed_context.rank() == recv_rank) {
             auto recv_data_shard_params = ShardSpecBuffer(
                 recv_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {recv_core_range_set.num_cores(), 1});
 
@@ -276,7 +276,7 @@ void test_multi_mesh_single_conn_bwd(
     using namespace tt::tt_metal::distributed;
     using namespace tt_metal;
 
-    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
 
     auto sender_logical_coord = CoreCoord(0, 0);
     auto recv_logical_coord = CoreCoord(0, 0);
@@ -293,7 +293,7 @@ void test_multi_mesh_single_conn_bwd(
     constexpr uint32_t sender_rank = 1;
     constexpr uint32_t num_iterations = 50;
 
-    if (*distributed_context->rank() == sender_rank) {
+    if (*distributed_context.rank() == sender_rank) {
         std::unordered_map<uint32_t, MeshSocket> sockets;
         std::vector<uint32_t> recv_node_ranks = get_neighbor_host_ranks(system_config);
 
@@ -301,7 +301,7 @@ void test_multi_mesh_single_conn_bwd(
             SocketConfig socket_config = {
                 .socket_connection_config = {socket_connection},
                 .socket_mem_config = socket_mem_config,
-                .sender_rank = distributed_context->rank(),
+                .sender_rank = distributed_context.rank(),
                 .receiver_rank = tt::tt_metal::distributed::multihost::Rank{recv_rank}};
             sockets.emplace(recv_rank, MeshSocket(mesh_device, socket_config));
         }
@@ -317,7 +317,7 @@ void test_multi_mesh_single_conn_bwd(
             .socket_connection_config = {socket_connection},
             .socket_mem_config = socket_mem_config,
             .sender_rank = tt::tt_metal::distributed::multihost::Rank{sender_rank},
-            .receiver_rank = distributed_context->rank()};
+            .receiver_rank = distributed_context.rank()};
         auto socket = MeshSocket(mesh_device, socket_config);
         for (int i = 0; i < num_iterations; i++) {
             test_socket_send_recv(mesh_device, socket, data_size, socket_page_size);
@@ -325,9 +325,8 @@ void test_multi_mesh_single_conn_bwd(
     }
     // Use compute-only distributed context to exclude switch meshes from barriers
     // Switch meshes don't run workloads, so they shouldn't participate in test synchronization
-    const auto& compute_only_context =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_compute_only_distributed_context();
-    compute_only_context->barrier();
+    auto& compute_only_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
+    compute_only_context.barrier();
 }
 
 void test_multi_mesh_single_conn_fwd(
@@ -340,7 +339,7 @@ void test_multi_mesh_single_conn_fwd(
     using namespace tt::tt_metal::distributed;
     using namespace tt_metal;
 
-    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
 
     auto sender_logical_coord = CoreCoord(0, 0);
     auto recv_logical_coord = CoreCoord(0, 0);
@@ -356,7 +355,7 @@ void test_multi_mesh_single_conn_fwd(
     constexpr uint32_t recv_rank = 1;
     constexpr uint32_t num_iterations = 50;
 
-    if (*distributed_context->rank() == recv_rank) {
+    if (*distributed_context.rank() == recv_rank) {
         std::unordered_map<uint32_t, MeshSocket> sockets;
         std::vector<uint32_t> sender_node_ranks = get_neighbor_host_ranks(system_config);
 
@@ -365,7 +364,7 @@ void test_multi_mesh_single_conn_fwd(
                 .socket_connection_config = {socket_connection},
                 .socket_mem_config = socket_mem_config,
                 .sender_rank = tt::tt_metal::distributed::multihost::Rank{sender_rank},
-                .receiver_rank = distributed_context->rank()};
+                .receiver_rank = distributed_context.rank()};
             sockets.emplace(sender_rank, MeshSocket(mesh_device, socket_config));
         }
         for (int i = 0; i < num_iterations; i++) {
@@ -377,7 +376,7 @@ void test_multi_mesh_single_conn_fwd(
         SocketConfig socket_config = {
             .socket_connection_config = {socket_connection},
             .socket_mem_config = socket_mem_config,
-            .sender_rank = distributed_context->rank(),
+            .sender_rank = distributed_context.rank(),
             .receiver_rank = tt::tt_metal::distributed::multihost::Rank{recv_rank}};
         auto socket = MeshSocket(mesh_device, socket_config);
         for (int i = 0; i < num_iterations; i++) {
@@ -386,9 +385,8 @@ void test_multi_mesh_single_conn_fwd(
     }
     // Use compute-only distributed context to exclude switch meshes from barriers
     // Switch meshes don't run workloads, so they shouldn't participate in test synchronization
-    const auto& compute_only_context =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_compute_only_distributed_context();
-    compute_only_context->barrier();
+    auto& compute_only_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
+    compute_only_context.barrier();
 }
 
 void test_multi_mesh_multi_conn_fwd(
@@ -401,7 +399,7 @@ void test_multi_mesh_multi_conn_fwd(
     using namespace tt::tt_metal::distributed;
     using namespace tt_metal;
 
-    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
     std::unordered_map<uint32_t, MeshSocket> sockets;
     std::vector<SocketConnection> socket_connections;
     auto sender_logical_core = CoreCoord(0, 0);
@@ -419,7 +417,7 @@ void test_multi_mesh_multi_conn_fwd(
     constexpr uint32_t recv_rank = 1;
     constexpr uint32_t num_iterations = 50;
 
-    if (*distributed_context->rank() == recv_rank) {
+    if (*distributed_context.rank() == recv_rank) {
         std::unordered_map<uint32_t, MeshSocket> sockets;
         std::vector<uint32_t> sender_node_ranks = get_neighbor_host_ranks(system_config);
 
@@ -428,7 +426,7 @@ void test_multi_mesh_multi_conn_fwd(
                 .socket_connection_config = {socket_connections},
                 .socket_mem_config = socket_mem_config,
                 .sender_rank = tt::tt_metal::distributed::multihost::Rank{sender_rank},
-                .receiver_rank = distributed_context->rank()};
+                .receiver_rank = distributed_context.rank()};
             sockets.emplace(sender_rank, MeshSocket(mesh_device, socket_config));
         }
         for (int i = 0; i < num_iterations; i++) {
@@ -440,7 +438,7 @@ void test_multi_mesh_multi_conn_fwd(
         SocketConfig socket_config = {
             .socket_connection_config = {socket_connections},
             .socket_mem_config = socket_mem_config,
-            .sender_rank = distributed_context->rank(),
+            .sender_rank = distributed_context.rank(),
             .receiver_rank = tt::tt_metal::distributed::multihost::Rank{recv_rank},
         };
         auto socket = MeshSocket(mesh_device, socket_config);
@@ -450,9 +448,8 @@ void test_multi_mesh_multi_conn_fwd(
     }
     // Use compute-only distributed context to exclude switch meshes from barriers
     // Switch meshes don't run workloads, so they shouldn't participate in test synchronization
-    const auto& compute_only_context =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_compute_only_distributed_context();
-    compute_only_context->barrier();
+    auto& compute_only_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
+    compute_only_context.barrier();
 }
 
 void test_multi_mesh_multi_conn_bidirectional(
@@ -465,7 +462,7 @@ void test_multi_mesh_multi_conn_bidirectional(
     using namespace tt::tt_metal::distributed;
     using namespace tt_metal;
 
-    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
     std::unordered_map<uint32_t, MeshSocket> forward_sockets;
     std::unordered_map<uint32_t, MeshSocket> backward_sockets;
     std::vector<SocketConnection> socket_connections;
@@ -484,7 +481,7 @@ void test_multi_mesh_multi_conn_bidirectional(
     constexpr uint32_t aggregator_rank = 1;
     constexpr uint32_t num_iterations = 50;
 
-    if (*distributed_context->rank() == aggregator_rank) {
+    if (*distributed_context.rank() == aggregator_rank) {
         std::unordered_map<uint32_t, MeshSocket> forward_sockets;
         std::unordered_map<uint32_t, MeshSocket> backward_sockets;
         std::vector<uint32_t> compute_node_ranks = get_neighbor_host_ranks(system_config);
@@ -494,13 +491,13 @@ void test_multi_mesh_multi_conn_bidirectional(
                 .socket_connection_config = {socket_connections},
                 .socket_mem_config = socket_mem_config,
                 .sender_rank = tt::tt_metal::distributed::multihost::Rank{compute_rank},
-                .receiver_rank = distributed_context->rank()};
+                .receiver_rank = distributed_context.rank()};
             forward_sockets.emplace(compute_rank, MeshSocket(mesh_device, forward_socket_config));
 
             SocketConfig backward_socket_config = {
                 .socket_connection_config = {socket_connections},
                 .socket_mem_config = socket_mem_config,
-                .sender_rank = distributed_context->rank(),
+                .sender_rank = distributed_context.rank(),
                 .receiver_rank = tt::tt_metal::distributed::multihost::Rank{compute_rank}};
             backward_sockets.emplace(compute_rank, MeshSocket(mesh_device, backward_socket_config));
         }
@@ -526,7 +523,7 @@ void test_multi_mesh_multi_conn_bidirectional(
         SocketConfig forward_socket_config = {
             .socket_connection_config = {socket_connections},
             .socket_mem_config = socket_mem_config,
-            .sender_rank = distributed_context->rank(),
+            .sender_rank = distributed_context.rank(),
             .receiver_rank = tt::tt_metal::distributed::multihost::Rank{aggregator_rank}};
         auto forward_socket = MeshSocket(mesh_device, forward_socket_config);
 
@@ -534,7 +531,7 @@ void test_multi_mesh_multi_conn_bidirectional(
             .socket_connection_config = {socket_connections},
             .socket_mem_config = socket_mem_config,
             .sender_rank = tt::tt_metal::distributed::multihost::Rank{aggregator_rank},
-            .receiver_rank = distributed_context->rank()};
+            .receiver_rank = distributed_context.rank()};
         auto backward_socket = MeshSocket(mesh_device, backward_socket_config);
         for (int i = 0; i < num_iterations; i++) {
             test_socket_send_recv(mesh_device, forward_socket, data_size, socket_page_size);
@@ -550,9 +547,8 @@ void test_multi_mesh_multi_conn_bidirectional(
     }
     // Use compute-only distributed context to exclude switch meshes from barriers
     // Switch meshes don't run workloads, so they shouldn't participate in test synchronization
-    const auto& compute_only_context =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_compute_only_distributed_context();
-    compute_only_context->barrier();
+    auto& compute_only_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
+    compute_only_context.barrier();
 }
 
 }  // namespace multihost_utils

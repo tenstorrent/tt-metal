@@ -110,9 +110,8 @@ public:
         if (system_supported()) {
             // Use compute-only distributed context to exclude switch meshes from barriers
             // Switch meshes don't run workloads, so they shouldn't participate in test synchronization
-            const auto& distributed_context =
-                tt::tt_metal::MetalContext::instance().get_control_plane().get_compute_only_distributed_context();
-            distributed_context->barrier();
+            auto& distributed_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
+            distributed_context.barrier();
             BaseFabricFixture::DoTearDownTestSuite();
         }
     }
@@ -146,9 +145,8 @@ public:
         if (system_supported()) {
             // Use compute-only distributed context to exclude switch meshes from barriers
             // Switch meshes don't run workloads, so they shouldn't participate in test synchronization
-            const auto& distributed_context =
-                tt::tt_metal::MetalContext::instance().get_control_plane().get_compute_only_distributed_context();
-            distributed_context->barrier();
+            auto& distributed_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
+            distributed_context.barrier();
             tt::tt_metal::GenericMeshDeviceFabric2DFixture::TearDown();
         }
     }

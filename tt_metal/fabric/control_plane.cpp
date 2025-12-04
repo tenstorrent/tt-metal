@@ -2089,58 +2089,6 @@ const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>&
     return host_local_context_;
 }
 
-const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>&
-ControlPlane::get_compute_only_distributed_context() const {
-    if (compute_only_distributed_context_) {
-        return compute_only_distributed_context_;
-    }
-
-    const auto& global_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    if (*global_context->size() == 1) {
-        compute_only_distributed_context_ = global_context;
-        return compute_only_distributed_context_;
-    }
-
-    // Get all compute mesh IDs (excludes switches)
-    const auto& compute_mesh_ids = this->mesh_graph_->get_compute_mesh_ids();
-
-    // Collect all MPI ranks for compute meshes only
-    std::unordered_set<int> compute_mpi_ranks;
-    for (const auto& mesh_id : compute_mesh_ids) {
-        auto mesh_host_ranks_it = mpi_ranks_.find(mesh_id);
-        if (mesh_host_ranks_it != mpi_ranks_.end()) {
-            for (const auto& [_, rank] : mesh_host_ranks_it->second) {
-                compute_mpi_ranks.insert(rank.get());
-            }
-        }
-    }
-
-    // If no compute meshes found, fall back to host_local_context
-    if (compute_mpi_ranks.empty()) {
-        compute_only_distributed_context_ = host_local_context_;
-        return compute_only_distributed_context_;
-    }
-
-    // Convert to sorted vector for create_sub_context
-    std::vector<int> compute_ranks_vec(compute_mpi_ranks.begin(), compute_mpi_ranks.end());
-    std::sort(compute_ranks_vec.begin(), compute_ranks_vec.end());
-
-    // Check if current rank is in compute ranks
-    int current_rank = *global_context->rank();
-    bool is_current_rank_in_compute =
-        std::find(compute_ranks_vec.begin(), compute_ranks_vec.end(), current_rank) != compute_ranks_vec.end();
-
-    // If current rank is not in compute ranks (e.g., host only has switches), return host_local_context
-    if (!is_current_rank_in_compute) {
-        compute_only_distributed_context_ = host_local_context_;
-        return compute_only_distributed_context_;
-    }
-
-    // Create sub-context with only compute mesh ranks
-    compute_only_distributed_context_ = global_context->create_sub_context(compute_ranks_vec);
-    return compute_only_distributed_context_;
-}
-
 const std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>&
 ControlPlane::get_global_logical_bindings() const {
     return global_logical_bindings_;

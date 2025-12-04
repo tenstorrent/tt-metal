@@ -8,6 +8,7 @@
 #include <mutex>
 #include <future>
 #include <vector>
+#include <unordered_set>
 
 #include <enchantum/enchantum.hpp>
 #include <tracy/Tracy.hpp>
@@ -396,6 +397,60 @@ MetalContext::MetalContext() {
 distributed::multihost::DistributedContext& MetalContext::global_distributed_context() {
     TT_FATAL(distributed_context_, "Distributed context not initialized.");
     return *distributed_context_;
+}
+
+distributed::multihost::DistributedContext& MetalContext::compute_only_distributed_context() {
+    if (compute_only_distributed_context_) {
+        return *compute_only_distributed_context_;
+    }
+
+    const auto& global_context = distributed::multihost::DistributedContext::get_current_world();
+    if (*global_context->size() == 1) {
+        compute_only_distributed_context_ = global_context;
+        return *compute_only_distributed_context_;
+    }
+
+    // Get all compute mesh IDs (excludes switches) from control plane mesh graph
+    const auto& mesh_graph = this->get_control_plane().get_mesh_graph();
+    const auto& compute_mesh_ids = mesh_graph.get_compute_mesh_ids();
+
+    // Get global logical bindings to map ranks to mesh IDs
+    const auto& global_logical_bindings = this->get_control_plane().get_global_logical_bindings();
+
+    // Collect all MPI ranks for compute meshes only
+    std::unordered_set<int> compute_mpi_ranks;
+    for (const auto& [rank, mesh_binding] : global_logical_bindings) {
+        const auto& [mesh_id, _] = mesh_binding;
+        // Check if this mesh_id is a compute mesh (not a switch)
+        if (std::find(compute_mesh_ids.begin(), compute_mesh_ids.end(), mesh_id) != compute_mesh_ids.end()) {
+            compute_mpi_ranks.insert(rank.get());
+        }
+    }
+
+    // If no compute meshes found, fall back to host_local_context
+    if (compute_mpi_ranks.empty()) {
+        compute_only_distributed_context_ = this->get_control_plane().get_host_local_context();
+        return *compute_only_distributed_context_;
+    }
+
+    // Convert to sorted vector for create_sub_context
+    std::vector<int> compute_ranks_vec(compute_mpi_ranks.begin(), compute_mpi_ranks.end());
+    std::sort(compute_ranks_vec.begin(), compute_ranks_vec.end());
+
+    // Check if current rank is in compute ranks
+    int current_rank = *global_context->rank();
+    bool is_current_rank_in_compute =
+        std::find(compute_ranks_vec.begin(), compute_ranks_vec.end(), current_rank) != compute_ranks_vec.end();
+
+    // If current rank is not in compute ranks (e.g., host only has switches), return host_local_context
+    if (!is_current_rank_in_compute) {
+        compute_only_distributed_context_ = this->get_control_plane().get_host_local_context();
+        return *compute_only_distributed_context_;
+    }
+
+    // Create sub-context with only compute mesh ranks
+    compute_only_distributed_context_ = global_context->create_sub_context(compute_ranks_vec);
+    return *compute_only_distributed_context_;
 }
 
 std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_distributed_context_ptr() {

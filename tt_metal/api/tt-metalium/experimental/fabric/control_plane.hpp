@@ -124,11 +124,6 @@ public:
     // Returns the distributed context with only one host.
     const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& get_host_local_context() const;
 
-    // Returns the distributed context for compute-only meshes (excludes switch meshes).
-    // This context includes all hosts that have compute meshes, but excludes hosts that only have switch meshes.
-    const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>&
-    get_compute_only_distributed_context() const;
-
     // Return valid ethernet channels on the specificed routing plane
     std::vector<chan_id_t> get_valid_eth_chans_on_routing_plane(
         FabricNodeId fabric_node_id, routing_plane_id_t routing_plane_id) const;
@@ -393,8 +388,6 @@ private:
     // Distributed contexts for each multi-host mesh, that this host is part of - this is typically a single mesh.
     std::unordered_map<MeshId, std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>>
         distributed_contexts_;
-
-    mutable std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> compute_only_distributed_context_;
 
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> host_local_context_;
 

@@ -78,14 +78,14 @@ TEST_F(IntermeshSplit2x2FabricFixture, MultiMeshEastMulticast_1) {
 
 TEST_F(InterMeshSplit1x2FabricFixture, MultiHopUnicast) {
     // Route traffic between meshes that are not directily adjacent and require an intermediate mesh
-    auto distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
 
     constexpr uint32_t num_iterations = 20;
     auto run_send_recv = [&](uint32_t sender_rank, uint32_t recv_rank) {
         for (int i = 0; i < num_iterations; i++) {
-            if (*(distributed_context->rank()) == sender_rank) {
+            if (*distributed_context.rank() == sender_rank) {
                 multihost_utils::run_unicast_sender_step(this, tt::tt_metal::distributed::multihost::Rank{recv_rank});
-            } else if (*(distributed_context->rank()) == recv_rank) {
+            } else if (*distributed_context.rank() == recv_rank) {
                 multihost_utils::run_unicast_recv_step(this, tt::tt_metal::distributed::multihost::Rank{sender_rank});
             }
         }
@@ -97,9 +97,8 @@ TEST_F(InterMeshSplit1x2FabricFixture, MultiHopUnicast) {
     run_send_recv(3, 0);
     // Use compute-only distributed context to exclude switch meshes from barriers
     // Switch meshes don't run workloads, so they shouldn't participate in test synchronization
-    const auto& compute_only_context =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_compute_only_distributed_context();
-    compute_only_context->barrier();
+    auto& compute_only_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
+    compute_only_context.barrier();
 }
 
 // ========= Data-Movement Tests for 2 Loudboxes with Intermesh Connections  =========
@@ -185,12 +184,12 @@ TEST_F(InterMeshDual2x4FabricFixture, MultiMeshNorthMulticast_1) {
 // ========= Data-Movement Tests for NanoExabox Machines  =========
 
 TEST_F(IntermeshNanoExabox2x4FabricFixture, RandomizedIntermeshUnicastBwd) {
-    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
 
     constexpr uint32_t sender_rank = 1;
     constexpr uint32_t num_iterations = 100;
 
-    if (*(distributed_context->rank()) == sender_rank) {
+    if (*distributed_context.rank() == sender_rank) {
         std::vector<uint32_t> recv_node_ranks = {0, 2, 3, 4};
         log_info(tt::LogTest, "{} rank starting unicast to all receivers", sender_rank);
         for (uint32_t i = 0; i < num_iterations; i++) {
@@ -200,26 +199,25 @@ TEST_F(IntermeshNanoExabox2x4FabricFixture, RandomizedIntermeshUnicastBwd) {
         }
         log_info(tt::LogTest, "{} rank completed unicast to all receivers", sender_rank);
     } else {
-        log_info(tt::LogTest, "{} rank processing unicasts", *(distributed_context->rank()));
+        log_info(tt::LogTest, "{} rank processing unicasts", *distributed_context.rank());
         for (uint32_t i = 0; i < num_iterations; i++) {
             multihost_utils::run_unicast_recv_step(this, tt::tt_metal::distributed::multihost::Rank{sender_rank});
         }
-        log_info(tt::LogTest, "{} rank done processing unicasts", *(distributed_context->rank()));
+        log_info(tt::LogTest, "{} rank done processing unicasts", *distributed_context.rank());
     }
     // Use compute-only distributed context to exclude switch meshes from barriers
     // Switch meshes don't run workloads, so they shouldn't participate in test synchronization
-    const auto& compute_only_context =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_compute_only_distributed_context();
-    compute_only_context->barrier();
+    auto& compute_only_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
+    compute_only_context.barrier();
 }
 
 TEST_F(IntermeshNanoExabox2x4FabricFixture, RandomizedIntermeshUnicastFwd) {
-    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
 
     constexpr uint32_t recv_rank = 1;
     constexpr uint32_t num_iterations = 100;
 
-    if (*(distributed_context->rank()) == recv_rank) {
+    if (*distributed_context.rank() == recv_rank) {
         std::vector<uint32_t> sender_node_ranks = {0, 2, 3, 4};
         log_info(tt::LogTest, "{} rank starting processing unicasts from all senders", recv_rank);
         for (uint32_t i = 0; i < num_iterations; i++) {
@@ -229,17 +227,16 @@ TEST_F(IntermeshNanoExabox2x4FabricFixture, RandomizedIntermeshUnicastFwd) {
         }
         log_info(tt::LogTest, "{} rank completed processing unicasts from all senders", recv_rank);
     } else {
-        log_info(tt::LogTest, "{} rank starting unicast to receiver", *(distributed_context->rank()));
+        log_info(tt::LogTest, "{} rank starting unicast to receiver", *distributed_context.rank());
         for (uint32_t i = 0; i < num_iterations; i++) {
             multihost_utils::run_unicast_sender_step(this, tt::tt_metal::distributed::multihost::Rank{recv_rank});
         }
-        log_info(tt::LogTest, "{} rank completed unicast to receiver", *(distributed_context->rank()));
+        log_info(tt::LogTest, "{} rank completed unicast to receiver", *distributed_context.rank());
     }
     // Use compute-only distributed context to exclude switch meshes from barriers
     // Switch meshes don't run workloads, so they shouldn't participate in test synchronization
-    const auto& compute_only_context =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_compute_only_distributed_context();
-    compute_only_context->barrier();
+    auto& compute_only_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
+    compute_only_context.barrier();
 }
 
 }  // namespace fabric_router_tests::multihost
