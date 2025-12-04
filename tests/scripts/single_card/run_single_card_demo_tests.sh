@@ -161,7 +161,7 @@ run_ufld_v2_func() {
 run_vgg_func() {
 
   #VGG11/VGG16
-  $PYTEST_CMD models/demos/vgg/demo/demo.py
+  $PYTEST_CMD models/demos/vision/classification/vgg/demo/demo.py
 
 }
 
