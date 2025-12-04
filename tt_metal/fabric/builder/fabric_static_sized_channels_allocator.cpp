@@ -190,20 +190,20 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     // fabric with tensix extension uses different buffer slots options, since only one or two sender channels are
     // used by fabric router, while other sender channels are skipped and have 0 buffer slots.
     static const std::vector<std::vector<std::pair<size_t, size_t>>> default_with_tensix_buffer_slot_options = {
-        {{16, 16}, {8, 16}, {8, 8}},                     // WORMHOLE_B0: {sender_slots, receiver_slots}
-        {{32, 32}, {16, 32}, {16, 16}, {8, 16}, {8, 8}}  // BLACKHOLE: {sender_slots, receiver_slots}
+        {{16, 16}, {8, 16}, {8, 8}, {4, 4}, {2, 2}},                     // WORMHOLE_B0: {sender_slots, receiver_slots}
+        {{32, 32}, {16, 32}, {16, 16}, {8, 16}, {8, 8}, {4, 4}, {2, 2}}  // BLACKHOLE: {sender_slots, receiver_slots}
     };
 
     auto get_num_buffer_slots = [](Topology topology,
                                    size_t arch_index) -> const std::vector<std::pair<size_t, size_t>>& {
         // Architecture-specific buffer slot configurations
         static const std::vector<std::vector<std::pair<size_t, size_t>>> mesh_buffer_slot_options = {
-            {{7, 11}, {4, 8}},  // WORMHOLE_B0: {sender_slots, receiver_slots}
-            {{8, 16}, {8, 8}, {4, 8}}   // BLACKHOLE: {sender_slots, receiver_slots}
+            {{7, 11}, {4, 8}, {4, 4}, {2, 2}},         // WORMHOLE_B0: {sender_slots, receiver_slots}
+            {{8, 16}, {8, 8}, {4, 8}, {4, 4}, {2, 2}}  // BLACKHOLE: {sender_slots, receiver_slots}
         };
         static const std::vector<std::vector<std::pair<size_t, size_t>>> other_buffer_slot_options = {
-            {{8, 16}},  // WORMHOLE_B0: {sender_slots, receiver_slots}
-            {{32, 32}, {16, 32}, {16, 16}, {8, 16}, {8, 8}, {4, 8}}  // BLACKHOLE: {sender_slots,
+            {{8, 16}, {4, 8}, {4, 4}, {2, 2}},  // WORMHOLE_B0: {sender_slots, receiver_slots}
+            {{32, 32}, {16, 32}, {16, 16}, {8, 16}, {8, 8}, {4, 8}, {4, 4}, {2, 2}}  // BLACKHOLE: {sender_slots,
         };
 
         static tt::stl::Indestructible<std::vector<std::vector<std::pair<size_t, size_t>>>> mesh_slots(

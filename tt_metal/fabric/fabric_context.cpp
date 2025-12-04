@@ -76,6 +76,12 @@ size_t FabricContext::compute_packet_header_size_bytes() const {
 }
 
 size_t FabricContext::compute_max_payload_size_bytes() const {
+    // If user provided override, validate and use it
+    if (router_config_.max_packet_payload_size_bytes.has_value()) {
+        return validate_and_apply_packet_size(router_config_.max_packet_payload_size_bytes.value());
+    }
+
+    // Default behavior
     if (this->is_2D_routing_enabled()) {
         return tt::tt_fabric::FabricEriscDatamoverBuilder::default_mesh_packet_payload_size_bytes;
     } else {
@@ -83,7 +89,8 @@ size_t FabricContext::compute_max_payload_size_bytes() const {
     }
 }
 
-FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
+FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config, const FabricRouterConfig& router_config) :
+    router_config_(router_config) {
     TT_FATAL(
         fabric_config != tt::tt_fabric::FabricConfig::DISABLED,
         "Trying to initialize fabric context for disabled fabric config");
@@ -158,6 +165,29 @@ bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions directio
     }
 
     return false;
+}
+
+size_t FabricContext::validate_and_apply_packet_size(size_t requested_size) const {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    tt::ARCH arch = hal.get_arch();
+
+    // Get architecture-specific limit from single source of truth
+    size_t max_allowed = FabricEriscDatamoverBuilder::get_max_packet_payload_size_for_arch(arch);
+
+    TT_FATAL(
+        requested_size <= max_allowed,
+        "Requested packet size {} exceeds maximum {} for {}",
+        requested_size,
+        max_allowed,
+        tt::arch_to_str(arch));
+
+    // Validate alignment (must be 16-byte aligned)
+    constexpr size_t ALIGNMENT = 16;
+    TT_FATAL(requested_size % ALIGNMENT == 0, "Packet size {} must be {}-byte aligned", requested_size, ALIGNMENT);
+
+    TT_FATAL(requested_size > 0, "Packet size must be greater than 0");
+
+    return requested_size;
 }
 
 }  // namespace tt::tt_fabric

@@ -35,7 +35,8 @@ public:
     static constexpr auto routing_directions = {
         RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
 
-    explicit FabricContext(tt::tt_fabric::FabricConfig fabric_config);
+    explicit FabricContext(
+        tt::tt_fabric::FabricConfig fabric_config, const FabricRouterConfig& router_config = FabricRouterConfig{});
     ~FabricContext();
 
     // Non-copyable, non-movable
@@ -81,9 +82,11 @@ private:
     std::unordered_map<MeshId, bool> check_for_wrap_around_mesh() const;
     size_t compute_packet_header_size_bytes() const;
     size_t compute_max_payload_size_bytes() const;
+    size_t validate_and_apply_packet_size(size_t requested_size) const;
 
     tt::tt_fabric::FabricConfig fabric_config_{};
     tt::tt_fabric::Topology topology_{};
+    FabricRouterConfig router_config_{};
 
     bool is_2D_routing_enabled_ = false;
     bool bubble_flow_control_enabled_ = false;

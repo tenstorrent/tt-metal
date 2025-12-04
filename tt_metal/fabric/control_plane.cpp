@@ -1915,9 +1915,10 @@ void ControlPlane::set_routing_mode(uint16_t mode) {
 
 uint16_t ControlPlane::get_routing_mode() const { return this->routing_mode_; }
 
-void ControlPlane::initialize_fabric_context(tt_fabric::FabricConfig fabric_config) {
+void ControlPlane::initialize_fabric_context(
+    tt_fabric::FabricConfig fabric_config, const tt_fabric::FabricRouterConfig& router_config) {
     TT_FATAL(this->fabric_context_ == nullptr, "Trying to re-initialize fabric context");
-    this->fabric_context_ = std::make_unique<FabricContext>(fabric_config);
+    this->fabric_context_ = std::make_unique<FabricContext>(fabric_config, router_config);
 }
 
 FabricContext& ControlPlane::get_fabric_context() const {

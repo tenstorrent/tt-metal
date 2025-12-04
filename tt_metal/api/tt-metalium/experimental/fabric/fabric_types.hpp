@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <optional>
 #include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_fabric {
@@ -32,6 +33,14 @@ enum class FabricTensixConfig : uint32_t {
 enum class FabricUDMMode : uint32_t {
     DISABLED = 0,
     ENABLED = 1,
+};
+
+// Configuration for router-level parameters
+// Extensible for future router tuning (buffer counts, VC settings, etc.)
+struct FabricRouterConfig {
+    // Optional override for maximum packet payload size (bytes)
+    // If not set, uses architecture and routing mode defaults
+    std::optional<size_t> max_packet_payload_size_bytes = std::nullopt;
 };
 
 enum class FabricType {

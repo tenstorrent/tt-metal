@@ -56,7 +56,8 @@ void py_bind_fabric_api(py::module& module) {
         py::arg("reliability_mode") = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
         py::arg("num_planes") = std::nullopt,
         py::arg("fabric_tensix_config") = tt::tt_fabric::FabricTensixConfig::DISABLED,
-        py::arg("fabric_udm_mode") = tt::tt_fabric::FabricUDMMode::DISABLED);
+        py::arg("fabric_udm_mode") = tt::tt_fabric::FabricUDMMode::DISABLED,
+        py::arg("router_config") = tt::tt_fabric::FabricRouterConfig{});
 }
 
 }  // namespace ttnn::fabric
