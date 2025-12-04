@@ -12,10 +12,15 @@
 #include <vector>
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <umd/device/cluster_descriptor.hpp>
+#include <umd/device/utils/semver.hpp>
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/reflection.hpp>
+
+namespace YAML {
+class Node;
+}
 
 namespace tt::umd {
 class Cluster;
@@ -198,6 +203,7 @@ public:
     const std::unordered_map<std::string, std::string>& get_host_mobo_name_map() const { return host_to_mobo_name_; }
     const std::unordered_map<std::string, uint32_t>& get_host_to_rank_map() const { return host_to_rank_; }
     const ExitNodeConnectionTable& get_exit_node_connection_table() const { return exit_node_connection_table_; }
+    const tt::umd::semver_t& get_ethernet_firmware_version() const { return ethernet_firmware_version_; }
     tt::TargetDevice get_target_device_type() const { return target_device_type_; }
     LocalEthernetMetrics query_local_ethernet_metrics() const;
 
@@ -206,11 +212,13 @@ public:
     std::unordered_map<std::string, std::string>& get_host_mobo_name_map() { return host_to_mobo_name_; }
     std::unordered_map<std::string, uint32_t>& get_host_to_rank_map() { return host_to_rank_; }
     ExitNodeConnectionTable& get_exit_node_connection_table() { return exit_node_connection_table_; }
+    tt::umd::semver_t& get_ethernet_firmware_version() { return ethernet_firmware_version_; }
 
     static const std::unique_ptr<tt::umd::Cluster> null_cluster;
 
     // Utility APIs to Print Physical System Descriptor
-    void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt);
+    void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt) const;
+    YAML::Node generate_yaml_node() const;
     void emit_to_text_proto(const std::optional<std::string>& path_to_text_proto = std::nullopt);
 
 private:
@@ -224,6 +232,10 @@ private:
     void remove_unresolved_nodes();
     void resolve_hostname_uniqueness();
     void validate_graphs();
+    void validate_eth_fw_versions(
+        const tt::umd::semver_t& peer_ethernet_firmware_version,
+        const std::string& my_host_name,
+        const std::string& peer_host_name);
 
     const std::unique_ptr<tt::umd::Cluster>& cluster_;
     std::unique_ptr<umd::ClusterDescriptor> cluster_desc_ = nullptr;
@@ -237,6 +249,7 @@ private:
     std::unordered_map<std::string, uint32_t> host_to_rank_;
     ExitNodeConnectionTable exit_node_connection_table_;
     bool all_hostnames_unique_ = true;
+    tt::umd::semver_t ethernet_firmware_version_;
 };
 
 }  // namespace tt::tt_metal

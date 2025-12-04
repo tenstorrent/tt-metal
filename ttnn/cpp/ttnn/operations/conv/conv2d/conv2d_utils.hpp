@@ -8,7 +8,8 @@
 #include <string>
 
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -35,6 +36,11 @@ uint32_t get_input_channels_alignment(
     bool sliced_op,
     bool is_mm_conv,
     const std::optional<MemoryConfig>& input_memory_config);
+
+CoreCoord get_output_compute_grid_size(
+    const CoreCoord& device_compute_grid_size,
+    const Conv2dConfig& conv_config,
+    const sliding_window::ParallelConfig& input_parallel_config);
 
 bool use_matmul_for_1x1_conv(
     const std::array<uint32_t, 2>& kernel_size,
@@ -207,6 +213,7 @@ bool auto_enable_kernel_folding(
 Tensor fold_input_tensor_if_required(
     const ttnn::Tensor& input_tensor,
     MeshDevice* device,
+    uint32_t& batch_size,
     uint32_t& input_height,
     uint32_t& input_width,
     uint32_t& in_channels,
@@ -222,7 +229,11 @@ ttnn::Tensor fold_tensor(
     MeshDevice* device,
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 4> padding_n4);
+    std::array<uint32_t, 4> padding_n4,
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    uint32_t in_channels);
 
 struct KernelStrideFoldingResult {
     uint32_t input_height;

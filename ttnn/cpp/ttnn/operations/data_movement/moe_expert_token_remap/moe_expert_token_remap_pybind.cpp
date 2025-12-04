@@ -10,7 +10,7 @@
 
 #include "ttnn-pybind/decorators.hpp"
 #include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 #include "moe_expert_token_remap.hpp"
 #include "moe_expert_token_remap_pybind.hpp"
@@ -18,7 +18,7 @@
 namespace ttnn::operations::data_movement::detail {
 
 void py_bind_moe_expert_token_remap(py::module& module) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
 
 Remap MoE CCL Metadata from global experts to local device experts
 

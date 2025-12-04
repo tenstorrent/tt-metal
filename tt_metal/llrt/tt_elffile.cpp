@@ -4,7 +4,6 @@
 
 #include "tt_elffile.hpp"
 
-#include <tt_stl/assert.hpp>
 #include <elf.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -18,7 +17,27 @@
 #include <map>
 #include <type_traits>
 
+#ifdef ELF_STANDALONE
+// For development of this functionality
+#if __has_include(<format>)
+#include <format>
+using std::format;
+#else
+template <typename... Args>
+std::string format(std::string m, Args&&...) {
+    return m;
+}
+#endif
+#define TT_THROW(A, ...) (log_debug(_, A __VA_OPT__(, ) __VA_ARGS__), abort())
+#define log_debug(_, A, ...) (fprintf(stderr, "%s\n", format(A __VA_OPT__(, ) __VA_ARGS__).c_str()), (void)0)
+#else
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
+#endif
+
+// These guidelines are wrong. And I will die on this hill :)
+// NOLINTBEGIN (readability-redundant-access-specifiers)
+// NOLINTBEGIN (cppcoreguidelines-explicit-virtual-function)
 
 // Verify some knowledge of, and compatibilty with, RiscV
 #ifndef EM_RISCV
@@ -54,67 +73,76 @@ static constexpr unsigned mask_lo12_s_shift_2 = 25;
 using namespace ll_api;
 
 class ElfFile::Impl {
-protected:
+private:
     ElfFile& owner_;
+
+protected:
     // This is a view of the caller's object, which must remain live
     // for the lifetime of this object. (As that's the case anyway,
     // there's no burden on the caller). See the document on
     // ReadImage's declaration.
     const std::string_view path_;
 
-public:  // NOLINT
+public:
     Impl(ElfFile& owner, std::string_view path) : owner_(owner), path_(path) {}
     virtual ~Impl() = default;
 
-public:  // NOLINT
+public:
     Impl(const Impl&) = delete;
     Impl& operator=(const Impl&) = delete;
     Impl(Impl&&) = delete;
     Impl& operator=(Impl&&) = delete;
 
-public:  // NOLINT
+public:
     static Impl* Make(ElfFile& owner, const std::string& path);
 
-public:  // NOLINT
+public:
     virtual void LoadImage() = 0;
     virtual void WeakenDataSymbols(std::span<const std::string_view> strong_names) = 0;
+    virtual void ObjectifyExecutable() = 0;
     virtual void XIPify() = 0;
 
-private:  // NOLINT
+private:
+    [[nodiscard]] auto GetSegments() const -> std::vector<Segment>& { return owner_.segments_; }
+    [[nodiscard]] auto GetContents() const -> std::span<std::byte>& { return owner_.contents_; }
+    void TrimSegments(std::span<const std::uint32_t>);
+
+private:
     template <bool Is64>
     class Elf;
 };
 
 template <bool Is64>
 class ElfFile::Impl::Elf final : public Impl {
-public:  // NOLINT
+public:
     using Ehdr = std::conditional_t<Is64, Elf64_Ehdr, Elf32_Ehdr>;
     using Phdr = std::conditional_t<Is64, Elf64_Phdr, Elf32_Phdr>;
     using Shdr = std::conditional_t<Is64, Elf64_Shdr, Elf32_Shdr>;
     using Sym = std::conditional_t<Is64, Elf64_Sym, Elf32_Sym>;
     using Rela = std::conditional_t<Is64, Elf64_Rela, Elf32_Rela>;
 
-private:  // NOLINT
+private:
     std::span<Phdr> phdrs_;
     std::span<Shdr> shdrs_;
+    //    const Shdr* segment_info_ = nullptr;
 
     class Weakener;
 
-public:  // NOLINT
+public:
     Elf(ElfFile& owner, std::string_view path) : Impl(owner, path) {}
-    virtual ~Elf() override = default;  // NOLINT
+    virtual ~Elf() override = default;
 
-    virtual void LoadImage() override;                                                        // NOLINT
-    virtual void WeakenDataSymbols(std::span<const std::string_view> strong_names) override;  // NOLINT
-    virtual void XIPify() override;                                                           // NOLINT
+    virtual void LoadImage() override;
+    virtual void WeakenDataSymbols(std::span<const std::string_view> strong_names) override;
+    virtual void ObjectifyExecutable() override;
+    virtual void XIPify() override;
 
-private:  // NOLINT
-    [[nodiscard]] auto GetHeader() const -> const Ehdr& { return *ByteOffset<Ehdr>(GetContents().data()); }
+private:
+    [[nodiscard]] auto GetHeader() const -> Ehdr& { return *ByteOffset<Ehdr>(GetContents().data()); }
     [[nodiscard]] auto GetPhdrs() const -> std::span<const Phdr> { return phdrs_; }
-    [[nodiscard]] auto GetShdrs() const -> std::span<const Shdr> { return shdrs_; }
+    [[nodiscard]] auto GetShdrs() const -> std::span<Shdr> { return shdrs_; }
     [[nodiscard]] auto GetShdr(unsigned ix) const -> const Shdr& { return shdrs_[ix]; }
-    [[nodiscard]] auto GetSegments() const -> std::vector<Segment>& { return owner_.segments_; }
-    [[nodiscard]] auto GetContents() const -> std::span<std::byte>& { return owner_.contents_; }
+    using Impl::GetContents;
     [[nodiscard]] auto GetContents(const Phdr& phdr) const -> std::span<std::byte> {
         return GetContents().subspan(phdr.p_offset, phdr.p_filesz);
     }
@@ -139,35 +167,30 @@ private:  // NOLINT
         return std::span(ByteOffset<Rela>(section.data()), section.size() / shdr.sh_entsize);
     }
 
-    [[nodiscard]] static bool IsInSegment(const Segment& segment, const Shdr& shdr) {
-        // Remember, Segments use word_t sizes. If a zero-sized
-        // section is at the end of a segment, it is considered in
-        // that segment. Fortunately, we do not have abutting
-        // segments, so do not have to consider the case of a zero
-        // length section sitting at that boundary. We also take
-        // advantage of the (a) fact that sections cannot straddle
-        // segment boundaries -- they're either wholey inside or
-        // wholey outside, and (b) unsigned arithmetic.
-        return shdr.sh_flags & SHF_ALLOC && shdr.sh_addr + shdr.sh_size - segment.address <= segment.membytes;
-    }
-    [[nodiscard]] bool IsInSegment(unsigned _ix, const Shdr& shdr) const {
-        return IsInSegment(GetSegments()[_ix], shdr);
-    }
-    [[nodiscard]] bool IsInText(const Shdr& shdr) const { return IsInSegment(GetSegments().front(), shdr); };
-    [[nodiscard]] int GetSegmentIx(const Shdr& shdr) const {
-        for (unsigned ix = GetSegments().size(); ix--;) {
-            if (IsInSegment(ix, shdr)) {
-                return ix;
+    // Find the segment containing SHDR
+    [[nodiscard]] Segment* FindSegment(const Shdr& shdr) const {
+        if (!(shdr.sh_flags & SHF_ALLOC)) {
+            return nullptr;
+        }
+        for (auto& seg : GetSegments()) {
+            // If a zero-sized section is at the end of a segment, it
+            // is considered in that segment. Fortunately, we do not
+            // have abutting segments, so do not have to consider the
+            // case of a zero length section sitting at that
+            // boundary. We also take advantage of the (a) fact that
+            // sections cannot straddle segment boundaries -- they're
+            // either wholey inside or wholey outside, and (b)
+            // unsigned arithmetic.
+            if (shdr.sh_addr + shdr.sh_size - seg.address <= seg.membytes) {
+                return &seg;
             }
         }
-        return -1;
+        return nullptr;
     };
-    [[nodiscard]] bool IsTextSymbol(const Sym& symbol) const {
-        return symbol.st_shndx < GetShdrs().size() && IsInText(GetShdr(symbol.st_shndx));
+    [[nodiscard]] Segment* FindSegment(const Sym& symbol) const {
+        return symbol.st_shndx < GetShdrs().size() ? FindSegment(GetShdr(symbol.st_shndx)) : nullptr;
     }
-    [[nodiscard]] bool IsDataSymbol(const Sym& symbol) const {
-        return symbol.st_shndx < GetShdrs().size() && GetSegmentIx(GetShdr(symbol.st_shndx)) > 0;
-    }
+    [[nodiscard]] bool IsText(const Segment* seg) { return seg == &GetSegments().front(); }
 
     template <typename T = std::byte>
     [[nodiscard]] static T* ByteOffset(std::byte* base, size_t offset = 0) {
@@ -185,7 +208,7 @@ private:  // NOLINT
         *ByteOffset<uint32_t>(GetContents(shdr).data(), addr - shdr.sh_addr) = value;
     }
 
-private:  // NOLINT
+private:
     static unsigned char GetSymBind(const Sym& sym) {
         if constexpr (Is64) {
             return ELF64_ST_BIND(sym.st_info);
@@ -311,7 +334,72 @@ void ElfFile::WriteImage(std::string const& path) {
 
 void ElfFile::WeakenDataSymbols(std::span<std::string_view const> strong) { pimpl_->WeakenDataSymbols(strong); }
 
+void ElfFile::ObjectifyExecutable() { pimpl_->ObjectifyExecutable(); }
+
 void ElfFile::MakeExecuteInPlace() { pimpl_->XIPify(); }
+
+void ElfFile::Impl::XIPify() {
+    // The text segment is now XIP
+    GetSegments().front().address = 0;
+}
+
+void ElfFile::Impl::TrimSegments(std::span<const std::uint32_t> info) {
+    auto segment_iter = GetSegments().end();
+    for (unsigned ix = info.size() / 3 * 3; ix;) {
+        ix -= 3;
+        uint32_t vma = info[ix + 0];
+
+        for (;;) {
+            if (segment_iter == GetSegments().begin()) {
+                TT_THROW("{}: cannot find segment at {:#x}", path_, vma);
+                break;
+            }
+
+            --segment_iter;
+            if (segment_iter->address == vma) {
+                if (uint32_t trim = info[ix + 1] - vma) {
+                    if (segment_iter->lma == segment_iter->address) {
+                        // Keep the LMA matching
+                        segment_iter->lma += trim;
+                    } else {
+                        // Keep the LMA unchanged, move any following
+                        // contiguous LMAs
+                        uint32_t hwm = segment_iter->lma + segment_iter->contents.size() * sizeof(uint32_t);
+                        for (auto probe = segment_iter; ++probe != GetSegments().end() && probe->lma == hwm;) {
+                            probe->lma -= trim;
+                            hwm += probe->contents.size() * sizeof(uint32_t);
+                        }
+                    }
+                    segment_iter->address += trim;
+                    segment_iter->membytes -= trim;
+                    segment_iter->contents = segment_iter->contents.subspan(trim / sizeof(uint32_t));
+                }
+
+                uint32_t limit = info[ix + 2];
+                if (segment_iter->membytes > limit) {
+                    unsigned seg_ix = segment_iter - GetSegments().begin();
+                    TT_THROW(
+                        "{}: segment[{}] [{:#x},+{:#x}) overflows region:{} limit of {:#x} bytes, reduce the size of "
+                        "{}",
+                        path_,
+                        seg_ix,
+                        segment_iter->address,
+                        segment_iter->membytes,
+                        ix / 3,
+                        limit,
+                        seg_ix == 0                                ? "code"
+                        : seg_ix == 2                              ? "statically allocated variables (e.g, globals)"
+                        : seg_ix == 1 && GetSegments().size() == 2 ? "thread_local variables"
+                                                                   : "globals and/or thread_local variables");
+                }
+                if (!segment_iter->membytes) {
+                    GetSegments().erase(segment_iter);
+                }
+                break;
+            }
+        }
+    }
+}
 
 template <bool Is64>
 void ElfFile::Impl::Elf<Is64>::LoadImage() {
@@ -340,26 +428,29 @@ void ElfFile::Impl::Elf<Is64>::LoadImage() {
     }
 
     GetSegments().reserve(hdr.e_phnum);
-    bool haveStack = false;
-    for (auto const& phdr : GetPhdrs()) {
-        if (phdr.p_type == PT_RISCV_ATTRIBUTES) {
-            // TODO: verify Arch is ok?
-            continue;
-        }
+    for (unsigned ix = 0; ix != GetPhdrs().size(); ix++) {
+        const auto& phdr = GetPhdrs()[ix];
 
-        if (phdr.p_type == PT_GNU_STACK) {
-            haveStack = true;
-        } else if (phdr.p_type != PT_LOAD) {
-            continue;
-        } else if (haveStack) {
-            TT_THROW("{}: loadable segments after stack segment", path_);
+        switch (phdr.p_type) {
+            case PT_LOAD: break;
+            case PT_TLS:
+                /* A PT_LOAD segment covering TLS will not contain the
+                   tbss size, so copy that.  */
+                if (!GetSegments().empty()) {
+                    auto& seg = GetSegments().back();
+                    if (seg.membytes + seg.address == phdr.p_vaddr + phdr.p_filesz) {
+                        seg.membytes = phdr.p_memsz;
+                    }
+                }
+                [[fallthrough]];
+            default: continue;
         }
 
         log_debug(
             tt::LogLLRuntime,
-            "{}: loadable segment {}: [{},+{}/{})@{}",
+            "{}: phdr[{}]: [{:#x},+{:#x}/{:#x})@{:#x}",
             path_,
-            unsigned(GetSegments().size()),
+            ix,
             phdr.p_vaddr,
             phdr.p_filesz,
             phdr.p_memsz,
@@ -370,21 +461,14 @@ void ElfFile::Impl::Elf<Is64>::LoadImage() {
             // Only support loading into the first 4GB
             (Is64 && ((phdr.p_vaddr | phdr.p_paddr) + phdr.p_memsz) > UINT32_MAX)) {
             TT_THROW(
-                "{}: loadable segment {} is misaligned or misplaced, [{}({}),+{}/{})@{}",
+                "{}: phdr[{}] is misaligned or misplaced, [{:#x}({:#x}),+{:#x}/{:#x})@{:#x}",
                 path_,
-                unsigned(GetSegments().size()),
+                ix,
                 phdr.p_vaddr,
                 phdr.p_paddr,
                 phdr.p_filesz,
                 phdr.p_memsz,
                 phdr.p_offset);
-        }
-
-        auto contents = GetContents(phdr);
-        // We require the first segment to be text, and that the entry
-        // point is the start of that segment.
-        if (GetSegments().empty() && hdr.e_entry != phdr.p_vaddr) {
-            TT_THROW("{}: first loadable segment is not text", path_);
         }
 
         // This word-size rounding up means the span can occupy some bytes
@@ -393,20 +477,27 @@ void ElfFile::Impl::Elf<Is64>::LoadImage() {
         offset_t file_words = (phdr.p_filesz + sizeof(word_t) - 1) / sizeof(word_t);
         offset_t mem_bytes = (phdr.p_memsz + sizeof(word_t) - 1) & ~(sizeof(word_t) - 1);
         GetSegments().emplace_back(
-            std::span(reinterpret_cast<word_t const*>(contents.data()), file_words),
+            std::span(reinterpret_cast<const word_t*>(GetContents(phdr).data()), file_words),
             phdr.p_vaddr,
             phdr.p_paddr,
             mem_bytes);
     }
 
+    // We require the first segment to be text, and that the entry
+    // point is the start of that segment.
+    if (GetSegments().empty() || GetSegments().front().address != hdr.e_entry) {
+        TT_THROW("{}: first loadable segment is not text", path_);
+    }
+
     // Check sections
+    const Shdr* segment_info = nullptr;
     for (auto const& section : GetShdrs()) {
         // We care about alignment of allocatable sections,
         // relocations and symbols.
         if ((section.sh_flags & SHF_ALLOC || section.sh_type == SHT_RELA || section.sh_type == SHT_SYMTAB) &&
             (section.sh_offset | section.sh_addr) & (sizeof(word_t) - 1)) {
             TT_THROW(
-                "{}: section {} is misaligned [{},+{})@{}",
+                "{}: section {} is misaligned [{:#x},+{:#x})@{:#x}",
                 path_,
                 GetName(section),
                 section.sh_addr,
@@ -414,9 +505,9 @@ void ElfFile::Impl::Elf<Is64>::LoadImage() {
                 section.sh_offset);
         }
         // If it's allocatable, make sure it's in a segment.
-        if (section.sh_flags & SHF_ALLOC && GetSegmentIx(section) < 0) {
+        if (section.sh_flags & SHF_ALLOC && !FindSegment(section)) {
             TT_THROW(
-                "{}: allocatable section {} [{},+{})@{} is not in known segment",
+                "{}: allocatable section {} [{:#x},+{:#x})@{:#x} is not in known segment",
                 path_,
                 GetName(section),
                 section.sh_addr,
@@ -434,41 +525,14 @@ void ElfFile::Impl::Elf<Is64>::LoadImage() {
             }
         }
         if (!(section.sh_flags & SHF_ALLOC) && section.sh_type == SHT_PROGBITS &&
-             std::strcmp(GetName(section), ".phdrs") == 0) {
-            // Specifies phdr size limits
-            auto bytes = GetContents(section);
-            auto words = std::span(reinterpret_cast<uint32_t const *>(bytes.data()), bytes.size() / sizeof(uint32_t));
-            for (unsigned ix = 0; ix != words.size(); ix++) {
-                if (ix >= GetSegments().size())
-                    continue;
-                uint32_t limit = words[ix];
-                auto const &seg = GetSegments()[ix];
-                if (seg.membytes > limit) {
-                    TT_THROW("{}: phdr[{}] [{},+{}) overflows limit of {} bytes, {}",
-                             path_, ix, seg.address, seg.membytes, limit,
-                             ix == 0 ? "reduce the code size" :
-                             ix == 1 ? "reduce the number of statically allocated variables (e.g, globals)" :
-                             "examine executable for segment details"
-                        );
-                }
-            }
-        }
-        if (std::strcmp(GetName(section), ".data") == 0) {
-            // Verify this is at the start of segment 1 -- we had a
-            // linker script bug at one point.
-            bool in_range = GetSegments().size() >= 2;
-            if (!in_range || section.sh_addr != GetSegments()[1].address) {
-                TT_THROW("{}: .data section at [{},+{}) not at start of data segment at [{},+{})",
-                         path_,
-                         section.sh_addr, section.sh_size,
-                         in_range ? GetSegments()[1].address : 0,
-                         in_range ? GetSegments()[1].membytes : 0);
-            }
+            std::strcmp(GetName(section), ".segments") == 0) {
+            segment_info = &section;
         }
     }
-    if (haveStack) {
-        // Remove the stack segment, now we used it for checking the sections.
-        GetSegments().pop_back();
+    if (segment_info) {
+        auto bytes = GetContents(*segment_info);
+        std::span info{reinterpret_cast<const uint32_t*>(bytes.data()), bytes.size() / sizeof(uint32_t)};
+        TrimSegments(info);
     }
 }
 
@@ -500,11 +564,21 @@ public:
         for (auto& sym : syms_in_) {
             auto kind = GLOBAL;
             auto bind = impl.GetSymBind(sym);
-            if ((bind == STB_GLOBAL || bind == STB_WEAK) && !name_matches(impl.GetName(sym, shdr_.sh_link), strong)) {
-                bind = impl.IsDataSymbol(sym) ? STB_WEAK : STB_LOCAL;
-                impl.SetSymInfo(sym, bind, impl.GetSymType(sym));
-                if (bind == STB_LOCAL) {
+            if (bind == STB_GLOBAL || bind == STB_WEAK) {
+                auto name = impl.GetName(sym, shdr_.sh_link);
+                if (!name_matches(name, strong)) {
+                    bind = STB_LOCAL;
                     kind = LOCAL;
+                    auto type = impl.GetSymType(sym);
+                    if (type == STT_OBJECT || type == STT_NOTYPE || type == STT_TLS || type == STT_COMMON) {
+                        if (auto* seg = impl.FindSegment(sym)) {
+                            if (!impl.IsText(seg)) {
+                                bind = STB_WEAK;
+                                kind = GLOBAL;
+                            }
+                        }
+                    }
+                    impl.SetSymInfo(sym, bind, type);
                 }
             }
             remap_.push_back(syms_out_[kind].size() ^ (kind == GLOBAL ? ~0U : 0U));
@@ -566,6 +640,49 @@ void ElfFile::Impl::Elf<Is64>::WeakenDataSymbols(std::span<const std::string_vie
 }
 
 template <bool Is64>
+void ElfFile::Impl::Elf<Is64>::ObjectifyExecutable() {
+    const Shdr* tls_sec = nullptr;
+    auto sections = GetShdrs();
+    for (auto& sec : sections) {
+        switch (sec.sh_type) {
+            default: break;
+            case SHT_RELA: sec.sh_type = SHT_NULL; break;
+            case SHT_SYMTAB:
+                for (auto& sym : GetSymbols(sec)) {
+                    if (sym.st_shndx < sections.size()) {
+                        const auto* sym_sec = &sections[sym.st_shndx];
+                        sym.st_value -= sym_sec->sh_addr;
+                        if (GetSymType(sym) == STT_TLS) {
+                            // TLS symbols are relative to the first
+                            // TLS section.  We have to find that.
+                            if (!tls_sec) {
+                                for (tls_sec = sym_sec; sym_sec != &sections[0]; --sym_sec) {
+                                    if (sym_sec->sh_flags & SHF_TLS && sym_sec->sh_addr < tls_sec->sh_addr) {
+                                        tls_sec = sym_sec;
+                                    }
+                                }
+                            }
+                            sym.st_value += tls_sec->sh_addr;
+                        }
+                    }
+                }
+                break;
+        }
+    }
+    for (auto& sec : sections) {
+        if (sec.sh_flags & SHF_ALLOC) {
+            sec.sh_addr = 0;
+        }
+    }
+
+    auto& hdr = GetHeader();
+    hdr.e_type = ET_REL;
+    hdr.e_phoff = 0;
+    hdr.e_phnum = 0;
+    hdr.e_phentsize = 0;
+}
+
+template <bool Is64>
 void ElfFile::Impl::Elf<Is64>::XIPify() {
     // In general there can be several lo12 relocs for a hi20
     // reloc. This is particularly true for lui/{addi,lw,sw,etc}
@@ -615,7 +732,7 @@ void ElfFile::Impl::Elf<Is64>::XIPify() {
         // be out of bounds (and probably fail),
         // but we kind of want that anyway
         if (GetRelocType((&reloc)[1]) != R_RISCV_RELAX) {
-            log_debug(tt::LogLLRuntime, "{}: Relocation at {} is not relaxed", path_, reloc.r_offset);
+            log_debug(tt::LogLLRuntime, "{}: Relocation at {:#x} is not relaxed", path_, reloc.r_offset);
         }
     };
 
@@ -632,8 +749,8 @@ void ElfFile::Impl::Elf<Is64>::XIPify() {
             continue;
         }
 
-        int segment_ix = GetSegmentIx(section);
-        if (segment_ix < 0) {
+        auto* seg = FindSegment(section);
+        if (!seg) {
             continue;
         }
 
@@ -643,7 +760,7 @@ void ElfFile::Impl::Elf<Is64>::XIPify() {
 
         auto symbols = GetSymbols(GetShdr(relocHdr.sh_link));
         auto relocs = GetRelocations(relocHdr);
-        bool is_from_text = !segment_ix;
+        bool is_from_text = IsText(seg);
 
         // ADD32/SUB32 pairs are used for switch tables. Make sure
         // they're consistent.
@@ -654,7 +771,7 @@ void ElfFile::Impl::Elf<Is64>::XIPify() {
             if (reloc.r_offset & 3 ||
                 reloc.r_offset - section.sh_addr >= section.sh_size + int(GetRelocType(reloc) == R_RISCV_NONE)) {
                 TT_THROW(
-                    "{}: relocation @ {} is {} section {}",
+                    "{}: relocation @ {:#x} is {} section {}",
                     path_,
                     reloc.r_offset,
                     reloc.r_offset & 3 ? "misaligned in" : "outside of",
@@ -664,11 +781,12 @@ void ElfFile::Impl::Elf<Is64>::XIPify() {
             auto type = GetRelocType(reloc);
             auto sym_ix = GetRelocSymIx(reloc);
             auto const* symbol = &symbols[sym_ix];
-            bool is_to_text = IsTextSymbol(*symbol);
+            auto sym_seg = FindSegment(*symbol);
+            bool is_to_text = IsText(sym_seg);
 
             auto throw_unpaired = [&]() {
                 TT_THROW(
-                    "{}: unpaired {} reloc at {}",
+                    "{}: unpaired {} reloc at {:#x}",
                     path_,
                     sub_reloc ? "sub32" : "add32",
                     (sub_reloc ? sub_reloc : &reloc)->r_offset);
@@ -680,10 +798,14 @@ void ElfFile::Impl::Elf<Is64>::XIPify() {
             }
             if (type == R_RISCV_ADD32) {
                 const auto* sub_symbol = &symbols[GetRelocSymIx(*sub_reloc)];
-                bool sub_is_to_text = IsTextSymbol(*sub_symbol);
+                auto* sub_seg = FindSegment(*sub_symbol);
+                bool sub_is_to_text = IsText(sub_seg);
                 if (is_to_text != sub_is_to_text) {
                     TT_THROW(
-                        "{}: mismatched add32/sub32 relocs at {} & {}", path_, reloc.r_offset, sub_reloc->r_offset);
+                        "{}: mismatched add32/sub32 relocs at {:#x} & {:#x}",
+                        path_,
+                        reloc.r_offset,
+                        sub_reloc->r_offset);
                 }
             }
             sub_reloc = nullptr;
@@ -695,8 +817,8 @@ void ElfFile::Impl::Elf<Is64>::XIPify() {
             }
 
             unsigned kind = PCREL;
-            // NOLINTBEGIN(bugprone-switch-missing-default-case)
             switch (type) {
+                default: break;
                 case R_RISCV_LO12_I:
                 case R_RISCV_LO12_S: kind = ABS; [[fallthrough]];
 
@@ -719,7 +841,10 @@ void ElfFile::Impl::Elf<Is64>::XIPify() {
                 case R_RISCV_PCREL_HI20:
                     if (is_to_text && !is_from_text) {
                         TT_THROW(
-                            "{}: segment-crossing {} relocation found at {}", path_, r_names[kind][0], reloc.r_offset);
+                            "{}: segment-crossing {} relocation found at {:#x}",
+                            path_,
+                            r_names[kind][0],
+                            reloc.r_offset);
                     }
 
                     if (kind == ABS && !is_to_text) {
@@ -736,11 +861,10 @@ void ElfFile::Impl::Elf<Is64>::XIPify() {
                     }
                     // Emit dynamic reloc
                     log_debug(
-                        tt::LogLLRuntime, "{}: emitting dynamic R_RISCV_32 relocation at {}", path_, reloc.r_offset);
+                        tt::LogLLRuntime, "{}: emitting dynamic R_RISCV_32 relocation at {:#x}", path_, reloc.r_offset);
                     address_t value = (symbol->st_value + reloc.r_addend - GetSegments().front().address);
                     Write32(section, reloc.r_offset, value);
-                    auto& seg = GetSegments()[segment_ix];
-                    seg.relocs.push_back(reloc.r_offset - seg.address);
+                    seg->relocs.push_back(reloc.r_offset - seg->address);
                 } break;
 
                 case R_RISCV_JAL:
@@ -748,17 +872,16 @@ void ElfFile::Impl::Elf<Is64>::XIPify() {
                 case R_RISCV_CALL_PLT:
                     if (is_from_text != is_to_text) {
                         TT_THROW(
-                            "{}: segment-crossing R_RISCV_(JAL|CALL|CALL_PLT) relocation found at {}",
+                            "{}: segment-crossing R_RISCV_(JAL|CALL|CALL_PLT) relocation found at {:#x}",
                             path_,
                             reloc.r_offset);
                     }
                     break;
 
                 case R_RISCV_32_PCREL:
-                    TT_THROW("{}: R_RISCV_32_PCREL relocation found at {}", path_, reloc.r_offset);
+                    TT_THROW("{}: R_RISCV_32_PCREL relocation found at {:#x}", path_, reloc.r_offset);
                     break;
             }
-            // NOLINTEND(bugprone-switch-missing-default-case)
         }
 
         // Combine hi/lo relocs
@@ -794,7 +917,7 @@ void ElfFile::Impl::Elf<Is64>::XIPify() {
                     }
                 }
                 TT_THROW(
-                    "{}: {} relocation at {} has no matching {}",
+                    "{}: {} relocation at {:#x} has no matching {}",
                     path_,
                     r_names[kind][true],
                     lo_reloc->r_offset,
@@ -809,17 +932,18 @@ void ElfFile::Impl::Elf<Is64>::XIPify() {
             for (auto& slot : composed[kind]) {
                 if (slot.second.lo_relocs.empty()) {
                     TT_THROW(
-                        "{}: R_RISCV_{}HI20 relocation at {} has no matching R_RISCV_{}LO12",
+                        "{}: R_RISCV_{}HI20 relocation at {:#x} has no matching R_RISCV_{}LO12",
                         path_,
                         r_names[kind][false],
-                        r_names[kind][true],
-                        slot.first);
+                        slot.first,
+                        r_names[kind][true]);
                 }
 
                 auto hi_reloc = slot.second.hi_reloc;
                 unsigned sym_ix = GetRelocSymIx(*hi_reloc);
                 auto const& symbol = symbols[sym_ix];
-                bool is_to_text = IsTextSymbol(symbol);
+                auto* sym_seg = FindSegment(symbol);
+                bool is_to_text = IsText(sym_seg);
                 if (kind == PCREL && is_to_text == is_from_text) {
                     // intra-text PCREL is ok.
                     continue;
@@ -836,14 +960,14 @@ void ElfFile::Impl::Elf<Is64>::XIPify() {
                 uint32_t insn = Read32(section, hi_reloc->r_offset);
                 log_debug(
                     tt::LogLLRuntime,
-                    "{}: translating {} at {} to {}",
+                    "{}: translating {} at {:#x} to {}",
                     path_,
                     r_names[kind][false],
                     hi_reloc->r_offset,
                     r_names[HWM - 1 - kind][false]);
                 if ((insn & insn_mask_u) != (kind == ABS ? insn_opc_lui : insn_opc_auipc)) {
                     TT_THROW(
-                        "{}: translating instruction at {} is not `{}'",
+                        "{}: translating instruction at {:#x} is not `{}'",
                         path_,
                         hi_reloc->r_offset,
                         kind == ABS ? "lui" : "auipc");
@@ -863,7 +987,7 @@ void ElfFile::Impl::Elf<Is64>::XIPify() {
                     uint32_t insn = Read32(section, lo_reloc->r_offset);
                     log_debug(
                         tt::LogLLRuntime,
-                        "{}: translating R_RISCV{}_LO12 at {} to R_RISCV{}_LO12",
+                        "{}: translating R_RISCV{}_LO12 at {:#x} to R_RISCV{}_LO12",
                         path_,
                         r_names[kind][true],
                         lo_reloc->r_offset,
@@ -899,6 +1023,21 @@ void ElfFile::Impl::Elf<Is64>::XIPify() {
         TT_THROW("{}: there are no relocation sections", path_);
     }
 
-    // The text segment is now XIP
-    GetSegments().front().address = 0;
+    Impl::XIPify();  // success
 }
+
+#ifdef ELF_STANDALONE
+int main(int argc, char* argv[]) {
+    ll_api::ElfFile elf;
+    if (argc != 3) {
+        return 1;
+    }
+    elf.ReadImage(argv[1]);
+    elf.WeakenDataSymbols({});
+    elf.ObjectifyExecutable();
+    elf.WriteImage(argv[2]);
+}
+#endif
+
+// NOLINTEND (readability-redundant-access-specifiers)
+// NOLINTEND (cppcoreguidelines-explicit-virtual-function)

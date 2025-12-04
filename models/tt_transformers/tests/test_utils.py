@@ -321,10 +321,10 @@ def find_repeated_block(ops, min_repeat=2):
                 }
     # No repetition found
     return {
-        "head": ops,
-        "layer_block": [],
+        "num_head_ops": len(ops),
+        "num_layer_block_ops": 0,
         "num_layers": 0,
-        "tail": [],
+        "num_tail_ops": len(ops),
     }
 
 
@@ -358,6 +358,7 @@ def split_compile_and_trace(
         )
         Any of the additional outputs may be None if slicing arguments are not provided.
     """
+
     # Finds the first index such that ops[left:] contains num_runs of identical blocks of ops
     first_run_start = find_repeated_runs(df["OP CODE"].tolist(), num_runs)
     adjusted_len = (len(df) - first_run_start) // num_runs  # The number of ops in each run

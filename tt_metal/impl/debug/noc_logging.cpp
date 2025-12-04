@@ -18,6 +18,8 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/soc_descriptor.hpp>
+#include <impl/dispatch/dispatch_core_manager.hpp>
+#include <llrt/tt_cluster.hpp>
 
 using namespace tt::tt_metal;
 

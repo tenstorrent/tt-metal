@@ -24,6 +24,9 @@
 #include "jit_build/build.hpp"
 #include "metal_soc_descriptor.h"
 #include <umd/device/types/core_coordinates.hpp>
+#include <impl/dispatch/dispatch_core_manager.hpp>
+#include <llrt/tt_cluster.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace tt::tt_metal {
 
@@ -60,17 +63,7 @@ std::map<std::string, std::string> initialize_device_kernel_defines(ChipId devic
     // # of L1 banks needs to match allocator. For L1BankingAllocator this is the # of storage cores. TODO: when
     // allocator is pulled out of device, use it to get that info here.
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    const size_t num_compute_and_storage_cores =
-        tt::get_logical_compute_cores(device_id, num_hw_cqs, dispatch_core_config).size();
-    const size_t num_storage_only_cores =
-        tt::get_logical_storage_cores(device_id, num_hw_cqs, dispatch_core_config).size();
-    size_t num_banks_per_storage_core = 0;
-    if (num_storage_only_cores > 0) {
-        num_banks_per_storage_core =
-            static_cast<size_t>(soc_d.worker_l1_size) /
-            tt::get_storage_core_bank_size(device_id, num_hw_cqs, dispatch_core_config).value();
-    }
-    const size_t num_l1_banks = num_compute_and_storage_cores + (num_storage_only_cores * num_banks_per_storage_core);
+    const size_t num_l1_banks = tt::get_logical_compute_cores(device_id, num_hw_cqs, dispatch_core_config).size();
 
     bool is_dram_pow2 = ceil(log2(num_dram_banks)) == log2(num_dram_banks);
     bool is_l1_pow2 = ceil(log2(num_l1_banks)) == log2(num_l1_banks);
@@ -202,7 +195,7 @@ const JitBuildState& BuildEnvManager::get_kernel_build_state(
 JitBuildStateSubset BuildEnvManager::get_kernel_build_states(
     ChipId device_id, uint32_t programmable_core, uint32_t processor_class) {
     auto [b_id, count] = get_build_index_and_state_count(programmable_core, processor_class);
-    auto& kernel_build_states = get_device_build_env(device_id).kernel_build_states;
+    const auto& kernel_build_states = get_device_build_env(device_id).kernel_build_states;
     return {kernel_build_states.begin() + b_id, count};
 }
 
