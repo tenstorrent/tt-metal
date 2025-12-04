@@ -6,6 +6,7 @@ import statistics
 import pytest
 import ttnn
 from loguru import logger
+from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from ....pipelines.motif.pipeline_motif import MotifPipeline
 

@@ -7,6 +7,7 @@ import pytest
 import ttnn
 from loguru import logger
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
+from models.common.utility_functions import is_blackhole
 
 from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import StableDiffusion3Pipeline
 
@@ -158,7 +159,7 @@ def test_sd35_new_pipeline_performance(
                     seed=0,  # Different seed for each run
                     traced=True,
                     timer=benchmark_profiler,
-                    timer_iteration=0,
+                    timer_iteration=i,
                 )
             images[0].save(f"sd35_new_{image_w}_{image_h}_perf_run{i}.png")
 

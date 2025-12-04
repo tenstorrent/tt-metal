@@ -235,21 +235,21 @@ def test_pipeline_performance(
         "encoder": statistics.mean(text_encoder_times),
         "denoising": statistics.mean(denoising_times),
         "vae": statistics.mean(vae_times),
-        "run": statistics.mean(total_times),
+        "total": statistics.mean(total_times),
     }
     if tuple(mesh_device.shape) == (2, 4) and height == 480:
         expected_metrics = {
             "encoder": 14.8,
             "denoising": 909.0,
             "vae": 64.6,
-            "run": 990.0,
+            "total": 990.0,
         }
     elif tuple(mesh_device.shape) == (4, 8) and height == 480:
         expected_metrics = {
             "encoder": 15.0,
             "denoising": 163.0,
             "vae": 18.2,
-            "run": 192.0,
+            "total": 192.0,
         }
     elif tuple(mesh_device.shape) == (4, 8) and height == 720:
         if is_blackhole():
@@ -257,14 +257,14 @@ def test_pipeline_performance(
                 "encoder": 15.0,
                 "denoising": 290.0,
                 "vae": 36.0,
-                "run": 341.0,
+                "total": 341.0,
             }
         else:
             expected_metrics = {
                 "encoder": 15.0,
                 "denoising": 440.0,
                 "vae": 42.0,
-                "run": 497.0,
+                "total": 497.0,
             }
     elif tuple(mesh_device.shape) == (1, 4) and height == 480:
         assert is_blackhole(), "1x4 is only supported for blackhole"
@@ -272,7 +272,7 @@ def test_pipeline_performance(
             "encoder": 17.0,
             "denoising": 680.0,
             "vae": 60.0,
-            "run": 760.0,
+            "total": 760.0,
         }
     elif tuple(mesh_device.shape) == (1, 4) and height == 720:
         assert is_blackhole(), "1x4 is only supported for blackhole"
@@ -280,7 +280,7 @@ def test_pipeline_performance(
             "encoder": 15.0,
             "denoising": 3200.0,
             "vae": 200.0,
-            "run": 3415.0,
+            "total": 3415.0,
         }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
@@ -296,7 +296,7 @@ def test_pipeline_performance(
                     step_name=step_name,
                     name=step_name,
                     value=benchmark_profiler.get_duration(step_name, iteration),
-                    target=expected_metrics[step_name],
+                    target=expected_metrics["total" if step_name == "run" else step_name],
                 )
         device_name_map = {
             (1, 4): "BH_QB",

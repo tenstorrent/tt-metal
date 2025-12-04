@@ -648,10 +648,11 @@ class StableDiffusion3Pipeline:
 
                 output = self._image_processor.numpy_to_pil(self._image_processor.pt_to_numpy(image))
 
-        logger.info(f"prompt encoding duration: {timer.get_duration('encoder', timer_iteration)}")
-        logger.info(f"denoising duration: {timer.get_duration('denoising', timer_iteration)}")
-        logger.info(f"image decoding duration: {timer.get_duration('vae', timer_iteration)}")
-        logger.info(f"total runtime: {timer.get_duration('total', timer_iteration)}")
+        if timer:
+            logger.info(f"prompt encoding duration: {timer.get_duration('encoder', timer_iteration)}")
+            logger.info(f"denoising duration: {timer.get_duration('denoising', timer_iteration)}")
+            logger.info(f"image decoding duration: {timer.get_duration('vae', timer_iteration)}")
+            logger.info(f"total runtime: {timer.get_duration('total', timer_iteration)}")
 
         return output
 

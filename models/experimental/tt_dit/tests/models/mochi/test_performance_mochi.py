@@ -7,6 +7,7 @@ import pytest
 import torch
 import ttnn
 from loguru import logger
+from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 
 from ....pipelines.mochi.pipeline_mochi import MochiPipeline as TTMochiPipeline
@@ -288,7 +289,7 @@ def test_mochi_pipeline_performance(
                     step_name=step_name,
                     name=step_name,
                     value=benchmark_profiler.get_duration(step_name, iteration),
-                    target=expected_metrics[step_name],
+                    target=expected_metrics["total" if step_name == "run" else step_name],
                 )
         device_name_map = {
             (1, 4): "BH_QB",
