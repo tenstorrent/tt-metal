@@ -1655,7 +1655,7 @@ static uint32_t relay_linear_to_downstream(
     // Following is fine if downstream cb block is bigger than scratch and there are at least a couple of them
     uint32_t npages = (amt_to_write - page_residual_space + downstream_cb_page_size - 1) / downstream_cb_page_size;
     if (npages != 0) {
-        cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(npages, my_downstream_cb_sem_additional_count);
+        DispatchRelayInlineState::cb_writer.acquire_pages(npages);
     }
     uint64_t noc_addr;
     if (downstream_data_ptr == downstream_cb_end) {
@@ -1670,6 +1670,7 @@ static uint32_t relay_linear_to_downstream(
         amt_to_write -= last_chunk_size;
     }
     noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
+    // consider calling relay_client.write_atomic_inc_any_len instead
     relay_client.write_any_len<my_noc_index, true, NCRISC_WR_CMD_BUF>(scratch_write_addr, noc_addr, amt_to_write);
     downstream_data_ptr += amt_to_write;
     return npages;
