@@ -21,32 +21,6 @@ jobs:
       PROJECT_ID: "PVT_kwDOA9MHEM4AgKVv"
       FIELD_ID: "PVTF_lADOA9MHEM4AgKVvzg4bxWU"
     steps:
-      - name: Check Rate Limit Status
-        run: |
-          set -e
-          
-          echo "Checking rate limit status before workflow operations..."
-          RATE_RESP=$(gh api rate_limit --include 2>&1)
-          
-          # Extract rate limit info from headers
-          GRAPHQL_LIMIT=$(echo "$RATE_RESP" | grep -i "x-ratelimit-limit" | head -1 | cut -d: -f2 | tr -d ' \r')
-          GRAPHQL_REMAINING=$(echo "$RATE_RESP" | grep -i "x-ratelimit-remaining" | head -1 | cut -d: -f2 | tr -d ' \r')
-          GRAPHQL_RESET=$(echo "$RATE_RESP" | grep -i "x-ratelimit-reset" | head -1 | cut -d: -f2 | tr -d ' \r')
-          
-          # Get detailed breakdown from response body
-          echo "$RATE_RESP" | tail -1 | jq -r '
-            "=== Rate Limit Status ===",
-            "GraphQL: \(.resources.graphql.remaining)/\(.resources.graphql.limit) remaining (used: \(.resources.graphql.used))",
-            "Core API: \(.resources.core.remaining)/\(.resources.core.limit) remaining (used: \(.resources.core.used))",
-            "Reset time: \(.resources.graphql.reset | strftime("%Y-%m-%d %H:%M:%S UTC"))",
-            "========================"
-          '
-          
-          # Warn if running low
-          if [ "$GRAPHQL_REMAINING" -lt 100 ]; then
-            echo "⚠️  WARNING: GraphQL rate limit is low ($GRAPHQL_REMAINING remaining)" >&2
-          fi
-
       - name: Extract Issue Date
         id: setup
         run: |
