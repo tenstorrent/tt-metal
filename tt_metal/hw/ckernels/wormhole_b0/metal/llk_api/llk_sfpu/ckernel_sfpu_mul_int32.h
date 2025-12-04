@@ -39,22 +39,44 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
         // This is exact for 23-bit integers.
 
         // a0
-        TT_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_3, dst_index_in0 * dst_tile_size);
+        TT_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_3, dst_index_in0 * dst_tile_size);  // A with 32 bits
         // a1
-        TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG2, 5);
+        TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG2, 5);  // A without last 11 bits
         // a2
-        TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG13, p_sfpu::LREG4, 5);
+        TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG13, p_sfpu::LREG4, 5);  // A without last 22 bits
+        /*
+        the 5 passed as the inst_mode means
+        The value in the LREG specified by lreg_dest is shifted by the
+        number of bits determined by the value in the LREG specified by
+        lreg_src_c. When the sign bit of the shift amount is 1, the value
+        will be shifted to the right. When the sign bit of the shift
+        amount is 0, the value is shifted to the left. The shift is a
+        logical shift, where the value filled will be zero.
+        */
 
         // a1 = (a1 & 0x7ff) as fp32
-        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG2, 0);
+        /* Purpose of  (a1 & 0x7ff)
+         Mask 0x7ff preserves the last 11-bits and sets the remaining bits of an input to zero
+         when performed Bitwise AND & operation with any input */
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG2, 0);  // A1 with mid 11 bits
         TTI_SFPCAST(p_sfpu::LREG2, p_sfpu::LREG2, 0);
+        // int32 to fp32
 
         // a2 = a2 as fp32
         TTI_SFPCAST(p_sfpu::LREG4, p_sfpu::LREG4, 0);
+        // int32 to fp32 conversion for a2 as well
 
         // a0 = (a0 & 0x7ff) as fp32
-        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);  // A0 with low 11 bits
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
+        // int32 to fp32
+        /*
+        instr_mod1 (4 bits):
+        0: the original value is interpreted as an int32 value and is converted
+        to an fp32 value using round to nearest even
+        1: the original value is interpreted as an int32 value and is converted
+        to an fp32 value using stochastic rounding
+*/
 
         // b0
         TT_SFPLOAD(p_sfpu::LREG1, INT32, ADDR_MOD_3, dst_index_in1 * dst_tile_size);
@@ -93,9 +115,18 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
         TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG6, 0);
 
         // extract integers from mantissas
-        TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPEXMAN_MOD1_PAD9);
-        TTI_SFPEXMAN(0, p_sfpu::LREG6, p_sfpu::LREG6, sfpi::SFPEXMAN_MOD1_PAD9);
-        TTI_SFPEXMAN(0, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPEXMAN_MOD1_PAD9);
+        TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPEXMAN_MOD1_PAD9);  // low
+        TTI_SFPEXMAN(0, p_sfpu::LREG6, p_sfpu::LREG6, sfpi::SFPEXMAN_MOD1_PAD9);  // mid
+        TTI_SFPEXMAN(0, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPEXMAN_MOD1_PAD9);  // top
+        /*
+        SFPEXMAN :
+        Extracts the 10-bit ?! mantissa field from the LREG specified by lreg_c and writes the result into
+        the LREG specified by lreg_dest.
+        When the instr_mod1[0] is 1, the mantissa is extracted without modification and the result is
+        padded with 9 zeroes in the MSBs. When the instr_mod1[0] is 0, the extracted mantissa is
+        extended to include the hidden bit and then padded with 8 zeroes in the MSBs.
+        We used mode 1, so 23 bits of mantissa + 9 padded zeros = 32 bit ??
+        */
 
         TTI_SFPSHFT(22, 0, p_sfpu::LREG5, 1);  // top <<= 22
         TTI_SFPSHFT(11, 0, p_sfpu::LREG6, 1);  // mid <<= 11
@@ -109,9 +140,12 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
 
 template <bool APPROXIMATION_MODE>
 inline void mul_int32_init() {
-    sfpi::vConstIntPrgm0 = 0x7ff;
-    sfpi::vConstIntPrgm1 = -11;
-    sfpi::vConstFloatPrgm2 = 8388608.0f;  // 2**23
+    sfpi::vConstIntPrgm0 = 0x7ff;  // lreg  12? mask that extracts only last 11 bits of the input it is &-ed with
+    sfpi::vConstIntPrgm1 =
+        -11;  // lreg 13? no of bits to shift; -ve sign indicates right shift with SFPSHFT2 instr_mode 5
+    sfpi::vConstFloatPrgm2 =
+        8388608.0f;  // lreg14 ? 2**23 if this mask is added to the result in floating point multiplication, the integer
+                     // bits will be pushed to occupy the mantissa bits ?
 }
 
 }  // namespace ckernel::sfpu
