@@ -134,7 +134,7 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
 
     FORCE_INLINE void increment_num_processed_acks(size_t num_acks) { acks_received_and_processed += num_acks; }
 
-    template <bool ENABLE_RISC_CPU_DATA_CACHE=true>
+    template <bool ENABLE_RISC_CPU_DATA_CACHE>
     FORCE_INLINE uint32_t get_num_unprocessed_completions_from_receiver() {
         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
         return *completions_received_counter_ptr - completions_received_and_processed;
@@ -164,6 +164,7 @@ struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
         increment_local_update_ptr_val(to_sender_packets_acked_stream, -num_acks);
     }
 
+    template <bool ENABLE_RISC_CPU_DATA_CACHE=true>
     FORCE_INLINE uint32_t get_num_unprocessed_completions_from_receiver() {
         return get_ptr_val(to_sender_packets_completed_stream);
     }
