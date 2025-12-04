@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::data_movement::tilize {
 
 struct operation_attributes_t {
     tt::tt_metal::MemoryConfig output_mem_config;
@@ -33,4 +33,4 @@ struct MultiCoreSharedVariables {
     };
 };
 }  // namespace program
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::tilize

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,9 +20,9 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement::program {
 
 TilizeMultiCoreShardedProgramFactory::cached_program_t TilizeMultiCoreShardedProgramFactory::create(
-    const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
-    const TilizeDeviceOperation::tensor_args_t& tensor_args,
-    const TilizeDeviceOperation::tensor_return_value_t& tensor_return_value) {
+    const tilize::operation_attributes_t& operation_attributes,
+    const tilize::tensor_args_t& tensor_args,
+    const tilize::tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::Program program{};
     auto input = tensor_args.input_tensor;
     auto output = tensor_return_value;
@@ -85,14 +85,15 @@ TilizeMultiCoreShardedProgramFactory::cached_program_t TilizeMultiCoreShardedPro
 
     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, all_cores, {num_tiles_per_shard});
     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, all_cores, {num_tiles_per_shard});
-    return cached_program_t{std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cb_output}};
+    return TilizeMultiCoreShardedProgramFactory::cached_program_t{
+        std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cb_output}};
 }
 
 void TilizeMultiCoreShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const ttnn::operations::data_movement::operation_attributes_t& operation_attributes,
-    const ttnn::operations::data_movement::tensor_args_t& tensor_args,
-    const ttnn::operations::data_movement::tensor_return_value_t& tensor_return_value) {
+    const tilize::operation_attributes_t& operation_attributes,
+    const tilize::tensor_args_t& tensor_args,
+    const tilize::tensor_return_value_t& tensor_return_value) {
     auto src_buffer = tensor_args.input_tensor.buffer();
     auto dst_buffer = tensor_return_value.buffer();
     UpdateDynamicCircularBufferAddress(

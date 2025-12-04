@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,10 +18,10 @@
 namespace ttnn::operations::data_movement {
 
 struct TilizeDeviceOperation {
-    using operation_attributes_t = data_movement::operation_attributes_t;
-    using tensor_args_t = data_movement::tensor_args_t;
-    using spec_return_value_t = data_movement::spec_return_value_t;
-    using tensor_return_value_t = data_movement::tensor_return_value_t;
+    using operation_attributes_t = data_movement::tilize::operation_attributes_t;
+    using tensor_args_t = data_movement::tilize::tensor_args_t;
+    using spec_return_value_t = data_movement::tilize::spec_return_value_t;
+    using tensor_return_value_t = data_movement::tilize::tensor_return_value_t;
     using program_factory_t = std::variant<
         program::TilizeMultiCoreInterleavedProgramFactory,
         program::TilizeMultiCoreBlockProgramFactory,
@@ -38,12 +38,10 @@ struct TilizeDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensors,
-        const tt::tt_metal::MemoryConfig& output_mem_config,
-        const tt::tt_metal::DataType output_dtype,
+        const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
+        const std::optional<tt::tt_metal::DataType>& output_dtype,
         const bool use_multicore,
         const bool enough_space_width,
         const bool enough_space_height);

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,9 +18,9 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::program {
 TilizeMultiCoreBlockProgramFactory::cached_program_t TilizeMultiCoreBlockProgramFactory::create(
-    const ttnn::operations::data_movement::operation_attributes_t& operation_attributes,
-    const ttnn::operations::data_movement::tensor_args_t& tensor_args,
-    const ttnn::operations::data_movement::tensor_return_value_t& tensor_return_value) {
+    const tilize::operation_attributes_t& operation_attributes,
+    const tilize::tensor_args_t& tensor_args,
+    const tilize::tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     auto a = tensor_args.input_tensor;
     auto output = tensor_return_value;
@@ -279,9 +279,9 @@ TilizeMultiCoreBlockProgramFactory::cached_program_t TilizeMultiCoreBlockProgram
 
 void TilizeMultiCoreBlockProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const ttnn::operations::data_movement::operation_attributes_t& operation_attributes,
-    const ttnn::operations::data_movement::tensor_args_t& tensor_args,
-    const ttnn::operations::data_movement::tensor_return_value_t& tensor_return_value) {
+    const tilize::operation_attributes_t& operation_attributes,
+    const tilize::tensor_args_t& tensor_args,
+    const tilize::tensor_return_value_t& tensor_return_value) {
     auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     auto& cores = cached_program.shared_variables.cores;

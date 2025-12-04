@@ -59,12 +59,7 @@ ttnn::Tensor ExecuteTilize::invoke(
 
     auto base_tilize = [=](const ttnn::Tensor& input_tensor) {
         return ttnn::prim::tilize(
-            input_tensor,
-            memory_config.value_or(input_tensor.memory_config()),
-            output_dtype.value_or(input_tensor.dtype()),
-            use_multicore,
-            enough_space_width,
-            enough_space_height);
+            input_tensor, memory_config, output_dtype, use_multicore, enough_space_width, enough_space_height);
     };
 
     return build_ndiml_tilize(base_tilize)(input_tensor);
