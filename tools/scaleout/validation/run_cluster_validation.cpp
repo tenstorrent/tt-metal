@@ -24,7 +24,35 @@
 
 namespace tt::scaleout_tools {
 
+<<<<<<< HEAD
 using tt::tt_metal::AsicTopology;
+=======
+// Validation (default) mode arguments and their descriptions
+const std::unordered_map<std::string_view, std::string_view> VALIDATION_ARGS = {
+    {"--cabling-descriptor-path", "Path to cabling descriptor"},
+    {"--deployment-descriptor-path", "Path to deployment descriptor"},
+    {"--factory-descriptor-path", "Path to factory descriptor"},
+    {"--global-descriptor-path", "Path to global descriptor"},
+    {"--output-path", "Path to output directory"},
+    {"--hard-fail", "Fail on warning"},
+    {"--log-ethernet-metrics", "Log live ethernet statistics"},
+    {"--print-connectivity", "Print Ethernet Connectivity between ASICs"},
+    {"--send-traffic", "Send traffic across detected links"},
+    {"--num-iterations", "Number of iterations to send traffic"},
+    {"--data-size", "Data size (bytes) sent across each link per iteration"},
+    {"--packet-size-bytes", "Packet size (bytes) sent across each link"},
+    {"--sweep-traffic-configs", "Sweep pre-generated traffic configurations across detected links (stress testing)"},
+    {"--min-connections", "Minimum connections per ASIC pair required for relaxed validation mode"}};
+
+// link_reset subcommand arguments and their descriptions
+const std::unordered_map<std::string_view, std::string_view> LINK_RETRAIN_ARGS = {
+    {"--host", "Host name of the source ASIC"},
+    {"--tray-id", "Tray ID of the source ASIC"},
+    {"--asic-location", "ASIC location of the source ASIC"},
+    {"--channel", "Channel ID to reset"},
+    {"--help", "Print usage information"}};
+
+>>>>>>> 1daffd581d (review)
 using tt::tt_metal::PhysicalSystemDescriptor;
 
 enum class CommandMode {
@@ -238,6 +266,7 @@ void parse_validation_args(int argc, char* argv[], InputArgs& input_args) {
                 "Relaxed validation mode enabled. Minimum connections per ASIC pair: " +
                 std::to_string(input_args.min_connections.value()));
         }
+<<<<<<< HEAD
 
     } catch (const cxxopts::exceptions::exception& e) {
         std::cerr << "Error parsing arguments: " << e.what() << std::endl;

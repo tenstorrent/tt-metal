@@ -26,7 +26,8 @@ namespace tt::scaleout_tools {
 //   - assert_on_connection_mismatch: If true, throws an error if there are connection mismatches
 //                                    If false, missing connections are logged without an error being thrown
 //   - min_connections: If specified, enables relaxed validation mode where missing connections
-//                      are not reported as errors if the total discovered connections >= this value
+//                      are not reported as errors if each expected ASIC pair has at least this many
+//                      discovered connections (checked at per-ASIC-pair granularity)
 std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
     const std::string& fsd_filename,
     const std::string& gsd_filename,

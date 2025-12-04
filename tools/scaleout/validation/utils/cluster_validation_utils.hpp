@@ -38,7 +38,6 @@ struct ConnectivityValidationConfig {
     std::optional<std::string> deployment_descriptor_path = std::nullopt;
     std::optional<std::string> fsd_path = std::nullopt;
     bool fail_on_warning = false;
-    std::optional<uint32_t> min_connections = std::nullopt;  // Relaxed validation mode
 };
 
 // ============================================================================
