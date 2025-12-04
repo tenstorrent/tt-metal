@@ -376,7 +376,7 @@ run_yolov6l_demo() {
 
 run_vgg_unet_demo() {
  # vgg_unet demo
-  $PYTEST_CMD models/demos/wormhole/vgg_unet/demo/demo.py
+  $PYTEST_CMD models/demos/vision/segmentation/vgg_unet/wormhole/demo/demo.py
 }
 
 

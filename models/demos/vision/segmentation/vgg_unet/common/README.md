@@ -14,7 +14,7 @@ The VGG-UNet model performs brain tumor segmentation on MRI images. It takes an 
 Find the model instructions for each device below:
 
 ### Wormhole N150, N300
-[models/demos/wormhole/vgg_unet](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/vgg_unet)
+[models/demos/vision/segmentation/vgg_unet/wormhole](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/vision/segmentation/vgg_unet/wormhole)
 
 ### Blackhole P150
-[models/demos/blackhole/vgg_unet](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/blackhole/vgg_unet)
+[models/demos/vision/segmentation/vgg_unet/blackhole](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/vision/segmentation/vgg_unet/blackhole)
