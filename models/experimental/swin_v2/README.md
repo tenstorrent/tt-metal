@@ -61,7 +61,7 @@ Swin Transformer v2 builds upon the original Swin Transformer to tackle key chal
 - Use the following command to run the performant data evaluation with Trace+2CQs:
 
   ```
-  pytest models/demos/classification_eval/classification_eval.py::test_swin_v2_image_classification_eval
+  pytest models/demos/vision/classification/classification_eval/classification_eval.py::test_swin_v2_image_classification_eval
   ```
 
 #### Multi Device (DP=2, N300):
@@ -69,7 +69,7 @@ Swin Transformer v2 builds upon the original Swin Transformer to tackle key chal
 - Use the following command to run the performant data evaluation with Trace+2CQs:
 
   ```
-  pytest models/demos/classification_eval/classification_eval.py::test_swin_v2_image_classification_eval_dp
+  pytest models/demos/vision/classification/classification_eval/classification_eval.py::test_swin_v2_image_classification_eval_dp
   ```
 ## Details
 - Entry point for the model is `models/experimental/swin_v2/tt/tt_swin_transformer.py`
