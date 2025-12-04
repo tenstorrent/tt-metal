@@ -10,6 +10,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
+#include <llrt/tt_cluster.hpp>
 #include "ttnn/device.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn_test_fixtures.hpp"
