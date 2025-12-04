@@ -124,7 +124,6 @@ Llama::Llama(const LlamaConfig& config) : m_config(config) {
     fmt::print("    Runner type: {}\n", runner_type == RunnerType::Default ? "Default" : "Memory efficient");
     fmt::print("    Weight tying: {}\n", config.weight_tying == WeightTyingType::Enabled ? "Enabled" : "Disabled");
     fmt::print("    Theta: {}\n", theta);
-    fmt::print("    Inference mode (KV cache): {}\n", config.inference ? "Enabled" : "Disabled");
 
     uint32_t vocab_size_divisible_by_32 = (vocab_size + 31) / 32 * 32;
     if (max_sequence_length % 32 != 0) {
@@ -183,19 +182,9 @@ Llama::Llama(const LlamaConfig& config) : m_config(config) {
     register_module(fc, "fc");
 
     common::transformer::initialize_weights_gpt2(*this);
-
-    // Initialize KV cache if in inference mode
-    if (config.inference) {
-        initialize_kv_cache(1);  // Default batch size of 1 for inference
-    }
 }
 
 void Llama::initialize_kv_cache(const uint32_t batch_size) {
-    if (!m_config.inference) {
-        fmt::print("Warning: Attempting to initialize KV cache but inference mode is disabled\n");
-        return;
-    }
-
     uint32_t head_dim = m_config.embedding_dim / m_config.num_heads;
     uint32_t max_seq_len = m_config.max_sequence_length;
     uint32_t num_groups = m_config.num_groups;
@@ -238,11 +227,18 @@ void Llama::initialize_kv_cache(const uint32_t batch_size) {
     fmt::print("KV cache initialized successfully\n");
 }
 
-ttml::autograd::TensorPtr Llama::operator()(const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) {
+ttml::autograd::TensorPtr Llama::operator()(
+    const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask, const bool use_cache) {
     auto tok_emb_out = (*tok_emb)(x);
     auto out = tok_emb_out;  // llama does positional embedding in the attention blocks
 
-    if (m_config.inference && !m_kv_cache.empty()) {
+    if (use_cache) {
+        // Initialize KV cache if empty
+        if (m_kv_cache.empty()) {
+            const uint32_t batch_size = x->get_value().logical_shape()[0];
+            initialize_kv_cache(batch_size);
+        }
+
         // Inference mode with KV cache
         const modules::InferenceMode mode =
             (m_cache_position == 0) ? modules::InferenceMode::PREFILL : modules::InferenceMode::DECODE;
