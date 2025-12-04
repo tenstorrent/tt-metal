@@ -54,7 +54,7 @@ if [[ ${1-} = CREATE ]]; then
 	for file in "$dir"/*.$hashtype
 	do
 	    if ! [[ -r "$file" ]]; then
-		echo "$dir contains no hash files" >&2
+		echo "$dir contains no $hashtype files" >&2
 		exit 1
 	    fi
 	    files+=("$file")
