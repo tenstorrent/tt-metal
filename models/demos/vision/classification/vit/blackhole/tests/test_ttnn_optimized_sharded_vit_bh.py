@@ -11,8 +11,10 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import torch_random
-from models.demos.blackhole.vit.tt import ttnn_optimized_sharded_vit_bh as ttnn_optimized_sharded_vit
-from models.demos.vit.common import load_torch_model
+from models.demos.vision.classification.vit.blackhole.tt import (
+    ttnn_optimized_sharded_vit_bh as ttnn_optimized_sharded_vit,
+)
+from models.demos.vision.classification.vit.common.common import load_torch_model
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
