@@ -117,6 +117,7 @@ tt::tt_fabric::Topology get_fabric_topology();
  * | fabric_tensix_config| Tensix fabric configuration      | FabricTensixConfig     | No       |
  * | fabric_udm_mode     | Unified DataMovement mode        | FabricUDMMode          | No       |
  * | fabric_manager      | Fabric manager mode              | FabricManagerMode      | No       |
+ * | router_config       | Router-level configuration       | FabricRouterConfig     | No       |
  */
 void SetFabricConfig(
     FabricConfig fabric_config,
@@ -124,7 +125,8 @@ void SetFabricConfig(
     std::optional<uint8_t> num_routing_planes = std::nullopt,
     FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
     FabricUDMMode fabric_udm_mode = FabricUDMMode::DISABLED,
-    FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT);
+    FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT,
+    FabricRouterConfig router_config = FabricRouterConfig{});
 
 FabricConfig GetFabricConfig();
 

@@ -411,12 +411,23 @@ class FabricEriscDatamoverBuilder : public FabricDatamoverBuilderBase {
 public:
     static constexpr size_t default_firmware_context_switch_interval = 10000;
     static constexpr auto default_firmware_context_switch_type = FabricEriscDatamoverContextSwitchType::WAIT_FOR_IDLE;
+
+    // Default packet payload sizes (optimized for 4 tiles of Bfp8_b)
+    // Users can configure larger sizes up to architecture-specific maximums
+    // via FabricRouterConfig in SetFabricConfig()
     // payload only, no header
     static constexpr size_t default_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 4;
     static constexpr size_t default_mesh_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 4;
 
+    // Architecture-specific maximum packet payload size limits
+    static constexpr size_t max_packet_payload_size_bytes_wormhole = 7 * 1088;    // 7616 bytes
+    static constexpr size_t max_packet_payload_size_bytes_blackhole = 14 * 1088;  // 15232 bytes
+
     static_assert(default_packet_payload_size_bytes == 4352, "Packet size must be 4352 bytes");
     static_assert(default_mesh_packet_payload_size_bytes == 4352, "Mesh packet size must be 4352 bytes");
+
+    // Get architecture-specific maximum packet payload size
+    static size_t get_max_packet_payload_size_for_arch(tt::ARCH arch);
 
     FabricEriscDatamoverBuilder(
         const CoreCoord& my_eth_core_logical,

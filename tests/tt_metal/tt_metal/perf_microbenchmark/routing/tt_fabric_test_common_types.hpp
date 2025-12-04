@@ -130,6 +130,7 @@ struct TestFabricSetup {
     std::optional<tt_fabric::FabricReliabilityMode> fabric_reliability_mode;
     uint32_t num_links{};
     std::optional<std::string> torus_config;  // For Torus topology: "X", "Y", or "XY"
+    std::optional<uint32_t> max_packet_size;  // Custom max packet size for router
 };
 
 struct HighLevelPatternConfig {

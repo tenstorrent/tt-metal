@@ -200,7 +200,7 @@ public:
                 close_devices();
             }
             log_info(tt::LogTest, "Opening devices with fabric reliability mode: {}", reliability_mode);
-            open_devices_internal(new_fabric_config, fabric_tensix_config, reliability_mode);
+            open_devices_internal(new_fabric_config, fabric_tensix_config, reliability_mode, fabric_setup);
 
             topology_ = topology;
         } else {
@@ -1664,9 +1664,23 @@ private:
     void open_devices_internal(
         tt::tt_fabric::FabricConfig fabric_config,
         tt_fabric::FabricTensixConfig fabric_tensix_config,
-        tt_fabric::FabricReliabilityMode reliability_mode) {
+        tt_fabric::FabricReliabilityMode reliability_mode,
+        const TestFabricSetup& fabric_setup) {
         // Set fabric config FIRST, before any control plane access, this will reset control plane in metal context
-        tt::tt_fabric::SetFabricConfig(fabric_config, reliability_mode, std::nullopt, fabric_tensix_config);
+        // Create FabricRouterConfig if max_packet_size is specified
+        tt::tt_fabric::FabricRouterConfig router_config{};
+        if (fabric_setup.max_packet_size.has_value()) {
+            router_config.max_packet_payload_size_bytes = fabric_setup.max_packet_size.value();
+        }
+
+        tt::tt_fabric::SetFabricConfig(
+            fabric_config,
+            reliability_mode,
+            std::nullopt,
+            fabric_tensix_config,
+            tt::tt_fabric::FabricUDMMode::DISABLED,
+            tt::tt_fabric::FabricManagerMode::DEFAULT,
+            router_config);
 
         // Now it's safe to initialize control plane (will use correct mesh graph descriptor)
         // first need to re-init contorl plane so that it checks out the latest fabric config.

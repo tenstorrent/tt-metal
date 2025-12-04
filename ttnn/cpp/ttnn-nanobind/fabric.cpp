@@ -77,7 +77,8 @@ void bind_fabric_api(nb::module_& mod) {
         nb::arg("num_planes") = nb::none(),
         nb::arg("fabric_tensix_config") = nb::cast(tt::tt_fabric::FabricTensixConfig::DISABLED),
         nb::arg("fabric_udm_mode") = nb::cast(tt::tt_fabric::FabricUDMMode::DISABLED),
-        nb::arg("fabric_manager_mode") = nb::cast(tt::tt_fabric::FabricManagerMode::DEFAULT));
+        nb::arg("fabric_manager_mode") = nb::cast(tt::tt_fabric::FabricManagerMode::DEFAULT),
+        nb::arg("router_config") = nb::cast(tt::tt_fabric::FabricRouterConfig{}));
 }
 
 }  // namespace ttnn::fabric
