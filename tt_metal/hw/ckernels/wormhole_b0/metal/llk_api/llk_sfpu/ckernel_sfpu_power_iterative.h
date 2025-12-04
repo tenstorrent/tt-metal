@@ -57,9 +57,12 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power(sfpi::vFloat base, sfpi::vFloat pow) 
     sfpi::vInt exp = sfpi::exexp(base);
     // sfpi::exexp returns signed-integer but sfpi::int32_to_float() takes sign-magnitude integers
     // These types differ on negative inputs, which is why we explicitly convert signed -> sign-magnitude
-    v_if(exp < 0) { exp = sfpi::setsgn(~exp + 1, 1); }
-    v_endif;
-    sfpi::vFloat exp_f32 = sfpi::int32_to_float(exp, 0);
+    // Note: >> is only defined for vUInt (logical shift), so we extract sign bit then negate to create mask
+    sfpi::vInt sign_bit = sfpi::reinterpret<sfpi::vInt>(sfpi::reinterpret<sfpi::vUInt>(exp) >> 31);  // 0 or 1
+    sfpi::vInt exp_sign = sfpi::vInt(0) - sign_bit;    // 0 or 0xFFFFFFFF (arithmetic right shift equivalent)
+    sfpi::vInt exp_abs = (exp ^ exp_sign) - exp_sign;  // Take two's complement if negative exponent
+    // setsgn reads sign from bit 31, so use exp_sign directly (0 or 0xFFFFFFFF) not (exp_sign & 1)
+    sfpi::vFloat exp_f32 = sfpi::int32_to_float(sfpi::setsgn(exp_abs, exp_sign), 0);
 
     // De-normalize to original range
     const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;           // vConst1Ln2 = 1.4426950408889634f;
@@ -153,20 +156,31 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_power_iterative(const uint32_t exponent) {
     const float pow_scalar = Converter::as_float(exponent);
     const sfpi::vFloat pow = Converter::as_float(exponent);
-    if (pow_scalar == 0.0f || pow_scalar == 1.0f || pow_scalar == 2.0f || pow_scalar == 3.0f) {
+    if (pow_scalar == 0.0f) {
+        // x^0 = 1 for all x
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::dst_reg[0] = 1.0f;
+            sfpi::dst_reg++;
+        }
+    } else if (pow_scalar == 1.0f) {
+        // x^1 = x
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::dst_reg++;
+        }
+    } else if (pow_scalar == 2.0f) {
+        // x^2 = x * x
 #pragma GCC unroll 8
-        for (int d = 0; d < 8; d++) {
-            uint exp = static_cast<uint>(pow_scalar);
+        for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat in = sfpi::dst_reg[0];
-            sfpi::vFloat result = 1.0f;
-            while (exp > 0) {
-                if (exp & 1) {
-                    result *= in;
-                }
-                in *= in;
-                exp >>= 1;
-            }
-            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg[0] = in * in;
+            sfpi::dst_reg++;
+        }
+    } else if (pow_scalar == 3.0f) {
+// x^3 = x * x * x
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat in = sfpi::dst_reg[0];
+            sfpi::dst_reg[0] = in * in * in;
             sfpi::dst_reg++;
         }
     } else if (pow_scalar >= 0.0f) {
