@@ -2510,7 +2510,6 @@ def test_matmul_block_sharded_input_with_padding(device):
 
     input_a_shape = (4096, 16)
     input_b_shape = (16, 128)
-    expected_output_shape = (4096, 128)
 
     torch_input_a = torch.randn(input_a_shape, dtype=torch.bfloat16)
     torch_input_b = torch.randn(input_b_shape, dtype=torch.bfloat16)
