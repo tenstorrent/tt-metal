@@ -32,7 +32,8 @@ void set_runtime_args_hc_tiled_interleaved(
     auto tile_hw = tile_shape[0] * tile_shape[1];
     uint32_t num_tensor_tiles = input_tensor.physical_volume() / tile_hw;
     uint32_t num_output_tiles = output_tensor.physical_volume() / tile_hw;
-    uint32_t padded_num_tensor_tiles = num_output_tiles / (output_tensor.padded_shape()[2] / tile_shape[0]);
+    uint32_t padded_num_tensor_tiles = num_output_tiles / (output_tensor.padded_shape()[2] /
+                                                           tile_shape[0]);  // only last row of Ct should have padding
 
     auto& cached_reader_args = GetRuntimeArgs(program, reader_kernel_id);
     auto& cached_writer_args = GetRuntimeArgs(program, writer_kernel_id);
