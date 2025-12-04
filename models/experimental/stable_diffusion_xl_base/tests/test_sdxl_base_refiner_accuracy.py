@@ -85,7 +85,9 @@ test_demo_base_and_refiner.__test__ = False
     "use_refiner",
     [
         (True),
+        (False),
     ],
+    ids=("with_refiner", "no_refiner"),
 )
 @pytest.mark.parametrize(
     "denoising_split",
@@ -166,13 +168,15 @@ def test_accuracy_sdxl_base_and_refiner(
 
     accuracy_metrics = calculate_accuracy_metrics(images, prompts, coco_statistics_path)
 
+    model_name = "sdxl-base-refiner" if use_refiner else "sdxl"
     metadata = {
-        "model_name": "sdxl-base-refiner-tp" if use_cfg_parallel else "sdxl-base-refiner",
+        "model_name": model_name + "-tp" if use_cfg_parallel else model_name,
         "device": get_device_name(),
         "device_vae": vae_on_device,
         "capture_trace": capture_trace,
         "encoders_on_device": encoders_on_device,
         "use_cfg_parallel": use_cfg_parallel,
+        "use_refiner": use_refiner,
         "denoising_split": denoising_split,
         "refiner_strength": refiner_strength,
         "refiner_aesthetic_score": refiner_aesthetic_score,
