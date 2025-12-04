@@ -67,7 +67,7 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
         for (uint32_t link = 0; link < shared_vars.num_links; link++) {
             // direction 0 means pad left (top), 1 means pad right (bottom)
             for (uint32_t direction = 0; direction < shared_vars.num_directions; direction++) {
-                CoreCoord core = {link * shared_vars.num_directions + direction, 0};
+                CoreCoord core = {(link * shared_vars.num_directions) + direction, 0};
                 auto& reader_runtime_args = GetRuntimeArgs(program, shared_vars.reader_kernel_ids[core_idx]);
                 auto& writer_runtime_args = GetRuntimeArgs(program, shared_vars.writer_kernel_ids[core_idx]);
 
