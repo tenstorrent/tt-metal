@@ -217,7 +217,7 @@ jobs:
               "structured-output": true,
               "multimodal": true,
               "additional-server-args": "--max_model_len 2048",
-              "co-owner-1-id": "U07RY6B5FLJ",
+              "co-owner-1-id": "U07RY6B5FLJ"
             },
             {
               "name": "[BH-LB][v1] Llama-3.1-8B-Instruct",
