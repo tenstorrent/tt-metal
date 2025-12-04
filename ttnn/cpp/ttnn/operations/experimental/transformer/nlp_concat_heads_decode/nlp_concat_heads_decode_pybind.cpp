@@ -6,7 +6,7 @@
 
 #include "ttnn/operations/experimental/transformer/nlp_concat_heads_decode/nlp_concat_heads_decode.hpp"
 
-namespace ttnn::operations::experimental::transformer::detail {
+namespace ttnn::operations::experimental::nlp_concat_heads_decode::detail {
 
 namespace py = pybind11;
 
@@ -35,4 +35,4 @@ void bind_nlp_concat_heads_decode(py::module& module) {
             py::arg("sub_core_grids") = std::nullopt});
 }
 
-}  // namespace ttnn::operations::experimental::transformer::detail
+}  // namespace ttnn::operations::experimental::nlp_concat_heads_decode::detail
