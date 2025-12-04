@@ -132,7 +132,7 @@ PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMu
     tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, all_cores_padded, {});
     tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, all_cores_padded, {});
 
-    return cached_program_t{std::move(program), {}};
+    return cached_program_t{std::move(program), {input_shard_cb, output_shard_cb}};
 }
 
 void PadRmReaderWriterMultiCoreV2ProgramFactory::override_runtime_arguments(

@@ -216,7 +216,7 @@ PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory:
     return cached_program_t{std::move(program), {}};
 }
 
-void PadRmReaderWriterProgramFactory::override_runtime_arguments(
+void PadTileMulticoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,

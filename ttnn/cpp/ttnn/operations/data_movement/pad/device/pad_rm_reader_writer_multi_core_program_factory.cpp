@@ -13,6 +13,140 @@ inline void log_rt_args(const CoreCoord& core, std::vector<uint32_t>& args) {
     }
 }
 
+// This is currently mostly hardcoded for resnet shapes
+inline std::tuple<uint32_t, uint32_t, uint32_t, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t, uint32_t, uint32_t>
+split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint32_t ntiles_h, uint32_t ntiles_w) {
+    uint32_t ncores, ncores_h, ncores_w, ntiles_per_core_h, ntiles_per_core_w, nbatch_per_core_h, ncores_per_batch_h;
+
+    ncores_h = 1;
+
+    // each batch needs to be padded independently
+    switch (nbatch) {
+        case 1:
+            ncores_h = 1;
+            nbatch_per_core_h = 1;
+            ntiles_per_core_h = 1;
+            switch (ntiles_h) {
+                case 2:
+                    ncores_h = 2;
+                    ntiles_per_core_h = 1;
+                    break;
+                case 4:
+                    ncores_h = 4;
+                    ntiles_per_core_h = 1;
+                    break;
+                case 8:
+                    ncores_h = 8;
+                    ntiles_per_core_h = 1;
+                    break;
+                case 64:
+                    ncores_h = 8;
+                    ntiles_per_core_h = 8;
+                    break;
+                default: TT_THROW("Unsupported ntiles_h value {}", ntiles_h);
+            }
+            ncores_per_batch_h = ncores_h;
+            break;
+
+        case 2:
+            ncores_h = 1;
+            ncores_per_batch_h = 1;
+            nbatch_per_core_h = 1;
+            ntiles_per_core_h = 1;
+            switch (ntiles_h) {
+                case 2:
+                    ncores_per_batch_h = 2;
+                    ncores_h = ncores_per_batch_h * nbatch;
+                    ntiles_per_core_h = 1;
+                    break;
+                case 4:
+                    ncores_per_batch_h = 4;
+                    ncores_h = ncores_per_batch_h * nbatch;
+                    ntiles_per_core_h = 1;
+                    break;
+                case 8:
+                    ncores_per_batch_h = 4;
+                    ncores_h = ncores_per_batch_h * nbatch;
+                    ntiles_per_core_h = 2;
+                    break;
+                case 64:
+                    ncores_per_batch_h = 4;
+                    ncores_h = ncores_per_batch_h * nbatch;
+                    ntiles_per_core_h = 16;
+                    break;
+                default: TT_THROW("Unsupported ntiles_h value {}", ntiles_h);
+            }
+            break;
+
+        case 8:
+            ncores_h = 8;
+            ncores_per_batch_h = 1;
+            nbatch_per_core_h = 1;
+            ntiles_per_core_h = ntiles_h;
+            break;
+
+        default:
+            TT_ASSERT(false, "unhandled nbatch. TODO");
+
+            // generic case -- TODO
+
+            // one of the following will be 0 when grid_size.y != nbatch
+            uint32_t nbatch_per_core_h = nbatch / grid_size.y;   // floor
+            uint32_t ncores_per_batch_h = grid_size.y / nbatch;  // floor
+            if (nbatch == grid_size.y) {
+                nbatch_per_core_h = 1;
+                ncores_per_batch_h = 1;
+            }
+
+            // currently uses hardcoded values for resnet50
+            // TT_ASSERT(ntiles_h == 1 || ntiles_h == 2 || ntiles_h == 4 || ntiles_h == 16, "Only Resnet50 shapes are
+            // supported in multicore version for now."); TT_ASSERT(ntiles_w == 64, "Only Resnet50 shapes are supported
+            // in multicore version for now.");
+
+            TT_ASSERT(nbatch <= grid_size.y, "Unsupported case with nbatch > grid_size.y!");
+
+            if (nbatch_per_core_h == 0) {
+                // there are multiple cores along h per batch
+                nbatch_per_core_h = 1;
+            } else if (ncores_per_batch_h == 0) {
+                // unsupported case. TODO.
+                TT_ASSERT(false);
+                // there are multiple batch per core along h
+                // ncores_per_batch_h = 1;
+            } else {
+                TT_THROW("Something went terribly wrong in splitting acrtoss cores");
+            }
+            break;
+    }
+
+    ncores_w = 1;
+    switch (ntiles_w) {
+        case 2: ncores_w = 2; break;
+        case 4: ncores_w = 4; break;
+        case 8:
+        case 64: ncores_w = 8; break;
+        default: TT_THROW("Unsupported ntiles_w value {}", ntiles_w);
+    }
+    ncores = ncores_h * ncores_w;
+    ntiles_per_core_w = ntiles_w / ncores_w;
+    std::set<CoreRange> all_cores;
+    std::set<CoreRange> core_range;
+
+    all_cores.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_w - 1, ncores_h - 1)));
+    core_range.insert(CoreRange(CoreCoord(0, 0), CoreCoord(ncores_w - 1, ncores_h - 1)));
+
+    return std::make_tuple(
+        ncores,
+        ncores_h,
+        ncores_w,
+        all_cores,
+        core_range,
+        ntiles_per_core_h,
+        ntiles_per_core_w,
+        nbatch_per_core_h,
+        ncores_per_batch_h);
+}
+
 PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMultiCoreV2ProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -223,36 +357,32 @@ PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMu
         }  // for ncores_h
     }
 
-    auto override_runtime_args_callback = [reader_kernel_id = reader_kernel_id,
-                                           writer_kernel_id = writer_kernel_id,
-                                           ncores_h = ncores_h,
-                                           ncores_w = ncores_w](
-                                              const void* operation,
-                                              Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto* src_buffer = input_tensors.at(0).buffer();
-        auto* dst_buffer = output_tensors.at(0).buffer();
+    return cached_program_t{std::move(program), {}};
+}
 
-        for (uint32_t j = 0; j < ncores_h; ++j) {
-            for (uint32_t i = 0; i < ncores_w; ++i) {
-                CoreCoord core = {i, j};
-                {
-                    auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
-                    runtime_args[0] = src_buffer->address();
-                    runtime_args[1] = dst_buffer->address();
-                }
-                {
-                    auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
-                    runtime_args[0] = src_buffer->address();
-                    runtime_args[1] = dst_buffer->address();
-                }
+void PadRmReaderWriterProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto* src_buffer = input_tensors.at(0).buffer();
+    auto* dst_buffer = output_tensors.at(0).buffer();
+
+    for (uint32_t j = 0; j < ncores_h; ++j) {
+        for (uint32_t i = 0; i < ncores_w; ++i) {
+            CoreCoord core = {i, j};
+            {
+                auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
+                runtime_args[0] = src_buffer->address();
+                runtime_args[1] = dst_buffer->address();
+            }
+            {
+                auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
+                runtime_args[0] = src_buffer->address();
+                runtime_args[1] = dst_buffer->address();
             }
         }
-    };
-
-    return cached_program_t{std::move(program), {}};
+    }
 }
 
 }  // namespace ttnn::operations::data_movement::pad::program

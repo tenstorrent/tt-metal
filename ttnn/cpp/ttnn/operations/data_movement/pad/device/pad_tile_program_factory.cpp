@@ -1,12 +1,13 @@
 
-#include "pad_program_factory.hpp"
+#include "pad_tile_program_factory.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::pad::program {
-PadProgramFactory::cached_program_t PadProgramFactory::create(
+PadTileCoreProgramFactory::cached_program_t PadTileCoreProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
@@ -116,30 +117,30 @@ PadProgramFactory::cached_program_t PadProgramFactory::create(
 
     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_kernel_args);
 
-    auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-                                              const void* operation,
-                                              Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto* src_dram_buffer = input_tensors.at(0).buffer();
+    return cached_program_t{std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id}};
+}
 
-        auto* dst_dram_buffer = output_tensors.at(0).buffer();
+void PadTileCoreProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto* src_dram_buffer = tensor_args.input.buffer();
+    auto* dst_dram_buffer = tensor_return_value.buffer();
 
-        CoreCoord core = {0, 0};
+    CoreCoord core = {0, 0};
 
-        {
-            auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, core);
-            runtime_args[0] = src_dram_buffer->address();
-        }
+    {
+        auto& runtime_args =
+            tt::tt_metal::GetRuntimeArgs(cached_program, cached_program.shared_variables.unary_reader_kernel_id, core);
+        runtime_args[0] = src_dram_buffer->address();
+    }
 
-        {
-            auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
-            runtime_args[0] = dst_dram_buffer->address();
-        }
-    };
-
-    return cached_program_t{std::move(program), {}};
+    {
+        auto& runtime_args =
+            tt::tt_metal::GetRuntimeArgs(cached_program, cached_program.shared_variables.unary_writer_kernel_id, core);
+        runtime_args[0] = dst_dram_buffer->address();
+    }
 }
 
 }  // namespace ttnn::operations::data_movement::pad::program

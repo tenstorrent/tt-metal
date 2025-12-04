@@ -134,15 +134,15 @@ PadRmReaderWriterMultiCoreProgramFactory::cached_program_t PadRmReaderWriterMult
     tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, cores, reader_rt_args);
     tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, cores, writer_rt_args);
 
-    return cached_program_t{std::move(program), {}};
+    return cached_program_t{std::move(program), {reader_kernel_id, writer_kernel_id}};
 }
 
-void PadRmReaderWriterProgramFactory::override_runtime_arguments(
+void PadRmReaderWriterMultiCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto* src_buffer = operation_attributes.input.buffer();
+    auto* src_buffer = tensor_args.input.buffer();
     auto* dst_buffer = tensor_return_value.buffer();
     CoreCoord core = {0, 0};
     {

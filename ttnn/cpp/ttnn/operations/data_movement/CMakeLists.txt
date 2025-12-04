@@ -142,7 +142,6 @@ target_sources(
         non_zero_indices/device/non_zero_indices_program_factory.cpp
         non_zero_indices/non_zero_indices.cpp
         pad/device/pad_device_operation.cpp
-        pad/device/pad_program_factory.cpp
         pad/device/pad_rm_reader_writer_multi_core_program_factory.cpp
         pad/device/pad_rm_reader_writer_multi_core_v2_program_factory.cpp
         pad/device/pad_rm_reader_writer_program_factory.cpp
