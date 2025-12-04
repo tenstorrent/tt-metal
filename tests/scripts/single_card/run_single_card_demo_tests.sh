@@ -210,7 +210,7 @@ run_distilbert_func() {
 
 run_mnist_func() {
 
-  $PYTEST_CMD models/demos/mnist/demo/demo.py
+  $PYTEST_CMD models/demos/vision/classification/mnist/demo/demo.py
 
 }
 

@@ -10,8 +10,8 @@ from torchvision import datasets, transforms
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.demos.mnist.reference.mnist import MnistModel
-from models.demos.mnist.tt import tt_mnist
+from models.demos.vision.classification.mnist.reference.mnist import MnistModel
+from models.demos.vision.classification.mnist.tt import tt_mnist
 
 
 def run_demo_dataset(device, batch_size, iterations, model_location_generator):
