@@ -155,11 +155,6 @@ const std::vector<std::pair<CoreCoord, CoreRangeSet>>& GlobalCircularBuffer::sen
     return sender_receiver_core_mapping_;
 }
 
-std::ostream& operator<<(std::ostream& os, const GlobalCircularBuffer& value) {
-    tt::stl::reflection::operator<<(os, value);
-    return os;
-}
-
 }  // namespace experimental
 
 }  // namespace tt::tt_metal
