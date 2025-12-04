@@ -1704,38 +1704,7 @@ void Matmul::validate(
     MatmulProgramConfig chosen_program_config =
         get_program_config(input_tensor_a, input_tensor_b, bias_single_tile_size, this);
 
-    if (std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config) &&
-        this->global_cb.has_value() && input_tensor_b.is_sharded() && input_tensor_b.buffer()->is_dram()) {
-        for (uint32_t i = 1; i < input_tensors.size(); ++i) {
-            TT_FATAL(
-                input_tensor_b.logical_shape() == input_tensors[i].logical_shape(),
-                "for multi-tensor matmul, all weight tensors must have the same logical_shape, {} is not equal to {}",
-                input_tensor_b.logical_shape(),
-                input_tensors[i].logical_shape());
-            TT_FATAL(
-                input_tensor_b.padded_shape() == input_tensors[i].padded_shape(),
-                "for multi-tensor matmul, all weight tensors must have the same padded_shape {} is not equal to {}",
-                input_tensor_b.padded_shape(),
-                input_tensors[i].padded_shape());
-            TT_FATAL(
-                input_tensor_b.tensor_spec() == input_tensors[i].tensor_spec(),
-                "for multi-tensor matmul, all weight tensors must have the same tensor_spec {} is not equal to {}",
-                input_tensor_b.tensor_spec(),
-                input_tensors[i].tensor_spec());
-            TT_FATAL(
-                input_tensor_b.layout() == input_tensors[i].layout(),
-                "for multi-tensor matmul, all weight tensors must have the same layout {} is not equal to {}",
-                input_tensor_b.layout(),
-                input_tensors[i].layout());
-            TT_FATAL(
-                input_tensor_b.dtype() == input_tensors[i].dtype(),
-                "for multi-tensor matmul, all weight tensors must have the same _dtype {} is not equal to {}",
-                input_tensor_b.dtype(),
-                input_tensors[i].dtype());
-        }
-    } else {
-        TT_FATAL(input_tensors.size() == 2, "Must have exactly 2 input tensors, got: {}", input_tensors.size());
-    }
+    TT_FATAL(input_tensors.size() == 2, "Must have exactly 2 input tensors, got: {}", input_tensors.size());
 
     if (optional_bias.has_value()) {
         const auto& bias = optional_bias.value();
