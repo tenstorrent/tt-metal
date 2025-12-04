@@ -26,6 +26,7 @@ on:
           - resnet
           - sd35_large
           - flux1
+          - motif
           - mistral
           - wan2.2
           - mochi

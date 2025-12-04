@@ -13,7 +13,6 @@ on:
           - falcon7b
           - falcon40b
           - llama3
-          - llama3_load_checkpoints
           - llama3_vision
           - llama3_90b_vision
           - llama3_70b
@@ -21,8 +20,10 @@ on:
           - sentence_bert
           - sd35_large
           - flux1-dev
+          - motif
           - mistral
           - mixtral
+          - whisper
           - qwen3
           - qwen25
           - qwen25_vl
