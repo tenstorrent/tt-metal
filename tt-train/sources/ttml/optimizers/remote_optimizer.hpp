@@ -21,7 +21,7 @@ using SortedParameters = std::map<std::string, autograd::TensorPtr>;
 
 class RemoteOptimizer : public OptimizerBase {
 public:
-    [[nodiscard]] virtual std::string get_name() const override {
+    [[nodiscard]] std::string get_name() const override {
         return "RemoteOptimizer";
     };
 
