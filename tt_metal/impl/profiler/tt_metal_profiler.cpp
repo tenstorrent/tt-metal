@@ -711,12 +711,12 @@ void InitDeviceProfiler(IDevice* device) {
     }
 
     const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
 
     const uint32_t num_cores_per_dram_bank = soc_desc.profiler_ceiled_core_count_perf_dram_bank;
-    const uint32_t bank_size_bytes = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC *
-                                     MetalContext::instance().hal().get_max_processors_per_core() *
-                                     num_cores_per_dram_bank;
-    TT_ASSERT(bank_size_bytes <= MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::PROFILER));
+    const uint32_t bank_size_bytes =
+        get_profiler_dram_bank_size_per_risc_bytes() * hal.get_max_processors_per_core() * num_cores_per_dram_bank;
+    TT_ASSERT(bank_size_bytes <= hal.get_dev_size(HalDramMemAddrType::PROFILER));
 
     const uint32_t num_dram_banks = soc_desc.get_num_dram_views();
 
@@ -726,8 +726,7 @@ void InitDeviceProfiler(IDevice* device) {
     profiler.profile_buffer.resize(profiler.profile_buffer_bank_size_bytes * num_dram_banks / sizeof(uint32_t));
 
     std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
-    control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] =
-        MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::PROFILER);
+    control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
     setControlBuffer(device, control_buffer);
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
