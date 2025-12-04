@@ -141,7 +141,7 @@ jobs:
           ]' --compact-output)
 
           # Combine both arrays into full matrix
-          FULL_MATRIX=$ACTIVE_MODELS
+          FULL_MATRIX=$DISABLED_MODELS
 
           # Filter matrix based on model selection
           if [ "${{ inputs.model }}" = "all" ]; then
