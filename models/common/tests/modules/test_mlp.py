@@ -862,8 +862,13 @@ def test_mlp_forward_non_tg_vs_reference(seq_len, mesh_device, reset_seeds, ensu
 
 
 def test_mlp_non_tg_config_creation():
-    """Test that MLPNonTGConfig can be created with expected values."""
-    from models.common.modules.mlp.mlp_non_tg import MLPNonTGConfig
+    """Test that MLPNonTGConfig can be created with expected values and nested configs."""
+    from models.common.modules.mlp.mlp_non_tg import (
+        MLPNonTGConfig,
+        MLPNonTGDecodeConfigs,
+        MLPNonTGOptimizationConfig,
+        MLPNonTGPrefillConfigs,
+    )
 
     config = MLPNonTGConfig(
         dim=4096,
@@ -880,27 +885,55 @@ def test_mlp_non_tg_config_creation():
     # No is_galaxy field - this is a non-TG only config
     assert not hasattr(config, "is_galaxy") or config.__dict__.get("is_galaxy") is None
 
+    # Nested configs should be auto-created by __post_init__ with parent reference
+    assert isinstance(config.decode, MLPNonTGDecodeConfigs)
+    assert isinstance(config.prefill, MLPNonTGPrefillConfigs)
+    assert isinstance(config.optimization, MLPNonTGOptimizationConfig)
+
+    # Each sub-config should have a reference back to the parent
+    assert config.decode.cfg is config
+    assert config.prefill.cfg is config
+    assert config.optimization.cfg is config
+
+    # Sub-configs should have callable methods
+    assert callable(config.decode.w1_w3_prg_config)
+    assert callable(config.prefill.w1_w3_prg_config)
+    assert callable(config.optimization.ff1_3_dtype)
+
 
 def test_mlp_non_tg_configs_creation():
-    """Test that MLPNonTGDecodeConfigs and MLPNonTGPrefillConfigs are properly split."""
-    from models.common.modules.mlp.mlp_non_tg import MLPNonTGDecodeConfigs, MLPNonTGPrefillConfigs
+    """Test that MLPNonTGDecodeConfigs and MLPNonTGPrefillConfigs work with parent config."""
+    from models.common.modules.mlp.mlp_non_tg import MLPNonTGConfig
 
-    decode_configs = MLPNonTGDecodeConfigs()
-    prefill_configs = MLPNonTGPrefillConfigs()
+    # Create a parent config first
+    parent_config = MLPNonTGConfig(
+        dim=4096,
+        hidden_dim=14336,
+        cluster_shape=[1, 8],
+        num_devices=8,
+        prefill_len_cutoff=1024,
+    )
 
-    # Decode should have decode-specific fields
-    assert hasattr(decode_configs, "w1_w3_prg_config")
-    assert hasattr(decode_configs, "w2_prg_config")
-    assert hasattr(decode_configs, "sharded_mlp2_input_memcfg")
-    assert hasattr(decode_configs, "decode_residual_memcfg")
+    # Decode should have decode-specific methods
+    assert callable(parent_config.decode.w1_w3_prg_config)
+    assert callable(parent_config.decode.w2_prg_config)
+    assert callable(parent_config.decode.sharded_mlp2_input_memcfg)
+    assert callable(parent_config.decode.decode_residual_memcfg)
 
-    # Prefill should have prefill-specific fields
-    assert hasattr(prefill_configs, "w1_w3_prg_config")
-    assert hasattr(prefill_configs, "w2_prg_config")
+    # Prefill should have prefill-specific methods (that take seq_len)
+    assert callable(parent_config.prefill.w1_w3_prg_config)
+    assert callable(parent_config.prefill.w2_prg_config)
 
-    # Neither should have TG-specific fields
-    assert not hasattr(decode_configs, "ff1_3_tg_progcfg")
-    assert not hasattr(prefill_configs, "ff1_3_tg_progcfg")
+    # Neither should have TG-specific methods
+    assert not hasattr(parent_config.decode, "ff1_3_tg_progcfg")
+    assert not hasattr(parent_config.prefill, "ff1_3_tg_progcfg")
+
+    # Test that methods can be called and return values
+    decode_w1_w3 = parent_config.decode.w1_w3_prg_config()
+    assert decode_w1_w3 is not None
+
+    prefill_w1_w3 = parent_config.prefill.w1_w3_prg_config(seq_len=512)
+    assert prefill_w1_w3 is not None
 
 
 @torch.no_grad()
@@ -959,16 +992,14 @@ def test_mlp_non_tg_class_vs_original(seq_len, mesh_device, reset_seeds, ensure_
         dtype=dtype,
     )
 
-    # Create MLPNonTG
+    # Create MLPNonTG (no model_config needed - uses internal defaults)
     non_tg_mlp = MLPNonTG.from_model_args(
         mesh_device=mesh_device,
         tt_ccl=tt_ccl,
         args=model_args,
-        model_config=model_config,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         layer_num=0,
-        dtype=dtype,
     )
 
     # Create input tensor
@@ -1025,22 +1056,25 @@ def test_mlp_non_tg_class_vs_original(seq_len, mesh_device, reset_seeds, ensure_
     logger.info(f"MLPNonTG class test PASSED for mode={mode}, seq_len={seq_len}")
 
 
-@torch.no_grad()
 @pytest.mark.parametrize(
-    "mesh_device",
+    "ttnn_mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        (1, 1),  # single device # [INFO] apply auto_compose on single device would incur error in c++ code
+        (1, 2),  # 1D mesh, 2 devices
+        (1, 8),  # 1D mesh, 8 devices
+        # todo)) 2D mesh is not supported yet
+        # (2, 4),  # 2D mesh, 8 devices
+    ],
+    ids=[
+        "1x1",
+        "1x2",
+        "1x8",
+        # "2x4",
     ],
     indirect=True,
 )
-@pytest.mark.parametrize(
-    "seq_len",
-    (512, 32),
-)
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-def test_mlp_non_tg_class_vs_reference(seq_len, mesh_device, reset_seeds, ensure_gc):
+@pytest.mark.parametrize("seq_len", (512, 32))
+def test_mlp_non_tg_class_vs_reference(ttnn_mesh_device: ttnn.MeshDevice, seq_len):
     """
     Test that MLPNonTG class matches the HuggingFace/Meta reference model.
     """
@@ -1053,14 +1087,14 @@ def test_mlp_non_tg_class_vs_reference(seq_len, mesh_device, reset_seeds, ensure
     batch_size = 1
     mode = "decode" if seq_len <= 32 else "prefill"
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128, cache_hf=True)
+    model_args = ModelArgs(ttnn_mesh_device, max_batch_size=batch_size, max_seq_len=128, cache_hf=True)
     model_args.n_layers = 1
 
     if model_args.is_galaxy:
         pytest.skip("MLPNonTG test only runs on non-TG devices")
 
     state_dict = model_args.load_state_dict()
-    model_config = model_args.get_model_config()
+    model_config = model_args.get_model_config()  # Need for proper input memory config
 
     # Load reference model
     first_layer_prefix = model_args.get_state_dict_prefix("MLP", 0)
@@ -1072,14 +1106,32 @@ def test_mlp_non_tg_class_vs_reference(seq_len, mesh_device, reset_seeds, ensure
     reference_model.load_state_dict(partial_state_dict)
 
     # Create MLPNonTG
-    tt_ccl = TT_CCL(mesh_device)
+    def topology_aware_cache_path(dtype):
+        # todo)) use LazyWeight
+        if model_args.instruct:
+            return (
+                model_args.model_cache_path
+                / {
+                    ttnn.bfloat16: f"tensor_cache_instruct_bf16_{ttnn_mesh_device.shape}",
+                    ttnn.bfloat8_b: f"tensor_cache_instruct_bfp8_{ttnn_mesh_device.shape}",
+                }[dtype]
+            )
+        else:
+            return (
+                model_args.model_cache_path
+                / {
+                    ttnn.bfloat16: f"tensor_cache_bf16_{ttnn_mesh_device.shape}",
+                    ttnn.bfloat8_b: f"tensor_cache_bfp8_{ttnn_mesh_device.shape}",
+                }[dtype]
+            )
+
+    tt_ccl = TT_CCL(ttnn_mesh_device)
     tt_model = MLPNonTG.from_model_args(
-        mesh_device=mesh_device,
+        mesh_device=ttnn_mesh_device,
         tt_ccl=tt_ccl,
         args=model_args,
-        model_config=model_config,
         state_dict=state_dict,
-        weight_cache_path=model_args.weight_cache_path(dtype),
+        weight_cache_path=topology_aware_cache_path(dtype),
         layer_num=0,
     )
 
@@ -1091,13 +1143,13 @@ def test_mlp_non_tg_class_vs_reference(seq_len, mesh_device, reset_seeds, ensure
     # Run reference
     reference_output = reference_model(torch_input)
 
-    # Run TT model
+    # Run TT model - use model_config for proper input sharding
     input_mem_config = model_config["SHARDED_MLP_INPUT_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
 
     tt_input = ttnn.from_torch(
         torch_input,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
+        device=ttnn_mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
         dtype=ttnn.bfloat8_b,
         memory_config=input_mem_config,
         layout=ttnn.TILE_LAYOUT,
@@ -1107,7 +1159,7 @@ def test_mlp_non_tg_class_vs_reference(seq_len, mesh_device, reset_seeds, ensure
 
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(ttnn_mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
     )
     tt_output_torch = tt_output_torch[:, :1, :, :]
 
@@ -1147,7 +1199,6 @@ def test_mlp_non_tg_rejects_galaxy(mesh_device, reset_seeds, ensure_gc):
         pytest.skip("This test only runs on TG devices to verify rejection")
 
     state_dict = model_args.load_state_dict()
-    model_config = model_args.get_model_config()
     tt_ccl = TT_CCL(mesh_device)
 
     with pytest.raises(ValueError, match="MLPNonTG cannot be used for Galaxy devices"):
@@ -1155,11 +1206,9 @@ def test_mlp_non_tg_rejects_galaxy(mesh_device, reset_seeds, ensure_gc):
             mesh_device=mesh_device,
             tt_ccl=tt_ccl,
             args=model_args,
-            model_config=model_config,
             state_dict=state_dict,
             weight_cache_path=model_args.weight_cache_path(ttnn.bfloat8_b),
             layer_num=0,
-            dtype=ttnn.bfloat8_b,
         )
 
     logger.info("MLPNonTG correctly rejects Galaxy devices")
