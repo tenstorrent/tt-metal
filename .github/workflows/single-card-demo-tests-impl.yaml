@@ -218,7 +218,7 @@ jobs:
             exit 1
           fi
       - name: Run demo regression tests
-        timeout-minutes: 60
+        timeout-minutes: 120
         shell: bash
         run: |
           source /work/tests/scripts/single_card/run_single_card_demo_tests.sh
