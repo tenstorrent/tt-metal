@@ -103,11 +103,8 @@ constexpr size_t fabric_worker_buffer_index_sem = FABRIC_WORKER_BUFFER_INDEX_SEM
 
 constexpr uint8_t num_hops = NUM_HOPS;
 
-constexpr uint32_t my_dev_id = MY_DEV_ID;
 constexpr uint32_t ew_dim = EW_DIM;
 constexpr uint32_t to_mesh_id = TO_MESH_ID;
-constexpr uint32_t to_dev_id = TO_DEV_ID;
-constexpr uint32_t router_direction = ROUTER_DIRECTION;
 
 constexpr bool is_2d_fabric = FABRIC_2D;
 
@@ -238,6 +235,11 @@ static uint32_t rd_block_idx = 0;
 static uint32_t upstream_total_acquired_page_count = 0;
 static uint32_t ringbuffer_wp = scratch_db_base;
 static uint32_t ringbuffer_offset = 0;
+
+// Runtime args
+static uint32_t my_dev_id;
+static uint32_t to_dev_id;
+static uint32_t router_direction;
 
 CQRelayClient<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes, fabric_header_rb_base>
     relay_client;
@@ -1905,14 +1907,11 @@ void kernel_main_h() {
         fabric_worker_buffer_index_sem,
         fabric_mux_status_address,
         my_fabric_sync_status_addr,
-        my_dev_id,
-        to_dev_id,
         to_mesh_id,
         ew_dim,
-        router_direction,
         fabric_header_rb_base,
         num_hops,
-        NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0));
+        NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0), my_dev_id, to_dev_id, router_direction);
 
     while (!done) {
         fetch_q_get_cmds<sizeof(CQPrefetchHToPrefetchDHeader)>(fence, cmd_ptr, pcie_read_ptr);
@@ -1965,14 +1964,11 @@ void kernel_main_d() {
         fabric_worker_buffer_index_sem,
         fabric_mux_status_address,
         my_fabric_sync_status_addr,
-        my_dev_id,
-        to_dev_id,
         to_mesh_id,
         ew_dim,
-        router_direction,
         fabric_header_rb_base,
         num_hops,
-        NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0));
+        NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0), my_dev_id, to_dev_id, router_direction);
 #else
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0, my_noc_index);
@@ -2048,6 +2044,11 @@ void kernel_main() {
 #else
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start" << ENDL();
 #endif
+
+    // Get runtime args
+    my_dev_id = get_arg_val<uint32_t>(OFFSETOF_MY_DEV_ID);
+    to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);
+    router_direction = get_arg_val<uint32_t>(OFFSETOF_ROUTER_DIRECTION);
 
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();

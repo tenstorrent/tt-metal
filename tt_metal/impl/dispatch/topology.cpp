@@ -575,9 +575,10 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
     // Read the input table, create configs for each node + track mmio devices and number of cqs.
     std::unordered_set<ChipId> mmio_device_ids;
     std::unordered_set<uint8_t> hw_cq_ids;
+    node_id_to_kernel.reserve(nodes.size());
     for (const auto& node : nodes) {
         TT_ASSERT(node_id_to_kernel.size() == node.id);
-        node_id_to_kernel.push_back(FDKernel::Generate(
+        node_id_to_kernel.emplace_back(FDKernel::Generate(
             node.id,
             node.device_id,
             node.servicing_device_id,
@@ -677,16 +678,13 @@ void create_cq_program(IDevice* device) {
         "populate_cq_static_args())",
         device->id());
     empty_cores.clear();
-    // Third pass, populate dependent configs and create kernels for each node
+    // Third pass, populate dependent configs, runtime configs, and create kernels for each node
     for (auto* node_and_kernel : node_id_to_kernel) {
         if (node_and_kernel->GetDeviceId() == device->id()) {
             node_and_kernel->GenerateDependentConfigs();
-        }
-    }
-
-    for (auto* node_and_kernel : node_id_to_kernel) {
-        if (node_and_kernel->GetDeviceId() == device->id()) {
+            node_and_kernel->InitializeRuntimeArgsValues();
             node_and_kernel->CreateKernel();
+            node_and_kernel->SetRuntimeArgs();
         }
     }
 
