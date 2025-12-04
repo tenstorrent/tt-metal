@@ -74,56 +74,37 @@ inline OutputCBs reduce_fct(
     cb_wait_front(cb_prev_sum_2, Sq_chunk_t);
     cb_wait_front(cb_out_accumulate_im, out_tiles);
     cb_wait_front(cb_out_accumulate_im_2, out_tiles);
-    // DPRINT << "all inputs available\n";
 
-    // move sum and max to temp cbs
+    // move sum to temp cbs
     move_block<false>(cb_prev_sum, cb_s1_temp, Sq_chunk_t);
-    // DPRINT << "after moving s2\n";
     move_block<false>(cb_prev_sum_2, cb_s2_temp, Sq_chunk_t);
-    // DPRINT << "after moving s1\n";
 
     // Compute max(m1, m2) directly from source CBs
-    // DPRINT << "reserving and waiting before max block\n";
     max_block<mode>(cb_m_in, cb_prev_max, cb_m_temp, Sq_chunk_t);
-    // DPRINT << "after max block\n";
 
     // P1 = exp((m1 - m_new) * scale) - store in cb_exp_max_diff_2
     sub_exp_block<scale_fp32, mode>(cb_m_in, cb_m_temp, cb_exp_max_diff_2, Sq_chunk_t);
-    // DPRINT << "after sub_exp_block1 (P1)\n";
 
     // P2 = exp((m2 - m_new) * scale) - store in cb_exp_max_diff
     sub_exp_block<scale_fp32, mode>(cb_prev_max, cb_m_temp, cb_exp_max_diff, Sq_chunk_t);
-    // DPRINT << "after sub_exp_block2 (P2)\n";
 
-    // For S: use element-wise multiplication (all columns of P)
-    // Note: Only column 0 is meaningful, other columns are garbage but unused
     // s1 * P1 (element-wise)
     mul_block_inplace(cb_s1_temp, cb_exp_max_diff_2, Sq_chunk_t);
-    // DPRINT << "after s1 *= P1\n";
 
     // s2 * P2 (element-wise)
     mul_block_inplace(cb_s2_temp, cb_exp_max_diff, Sq_chunk_t);
-    // DPRINT << "after s2 *= P2\n";
 
     // s_new = s1 * P1 + s2 * P2
     add_block_inplace<true>(cb_s1_temp, cb_s2_temp, Sq_chunk_t);
-    // DPRINT << "after cur sum\n";
 
-    // DPRINT << "START OF MUL L1\n";
-    //  For L: broadcast column 0 of P to all columns
     //  l1 * P1 -> cb_l1_temp (broadcast column 0 of P1)
     mul_block_bcast_cols(cb_out_accumulate_im, cb_exp_max_diff_2, cb_l1_temp, Sq_chunk_t, vDHt);
-    // DPRINT << "after l1 * P1\n";
 
-    // DPRINT << "START OF MUL L2\n";
     //  l2 * P2 -> cb_l2_temp (broadcast column 0 of P2)
     mul_block_bcast_cols(cb_out_accumulate_im_2, cb_exp_max_diff, cb_l2_temp, Sq_chunk_t, vDHt);
-    // DPRINT << "after l2 * P2\n";
 
-    // DPRINT << "START OF ADD\n";
     //  l_new = l1 * P1 + l2 * P2
     add_block_inplace<true>(cb_l1_temp, cb_l2_temp, out_tiles);
-    // DPRINT << "after l add\n";
 
     return {cb_l1_temp, cb_s1_temp, cb_m_temp};
 }
@@ -156,12 +137,6 @@ constexpr uint32_t int_s_cb = get_compile_time_arg_val(22);  // intermediate m c
 constexpr uint32_t int_m_cb = get_compile_time_arg_val(23);
 
 void MAIN {
-    // DPRINT << "reduce to root compute kernel started\n";
-    // DPRINT << "reading from cbs: "
-    //        << " cb_out_accumulate_im_2: " << cb_out_accumulate_im_2 << " cb_out_accumulate_im: " <<
-    //        cb_out_accumulate_im
-    //        << " cb_prev_sum _2: " << cb_prev_sum_2 << " cb_m_in: " << cb_m_in << " cb_prev_max: " << cb_prev_max
-    //        << " cb_prev_sum: " << cb_prev_sum << "\n";
     const bool use_half_tile = true;
     constexpr int vector_mode = use_half_tile ? VectorMode::R : VectorMode::RC;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -190,15 +165,11 @@ void MAIN {
         vDHt,
         loop_size);
 
-    // DPRINT << "AFTER First call \n";
-
     if (loop_size == 1) {
-        // Move results to intermediate CBs with push_back (true)
+        // Move results to output cbs
         move_block<true>(output_cbs.l_cb, cb_out_o, out_chunk_tiles);
         move_block<true>(output_cbs.m_cb, cb_cur_max, Sq_chunk_t);
         move_block<true>(output_cbs.s_cb, cb_cur_sum, Sq_chunk_t);
-
-        // DPRINT << "AFTER moving first call to intermediate CBs\n";
 
         // pop front all the input cbs from first reduction
         cb_pop_front(cb_m_in, Sq_chunk_t);
@@ -206,22 +177,17 @@ void MAIN {
         cb_pop_front(cb_prev_sum, Sq_chunk_t);
         cb_pop_front(cb_prev_sum_2, Sq_chunk_t);
     } else {
-        // Move results to intermediate CBs with push_back (true)
+        // Move results to intermediate CBs
         move_block<true>(output_cbs.l_cb, int_l_cb, out_chunk_tiles);
         move_block<true>(output_cbs.m_cb, int_m_cb, Sq_chunk_t);
         move_block<true>(output_cbs.s_cb, int_s_cb, Sq_chunk_t);
 
-        // DPRINT << "AFTER moving first call to intermediate CBs\n";
-
-        // pop front all the input cbs from first reduction
         cb_pop_front(cb_m_in, Sq_chunk_t);
         cb_pop_front(cb_prev_max, Sq_chunk_t);
         cb_pop_front(cb_prev_sum, Sq_chunk_t);
         cb_pop_front(cb_prev_sum_2, Sq_chunk_t);
-        // cb_pop_front(cb_out_accumulate_im_2, out_chunk_tiles);
 
-        // DPRINT << "AFTER CB pop first call\n";
-
+        // do final reduction
         OutputCBs output_cbs2 = reduce_fct<scale_fp32>(
             cb_out_o,
             int_l_cb,
@@ -244,29 +210,20 @@ void MAIN {
             vDHt,
             loop_size);
 
-        // DPRINT << "AFTER Second call \n";
-
+        // final division
         move_block<false>(output_cbs2.s_cb, cb_s_temp, Sq_chunk_t);
         recip_block_inplace<vector_mode>(cb_s_temp, Sq_chunk_t);
         mul_block_bcast_cols_inplace(output_cbs2.l_cb, cb_s_temp, Sq_chunk_t, vDHt);
 
-        // DPRINT << "AFTER final div\n";
-
         move_block<true>(output_cbs2.l_cb, cb_out_o, out_chunk_tiles);
         move_block<true>(output_cbs2.m_cb, cb_cur_max, Sq_chunk_t);
         move_block<true>(output_cbs2.s_cb, cb_cur_sum, Sq_chunk_t);
-
-        // DPRINT << "AFTER moving second call \n";
 
         // pop front all the input cbs from second reduction
         cb_pop_front(cb_m_in, Sq_chunk_t);
         cb_pop_front(int_m_cb, Sq_chunk_t);
         cb_pop_front(cb_prev_sum, Sq_chunk_t);
         cb_pop_front(int_s_cb, Sq_chunk_t);
-        // cb_pop_front(cb_out_accumulate_im, out_chunk_tiles);
-        // cb_pop_front(int_l_cb, out_chunk_tiles);
-
-        // DPRINT << "after final cb pops\n";
     }
 
     /*

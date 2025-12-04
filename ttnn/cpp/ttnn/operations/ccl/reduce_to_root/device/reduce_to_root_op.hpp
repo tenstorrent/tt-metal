@@ -45,7 +45,7 @@ struct ReduceToRootOp {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle send_unary_reader_kernel_id;
             tt::tt_metal::KernelHandle send_unary_writer_kernel_id;
-            std::vector<CoreCoord> sender_cores;
+            std::vector<CoreCoord> cores;
 
             tt::tt_metal::KernelHandle root1_reader_kernel_id;
             tt::tt_metal::KernelHandle root1_writer_kernel_id;
@@ -55,7 +55,6 @@ struct ReduceToRootOp {
 
             tt::tt_metal::KernelHandle compute_kernel_id;
 
-            std::vector<CoreCoord> receiver_cores;
             std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
         };
 
