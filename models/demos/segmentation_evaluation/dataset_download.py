@@ -58,7 +58,9 @@ def download_lgg_dataset():
     os.makedirs("models/demos/segmentation_evaluation/pred_image_set", exist_ok=True)
 
 
-def download_ade20k_dataset(dest_root="models/demos/segformer/demo/validation_data_ade20k", max_samples=2000):
+def download_ade20k_dataset(
+    dest_root="models/demos/vision/segmentation/segformer/demo/validation_data_ade20k", max_samples=2000
+):
     if os.path.exists(dest_root) and len(os.listdir(os.path.join(dest_root, "images"))) >= max_samples:
         print(f"ADE20K dataset already exists with {len(os.listdir(os.path.join(dest_root, 'images')))} images.")
         return
