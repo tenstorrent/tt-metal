@@ -39,21 +39,50 @@ protected:
             tt::tt_fabric::FabricConfig::FABRIC_2D,
             tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     }
+
+    void initialize_device_pool() {
+        // For switch meshes, DevicePool will be automatically initialized when Control Plane
+        // is accessed (via get_control_plane()). No explicit initialization needed.
+
+        // initialize device pool still needs to be called to add switch devices to the pool
+        // Init the device pool - pass empty list and let DevicePool::initialize() add switch devices automatically
+        tt::DevicePool::initialize(
+            {},  // Empty device_ids - DevicePool will automatically add switch devices if on switch mesh
+            1,   // num_command_queues
+            l1_small_size_,
+            trace_region_size_,
+            tt::tt_metal::DispatchCoreConfig{tt::tt_metal::DispatchCoreType::WORKER},
+            {},     // l1_bank_remap
+            false,  // init_profiler
+            true,   // use_max_eth_core_count_on_all_devices
+            true);  // initialize_fabric_and_dispatch_fw
+    }
+
+    void TearDown() override {
+        // Close all active devices to ensure proper fabric handshake between tests.
+        // This is critical because fabric routers wait for peer handshake, and if
+        // devices remain open from a previous test, the handshake won't be re-initiated,
+        // causing subsequent tests to hang.
+        if (tt::DevicePool::is_initialized()) {
+            auto active_devices = tt::DevicePool::instance().get_all_active_devices();
+            if (!active_devices.empty()) {
+                tt::DevicePool::instance().close_devices(active_devices);
+            }
+        }
+    }
 };
 
 TEST_F(MeshDeviceTTSwitchFixture, TestOpenCloseComputeMeshDevice) {
-    const char* mesh_id_str = std::getenv("TT_MESH_ID");
-    ASSERT_NE(mesh_id_str, nullptr) << "TT_MESH_ID must be set";
-
-    int mesh_id_val = std::stoi(mesh_id_str);
-
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
     // Only test compute mesh (mesh_id 0), not the switch
-    if (mesh_id_val != 0) {
+    if (control_plane.is_local_host_on_switch_mesh()) {
+        initialize_device_pool();
         GTEST_SKIP() << "This test is for compute mesh only (mesh_id 0)";
     }
+
+    auto mesh_id_val = *control_plane.get_local_mesh_id_bindings()[0];
 
     // Verify this is a compute mesh, not a switch
     tt::tt_fabric::MeshId mesh_id(mesh_id_val);
@@ -95,16 +124,12 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenCloseComputeMeshDevice) {
 }
 
 TEST_F(MeshDeviceTTSwitchFixture, TestOpenMeshDeviceWithExplicitPhysicalDeviceIds) {
-    const char* mesh_id_str = std::getenv("TT_MESH_ID");
-    ASSERT_NE(mesh_id_str, nullptr) << "TT_MESH_ID must be set";
-
-    int mesh_id_val = std::stoi(mesh_id_str);
-
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
-    // Only test compute mesh (mesh_id 0)
-    if (mesh_id_val != 0) {
+    // Only test compute mesh (mesh_id 0), not the switch
+    if (control_plane.is_local_host_on_switch_mesh()) {
+        initialize_device_pool();
         GTEST_SKIP() << "This test is for compute mesh only (mesh_id 0)";
     }
 
@@ -157,18 +182,16 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenMeshDeviceWithExplicitPhysicalDeviceId
 
 TEST_F(MeshDeviceTTSwitchFixture, TestOpenCloseSwitchMeshDevice) {
     GTEST_SKIP() << "This test is disabled because it hangs when running in multi-process environment";
-    const char* mesh_id_str = std::getenv("TT_MESH_ID");
-    ASSERT_NE(mesh_id_str, nullptr) << "TT_MESH_ID must be set";
-
-    int mesh_id_val = std::stoi(mesh_id_str);
-
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
-    // Only test switch mesh (mesh_id 1)
-    if (mesh_id_val != 1) {
-        GTEST_SKIP() << "This test is for switch mesh only (mesh_id 1)";
+    // Only test switch mesh - skip if not on switch mesh
+    if (!control_plane.is_local_host_on_switch_mesh()) {
+        initialize_device_pool();
+        GTEST_SKIP() << "This test is for switch mesh only";
     }
+
+    auto mesh_id_val = *control_plane.get_local_mesh_id_bindings()[0];
 
     // Verify this is a switch
     tt::tt_fabric::MeshId mesh_id(mesh_id_val);
@@ -207,18 +230,16 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenCloseSwitchMeshDevice) {
 }
 
 TEST_F(MeshDeviceTTSwitchFixture, TestOpenUnitMeshesOnComputeMeshFabricNodes) {
-    const char* mesh_id_str = std::getenv("TT_MESH_ID");
-    ASSERT_NE(mesh_id_str, nullptr) << "TT_MESH_ID must be set";
-
-    int mesh_id_val = std::stoi(mesh_id_str);
-
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
     // Only test compute mesh (mesh_id 0), not the switch
-    if (mesh_id_val != 0) {
+    if (control_plane.is_local_host_on_switch_mesh()) {
+        initialize_device_pool();
         GTEST_SKIP() << "This test is for compute mesh only (mesh_id 0)";
     }
+
+    auto mesh_id_val = *control_plane.get_local_mesh_id_bindings()[0];
 
     // Verify this is a compute mesh, not a switch
     tt::tt_fabric::MeshId mesh_id(mesh_id_val);
@@ -277,18 +298,16 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenUnitMeshesOnComputeMeshFabricNodes) {
 
 TEST_F(MeshDeviceTTSwitchFixture, TestOpenUnitMeshesOnSwitchFabricNodes) {
     GTEST_SKIP() << "This test is disabled because it hangs when running in multi-process environment";
-    const char* mesh_id_str = std::getenv("TT_MESH_ID");
-    ASSERT_NE(mesh_id_str, nullptr) << "TT_MESH_ID must be set";
-
-    int mesh_id_val = std::stoi(mesh_id_str);
-
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
-    // Only test switch mesh (mesh_id 1)
-    if (mesh_id_val != 1) {
-        GTEST_SKIP() << "This test is for switch mesh only (mesh_id 1)";
+    // Only test switch mesh - skip if not on switch mesh
+    if (!control_plane.is_local_host_on_switch_mesh()) {
+        initialize_device_pool();
+        GTEST_SKIP() << "This test is for switch mesh only";
     }
+
+    auto mesh_id_val = *control_plane.get_local_mesh_id_bindings()[0];
 
     // Verify this is a switch
     tt::tt_fabric::MeshId mesh_id(mesh_id_val);
