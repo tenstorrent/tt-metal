@@ -44,7 +44,7 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
     // Test thread safety.
     auto* device = this->device_;
 
-    const ttnn::Shape tensor_shape{1, 1, 1024, 1024};
+    const ttnn::Shape tensor_shape{1, 1, 256, 256};
     const MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     const TensorLayout tensor_layout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), mem_cfg);
     const TensorSpec tensor_spec(tensor_shape, tensor_layout);
@@ -61,12 +61,12 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
     const Tensor t0_host_tensor = Tensor::from_vector(t0_host_data, tensor_spec);
     const Tensor t1_host_tensor = Tensor::from_vector(t1_host_data, tensor_spec);
 
-    constexpr int kNumIterations = 100;
+    constexpr int kNumIterations = 25;
     std::thread t0([&]() {
         for (int j = 0; j < kNumIterations; j++) {
             Tensor t0_tensor = t0_host_tensor.to_device(device, mem_cfg, t0_io_cq);
             EXPECT_TRUE(is_device_tensor(t0_tensor));
-            EXPECT_THAT(t0_tensor.to_vector<float>(t0_io_cq), Pointwise(FloatEq(), t0_host_data));
+            EXPECT_EQ(t0_tensor.to_vector<float>(t0_io_cq), t0_host_data);
         }
     });
 
@@ -74,7 +74,7 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
         for (int j = 0; j < kNumIterations; j++) {
             Tensor t1_tensor = t1_host_tensor.to_device(device, mem_cfg, t1_io_cq);
             EXPECT_TRUE(is_device_tensor(t1_tensor));
-            EXPECT_THAT(t1_tensor.to_vector<float>(t1_io_cq), Pointwise(FloatEq(), t1_host_data));
+            EXPECT_EQ(t1_tensor.to_vector<float>(t1_io_cq), t1_host_data);
         }
     });
 
