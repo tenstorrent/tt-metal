@@ -29,6 +29,7 @@ namespace ckernel {
  * | threshold       | Threshold used in softplus calculation                                     | uint32_t | Greater than 0                                        | True     |
  */
 // clang-format on
+template <uint32_t APPROX_MODE = 0>
 ALWI void softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
     MATH(SFPU_UNARY_THREE_PARAM_KERNEL(softplus, RC, APPROX, idst, beta, beta_reciprocal, threshold));
 }
