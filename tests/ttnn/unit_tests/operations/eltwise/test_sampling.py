@@ -283,7 +283,7 @@ def test_log_probs_calculation(shape, mesh_device):
     )
 
     # prepare relevant logits
-    relevant_logits_tensor = log_probs_calculator.prepare_relevant_logits(logits_tensor, ttnn_indices_tensor)
+    relevant_logits_tensor = log_probs_calculator.prepare_relevant_logits(ttnn_indices_tensor)
     tt_log_probs = log_probs_calculator.calculate_log_probs(relevant_logits_tensor)
 
     log_probs_tt_host = ttnn.to_torch(tt_log_probs, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
