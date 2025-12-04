@@ -450,17 +450,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
 
     return cached_program_t{
         std::move(program),
-        {.reader_kernel_id = reader_kernels_id,
-         .writer_kernel_id = writer_kernels_id,
-         .compute_kernel_id = compute_kernels_id,
-         .cores = std::move(cores),
-         .num_cores = num_cores,
-         .core_group_1 = core_group_1,
-         .core_group_2 = core_group_2,
-         .num_tile_rows_per_core_group_1 = num_tile_rows_per_core_group_1,
-         .num_tile_rows_per_core_group_2 = num_tile_rows_per_core_group_2,
-         .Wt = Wt,
-         .stats_tiles_cols = stats_tiles_cols}};
+        {.reader_kernel_id = reader_kernels_id, .writer_kernel_id = writer_kernels_id, .cores = std::move(cores)}};
 }
 
 void LayerNormPostAllGatherProgramFactory::override_runtime_arguments(
