@@ -7,6 +7,10 @@ if [ -z "${ARCH_NAME}" ]; then
   exit 1
 fi
 
+reset_machine_state () {
+  mpirun-ulfm --hostfile /etc/mpirun/hostfile --mca btl self,tcp --mca hwloc_base_binding_policy none --tag-output bash -c "pkill -9 python && source python_env/bin/activate && tt-smi -glx_reset --snapshot_no_tty && sudo /dev/shm/*"
+}
+
 run_quad_galaxy_unit_tests() {
   # Record the start time
   fail=0
@@ -14,12 +18,17 @@ run_quad_galaxy_unit_tests() {
 
   echo "LOG_METAL: Running run_quad_galaxy_unit_tests"
 
+  reset_machine_state
+
   source python_env/bin/activate
 
   local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
   #local mpi_args="--host g05glx01,g05glx02,g05glx03,g05glx04 $mpi_args_base"
   local mpi_args="--host g05glx04,g05glx03,g05glx02,g05glx01 $mpi_args_base"
   local rank_binding="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
+
+
+  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/tt_fabric/test_system_health --gtest_filter="Cluster.ReportIntermeshLinks" ; fail+=$?
 
   # TODO: Currently failing
   #mpirun-ulfm $mpi_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
