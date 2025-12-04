@@ -154,7 +154,33 @@ void FlatBufferFile::put(std::string_view key, const char* value) {
 }
 
 void FlatBufferFile::put(std::string_view key, const ValueType& value) {
-    m_data[std::string(key)] = value;
+    // Dispatch to appropriate put() method based on variant type
+    // Scalars are written directly, strings/vectors are stored in m_data
+    std::visit(
+        [this, key](auto&& arg) {
+            using T = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<T, bool>) {
+                this->put(key, arg);
+            } else if constexpr (std::is_same_v<T, char>) {
+                this->put(key, arg);
+            } else if constexpr (std::is_same_v<T, int>) {
+                this->put(key, arg);
+            } else if constexpr (std::is_same_v<T, float>) {
+                this->put(key, arg);
+            } else if constexpr (std::is_same_v<T, double>) {
+                this->put(key, arg);
+            } else if constexpr (std::is_same_v<T, uint32_t>) {
+                this->put(key, arg);
+            } else if constexpr (std::is_same_v<T, size_t>) {
+                this->put(key, arg);
+            } else if constexpr (std::is_same_v<T, bfloat16>) {
+                this->put(key, arg);
+            } else {
+                // Strings and vectors - store in m_data for later serialization
+                m_data[std::string(key)] = arg;
+            }
+        },
+        value);
 }
 
 void FlatBufferFile::put(std::string_view key, const tt::tt_metal::Tensor& tensor) {

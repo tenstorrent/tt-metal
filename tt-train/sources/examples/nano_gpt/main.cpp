@@ -557,8 +557,7 @@ int main(int argc, char **argv) {
         }
         fmt::println("Saving model and exiting");
         ttml::serialization::FlatBufferFile serializer;
-        std::string model_prefix = (model_config.model_type == "llama") ? "llama" : "gpt2";
-        ttml::serialization::write_module(serializer, model_prefix, model.get());
+        ttml::serialization::write_module(serializer, model_config.model_type, model.get());
         serializer.serialize(save_and_exit_path);
         fmt::println("Model saved to {}", save_and_exit_path);
         std::exit(0);
@@ -567,9 +566,8 @@ int main(int argc, char **argv) {
     // Load model parameters if in eval mode and model path exists
     if (!safetensors_path.empty() && !model_config.model_path.empty() &&
         std::filesystem::exists(model_config.model_path)) {
-        std::string model_name = (model_config.model_type == "llama") ? "llama" : "gpt2";
         fmt::print("Loading model parameters\n");
-        load_model_parameters(model_config.model_path, model, model_name);
+        load_model_parameters(model_config.model_path, model, model_config.model_type);
         fmt::print("Model loaded\n");
     }
 
@@ -624,10 +622,9 @@ int main(int argc, char **argv) {
         // otherwise proceed with normal loading training state if necessary
         if (!model_config.model_path.empty() && std::filesystem::exists(model_config.model_path)) {
             fmt::print("Loading model from {}\n", model_config.model_path);
-            std::string model_name = (model_config.model_type == "llama") ? "llama" : "gpt2";
             fmt::print("Loading training state\n");
-            std::string optimizer_name = "adamw";
-            load_training_state(model_config.model_path, model, scheduler, model_name, optimizer_name);
+            load_training_state(
+                model_config.model_path, model, scheduler, model_config.model_type, optimizer->get_name());
             fmt::print("Model loaded after {} steps\n", optimizer->get_steps());
         }
     }
@@ -721,7 +718,8 @@ int main(int argc, char **argv) {
                 if (!multihost_config.enable_mpi) {
                     // save training state if it's not 3 tier training
                     if (!model_config.model_path.empty() && global_step % training_config.model_save_interval == 0) {
-                        save_training_state(model_config.model_path, model, scheduler, "transformer", "adamw");
+                        save_training_state(
+                            model_config.model_path, model, scheduler, model_config.model_type, optimizer->get_name());
                     }
                 }
 
@@ -755,7 +753,8 @@ int main(int argc, char **argv) {
     if (!multihost_config.enable_mpi) {
         // save training state if it's not 3 tier training
         if (!model_config.model_path.empty()) {
-            save_training_state(model_config.model_path, model, scheduler, "transformer", "adamw");
+            save_training_state(
+                model_config.model_path, model, scheduler, model_config.model_type, optimizer->get_name());
         }
     }
 

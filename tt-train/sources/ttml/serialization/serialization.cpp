@@ -179,6 +179,7 @@ void read_optimizer(FlatBufferFile& file, std::string_view name, optimizers::Opt
 
 void write_module(FlatBufferFile& file, std::string_view name, const modules::ModuleBase* module) {
     assert(module);
+    assert(!name.empty() && "Model name must be non-empty when writing module");
     auto named_parameters = module->parameters();
     write_named_parameters(file, name, named_parameters);
 }

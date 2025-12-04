@@ -188,9 +188,10 @@ TEST_F(FlatBufferFileTest, EmptySerializerSerialization) {
 }
 
 TEST_F(FlatBufferFileTest, NonExistentFileDeserialization) {
+    std::filesystem::create_directories(test_filename);
     ttml::serialization::FlatBufferFile deserializer;
     // Try to deserialize from non-existent directory
-    EXPECT_THROW(deserializer.deserialize("/nonexistent/directory/path"), std::runtime_error);
+    EXPECT_THROW(deserializer.deserialize(test_filename + "/nonexistent"), std::runtime_error);
 }
 
 TEST_F(FlatBufferFileTest, InvalidDataDeserialization) {
