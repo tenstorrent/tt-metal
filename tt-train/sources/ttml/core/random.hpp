@@ -55,7 +55,7 @@ void parallel_generate(
 }  // namespace legacy
 
 static inline bool use_simd_rng() {
-    constexpr auto DISABLE_SIMD_RNG = "DISABLE_SIMD_RNG";
+    constexpr auto DISABLE_SIMD_RNG = "TT_TRAIN_DISABLE_SIMD_RNG";
     static bool simd_disabled = (std::getenv(DISABLE_SIMD_RNG) != nullptr);
 
     return !simd_disabled;
