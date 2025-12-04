@@ -377,11 +377,6 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    union {
-        float f;
-        uint32_t u;
-    } winv{};
-    winv.f = 1.0f / W;
     bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
     std::vector<uint32_t> compute_args = {Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en};
     if (use_welford_and_not_rms_norm) {
@@ -392,7 +387,6 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     } else {
         compute_args.push_back(float32_reduction);
         compute_args.push_back(legacy_rsqrt);
-        compute_args.push_back(winv.u);
     }
 
     // The large-tensor non-Welford reduce kernel needs
@@ -520,15 +514,14 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     }
 
     uint32_t curr_row = 0;
+    float winv = 1.0f / W;
+    auto bfloat_winv_value = bfloat16(winv);
+    uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
     union {
         float f;
         uint32_t u;
-    } e{}, one{};
-    e.f = eps;
-    one.f = 1.0f;
-    auto bfloat_one_value = bfloat16(one.f);
-    uint32_t packed_one_value = pack_two_bfloat16_into_uint32({bfloat_one_value, bfloat_one_value});
-
+    } e{};
+    e.f = eps;  // epsilon
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
@@ -550,7 +543,7 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
             {a_addr,
              num_tile_rows_per_core,
              tile_offset,
-             packed_one_value,
+             packed_winv_value,
              e.u,  // 0-5
              gamma_dram_addr,
              beta_dram_addr,
