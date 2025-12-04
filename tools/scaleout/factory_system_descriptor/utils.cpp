@@ -518,6 +518,16 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
     return validate_fsd_against_gsd_impl(generated_fsd, discovered_gsd, strict_validation, assert_on_connection_mismatch, log_output);
 }
 
+std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
+    const fsd::proto::FactorySystemDescriptor& fsd_proto,
+    const YAML::Node& gsd_yaml_node,
+    bool strict_validation,
+    bool assert_on_connection_mismatch,
+    bool log_output) {
+    return validate_fsd_against_gsd_impl(
+        fsd_proto, gsd_yaml_node, strict_validation, assert_on_connection_mismatch, log_output);
+}
+
 std::set<PhysicalChannelConnection> validate_cabling_descriptor_against_gsd(
     const std::string& cabling_descriptor_path,
     const std::vector<std::string>& hostnames,
