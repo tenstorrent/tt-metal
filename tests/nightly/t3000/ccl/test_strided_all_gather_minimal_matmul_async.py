@@ -253,7 +253,7 @@ def run_strided_all_gather_minimal_matmul_impl(
 
         # Capture the trace
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        tt_all_gather_out_tensor = run_op(0)
+        tt_all_gather_out_tensor, tt_matmul_out_tensor = run_op(0)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
         logger.info(f"Done capturing trace")
@@ -264,6 +264,7 @@ def run_strided_all_gather_minimal_matmul_impl(
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh_device)
             tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
+            tt_matmul_out_tensor_list.append(tt_matmul_out_tensor)
         logger.info(f"Done executing trace")
         signpost("stop")
     else:
