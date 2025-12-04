@@ -187,7 +187,7 @@ def test_peak_memory_chained_operations():
         # Chain multiple operations to accumulate memory allocations
         x = ttnn.relu(x)
         x = ttnn.add(x, x)
-        x = ttnn.multiply(x, x)
+        ttnn.multiply(x, x)
 
         captured_graph = ttnn.graph.end_graph_capture()
 
