@@ -8,15 +8,15 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import divup, is_blackhole, is_wormhole_b0
-from models.demos.vit.common import load_torch_model
-from models.demos.vit.tests.vit_helper_funcs import get_batch, get_data_loader
+from models.demos.vision.classification.vit.common.common import load_torch_model
+from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import get_batch, get_data_loader
 
 if is_wormhole_b0():
-    from models.demos.wormhole.vit.tt import ttnn_optimized_sharded_vit_wh as ttnn_optimized_sharded_vit
+    from models.demos.vision.classification.vit.wormhole.tt import ttnn_optimized_sharded_vit_wh as ttnn_optimized_sharded_vit
 elif is_blackhole():
-    from models.demos.blackhole.vit.tt import ttnn_optimized_sharded_vit_bh as ttnn_optimized_sharded_vit
+    from models.demos.vision.classification.vit.blackhole.tt import ttnn_optimized_sharded_vit_bh as ttnn_optimized_sharded_vit
 else:
-    from models.demos.vit.tt import ttnn_optimized_sharded_vit
+    from models.demos.vision.classification.vit.common.tt import ttnn_optimized_sharded_vit
 
 
 class VitTestInfra:

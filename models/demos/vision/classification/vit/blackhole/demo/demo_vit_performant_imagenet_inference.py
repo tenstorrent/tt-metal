@@ -11,8 +11,8 @@ from transformers import AutoImageProcessor, ViTConfig
 
 import ttnn
 from models.common.utility_functions import profiler, run_for_blackhole
-from models.demos.vit.tests.vit_helper_funcs import get_batch, get_data_loader
-from models.demos.vit.tests.vit_performant_imagenet import VitTrace2CQ
+from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import get_batch, get_data_loader
+from models.demos.vision.classification.vit.common.tests.vit_performant_imagenet import VitTrace2CQ
 
 NUM_VALIDATION_IMAGES_IMAGENET = 49920
 

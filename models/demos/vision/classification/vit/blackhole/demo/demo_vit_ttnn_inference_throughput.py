@@ -12,9 +12,9 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import is_blackhole, torch2tt_tensor
-from models.demos.blackhole.vit.tt import ttnn_optimized_sharded_vit_bh
-from models.demos.vit.common import load_torch_model
-from models.demos.vit.tests.vit_helper_funcs import get_batch, get_data_loader
+from models.demos.vision.classification.vit.blackhole.tt import ttnn_optimized_sharded_vit_bh
+from models.demos.vision.classification.vit.common.common import load_torch_model
+from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import get_batch, get_data_loader
 from models.perf.perf_utils import prep_perf_report
 
 
