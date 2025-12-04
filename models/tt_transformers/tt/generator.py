@@ -468,6 +468,7 @@ class Generator:
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
     ):
+        reset_batch = True
         sampling_on_device = sampling_params is not None
         split_sampling_enabled = bool(self.enable_split_sampling and sampling_on_device)
         self._set_sampling_trace_mode(split_sampling_enabled)
