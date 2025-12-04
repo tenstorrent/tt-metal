@@ -270,8 +270,8 @@ class OpenVLALanguageModel(GenerationMixin):
             "instruct": False,
             "global_batch_size": 1,
             "optimizations": "performance",  # Use performance optimizations to reduce memory usage
-            "max_seq_len": 512,  # Reduced from 1024 to fit in memory
-            "page_params": {"page_block_size": 32, "page_max_num_blocks_per_dp": 512},  # Reduced blocks
+            "max_seq_len": 1024,
+            "page_params": {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},
             "paged_attention": True,
             "num_layers": 32,  # Default number of layers for LLaMA model
         }
