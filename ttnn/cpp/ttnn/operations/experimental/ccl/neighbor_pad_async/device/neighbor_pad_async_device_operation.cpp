@@ -51,13 +51,13 @@ void NeighborPadAsyncDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(args.num_links > 0, "Error, num_links should be more than 0 but has {}", args.num_links);
     if (args.dim > 0) {
         uint32_t outer_dim_size = 1;
-        for (int d = 0; d < args.dim; d++) {
+        for (uint32_t d = 0; d < args.dim; d++) {
             outer_dim_size *= input_tensor_shape[d];
         }
-        TT_FATAL(outer_dim_size >= args.num_links, "Not enough work ({}) to split among {} links, reduce num links", outer_dim_size, args.num_links);
+        TT_FATAL(outer_dim_size >= args.num_links, "Not enough work to split among links, reduce num links");
     } else {
         uint32_t num_sticks_per_halo_dim = 1;
-        for (int d = args.dim + 1; d < input_tensor_shape.size() - 1; d++) {
+        for (uint32_t d = args.dim + 1; d < input_tensor_shape.size() - 1; d++) {
             num_sticks_per_halo_dim *= input_tensor_shape[d];
         }
         TT_FATAL(num_sticks_per_halo_dim >= args.num_links, "Not enough work to split among links, reduce num links");
