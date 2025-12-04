@@ -31,6 +31,6 @@
 
 #else
 
-#define LLK_ASSERT(condition, message) ((void)condition)
+#define LLK_ASSERT(condition, message) ((void)(condition), (void)(message))
 
 #endif // ENABLE_LLK_ASSERT
