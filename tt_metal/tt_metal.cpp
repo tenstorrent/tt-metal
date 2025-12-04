@@ -377,7 +377,6 @@ std::map<ChipId, IDevice*> CreateDevices(
     const std::vector<uint32_t>& /*l1_bank_remap*/,
     const size_t worker_l1_size,
     bool init_profiler,
-    bool use_max_eth_core_count_on_all_devices,
     bool initialize_fabric_and_dispatch_fw) {
     // Issue #19729: use_max_eth_core_count_on_all_devices is a workaround
     // to allow TT-Mesh Workload dispatch to target active ethernet cores.
@@ -392,7 +391,6 @@ std::map<ChipId, IDevice*> CreateDevices(
         {},
         worker_l1_size,
         init_profiler,
-        use_max_eth_core_count_on_all_devices,
         initialize_fabric_and_dispatch_fw);
 
     const auto devices = tt::tt_metal::MetalContext::instance().device_manager()->get_all_active_devices();

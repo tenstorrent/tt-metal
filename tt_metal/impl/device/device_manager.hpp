@@ -26,7 +26,6 @@ public:
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
         bool init_profiler = true,
-        bool use_max_eth_core_count_on_all_devices = false,
         bool initialize_fabric_and_dispatch_fw = true);
 
     IDevice* get_active_device(ChipId device_id) const;
@@ -61,9 +60,6 @@ private:
     std::vector<std::unique_ptr<tt_metal::IDevice>> devices;
 
     bool skip_remote_devices{};
-    // Issue #19729: use_max_eth_core_count_on_all_devices_ is a workaround
-    // to allow TT-Mesh Workload dispatch to target active ethernet cores.
-    bool use_max_eth_core_count_on_all_devices_{};
 
     // Determine which CPU cores the worker threads need to be placed on for each device
     std::unordered_map<uint32_t, uint32_t> worker_thread_to_cpu_core_map;

@@ -227,7 +227,6 @@ DeviceManager::DeviceManager(
     tt::stl::Span<const std::uint32_t> a_l1_bank_remap,
     size_t worker_l1_size,
     bool init_profiler,
-    bool use_max_eth_core_count_on_all_devices,
     bool initialize_fabric_and_dispatch_fw) :
     num_hw_cqs(num_hw_cqs),
     l1_small_size(l1_small_size),
@@ -235,8 +234,7 @@ DeviceManager::DeviceManager(
     worker_l1_size(worker_l1_size),
     using_fast_dispatch_(tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()),
     init_profiler_(init_profiler),
-    initialize_fabric_and_dispatch_fw_(initialize_fabric_and_dispatch_fw),
-    use_max_eth_core_count_on_all_devices_(use_max_eth_core_count_on_all_devices) {
+    initialize_fabric_and_dispatch_fw_(initialize_fabric_and_dispatch_fw) {
     ZoneScoped;
     log_debug(tt::LogMetal, "DeviceManager constructor");
 

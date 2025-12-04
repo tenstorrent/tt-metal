@@ -148,7 +148,6 @@ MeshDevice::ScopedDevices::ScopedDevices(
         {},
         worker_l1_size,
         /*init_profiler*/ false,
-        /*use_max_eth_core_count_on_all_devices*/ true,
         /* initialize_fabric_and_dispatch_fw */ false);
 
     for (auto device_id : device_ids) {

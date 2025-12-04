@@ -75,7 +75,6 @@ void MetalContext::initialize_device_manager(
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size,
     bool init_profiler,
-    bool use_max_eth_core_count_on_all_devices,
     bool initialize_fabric_and_dispatch_fw) {
     initialize(dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
     device_manager_ = std::make_unique<DeviceManager>(
@@ -86,7 +85,6 @@ void MetalContext::initialize_device_manager(
         l1_bank_remap,
         worker_l1_size,
         init_profiler,
-        use_max_eth_core_count_on_all_devices,
         initialize_fabric_and_dispatch_fw);
 }
 
