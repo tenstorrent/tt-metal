@@ -491,7 +491,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
         .def(
             "__init__",
             [](CoreRangeSet* t, const std::set<CoreRange>& core_ranges) { new (t) CoreRangeSet(core_ranges); },
-            nb::arg("core_ranges").noconvert())
+            nb::arg("core_ranges"))
         .def(
             "bounding_box",
             &CoreRangeSet::bounding_box,
