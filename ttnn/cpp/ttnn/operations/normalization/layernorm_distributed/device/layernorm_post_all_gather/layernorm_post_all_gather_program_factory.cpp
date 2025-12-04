@@ -11,7 +11,6 @@
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-using uint32_t = std::uint32_t;
 using namespace tt::constants;
 
 namespace ttnn::operations::normalization::layernorm_post_all_gather::program {
