@@ -14,7 +14,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch2tt_tensor
 from models.demos.grayskull.vit.tt import ttnn_optimized_sharded_vit_gs
-from models.demos.vit.tests.vit_helper_funcs import get_batch, get_data_loader
+from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import get_batch, get_data_loader
 from models.perf.perf_utils import prep_perf_report
 
 

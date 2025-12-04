@@ -22,13 +22,13 @@ This demo includes two performance tests:
 #### Full ImageNet Inference Test
 ```bash
 # Run with ImageNet validation data (requires ImageNet dataset)
-pytest models/demos/t3000/vit/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference
+pytest models/demos/vision/classification/vit/t3000/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference
 ```
 
 #### Performance Benchmark Test
 ```bash
 # Run with random inputs for performance measurement
-pytest models/demos/t3000/vit/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference_with_random_inputs
+pytest models/demos/vision/classification/vit/t3000/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference_with_random_inputs
 ```
 
 ## Testing

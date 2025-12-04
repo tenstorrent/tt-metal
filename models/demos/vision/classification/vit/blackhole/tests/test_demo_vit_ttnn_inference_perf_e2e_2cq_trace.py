@@ -8,7 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_wormhole_b0, profiler
-from models.demos.vit.tests.vit_test_infra import create_test_infra
+from models.demos.vision.classification.vit.common.tests.vit_test_infra import create_test_infra
 from models.perf.perf_utils import prep_perf_report
 
 try:

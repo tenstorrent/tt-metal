@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.vit.tests.vit_test_infra import create_test_infra
+from models.demos.vision.classification.vit.common.tests.vit_test_infra import create_test_infra
 
 
 class VitTrace2CQ:
