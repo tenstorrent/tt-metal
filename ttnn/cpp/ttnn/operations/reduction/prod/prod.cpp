@@ -1,5 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "prod.hpp"
@@ -32,7 +31,7 @@ inline Tensor prod_all(const Tensor& input_a, const MemoryConfig& output_mem_con
     return tt::operations::primary::prod_all(formatted_input_tensor, output_mem_config);
 }
 
-inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& output_mem_config) {
+inline Tensor compute_prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& output_mem_config) {
     // layout conversion
     auto formatted_input_tensor = temp;
     if (formatted_input_tensor.layout() == Layout::ROW_MAJOR) {
@@ -124,7 +123,7 @@ Tensor ProdOperation::invoke(
         // Dim0 grows to include the rest of the dimensions, and our "third last" dim moves into dim1, which is our 4D
         // reduction dim
         auto input_tensor_4d = data_movement::squeeze_from_ND_to_4D(permuted);
-        Tensor result = prod_nc(input_tensor_4d, /*dim=*/1, output_mem_config);
+        Tensor result = compute_prod_nc(input_tensor_4d, /*dim=*/1, output_mem_config);
 
         // Unsqueeze dim0 to restore the original tensor rank
         ttnn::Shape output_shape = ttnn::Shape(input_shape);
@@ -161,7 +160,7 @@ Tensor ProdOperation::invoke(
             ttnn::SmallVector<int64_t> permute_dims = {3, 0, 1, 2};
             temp = ttnn::permute(input_tensor_4d, permute_dims, output_mem_config);
         }
-        Tensor result = prod_nc(temp, dim_4d, output_mem_config);
+        Tensor result = compute_prod_nc(temp, dim_4d, output_mem_config);
         // Permute and unpad result for dim 2,3. Don't need to process dim 0,1.
         auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
         if (dim_4d == 0 || dim_4d == 1 || dim_4d == -4 || dim_4d == -3) {
