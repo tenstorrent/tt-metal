@@ -1,1 +1,0 @@
-../../../../wormhole/stable_diffusion/tests/vae/test_vae_upsample.py
