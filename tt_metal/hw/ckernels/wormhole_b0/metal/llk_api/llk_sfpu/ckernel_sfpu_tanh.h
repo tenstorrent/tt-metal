@@ -7,19 +7,16 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "llk_defs.h"
-#include "noc_nonblocking_api.h"
-
-using namespace sfpi;
+#include "sfpu/ckernel_sfpu_polyval.h"
 
 namespace ckernel {
 namespace sfpu {
 
-template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
-inline void calculate_tanh() {
-    // SFPU microcode
-    vUInt l0 = l_reg[LRegs::LReg0];
-    vUInt l1 = l_reg[LRegs::LReg1];
-    vUInt l2 = l_reg[LRegs::LReg2];
+template <bool is_fp32_acc_to_dest_mode = true>
+sfpi_inline sfpi::vFloat _sfpu_tanh_continued_fraction_(sfpi::vFloat val) {
+    // Formula found at
+    // https://varietyofsound.wordpress.com/2011/02/14/efficient-tanh-computation-using-lamberts-continued-fraction/
+    // This approximation is derived from a continued fraction formula of tanh(x)
 
     // For negative numbers, we compute tanh(x) = -tanh(x)
     sfpi::vFloat x = sfpi::abs(val);  // set positive
@@ -45,7 +42,79 @@ inline void calculate_tanh() {
     return result;
 }
 
-template <ApproximationMode APPROX_MODE>
+template <bool is_fp32_acc_to_dest_mode = true>
+sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
+    // For negative numbers, we compute tanh(-x) = -tanh(x)
+    sfpi::vFloat val = sfpi::abs(x);  // set positive
+
+    // Polynomial coefficients found using Sollya
+    // val * (0.999004364013671875 + val * (3.0897438526153564453125e-2 + val * (-0.4890659749507904052734375 + val *
+    // (0.281917631626129150390625 + val * (-6.6649019718170166015625e-2 + val *
+    // (5.876733921468257904052734375e-3))))));
+    sfpi::vFloat result = PolynomialEvaluator::eval(
+        val,
+        sfpi::vConst0,
+        0.999004364013671875,
+        3.0897438526153564453125e-2,
+        -0.4890659749507904052734375,
+        sfpi::vConstFloatPrgm2,
+        sfpi::vConstFloatPrgm1,
+        sfpi::vConstFloatPrgm0);
+
+    // For larger x, the polynomial approximation may exceed 1.0.
+    // Since tanh(x) is bounded by [-1, 1], we clamp output to 1.0.
+    sfpi::vFloat threshold_value = sfpi::vConst1;
+    sfpi::vec_min_max(result, threshold_value);
+
+    result = sfpi::setsgn(result, x);  // restore sign (i.e. tanh(-x) = -tanh(x))
+
+    if constexpr (!is_fp32_acc_to_dest_mode) {
+        result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+    }
+
+    return result;
+}
+
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
+inline void calculate_tanh() {
+    if constexpr (APPROX_MODE == ApproximationMode::Fast) {
+        // SFPU microcode
+        sfpi::vUInt l0 = l_reg[sfpi::LRegs::LReg0];
+        sfpi::vUInt l1 = l_reg[sfpi::LRegs::LReg1];
+        sfpi::vUInt l2 = l_reg[sfpi::LRegs::LReg2];
+
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat val = sfpi::dst_reg[0];
+            val = sfpi::lut(val, l0, l1, l2);
+            sfpi::dst_reg[0] = val;
+
+            sfpi::dst_reg++;
+        }
+
+        l_reg[sfpi::LRegs::LReg0] = l0;
+        l_reg[sfpi::LRegs::LReg1] = l1;
+        l_reg[sfpi::LRegs::LReg2] = l2;
+    } else {  // APPROX_MODE is Precise
+
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat val = sfpi::dst_reg[0];
+
+            sfpi::vFloat result;
+
+            if constexpr (is_fp32_dest_acc_en) {
+                result = _sfpu_tanh_continued_fraction_<is_fp32_dest_acc_en>(val);
+            } else {
+                result = _sfpu_tanh_polynomial_<is_fp32_dest_acc_en>(val);
+            }
+
+            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg++;
+        }
+    }
+}
+
+template <ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en = false>
 inline void tanh_init() {
     if constexpr (APPROX_MODE == ApproximationMode::Fast) {
         uint imm0 = 0x1DFF;  // 0.90625*x
@@ -57,7 +126,7 @@ inline void tanh_init() {
     } else {
         if constexpr (is_fp32_dest_acc_en) {
             // Continued fraction
-            ckernel::sfpu::_init_sfpu_reciprocal_<false>();
+            ckernel::sfpu::_init_sfpu_reciprocal_<ApproximationMode::Precise>();
         } else {
             // Polynomial approximation
             // Store some polynomial coefficients in programmable registers
