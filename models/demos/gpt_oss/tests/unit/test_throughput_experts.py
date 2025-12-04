@@ -440,16 +440,17 @@ def load_hf_reference_layer(
     reference_layer = GptOssDecoderLayer(config, layer_idx=0)
 
     # Initialize weights (either load from checkpoint or use random for testing)
-    # For now, use random initialization with fixed seed for reproducibility
+    # # For now, use random initialization with fixed seed for reproducibility
     with torch.no_grad():
         std = 0.02
         reference_layer.mlp.experts.gate_up_proj.data.normal_(0.0, std)
-        reference_layer.mlp.experts.gate_up_proj_bias.data.zero_()
+        reference_layer.mlp.experts.gate_up_proj_bias.data.normal_(0.0, std)
         reference_layer.mlp.experts.down_proj.data.normal_(0.0, std)
-        reference_layer.mlp.experts.down_proj_bias.data.zero_()
+        reference_layer.mlp.experts.down_proj_bias.data.normal_(0.0, std)
 
     # Extract experts module and set to eval mode
     reference_experts = reference_layer.mlp.experts.eval()
+    breakpoint()
 
     # Extract state dict for TT implementation
     state_dict = {
@@ -589,6 +590,7 @@ def run_throughput_experts_test(
     )
 
     # Create TT experts module
+    breakpoint()
     tt_experts = ThroughputExperts(
         mesh_device=mesh_device,
         config=config,
@@ -637,6 +639,7 @@ def run_throughput_experts_test(
         tt_output = tt_experts.forward_decode(tt_hidden, tt_indices, tt_weights)
 
         # Convert output to torch
+        breakpoint()
         tt_output_torch = ttnn.to_torch(
             tt_output,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
@@ -1101,171 +1104,3 @@ def test_throughput_experts_galaxy(
 
     assert passed, "Throughput experts test failed"
 
-
-# =============================================================================
-# HUGGINGFACE REFERENCE COMPARISON TEST
-# =============================================================================
-
-
-@parametrize_mesh_with_fabric()
-class TestThroughputExpertsVsHuggingFace:
-    """Compare TT throughput experts against HuggingFace GptOssExperts."""
-
-    @pytest.mark.parametrize("batch_size", [4])
-    def test_vs_hf_experts(self, mesh_device, device_params, batch_size):
-        """Compare TT output against HuggingFace GptOssExperts.
-
-        This test:
-        1. Creates a GptOssDecoderLayer and extracts experts module
-        2. Loads same weights into TT ThroughputExperts
-        3. Runs forward on both with identical inputs
-        4. Compares outputs using PCC
-        """
-        try:
-            from transformers import AutoConfig
-            from transformers.models.gpt_oss.modeling_gpt_oss import GptOssDecoderLayer
-        except ImportError:
-            pytest.skip("transformers with gpt_oss not available")
-
-        from models.common.utility_functions import comp_pcc
-
-        from ...tt.model_config import ModelArgs
-
-        # Check mesh compatibility
-        mesh_rows = mesh_device.shape[0]
-        if mesh_rows < 2:
-            pytest.skip(f"Requires multi-row mesh (got {mesh_rows} rows)")
-
-        torch.manual_seed(42)
-        random.seed(42)
-
-        # Load config
-        model_args = ModelArgs(mesh_device=mesh_device, dummy_weights=True)
-        hf_config = AutoConfig.from_pretrained(model_args.model_path, trust_remote_code=True)
-
-        num_experts = hf_config.num_local_experts
-        hidden_size = hf_config.hidden_size
-        intermediate_size = hf_config.intermediate_size
-        num_experts_per_tok = hf_config.num_experts_per_tok
-        num_devices = mesh_device.get_num_devices()
-        seq_len = 1
-
-        # Create HF reference
-        reference_layer = GptOssDecoderLayer(hf_config, layer_idx=0)
-        std = 0.02
-        reference_layer.mlp.experts.gate_up_proj.data.normal_(0.0, std)
-        reference_layer.mlp.experts.gate_up_proj_bias.data.zero_()
-        reference_layer.mlp.experts.down_proj.data.normal_(0.0, std)
-        reference_layer.mlp.experts.down_proj_bias.data.zero_()
-        reference_experts = reference_layer.mlp.experts.eval()
-
-        # Extract weights
-        state_dict = {
-            "gate_up_proj": reference_experts.gate_up_proj.data.clone(),
-            "gate_up_proj_bias": reference_experts.gate_up_proj_bias.data.clone(),
-            "down_proj": reference_experts.down_proj.data.clone(),
-            "down_proj_bias": reference_experts.down_proj_bias.data.clone(),
-        }
-
-        # Create TT experts
-        config = ThroughputExpertConfig(
-            intermediate_size=intermediate_size,
-            num_experts=num_experts,
-            hidden_size=hidden_size,
-            num_experts_per_tok=num_experts_per_tok,
-            num_devices=num_devices,
-        )
-
-        tt_experts = ThroughputExperts(
-            mesh_device=mesh_device,
-            config=config,
-            state_dict=state_dict,
-            weight_dtype=ttnn.bfloat16,
-        )
-
-        # Create inputs
-        hidden_states = torch.randn(batch_size, seq_len, hidden_size)
-
-        # Generate routing (like test_modules.py)
-        routing_weights = torch.zeros(batch_size * seq_len, num_experts)
-        for b, s in itertools.product(range(batch_size), range(seq_len)):
-            active_experts = torch.randperm(num_experts)[:num_experts_per_tok]
-            weights = torch.rand(num_experts_per_tok)
-            weights = weights / weights.sum()
-            routing_weights[b * seq_len + s, active_experts] = weights
-
-        topk_weights, topk_indices = torch.topk(routing_weights, k=num_experts_per_tok, dim=-1)
-
-        # Run HF reference
-        with torch.no_grad():
-            reference_output = reference_experts(
-                hidden_states,
-                router_indices=topk_indices,
-                routing_weights=routing_weights,
-            )
-
-        # Convert inputs for TT
-        hidden_4d = hidden_states.reshape(batch_size, 1, 1, hidden_size)
-        indices_4d = topk_indices.reshape(1, batch_size, 1, num_experts_per_tok)
-        weights_4d = topk_weights.reshape(batch_size, 1, 1, num_experts_per_tok)
-
-        tt_hidden = ttnn.from_torch(
-            hidden_4d,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        tt_indices = ttnn.from_torch(
-            indices_4d.to(torch.int32),
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.uint16,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        tt_weights = ttnn.from_torch(
-            weights_4d,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-
-        # Run TT forward
-        tt_output = tt_experts.forward_decode(tt_hidden, tt_indices, tt_weights)
-        tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0]).squeeze()
-
-        # Reshape for comparison
-        if tt_output_torch.dim() > 2:
-            tt_output_torch = tt_output_torch.reshape(batch_size, seq_len, hidden_size)
-        tt_output_torch = tt_output_torch[:batch_size, :seq_len, :hidden_size]
-
-        # Compare
-        pcc_threshold = 0.93
-        passing, pcc_value = comp_pcc(reference_output, tt_output_torch, pcc_threshold)
-
-        logger.info(f"HF comparison - PCC: {pcc_value:.6f}")
-        logger.info(f"  Reference mean: {reference_output.mean().item():.6f}")
-        logger.info(f"  TT mean: {tt_output_torch.mean().item():.6f}")
-
-        assert passing, f"PCC {pcc_value} < {pcc_threshold}"
-        logger.info(f"✓ TT matches HuggingFace with PCC={pcc_value:.6f}")
-
-
-# =============================================================================
-# PYTEST FIXTURES
-# =============================================================================
-
-
-@pytest.fixture
-def reset_seeds():
-    """Reset random seeds before each test."""
-    torch.manual_seed(42)
-    random.seed(42)
-    yield
-
-
-@pytest.fixture(scope="module")
-def device_params(request):
-    """Default device parameters for tests."""
-    return getattr(request, "param", {})

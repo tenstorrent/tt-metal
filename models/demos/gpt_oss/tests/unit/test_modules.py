@@ -120,6 +120,7 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
     """Test experts component - extracted from decoder layer"""
 
     # Create input
+    hidden_shape = torch.Size([128, 1, 2880])
     hidden_states = torch.randn(hidden_shape)
     seq_len = hidden_shape[1]
     batch_size = hidden_shape[0]
@@ -140,45 +141,51 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
     else:
         # Dense routing
         routing_weights = torch.ones(hidden_states.shape[-2], config.num_local_experts) / config.num_local_experts
+    topk_weights_dense = torch.tensor([[routing_weights[i, j].item() for j in b] for i, b in enumerate(router_indices)])
     # Extract reference experts from reference layer
     reference_experts = reference_layer.mlp.experts.eval()  # Set to eval mode for inference
     reference_output = reference_experts(hidden_states, router_indices=router_indices, routing_weights=routing_weights)
 
     # Convert to TTNN tensors
     tt_hidden_states = ttnn.from_torch(
-        hidden_states,
+        hidden_states.unsqueeze(1),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(None, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
     )
     tt_routing_weights = ttnn.from_torch(
-        routing_weights,
+        topk_weights_dense.unsqueeze(1).unsqueeze(1),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(None, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
     )
     tt_router_indices = ttnn.from_torch(
-        router_indices,
+        router_indices.unsqueeze(1).unsqueeze(1),
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.uint16,
-        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(None, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
     )
 
     # Extract TT experts from decoder layer
     # tt_experts = decoder_layer.mlp.experts
     tt_experts = decoder_layer.mlp.throughput_experts
-    breakpoint()
-    # tt_output = tt_experts(tt_hidden_states, tt_routing_weights)
-    tt_hidden_states = ttnn.reshape(tt_hidden_states, (batch_size, 1, 1, 2880))
-    tt_router_indices = ttnn.reshape(tt_router_indices, (batch_size, 1, 1, 4))
-    tt_routing_weights = ttnn.reshape(tt_routing_weights, (batch_size, 1, 1, 128))
     tt_output = tt_experts(tt_hidden_states, tt_router_indices, tt_routing_weights)
+
+    tt_output = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
+    )[0]
     # Compare outputs
-    passing, output = run_component_comparison(tt_output, reference_output, mesh_device, pcc_threshold=0.93)
-    assert passing, f"Experts test failed. Output: {output}"
+    # passing, output = run_component_comparison(tt_output, reference_output, mesh_device, pcc_threshold=0.93)
+    passing, output = compare_tensors(tt_output, reference_output, mesh_device, pcc_threshold=0.93)
+    if passing:
+        logger.info(f"Experts test passed. Output: {output}")
+    else:
+        assert passing, f"Experts test failed. Output: {output}"
+
 
 
 def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_layer):
@@ -238,7 +245,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
     """
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
-    setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
+    setup = TestFactory.setup_test(mesh_device, use_real_weights=True)
     config = setup["config"]
 
     # Set attention implementation for transformers compatibility

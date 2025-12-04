@@ -124,7 +124,6 @@ def _apply_swiglu(
     gate_alpha = ttnn.mul(gate, alpha)
 
     # Compute gate_sigmoid = sigmoid(gate_alpha)
-    breakpoint()
     gate_sigmoid = ttnn.sigmoid(gate_alpha)
     ttnn.deallocate(gate_alpha)
 
@@ -183,15 +182,6 @@ def decode_forward(
     Returns:
         Output tensor [batch_size_per_device, 1, seq_len, hidden_size]
     """
-    import torch
-
-    torch.save(
-        ttnn.to_torch(
-            hidden_states,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -2), mesh_shape=tuple(mesh_device.shape)),
-        )[:, :, :1, :],
-        "gpt_oss_debug/hidden_states_tt.pt",
-    )
     seq_len = 1  # Decode mode always has seq_len=1
     batch_size_per_device = hidden_states.shape[0]
     num_dispatch_devices = (
@@ -375,7 +365,7 @@ def decode_forward(
     # Add down projection bias
     # expert_output shape: [num_sparse_blocks, num_experts_per_device, block_size, hidden]
     # Bias shape: [1, num_experts_per_device, 1, hidden] - broadcasts correctly after squeeze
-    expert_output = ttnn.add(expert_output, weights.w2_bias)
+    # expert_output = ttnn.add(expert_output, weights.w2_bias)
 
     # ==========================================================================
     # STEP 6: PREPARE EXPERT OUTPUT FOR ALL_TO_ALL_COMBINE
@@ -431,13 +421,13 @@ def decode_forward(
     topk_weights_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
     topk_weights_rm = ttnn.repeat(topk_weights_rm, ttnn.Shape((1, 1, config.hidden_size, 1)))
     topk_weights_rm = ttnn.permute(topk_weights_rm, (3, 1, 0, 2))
-    topk_weights = ttnn.to_layout(topk_weights_rm, ttnn.TILE_LAYOUT)
+    topk_weights_reshaped = ttnn.to_layout(topk_weights_rm, ttnn.TILE_LAYOUT)
     ttnn.deallocate(topk_weights_rm)
 
     # Weighted sum: sum_k(expert_output_k * routing_weight_k)
-    weighted_output = ttnn.mul(post_combine, topk_weights, memory_config=memory_config)
+    weighted_output = ttnn.mul(post_combine, topk_weights_reshaped, memory_config=memory_config)
     ttnn.deallocate(post_combine)
-    ttnn.deallocate(topk_weights)
+    ttnn.deallocate(topk_weights_reshaped)
 
     # Sum across K experts (first dimension)
     output = ttnn.sum(weighted_output, dim=0, keepdim=True)

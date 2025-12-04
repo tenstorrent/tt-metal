@@ -140,7 +140,7 @@ class ThroughputProgramConfig:
     # Sparse matmul parameters
     in0_block_w: int = 2
     out_subblock_h: int = 1
-    out_subblock_w: int = 30
+    out_subblock_w: int = 1
     per_core_M: int = 1
 
     def __post_init__(self):
