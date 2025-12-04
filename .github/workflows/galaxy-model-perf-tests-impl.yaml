@@ -35,7 +35,7 @@ jobs:
         id: set-matrix
         run: |
           # Create matrix in two parts: disabled and active models
-          DISABLED_MODELS=$(jq -n '[
+          ACTIVE_MODELS=$(jq -n '[
             {
               "name": "Galaxy Llama 70B model perf tests",
               "model-type": "Llama-70B",
@@ -68,7 +68,7 @@ jobs:
             } # Miguel Tairum
           ]' --compact-output)
 
-          ACTIVE_MODELS=$(jq -n '[
+          DISABLED_MODELS=$(jq -n '[
             {
               "name": "Galaxy CNN model perf tests",
               "model-type": "CNN",
@@ -141,7 +141,7 @@ jobs:
           ]' --compact-output)
 
           # Combine both arrays into full matrix
-          FULL_MATRIX=$DISABLED_MODELS
+          FULL_MATRIX=$ACTIVE_MODELS
 
           # Filter matrix based on model selection
           if [ "${{ inputs.model }}" = "all" ]; then
