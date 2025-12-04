@@ -469,8 +469,9 @@ void ControlPlane::init_control_plane(
     } else {
         std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
 
-        // Pin the start of the mesh to match the Galaxy Topology, ensuring that external QSFP links align with the corner node IDs of the fabric mesh.
-        // This is a performance optimization to ensure that MGD mapping does not bisect a device.
+        // Pin the start of the mesh to match the Galaxy Topology, ensuring that external QSFP links align with the
+        // corner node IDs of the fabric mesh. This is a performance optimization to ensure that MGD mapping does not
+        // bisect a device.
 
         // * * o o < Pinned corners marked with *
         // * o o o
@@ -1157,6 +1158,7 @@ eth_chan_directions ControlPlane::routing_direction_to_eth_direction(RoutingDire
         case RoutingDirection::S: dir = eth_chan_directions::SOUTH; break;
         case RoutingDirection::E: dir = eth_chan_directions::EAST; break;
         case RoutingDirection::W: dir = eth_chan_directions::WEST; break;
+        case RoutingDirection::Z: return static_cast<eth_chan_directions>(eth_chan_magic_values::INVALID_DIRECTION);
         default: TT_FATAL(false, "Invalid Routing Direction");
     }
     return dir;
@@ -1539,8 +1541,8 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
     uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
     TT_ASSERT(num_chips <= 256, "Number of chips exceeds 256 for mesh {}", *mesh_id);
     TT_ASSERT(
-        mesh_shape[0] <= 16 && mesh_shape[1] <= 16,
-        "One or both of mesh axis exceed 16 for mesh {}: {}x{}",
+        mesh_shape[0] <= 32 && mesh_shape[1] <= 32,
+        "One or both of mesh axis exceed 32 for mesh {}: {}x{}",
         *mesh_id,
         mesh_shape[0],
         mesh_shape[1]);
@@ -1722,15 +1724,21 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, Chip
         }
     }
 
-    // Write fabric connections (fabric router config) to mux cores and tensix connections (tensix config) to worker
-    // cores
-    write_to_worker_or_fabric_tensix_cores(
-        &fabric_worker_connections,      // worker_data - goes to mux cores
-        &fabric_dispatcher_connections,  // dispatcher_data - goes to dispatcher cores
-        &fabric_tensix_connections,      // tensix_extension_data - goes to worker cores
-        sizeof(tt::tt_fabric::tensix_fabric_connections_l1_info_t),
-        tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS,
-        physical_chip_id);
+    const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
+        // UDM mode: use per-worker connections
+        this->write_udm_fabric_connections_to_tensix_cores(
+            physical_chip_id, fabric_worker_connections, fabric_dispatcher_connections);
+    } else {
+        // Non UDM mode: same connection info for all workers
+        write_to_worker_or_fabric_tensix_cores(
+            &fabric_worker_connections,      // worker_data - goes to mux cores
+            &fabric_dispatcher_connections,  // dispatcher_data - goes to dispatcher cores
+            &fabric_tensix_connections,      // tensix_extension_data - goes to worker cores
+            sizeof(tt::tt_fabric::tensix_fabric_connections_l1_info_t),
+            tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS,
+            physical_chip_id);
+    }
 }
 
 std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_routing_planes_in_direction(
@@ -2171,14 +2179,74 @@ void ControlPlane::populate_fabric_connection_info(
         auto core_id = tensix_config.get_core_id_for_channel(physical_chip_id, eth_channel_id);
         // In UDM mode, get the first channel for worker connection for now.
         // TODO: have a vector of worker channels based on the current core and connected eth_channel_id
-        uint32_t tensix_sender_channel = (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM)
-                                             ? static_cast<uint32_t>(UdmMuxChannelId::WORKER_CHANNEL_BASE)
-                                             : sender_channel;
+        uint32_t tensix_sender_channel = sender_channel;
 
         fill_tensix_connection_info_fields(
             tensix_connection_info, mux_core_virtual, tensix_config, tensix_sender_channel, core_id);
     } else {
         dispatcher_connection_info = worker_connection_info;
+    }
+}
+
+// UDM-specific: write per-worker connection info to each worker core's L1
+void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
+    ChipId physical_chip_id,
+    const tt::tt_fabric::tensix_fabric_connections_l1_info_t& fabric_mux_connections,
+    const tt::tt_fabric::tensix_fabric_connections_l1_info_t& fabric_dispatcher_connections) const {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& fabric_context = this->get_fabric_context();
+    const auto& tensix_config = fabric_context.get_tensix_config();
+
+    // Get mux and dispatcher cores
+    std::unordered_set<CoreCoord> fabric_mux_cores_translated = tensix_config.get_translated_fabric_mux_cores();
+    std::unordered_set<CoreCoord> dispatch_mux_cores_translated = tensix_config.get_translated_dispatch_mux_cores();
+
+    const auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
+    const std::vector<tt::umd::CoreCoord>& all_tensix_cores =
+        soc_desc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED);
+
+    // Build per-worker connection info and write to each worker core
+    for (const auto& tensix_core : all_tensix_cores) {
+        CoreCoord core_coord(tensix_core.x, tensix_core.y);
+
+        // Determine core type
+        const void* data_to_write = nullptr;
+        if (fabric_mux_cores_translated.find(core_coord) != fabric_mux_cores_translated.end()) {
+            // Mux core: write fabric_mux_connections (passed in from caller)
+            data_to_write = &fabric_mux_connections;
+        } else if (dispatch_mux_cores_translated.find(core_coord) != dispatch_mux_cores_translated.end()) {
+            // Dispatcher core: write fabric_dispatcher_connections (passed in from caller)
+            data_to_write = &fabric_dispatcher_connections;
+        } else {
+            // Worker core: build per-worker connection info
+            tt::tt_fabric::tensix_fabric_connections_l1_info_t worker_connections = {};
+
+            // Get worker assignment info (tensix core + channel index) with a single lookup
+            auto tensix_info = tensix_config.get_worker_tensix_info(physical_chip_id, core_coord);
+
+            // Populate worker-specific tensix mux connection for ALL eth channel indices
+            for (uint8_t eth_chan = 0;
+                 eth_chan < tt::tt_fabric::tensix_fabric_connections_l1_info_t::MAX_FABRIC_ENDPOINTS;
+                 eth_chan++) {
+                auto& connection_info = worker_connections.read_only[eth_chan];
+                fill_tensix_connection_info_fields(
+                    connection_info,
+                    tensix_info.tensix_core,
+                    tensix_config,
+                    tensix_info.channel_index,
+                    FabricTensixCoreType::MUX);
+            }
+
+            data_to_write = &worker_connections;
+        }
+
+        // Write to L1
+        cluster.write_core(
+            data_to_write,
+            sizeof(tt::tt_fabric::tensix_fabric_connections_l1_info_t),
+            tt_cxy_pair(physical_chip_id, core_coord),
+            tt_metal::MetalContext::instance().hal().get_dev_addr(
+                tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS));
     }
 }
 
@@ -2306,10 +2374,22 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
         auto exit_node_hash = (*exit_node.src_exit_node) + (*exit_node.dst_exit_node);
         auto src_eth_chan = exit_node.eth_conn.src_chan;
         auto exit_node_chip = exit_node_fabric_node_id.chip_id;
+
+        // Check if this is BLACKHOLE and channel 8 or 9, which should use Z direction
+        const auto& chip_spec = this->mesh_graph_->get_chip_spec();
+        bool is_blackhole_z_channel =
+            (chip_spec.arch == tt::ARCH::BLACKHOLE) && (src_eth_chan == 8 || src_eth_chan == 9);
+
         for (const auto& [port_id, chip_id] : mesh_edge_ports_to_chip_id[*my_mesh_id]) {
             if (exit_node_chip == chip_id) {
                 auto port_direction = port_id.first;
                 auto logical_chan_id = port_id.second;
+
+                // If this is a Z channel on BLACKHOLE, prefer Z direction ports
+                if (is_blackhole_z_channel && port_direction != RoutingDirection::Z) {
+                    continue;
+                }
+
                 port_id_t port_id = {port_direction, logical_chan_id};
                 // Assign this port id to the exit node if it is not already assigned
                 bool valid_direction =
@@ -2318,9 +2398,11 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
                 if (assigned_port_ids.find(port_id) == assigned_port_ids.end() && valid_direction) {
                     assigned_port_ids.insert(port_id);
                     ports_to_neighbor.push_back(PortDescriptor{port_id, assoc_connection_hash});
-                    exit_node_directions_[exit_node_fabric_node_id][src_eth_chan] = port_direction;
+                    // Override direction to Z if this is a Z channel on BLACKHOLE
+                    RoutingDirection final_direction = is_blackhole_z_channel ? RoutingDirection::Z : port_direction;
+                    exit_node_directions_[exit_node_fabric_node_id][src_eth_chan] = final_direction;
                     logical_port_to_eth_chan_[exit_node_fabric_node_id][port_id] = src_eth_chan;
-                    curr_exit_node_direction[exit_node_hash] = port_direction;
+                    curr_exit_node_direction[exit_node_hash] = final_direction;
                     break;
                 }
             }
@@ -2809,7 +2891,7 @@ void ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
         all_hostnames,
         gsd_yaml,
         false,  // strict_validation
-        false   // assert_on_connection_mismatch
+        true    // assert_on_connection_mismatch
     );
 
     log_debug(tt::LogFabric, "Torus validation passed for configuration: {}", enchantum::to_string(fabric_config));

@@ -1,12 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
-
+#include "argmax_common.hpp"
 #include "dataflow_api.h"
 
-#include "argmax_common.hpp"
+#include <stdint.h>
 
 void kernel_main() {
     // Runtime args
