@@ -255,12 +255,12 @@ Result conv2d_L1(
 
         bool bypass_halo =
             (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED &&
-             sliding_window_config.get_pad_h() == 0 && sliding_window_config.get_pad_w() == 0);
+             input_tensor_post_tm.layout() == Layout::ROW_MAJOR && sliding_window_config.get_pad_h() == 0 &&
+             sliding_window_config.get_pad_w() == 0);
 
         if (bypass_halo) {
-            if (input_tensor_post_tm.layout() == Layout::TILE) {
-                input_tensor_post_tm = ttnn::to_layout(input_tensor_post_tm, Layout::ROW_MAJOR);
-            }
+            // Halo is more efficent with L1 for Untilize. Using to_layout may cause OOM for large tensors.
+            log_debug(tt::LogOp, "Bypassing halo operation as no padding is required for WIDTH_SHARDED layout.");
         } else {
             ttnn::Tensor halo_output = ttnn::halo(
                 input_tensor_post_tm,
