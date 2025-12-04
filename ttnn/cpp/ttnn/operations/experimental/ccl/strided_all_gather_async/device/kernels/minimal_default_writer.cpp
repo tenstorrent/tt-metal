@@ -80,6 +80,7 @@ void kernel_main() {
     uint32_t mm_block_wt = get_arg_val<uint32_t>(arg_idx++);
     uint32_t mm_block_ht = get_arg_val<uint32_t>(arg_idx++);
     uint32_t mm_cores_y = get_arg_val<uint32_t>(arg_idx++);
+    bool read_local_slice_from_input = (bool)get_arg_val<uint32_t>(arg_idx++);
 
     uint32_t device_k_block_counts[ring_size];
     uint32_t device_max_chunks = get_arg_val<uint32_t>(arg_idx++);
@@ -234,8 +235,8 @@ void kernel_main() {
                     direction,
                     num_targets_forward_direction,
                     num_targets_backward_direction,
-                    true);
-                if constexpr (fuse_op && direction == 1) {
+                    true && !read_local_slice_from_input);
+                if (fuse_op && direction == 1 && !read_local_slice_from_input) {
                     // Synchronize and signal that the local tensor slice is available
                     op_signaler_sender.synchronize_workers_and_signal_op(my_chip_id);
                 }
