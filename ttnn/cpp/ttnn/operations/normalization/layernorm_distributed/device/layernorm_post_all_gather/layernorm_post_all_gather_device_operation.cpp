@@ -7,6 +7,8 @@
 
 #include <tt-metalium/constants.hpp>
 
+#include <string_view>
+
 using namespace tt::constants;
 
 namespace ttnn::operations::normalization::layernorm_post_all_gather {
@@ -31,21 +33,19 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
     const auto& gamma = tensor_args.gamma;
     const auto& beta = tensor_args.beta;
 
-    TT_FATAL(a.layout() == Layout::TILE, "Input tensor must have TILE layout, got: {}", a.layout());
-    TT_FATAL(
-        a.dtype() == DataType::BFLOAT16 || a.dtype() == DataType::BFLOAT8_B,
-        "Input tensor must be BFLOAT16 or BFLOAT8_B, got: {}",
-        a.dtype());
-    TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
-    TT_FATAL(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+    auto validate_input_tensor = [](const Tensor& t, std::string_view name) {
+        TT_FATAL(t.layout() == Layout::TILE, "{} tensor must have TILE layout, got: {}", name, t.layout());
+        TT_FATAL(
+            t.dtype() == DataType::BFLOAT16 || t.dtype() == DataType::BFLOAT8_B,
+            "{} tensor must be BFLOAT16 or BFLOAT8_B, got: {}",
+            name,
+            t.dtype());
+        TT_FATAL(t.storage_type() == StorageType::DEVICE, "{} tensor must be on device!", name);
+        TT_FATAL(t.buffer() != nullptr, "{} tensor must be allocated in buffers on device!", name);
+    };
 
-    TT_FATAL(stats.layout() == Layout::TILE, "Stats tensor must have TILE layout, got: {}", stats.layout());
-    TT_FATAL(
-        stats.dtype() == DataType::BFLOAT16 || stats.dtype() == DataType::BFLOAT8_B,
-        "Stats tensor must be BFLOAT16 or BFLOAT8_B, got: {}",
-        stats.dtype());
-    TT_FATAL(stats.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
-    TT_FATAL(stats.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+    validate_input_tensor(a, "Input");
+    validate_input_tensor(stats, "Stats");
 
     // stats has 2 or 1 tile columns per device if layernorm or rmsnorm
     TT_FATAL(
