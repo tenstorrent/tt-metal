@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/constants.hpp>
-
 #include "llama_reduce_scatter.hpp"
 #include "device/llama_reduce_scatter_device_operation.hpp"
 #include "ttnn/run_operation.hpp"

@@ -28,7 +28,7 @@ target_sources(
             hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp
             hw/inc/edm_fabric/fabric_txq_setup.h
             hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp
-            hw/inc/fabric_routing_table_interface.h
+            hw/inc/fabric_direction_table_interface.h
             fabric_edm_packet_header.hpp
     PRIVATE
         control_plane.cpp
@@ -36,6 +36,10 @@ target_sources(
         routing_table_generator.cpp
         mesh_graph.cpp
         erisc_datamover_builder.cpp
+        fabric_router_channel_mapping.cpp
+        fabric_router_builder.cpp
+        builder/fabric_builder_config.cpp
+        builder/fabric_builder_helpers.cpp
         builder/fabric_core_placement.cpp
         builder/fabric_channel_allocator.cpp
         builder/fabric_static_sized_channels_allocator.cpp
@@ -47,20 +51,22 @@ target_sources(
         fabric.cpp
         fabric_init.cpp
         fabric_host_utils.cpp
+        fabric_telemetry_reader.cpp
         fabric_context.cpp
         fabric_mux_config.cpp
         fabric_tensix_builder.cpp
+        fabric_tensix_builder_impl.cpp
         fabric_types.cpp
-        compressed_routing_table.cpp
+        compressed_direction_table.cpp
         compressed_routing_path.cpp
         serialization/router_port_directions.cpp
         serialization/physical_system_descriptor_serialization.cpp
         serialization/intermesh_connections_serialization.cpp
         serialization/port_descriptor_serialization.cpp
-        erisc_datamover_builder_helper.cpp
         ccl/ccl_common.cpp
         physical_system_descriptor.cpp
         topology_mapper.cpp
+        topology_mapper_utils.cpp
 )
 
 # Include helper functions and generate headers from protobuf schemas
@@ -68,7 +74,7 @@ include(protobuf)
 set(PROTO_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/mesh_graph_descriptor.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/physical_system_descriptor.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/router_port_directions.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/router_port_directions.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/port_descriptor_table.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/intermesh_connection_table.proto
 )
@@ -89,6 +95,7 @@ target_include_directories(fabric SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(
     fabric
     PRIVATE
+        TT::ScaleoutTools
         Metalium::Metal::LLRT
         umd::device
         metal_common_libs
@@ -113,4 +120,15 @@ install(
         DESTINATION
             ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/fabric # FIXME: fix the include paths for jit_build
         COMPONENT metalium-runtime
+)
+
+# Install proto schema files for external use
+install(
+    DIRECTORY
+        protobuf
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/tt-metalium/proto
+    COMPONENT metalium-dev
+    FILES_MATCHING
+    PATTERN
+    "*.proto"
 )

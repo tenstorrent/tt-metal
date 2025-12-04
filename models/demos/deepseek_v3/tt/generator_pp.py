@@ -12,15 +12,12 @@ from loguru import logger
 from transformers import AutoConfig
 
 import ttnn
-from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.model.row_pipelined_model import RowPipelinedModel
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_weight_config
-from models.demos.deepseek_v3.utils.hf_model_utils import load_model_weights
 from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.test_utils import add_inv_scale_to_state_dict
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
@@ -152,56 +149,15 @@ class DeepseekGenerator:
         weight_cache_path = Path(cache_dir) if cache_dir is not None else Path("generated/deepseek_v3")
         weight_cache_path.mkdir(parents=True, exist_ok=True)
 
-        if self.random_weights:
-            if self.single_layer and self.single_layer.lower() == "moe":
-                raise NotImplementedError(
-                    "Random weights with 'moe' single layer is not supported by RowPipelinedModel demo yet. Use 'mlp' or disable random mode."
-                )
-            logger.info("Building random weights from HF reference model (ForCausalLM)...")
-            ref_model = DeepseekV3ForCausalLM(self.hf_config).eval()
-            # Ensure parameter/buffer dtype matches downstream expectations (bfloat16)
-            ref_model = ref_model.to(dtype=torch.bfloat16)
-            torch_state = ref_model.state_dict()
-            # Quantize MLP weights as expected by TT converters
-            torch_state = add_inv_scale_to_state_dict(
-                torch_state,
-                block_shape=self.hf_config.quantization_config["weight_block_size"],
-            )
-            model_state = {
-                k: v
-                for k, v in torch_state.items()
-                if k.startswith("model.embed_tokens.")
-                or k.startswith("model.layers.")
-                or k.startswith("model.norm.")
-                or k.startswith("lm_head.")
-            }
-        else:
-            logger.info(f"Loading HF weights from {self.model_path} (this may take a while)...")
-            hf_weights = load_model_weights(self.model_path)
-            logger.info("HF weights loaded")
-
-            if "lm_head.weight" not in hf_weights:
-                raise RuntimeError(
-                    "No HF safetensors found in model path or missing 'lm_head.weight'. "
-                    "Set DEEPSEEK_V3_HF_MODEL to a directory containing DeepSeek-V3 safetensors, or pass --model-path."
-                )
-            model_state = {
-                k: v
-                for k, v in hf_weights.items()
-                if k.startswith("model.embed_tokens.")
-                or k.startswith("model.layers.")
-                or k.startswith("model.norm.")
-                or k.startswith("lm_head.")
-            }
-        # Convert weights to TT tensors-on-disk and build weight_config
-        logger.info("Converting weights to TTNN SavedWeight format (RowPipelinedModel)...")
         self.model_weight_config = get_weight_config(
             ModuleClass=RowPipelinedModel,
             hf_config=self.hf_config,
-            state_dicts=(model_state,),
             weight_cache_path=weight_cache_path,
             mesh_device=self.mesh_device,
             force_recalculate=False,
+            random_weights=self.random_weights,
+            model_path=self.model_path,
+            single_layer=self.single_layer,
         )
 
     def _prepare_model_states(self) -> None:
@@ -499,6 +455,7 @@ class DeepseekGenerator:
         sampling: SamplingParams | None = None,
         teacher_forcing=None,
         early_print_first_user: bool = True,
+        repeat_batches: int = 1,
     ) -> Tuple[List[List[int]], dict]:
         """Generate tokens for the given prompts using greedy decode by default.
 
@@ -532,69 +489,72 @@ class DeepseekGenerator:
 
         logger.info(f"Lengths of (encoded) prompts: {lengths}")
 
-        # Prefill
-        profiler.start("inference_prefill")
-        num_of_users = tokens_batched.shape[0]
-        last_logits = []
-        for user_id in range(num_of_users):
-            if lengths[user_id] == 0:
-                logger.info(f"Skipping prefill for user_id: {user_id} as prompt length is 0")
-                last_logits.append(torch.zeros(self.hf_config.vocab_size))
-                continue
-            logger.info(f"Running prefill for user_id: {user_id}")
-            logger.info(
-                f"Input to the prefill: {self.tokenizer.decode(tokens_batched[user_id].tolist(), skip_special_tokens=True)}"
-            )
-            user_out = self._prefill(tokens_batched[user_id], user_id)
-            user_out = user_out[0, 0, -1:, :].squeeze(0)  # [ 1, 1, seq_len, V] -> [V]
-            last_logits.append(user_out)
-            self.ccl.reset_sem_counters()
-        last_logits = torch.stack(last_logits)
-        profiler.end("inference_prefill")
+        # Repeat full prefill+decode batches
+        for _ in range(repeat_batches):
+            # Prefill
+            profiler.start("inference_prefill")
+            num_of_users = tokens_batched.shape[0]
+            last_logits = []
+            for user_id in range(num_of_users):
+                if lengths[user_id] == 0:
+                    logger.info(f"Skipping prefill for user_id: {user_id} as prompt length is 0")
+                    last_logits.append(torch.zeros(self.hf_config.vocab_size))
+                    continue
+                logger.info(f"Running prefill for user_id: {user_id}")
+                logger.info(
+                    f"Input to the prefill: {self.tokenizer.decode(tokens_batched[user_id].tolist(), skip_special_tokens=True)}"
+                )
+                user_out = self._prefill(tokens_batched[user_id], user_id)
+                user_out = user_out[0, 0, -1:, :].squeeze(0)  # [ 1, 1, seq_len, V] -> [V]
+                last_logits.append(user_out)
+                self.ccl.reset_sem_counters()
+            last_logits = torch.stack(last_logits)
+            profiler.end("inference_prefill")
 
-        assert len(last_logits) == num_of_users
+            assert len(last_logits) == num_of_users
 
-        logger.info(f"Finished prefill for all users...")
+            logger.info(f"Finished prefill for all users...")
 
-        # First sampled token after prompt
-        next_tokens = self._sample_greedy(last_logits)
+            # First sampled token after prompt
+            next_tokens = self._sample_greedy(last_logits)
 
-        # Decode
-        positions = torch.zeros(USERS_PER_ROW, dtype=torch.int32) + lengths
+            # Decode
+            positions = torch.zeros(USERS_PER_ROW, dtype=torch.int32) + lengths
 
-        # If teacher forcing is enabled, collect the model's predicted token and force GT for next step (single prompt)
-        if teacher_forcing is not None:
-            # Only enforce for the first user to keep scope minimal
-            forced = teacher_forcing.collect_predicted_tokens(int(next_tokens[0].item()))
-            next_tokens[0] = int(forced)
-
-        generations: List[List[int]] = [[] for _ in range(num_of_prompts)]
-        logger.info(f"Generating {max_new_tokens} tokens for {num_of_prompts} user(s)...")
-        if early_print_first_user:
-            logger.info("===== Generation for first user =====")
-
-        profiler.start("inference_decode")
-        for gen_idx in range(max_new_tokens):
-            # Decode one step with previous next_tokens
-            profiler.start(f"decode_time_{gen_idx}")
-            logits = self._decode_step(next_tokens, positions).squeeze(0).squeeze(0)
-            profiler.end(f"decode_time_{gen_idx}")
-            self.ccl.reset_sem_counters()
-            pred_tokens = self._sample_greedy(logits)
+            # If teacher forcing is enabled, collect the model's predicted token and force GT for next step (single prompt)
             if teacher_forcing is not None:
-                forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
-                pred_tokens[0] = int(forced)
-            next_tokens = pred_tokens
-            positions += 1
+                # Only enforce for the first user to keep scope minimal
+                forced = teacher_forcing.collect_predicted_tokens(int(next_tokens[0].item()))
+                next_tokens[0] = int(forced)
 
-            # Collect only for the original batch size
-            for i in range(num_of_prompts):
-                token_value = int(next_tokens[i].item())
-                generations[i].append(token_value)
-                if early_print_first_user and i == 0:
-                    print(self.tokenizer.decode(token_value, skip_special_tokens=True), end="", flush=True)
+            generations: List[List[int]] = [[] for _ in range(num_of_prompts)]
+            logger.info(f"Generating {max_new_tokens} tokens for {num_of_prompts} user(s)...")
+            if early_print_first_user:
+                logger.info("===== Generation for first user =====")
 
-        profiler.end("inference_decode")
+            profiler.start("inference_decode")
+            for gen_idx in range(max_new_tokens):
+                # Decode one step with previous next_tokens
+                profiler.start(f"decode_time_{gen_idx}")
+                logits = self._decode_step(next_tokens, positions).squeeze(0).squeeze(0)
+                profiler.end(f"decode_time_{gen_idx}")
+                self.ccl.reset_sem_counters()
+                pred_tokens = self._sample_greedy(logits)
+                if teacher_forcing is not None:
+                    forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
+                    pred_tokens[0] = int(forced)
+                next_tokens = pred_tokens
+                positions += 1
+
+                # Collect only for the original batch size
+                for i in range(num_of_prompts):
+                    token_value = int(next_tokens[i].item())
+                    generations[i].append(token_value)
+                    if early_print_first_user and i == 0:
+                        print(self.tokenizer.decode(token_value, skip_special_tokens=True), end="", flush=True)
+
+            profiler.end("inference_decode")
+
         profiler.end("run")
 
         if early_print_first_user:

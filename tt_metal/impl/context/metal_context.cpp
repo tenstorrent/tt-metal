@@ -4,6 +4,10 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <algorithm>
+#include <mutex>
+#include <future>
+#include <vector>
 
 #include <enchantum/enchantum.hpp>
 #include <tracy/Tracy.hpp>
@@ -25,13 +29,20 @@
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/llrt/get_platform_architecture.hpp"
 #include "tt_metal/llrt/llrt.hpp"
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include "tt_metal/impl/device/device_pool.hpp"
 #include <tt-metalium/distributed_context.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include "tt_metal/impl/dispatch/data_collector.hpp"
+
+#include <impl/dispatch/dispatch_query_manager.hpp>
+#include <impl/dispatch/dispatch_core_manager.hpp>
+#include <llrt/tt_cluster.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
+#include "tt_metal/common/executor.hpp"
 
 namespace tt::tt_metal {
 
@@ -134,6 +145,8 @@ void MetalContext::initialize(
         profiler_state_manager_ = std::make_unique<ProfilerStateManager>();
     }
 
+    data_collector_ = std::make_unique<DataCollector>();
+
     // Minimal setup, don't initialize FW/Dispatch/etc.
     if (minimal) {
         return;
@@ -141,40 +154,59 @@ void MetalContext::initialize(
 
     // Clear state, build FW
     auto all_devices = cluster_->all_chip_ids();
-    for (ChipId device_id : all_devices) {
-        // Clear L1/DRAM if requested
-        if (rtoptions_.get_clear_l1()) {
-            clear_l1_state(device_id);
-        }
-        if (rtoptions_.get_clear_dram()) {
-            clear_dram_state(device_id);
-        }
-        [[maybe_unused]] int ai_clk = cluster_->get_device_aiclk(device_id);
-        log_debug(tt::LogMetal, "AI CLK for device {} is:   {} MHz", device_id, ai_clk);
-        generate_device_bank_to_noc_tables(device_id);
-        generate_worker_logical_to_virtual_map(device_id);
 
-        // Create build env for this device, and build FW if it's not built already
-        BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
-        // fw_build_key is a combination of build_key and fw_compile_hash
-        // If fw_compile_hash changes, the fw_build_key will change and FW will be rebuilt
-        // if it's not already in firmware_built_keys_
-        // Combine build_key and fw_compile_hash using XOR to create unique firmware build key
-        // Uses full 64-bit fw_compile_hash for proper change detection
-        uint64_t fw_build_key =
-            BuildEnvManager::get_instance().get_device_build_env(device_id).build_key() ^ fw_compile_hash;
+    std::vector<std::shared_future<void>> futures;
+    {
+        ZoneScopedN("FW builds and Device Inits");
 
-        if (!firmware_built_keys_.contains(fw_build_key)) {
-            BuildEnvManager::get_instance().build_firmware(device_id);
-            firmware_built_keys_.insert(fw_build_key);
+        futures.reserve(all_devices.size());
+
+        // Launch async tasks for each device
+        for (ChipId device_id : all_devices) {
+            futures.emplace_back(detail::async([this, device_id, fw_compile_hash]() {
+                // Clear L1/DRAM if requested
+                if (rtoptions_.get_clear_l1()) {
+                    clear_l1_state(device_id);
+                }
+                if (rtoptions_.get_clear_dram()) {
+                    clear_dram_state(device_id);
+                }
+                [[maybe_unused]] int ai_clk = cluster_->get_device_aiclk(device_id);
+                log_debug(tt::LogMetal, "AI CLK for device {} is:   {} MHz", device_id, ai_clk);
+                generate_device_bank_to_noc_tables(device_id);
+                generate_worker_logical_to_virtual_map(device_id);
+
+                // Create build env for this device, and build FW if it's not built already
+                BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
+                // fw_build_key is a combination of build_key and fw_compile_hash
+                // If fw_compile_hash changes, the fw_build_key will change and FW will be rebuilt
+                // if it's not already in firmware_built_keys_
+                // Combine build_key and fw_compile_hash using XOR to create unique firmware build key
+                // Uses full 64-bit fw_compile_hash for proper change detection
+                uint64_t fw_build_key =
+                    BuildEnvManager::get_instance().get_device_build_env(device_id).build_key() ^ fw_compile_hash;
+
+                {
+                    std::lock_guard<std::mutex> lock(firmware_built_keys_mutex_);
+                    if (!firmware_built_keys_.contains(fw_build_key)) {
+                        BuildEnvManager::get_instance().build_firmware(device_id);
+                        firmware_built_keys_.insert(fw_build_key);
+                    }
+                }
+
+                // Clear the entire launch message ring buffer on ethernet cores before application firmware is
+                // activated. This is required since ethernet cores context switch between application and routing
+                // firmware. If ERISC application firmware is activated before the launch messages are cleared, it can
+                // enter an undefined state by reading a corrupted launch message. Routing firmware will never run in
+                // this case, causing UMD issued transactions to hang.
+                clear_launch_messages_on_eth_cores(device_id);
+            }));
         }
 
-        // Clear the entire launch message ring buffer on ethernet cores before application firmware is activated.
-        // This is required since ethernet cores context switch between application and routing firmware.
-        // If ERISC application firmware is activated before the launch messages are cleared, it can enter an undefined
-        // state by reading a corrupted launch message. Routing firmware will never run in this case, causing UMD issued
-        // transactions to hang.
-        clear_launch_messages_on_eth_cores(device_id);
+        // Wait for all async tasks to complete
+        for (auto& fut : futures) {
+            fut.wait();
+        }
     }
 
     // Populate FD topology across all devices
@@ -192,12 +224,29 @@ void MetalContext::initialize(
         dprint_server_->attach_devices();
     }
     watcher_server_->init_devices();
-    for (ChipId device_id : all_devices) {
-        ClearNocData(device_id);
 
-        reset_cores(device_id);
+    // Parallelize device initialization
+    {
+        ZoneScopedN("Resets and FW Launch");
 
-        initialize_and_launch_firmware(device_id);
+        // Clear and reuse existing task group vectors
+        futures.clear();
+
+        // Launch async tasks for each device
+        for (ChipId device_id : all_devices) {
+            futures.emplace_back(detail::async([this, device_id]() {
+                ClearNocData(device_id);
+
+                reset_cores(device_id);
+
+                initialize_and_launch_firmware(device_id);
+            }));
+        }
+
+        // Wait for all async tasks to complete
+        for (auto& fut : futures) {
+            fut.wait();
+        }
     }
     // Watcher needs to init before FW since FW needs watcher mailboxes to be set up, and needs to attach after FW
     // starts since it also writes to watcher mailboxes.
@@ -220,8 +269,29 @@ void MetalContext::teardown() {
     }
     initialized_ = false;
 
+    auto all_devices = cluster_->all_chip_ids();
+    // If simulator is enabled, force a teardown of active ethernet cores for WH
+    if (rtoptions_.get_simulator_enabled()) {
+        if (hal_->get_eth_fw_is_cooperative()) {
+            for (ChipId device_id : all_devices) {
+                for (const auto& logical_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
+                    CoreCoord virtual_core = cluster_->get_virtual_coordinate_from_logical_coordinates(
+                        device_id, logical_core, CoreType::ETH);
+                    erisc_send_exit_signal(device_id, virtual_core, false);
+                    while (erisc_app_still_running(device_id, virtual_core)) {
+                    }
+                }
+            }
+        }
+    }
+
     // Set internal routing to false to exit active ethernet FW & go back to base FW
     cluster_->set_internal_routing_info_for_ethernet_cores(false);
+
+    if (data_collector_) {
+        data_collector_->DumpData();
+        data_collector_.reset();
+    }
 
     if (dprint_server_) {
         dprint_server_->detach_devices();
@@ -229,7 +299,6 @@ void MetalContext::teardown() {
         rtoptions_.set_disable_dma_ops(false);
     }
 
-    auto all_devices = cluster_->all_chip_ids();
     watcher_server_->detach_devices();
     watcher_server_.reset();
     for (ChipId device_id : all_devices) {
@@ -247,6 +316,7 @@ void MetalContext::teardown() {
             mem_map.reset();
         }
     }
+
     dispatch_query_manager_.reset();
     dispatch_core_manager_.reset();
     tt::tt_metal::reset_topology_state();
@@ -267,6 +337,8 @@ MetalContext& MetalContext::instance() {
 void MetalContext::teardown_base_objects() {
     // Teardown in backward order of dependencies to avoid dereferencing uninitialized objects
     distributed_context_.reset();
+    // Destroy inspector before cluster to prevent RPC handlers from accessing destroyed cluster
+    inspector_data_.reset();
     cluster_.reset();
     hal_.reset();
 }
@@ -283,7 +355,11 @@ MetalContext::MetalContext() {
     const auto platform_arch = get_platform_architecture(rtoptions_);
 
     const auto initialize_objects = [&]() {
-        hal_ = std::make_unique<Hal>(platform_arch, is_base_routing_fw_enabled, rtoptions_.get_enable_2_erisc_mode());
+        hal_ = std::make_unique<Hal>(
+            platform_arch,
+            is_base_routing_fw_enabled,
+            rtoptions_.get_enable_2_erisc_mode(),
+            get_profiler_dram_bank_size_per_risc_bytes(rtoptions_));
         rtoptions_.ParseAllFeatureEnv(*hal_);
         cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
         distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
@@ -298,6 +374,22 @@ MetalContext::MetalContext() {
         rtoptions_.set_enable_2_erisc_mode(false);
         teardown_base_objects();
         initialize_objects();
+    }
+
+    // Initialize some container members to allow threadsafe operations on them later
+    dram_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
+    l1_bank_offset_map_.reserve(cluster_->all_chip_ids().size());
+    dram_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
+    l1_bank_to_noc_xy_.reserve(cluster_->all_chip_ids().size());
+    worker_logical_col_to_virtual_col_.reserve(cluster_->all_chip_ids().size());
+    worker_logical_row_to_virtual_row_.reserve(cluster_->all_chip_ids().size());
+    for (ChipId device_id : cluster_->all_chip_ids()) {
+        dram_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
+        l1_bank_offset_map_.emplace(device_id, std::vector<int32_t>{});
+        dram_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
+        l1_bank_to_noc_xy_.emplace(device_id, std::vector<uint16_t>{});
+        worker_logical_col_to_virtual_col_.emplace(device_id, std::vector<uint8_t>{});
+        worker_logical_row_to_virtual_row_.emplace(device_id, std::vector<uint8_t>{});
     }
 
     // We do need to call Cluster teardown at the end of the program, use atexit temporarily until we have clarity on
@@ -351,7 +443,7 @@ const DispatchMemMap& MetalContext::dispatch_mem_map() const {
 }
 
 const DispatchMemMap& MetalContext::dispatch_mem_map(const CoreType& core_type) const {
-    auto& mem_map = dispatch_mem_map_[enchantum::to_underlying(core_type)];
+    const auto& mem_map = dispatch_mem_map_[enchantum::to_underlying(core_type)];
     TT_FATAL(mem_map, "Tried to get dispatch_mem_map for {} before initializing it.", core_type);
     return *mem_map;
 }
@@ -435,8 +527,9 @@ void MetalContext::clear_launch_messages_on_eth_cores(ChipId device_id) {
 }
 
 tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
+    std::lock_guard<std::mutex> lock(control_plane_mutex_);
     if (!control_plane_) {
-        this->initialize_control_plane();
+        this->initialize_control_plane_impl();
     }
     return *control_plane_;
 }
@@ -593,6 +686,11 @@ void MetalContext::construct_control_plane(const std::filesystem::path& mesh_gra
 }
 
 void MetalContext::initialize_control_plane() {
+    std::lock_guard<std::mutex> lock(control_plane_mutex_);
+    initialize_control_plane_impl();
+}
+
+void MetalContext::initialize_control_plane_impl() {
     if (custom_mesh_graph_desc_path_.has_value()) {
         log_debug(tt::LogDistributed, "Using custom mesh graph descriptor: {}", custom_mesh_graph_desc_path_.value());
         std::filesystem::path mesh_graph_desc_path = std::filesystem::path(custom_mesh_graph_desc_path_.value());
@@ -606,21 +704,13 @@ void MetalContext::initialize_control_plane() {
         return;
     }
     log_debug(tt::LogDistributed, "Using default mesh graph descriptor.");
-
-    if (!rtoptions_.get_use_mesh_graph_descriptor_1_0()) {
-        log_debug(tt::LogDistributed, "Using MGD 2.0 mesh graph descriptor.");
-    } else {
-        log_debug(tt::LogDistributed, "Using MGD 1.0 mesh graph descriptor.");
-    }
+    log_debug(tt::LogDistributed, "Using MGD mesh graph descriptor.");
 
     auto cluster_type = cluster_->get_cluster_type();
     auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_);
     std::filesystem::path mesh_graph_desc_path =
         tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
-            cluster_type,
-            std::filesystem::path(rtoptions_.get_root_dir()),
-            !rtoptions_.get_use_mesh_graph_descriptor_1_0(),
-            fabric_type);
+            cluster_type, rtoptions_.get_root_dir(), fabric_type);
 
     log_debug(tt::LogMetal, "Using mesh graph descriptor: {}", mesh_graph_desc_path);
 
