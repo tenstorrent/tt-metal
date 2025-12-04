@@ -184,6 +184,12 @@ run_resnet_func() {
 
 }
 
+run_resnet_func_with_ops_recording() {
+  # Run resnet with operation recording enabled
+  # This sets TTNN_CONFIG_OVERRIDES and extracts operations from db.sqlite
+  bash "$(dirname "${BASH_SOURCE[0]}")/record_and_list_operations.sh" "resnet_ops" "pytest models/demos/wormhole/resnet50/demo/demo.py"
+}
+
 run_sdxl_func() {
   TT_MM_THROTTLE_PERF=5 pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py --start-from=0 --num-prompts=2 -k "device_encoders and device_vae and no_cfg_parallel"
   TT_MM_THROTTLE_PERF=5 pytest  models/experimental/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"

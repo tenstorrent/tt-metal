@@ -46,6 +46,7 @@ jobs:
             { name: "bert_tiny", runner-label: "N150", performance: false, cmd: run_bert_tiny_func, owner_id: U024A4EFV6U}, # Brian Liu
             { name: "bert", runner-label: "N150", performance: false, cmd: run_bert_func, owner_id: U024A4EFV6U}, # Brian Liu
             { name: "resnet", runner-label: "N150", performance: false, cmd: run_resnet_func, owner_id: U0837MYG788}, # Marko Radosavljevic
+            { name: "resnet_ops_recording", runner-label: "N150", performance: false, cmd: run_resnet_func_with_ops_recording, owner_id: U0837MYG788}, # Marko Radosavljevic - Resnet with ops recording
             { name: "distilbert", runner-label: "N150", performance: false, cmd: run_distilbert_func, owner_id: U013121KDH9}, # Austin Ho
             { name: "mnist", runner-label: "N150", performance: false, cmd: run_mnist_func, owner_id: U06ECNVR0EN}, # Evan Smal
             { name: "squeezebert", runner-label: "N150", performance: false, cmd: run_squeezebert_func, owner_id: UBHPP2NDP}, # Joseph Chu
@@ -221,6 +222,13 @@ jobs:
         run: |
           source /work/tests/scripts/single_card/run_single_card_demo_tests.sh
           ${{ matrix.test-group.cmd }}
+      - name: Upload TTNN reports (operations recording)
+        if: ${{ !cancelled() && contains(matrix.test-group.cmd, 'ops_recording') }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        with:
+          path: generated/ttnn/reports/
+          prefix: "ttnn_reports_"
       - name: Save environment data
         id: save-environment-data
         if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !cancelled() }}
