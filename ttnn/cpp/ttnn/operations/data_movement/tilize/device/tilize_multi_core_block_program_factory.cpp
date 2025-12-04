@@ -23,7 +23,7 @@ TilizeMultiCoreBlockProgramFactory::cached_program_t TilizeMultiCoreBlockProgram
     const tilize::tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     auto a = tensor_args.input_tensor;
-    auto output = tensor_return_value;
+    const auto& output = tensor_return_value;
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);

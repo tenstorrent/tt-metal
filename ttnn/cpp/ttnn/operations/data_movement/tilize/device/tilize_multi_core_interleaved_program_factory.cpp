@@ -24,7 +24,7 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
     const tilize::tensor_args_t& tensor_args,
     const tilize::tensor_return_value_t& tensor_return_value) {
     auto a = tensor_args.input_tensor;
-    auto output = tensor_return_value;
+    const auto& output = tensor_return_value;
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
