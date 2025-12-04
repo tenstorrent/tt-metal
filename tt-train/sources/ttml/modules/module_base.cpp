@@ -117,5 +117,12 @@ autograd::TensorPtr ModuleBase::operator()(const autograd::TensorPtr& tensor, co
         "ModuleBase::operator()(const autograd::TensorPtr& tensor, const autograd::TensorPtr& other) is Not "
         "implemented");
 }
+autograd::TensorPtr ModuleBase::operator()(
+    const autograd::TensorPtr& tensor, const autograd::TensorPtr& other, const bool use_cache) {
+    throw std::logic_error(
+        "ModuleBase::operator()(const autograd::TensorPtr& tensor, const autograd::TensorPtr& other, bool use_cache) "
+        "is Not "
+        "implemented");
+}
 
 }  // namespace ttml::modules

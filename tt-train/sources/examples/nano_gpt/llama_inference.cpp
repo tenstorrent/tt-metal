@@ -123,14 +123,15 @@ void run_inference_with_kv_cache(
         // For first step (prefill): use all prompt tokens
         // For subsequent steps (decode): use only the last generated token
         std::vector<uint32_t> input_tokens;
-        uint32_t cache_pos = model->get_cache_position();
+        uint32_t processed_tokens = 0;
 
-        if (cache_pos == 0) {
+        if (model->get_inference_mode() == ttml::modules::InferenceMode::PREFILL) {
             // Prefill: process entire prompt
             input_tokens = generated_tokens;
         } else {
             // Decode: process only last token
             input_tokens = {generated_tokens.back()};
+            processed_tokens = generated_tokens.size() - 1;
         }
 
         auto token_tensor = tokens_to_tensor(input_tokens, device);
@@ -138,21 +139,22 @@ void run_inference_with_kv_cache(
         // Create causal mask
         // For prefill: query_len = prompt_len, key_len = prompt_len
         // For decode: query_len = 1, key_len = cache_position + 1
-        auto mask = create_causal_mask(device, input_tokens.size(), cache_pos);
-        auto logits = (*model)(token_tensor, mask);
+        auto mask = create_causal_mask(device, input_tokens.size(), processed_tokens);
+        auto logits = (*model)(token_tensor, mask, true);  // use_cache = true
 
         // Sample next token from the last position
         uint32_t next_token = sample_token(logits, input_tokens.size());
         generated_tokens.push_back(next_token);
 
         if (step % 10 == 0) {
-            fmt::print("Step {}: token={}, cache_pos={}\n", step, next_token, model->get_cache_position());
+            fmt::print("Step {}: token={}, processed_tokens={}\n", step, next_token, processed_tokens);
         }
     }
 
     auto end_timer = std::chrono::high_resolution_clock::now();
     auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_timer - start_timer).count();
 
+    model->reset_cache();
     // ============================================================================
     // Summary
     // ============================================================================
@@ -173,7 +175,6 @@ void run_inference_with_kv_cache(
 
     fmt::print("\nTotal time: {} ms\n", total_duration);
     fmt::print("Average time per token: {} ms\n", new_tokens > 0 ? total_duration / new_tokens : 0);
-    fmt::print("Final cache position: {}\n", model->get_cache_position());
     fmt::print("Cache entries: {}\n", device->num_program_cache_entries());
     fmt::print("{}\n", std::string(80, '='));
 }
@@ -275,8 +276,7 @@ int main(int argc, char** argv) {
     TT_FATAL(tt_metal_home != nullptr, "TT_METAL_HOME environment variable is not set");
 
     // Use default LLaMA config path
-    std::string model_config_path =
-        std::string(tt_metal_home) + "/tt-train/configs/model_configs/llama3_gpt2s_size.yaml";
+    std::string model_config_path = std::string(tt_metal_home) + "/tt-train/configs/model_configs/tinyllama.yaml";
 
     fmt::print("\n{}\n", std::string(80, '='));
     fmt::print("LLaMA Inference {}\n", inference_config.use_kv_cache ? "with KV Cache" : "without KV Cache");
@@ -290,9 +290,6 @@ int main(int argc, char** argv) {
     fmt::print("Loading model configuration from: {}\n", model_config_path);
     YAML::Node yaml_config = YAML::LoadFile(model_config_path);
     auto llama_config = ttml::models::llama::read_config(yaml_config["transformer_config"]);
-
-    // Set inference mode based on command-line flag
-    llama_config.inference = inference_config.use_kv_cache;
 
     fmt::print("\n1. Model Configuration:\n");
     fmt::print("   Num heads: {}\n", llama_config.num_heads);
@@ -317,8 +314,7 @@ int main(int argc, char** argv) {
     fmt::print("   Num devices: {}\n\n", device->num_devices());
 
     // Create model
-    fmt::print(
-        "3. Creating LLaMA model{}...\n", inference_config.use_kv_cache ? " with KV cache" : " without KV cache");
+    fmt::print("3. Creating LLaMA model...\n");
     auto model = ttml::models::llama::create(llama_config);
 
     // Load weights if provided
