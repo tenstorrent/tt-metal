@@ -462,7 +462,7 @@ private:
 
     // Whether this mux has a fabric router to connect to
     // False for missing directions in UDM mode (inter-mux forwarding only)
-    bool has_fabric_router_;
+    bool has_fabric_router_ = true;
 
     // Channel connection liveness check disable array
     mutable std::array<bool, builder_config::num_sender_channels> channel_connection_liveness_check_disable_array_{};
