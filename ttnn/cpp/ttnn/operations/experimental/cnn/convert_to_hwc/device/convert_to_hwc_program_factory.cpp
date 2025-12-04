@@ -99,13 +99,15 @@ GroupingResult group_and_coalesce_transfers(
     const std::vector<CoreCoord>& in_cores,
     uint32_t effective_hw_for_gather,
     uint32_t block_size_width) {
+    // Use the actual output shard width for transfer generation (determines which output core)
+    // block_size_width is only used for grouping transfers into blocks
     const auto gather_transfers = convert_to_hwc::detail::precompute_gather_transfers(
         config.batch_size,
         config.input_channels,
         effective_hw_for_gather,
         in_cores,
         config.output_cores,
-        block_size_width);
+        config.gather_l1_output_shard_width);
 
     const auto blocked_result = convert_to_hwc::detail::group_transfers_by_output_column_blocks(
         gather_transfers,
@@ -116,7 +118,7 @@ GroupingResult group_and_coalesce_transfers(
         config.output_cores.size(),
         /*element_size_bytes=*/config.element_size_bytes,
         /*block_size=*/block_size_width,
-        /*output_shard_width=*/block_size_width);
+        /*output_shard_width=*/config.gather_l1_output_shard_width);
 
     auto blocked_gather_transfers = blocked_result.blocked_transfers;
     auto per_core_blocked_gather_transfers =
@@ -408,7 +410,17 @@ ConvertToHWCProgramFactory::cached_program_t ConvertToHWCProgramFactory::create(
     uint32_t effective_hw_for_gather = detail::calculate_effective_hw_for_sharding(
         config.hw_total, config.batch_size, config.l1_input_shard_width, static_cast<uint32_t>(in_cores.size()));
 
-    const uint32_t block_size_width = config.gather_l1_output_shard_width;
+    // Use smaller block size to reduce L1 consumption
+    // Try to use 32 if it divides evenly, otherwise use 64, or fall back to full width
+    // This reduces the CB_IN_BATCH buffer size significantly
+    uint32_t block_size_width = 32;
+    if (config.gather_l1_output_shard_width % 32 != 0) {
+        block_size_width = 64;
+        // Ensure 64 also divides evenly, otherwise fall back to full width
+        if (config.gather_l1_output_shard_width % 64 != 0) {
+            block_size_width = config.gather_l1_output_shard_width;
+        }
+    }
     const auto block_width = block_size_width;
 
     // Setup circular buffers on the output cores (where the kernels execute)
