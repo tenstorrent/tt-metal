@@ -1282,11 +1282,14 @@ void DeviceProfiler::readRiscProfilerResults(
         }
     }
 
+    const uint32_t profiler_dram_bank_size_per_risc_bytes = get_profiler_dram_bank_size_per_risc_bytes();
+    const uint32_t profiler_dram_bank_vector_size_per_risc = profiler_dram_bank_size_per_risc_bytes / sizeof(uint32_t);
+
     const uint32_t coreFlatID =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_routing_to_profiler_flat_id(device_id).at(
             worker_core);
     const uint32_t startIndex = coreFlatID * MetalContext::instance().hal().get_max_processors_per_core() *
-                                PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
+                                profiler_dram_bank_vector_size_per_risc;
 
     // translate worker core virtual coord to phys coordinates
     const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
@@ -1327,7 +1330,7 @@ void DeviceProfiler::readRiscProfilerResults(
         }
 
         if (bufferEndIndex > 0) {
-            uint32_t bufferRiscShift = (riscEndIndex * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) + startIndex;
+            uint32_t bufferRiscShift = (riscEndIndex * profiler_dram_bank_vector_size_per_risc) + startIndex;
             if (data_source == ProfilerDataBufferSource::L1) {
                 // Shift by L1 buffer size only
                 bufferRiscShift = riscEndIndex * kernel_profiler::PROFILER_L1_VECTOR_SIZE;

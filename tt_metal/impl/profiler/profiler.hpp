@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <nlohmann/json_fwd.hpp>
 #include <stdint.h>
 #include <cstddef>
 #include <filesystem>
@@ -20,7 +19,6 @@
 #include "buffer.hpp"
 #include "common/TracyTTDeviceData.hpp"
 #include "core_coord.hpp"
-#include "thread_pool.hpp"
 #include "profiler_optional_metadata.hpp"
 #include "profiler_types.hpp"
 #include "tracy/TracyTTDevice.hpp"
@@ -28,6 +26,7 @@
 namespace tt {
 namespace tt_metal {
 class IDevice;
+class ThreadPool;
 }  // namespace tt_metal
 }  // namespace tt
 
