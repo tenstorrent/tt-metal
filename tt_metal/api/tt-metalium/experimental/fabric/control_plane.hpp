@@ -306,6 +306,12 @@ private:
         ChipId physical_chip_id,
         chan_id_t eth_channel_id) const;
 
+    // UDM-specific helper to write per-worker connection info to each worker core's L1
+    void write_udm_fabric_connections_to_tensix_cores(
+        ChipId physical_chip_id,
+        const tt::tt_fabric::tensix_fabric_connections_l1_info_t& fabric_worker_connections,
+        const tt::tt_fabric::tensix_fabric_connections_l1_info_t& fabric_dispatcher_connections) const;
+
     void assign_direction_to_fabric_eth_chan(
         const FabricNodeId& fabric_node_id, chan_id_t chan_id, RoutingDirection direction);
 

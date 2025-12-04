@@ -300,6 +300,63 @@ FORCE_INLINE void fabric_write_set_unicast_route_control_field(volatile tt_l1_pt
     }
 }
 
+WorkerToFabricEdmSender build_from_reserved_l1_info() {
+    constexpr bool is_persistent_fabric = true;
+    const StreamId my_fc_stream_channel_id = StreamId{std::numeric_limits<uint32_t>::max()};
+
+    tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
+        reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
+    constexpr uint32_t eth_channel = 0;  // always use channel 0 for UDM mode
+    const auto conn = &connection_info->read_only[eth_channel];
+    const auto aligned_conn = &connection_info->read_write[eth_channel];
+    uint8_t direction = conn->edm_direction;
+    uint8_t edm_worker_x = conn->edm_noc_x;
+    uint8_t edm_worker_y = conn->edm_noc_y;
+    uint32_t edm_buffer_base_addr = conn->edm_buffer_base_addr;
+    uint8_t num_buffers_per_channel = conn->num_buffers_per_channel;
+    uint32_t edm_connection_handshake_l1_addr = conn->edm_connection_handshake_addr;
+    uint32_t edm_worker_location_info_addr = conn->edm_worker_location_info_addr;
+    uint16_t buffer_size_bytes = conn->buffer_size_bytes;
+    uint32_t edm_copy_of_wr_counter_addr = conn->buffer_index_semaphore_id;
+    volatile uint32_t* writer_send_sem_addr =
+        reinterpret_cast<volatile uint32_t*>(reinterpret_cast<uintptr_t>(&aligned_conn->worker_flow_control_semaphore));
+    uint32_t worker_free_slots_stream_id = static_cast<uint32_t>(conn->worker_free_slots_stream_id);
+
+    // Use second region for worker_teardown_sem_addr
+    constexpr uint32_t eth_channel_teardown = 1;
+    static_assert(
+        eth_channel_teardown < tensix_fabric_connections_l1_info_t::MAX_FABRIC_ENDPOINTS,
+        "eth_channel_teardown out of bounds");
+    const auto aligned_conn_teardown = &connection_info->read_write[eth_channel_teardown];
+    volatile uint32_t* worker_teardown_sem_addr = reinterpret_cast<volatile uint32_t*>(
+        reinterpret_cast<uintptr_t>(&aligned_conn_teardown->worker_flow_control_semaphore));
+
+    // Use third region for worker_buffer_index_semaphore_addr
+    constexpr uint32_t eth_channel_buffer_index = 2;
+    static_assert(
+        eth_channel_buffer_index < tensix_fabric_connections_l1_info_t::MAX_FABRIC_ENDPOINTS,
+        "eth_channel_buffer_index out of bounds");
+    const auto aligned_conn_buffer_index = &connection_info->read_write[eth_channel_buffer_index];
+    uint32_t worker_buffer_index_semaphore_addr =
+        static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&aligned_conn_buffer_index->worker_flow_control_semaphore));
+
+    return WorkerToFabricEdmSender(
+        is_persistent_fabric,
+        edm_worker_x,
+        edm_worker_y,
+        edm_buffer_base_addr,
+        num_buffers_per_channel,
+        edm_connection_handshake_l1_addr,
+        edm_worker_location_info_addr,
+        buffer_size_bytes,
+        edm_copy_of_wr_counter_addr,
+        writer_send_sem_addr,
+        worker_teardown_sem_addr,
+        worker_buffer_index_semaphore_addr,
+        worker_free_slots_stream_id,
+        my_fc_stream_channel_id);
+}
+
 /**
  * @brief Get or create a singleton fabric connection for the current worker
  *
@@ -319,7 +376,7 @@ FORCE_INLINE std::pair<tt::tt_fabric::WorkerToFabricEdmSender&, bool> get_or_ope
         // addresses.
         size_t rt_args_idx = 0;
         static tt::tt_fabric::WorkerToFabricEdmSender conn;
-        conn = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+        conn = build_from_reserved_l1_info();
         conn.open();
         connection = &conn;
         initialized = true;
