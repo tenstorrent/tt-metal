@@ -140,12 +140,13 @@ jobs:
               "timeout": 50,
               "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
             },
-            { 
-              "name": "t3k_whisper_tests", 
-              "arch": "wormhole_b0", 
-              "cmd": "run_t3000_whisper_tests", 
-              "timeout": 90, 
-              "owner_id": "U088413NP0Q", # Ashai Reddy
+            {
+              "name": "t3k_whisper_tests",
+              "model": "whisper",
+              "arch": "wormhole_b0",
+              "cmd": "run_t3000_whisper_tests",
+              "timeout": 90,
+              "owner_id": "U088413NP0Q" # Ashai Reddy
             },
             {
               "name": "t3k_qwen3_tests",
