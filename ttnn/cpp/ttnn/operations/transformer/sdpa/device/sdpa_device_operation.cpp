@@ -107,6 +107,8 @@ void SDPAOperation::validate_on_program_cache_miss(const operation_attributes_t&
             TT_FATAL(mask_shape[2] == q_shape[2], "Mask sequence length must match Q sequence length");
             TT_FATAL(mask_shape[3] == k_shape[2], "Mask sequence length must match K sequence length");
 
+            // When given a mask, we must check that the mask can be divided by chunk size. Otherwise we'd need to pad
+            // the mask
             const auto q_chunk_size = get_q_chunk_size(attrs);
             const auto k_chunk_size = get_k_chunk_size(attrs);
             TT_FATAL(
@@ -139,6 +141,7 @@ void SDPAOperation::validate_on_program_cache_miss(const operation_attributes_t&
         }
 
         if (use_mla) {
+            // Head dim v validation
             TT_FATAL(
                 attrs.head_dim_v.value() <= q_shape[3],
                 "Head dimension of V must be less than or equal to head dim of Q, got {} and {}",
@@ -189,7 +192,7 @@ void SDPAOperation::validate_on_program_cache_miss(const operation_attributes_t&
     auto validate_chunked_mode = [&]() {
         TT_FATAL(attrs.chunk_start_idx.has_value(), "chunk_start_idx must be provided for chunked mode");
         TT_FATAL(attrs.chunk_start_idx.value() >= 0, "chunk_start_idx must be non-negative");
-
+        // Validate page table tensor
         const auto& page_table = tensors.page_table.value();
         TT_FATAL(page_table.storage_type() == StorageType::DEVICE, "Page table tensor must be on device");
         TT_FATAL(q.device() == page_table.device(), "Page table must be on the same device as the input tensors");
@@ -201,6 +204,7 @@ void SDPAOperation::validate_on_program_cache_miss(const operation_attributes_t&
             !tensors.attn_mask.has_value(),
             "Attention mask should not be provided in chunked mode - masking is handled internally");
 
+        // Additional chunked-specific validations
         const auto q_shape = q.logical_shape();
         const auto k_shape = k.logical_shape();
         const auto v_shape = v.logical_shape();
@@ -288,6 +292,8 @@ void SDPAOperation::validate_on_program_cache_miss(const operation_attributes_t&
             const auto& sink_shape = attention_sink.logical_shape();
             const auto q_shape = q.logical_shape();
 
+            // Attention sink must have shape [1, NH, 1, 1] - single value per head, broadcast across batch and tile
+            // dims
             TT_FATAL(sink_shape[0] == 1, "Attention sink batch dimension must be 1. Got {}", sink_shape[0]);
             TT_FATAL(
                 sink_shape[1] == q_shape[1],
@@ -302,7 +308,7 @@ void SDPAOperation::validate_on_program_cache_miss(const operation_attributes_t&
     auto check_conditions = [&]() {
         bool has_chunk_start = attrs.chunk_start_idx.has_value();
         bool has_page_table = tensors.page_table.has_value();
-
+        // For chunked mode, we need at least 2 optional inputs (mask placeholder and page_table)
         if (has_chunk_start) {
             TT_FATAL(has_page_table, "page_table must be provided when chunk_start_idx is set");
         }
@@ -320,6 +326,8 @@ void SDPAOperation::validate_on_program_cache_miss(const operation_attributes_t&
     // Validate attention sink if provided
     validate_attention_sink();
 
+    // Check padding: Only the sequence dimension may be padded. For all other dims, logical shape must be equal to
+    // legacy shape
     for (const auto* tensor : {&q, &k, &v}) {
         validate_padding(*tensor);
     }
