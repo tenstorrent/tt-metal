@@ -23,6 +23,10 @@
 #define SFPU_TWO_TEMPLATE_PARAM_INIT(OP, INIT_CB, APPROXIMATE, PARAM0) \
     llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE, PARAM0>)
 
+// For ops that need a custom init callback with three template parameters (e.g., APPROXIMATE, DST_ACCUM and legacy_compat)
+#define SFPU_THREE_TEMPLATE_PARAM_INIT(OP, INIT_CB, APPROXIMATE, PARAM0, PARAM1) \
+    llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE, PARAM0, PARAM1>)
+
 // For ops that need a custom init callback and take two extra init-parameters
 #define SFPU_TWO_PARAM_KERNEL_INIT(OP, INIT_CB, APPROXIMATE, PARAM0, PARAM1) \
     llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE>, PARAM0, PARAM1)
