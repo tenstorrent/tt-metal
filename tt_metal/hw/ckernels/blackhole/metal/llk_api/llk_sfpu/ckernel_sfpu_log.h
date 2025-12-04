@@ -115,8 +115,7 @@ sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat val, const uint log
         // Step 2: Range reduction
         // If m >= sqrt(2), divide by 2 and increment exponent
         // This ensures m is in [sqrt(2)/2, sqrt(2)] ≈ [0.707, 1.414]
-        constexpr float SQRT2 = 1.4142135623730951f;  // sqrt(2)
-        v_if(m >= SQRT2) {
+        v_if(m >= sfpi::vConstFloatPrgm1) {
             m = m * 0.5f;   // Divide by 2
             exp = exp + 1;  // Increment exponent
         }
@@ -171,8 +170,7 @@ sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat val, const uint log
         sfpi::vFloat expf = sfpi::int32_to_float(exp, 0);
 
         // Step 5: Combine: ln(x) = exp×ln(2) + ln(m)
-        constexpr float LN2 = 0.6931471805599453f;  // log(2)
-        result = expf * LN2 + ln_m;                 // log(x) = log2(x) / log(2)
+        result = expf * sfpi::vConstFloatPrgm2 + ln_m;  // log(x) = log2(x) / log(2)
 
         if constexpr (HAS_BASE_SCALING) {
             result *= sfpi::reinterpret<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
@@ -196,6 +194,7 @@ inline void calculate_log(uint log_base_scale_factor) {
         sfpi::vFloat result;
         if constexpr (!is_fp32_dest_acc_en) {
             result = calculate_log_body<FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en>(in, log_base_scale_factor);
+            // result = sfpi::vConst0;
         } else {
             result = calculate_log_f32_body<HAS_BASE_SCALING>(in, log_base_scale_factor);
         }
@@ -211,7 +210,11 @@ inline void log_init() {
         sfpi::vConstFloatPrgm1 = -2.0069785118103027;
         sfpi::vConstFloatPrgm2 = 3.767500400543213;
     } else {
-        _init_reciprocal_</*approximation_mode*/ false, /*legacy_compat*/ false>();
+        // _init_sfpu_reciprocal_ set vConstFloatPrgm0 = 2.0f
+        _init_sfpu_reciprocal_</*approximation_mode*/ false>();
+        // But we can use the other 2 programmable constants:
+        sfpi::vConstFloatPrgm1 = 1.4142135623730951f;  // sqrt(2)
+        sfpi::vConstFloatPrgm2 = 0.6931471805599453f;  // log(2)
     }
 }
 
