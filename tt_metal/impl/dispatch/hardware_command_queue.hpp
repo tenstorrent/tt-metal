@@ -82,6 +82,7 @@ public:
 
     // needed interface items
     void terminate() override;
+    void finish(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
 
 private:
     uint32_t id_;
@@ -160,8 +161,6 @@ private:
     int get_prefetcher_cache_sizeB() const;
 
     void enqueue_record_event(const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids);
-
-    void finish(tt::stl::Span<const SubDeviceId> sub_device_ids);
 };
 
 }  // namespace tt::tt_metal
