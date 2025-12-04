@@ -46,7 +46,14 @@ struct MemoryPinningParameters {
  */
 class PinnedMemory {
 public:
+    /**
+     * @brief NOC address and the MMIO device ID where it's usable from.
+     *
+     * This address may have a 64-bit offset, so it must be used with noc_wwrite_with_state and the variant of
+     * noc_read_with_state that takes src_noc_addr as an argument.
+     */
     struct NocAddr {
+        uint32_t pcie_xy_enc;
         uint64_t addr;
         ChipId device_id;
     };
