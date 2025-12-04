@@ -131,6 +131,7 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
           auto-triage: ${{ !inputs.enable-watcher && matrix.test-group.auto-triage }}
+          slow-dispatch-timeout: 10
       - name: ${{ matrix.test-group.name }} tests
         #GH Issue 16167
         if: ${{ !(inputs.runner-label == 'BH' && matrix.test-group.name == 'tools') }}
