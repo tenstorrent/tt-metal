@@ -1811,7 +1811,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         if constexpr (is_sender_channel_serviced[0]) {
             open_perf_recording_window(inner_loop_perf_telemetry_collector);
         }
-        if (*router_state_l1 != tt::tt_fabric::router_state::ROUTER_STATE_PAUSED) {
+        if (*router_state_l1 == tt::tt_fabric::router_state::ROUTER_STATE_ACTIVE) {
             for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
                 invalidate_l1_cache();
                 // Capture these to see if we made progress
