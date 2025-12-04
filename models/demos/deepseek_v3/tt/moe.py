@@ -194,6 +194,22 @@ class MoE(SharedStateAddOn, AbstractModule):
         # CCL runtime initialization in execution order
         ccl = cfg["ccl"]
 
+        # import socket
+        # hostname = socket.gethostname()
+        # print(f"Hostname: {hostname}")
+
+        # if hostname == "g14glx03":
+        #     print("g14glx03, waiting for debugger on port 5678...")
+        #     import debugpy
+        #     debugpy.listen(("0.0.0.0", 5678))
+        #     debugpy.wait_for_client()  # Blocks until you attach
+        #     debugpy.breakpoint()
+        # elif hostname == "g14glx04":
+        #     print("g14glx04, do nothing")
+
+        # # print("x input moe fwd")
+        # # ttnn.visualize_tensor(x)
+
         x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["revert_tp"]))
 
         seq_len = 1  # a2a dispatch and combine require DP=num_dispatch_devices, hence in prefill for bs=1, we interchange the seq_len with batch_size dimensions

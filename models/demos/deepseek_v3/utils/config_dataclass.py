@@ -141,6 +141,13 @@ class AllToAllAsyncGenericConfig(OpConfigBase):
 
 
 @dataclass
+class SliceConfig(OpConfigBase):
+    """Common parameters for a ttnn.slice op"""
+
+    memory_config: ttnn.MemoryConfig | None = None
+
+
+@dataclass
 class ReduceScatterAsyncMinimalConfig(OpConfigBase):
     """Common parameters for a ttnn.experimental.reduce_scatter_minimal_async op"""
 

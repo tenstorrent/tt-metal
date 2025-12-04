@@ -19,7 +19,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     MulConfig,
     OpConfigBase,
     ReduceScatterAsyncMinimalConfig,
-    ReshardConfig,
     SavedWeight,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
@@ -260,6 +259,8 @@ class MLP(AbstractModule):
         ), "output_num_cores must divide the output tensor width evenly"
 
         # Calculate input and output memory configurations
+
+        input_memory_config = cls._get_decode_activation_memory_config(dim, input_num_cores, mesh_device)
         output_memory_config = cls._get_decode_activation_memory_config(
             even_int_div(dim, mesh_width), output_num_cores, mesh_device
         )
@@ -270,11 +271,8 @@ class MLP(AbstractModule):
                 mesh_device=MeshDeviceStub(mesh_device.shape),
                 cluster_axis=1,
                 dim=-1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=input_memory_config,
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
-            ),
-            "all_gather_reshard": ReshardConfig(
-                memory_config=cls._get_decode_activation_memory_config(dim, input_num_cores, mesh_device)
             ),
             "w1": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
@@ -315,6 +313,7 @@ class MLP(AbstractModule):
                 memory_config=output_memory_config,
             ),
             "output_memory_config": output_memory_config,  # For asserting the output of the MLP
+            "input_memory_config": input_memory_config,
         }
 
     @classmethod
@@ -490,8 +489,8 @@ class MLP(AbstractModule):
         # All gather
         x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
 
-        # TODO: File issue on AG not being able to do this internally (Issue #26672)
-        x = ttnn.to_memory_config(x, **cfg["all_gather_reshard"])
+        # # TODO: File issue on AG not being able to do this internally (Issue #26672)
+        # x = ttnn.to_memory_config(x, **cfg["all_gather_reshard"])
 
         # Gate and up projections
         w1_out = ttnn.linear(x, **cfg["w1"])
@@ -511,8 +510,8 @@ class MLP(AbstractModule):
         ttnn.deallocate(activated)
 
         # Add reduce-scatter
-        w2_out = ttnn.to_memory_config(w2_out, ttnn.DRAM_MEMORY_CONFIG)
-        # TODO: File issue on RS not being able to run sharded memory config
+        # w2_out = ttnn.to_memory_config(w2_out, ttnn.L1_MEMORY_CONFIG)
+        # # TODO: File issue on RS not being able to run sharded memory config
         output = ttnn.experimental.reduce_scatter_minimal_async(
             w2_out, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
         )
