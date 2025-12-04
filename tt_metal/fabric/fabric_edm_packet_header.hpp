@@ -9,7 +9,6 @@
 #include <climits>
 #include <initializer_list>
 #include <limits>
-#include <array>
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "debug/assert.h"
@@ -107,9 +106,6 @@ struct NocUnicastCommandHeader {
 #define NOC_SCATTER_WRITE_MAX_CHUNKS 4
 static constexpr uint8_t NOC_SCATTER_WRITE_MIN_CHUNKS = 2;
 struct NocUnicastScatterCommandHeader {
-    static_assert(
-        2 <= NOC_SCATTER_WRITE_MAX_CHUNKS && NOC_SCATTER_WRITE_MAX_CHUNKS <= 4,
-        "NOC_SCATTER_WRITE_MAX_CHUNKS must be between 2 and 4");
     uint64_t noc_address[NOC_SCATTER_WRITE_MAX_CHUNKS];
     uint16_t chunk_size[NOC_SCATTER_WRITE_MAX_CHUNKS - 1];  // last chunk size is implicit
     uint8_t chunk_count;
@@ -139,11 +135,6 @@ struct NocUnicastScatterCommandHeader {
         }
     }
 };
-
-// CTAD guides
-template <size_t N>
-NocUnicastScatterCommandHeader(const std::array<uint64_t, N>&, const std::array<uint16_t, N - 1>&)
-    -> NocUnicastScatterCommandHeader<N>;
 struct NocUnicastInlineWriteCommandHeader {
     uint64_t noc_address;
     uint32_t value;
@@ -200,7 +191,7 @@ union NocCommandFields {
     NocUnicastAtomicIncCommandHeader unicast_seminc;
     NocUnicastAtomicIncFusedCommandHeader unicast_seminc_fused;
     NocMulticastAtomicIncCommandHeader mcast_seminc;
-    NocUnicastScatterCommandHeader<4> unicast_scatter_write;
+    NocUnicastScatterCommandHeader unicast_scatter_write;
 };
 // NOLINTEND(cppcoreguidelines-pro-type-member-init,hicpp-member-init)
 static_assert(sizeof(NocCommandFields) == 40, "CommandFields size is not 40 bytes");
@@ -430,8 +421,7 @@ struct PacketHeaderBase {
     }
 
     volatile Derived* to_noc_unicast_scatter_write(
-        const NocUnicastScatterCommandHeader<NOC_SCATTER_WRITE_MAX_CHUNKS>& noc_unicast_scatter_command_header,
-        size_t payload_size_bytes) volatile {
+        const NocUnicastScatterCommandHeader& noc_unicast_scatter_command_header, size_t payload_size_bytes) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_SCATTER_WRITE;
         const uint8_t chunk_count = noc_unicast_scatter_command_header.chunk_count;

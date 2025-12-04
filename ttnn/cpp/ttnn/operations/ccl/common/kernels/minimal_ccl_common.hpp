@@ -338,13 +338,8 @@ FORCE_INLINE void scatter_fabric_write_unidir(
     const size_t payload_l1_address = l1_read_addr;
 
     pkt_hdr->to_noc_unicast_scatter_write(
-<<<<<<< HEAD
-        tt::tt_fabric::NocUnicastScatterCommandHeader<2>{
-            {noc0_dest_noc_addr, noc0_dest_noc_addr_next_core}, {payload_size_bytes_first_core}},
-=======
         tt::tt_fabric::NocUnicastScatterCommandHeader(
             {noc0_dest_noc_addr, noc0_dest_noc_addr_next_core}, {payload_size_bytes_first_core}),
->>>>>>> main
         payload_size_bytes_first_core * 2);
 
     perform_payload_send(fabric_direction_connection, l1_read_addr, payload_size_bytes_first_core * 2, pkt_hdr);
