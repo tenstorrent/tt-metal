@@ -66,6 +66,7 @@ target_sources(
         nlp_concat_heads/nlp_concat_heads.cpp
         nlp_concat_heads_decode/device/nlp_concat_heads_decode_device_operation.cpp
         nlp_concat_heads_decode/device/nlp_concat_heads_decode_program_factory.cpp
+        nlp_concat_heads_decode/device/nlp_concat_heads_decode_subcoregrids_program_factory.cpp
         nlp_concat_heads_decode/nlp_concat_heads_decode.cpp
         nlp_concat_heads_boltz/device/nlp_concat_heads_boltz_device_operation.cpp
         nlp_concat_heads_boltz/device/nlp_concat_heads_boltz_program_factory.cpp
@@ -108,9 +109,11 @@ target_sources(
         rotary_embedding_llama_fused_qk/device/rotary_embedding_llama_fused_qk_program_factory.cpp
         rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk.cpp
         rotate_half/device/rotate_half_device_operation.cpp
-        rotate_half/device/single_core/rotate_half_program_factory.cpp
+        rotate_half/device/rotate_half_program_factory.cpp
         rotate_half/rotate_half.cpp
         split_query_key_value_and_split_heads/device/split_query_key_value_and_split_heads_device_operation.cpp
+        split_query_key_value_and_split_heads/device/split_query_key_value_and_split_heads_program_factory.cpp
+        split_query_key_value_and_split_heads/device/split_query_key_value_and_split_heads_sharded_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_transformer PRIVATE ${FixmeOpIncDirs})
