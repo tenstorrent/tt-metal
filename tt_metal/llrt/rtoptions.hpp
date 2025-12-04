@@ -136,12 +136,14 @@ class RunTimeOptions {
     bool profiler_trace_profiler = false;
     bool profiler_trace_tracking = false;
     bool profiler_cpp_post_process = false;
+    bool profiler_sum = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
     uint32_t profiler_perf_counter_mode = 0;
     std::string profiler_noc_events_report_path;
     bool profiler_disable_dump_to_files = false;
     bool profiler_disable_push_to_tracy = false;
+    std::optional<uint32_t> profiler_program_support_count = std::nullopt;
 
     bool null_kernels = false;
     // Kernels should return early, skipping the rest of the kernel. Kernels
@@ -454,6 +456,11 @@ public:
     bool get_profiler_trace_tracking() const { return profiler_trace_tracking; }
     bool get_profiler_mid_run_dump() const { return profiler_mid_run_dump; }
     bool get_profiler_cpp_post_process() const { return profiler_cpp_post_process; }
+    bool get_profiler_sum() const { return profiler_sum; }
+    std::optional<uint32_t> get_profiler_program_support_count() const { return profiler_program_support_count; }
+    void set_profiler_program_support_count(uint32_t profiler_program_support_count) {
+        this->profiler_program_support_count = profiler_program_support_count;
+    }
     bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
     uint32_t get_profiler_perf_counter_mode() const { return profiler_perf_counter_mode; }

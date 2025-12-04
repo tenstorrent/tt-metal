@@ -4,7 +4,8 @@ on:
   issues:
     types: [opened]
 
-# This job uses your fine-grained PAT secret (DATE_AUTOMATION) via gh CLI.
+# This job uses a fine-grained PAT secret (DATE_AUTOMATION) via gh CLI.
+# Required token scopes: read:project, project (or write:project)
 # No repo write perms needed from the Actions token itself.
 permissions:
   contents: read
@@ -23,6 +24,12 @@ jobs:
         run: |
           set -e
 
+          # Validate token is set
+          if [ -z "$GH_TOKEN" ]; then
+            echo "Error: GH_TOKEN (DATE_AUTOMATION secret) is not set" >&2
+            exit 1
+          fi
+
           # Extract date from issue creation timestamp
           RAW_CREATED="${{ github.event.issue.created_at }}"
           OPENED_DATE="${RAW_CREATED%%T*}"
@@ -33,7 +40,7 @@ jobs:
             organization(login:$org){
               projectV2(number:$number){
                 id
-                fields(first:200){
+                fields(first:100){
                   nodes {
                     ... on ProjectV2FieldCommon {
                       id
@@ -49,20 +56,33 @@ jobs:
             exit 1
           }
 
-          # Check for GraphQL errors
+          # Check for GraphQL errors (including permission issues)
           if echo "$RESP" | jq -e '.errors' > /dev/null 2>&1; then
             echo "Error: GraphQL returned errors:" >&2
             echo "$RESP" | jq '.errors' >&2
+
+            # Check specifically for scope issues
+            if echo "$RESP" | jq -e '.errors[] | select(.type == "INSUFFICIENT_SCOPES")' > /dev/null 2>&1; then
+              echo "" >&2
+              echo "Token is missing required scopes. Please update DATE_AUTOMATION secret with:" >&2
+              echo "  - read:project (to read project data)" >&2
+              echo "  - project or write:project (to update fields)" >&2
+            fi
             exit 1
           fi
 
           PROJECT_ID=$(echo "$RESP" | jq -r '.data.organization.projectV2.id // empty')
-          FIELD_ID=$(echo "$RESP" | jq -r --arg NAME "$OPENED_ON_FIELD_NAME" '.data.organization.projectV2.fields.nodes[] | select(. != null and .name==$NAME) | .id // empty')
 
           if [ -z "$PROJECT_ID" ]; then
             echo "Error: Project '$PROJECT_NUMBER' not found in org '$ORG'" >&2
+            echo "This may be due to:" >&2
+            echo "  - Project doesn't exist" >&2
+            echo "  - Token lacks 'read:project' scope (or token is expired)" >&2
+            echo "  - Token doesn't have access to the organization" >&2
             exit 1
           fi
+
+          FIELD_ID=$(echo "$RESP" | jq -r --arg NAME "$OPENED_ON_FIELD_NAME" '.data.organization.projectV2.fields.nodes[] | select(. != null and .name==$NAME) | .id // empty')
 
           if [ -z "$FIELD_ID" ]; then
             echo "Error: Field '$OPENED_ON_FIELD_NAME' not found in project" >&2
@@ -95,6 +115,12 @@ jobs:
           if echo "$ADD_RESP" | jq -e '.errors' > /dev/null 2>&1; then
             echo "Error: Failed to add issue to project:" >&2
             echo "$ADD_RESP" | jq '.errors' >&2
+
+            # Check for scope/permission issues
+            if echo "$ADD_RESP" | jq -e '.errors[] | select(.type == "INSUFFICIENT_SCOPES" or (.message // "" | contains("permission")))' > /dev/null 2>&1; then
+              echo "" >&2
+              echo "Token may lack 'project' or 'write:project' scope" >&2
+            fi
             exit 1
           fi
 
@@ -106,7 +132,7 @@ jobs:
 
           # Set the "Opened On" field value
           UPDATE_RESP=$(gh api graphql -f query='
-          mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $date:String!){
+          mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $date:Date!){
             updateProjectV2ItemFieldValue(input:{
               projectId:$projectId,
               itemId:$itemId,
@@ -127,6 +153,12 @@ jobs:
           if echo "$UPDATE_RESP" | jq -e '.errors' > /dev/null 2>&1; then
             echo "Error: Failed to set field value:" >&2
             echo "$UPDATE_RESP" | jq '.errors' >&2
+
+            # Check for scope/permission issues
+            if echo "$UPDATE_RESP" | jq -e '.errors[] | select(.type == "INSUFFICIENT_SCOPES" or (.message // "" | contains("permission")))' > /dev/null 2>&1; then
+              echo "" >&2
+              echo "Token may lack 'project' or 'write:project' scope" >&2
+            fi
             exit 1
           fi
 
