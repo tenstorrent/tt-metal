@@ -21,7 +21,7 @@ except ImportError:
 def download_lgg_dataset():
     # Define dataset and target folder
     DATASET = "mateuszbuda/lgg-mri-segmentation"
-    TARGET_FOLDER = "models/demos/segmentation_evaluation/imageset"
+    TARGET_FOLDER = "models/demos/vision/segmentation/segmentation_evaluation/imageset"
 
     # Optionally remove previous cache if needed (only if you always want fresh download)
     cache_dir = "/home/ubuntu/.cache/kagglehub/datasets/mateuszbuda/lgg-mri-segmentation/versions/2"
@@ -55,7 +55,7 @@ def download_lgg_dataset():
     logger.info(f"Successfully moved '{source_root}' to '{TARGET_FOLDER}'")
 
     # Ensure prediction output folder also exists
-    os.makedirs("models/demos/segmentation_evaluation/pred_image_set", exist_ok=True)
+    os.makedirs("models/demos/vision/segmentation/segmentation_evaluation/pred_image_set", exist_ok=True)
 
 
 def download_ade20k_dataset(
