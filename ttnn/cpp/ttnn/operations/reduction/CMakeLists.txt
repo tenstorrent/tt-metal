@@ -60,6 +60,7 @@ target_sources(
         generic/device/common.cpp
         generic/generic_reductions.cpp
         prod/device/prod_nc_op.cpp
+        prod/device/prod_nc_device_operation.cpp
         prod/device/prod_nc_program_factory.cpp
         prod/device/prod_op_all.cpp
         prod/prod.cpp
