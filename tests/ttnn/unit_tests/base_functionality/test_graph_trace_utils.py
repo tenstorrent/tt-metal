@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
 import ttnn
 
@@ -29,7 +28,7 @@ def test_count_intermediate_and_output_tensors():
         input_tensor = ttnn.from_torch(
             torch.rand(1, 1, 32, 32, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
-        output = ttnn.add(input_tensor, input_tensor)
+        ttnn.add(input_tensor, input_tensor)
         captured_graph = ttnn.graph.end_graph_capture()
 
         intermediate, output_count = ttnn.graph.count_intermediate_and_output_tensors(captured_graph)
@@ -50,7 +49,7 @@ def test_extract_output_info():
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        output = ttnn.relu(input_tensor)
+        ttnn.relu(input_tensor)
         captured_graph = ttnn.graph.end_graph_capture()
 
         output_info = ttnn.graph.extract_output_info(captured_graph)
@@ -71,7 +70,7 @@ def test_extract_circular_buffers_peak_size_per_core():
         input_tensor = ttnn.from_torch(
             torch.rand(1, 1, 32, 32, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
-        output = ttnn.relu(input_tensor)
+        ttnn.relu(input_tensor)
         captured_graph = ttnn.graph.end_graph_capture()
 
         cb_peak = ttnn.graph.extract_circular_buffers_peak_size_per_core(captured_graph)
@@ -93,7 +92,7 @@ def test_extract_l1_buffer_allocation_peak_size_per_core():
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        output = ttnn.relu(input_tensor)
+        ttnn.relu(input_tensor)
         captured_graph = ttnn.graph.end_graph_capture()
 
         l1_peak_per_core = ttnn.graph.extract_l1_buffer_allocation_peak_size_per_core(captured_graph, cores)
@@ -131,7 +130,7 @@ def test_peak_memory_with_broadcast():
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        output = ttnn.add(input_a, input_b)
+        ttnn.add(input_a, input_b)
         captured_graph = ttnn.graph.end_graph_capture()
 
         peak_l1 = ttnn.graph.extract_peak_L1_memory_usage(captured_graph)
@@ -162,7 +161,7 @@ def test_peak_memory_larger_tensors():
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        output = ttnn.add(input_a, input_b)
+        ttnn.add(input_a, input_b)
         captured_graph = ttnn.graph.end_graph_capture()
 
         peak_l1 = ttnn.graph.extract_peak_L1_memory_usage(captured_graph)
@@ -218,7 +217,7 @@ def test_circular_buffers_with_operations():
         )
 
         # Binary operation should allocate circular buffers
-        output = ttnn.add(input_a, input_b)
+        ttnn.add(input_a, input_b)
         captured_graph = ttnn.graph.end_graph_capture()
 
         cb_peak = ttnn.graph.extract_circular_buffers_peak_size_per_core(captured_graph)
@@ -243,7 +242,7 @@ def test_output_info_with_multiple_outputs():
         )
 
         # Operation that produces output
-        output = ttnn.add(input_tensor, input_tensor)
+        ttnn.add(input_tensor, input_tensor)
         captured_graph = ttnn.graph.end_graph_capture()
 
         output_info = ttnn.graph.extract_output_info(captured_graph)
