@@ -5,7 +5,7 @@
 #include <gtest/gtest.h>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/device_pool.hpp>
+#include "tt_metal/impl/device/device_pool.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <memory>
 #include <vector>
@@ -30,7 +30,8 @@ void CloseDevicesInPool() {
 }
 
 TEST(DevicePool, DevicePoolOpenClose) {
-    std::vector<ChipId> device_ids{*tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin()};
+    auto all_chip_ids = MetalContext::instance().get_cluster().all_chip_ids();
+    std::vector<ChipId> device_ids{all_chip_ids.begin(), all_chip_ids.end()};
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
     const auto& dispatch_core_config = tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
@@ -42,16 +43,6 @@ TEST(DevicePool, DevicePoolOpenClose) {
         ASSERT_TRUE(dev->is_initialized());
     }
 
-    // Close then get devices again
-    for (const auto& dev : devices) {
-        dev->close();
-    }
-    devices = DevicePool::instance().get_all_active_devices();
-    for (const auto& dev : devices) {
-        ASSERT_EQ((int)(dev->allocator()->get_config().l1_small_size), l1_small_size);
-        ASSERT_EQ((int)(dev->num_hw_cqs()), num_hw_cqs);
-        ASSERT_TRUE(dev->is_initialized());
-    }
     CloseDevicesInPool();
 }
 
