@@ -5,13 +5,10 @@
 #pragma once
 
 #include <cstdint>
-#include <iostream>
 
 namespace tt::tt_fabric {
 
 enum class Topology { Ring = 0, Linear = 1, Mesh = 2, Torus = 3 };
-
-std::ostream& operator<<(std::ostream& os, const Topology& topology);
 
 struct WorkerXY {
     uint16_t x;

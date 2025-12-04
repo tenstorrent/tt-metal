@@ -23,7 +23,7 @@ inputs:
     type: boolean
   auto-triage:
     description: 'Enable detection of timeout on fast dispatch and automatically call tt-triage'
-    default: true
+    default: false
     type: boolean
   slow-dispatch-timeout:
     description: 'Timeout in seconds to consider a dispatch as slow for auto-triage'
