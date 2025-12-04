@@ -1,14 +1,25 @@
-
 #include "pad_rm_reader_writer_multi_core_v2_program_factory.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
+using namespace tt::constants;
+
 namespace ttnn::operations::data_movement::pad::program {
-PadRmReaderWriterMultiCoreProgramFactory::cached_program_t PadRmReaderWriterMultiCoreProgramFactory::create(
-    const Tensor& a,
-    Tensor& output,
-    const ttnn::Shape& output_padded_shape,
-    const ttnn::Shape& input_tensor_start,
-    const float pad_value) {
+
+inline void log_rt_args(const CoreCoord& core, std::vector<uint32_t>& args) {
+    for ([[maybe_unused]] auto v : args) {
+        log_debug(tt::LogOp, "{},{} :: {}", core.x, core.y, v);
+    }
+}
+
+PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMultiCoreV2ProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    const auto& a = tensor_args.input;
+    const auto& output_padded_shape = operation_attributes.output_padded_shape;
+    const auto& pad_value = operation_attributes.pad_value;
     Program program{};
 
     auto output_shape = output_padded_shape;
@@ -241,7 +252,7 @@ PadRmReaderWriterMultiCoreProgramFactory::cached_program_t PadRmReaderWriterMult
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return cached_program_t{std::move(program), {}};
 }
 
 }  // namespace ttnn::operations::data_movement::pad::program

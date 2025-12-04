@@ -1,14 +1,21 @@
 
 #include "pad_rm_reader_writer_multi_core_v2_program_factory.hpp"
 
+#include <tt-metalium/hal.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
+
 using namespace tt::tt_metal;
+using namespace tt::constants;
+
 namespace ttnn::operations::data_movement::pad::program {
-PadRmShardedWidthOnlyProgramFactory::cached_program_t PadRmShardedWidthOnlyProgramFactory::create(
-    const Tensor& a,
-    Tensor& output,
-    const ttnn::Shape& output_padded_shape,
-    const ttnn::Shape& input_tensor_start,
-    const float pad_value) {
+PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMultiCoreV2ProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    const auto& input_tensor = tensor_args.input;
+    const auto& output_padded_shape = operation_attributes.output_padded_shape;
+    const auto& pad_value = operation_attributes.pad_value;
+    const auto& input_tensor_start = operation_attributes.input_tensor_start;
     Program program{};
 
     TT_ASSERT(
@@ -125,19 +132,19 @@ PadRmShardedWidthOnlyProgramFactory::cached_program_t PadRmShardedWidthOnlyProgr
     tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, all_cores_padded, {});
     tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, all_cores_padded, {});
 
-    auto override_runtime_args_callback = [input_shard_cb, output_shard_cb](
-                                              const void* operation,
-                                              Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto* input_buffer = input_tensors.at(0).buffer();
-        auto* output_buffer = output_tensors.at(0).buffer();
+    return cached_program_t{std::move(program), {}};
+}
 
-        UpdateDynamicCircularBufferAddress(program, input_shard_cb, *input_buffer);
-        UpdateDynamicCircularBufferAddress(program, output_shard_cb, *output_buffer);
-    };
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+void PadRmReaderWriterMultiCoreV2ProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto* input_buffer = tensor_args.input.buffer();
+    auto* output_buffer = tensor_return_value.buffer();
+
+    UpdateDynamicCircularBufferAddress(cached_program, input_shard_cb, *input_buffer);
+    UpdateDynamicCircularBufferAddress(cached_program, output_shard_cb, *output_buffer);
 }
 
 }  // namespace ttnn::operations::data_movement::pad::program

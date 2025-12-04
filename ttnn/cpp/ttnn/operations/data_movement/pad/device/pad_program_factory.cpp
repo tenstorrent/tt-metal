@@ -22,12 +22,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::pad::program {
 
-inline void log_rt_args(const CoreCoord& core, std::vector<uint32_t>& args) {
-    for ([[maybe_unused]] auto v : args) {
-        log_debug(tt::LogOp, "{},{} :: {}", core.x, core.y, v);
-    }
-}
-
 // This is currently mostly hardcoded for resnet shapes
 inline std::tuple<uint32_t, uint32_t, uint32_t, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t, uint32_t, uint32_t>
 split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint32_t ntiles_h, uint32_t ntiles_w) {

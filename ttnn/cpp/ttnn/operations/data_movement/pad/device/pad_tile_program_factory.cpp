@@ -1,14 +1,19 @@
 
 #include "pad_program_factory.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
+using namespace tt::constants;
 using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement::pad::program {
 PadProgramFactory::cached_program_t PadProgramFactory::create(
-    const Tensor& a,
-    Tensor& output,
-    const ttnn::Shape& output_padded_shape,
-    const ttnn::Shape& input_tensor_start,
-    const float pad_value) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    const auto& a = tensor_args.input;
+    const auto& pad_value = operation_attributes.pad_value;
+    const auto& output_padded_shape = operation_attributes.output_padded_shape;
+    const auto& input_tensor_start = operation_attributes.input_tensor_start;
     tt::tt_metal::Program program{};
 
     CoreRange core({0, 0}, {0, 0});
@@ -134,7 +139,7 @@ PadProgramFactory::cached_program_t PadProgramFactory::create(
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return cached_program_t{std::move(program), {}};
 }
 
 }  // namespace ttnn::operations::data_movement::pad::program

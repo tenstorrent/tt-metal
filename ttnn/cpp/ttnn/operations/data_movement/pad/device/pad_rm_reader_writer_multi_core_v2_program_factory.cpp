@@ -1,14 +1,23 @@
 
 #include "pad_rm_reader_writer_multi_core_v2_program_factory.hpp"
 
+#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
+
+using namespace tt::constants;
 using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement::pad::program {
 PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMultiCoreV2ProgramFactory::create(
-    const Tensor& a,
-    Tensor& output,
-    const ttnn::Shape& output_padded_shape,
-    const ttnn::Shape& input_tensor_start,
-    const float pad_value) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    const auto& a = tensor_args.input;
+    const auto& pad_value = operation_attributes.pad_value;
+    const auto& output_padded_shape = operation_attributes.output_padded_shape;
+    const auto& input_tensor_start = operation_attributes.input_tensor_start;
     Program program{};
 
     const auto& a_shape = a.logical_shape();

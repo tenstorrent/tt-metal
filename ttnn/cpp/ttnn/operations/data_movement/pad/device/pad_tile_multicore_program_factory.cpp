@@ -1,6 +1,11 @@
 #include "pad_tile_multicore_program_factory.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
+using namespace tt::constants;
+
 namespace ttnn::operations::data_movement::pad::program {
 
 static inline int advance_tensor_index(std::vector<uint32_t>& idx, const ttnn::Shape& dims, uint32_t ndims) {
@@ -16,12 +21,13 @@ static inline int advance_tensor_index(std::vector<uint32_t>& idx, const ttnn::S
     return 0;  // overflowed most-significant dim
 }
 
-PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMultiCoreV2ProgramFactory::create(
-    const Tensor& a,
-    Tensor& output,
-    const ttnn::Shape& output_padded_shape,
-    const ttnn::Shape& input_tensor_start,
-    const float pad_value) {
+PadTileMulticoreProgramFactory::cached_program_t PadTileMulticoreProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    const auto& a = tensor_args.input;
+    const auto& pad_value = operation_attributes.pad_value;
+    const auto& output_padded_shape = operation_attributes.output_padded_shape;
     Program program{};
 
     const auto& a_shape = a.logical_shape();
@@ -207,38 +213,36 @@ PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMu
         // The input and output id_per_dim should now be set correctly for the next core
     }
 
-    auto override_runtime_args_callback =
-        [reader_kernel_id, writer_kernel_id, compute_with_storage_grid_size, input_tensor_start](
-            const void* operation,
-            const Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>&,
-            const std::vector<Tensor>& output_tensors) {
-            auto* src_buffer = input_tensors.at(0).buffer();
-            auto* dst_buffer = output_tensors.at(0).buffer();
+    return cached_program_t{std::move(program), {}};
+}
 
-            uint32_t num_cores_x = compute_with_storage_grid_size.x;
-            uint32_t num_cores_y = compute_with_storage_grid_size.y;
-            uint32_t num_cores_total = num_cores_x * num_cores_y;
+void PadRmReaderWriterProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto* src_buffer = input_tensors.at(0).buffer();
+    auto* dst_buffer = output_tensors.at(0).buffer();
 
-            for (uint32_t i = 0; i < num_cores_total; i++) {
-                CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    uint32_t num_cores_total = num_cores_x * num_cores_y;
 
-                // Update reader kernel runtime args
-                {
-                    auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                    runtime_args[0] = src_buffer->address();
-                }
+    for (uint32_t i = 0; i < num_cores_total; i++) {
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
-                // Update writer kernel runtime args
-                {
-                    auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                    runtime_args[0] = dst_buffer->address();
-                }
-            }
-        };
+        // Update reader kernel runtime args
+        {
+            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            runtime_args[0] = src_buffer->address();
+        }
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+        // Update writer kernel runtime args
+        {
+            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            runtime_args[0] = dst_buffer->address();
+        }
+    }
 }
 
 }  // namespace ttnn::operations::data_movement::pad::program

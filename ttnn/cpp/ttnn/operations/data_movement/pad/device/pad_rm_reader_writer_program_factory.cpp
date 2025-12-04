@@ -1,27 +1,32 @@
 
-#include "pad_program_factory.hpp"
+#include "pad_rm_reader_writer_multi_core_program_factory.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
+using namespace tt::constants;
+
 namespace ttnn::operations::data_movement::pad::program {
-operation::ProgramWithCallbacks PadRmReaderWriterProgramFactory::create(
-    const Tensor& a,
-    Tensor& output,
-    const ttnn::Shape& output_padded_shape,
-    const ttnn::Shape& input_tensor_start,
-    const float pad_value) {
+PadRmReaderWriterMultiCoreProgramFactory::cached_program_t PadRmReaderWriterMultiCoreProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    const auto& a = tensor_args.input;
+    const auto& pad_value = operation_attributes.pad_value;
     Program program{};
 
-    auto output_shape = output_padded_shape;
+    auto output_shape = operation_attributes.output_padded_shape;
 
-    uint32_t unpadded_row_size_nbytes = a.padded_shape()[3] * a.element_size();
-    uint32_t padded_row_size_nbytes = output_shape[3] * a.element_size();  // Assuming output is same datatype as input
+    uint32_t unpadded_row_size_nbytes = tensor_args.input.padded_shape()[3] * tensor_args.input.element_size();
+    uint32_t padded_row_size_nbytes =
+        output_shape[3] * tensor_args.input.element_size();  // Assuming output is same datatype as input
     TT_ASSERT(
         unpadded_row_size_nbytes <= padded_row_size_nbytes, "Padded output tensor size should be >= input tensor size");
 
     // construct const buffer with the pad_value
-    MeshDevice* device = a.device();
+    MeshDevice* device = tensor_args.input.device();
     uint32_t pad_value_const_buffer_size = 32;  // noc transfers in chunks of 32
-    uint32_t pad_value_const_buffer_nbytes = pad_value_const_buffer_size * a.element_size();
+    uint32_t pad_value_const_buffer_nbytes = pad_value_const_buffer_size * tensor_args.input.element_size();
     auto pad_value_const_buffer =
         tt::tt_metal::HostBuffer(std::vector<bfloat16>(pad_value_const_buffer_size, bfloat16(pad_value)));
     const Tensor pad_value_const_tensor =
@@ -129,28 +134,27 @@ operation::ProgramWithCallbacks PadRmReaderWriterProgramFactory::create(
     tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, cores, reader_rt_args);
     tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, cores, writer_rt_args);
 
-    auto override_runtime_args_callback = [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id](
-                                              const void* operation,
-                                              Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto* src_buffer = input_tensors.at(0).buffer();
-        auto* dst_buffer = output_tensors.at(0).buffer();
-        CoreCoord core = {0, 0};
-        {
-            auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
-            runtime_args[1] = dst_buffer->address();
-        }
-        {
-            auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
-            runtime_args[1] = dst_buffer->address();
-        }
-    };
+    return cached_program_t{std::move(program), {}};
+}
 
-    return {std::move(program), override_runtime_args_callback};
+void PadRmReaderWriterProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto* src_buffer = operation_attributes.input.buffer();
+    auto* dst_buffer = tensor_return_value.buffer();
+    CoreCoord core = {0, 0};
+    {
+        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(cached_program, reader_kernel_id, core);
+        runtime_args[0] = src_buffer->address();
+        runtime_args[1] = dst_buffer->address();
+    }
+    {
+        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(cached_program, writer_kernel_id, core);
+        runtime_args[0] = src_buffer->address();
+        runtime_args[1] = dst_buffer->address();
+    }
 }
 
 }  // namespace ttnn::operations::data_movement::pad::program

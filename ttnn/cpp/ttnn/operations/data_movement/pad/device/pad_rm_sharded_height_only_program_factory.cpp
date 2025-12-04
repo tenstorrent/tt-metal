@@ -1,14 +1,19 @@
 
 #include "pad_rm_reader_writer_multi_core_v2_program_factory.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
+using namespace tt::constants;
+
 namespace ttnn::operations::data_movement::pad::program {
-PadRmShardedHeightOnlyProgramFactory::cached_program_t PadRmShardedHeightOnlyProgramFactory::create(
-    const Tensor& a,
-    Tensor& output,
-    const ttnn::Shape& output_padded_shape,
-    const ttnn::Shape& input_tensor_start,
-    const float pad_value) {
+PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMultiCoreV2ProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    const auto& a = tensor_args.input;
+    const auto& output_padded_shape = operation_attributes.output_padded_shape;
+    const auto& pad_value = operation_attributes.pad_value;
+    const auto& input_tensor_start = operation_attributes.input_tensor_start;
     Program program{};
 
     const auto& a_shape = a.logical_shape();
@@ -17,7 +22,7 @@ PadRmShardedHeightOnlyProgramFactory::cached_program_t PadRmShardedHeightOnlyPro
     uint32_t W_padded = output_padded_shape[3], H_padded = output_padded_shape[2], C_padded = output_padded_shape[1],
              N_padded = output_padded_shape[0];
 
-    const auto& front_pad = input_tensor_start;
+    const auto& front_pad = operation_attributes.input_tensor_start;
 
     log_debug(tt::LogOp, "H_padded: {}", H_padded);
     log_debug(tt::LogOp, "front_pad: {}", front_pad);
@@ -180,7 +185,7 @@ PadRmShardedHeightOnlyProgramFactory::cached_program_t PadRmShardedHeightOnlyPro
         UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
     };
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return cached_program_t{std::move(program), {}};
 }
 
 }  // namespace ttnn::operations::data_movement::pad::program
