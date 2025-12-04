@@ -1520,7 +1520,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         }
         if (can_send_ack) {
             // currently only support processing one packet at a time, so we only decrement by 1
-            invalidate_l1_cache();
+            router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
             increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
 
             uint8_t src_ch_id;
