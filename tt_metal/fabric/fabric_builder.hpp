@@ -31,8 +31,8 @@ class FabricBuilderContext;
  *   1. Construct with device, program, and contexts
  *   2. Call build phases in order:
  *      discover_channels() -> create_routers() -> connect_routers() ->
- *      compile_ancillary_kernels() -> create_kernels() -> finalize_build_state()
- *   3. FabricBuilder is destroyed, routers are destroyed
+ *      compile_ancillary_kernels() -> create_kernels()
+ *   3. FabricBuilder is destroyed, router builders are destroyed
  */
 class FabricBuilder {
 public:
@@ -63,11 +63,6 @@ public:
      * Create the main ERISC router kernels.
      */
     void create_kernels();
-
-    /**
-     * Record build state in BuilderContext.
-     */
-    void finalize_build_state();
 
     /**
      * Check if any routers were created.

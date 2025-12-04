@@ -106,8 +106,11 @@ void FabricBuilder::create_routers() {
         }
     }
 
+    // Record build state
+    builder_context_.set_num_fabric_initialized_routers(device_->id(), routers_.size());
     if (!routers_.empty()) {
         master_router_chan_ = routers_.begin()->first;
+        builder_context_.set_fabric_master_router_chan(device_->id(), master_router_chan_);
     }
 }
 
@@ -204,13 +207,6 @@ void FabricBuilder::create_kernels() {
 
     for (auto& [eth_chan, router_builder] : routers_) {
         router_builder->create_kernel(program_, ctx);
-    }
-}
-
-void FabricBuilder::finalize_build_state() {
-    builder_context_.set_num_fabric_initialized_routers(device_->id(), routers_.size());
-    if (!routers_.empty()) {
-        builder_context_.set_fabric_master_router_chan(device_->id(), master_router_chan_);
     }
 }
 

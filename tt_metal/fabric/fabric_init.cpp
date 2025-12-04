@@ -39,7 +39,6 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
     builder.connect_routers();
     builder.compile_ancillary_kernels();
     builder.create_kernels();
-    builder.finalize_build_state();
 
     // Compile the program
     tt::tt_metal::detail::CompileProgram(
