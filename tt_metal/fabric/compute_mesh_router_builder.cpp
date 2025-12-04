@@ -411,8 +411,14 @@ void ComputeMeshRouterBuilder::connect_to_local_tensix_builder(FabricTensixDatam
 
 void ComputeMeshRouterBuilder::configure_connection(
     FabricRouterBuilder& peer, uint32_t link_idx, uint32_t num_links, Topology topology, bool is_galaxy) {
-    // Safe: FabricBuilder guarantees all routers on a device are the same concrete type
-    auto& peer_compute = static_cast<ComputeMeshRouterBuilder&>(peer);
+    // Validate invariant: FabricBuilder guarantees all routers on a device are the same concrete type
+    // This is enforced by the factory method which determines router type based on mesh_id
+    auto* peer_compute_ptr = dynamic_cast<ComputeMeshRouterBuilder*>(&peer);
+    TT_FATAL(
+        peer_compute_ptr != nullptr,
+        "Router type mismatch: expected ComputeMeshRouterBuilder but got different type. "
+        "This indicates a bug in FabricBuilder::create_routers()");
+    auto& peer_compute = *peer_compute_ptr;
 
     // Establish bidirectional VC0 connections
     this->connect_to_downstream_router_over_noc(peer_compute, 0);

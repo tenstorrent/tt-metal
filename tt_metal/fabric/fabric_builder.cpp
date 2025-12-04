@@ -20,10 +20,8 @@ FabricBuilder::FabricBuilder(
     fabric_context_(fabric_context),
     builder_context_(fabric_context.get_builder_context()),
     local_node_(tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
-        device->id())) {
-    // Initialize topology info
-    wrap_around_mesh_ = fabric_context_.is_wrap_around_mesh(local_node_.mesh_id);
-
+        device->id())),
+    wrap_around_mesh_(fabric_context_.is_wrap_around_mesh(local_node_.mesh_id)) {
     // Determine if this device has tunneling dispatch
     auto mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_->id());
