@@ -42,6 +42,34 @@ jobs:
         run: |
           set -e
 
+          # Helper function to handle rate limit errors
+          handle_rate_limit_error() {
+            local RESPONSE="$1"
+            local CONTEXT="$2"
+            
+            if echo "$RESPONSE" | grep -q "API rate limit"; then
+              echo "Error: GitHub API rate limit exceeded for DATE_AUTOMATION token" >&2
+              
+              # Extract rate limit details from headers if available
+              RESET_TIME=$(echo "$RESPONSE" | grep -i "x-ratelimit-reset" | cut -d: -f2 | tr -d ' \r')
+              REMAINING=$(echo "$RESPONSE" | grep -i "x-ratelimit-remaining" | cut -d: -f2 | tr -d ' \r')
+              RESOURCE=$(echo "$RESPONSE" | grep -i "x-ratelimit-resource" | cut -d: -f2 | tr -d ' \r')
+              
+              if [ -n "$RESET_TIME" ]; then
+                RESET_DATE=$(date -u -d "@$RESET_TIME" 2>/dev/null || date -u -r "$RESET_TIME" 2>/dev/null || echo "unknown")
+                echo "Rate limit resource: $RESOURCE" >&2
+                echo "Remaining: $REMAINING" >&2
+                echo "Resets at: $RESET_DATE" >&2
+              fi
+              
+              echo "" >&2
+              echo "Full response:" >&2
+              echo "$RESPONSE" >&2
+              return 0
+            fi
+            return 1
+          }
+
           # Add issue to project (idempotent - will return existing item if already added)
           ADD_RESP=$(gh api graphql -f query='
           mutation($projectId:ID!, $contentId:ID!){
@@ -51,23 +79,11 @@ jobs:
           }' \
           -F projectId="$PROJECT_ID" \
           -F contentId='${{ github.event.issue.node_id }}' --include 2>&1) || {
-            if echo "$ADD_RESP" | grep -q "API rate limit"; then
-              echo "Error: GitHub API rate limit exceeded for DATE_AUTOMATION token" >&2
-              
-              # Extract rate limit details from headers if available
-              RESET_TIME=$(echo "$ADD_RESP" | grep -i "x-ratelimit-reset" | cut -d: -f2 | tr -d ' \r')
-              REMAINING=$(echo "$ADD_RESP" | grep -i "x-ratelimit-remaining" | cut -d: -f2 | tr -d ' \r')
-              RESOURCE=$(echo "$ADD_RESP" | grep -i "x-ratelimit-resource" | cut -d: -f2 | tr -d ' \r')
-              
-              if [ -n "$RESET_TIME" ]; then
-                RESET_DATE=$(date -u -d "@$RESET_TIME" 2>/dev/null || date -u -r "$RESET_TIME" 2>/dev/null || echo "unknown")
-                echo "Rate limit resource: $RESOURCE" >&2
-                echo "Remaining: $REMAINING" >&2
-                echo "Resets at: $RESET_DATE" >&2
-              fi
+            if handle_rate_limit_error "$ADD_RESP" "adding issue to project"; then
               exit 1
             fi
             echo "Error: Failed to add issue to project" >&2
+            echo "Full response:" >&2
             echo "$ADD_RESP" >&2
             exit 1
           }
@@ -106,23 +122,11 @@ jobs:
           -F itemId="$ITEM_ID" \
           -F fieldId="$FIELD_ID" \
           -F date='${{ steps.setup.outputs.opened_date }}' --include 2>&1) || {
-            if echo "$UPDATE_RESP" | grep -q "API rate limit"; then
-              echo "Error: GitHub API rate limit exceeded" >&2
-              
-              # Extract rate limit details from headers if available
-              RESET_TIME=$(echo "$UPDATE_RESP" | grep -i "x-ratelimit-reset" | cut -d: -f2 | tr -d ' \r')
-              REMAINING=$(echo "$UPDATE_RESP" | grep -i "x-ratelimit-remaining" | cut -d: -f2 | tr -d ' \r')
-              RESOURCE=$(echo "$UPDATE_RESP" | grep -i "x-ratelimit-resource" | cut -d: -f2 | tr -d ' \r')
-              
-              if [ -n "$RESET_TIME" ]; then
-                RESET_DATE=$(date -u -d "@$RESET_TIME" 2>/dev/null || date -u -r "$RESET_TIME" 2>/dev/null || echo "unknown")
-                echo "Rate limit resource: $RESOURCE" >&2
-                echo "Remaining: $REMAINING" >&2
-                echo "Resets at: $RESET_DATE" >&2
-              fi
+            if handle_rate_limit_error "$UPDATE_RESP" "setting field value"; then
               exit 1
             fi
             echo "Error: Failed to set field value" >&2
+            echo "Full response:" >&2
             echo "$UPDATE_RESP" >&2
             exit 1
           }
