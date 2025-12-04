@@ -115,6 +115,9 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     uint32_t gamma_single_tile_size = tt::tile_size(gamma_cb_data_format);
     uint32_t beta_single_tile_size = tt::tile_size(beta_cb_data_format);
 
+    const bool gamma_is_row_major = gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR;
+    const bool beta_is_row_major = beta.has_value() && beta.value().layout() == Layout::ROW_MAJOR;
+
     auto a_addr = a.buffer()->address();
     auto stats_addr = stats.buffer()->address();
     auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
@@ -125,11 +128,11 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     [[maybe_unused]] uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
 
     // For bert, tensor is packed as RM with width 32
-    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
-        num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_WIDTH : 0;
+    if (gamma_is_row_major) {
+        num_gamma_tiles = gamma.value().physical_volume() / TILE_WIDTH;
     }
-    if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
-        num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_WIDTH : 0;
+    if (beta_is_row_major) {
+        num_beta_tiles = beta.value().physical_volume() / TILE_WIDTH;
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -240,7 +243,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     };
 
     uint32_t gamma_stick_size = 0;
-    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
+    if (gamma_is_row_major) {
         gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
         bool gamma_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(gamma_stick_size);
         TT_FATAL(gamma_stick_size_is_power_of_two, "Only power of 2 gammas are supported");
@@ -266,8 +269,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
         reader_defines["FUSE_BETA"] = "1";
     }
 
-    auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
-                                (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
+    auto use_row_major_kernel = gamma_is_row_major || beta_is_row_major;
     TT_FATAL(
         use_row_major_kernel || (!gamma.has_value() && !beta.has_value()),
         "Only row major gamma and beta are supported");
