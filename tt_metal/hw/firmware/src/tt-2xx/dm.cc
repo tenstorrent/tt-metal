@@ -36,11 +36,6 @@ uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
-// These arrays are used to store the worker logical to virtual coordinate mapping
-// Round up to nearest multiple of 4 to ensure uint32_t alignment for L1 to local copies
-uint8_t worker_logical_col_to_virtual_col[round_up_to_mult_of_4(noc_size_x)] __attribute__((used));
-uint8_t worker_logical_row_to_virtual_row[round_up_to_mult_of_4(noc_size_y)] __attribute__((used));
-
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE);
 
 void device_setup() {
@@ -111,7 +106,6 @@ extern "C" uint32_t _start1() {
         signal_subordinate_completion();
     } else {  // This is DM0
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
-        noc_worker_logical_to_virtual_map_init(MEM_LOGICAL_TO_VIRTUAL_SCRATCH);
 
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
