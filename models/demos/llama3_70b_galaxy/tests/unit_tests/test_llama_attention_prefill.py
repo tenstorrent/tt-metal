@@ -21,7 +21,8 @@ from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetche
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 
 
-# @pytest.mark.skip(reason="Skipping test due to failure here, fix to be revisited: https://github.com/tenstorrent/tt-metal/issues/33677")
+# TODO: The default attention path (paged_attention=False) of this testcauses this issue https://github.com/tenstorrent/tt-metal/issues/33677
+# although it is not used in production, the fix should be properly revisited.
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
