@@ -28,13 +28,17 @@ namespace ckernel {
  * | threshold       | Threshold used in softplus calculation                                     | uint32_t | Greater than 0                                        | True     |
  */
 // clang-format on
+template <uint32_t APPROX_MODE = 0>
 ALWI void softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
-    MATH((llk_math_eltwise_unary_sfpu_softplus<APPROX>(idst, beta, beta_reciprocal, threshold)));
+    MATH((llk_math_eltwise_unary_sfpu_softplus<APPROX, APPROX_MODE>(idst, beta, beta_reciprocal, threshold)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void softplus_tile_init() { MATH((llk_math_eltwise_unary_sfpu_softplus_init<APPROX>())); }
+template <uint32_t APPROX_MODE = 0>
+ALWI void softplus_tile_init() {
+    MATH((llk_math_eltwise_unary_sfpu_softplus_init<APPROX, APPROX_MODE>()));
+}
 
 }  // namespace ckernel
