@@ -108,9 +108,11 @@ else()
 endif()
 
 include(GoogleTest)
+# Set a reasonable default timeout for unit tests. If specific tests need more time,
+# use set_tests_properties(<test> PROPERTIES TIMEOUT <seconds>) after discovery.
 gtest_discover_tests(
     ttml_tests
     PROPERTIES
         TIMEOUT
-            300
+            60
 )
