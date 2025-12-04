@@ -30,12 +30,25 @@ void py_graph_module(py::module& m) {
         .def_readonly("type", &ttnn::graph::TensorInfo::type)
         .def("__repr__", [](const ttnn::graph::TensorInfo& info) {
             std::stringstream ss;
+            std::string type_str;
+            switch (info.type) {
+                case tt::tt_metal::BufferType::DRAM:
+                    type_str = "DRAM";
+                    break;
+                case tt::tt_metal::BufferType::L1:
+                    type_str = "L1";
+                    break;
+                // Add more cases here as needed for other BufferType values
+                default:
+                    type_str = "UNKNOWN";
+                    break;
+            }
             ss << "TensorInfo(shape=" << info.shape << ", size=" << info.size
-               << ", type=" << (info.type == tt::tt_metal::BufferType::DRAM ? "DRAM" : "L1") << ")";
+               << ", type=" << type_str << ")";
             return ss.str();
         });
 
-    auto doc_begin =
+    const auto* doc_begin =
         R"doc(begin_graph_capture()
     )doc";
 
@@ -45,7 +58,7 @@ void py_graph_module(py::module& m) {
         doc_begin,
         py::arg("run_mode") = IGraphProcessor::RunMode::NORMAL);
 
-    auto doc_end =
+    const char* doc_end =
         R"doc(end_graph_capture() -> Union[None, bool, int, float, list, dict]
         returns the value captured graph as a json object converted to python object
     )doc";
