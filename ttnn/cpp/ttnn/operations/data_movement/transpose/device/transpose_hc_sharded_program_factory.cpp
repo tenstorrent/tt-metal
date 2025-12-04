@@ -116,7 +116,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
         }
     }
 
-    uint32_t num_H_per_core = shard_height / H > 0 ? shard_height / H : 1;
+    uint32_t num_H_per_core = shard_height / H > 0 ? shard_height / H : 1;  // the number of H blocks in a shard
     uint32_t num_C_blocks_per_core = shard_height > C ? shard_height / C : 1;
 
     uint32_t curr_c = 0, curr_h = 0;
@@ -146,6 +146,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
             }
         }
 
+        // figure out the stick id in a shard, and the core id for the stick.
         std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> core_stick_map;
         for (uint32_t j = 0; j < num_sticks_per_core; ++j) {
             uint32_t stick_id = stick_ids_per_core[j];
@@ -181,7 +182,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
         uint32_t num_non_repeat_cores = read_cores_indices.size();
         uint32_t read_stick_stride = read_stick_offset.size() > 1 ? read_stick_offset[1] - read_stick_offset[0] : 0;
 
-        if (num_H_per_core == 1) {
+        if (num_H_per_core == 1) {  // each core only has one H block or part of H block
             for (uint32_t k = 1; k < read_cores_indices.size(); ++k) {
                 if (read_cores_indices[k] == read_cores_indices[0]) {
                     num_non_repeat_cores = k;

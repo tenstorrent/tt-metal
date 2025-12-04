@@ -152,6 +152,11 @@ TransposeHCTiledProgramFactory::cached_program_t TransposeHCTiledProgramFactory:
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = 0;
+    // check if we need to allocate a scratch buffer
+    // The kernel reads several 16 element face lines (32B for BFLOAT16) from different input tiles to form a single
+    // output tile, one output tile at a time Each face line is 32 bytes, so if our minimum read alignment is greater
+    // than that (64B for Blackhole) then we will have reads from unaligned face-lines into differently aligned
+    // destination face-lines
     // TODO: noc_async_write only require 16B alignment for both DRAM and L1 for Blackhole, so instead of reading in
     // face-lines from C tiles to form a single tile, we can load a single tile and then write out its face-lines to C
     // tiles
@@ -164,6 +169,8 @@ TransposeHCTiledProgramFactory::cached_program_t TransposeHCTiledProgramFactory:
             .set_page_size(src0_cb_index, single_tile_size);
     CreateCircularBuffer(program, total_cores, cb_src0_config);
 
+    // need some scratch memory here - if we need data from a misaligned address then we need to read from the
+    // nearest aligned address and then copy the data to the correct location
     if (misaligned) {
         uint32_t src1_cb_index = 1;
         CircularBufferConfig cb_src1_config =
