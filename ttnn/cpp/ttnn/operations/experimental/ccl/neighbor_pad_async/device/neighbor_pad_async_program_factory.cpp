@@ -219,7 +219,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         // direction 0 means pad left (top), 1 means pad right (bottom)
         for (uint32_t direction = 0; direction < num_directions; direction++) {
             CoreCoord core = {link * num_directions + direction, 0};
-            CoreCoord opposite_core = {link * num_directions + (1 - direction), 0};
+            CoreCoord opposite_core = {(link * num_directions) + (1 - direction), 0};
             CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
             CoreCoord virtual_opposite_core = mesh_device->worker_core_from_logical_core(opposite_core);
             if (core_group_1.contains(core)) {
