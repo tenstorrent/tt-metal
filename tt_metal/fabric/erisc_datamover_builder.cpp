@@ -390,7 +390,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     // -1 to discount for the tensix worker channel
     this->num_fwd_paths = this->num_used_sender_channels - 1;
 
-    // TODO: Remove VC1 adjustments once VC1 sender/receiver channels are fully implemented
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/32561
+    // Remove VC1 adjustments once VC1 sender/receiver channels are fully implemented
     // For 2D routing (Mesh/Torus), VC1 channels (sender channels 4-6, receiver channel 1) are not yet implemented
     // so we exclude them from allocation
     if ((topology == Topology::Mesh || topology == Topology::Torus) && is_2D_routing) {
