@@ -16,6 +16,10 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         constexpr uint dst_tile_size = 64;
+        /*
+         A number is split into chunks of 11 bits
+            A = (a2 . 2^22)  + (a1 . 2^11) + a0 . 2^0
+        */
 
         // Split the 32-bit input values into 11-bit chunks:
         //
@@ -45,6 +49,17 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
         // a2
         TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG13, p_sfpu::LREG4, 5);  // A without last 22 bits
         /*
+        SFPSHFT2
+        Shifts values between or within LREGs, either within an SFPU instance or globally across SFPU
+        instances. The shift can be either at the granularity of the LREG, such that the entire value held
+        in one LREG is shifted to an adjacent LREG in one instruction, or a traditional bitwise shift that
+        happens within the LREG.
+        The global shift variants which move values from one SFPU instance to another require 2 cycles
+        to complete and should always be followed by an SFPNOP instruction.
+
+        Arguments: (imm12_math, lreg_src_c, lreg_dest, instr_mod1) ?
+        here the dest specified is only to store result , does not have any preloaded input
+
         the 5 passed as the inst_mode means
         The value in the LREG specified by lreg_dest is shifted by the
         number of bits determined by the value in the LREG specified by
@@ -126,13 +141,70 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
         padded with 9 zeroes in the MSBs. When the instr_mod1[0] is 0, the extracted mantissa is
         extended to include the hidden bit and then padded with 8 zeroes in the MSBs.
         We used mode 1, so 23 bits of mantissa + 9 padded zeros = 32 bit ??
+
+        instr_mod1 (4 bits):
+        0: extracted mantissa is extended to include the hidden bit and padded
+        with 8 zeroes in the MSBs
+        1: extracted mantissa is padded with 9 zeroes in the MSBs
+        #define SFPEXMAN_MOD1_PAD9 1
+
         */
 
         TTI_SFPSHFT(22, 0, p_sfpu::LREG5, 1);  // top <<= 22
+        // first 22 bits are dropped, last 10 bits of tops are moved to the front and remaining 22 bits padded with 0
         TTI_SFPSHFT(11, 0, p_sfpu::LREG6, 1);  // mid <<= 11
+        // first 11 bits are dropped, last 21 bits of mid are moved to the front and remaining 11 bits padded with 0
+
+        /*
+        SFPSHFT
+        Shifts the value in the LREG specified by lreg_dest by an amount specified either in the
+        immediate field or the LREG specified by lreg_c. The shift can be in either direction, left or right,
+        depending upon the sign bit of the shift amount.
+        When the sign bit of the shift amount is a 1, the value will be shifted to the right.
+        When the sign bit of the shift amount is a 0, the value will be shifted to the left.
+        In either case, the shift will be a logical shift, where the filled value will be zeroes.
+        Arguments: (imm12_math, lreg_c, lreg_dest, instr_mod1)
+        instr_mod1 (4 bits):
+            0: lreg_c will specify the LREG which contains the shift amount
+            1: imm12_math will contain the shift amount
+            */
 
         TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
+        // L0 with last 11 bits of the result  + L6 with mid 11 bits of the result and last 11 bits padded to zero =
+        // last 22 bits of the result
         TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
+        // L0 with 22 bits of the result  + L5 with top 10 bits of the result = 32 bits of the result
+        /*
+        SFPIADD
+        Performs integer addition between the LREG specified by lreg_c and either the immediate field
+        or the value in the LREG specified by lreg_dest and writes the result into the LREG specified by
+        lreg_dest.
+        The instruction optionally updates the condition code register as outlined in the instr_mod1
+        settings.
+        Arguments: (imm12_math, lreg_c, lreg_dest, instr_mod1)
+        instr_mod1 (4 bits):
+            0: performs integer addition between LREGs specified in
+            lreg_c and lreg_dest
+            condition code register is set to MSB of addition result
+            1: performs integer addition between LREG specified in
+            lreg_c and the sign extended imm12_math value
+            condition code register is set to MSB of addition result
+            2: performs integer addition between LREG specified in
+            lreg_c and the 2’s complement of LREG specified in lreg_dest
+            condition code register is set to MSB of addition result
+            3: reserved
+            we use this here  SFPIADD_MOD1_CC_NONE = 4:
+            4: performs integer addition between LREGs specified in
+            lreg_c and lreg_dest
+
+            #define SFPIADD_MOD1_ARG_LREG_DST        0
+            #define SFPIADD_MOD1_ARG_IMM             1
+            #define SFPIADD_MOD1_ARG_2SCOMP_LREG_DST 2
+            #define SFPIADD_MOD1_CC_LT0  0
+            #define SFPIADD_MOD1_CC_NONE 4
+            #define SFPIADD_MOD1_CC_GTE0 8
+            condition code register is not modified
+*/
 
         TT_SFPSTORE(p_sfpu::LREG0, INT32, ADDR_MOD_2, dst_index_out * dst_tile_size);
     }
@@ -143,9 +215,9 @@ inline void mul_int32_init() {
     sfpi::vConstIntPrgm0 = 0x7ff;  // lreg  12? mask that extracts only last 11 bits of the input it is &-ed with
     sfpi::vConstIntPrgm1 =
         -11;  // lreg 13? no of bits to shift; -ve sign indicates right shift with SFPSHFT2 instr_mode 5
-    sfpi::vConstFloatPrgm2 =
-        8388608.0f;  // lreg14 ? 2**23 if this mask is added to the result in floating point multiplication, the integer
-                     // bits will be pushed to occupy the mantissa bits ?
+    sfpi::vConstFloatPrgm2 = 8388608.0f;  // lreg14 ? 2**23 if this mask is added to the result in floating point
+                                          // multiplication, the integer bits will be pushed to occupy the 23 mantissa
+                                          // bits and extracted easily by dropping the exponent bits ?
 }
 
 }  // namespace ckernel::sfpu
