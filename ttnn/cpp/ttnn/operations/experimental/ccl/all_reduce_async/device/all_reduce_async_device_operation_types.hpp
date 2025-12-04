@@ -20,17 +20,17 @@ namespace ttnn {
 namespace operations::experimental::ccl::all_reduce_async {
 
 struct operation_attributes_t {
-    const uint32_t num_links;
-    const uint32_t ring_size;
-    const DataType dtype;
-    const MemoryConfig output_mem_config;
-    const ttnn::ccl::Topology topology;
-    const GlobalSemaphore semaphore;
+    uint32_t num_links = 0;
+    uint32_t ring_size = 0;
+    DataType dtype = DataType::BFLOAT16;
+    MemoryConfig output_mem_config;
+    ttnn::ccl::Topology topology;
+    GlobalSemaphore semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
-    bool use_noc1_only;
-    bool use_optimal_ccl_for_llama;
-    uint32_t cluster_axis;
-    const distributed::MeshDevice* mesh_device;
+    bool use_noc1_only = false;
+    bool use_optimal_ccl_for_llama = false;
+    uint32_t cluster_axis = 0;
+    distributed::MeshDevice* mesh_device = nullptr;
 
     operation_attributes_t(
         uint32_t num_links,
@@ -43,7 +43,7 @@ struct operation_attributes_t {
         bool use_noc1_only,
         bool use_optimal_ccl_for_llama,
         uint32_t cluster_axis,
-        const distributed::MeshDevice* mesh_device) :
+        distributed::MeshDevice* mesh_device) :
         num_links(num_links),
         ring_size(ring_size),
         dtype(dtype),

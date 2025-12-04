@@ -35,7 +35,7 @@ struct AllReduceAsyncDeviceOperation {
         const Tensor& input_tensor,
         Tensor& buffer_tensor,
         const uint32_t cluster_axis,
-        const MeshDevice& mesh_device,
+        MeshDevice& mesh_device,
         const ttnn::ccl::Topology topology,
         const GlobalSemaphore& multi_device_global_semaphore,
         const std::optional<DataType> dtype,
