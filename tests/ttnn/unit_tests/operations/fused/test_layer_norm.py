@@ -24,11 +24,12 @@ allclose_thresholds = {
     # which is 0.5*2^-7=0.00390625 (a little less than 0.5%). Since we're doing
     # potentially thousands of operations in many tests, we'll allow up to 5%.
     torch.bfloat16: AllCloseThresholds(rtol=5e-2, atol=5e-2),
-    # torch.float32: AllCloseThresholds(rtol=1e-5, atol=1e-8) Unused for now
+    # Unused for now, see https://github.com/tenstorrent/tt-metal/issues/33621
+    # torch.float32: AllCloseThresholds(rtol=1e-5, atol=1e-8)
 }
 
 
-def assert_passes(torch_output, ttnn_output):
+def assert_output_accuracy(torch_output, ttnn_output):
     dtype = ttnn_output.dtype
     if dtype == torch.bfloat16:
         return assert_allclose(
@@ -59,7 +60,7 @@ def test_layer_norm(device, h, w, use_welford, dtype):
     output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_passes(torch_output_tensor, output_tensor)
+    assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("h", [32])
@@ -85,7 +86,7 @@ def test_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_passes(torch_output_tensor, output_tensor)
+    assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("h", [32])
@@ -112,7 +113,7 @@ def test_layer_norm_with_weight_and_bias_row_major(device, h, w, use_welford):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_passes(torch_output_tensor, output_tensor)
+    assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("h", [32])
@@ -146,7 +147,7 @@ def test_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welfor
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_passes(torch_output_tensor, output_tensor)
+    assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("h", [2])
@@ -186,7 +187,7 @@ def test_layer_norm_with_tile_layout(device, h, w):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_passes(torch_output_tensor, output_tensor)
+    assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("h", [1024, 2080])
@@ -205,7 +206,7 @@ def test_large_layer_norm(device, h, w, use_welford, dtype):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_passes(torch_output_tensor, output_tensor)
+    assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("h", [2048])
@@ -232,7 +233,7 @@ def test_large_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_passes(torch_output_tensor, output_tensor)
+    assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("h", [2048])
@@ -255,7 +256,7 @@ def test_large_layer_norm_with_weight(device, h, w, use_welford):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_passes(torch_output_tensor, output_tensor)
+    assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("h", [2048])
@@ -278,7 +279,7 @@ def test_large_layer_norm_with_bias(device, h, w, use_welford):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_passes(torch_output_tensor, output_tensor)
+    assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("h, w", [(2048, 2048)])
@@ -351,7 +352,7 @@ def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_
         # Fallback to PCC, see https://github.com/tenstorrent/tt-metal/issues/33694
         assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
     else:
-        assert_passes(torch_output_tensor, output_tensor)
+        assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("use_welford", [True, False])
@@ -377,7 +378,7 @@ def test_l1_interleaved(device, use_welford, dtype):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_passes(torch_output_tensor, output_tensor)
+    assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("dim_a", [2048, 3072, 4096])
@@ -398,6 +399,6 @@ def test_layer_norm_across_dtypes(*, device: ttnn.Device, dim_a: int, dim_b: int
     tt_output_torch = ttnn.to_torch(tt_output)
 
     if dtype == ttnn.bfloat16:
-        assert_passes(torch_output, tt_output_torch)
+        assert_output_accuracy(torch_output, tt_output_torch)
     elif dtype == ttnn.bfloat8_b:
         assert_with_pcc(torch_output, tt_output_torch, pcc=0.987)
