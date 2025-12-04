@@ -221,7 +221,7 @@ class TestTriage:
         global FAILURE_CHECKS
 
         FAILURE_CHECKS.clear()
-        result = run_script(
+        run_script(
             script_path=os.path.join(triage_home, "check_core_magic.py"),
             args=None,
             context=self.exalens_context,
