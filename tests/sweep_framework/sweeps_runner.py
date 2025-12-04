@@ -72,7 +72,6 @@ def create_config_from_args(args) -> SweepsConfig:
         vector_id=args.vector_id,
         result_destination=args.result_dest,
         watcher=args.watcher,
-        # E2E perf measurement with accurate cold/cached distinction using ClearKernelCache API
         measure_perf=args.perf,
         measure_perf_with_cache=args.perf_with_cache,
         measure_device_perf=args.device_perf,
@@ -845,8 +844,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--watcher", action="store_true", required=False, help="Add this flag to run sweeps with watcher enabled."
     )
-    # Measures e2e performance with accurate cold-start and fully-cached measurements
-    # using ttnn.device.ClearKernelCache() to clear the in-memory HashLookup cache.
     parser.add_argument(
         "--perf",
         action="store_true",

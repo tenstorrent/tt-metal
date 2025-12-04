@@ -27,8 +27,7 @@ void DisablePersistentKernelCache();
  * Clear the in-memory kernel compilation hash lookup cache.
  *
  * This forces kernels to be recompiled on next use, even if they were previously
- * compiled in this process. Use this to measure true cold-start compilation times
- * within a single process.
+ * compiled in this process.
  *
  * Note: This only clears the in-memory HashLookup cache. To also clear disk-cached
  * kernel binaries, you must delete the files in:
