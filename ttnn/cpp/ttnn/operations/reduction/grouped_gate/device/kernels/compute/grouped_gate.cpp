@@ -17,6 +17,7 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api/bcast.h"
+#include "compute_kernel_api/eltwise_binary_sfpu.h"
 
 #include "debug/dprint_tensix.h"
 
@@ -291,6 +292,7 @@ void normalize_scores(
     const uint32_t unnormalized_scores_cb_index,
     const uint32_t reduce_scalar_cb_index,
     const uint32_t intermediate_reduce_cb_index,
+    const uint32_t epsilon_cb_index,
     const uint32_t normalized_scores_cb_index) {
     compute_kernel_hw_startup(unnormalized_scores_cb_index, reduce_scalar_cb_index, normalized_scores_cb_index);
     reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL>(
@@ -304,6 +306,13 @@ void normalize_scores(
     reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL>(unnormalized_scores_cb_index, reduce_scalar_cb_index, 0, 0, 0);
     reduce_uninit();
 
+    copy_tile_init(epsilon_cb_index);
+    copy_tile(epsilon_cb_index, 0, 1);
+
+    // broadcast scalar to full tile
+    add_binary_tile_init();
+    add_binary_tile(0, 1, 0);
+
     recip_tile_init();
     recip_tile(0);  // DST[0] = 1/sum(unnormalized_scores)
 
@@ -315,13 +324,13 @@ void normalize_scores(
     // reduce_uninit();
 
     cb_wait_front(intermediate_reduce_cb_index, 1);
+    UNPACK(print_tile(intermediate_reduce_cb_index, 0, true, 0, 1, 0, 1));
     // UNPACK(print_tile(intermediate_reduce_cb_index, 0, true, 0, 32, 0, 1));
     mul_bcast_cols_init_short(unnormalized_scores_cb_index, intermediate_reduce_cb_index);
 
     acquire_dst();
     cb_reserve_back(normalized_scores_cb_index, 1);
     UNPACK(print_tile(unnormalized_scores_cb_index, 0, true, 0, 32, 0, 1));
-    UNPACK(print_tile(intermediate_reduce_cb_index, 0, true, 0, 1, 0, 1));
     mul_tiles_bcast<BroadcastType::COL>(
         unnormalized_scores_cb_index, intermediate_reduce_cb_index, 0, 0, 0);  // tile *= 1/(sum_col(tile))
     pack_tile(0, normalized_scores_cb_index);
@@ -371,6 +380,7 @@ void MAIN {
     constexpr uint32_t pre_normalized_scores_cb_index =
         get_named_compile_time_arg_val("pre_normalized_scores_cb_index");
     constexpr uint32_t reduce_scalar_cb_index = get_named_compile_time_arg_val("reduce_scalar_cb_index");
+    constexpr uint32_t epsilon_cb_index = get_named_compile_time_arg_val("epsilon_cb_index");
 
     constexpr uint32_t n_groups = get_named_compile_time_arg_val("n_groups");
     constexpr uint32_t log_n_groups = get_named_compile_time_arg_val("log_n_groups");
@@ -450,7 +460,11 @@ void MAIN {
             log_n_activated_experts);
 
         blocks::normalize_scores(
-            pre_normalized_scores_cb_index, reduce_scalar_cb_index, intermediate_local_sort_cb_index, scores_cb_index);
+            pre_normalized_scores_cb_index,
+            reduce_scalar_cb_index,
+            intermediate_local_sort_cb_index,
+            epsilon_cb_index,
+            weights_cb_index);
     }
 }
 }  // namespace NAMESPACE

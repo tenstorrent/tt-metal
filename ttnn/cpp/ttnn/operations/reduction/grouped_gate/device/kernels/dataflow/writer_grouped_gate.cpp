@@ -388,6 +388,20 @@ FORCE_INLINE void generate_winning_group_tiles(
     cb_pop_front(sorted_group_indices_cb_index, num_group_tiles);
 }
 
+void write_epsilon(const uint32_t epsilon_cb_index, const uint32_t packed_epsilon) {
+    cb_reserve_back(epsilon_cb_index, 1);
+    uint32_t write_addr = get_write_ptr(epsilon_cb_index);
+    tt_l1_ptr uint32_t* write_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(write_addr);
+    uint16_t epsilon = packed_epsilon >> 16;
+    for (uint32_t i = 0; i < 8; i++) {
+        write_ptr[i] = epsilon << 16 | epsilon;
+    }
+    noc_async_read(get_noc_addr(write_addr), write_addr + 512, 32);
+    noc_async_read_barrier();
+    // print_tile(epsilon_cb_index, 0, true, 0, 1, 0, 32);
+    cb_push_back(epsilon_cb_index, 1);
+}
+
 void kernel_main() {
     constexpr uint32_t weights_cb_index = get_named_compile_time_arg_val("weights_cb_index");
     constexpr uint32_t indices_cb_index = get_named_compile_time_arg_val("indices_cb_index");
@@ -415,6 +429,8 @@ void kernel_main() {
     constexpr uint32_t reduce_scalar_cb_index = get_named_compile_time_arg_val("reduce_scalar_cb_index");
     constexpr uint32_t packed_one_scalar = get_named_compile_time_arg_val("packed_one_scalar");
     constexpr uint32_t n_activated_experts = get_named_compile_time_arg_val("n_activated_experts");
+    constexpr uint32_t packed_epsilon = get_named_compile_time_arg_val("packed_epsilon");
+    constexpr uint32_t epsilon_cb_index = get_named_compile_time_arg_val("epsilon_cb_index");
 
     const uint32_t weights_addr = get_arg_val<uint32_t>(0);
     const uint32_t indices_addr = get_arg_val<uint32_t>(1);
@@ -434,6 +450,7 @@ void kernel_main() {
     generate_index_tiles(topk_index_creation_cb_index, width_tiles, indices_page_size);
     generate_group_indices_tiles(group_indices_cb_index, width_tiles, n_groups);
     generate_reduce_scalar(reduce_scalar_cb_index, packed_one_scalar, n_activated_experts);
+    write_epsilon(epsilon_cb_index, packed_epsilon);
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
         generate_summed_experts_tiles(
@@ -451,6 +468,8 @@ void kernel_main() {
 
         cb_wait_front(indices_cb_index, 1);
         noc_async_write_page(height_tile, indices_accessor, get_write_ptr(indices_cb_index));
+        cb_wait_front(weights_cb_index, 1);
+        noc_async_write_page(height_tile, weights_accessor, get_write_ptr(weights_cb_index));
         noc_async_writes_flushed();
         cb_pop_front(indices_cb_index, 1);
     }
