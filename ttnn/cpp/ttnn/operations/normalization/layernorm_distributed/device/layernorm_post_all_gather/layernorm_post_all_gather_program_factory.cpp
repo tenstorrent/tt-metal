@@ -74,14 +74,14 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
 
     uint32_t num_tile_rows = NC * Ht;
 
-    log_debug(tt::LogOp, "is_rmsnorm: {}", is_rmsnorm);
-    log_debug(tt::LogOp, "W: {}", W);
-    log_debug(tt::LogOp, "H: {}", H);
-    log_debug(tt::LogOp, "num_tile_rows: {}", num_tile_rows);
-    log_debug(tt::LogOp, "Wt: {}", Wt);
-    log_debug(tt::LogOp, "Ht: {}", Ht);
-    log_debug(tt::LogOp, "stats_tiles_cols: {}", stats_tiles_cols);
-    log_debug(tt::LogOp, "num_devices: {}", num_devices);
+    log_debug(
+        tt::LogOp,
+        "LayerNormPostAllGatherProgramFactory: is_rmsnorm={}, shape=[{},{}], num_tile_rows={}, num_devices={}",
+        is_rmsnorm,
+        W,
+        H,
+        num_tile_rows,
+        num_devices);
 
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
@@ -115,15 +115,6 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     uint32_t gamma_single_tile_size = tt::tile_size(gamma_cb_data_format);
     uint32_t beta_single_tile_size = tt::tile_size(beta_cb_data_format);
 
-    log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
-    log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
-    log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
-    log_debug(tt::LogOp, "gamma_cb_data_format: {}", gamma_cb_data_format);
-    log_debug(tt::LogOp, "beta_cb_data_format: {}", beta_cb_data_format);
-    log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
-    log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
-    log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
-
     auto a_addr = a.buffer()->address();
     auto stats_addr = stats.buffer()->address();
     auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
@@ -140,9 +131,6 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
         num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_WIDTH : 0;
     }
-
-    log_debug(tt::LogOp, "num_gamma_tiles: {}", num_gamma_tiles);
-    log_debug(tt::LogOp, "num_beta_tiles: {}", num_beta_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -238,13 +226,6 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
          core_group_2,
          num_tile_rows_per_core_group_1,
          num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
-
-    log_debug(tt::LogOp, "num_cores: {}", num_cores);
-    log_debug(tt::LogOp, "grid_size: {}", grid_size);
-    log_debug(tt::LogOp, "core_group_1: {}", core_group_1.str());
-    log_debug(tt::LogOp, "num_tile_rows_per_core_group_1: {}", num_tile_rows_per_core_group_1);
-    log_debug(tt::LogOp, "core_group_2: {}", core_group_2.str());
-    log_debug(tt::LogOp, "num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
 
@@ -418,18 +399,6 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
         CircularBufferConfig(out0_tiles * out_single_tile_size, {{tt::CBIndex::c_14, out_data_format}})
             .set_page_size(tt::CBIndex::c_14, out_single_tile_size);
     CreateCircularBuffer(program, all_cores, cb_out0_config);
-
-    // Log all circular buffers with program.circular_buffers(), which returns
-    // std::vector<std::shared_ptr<CircularBuffer>>
-
-    for (const auto& cb : program.circular_buffers()) {
-        for ([[maybe_unused]] const auto index : cb->buffer_indices()) {
-            log_debug(tt::LogOp, "cb_id {}", index);
-            log_debug(tt::LogOp, "page_size: {}", cb->page_size(index));
-            log_debug(tt::LogOp, "num_pages: {}", cb->num_pages(index));
-            log_debug(tt::LogOp, "data_format: {}", cb->data_format(index));
-        }
-    }
 
     uint32_t curr_row = 0;
     float winv = 1.0f / (W * num_devices);  // bcast-w scaler
