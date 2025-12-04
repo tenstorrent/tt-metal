@@ -84,14 +84,14 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_m
     uint32_t num_tile_rows = NC * Ht;
 
     log_debug(tt::LogOp, "device_id: {}", gamma.value().device()->get_device_ids());
-    // log_debug(tt::LogOp, "is_rmsnorm: {}", is_rmsnorm);
-    // log_debug(tt::LogOp, "W: {}", W);
-    // log_debug(tt::LogOp, "H: {}", H);
-    // log_debug(tt::LogOp, "num_tile_rows: {}", num_tile_rows);
-    // log_debug(tt::LogOp, "Wt: {}", Wt);
-    // log_debug(tt::LogOp, "Ht: {}", Ht);
-    // log_debug(tt::LogOp, "stats_tiles_cols: {}", stats_tiles_cols);
-    // log_debug(tt::LogOp, "num_devices: {}", num_devices);
+    log_debug(tt::LogOp, "is_rmsnorm: {}", is_rmsnorm);
+    log_debug(tt::LogOp, "W: {}", W);
+    log_debug(tt::LogOp, "H: {}", H);
+    log_debug(tt::LogOp, "num_tile_rows: {}", num_tile_rows);
+    log_debug(tt::LogOp, "Wt: {}", Wt);
+    log_debug(tt::LogOp, "Ht: {}", Ht);
+    log_debug(tt::LogOp, "stats_tiles_cols: {}", stats_tiles_cols);
+    log_debug(tt::LogOp, "num_devices: {}", num_devices);
 
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
@@ -125,14 +125,14 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_m
     uint32_t gamma_single_tile_size = tt::tile_size(gamma_cb_data_format);
     uint32_t beta_single_tile_size = tt::tile_size(beta_cb_data_format);
 
-    // log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
-    // log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
-    // log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
-    // log_debug(tt::LogOp, "gamma_cb_data_format: {}", gamma_cb_data_format);
-    // log_debug(tt::LogOp, "beta_cb_data_format: {}", beta_cb_data_format);
-    // log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
-    // log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
-    // log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
+    log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
+    log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
+    log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
+    log_debug(tt::LogOp, "gamma_cb_data_format: {}", gamma_cb_data_format);
+    log_debug(tt::LogOp, "beta_cb_data_format: {}", beta_cb_data_format);
+    log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
+    log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
+    log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
     auto a_addr = a.buffer()->address();
     auto stats_addr = stats.buffer()->address();
@@ -140,19 +140,19 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_m
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
     auto dst_addr = output.buffer()->address();
 
-    // uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
-    // uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
+    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
+    uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
 
     // For bert, tensor is packed as RM with width 32
     if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
-        // num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_WIDTH : 0;
+        num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_WIDTH : 0;
     }
     if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
-        // num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_WIDTH : 0;
+        num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_WIDTH : 0;
     }
 
-    // log_debug(tt::LogOp, "num_gamma_tiles: {}", num_gamma_tiles);
-    // log_debug(tt::LogOp, "num_beta_tiles: {}", num_beta_tiles);
+    log_debug(tt::LogOp, "num_gamma_tiles: {}", num_gamma_tiles);
+    log_debug(tt::LogOp, "num_beta_tiles: {}", num_beta_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -179,11 +179,17 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_m
     out0_cb: (x - mean(x)) * 1/sqrt(var + epsilon) * gamma + beta # RMSNorm doesn't include beta
 
     */
+    uint32_t cb_length = Wt;
 
-    const uint32_t in0_tiles = Wt;
+    const uint32_t available_L1 =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    if (cb_length * in_single_tile_size > available_L1 * 0.95) {
+        cb_length = ((available_L1 / in_single_tile_size) * 0.95) / 7;
+    }
+    const uint32_t in0_tiles = cb_length;
     const uint32_t in1_tiles = stats_tiles_cols;
-    const uint32_t in2_tiles = Wt;
-    const uint32_t in3_tiles = Wt;
+    const uint32_t in2_tiles = cb_length;
+    const uint32_t in3_tiles = cb_length;
     const uint32_t in4_tiles = 1;  // epsilon
     const uint32_t in5_tiles = 1;  // reduce scalar
 
@@ -192,10 +198,10 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_m
     const uint32_t intermed2_tiles = 1;
     const uint32_t intermed3_tiles = 1;
     const uint32_t intermed4_tiles = 1;
-    const uint32_t intermed5_tiles = Wt;
-    const uint32_t intermed6_tiles = Wt;
-    const uint32_t intermed7_tiles = Wt;
-    const uint32_t out0_tiles = Wt;
+    const uint32_t intermed5_tiles = cb_length;
+    const uint32_t intermed6_tiles = cb_length;
+    const uint32_t intermed7_tiles = cb_length;
+    const uint32_t out0_tiles = cb_length;
 
     TT_FATAL(
         W <= TILE_WIDTH * in0_tiles,
@@ -314,14 +320,31 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_m
     };
 
     uint32_t gamma_stick_size = 0;
+    uint32_t gamma_is_row_major = 0;
+    uint32_t beta_is_row_major = 0;
     if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
         gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
         bool gamma_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(gamma_stick_size);
         TT_FATAL(gamma_stick_size_is_power_of_two, "Only power of 2 gammas are supported");
+        gamma_is_row_major = 1;
     } else if (gamma.has_value() and gamma.value().layout() == Layout::TILE) {
-        gamma_stick_size = 2048;  // size of tile in bytes bf16
+        gamma_stick_size = gamma.value().element_size() * 1024;  // size of tile in bytes bf16
+    }
+    uint32_t beta_stick_size = 0;
+    if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
+        beta_stick_size = beta.value().padded_shape()[-1] * beta.value().element_size();
+        bool beta_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(beta_stick_size);
+        TT_FATAL(beta_stick_size_is_power_of_two, "Only power of 2 betas are supported");
+        beta_is_row_major = 1;
+    } else if (beta.has_value() and beta.value().layout() == Layout::TILE) {
+        beta_stick_size = beta.value().element_size() * 1024;  // size of tile in bytes bf16
     }
     reader_compile_time_args.push_back((std::uint32_t)gamma_stick_size);
+    reader_compile_time_args.push_back((std::uint32_t)beta_stick_size);
+    reader_compile_time_args.push_back((std::uint32_t)gamma_is_row_major);
+    reader_compile_time_args.push_back((std::uint32_t)beta_is_row_major);
+    reader_compile_time_args.push_back((std::uint32_t)cb_length);
+    reader_compile_time_args.push_back((std::uint32_t)Wt);
 
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(stats.buffer()).append_to(reader_compile_time_args);
