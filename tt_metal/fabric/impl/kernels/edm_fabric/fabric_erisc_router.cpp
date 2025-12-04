@@ -2378,7 +2378,7 @@ void kernel_main() {
         tt::tt_fabric::EdmChannelWorkerInterfaces<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY>::make(
             std::make_index_sequence<NUM_SENDER_CHANNELS>{});
 
-    RISC_POST_STATUS(tt::tt_fabric::EDMStatus::OBJECT_SETUP_IN_PROGRESS);
+    RISC_POST_STATUS(tt::tt_fabric::EDMStatus::DOWNSTREAM_EDM_SETUP_STARTED);
 
     // TODO: change to TMP.
     std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_DOWNSTREAM_SENDERS_VC0>
