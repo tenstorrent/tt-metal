@@ -489,17 +489,6 @@ Normalization Program Configs
    ttnn.SoftmaxDefaultProgramConfig
    ttnn.SoftmaxShardedMultiCoreProgramConfig
 
-
-Moreh Operations
-================
-
-.. autosummary::
-   :toctree: api
-   :nosignatures:
-   :template: function.rst
-
-   ttnn.moreh_sum
-
 Transformer
 ===========
 
