@@ -11,8 +11,8 @@ from torch.utils.data import DataLoader
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-from models.demos.mnist.reference.mnist import MnistModel
-from models.demos.mnist.tt import tt_mnist
+from models.demos.vision.classification.mnist.reference.mnist import MnistModel
+from models.demos.vision.classification.mnist.tt import tt_mnist
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
