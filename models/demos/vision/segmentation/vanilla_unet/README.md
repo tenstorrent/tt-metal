@@ -26,16 +26,16 @@ The UNet architecture consists of:
 Run inference on a single brain MRI image:
 
 ```bash
-pytest models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image
+pytest models/demos/vision/segmentation/vanilla_unet/demo/demo.py::test_unet_demo_single_image
 ```
 
 This will:
-1. Load a test brain MRI image from `models/demos/vanilla_unet/demo/images/`
+1. Load a test brain MRI image from `models/demos/vision/segmentation/vanilla_unet/demo/images/`
 2. Run inference using the TT-NN implementation
 3. Generate a visualization with:
    - **Red outline**: Model prediction
    - **Green outline**: Ground truth segmentation
-4. Save the result to `models/demos/vanilla_unet/demo/pred/result_ttnn_1.png`
+4. Save the result to `models/demos/vision/segmentation/vanilla_unet/demo/pred/result_ttnn_1.png`
 
 ## Performance Testing
 
@@ -44,7 +44,7 @@ This will:
 Run device performance benchmarks:
 
 ```bash
-pytest models/demos/vanilla_unet/tests/test_unet_perf.py::test_vanilla_unet_perf_device
+pytest models/demos/vision/segmentation/vanilla_unet/tests/test_unet_perf.py::test_vanilla_unet_perf_device
 ```
 
 ### End-to-End Performance
@@ -52,5 +52,5 @@ pytest models/demos/vanilla_unet/tests/test_unet_perf.py::test_vanilla_unet_perf
 Run end-to-end performance tests including compile time and inference throughput:
 
 ```bash
-pytest models/demos/vanilla_unet/tests/test_unet_perf.py::test_vanilla_unet_perf_e2e
+pytest models/demos/vision/segmentation/vanilla_unet/tests/test_unet_perf.py::test_vanilla_unet_perf_e2e
 ```
