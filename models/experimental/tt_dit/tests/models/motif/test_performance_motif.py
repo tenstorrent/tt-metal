@@ -255,10 +255,6 @@ def test_motif_pipeline_performance(
 
     if is_ci_env:
         # In CI, dump a performance report
-        device_name_map = {
-            (2, 4): "WH_T3K",
-            (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
-        }
         benchmark_data = BenchmarkData()
         for iteration in range(num_perf_runs):
             for step_name, target in zip(
@@ -278,6 +274,10 @@ def test_motif_pipeline_performance(
                     value=benchmark_profiler.get_duration(step_name, i),
                     target=target,
                 )
+        device_name_map = {
+            (2, 4): "WH_T3K",
+            (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
+        }
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
             run_type=device_name_map[tuple(mesh_device.shape)],

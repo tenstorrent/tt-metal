@@ -99,7 +99,7 @@ def test_flux1_pipeline_performance(
         """An epic, high-definition cinematic shot of a rustic snowy cabin glowing warmly at dusk, nestled in a serene winter landscape. Surrounded by gentle snow-covered pines and delicate falling snowflakes — captured in a rich, atmospheric, wide-angle scene with deep cinematic depth and warmth.""",
     ]
 
-    # Warmup run (not timed)
+    # Warmup run
     logger.info("Running warmup iteration...")
     with benchmark_profiler("run", iteration=0):
         images = pipeline.run_single_prompt(
@@ -284,12 +284,6 @@ def test_flux1_pipeline_performance(
 
     if is_ci_env:
         # In CI, dump a performance report
-        device_name_map = {
-            (1, 2): "BH_P300",
-            (2, 2): "BH_QB",
-            (2, 4): "WH_T3K",
-            (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
-        }
         benchmark_data = BenchmarkData()
         for iteration in range(num_perf_runs):
             for step_name, target in zip(
@@ -309,6 +303,12 @@ def test_flux1_pipeline_performance(
                     value=benchmark_profiler.get_duration(step_name, i),
                     target=target,
                 )
+        device_name_map = {
+            (1, 2): "BH_P300",
+            (2, 2): "BH_QB",
+            (2, 4): "WH_T3K",
+            (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
+        }
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
             run_type=device_name_map[tuple(mesh_device.shape)],
