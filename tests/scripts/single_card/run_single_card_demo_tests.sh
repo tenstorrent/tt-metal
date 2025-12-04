@@ -185,20 +185,20 @@ run_bert_func() {
 
 run_resnet_stability() {
 
-  $PYTEST_CMD models/demos/wormhole/resnet50/tests/test_resnet50_stability.py -k "short"
+  $PYTEST_CMD models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_stability.py -k "short"
 
 }
 
 run_resnet_func() {
 
-  $PYTEST_CMD models/demos/wormhole/resnet50/demo/demo.py
+  $PYTEST_CMD models/demos/vision/classification/resnet50/wormhole/demo/demo.py
 
 }
 
 run_sdxl_func() {
   TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py --start-from=0 --num-prompts=2 -k "device_encoders and device_vae and no_cfg_parallel"
-  TT_MM_THROTTLE_PERF=5 $PYTEST_CMD  models/experimental/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
-  TT_MM_THROTTLE_PERF=5 $PYTEST_CMD  models/experimental/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
+  TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
+  TT_MM_THROTTLE_PERF=5 $PYTEST_CMD models/experimental/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
 }
 
 run_distilbert_func() {

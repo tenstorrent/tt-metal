@@ -15,11 +15,11 @@ Usage:
 
 Examples (Pytest):
     python generic_ops_tracer.py models/demos/wormhole/distilbert/demo/demo.py::test_demo
-    python generic_ops_tracer.py models/demos/wormhole/resnet50/demo/demo.py::test_demo_sample
+    python generic_ops_tracer.py models/demos/vision/classification/resnet50/wormhole/demo/demo.py::test_demo_sample
     python generic_ops_tracer.py /path/to/test.py::test_function --store
 
 Examples (Standalone Python):
-    python generic_ops_tracer.py models/demos/wormhole/resnet50/demo/demo.py
+    python generic_ops_tracer.py models/demos/vision/classification/resnet50/wormhole/demo/demo.py
     python generic_ops_tracer.py models/experimental/some_model/run_model.py --store
     python generic_ops_tracer.py /path/to/script.py --output-dir ./my_traces
 """

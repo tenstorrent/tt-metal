@@ -232,7 +232,7 @@ python model_tracer/generic_ops_tracer.py /path/to/model/demo.py
 python model_tracer/generic_ops_tracer.py models/experimental/efficientnetb0/tests/pcc/test_ttnn_efficientnetb0.py::test_efficientnetb0_model
 
 # Examples - Standalone scripts
-python model_tracer/generic_ops_tracer.py models/demos/wormhole/resnet50/demo/demo.py
+python model_tracer/generic_ops_tracer.py models/demos/vision/classification/resnet50/wormhole/demo/demo.py
 python model_tracer/generic_ops_tracer.py models/experimental/some_model/run_inference.py
 
 # Keep trace files (default: auto-deleted after adding to master)

@@ -21,8 +21,8 @@ from models.common.utility_functions import (
     is_wormhole_b0,
 )
 
-from models.demos.ttnn_resnet.tests.common.resnet50_test_infra import load_resnet50_model
-from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_large import resnet50
+from models.demos.vision.classification.resnet50.ttnn_resnet.tests.common.resnet50_test_infra import load_resnet50_model
+from models.demos.vision.classification.resnet50.ttnn_resnet.tt.ttnn_functional_resnet50_large import resnet50
 
 
 def preprocess_conv_parameter(parameter, *, dtype):

@@ -48,7 +48,7 @@ run_dual_galaxy_resnet50_tests() {
 
   echo "LOG_METAL: Running run_dual_galaxy_resnet50_tests"
 
-  pytest models/demos/ttnn_resnet/tests/test_perf_e2e_resnet50.py ; fail+=$?
+  pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_perf_e2e_resnet50.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
