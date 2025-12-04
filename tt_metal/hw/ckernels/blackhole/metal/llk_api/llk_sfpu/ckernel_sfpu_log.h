@@ -11,7 +11,7 @@
 namespace ckernel {
 namespace sfpu {
 
-template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en = false>
+template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat in, const uint log_base_scale_factor) {
     ///////////////////////////////////
     // "normalize to calculation range"
@@ -185,7 +185,7 @@ template <
     bool APPROXIMATION_MODE,
     bool FAST_APPROX,
     bool HAS_BASE_SCALING,
-    bool is_fp32_dest_acc_en = false,
+    bool is_fp32_dest_acc_en,
     int ITERATIONS = 8>
 inline void calculate_log(uint log_base_scale_factor) {
 #pragma GCC unroll 8
@@ -194,7 +194,6 @@ inline void calculate_log(uint log_base_scale_factor) {
         sfpi::vFloat result;
         if constexpr (!is_fp32_dest_acc_en) {
             result = calculate_log_body<FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en>(in, log_base_scale_factor);
-            // result = sfpi::vConst0;
         } else {
             result = calculate_log_f32_body<HAS_BASE_SCALING>(in, log_base_scale_factor);
         }
@@ -203,16 +202,16 @@ inline void calculate_log(uint log_base_scale_factor) {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en = false>
+template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
 inline void log_init() {
     if constexpr (!is_fp32_dest_acc_en) {
         sfpi::vConstFloatPrgm0 = 0.693147182464599609375;  // ln(2)
         sfpi::vConstFloatPrgm1 = -2.0069785118103027;
         sfpi::vConstFloatPrgm2 = 3.767500400543213;
     } else {
-        // _init_sfpu_reciprocal_ set vConstFloatPrgm0 = 2.0f
+        // _init_sfpu_reciprocal_ sets vConstFloatPrgm0 to 2.0f
         _init_sfpu_reciprocal_</*approximation_mode*/ false>();
-        // But we can use the other 2 programmable constants:
+        // But we can use 2 other programmable constants:
         sfpi::vConstFloatPrgm1 = 1.4142135623730951f;  // sqrt(2)
         sfpi::vConstFloatPrgm2 = 0.6931471805599453f;  // log(2)
     }
