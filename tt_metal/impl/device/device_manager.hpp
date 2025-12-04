@@ -14,8 +14,6 @@
 namespace tt::tt_metal {
 class IDevice;
 class DeviceManager {
-    //    friend void tt_metal::detail::CloseDevices(const std::map<ChipId, tt_metal::IDevice*>& devices);
-
 public:
     ~DeviceManager();
     DeviceManager();
@@ -57,7 +55,7 @@ private:
     bool initialize_fabric_and_dispatch_fw_ = false;
     // This variable tracks the state of dispatch firmware on device.
     // It is set to true when dispatch firmware is launched, and reset
-    // after the terimnate command is sent.
+    // after the terminate command is sent.
     bool dispatch_firmware_active_ = false;
     bool is_initialized_ = false;
 
@@ -72,7 +70,7 @@ private:
     void init_firmware_on_active_devices();
     void activate_device(ChipId id);
 
-    // Initialive DeviceManager
+    // Initialize DeviceManager
     void initialize_devices(const std::vector<ChipId>& device_ids);
 
     // Initialize state on the host for this device

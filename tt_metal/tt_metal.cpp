@@ -378,8 +378,6 @@ std::map<ChipId, IDevice*> CreateDevices(
     const size_t worker_l1_size,
     bool init_profiler,
     bool initialize_fabric_and_dispatch_fw) {
-    // Issue #19729: use_max_eth_core_count_on_all_devices is a workaround
-    // to allow TT-Mesh Workload dispatch to target active ethernet cores.
     ZoneScoped;
     bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
     tt::tt_metal::MetalContext::instance().initialize_device_manager(
