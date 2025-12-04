@@ -10,6 +10,8 @@
 #include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/vector.h>
 
+#include <optional>
+
 #include "models/base_transformer.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/distributed/llama.hpp"
@@ -195,8 +197,25 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
         py_llama_config.def_rw("num_heads", &models::llama::LlamaConfig::num_heads, "Number of heads");
         py_llama_config.def_rw("num_groups", &models::llama::LlamaConfig::num_groups, "Number of groups");
         py_llama_config.def_rw("embedding_dim", &models::llama::LlamaConfig::embedding_dim, "Embedding dimensions");
-        py_llama_config.def_rw(
-            "intermediate_dim", &models::llama::LlamaConfig::intermediate_dim, "Intermediate dimensions");
+        // Custom property for intermediate_dim to handle Python int/None -> std::optional<unsigned int> conversion
+        py_llama_config.def_prop_rw(
+            "intermediate_dim",
+            [](const models::llama::LlamaConfig& self) -> nb::object {
+                if (self.intermediate_dim.has_value()) {
+                    return nb::cast(*self.intermediate_dim);
+                }
+                return nb::none();
+            },
+            [](models::llama::LlamaConfig& self, const nb::object& value) {
+                if (value.is_none()) {
+                    self.intermediate_dim = std::nullopt;
+                } else {
+                    // Convert Python int to unsigned int, then wrap in optional
+                    uint32_t int_value = nb::cast<uint32_t>(value);
+                    self.intermediate_dim = std::make_optional(int_value);
+                }
+            },
+            "Intermediate dimensions");
         py_llama_config.def_rw("dropout_prob", &models::llama::LlamaConfig::dropout_prob, "Dropout probability");
         py_llama_config.def_rw("theta", &models::llama::LlamaConfig::theta, "Theta");
         py_llama_config.def_rw("num_blocks", &models::llama::LlamaConfig::num_blocks, "Number of blocks");
@@ -214,6 +233,30 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
 
         auto py_llama = static_cast<nb::class_<models::llama::Llama>>(py_llama_module.attr("Llama"));
         py_llama.def(nb::init<models::llama::LlamaConfig>());
+        // Override __call__ to support use_cache parameter
+        py_llama.def(
+            "__call__",
+            static_cast<ttml::autograd::TensorPtr (models::llama::Llama::*)(
+                const ttml::autograd::TensorPtr&, const ttml::autograd::TensorPtr&, const bool)>(
+                &models::llama::Llama::operator()),
+            nb::arg("tensor"),
+            nb::arg("mask"),
+            nb::arg("use_cache") = false);
+        // KV cache methods
+        py_llama.def(
+            "initialize_kv_cache",
+            &models::llama::Llama::initialize_kv_cache,
+            nb::arg("batch_size") = 1,
+            "Initialize KV cache for inference");
+        py_llama.def("reset_cache", &models::llama::Llama::reset_cache, "Reset cache position for new sequence");
+        py_llama.def(
+            "get_inference_mode",
+            &models::llama::Llama::get_inference_mode,
+            "Get current inference mode (PREFILL or DECODE)");
+        py_llama.def(
+            "get_original_vocab_size",
+            &models::llama::Llama::get_original_vocab_size,
+            "Get the original vocabulary size");
     }
 
     {

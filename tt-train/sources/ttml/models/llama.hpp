@@ -7,6 +7,7 @@
 #include "autograd/tensor.hpp"
 #include "base_transformer.hpp"
 #include "common/transformer_common.hpp"
+#include "modules/grouped_query_attention.hpp"
 #include "modules/llama_block.hpp"
 #include "modules/module_base.hpp"
 #include "ops/rope_op.hpp"
@@ -28,7 +29,6 @@ struct LlamaConfig {
     uint32_t max_sequence_length = 256U;
     RunnerType runner_type = RunnerType::Default;
     WeightTyingType weight_tying = WeightTyingType::Enabled;
-    bool inference = false;  // Enable KV cache for inference mode
 
     // RoPE NTK-aware scaling parameters
     float scaling_factor = 0.0F;  // 0.0 means no scaling
@@ -57,7 +57,9 @@ public:
     virtual ~Llama() = default;
     void load_from_safetensors(const std::filesystem::path& model_path) override;
     ttml::autograd::TensorPtr operator()(
-        const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) override;
+        const ttml::autograd::TensorPtr& x,
+        const ttml::autograd::TensorPtr& mask,
+        const bool use_cache = false) override;
 
     // Get the original vocabulary size for token validation
     [[nodiscard]] uint32_t get_original_vocab_size() const {
@@ -70,16 +72,12 @@ public:
     // Reset cache position for new sequence
     void reset_cache() {
         m_cache_position = 0U;
+        m_kv_cache.clear();
     }
 
-    // Get current cache position
-    [[nodiscard]] uint32_t get_cache_position() const {
-        return m_cache_position;
-    }
-
-    // Set cache position (useful after prefill to set to actual prompt length)
-    void set_cache_position(uint32_t position) {
-        m_cache_position = position;
+    // Get current inference mode (PREFILL if cache_position == 0, DECODE otherwise)
+    [[nodiscard]] ttml::modules::InferenceMode get_inference_mode() const {
+        return (m_cache_position == 0U) ? ttml::modules::InferenceMode::PREFILL : ttml::modules::InferenceMode::DECODE;
     }
 };
 
