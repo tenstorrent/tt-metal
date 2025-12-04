@@ -124,8 +124,8 @@ class Generator:
                 break
 
         # TODO: https://github.com/tenstorrent/tt-metal/issues/33722
-        if "gpt-oss" in self.model_args[0].base_model_name and 6144 in sequence_lengths_to_warmup:
-            sequence_lengths_to_warmup.remove(6144)
+        # other models works with this, but gpt-oss does not
+        sequence_lengths_to_warmup.remove(6144)
 
         for model_id in range(self.data_parallel):
             for supported_length in sequence_lengths_to_warmup:
