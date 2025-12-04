@@ -79,8 +79,8 @@ def try_read_magic_with_elf(
     try:
         loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
         mailboxes = fw_elf.read_global("mailboxes", loc_mem_access)
-        return mailboxes.core_info.core_magic_number
-    except Exception:
+        return  int.from_bytes(mailboxes.core_info.core_magic_number.read_bytes(), byteorder="little")
+    except Exception as e:
         return None
 
 
