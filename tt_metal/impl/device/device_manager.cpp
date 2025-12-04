@@ -219,37 +219,40 @@ void DeviceManager::init_profiler() const {
 #endif
 }
 
-DeviceManager::DeviceManager(
-    const std::vector<ChipId>& device_ids,
-    const uint8_t num_hw_cqs,
-    size_t l1_small_size,
-    size_t trace_region_size,
-    tt::stl::Span<const std::uint32_t> a_l1_bank_remap,
-    size_t worker_l1_size,
-    bool init_profiler,
-    bool initialize_fabric_and_dispatch_fw) :
-    num_hw_cqs(num_hw_cqs),
-    l1_small_size(l1_small_size),
-    trace_region_size(trace_region_size),
-    worker_l1_size(worker_l1_size),
-    using_fast_dispatch_(tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()),
-    init_profiler_(init_profiler),
-    initialize_fabric_and_dispatch_fw_(initialize_fabric_and_dispatch_fw) {
+DeviceManager::DeviceManager() {
     ZoneScoped;
     log_debug(tt::LogMetal, "DeviceManager constructor");
+}
+
+void DeviceManager::initialize(
+    const std::vector<ChipId>& a_device_ids,
+    const uint8_t a_num_hw_cqs,
+    size_t a_l1_small_size,
+    size_t a_trace_region_size,
+    tt::stl::Span<const std::uint32_t> a_l1_bank_remap,
+    size_t a_worker_l1_size,
+    bool a_init_profiler,
+    bool a_initialize_fabric_and_dispatch_fw) {
+    ZoneScoped;
+    log_debug(tt::LogMetal, "DeviceManager initialize");
+
+    num_hw_cqs = a_num_hw_cqs;
+    l1_small_size = a_l1_small_size;
+    trace_region_size = a_trace_region_size;
+    worker_l1_size = a_worker_l1_size;
+    using_fast_dispatch_ = tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
+    init_profiler_ = a_init_profiler;
+    initialize_fabric_and_dispatch_fw_ = a_initialize_fabric_and_dispatch_fw;
 
     worker_thread_to_cpu_core_map =
         device_cpu_allocator::get_device_id_to_core_map(num_hw_cqs, completion_queue_reader_to_cpu_core_map);
 
     l1_bank_remap.assign(a_l1_bank_remap.begin(), a_l1_bank_remap.end());
 
-    initialize_devices(device_ids);
+    initialize_devices(a_device_ids);
 }
 
 void DeviceManager::initialize_devices(const std::vector<ChipId>& a_device_ids) {
-    ZoneScoped;
-    log_debug(tt::LogMetal, "DeviceManager initialize");
-
     std::vector<ChipId> device_ids_to_open = a_device_ids;
     // Never skip for TG Cluster
     bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();

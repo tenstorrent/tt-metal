@@ -77,7 +77,7 @@ void MetalContext::initialize_device_manager(
     bool init_profiler,
     bool initialize_fabric_and_dispatch_fw) {
     initialize(dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
-    device_manager_ = std::make_unique<DeviceManager>(
+    device_manager_->initialize(
         device_ids,
         num_hw_cqs,
         l1_small_size,
@@ -115,7 +115,7 @@ void MetalContext::initialize(
             worker_l1_size_ != worker_l1_size or l1_bank_remap != l1_bank_remap_ or
             fw_compile_hash != fw_compile_hash_) {
             log_warning(tt::LogAlways, "Closing and re-initializing MetalContext with new parameters.");
-            teardown(true);
+            teardown();
         } else {
             // Re-init request with the same parameters, do nothing unless force re-init requested.
             if (force_reinit_) {
@@ -123,7 +123,7 @@ void MetalContext::initialize(
                 log_debug(
                     tt::LogAlways,
                     "Closing and re-initializing MetalContext with same parameters due to force_reinit flag.");
-                teardown(true);
+                teardown();
             } else {
                 return;
             }
@@ -285,7 +285,7 @@ void MetalContext::initialize(
 
 // IMPORTANT: This function is registered as an atexit handler. Creating threads during program termination may cause
 // undefined behavior. Do not create threads in this function or any functions it calls.
-void MetalContext::teardown(bool is_reinit) {
+void MetalContext::teardown() {
     ZoneScoped;
 
     if (!initialized_) {
@@ -315,9 +315,6 @@ void MetalContext::teardown(bool is_reinit) {
     if (data_collector_) {
         data_collector_->DumpData();
         data_collector_.reset();
-    }
-    if (device_manager_ && !is_reinit) {
-        device_manager_.reset();
     }
 
     if (dprint_server_) {
@@ -419,6 +416,8 @@ MetalContext::MetalContext() {
         worker_logical_row_to_virtual_row_.emplace(device_id, std::vector<uint8_t>{});
     }
 
+    device_manager_ = std::make_unique<DeviceManager>();
+
     // We do need to call Cluster teardown at the end of the program, use atexit temporarily until we have clarity on
     // how MetalContext lifetime will work through the API.
     std::atexit([]() { MetalContext::instance().~MetalContext(); });
@@ -434,7 +433,10 @@ std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_di
     return distributed_context_;
 }
 
-MetalContext::~MetalContext() { teardown_base_objects(); }
+MetalContext::~MetalContext() {
+    device_manager_.reset();
+    teardown_base_objects();
+}
 
 llrt::RunTimeOptions& MetalContext::rtoptions() { return rtoptions_; }
 

@@ -18,7 +18,9 @@ class DeviceManager {
 
 public:
     ~DeviceManager();
-    DeviceManager(
+    DeviceManager();
+
+    void initialize(
         const std::vector<ChipId>& device_ids,
         uint8_t num_hw_cqs,
         size_t l1_small_size,
@@ -48,9 +50,9 @@ private:
     size_t trace_region_size{};
     size_t worker_l1_size{};
     std::vector<uint32_t> l1_bank_remap;
-    bool using_fast_dispatch_;
-    bool init_profiler_;
-    bool initialize_fabric_and_dispatch_fw_;
+    bool using_fast_dispatch_ = false;
+    bool init_profiler_ = false;
+    bool initialize_fabric_and_dispatch_fw_ = false;
     // This variable tracks the state of dispatch firmware on device.
     // It is set to true when dispatch firmware is launched, and reset
     // after the terimnate command is sent.

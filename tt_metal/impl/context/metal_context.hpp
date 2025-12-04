@@ -44,6 +44,8 @@ class DispatchMemMap;
 // Dispatch-dependent state (FW, dispatch, fabric) is initialized explicitly with a MetalContext::initialize() call, and
 // only accessible after that.
 class MetalContext {
+    friend DeviceManager;
+
 public:
     MetalContext& operator=(const MetalContext&) = delete;
     MetalContext& operator=(MetalContext&& other) noexcept = delete;
@@ -87,7 +89,7 @@ public:
         const BankMapping& l1_bank_remap,
         size_t worker_l1_size,
         bool minimal = false);
-    void teardown(bool is_reinit = false);
+    void teardown();
 
     // Control plane accessors
     void initialize_control_plane();
