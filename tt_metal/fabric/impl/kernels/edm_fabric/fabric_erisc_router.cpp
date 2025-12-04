@@ -27,6 +27,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_channel_traits.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 
 #include "noc_overlay_parameters.h"
 #include "tt_metal/hw/inc/utils/utils.h"
@@ -542,7 +543,7 @@ FORCE_INLINE bool can_forward_packet_completely(
         deliver_locally_only = (cached_routing_fields.value & tt::tt_fabric::LowLatencyRoutingFields::FIELD_MASK) ==
                                tt::tt_fabric::LowLatencyRoutingFields::WRITE_ONLY;
     }
-    return deliver_locally_only || downstream_edm_interface.edm_has_space_for_packet();
+    return deliver_locally_only || downstream_edm_interface.template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
 }
 
 template <eth_chan_directions downstream_direction>
@@ -565,7 +566,7 @@ FORCE_INLINE bool check_downstream_has_space(
         return true;
     } else {
         constexpr auto edm_index = get_downstream_edm_interface_index(DIRECTION);
-        return downstream_edm_interfaces_vc0[edm_index].edm_has_space_for_packet();
+        return downstream_edm_interfaces_vc0[edm_index].template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
     }
 }
 
@@ -575,13 +576,13 @@ FORCE_INLINE bool check_downstream_has_space(
     LocalRelayInterfaceT& local_relay_interface) {
     if constexpr (DIRECTION == my_direction) {
         if constexpr (udm_mode) {
-            return local_relay_interface.edm_has_space_for_packet();
+            return local_relay_interface.template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
         } else {
             return true;
         }
     } else {
         constexpr auto edm_index = get_downstream_edm_interface_index<DIRECTION>();
-        return downstream_edm_interfaces_vc0[edm_index].edm_has_space_for_packet();
+        return downstream_edm_interfaces_vc0[edm_index].template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
     }
 }
 
@@ -710,7 +711,7 @@ FORCE_INLINE void receiver_forward_packet(
 #else
         false;
 #endif
-    invalidate_l1_cache();  // Make sure we have the latest packet header in L1
+    router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();  // Make sure we have the latest packet header in L1
     if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::tt_fabric::RoutingFields>) {
         // If the packet is a terminal packet, then we can just deliver it locally
         bool start_distance_is_terminal_value =
@@ -1213,7 +1214,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
 template <typename EdmChannelWorkerIFs>
 FORCE_INLINE void establish_edm_connection(
     EdmChannelWorkerIFs& local_sender_channel_worker_interface, uint32_t stream_id) {
-    local_sender_channel_worker_interface.cache_producer_noc_addr();
+    local_sender_channel_worker_interface.template cache_producer_noc_addr<USE_DYNAMIC_CREDIT_ADDR, ENABLE_RISC_CPU_DATA_CACHE>();
 }
 
 bool any_sender_channels_active(
@@ -1407,7 +1408,7 @@ FORCE_INLINE bool run_sender_channel_step_impl(
 
     // Process COMPLETIONs from receiver
     int32_t completions_since_last_check =
-        sender_channel_from_receiver_credits.get_num_unprocessed_completions_from_receiver();
+        sender_channel_from_receiver_credits.template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
     if (completions_since_last_check) {
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
@@ -1437,7 +1438,7 @@ FORCE_INLINE bool run_sender_channel_step_impl(
         auto check_connection_status =
             !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();
         if (check_connection_status) {
-            check_worker_connections<MY_ETH_CHANNEL>(
+            check_worker_connections<MY_ETH_CHANNEL, WorkerInterfaceT, ENABLE_RISC_CPU_DATA_CACHE>(
                 local_sender_channel_worker_interface,
                 channel_connection_established,
                 sender_channel_free_slots_stream_id);
@@ -1468,7 +1469,7 @@ FORCE_INLINE bool run_sender_channel_step(
     if constexpr (is_sender_channel_serviced[sender_channel_index]) {
         // the cache is invalidated here because the channel will read some
         // L1 locations to see if it can make progress
-        invalidate_l1_cache();
+        router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
         return run_sender_channel_step_impl<
             sender_channel_index,
             to_receiver_packets_sent_streams[VC_RECEIVER_CHANNEL],
@@ -1551,7 +1552,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     receiver_forward_timer.open();
 
     if (unwritten_packets) {
-        invalidate_l1_cache();
+        router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
         tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
             local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
@@ -1704,7 +1705,7 @@ FORCE_INLINE bool run_receiver_channel_step(
     const tt::tt_fabric::routing_l1_info_t& routing_table,
     LocalTelemetryT& local_fabric_telemetry) {
     if constexpr (is_receiver_channel_serviced[receiver_channel]) {
-        invalidate_l1_cache();
+        router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
         return run_receiver_channel_step_impl<
             receiver_channel,
             to_receiver_packets_sent_streams[receiver_channel],
@@ -1797,7 +1798,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     // improve performance. The value of 32 was chosen somewhat empirically and then raised up slightly.
 
     uint64_t loop_start_cycles;
-    while (!got_immediate_termination_signal(termination_signal_ptr)) {
+    while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
         did_something = false;
 
         uint32_t tx_progress = 0;
@@ -1811,7 +1812,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         }
 
         for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
-            invalidate_l1_cache();
+            router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
             // Capture these to see if we made progress
 
             // There are some cases, mainly for performance, where we don't want to switch between sender channels
@@ -1928,7 +1929,7 @@ void
             return;
         }
         while (!connect_is_requested(*interface.connection_live_semaphore)) {
-            invalidate_l1_cache();
+            router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
         }
         establish_edm_connection(interface, local_sender_channel_free_slots_stream_ids[sender_channel_idx]);
     };
@@ -2044,13 +2045,13 @@ void wait_for_other_local_erisc() {
         write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(multi_erisc_sync_start_value);
         while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) !=
                multi_erisc_sync_step2_value) {
-            invalidate_l1_cache();
+            router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
         }
         write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(0);
     } else {
         while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) !=
                multi_erisc_sync_start_value) {
-            invalidate_l1_cache();
+            router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
         }
         write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(multi_erisc_sync_step2_value);
     }
@@ -2124,7 +2125,8 @@ void initialize_state_for_txq1_active_mode_sender_side() {
 }
 
 void kernel_main() {
-    set_l1_data_cache<true>();
+    static_assert(ENABLE_RISC_CPU_DATA_CACHE == false, "ENABLE_RISC_CPU_DATA_CACHE must be false");
+    set_l1_data_cache<ENABLE_RISC_CPU_DATA_CACHE>();
     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
     static_assert(
         receiver_txq_id == sender_txq_id || receiver_txq_id == 1,

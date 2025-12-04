@@ -11,6 +11,7 @@
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 
 namespace tt::tt_fabric {
 
@@ -19,9 +20,10 @@ FORCE_INLINE bool got_graceful_termination_signal(volatile tt::tt_fabric::Termin
     return *termination_signal_ptr == tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE;
 }
 
+template <bool ENABLE_RISC_CPU_DATA_CACHE=true>
 FORCE_INLINE bool got_immediate_termination_signal(volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     // mailboxes defined in tt_metal/hw/inc/ethernet/tunneling.h
-    invalidate_l1_cache();
+    router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
     uint32_t launch_msg_rd_ptr = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
     tt_l1_ptr launch_msg_t* const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_msg_rd_ptr]);
     return (*termination_signal_ptr == tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE) ||
@@ -41,10 +43,9 @@ FORCE_INLINE void establish_worker_connection(
     local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
 }
 
-template <uint8_t MY_ETH_CHANNEL, uint8_t SENDER_NUM_BUFFERS>
+template <uint8_t MY_ETH_CHANNEL, typename WorkerInterfaceT, bool ENABLE_RISC_CPU_DATA_CACHE=true>
 FORCE_INLINE void check_worker_connections(
-    tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS>&
-        local_sender_channel_worker_interface,
+    WorkerInterfaceT& local_sender_channel_worker_interface,
     bool& channel_connection_established,
     uint32_t stream_id) {
     if (!channel_connection_established) {
@@ -60,20 +61,20 @@ FORCE_INLINE void check_worker_connections(
         if (connect_is_requested(cached)) {
             channel_connection_established = true;
 
-            ASSERT(get_ptr_val(stream_id) <= static_cast<int32_t>(SENDER_NUM_BUFFERS));
             establish_worker_connection<MY_ETH_CHANNEL>(local_sender_channel_worker_interface);
         }
     } else if (local_sender_channel_worker_interface.has_worker_teardown_request()) {
         channel_connection_established = false;
-        local_sender_channel_worker_interface.template teardown_worker_connection<true>();
+        local_sender_channel_worker_interface.template teardown_worker_connection<true, ENABLE_RISC_CPU_DATA_CACHE>();
     }
 }
 
 // !!!FORCE_INLINE could potentially cause stack corruption as seen in the past
+template <bool ENABLE_RISC_CPU_DATA_CACHE=true>
 inline void wait_for_notification(uint32_t address, uint32_t value) {
     volatile tt_l1_ptr uint32_t* poll_addr = (volatile tt_l1_ptr uint32_t*)address;
     while (*poll_addr != value) {
-        invalidate_l1_cache();
+        router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
         // context switch while waiting to allow slow dispatch traffic to go through
         run_routing();
     }
