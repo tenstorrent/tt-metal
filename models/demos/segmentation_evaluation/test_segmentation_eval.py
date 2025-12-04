@@ -202,7 +202,7 @@ def evaluation(
         from torch.utils.data import DataLoader
         from transformers import AutoImageProcessor
 
-        from models.demos.segformer.demo.demo_for_semantic_segmentation import (
+        from models.demos.vision.segmentation.segformer.demo.demo_for_semantic_segmentation import (
             SemanticSegmentationDataset,
             custom_collate_fn,
             shift_gt_indices,
@@ -210,8 +210,8 @@ def evaluation(
 
         image_processor = AutoImageProcessor.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
 
-        image_folder = "models/demos/segformer/demo/validation_data_ade20k/images"
-        mask_folder = "models/demos/segformer/demo/validation_data_ade20k/annotations"
+        image_folder = "models/demos/vision/segmentation/segformer/demo/validation_data_ade20k/images"
+        mask_folder = "models/demos/vision/segmentation/segformer/demo/validation_data_ade20k/annotations"
 
         dataset = SemanticSegmentationDataset(image_folder, mask_folder, image_processor)
         data_loader = DataLoader(
@@ -378,11 +378,11 @@ def test_vgg_unet(device, model_type, use_pretrained_weight, res, model_location
 
 
 def run_segformer_eval(device, model_location_generator, model_type, res, device_batch_size):
-    from models.demos.segformer.common import load_config, load_torch_model
-    from models.demos.segformer.reference.segformer_for_semantic_segmentation import (
+    from models.demos.vision.segmentation.segformer.common import load_config, load_torch_model
+    from models.demos.vision.segmentation.segformer.reference.segformer_for_semantic_segmentation import (
         SegformerForSemanticSegmentationReference,
     )
-    from models.demos.segformer.runner.performant_runner import SegformerTrace2CQ
+    from models.demos.vision.segmentation.segformer.runner.performant_runner import SegformerTrace2CQ
 
     config = load_config("configs/segformer_semantic_config.json")
     reference_model = SegformerForSemanticSegmentationReference(config)
@@ -397,7 +397,7 @@ def run_segformer_eval(device, model_location_generator, model_type, res, device
         device, model_location_generator=model_location_generator, device_batch_size=device_batch_size
     )
 
-    if not os.path.exists("models/demos/segformer/demo/validation_data_ade20k"):
+    if not os.path.exists("models/demos/vision/segmentation/segformer/demo/validation_data_ade20k"):
         logger.info("downloading data")
         os.system("python models/demos/segmentation_evaluation/dataset_download.py segformer")
 
