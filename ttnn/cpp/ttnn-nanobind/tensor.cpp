@@ -473,21 +473,25 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
     pyCoreRange
         .def(
             "__init__",
-            [](CoreRange* t, const CoreCoord& start, const CoreCoord& end) { new (t) CoreRange{start, end}; })
+            [](CoreRange* t, const CoreCoord& start, const CoreCoord& end) { new (t) CoreRange{start, end}; },
+            nb::arg("start"),
+            nb::arg("end"))
         .def_ro("start", &CoreRange::start_coord)
         .def_ro("end", &CoreRange::end_coord)
         .def("grid_size", &CoreRange::grid_size);
 
     auto pyCoreRangeSet = static_cast<nb::class_<CoreRangeSet>>(m_tensor.attr("CoreRangeSet"));
     pyCoreRangeSet
-        .def(  // NANOBIND_TODO: see which overload was being used in prefetcher test
-            "__init__",
-            [](CoreRangeSet* t, const std::set<CoreRange>& core_ranges) { new (t) CoreRangeSet(core_ranges); })
         .def(
             "__init__",
             [](CoreRangeSet* t, const std::vector<CoreRange>& core_ranges) {
                 new (t) CoreRangeSet(tt::stl::Span<const CoreRange>(core_ranges));
-            })
+            },
+            nb::arg("core_ranges"))
+        .def(
+            "__init__",
+            [](CoreRangeSet* t, const std::set<CoreRange>& core_ranges) { new (t) CoreRangeSet(core_ranges); },
+            nb::arg("core_ranges").noconvert())
         .def(
             "bounding_box",
             &CoreRangeSet::bounding_box,
