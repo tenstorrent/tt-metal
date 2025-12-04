@@ -1,23 +1,18 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 // SPDX-License-Identifier: Apache-2.0
-#include <string>
 
-#include "ttnn/operations/math.hpp"
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
+#include "argmax_multi_core_program_factory.hpp"
+
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include "ttnn/operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
+
+namespace ttnn::operations::reduction::argmax::program {
 
 using namespace tt::tt_metal;
-
-namespace ttnn::operations::reduction::detail {
-
-using namespace tt::constants;
 
 /**
  * @brief Distributes work across cores for argmax reduction operations
@@ -84,193 +79,6 @@ static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uin
     }
 
     return {all_cores, cores0, cores1, red_dim_units0, red_dim_units1};
-}
-
-std::tuple<uint32_t, uint32_t> get_page_sizes_single_core(
-    const Tensor& input, const Tensor& output, bool keepdim, bool reduce_all) {
-    uint32_t src_page_size = 0;
-    uint32_t dst_page_size = 0;
-
-    const auto& input_shape = input.padded_shape();
-    const uint32_t rank = input_shape.size();
-
-    if (input.layout() == Layout::ROW_MAJOR) {
-        // Last dimension in input i.e. reduction dimension
-        const uint32_t red_dim_units = input_shape[rank - 1];
-
-        const uint32_t input_unit_size = input.element_size();
-        const uint32_t output_unit_size = output.element_size();
-
-        // Last dimension in output i.e. the dim left after reduction
-        const auto output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
-        src_page_size = red_dim_units * input_unit_size;
-        dst_page_size = output_last_dim * output_unit_size;
-    } else {
-        TT_FATAL(
-            output.layout() == Layout::ROW_MAJOR,
-            "For input tensor with TILE layout only ROW_MAJOR output is supported");
-        src_page_size = input.tensor_spec().compute_page_size_bytes();
-        dst_page_size = output.tensor_spec().compute_page_size_bytes();
-    }
-
-    return {src_page_size, dst_page_size};
-}
-
-void create_circular_buffers_single_core(
-    tt::tt_metal::Program& program,
-    auto& all_cores,
-    uint32_t src_cb_index,
-    uint32_t dst_cb_index,
-    uint32_t src_page_size,
-    uint32_t dst_page_size,
-    tt::DataFormat input_format,
-    tt::DataFormat output_format) {
-    // Create input CB
-    tt::tt_metal::CircularBufferConfig src_cb_config =
-        tt::tt_metal::CircularBufferConfig(src_page_size, {{src_cb_index, input_format}})
-            .set_page_size(src_cb_index, src_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, src_cb_config);
-
-    // Create output CB
-    const tt::tt_metal::CircularBufferConfig dst_cb_config =
-        tt::tt_metal::CircularBufferConfig(dst_page_size, {{dst_cb_index, output_format}})
-            .set_page_size(dst_cb_index, dst_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, dst_cb_config);
-}
-
-auto get_ctime_args_single_core(
-    const Tensor& input,
-    const Tensor& output,
-    uint32_t src_page_size,
-    uint32_t dst_page_size,
-    uint32_t src_cb_index,
-    uint32_t dst_cb_index,
-    bool keepdim,
-    bool reduce_all) {
-    std::vector<uint32_t> ctime_args;
-
-    const auto& input_shape = input.padded_shape();
-    const uint32_t rank = input_shape.size();
-
-    if (input.layout() == Layout::ROW_MAJOR) {
-        const uint32_t red_dim_units = input_shape[rank - 1];
-        const auto output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
-
-        const auto inner_dim_units = output_last_dim;
-        const auto outer_dim_units = input.logical_volume() / inner_dim_units / red_dim_units;
-
-        ctime_args.insert(
-            ctime_args.end(),
-            {
-                src_cb_index,
-                dst_cb_index,
-                src_page_size,
-                dst_page_size,
-                outer_dim_units,
-                inner_dim_units,
-                red_dim_units,
-                (uint32_t)(reduce_all),
-            });
-    } else {
-        const uint32_t logical_rank = input.logical_shape().size();
-        const uint32_t w_tiles = input_shape[rank - 1] / TILE_WIDTH;
-        const uint32_t h_tiles = input_shape[rank - 2] / TILE_HEIGHT;
-
-        const uint32_t w_logical = input.logical_shape()[logical_rank - 1];
-        const uint32_t h_logical = logical_rank > 1 ? input.logical_shape()[logical_rank - 2] : 1;
-
-        // The initial dims combined (excluding the two trailing dims)
-        const uint32_t outer_dim_units = input.logical_volume() / (h_logical * w_logical);
-
-        ctime_args.insert(
-            ctime_args.end(),
-            {src_cb_index,
-             dst_cb_index,
-             src_page_size,
-             dst_page_size,
-             TILE_HEIGHT,
-             TILE_WIDTH,
-             h_tiles,
-             w_tiles,
-             h_logical,
-             w_logical,
-             outer_dim_units,
-             (uint32_t)(reduce_all),
-             (uint32_t)(keepdim)});
-    }
-    return ctime_args;
-}
-
-operation::ProgramWithCallbacks argmax_single_core(
-    const Tensor& input, const Tensor& output, const std::optional<uint32_t> dim, const bool keepdim) {
-    tt::tt_metal::Program program{};
-    const tt::tt_metal::IDevice* device = output.device();
-    const bool reduce_all = not dim.has_value();
-
-    // Circular buffers
-    const auto src_cb_index = tt::CBIndex::c_0;
-    const auto dst_cb_index = tt::CBIndex::c_1;
-
-    const auto grid_size = device->compute_with_storage_grid_size();
-    const uint32_t num_units = 1;  // single-core
-    auto [num_cores, all_cores, unused_1, unused_2, unused_3, unused_4] =
-        tt::tt_metal::split_work_to_cores(grid_size, num_units);
-
-    const tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    const tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    const auto [src_page_size, dst_page_size] = get_page_sizes_single_core(input, output, keepdim, reduce_all);
-    create_circular_buffers_single_core(
-        program,
-        all_cores,
-        src_cb_index,
-        dst_cb_index,
-        src_page_size,
-        dst_page_size,
-        input_data_format,
-        output_data_format);
-
-    // Compile-time args
-    std::vector<uint32_t> ctime_args = get_ctime_args_single_core(
-        input, output, src_page_size, dst_page_size, src_cb_index, dst_cb_index, keepdim, reduce_all);
-
-    auto* const src_buffer = input.buffer();
-    auto* const dst_buffer = output.buffer();
-    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(ctime_args);
-    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(ctime_args);
-
-    // Kernel
-    std::string kernel_path =
-        input.layout() == Layout::ROW_MAJOR
-            ? "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved.cpp"
-            : "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_tile_layout.cpp";
-
-    const std::map<std::string, std::string> kernel_defines;
-    const tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
-        program, kernel_path, all_cores, tt::tt_metal::ReaderDataMovementConfig(ctime_args, kernel_defines));
-
-    // Runtime args
-    const auto cores = grid_to_cores(num_cores, grid_size.x, grid_size.y, false);
-    for (uint32_t i = 0; i < cores.size(); ++i) {
-        const CoreCoord& core = cores.at(i);
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {src_buffer->address(), dst_buffer->address()});
-    }
-
-    auto override_runtime_args_callback = [reader_kernel_id, cores](
-                                              const void* operation,
-                                              const Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto* src_buffer = input_tensors.at(0).buffer();
-        auto* dst_buffer = output_tensors.at(0).buffer();
-        for (const auto& core : cores) {
-            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
-            runtime_args[1] = dst_buffer->address();
-        }
-    };
-
-    return {std::move(program), override_runtime_args_callback};
 }
 
 /*
@@ -346,12 +154,16 @@ operation::ProgramWithCallbacks argmax_single_core(
  *
  *    Refer to the kernel code for info on compile time args and runtime args
  */
-operation::ProgramWithCallbacks argmax_multi_core(
-    const Tensor& input,
-    const Tensor& output,
-    const std::optional<uint32_t> dim,
-    const bool keepdim,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+ArgMaxMultiCoreProgramFactory::cached_program_t ArgMaxMultiCoreProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    const auto& input = tensor_args.input;
+    const auto& output = tensor_return_value;
+    const auto& dim = operation_attributes.dim;
+    const bool keepdim = operation_attributes.keepdim;
+    const auto& sub_core_grids = operation_attributes.sub_core_grids;
+
     tt::tt_metal::Program program{};
 
     const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
@@ -575,32 +387,33 @@ operation::ProgramWithCallbacks argmax_multi_core(
              (i == num_cores1 - 1) ? red_dim_units_last1 : red_dim_units1});
     }
 
-    auto override_runtime_args_callback = [reader_kernel_id0, reader_kernel_id1, cores_coords0, cores_coords1](
-                                              const void* operation,
-                                              const Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto* src_buffer = input_tensors.at(0).buffer();
-
-        auto* dst_buffer = output_tensors.at(0).buffer();
-        for (const auto& core : cores_coords0) {
-            {
-                auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id0, core);
-                reader_runtime_args[0] = src_buffer->address();
-                reader_runtime_args[1] = dst_buffer->address();
-            }
-        }
-        for (const auto& core : cores_coords1) {
-            {
-                auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id1, core);
-                reader_runtime_args[0] = src_buffer->address();
-                reader_runtime_args[1] = dst_buffer->address();
-            }
-        }
-    };
-
-    return {std::move(program), override_runtime_args_callback};
+    return {std::move(program), {reader_kernel_id0, reader_kernel_id1, cores_coords0, cores_coords1}};
 }
 
-}  // namespace ttnn::operations::reduction::detail
+void ArgMaxMultiCoreProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto* src_buffer = tensor_args.input.buffer();
+    auto* dst_buffer = tensor_return_value.buffer();
+
+    auto& program = cached_program.program;
+    const auto& reader_kernel_id0 = cached_program.shared_variables.reader_kernel_id0;
+    const auto& reader_kernel_id1 = cached_program.shared_variables.reader_kernel_id1;
+    const auto& cores_coords0 = cached_program.shared_variables.cores_coords0;
+    const auto& cores_coords1 = cached_program.shared_variables.cores_coords1;
+
+    for (const auto& core : cores_coords0) {
+        auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id0, core);
+        reader_runtime_args[0] = src_buffer->address();
+        reader_runtime_args[1] = dst_buffer->address();
+    }
+    for (const auto& core : cores_coords1) {
+        auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id1, core);
+        reader_runtime_args[0] = src_buffer->address();
+        reader_runtime_args[1] = dst_buffer->address();
+    }
+}
+
+}  // namespace ttnn::operations::reduction::argmax::program
