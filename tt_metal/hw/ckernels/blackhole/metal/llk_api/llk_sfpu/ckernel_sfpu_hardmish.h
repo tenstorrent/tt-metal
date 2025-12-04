@@ -6,24 +6,27 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "sfpu/ckernel_sfpu_converter.h"
 
 namespace ckernel {
 namespace sfpu {
 
+// hardmish(x) = x * clamp(x + 2.8, 0.0, 5.0) / 5
+//             = x * clamp(x + 2.8, 0.0, 5.0) * 0.2
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void hardmish() {
-    // hardmish(x) = x * (x + 2.8).clamp(0.0, 5.0) / 5
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat a = sfpi::dst_reg[0] + 2.8f;
+        sfpi::vFloat x = sfpi::dst_reg[0];
+        sfpi::vFloat a = x + 2.8f;
 
-        v_if(a < 0.0f) { a = 0.0f; }
-        v_endif;
+        // Branchless clamp using vec_min_max:
+        // vec_min_max(a, b) puts min in a, max in b
+        sfpi::vFloat low = sfpi::vConst0;
+        sfpi::vFloat high = 5.0f;
+        sfpi::vec_min_max(low, a);   // a = max(a, 0.0)
+        sfpi::vec_min_max(a, high);  // a = min(a, 5.0)
 
-        v_if(a > 5.0f) { a = 5.0f; }
-        v_endif;
-
-        sfpi::dst_reg[0] = sfpi::dst_reg[0] * a * 0.2f;
+        sfpi::dst_reg[0] = x * a * 0.2f;
         sfpi::dst_reg++;
     }
 }

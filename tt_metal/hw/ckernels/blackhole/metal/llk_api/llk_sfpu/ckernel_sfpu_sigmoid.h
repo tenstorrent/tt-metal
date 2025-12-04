@@ -8,40 +8,43 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_sigmoid_appx.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
-// sigmoid is anti-symmetric and offset by 1
-// sigmoid[-x] = 1 - sigmoid[x]
+// sigmoid(x) = 1 / (1 + exp(-x))
+// Uses anti-symmetry property: sigmoid(-x) = 1 - sigmoid(x)
+// Computes sigmoid(|x|) then adjusts for negative inputs
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_sigmoid() {
-    if constexpr (APPROXIMATION_MODE == false) {
-        for (int d = 0; d < ITERATIONS; d++) {
-            vFloat val = dst_reg[0];
-            vFloat result = 0.0f;
-
-            v_if(val < 0.0f) { val = -val; }
-            v_endif;
-
-            result = _sigmoid_piecewise_linear_positive_(val);
-
-            val = dst_reg[0];
-            v_if(val < 0.0f) { result = 1.0f - result; }
-            v_endif;
-
-            dst_reg[0] = result;
-            dst_reg++;
-        }
-    } else {
+    if constexpr (APPROXIMATION_MODE) {
         calculate_sigmoid_appx<ITERATIONS>();
+    } else {
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat val = sfpi::dst_reg[0];
+            sfpi::vFloat abs_val = val;
+
+            // Take absolute value for piecewise linear approximation
+            v_if(val < sfpi::vConst0) { abs_val = -val; }
+            v_endif;
+
+            sfpi::vFloat result = _sigmoid_piecewise_linear_positive_(abs_val);
+
+            // Apply anti-symmetry: sigmoid(-x) = 1 - sigmoid(x)
+            v_if(val < sfpi::vConst0) { result = sfpi::vConst1 - result; }
+            v_endif;
+
+            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg++;
+        }
     }
 }
 
 template <bool APPROXIMATION_MODE>
 inline void sigmoid_init() {
-    if constexpr (APPROXIMATION_MODE == false) {
+    if constexpr (APPROXIMATION_MODE) {
+        sigmoid_appx_init();
+    } else {
         // imm0 = 0x3DFF;
         // imm1 = 0x21D8;
         // imm2 = 0xFF10;
@@ -70,8 +73,6 @@ inline void sigmoid_init() {
         _sfpu_load_imm32_(2, 0x7C002A35);
         // imm6[15:0] = B4=0.2998 = 0x34CC -- imm6[31:16] = B5=0.4998 = 0x37ff
         _sfpu_load_imm32_(6, 0x37ff34CC);
-    } else {
-        sigmoid_appx_init();
     }
 }
 

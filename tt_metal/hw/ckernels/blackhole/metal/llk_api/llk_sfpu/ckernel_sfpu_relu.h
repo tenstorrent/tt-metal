@@ -6,36 +6,34 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "sfpu/ckernel_sfpu_converter.h"
-
-using namespace sfpi;
+#include "ckernel_sfpu_unary_max_min.h"
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE>
+// relu_min(x, threshold) = max(x, threshold)
+// Ensures output is at least threshold
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void relu_min(uint uint_threshold) {
-    vFloat threshold = Converter::as_float(uint_threshold);
-    for (int d = 0; d < 8; d++) {
-        vFloat a = dst_reg[0];
-        v_if(a < threshold) { a = threshold; }
-        v_endif;
-        dst_reg[0] = a;
-        dst_reg++;
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        load_value_param_float(uint_threshold);
+        calculate_unary_max_min_float_body<true>();  // max
+        sfpi::dst_reg++;
     }
 }
 
-template <bool APPROXIMATION_MODE>
+// relu_max(x, threshold) = max(min(x, threshold), 0)
+// Clamps to upper bound first, then ensures non-negative
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void relu_max(uint uint_threshold) {
-    vFloat threshold = Converter::as_float(uint_threshold);
-    for (int d = 0; d < 8; d++) {
-        vFloat a = dst_reg[0];
-        v_if(a > threshold) { a = threshold; }
-        v_endif;
-        v_if(a < 0.0f) { a = 0.0f; }
-        v_endif;
-        dst_reg[0] = a;
-        dst_reg++;
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        load_value_param_float(uint_threshold);       // Load threshold
+        calculate_unary_max_min_float_body<false>();  // x = min(x, threshold)
+        load_value_param_float(0);                    // Load 0.0f
+        calculate_unary_max_min_float_body<true>();   // x = max(x, 0)
+        sfpi::dst_reg++;
     }
 }
 

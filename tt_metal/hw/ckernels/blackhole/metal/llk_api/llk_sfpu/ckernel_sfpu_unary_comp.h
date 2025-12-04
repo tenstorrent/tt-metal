@@ -20,8 +20,8 @@ inline void calculate_unary_ne(uint value) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        v_if(v == s) { v = 0.0f; }
-        v_else { v = 1.0f; }
+        v_if(v == s) { v = sfpi::vConst0; }
+        v_else { v = sfpi::vConst1; }
         v_endif;
 
         sfpi::dst_reg[0] = v;
@@ -38,8 +38,8 @@ inline void calculate_unary_eq(uint value) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        v_if(v == s) { v = 1.0f; }
-        v_else { v = 0.0f; }
+        v_if(v == s) { v = sfpi::vConst1; }
+        v_else { v = sfpi::vConst0; }
         v_endif;
 
         sfpi::dst_reg[0] = v;
@@ -56,8 +56,8 @@ inline void calculate_unary_gt(uint value) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        v_if(v > s) { v = 1.0f; }
-        v_else { v = 0.0f; }
+        v_if(v > s) { v = sfpi::vConst1; }
+        v_else { v = sfpi::vConst0; }
         v_endif;
 
         sfpi::dst_reg[0] = v;
@@ -74,8 +74,8 @@ inline void calculate_unary_lt(uint value) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        v_if(v < s) { v = 1.0f; }
-        v_else { v = 0.0f; }
+        v_if(v < s) { v = sfpi::vConst1; }
+        v_else { v = sfpi::vConst0; }
         v_endif;
 
         sfpi::dst_reg[0] = v;
@@ -92,8 +92,8 @@ inline void calculate_unary_ge(uint value) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        v_if(v < s) { v = 0.0f; }
-        v_else { v = 1.0f; }
+        v_if(v < s) { v = sfpi::vConst0; }
+        v_else { v = sfpi::vConst1; }
         v_endif;
 
         sfpi::dst_reg[0] = v;
@@ -110,8 +110,8 @@ inline void calculate_unary_le(uint value) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        v_if(v > s) { v = 0.0f; }
-        v_else { v = 1.0f; }
+        v_if(v > s) { v = sfpi::vConst0; }
+        v_else { v = sfpi::vConst1; }
         v_endif;
 
         sfpi::dst_reg[0] = v;
