@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
 import ttnn
 import sys
@@ -27,7 +26,7 @@ class MockTestModule:
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        output = ttnn.relu(input_tensor)
+        ttnn.relu(input_tensor)
         return [True, 0]  # status, e2e_perf
 
 
@@ -51,7 +50,7 @@ class MockTestModuleBroadcast:
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        output = ttnn.add(input_a, input_b)
+        ttnn.add(input_a, input_b)
         return [True, 0]
 
 
