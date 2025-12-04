@@ -32,6 +32,13 @@
 // Include generated FlatBuffer code
 #include "ttml_metadata_generated.h"
 
+namespace {
+
+template <typename T, typename... Ts>
+static constexpr bool is_one_of_v = (std::is_same_v<T, Ts> || ...);
+
+}  // namespace
+
 namespace ttml::serialization {
 FlatBufferFile::~FlatBufferFile() {
     // Builder will be cleared automatically
@@ -41,9 +48,7 @@ FlatBufferFile::FlatBufferFile(FlatBufferFile&& other) noexcept :
     m_data(std::move(other.m_data)),
     m_tensors(std::move(other.m_tensors)),
     m_builder(std::move(other.m_builder)),
-    m_pairs(std::move(other.m_pairs)),
-    m_tensor_data(std::move(other.m_tensor_data)),
-    m_memory_pin(std::move(other.m_memory_pin)) {
+    m_pairs(std::move(other.m_pairs)) {
 }
 
 void FlatBufferFile::put(std::string_view key, bool value) {
@@ -159,21 +164,7 @@ void FlatBufferFile::put(std::string_view key, const ValueType& value) {
     std::visit(
         [this, key](auto&& arg) {
             using T = std::decay_t<decltype(arg)>;
-            if constexpr (std::is_same_v<T, bool>) {
-                this->put(key, arg);
-            } else if constexpr (std::is_same_v<T, char>) {
-                this->put(key, arg);
-            } else if constexpr (std::is_same_v<T, int>) {
-                this->put(key, arg);
-            } else if constexpr (std::is_same_v<T, float>) {
-                this->put(key, arg);
-            } else if constexpr (std::is_same_v<T, double>) {
-                this->put(key, arg);
-            } else if constexpr (std::is_same_v<T, uint32_t>) {
-                this->put(key, arg);
-            } else if constexpr (std::is_same_v<T, size_t>) {
-                this->put(key, arg);
-            } else if constexpr (std::is_same_v<T, bfloat16>) {
+            if constexpr (is_one_of_v<T, bool, char, int, float, double, uint32_t, size_t, bfloat16>) {
                 this->put(key, arg);
             } else {
                 // Strings and vectors - store in m_data for later serialization
@@ -493,8 +484,6 @@ void FlatBufferFile::deserialize_flatbuffer(std::span<const uint8_t> buffer) {
 void FlatBufferFile::deserialize(std::string_view filename) {
     m_data.clear();
     m_tensors.clear();
-    m_tensor_data.clear();
-    m_memory_pin.reset();
     m_builder.Clear();
     m_pairs.clear();
 

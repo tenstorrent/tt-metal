@@ -51,22 +51,12 @@ using ValueType = std::variant<
 class FlatBufferFile {
 public:
     explicit FlatBufferFile() = default;
-
     ~FlatBufferFile();
-
-    // Copy constructor
     FlatBufferFile(const FlatBufferFile& other) = delete;
-
-    // Copy assignment operator
     FlatBufferFile& operator=(const FlatBufferFile& other) = delete;
-
-    // Move constructor
     FlatBufferFile(FlatBufferFile&& other) noexcept;
-
-    // Move assignment operator
     FlatBufferFile& operator=(FlatBufferFile&& other) = delete;
 
-    // Methods to put different types
     void put(std::string_view key, bool value);
     void put(std::string_view key, char value);
     void put(std::string_view key, int value);
@@ -133,18 +123,12 @@ private:
         }
     }
 
-    // Store data that needs to be kept until serialize() (strings, vectors)
-    // Store only non-scalar data (strings, vectors) that need to be kept until serialize()
     std::unordered_map<std::string, ValueType> m_data;
     std::unordered_map<std::string, tt::tt_metal::Tensor> m_tensors;
 
     // FlatBufferBuilder for incremental building - scalars are built directly
     flatbuffers::FlatBufferBuilder m_builder;
     std::vector<flatbuffers::Offset<ttml::flatbuffer::KeyValuePair>> m_pairs;
-
-    // For deserialization
-    std::vector<std::byte> m_tensor_data;                   // Keep tensor data alive
-    std::shared_ptr<tt::tt_metal::MemoryPin> m_memory_pin;  // Keep memory pin alive
 };
 
 }  // namespace ttml::serialization
