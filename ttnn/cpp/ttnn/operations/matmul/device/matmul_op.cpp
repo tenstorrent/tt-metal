@@ -1487,29 +1487,6 @@ Tensor matmul(
         .at(0);
 }
 
-std::vector<Tensor> matmul_batched_weights(
-    const Tensor& input_tensor_a,
-    const std::vector<Tensor>& input_tensors_b,
-    const std::optional<const Tensor>& bias,
-    const struct Matmul& parameters,
-    const std::optional<Tensor>& optional_output_tensor) {
-    std::vector<std::optional<const Tensor>> optional_input_tensors = {};
-    if (bias.has_value()) {
-        optional_input_tensors.push_back(bias);
-    } else {
-        optional_input_tensors.push_back(std::nullopt);
-    }
-
-    std::vector<Tensor> input_tensors = input_tensors_b;
-    input_tensors.insert(input_tensors.begin(), input_tensor_a);
-
-    return operation::run(
-        create_matmul_struct(input_tensor_a, input_tensors_b[0], parameters, {optional_output_tensor}),
-        input_tensors,
-        optional_input_tensors,
-        {optional_output_tensor});
-}
-
 ttnn::Shape compute_sparse_matmul_output_shape(
     const Tensor& input_tensor_a, const Tensor& input_tensor_b, bool is_input_a_sparse, bool is_input_b_sparse) {
     const auto& input_shape_a = input_tensor_a.logical_shape();
@@ -1943,10 +1920,10 @@ void Matmul::validate(
                             program_config.in0_block_w);
                         if (!program_config.gather_in0) {  // Padding allowed for gather_in0
                             TT_FATAL(
-                            (shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
-                            "Error: shard_shape[1] ({}) / in0_tile_shape[1] ({}) must be divisible by in0_block_w.",
-                            shard_shape[1],
-                            in0_tile_shape[1]);
+                                (shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
+                                "Error: shard_shape[1] ({}) / in0_tile_shape[1] ({}) must be divisible by in0_block_w.",
+                                shard_shape[1],
+                                in0_tile_shape[1]);
                         }
                     }
                     if (this->output_mem_config.is_sharded()) {
