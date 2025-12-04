@@ -21,7 +21,7 @@ sfpi_inline vFloat sfpu_reciprocal(const vFloat in) {
 
 template <bool APPROXIMATE = false>
 sfpi_inline void sfpu_reciprocal_init() {
-    _init_sfpu_reciprocal_<APPROXIMATE>();
+    _init_sfpu_reciprocal_<APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise>();
 }
 
 template <ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8, bool legacy_compat = false>
