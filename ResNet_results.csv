@@ -5,8 +5,8 @@ batch_size=16,Compile Time,s,9.72,14.08,4.36,44.86%,First run compile time
 batch_size=32,Inference Time,ms,2.822,2.831,0.009,0.32%,5 warmup 15 measurement iterations
 batch_size=32,FPS,fps,11340.94,11302.86,-38.08,-0.34%,5 warmup 15 measurement iterations
 batch_size=32,Compile Time,s,9.75,4.86,-4.89,-50.15%,First run compile time
-
-E2E Performance Test (test_perf_e2e_resnet50.py - 15 warmup 30 inference iterations)
+,,,,,,,,
+E2E Performance Test (test_perf_e2e_resnet50.py - 15 warmup 30 inference iterations),,,,,,,,
 Test Configuration,Metric,Unit,GCC Result,LLVM Result,Difference,% Change,Notes
 batch_size=16,Inference Time,ms,8.935,8.973,0.038,0.43%,Equivalent performance (within noise). GCC slightly better.
 batch_size=16,FPS,fps,1790.62,1783.03,-7.59,-0.42%,Equivalent performance (within noise). GCC slightly better.
