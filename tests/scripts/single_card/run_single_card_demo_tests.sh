@@ -140,6 +140,12 @@ run_ufld_v2_func() {
   pytest models/demos/wormhole/ufld_v2/demo/demo.py
 }
 
+run_ufld_v2_with_ops_recording() {
+  # Run ufld_v2 with operation recording enabled
+  # This sets TTNN_CONFIG_OVERRIDES and extracts operations from db.sqlite
+  bash "$(dirname "${BASH_SOURCE[0]}")/record_and_list_operations.sh" "ufld_v2_ops" "pytest models/demos/wormhole/ufld_v2/demo/demo.py"
+}
+
 run_vgg_func() {
 
   #VGG11/VGG16
@@ -310,12 +316,6 @@ run_mobilenetv2_perf(){
 #  mobilenetv2 demo
  pytest models/demos/mobilenetv2/demo/demo.py
 
-}
-
-run_mobilenetv2_with_ops_recording() {
-  # Run mobilenetv2 with operation recording enabled
-  # This sets TTNN_CONFIG_OVERRIDES and extracts operations from db.sqlite
-  bash "$(dirname "${BASH_SOURCE[0]}")/record_and_list_operations.sh" "mobilenetv2_ops" "pytest models/demos/mobilenetv2/demo/demo.py"
 }
 
 run_yolov8s_world_perf() {
