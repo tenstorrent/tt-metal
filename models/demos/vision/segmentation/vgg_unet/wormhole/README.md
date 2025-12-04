@@ -48,13 +48,13 @@ pytest models/demos/vision/segmentation/vgg_unet/wormhole/demo/demo.py::test_dem
 #### Single Device (BS=1):
 Use the following command to run the performant evaluation with Trace+2CQs:
 ```sh
-pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet
+pytest models/demos/vision/segmentation/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet
 ```
 
 #### Multi Device (DP=2, n300):
 Use the following command to run the performant evaluation with Trace+2CQs:
 ```sh
-pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet_dp
+pytest models/demos/vision/segmentation/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet_dp
 ```
 
 ## Details
