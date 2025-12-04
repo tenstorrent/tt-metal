@@ -390,10 +390,12 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     // -1 to discount for the tensix worker channel
     this->num_fwd_paths = this->num_used_sender_channels - 1;
 
-    // TODO: For 2D routing, if there is only one mesh, we need to discount for inter-mesh vc.
-    if (topology == Topology::Mesh && is_2D_routing) {
+    // TODO: Remove VC1 adjustments once VC1 sender/receiver channels are fully implemented
+    // For 2D routing (Mesh/Torus), VC1 channels (sender channels 4-6, receiver channel 1) are not yet implemented
+    // so we exclude them from allocation
+    if ((topology == Topology::Mesh || topology == Topology::Torus) && is_2D_routing) {
         this->num_used_sender_channels -= builder_config::get_vc1_downstream_edm_count(is_2D_routing);
-        this->num_used_receiver_channels = 1;
+        this->num_used_receiver_channels = 1;  // Only VC0 receiver implemented
         this->num_fwd_paths -= builder_config::get_vc1_downstream_edm_count(is_2D_routing);
     }
 
