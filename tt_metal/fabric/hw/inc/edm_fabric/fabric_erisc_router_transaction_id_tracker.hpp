@@ -4,9 +4,7 @@
 
 #pragma once
 
-#if !defined(COMPILE_FOR_LITE_FABRIC)
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
-#endif
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp"

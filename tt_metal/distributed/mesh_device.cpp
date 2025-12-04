@@ -33,14 +33,14 @@
 #include "mesh_config.hpp"
 #include "mesh_trace.hpp"
 #include "profiler_types.hpp"
-#include "routing_table_generator.hpp"
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include "shape_base.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
 #include "tt_metal/common/thread_pool.hpp"
-#include "tt_metal/api/tt-metalium/device_pool.hpp"
-#include "tt_metal/api/tt-metalium/control_plane.hpp"
-#include "tt_metal/api/tt-metalium/fabric_types.hpp"
+#include "tt_metal/impl/device/device_pool.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/distributed/sd_mesh_command_queue.hpp"
 #include "tracy/Tracy.hpp"
@@ -60,6 +60,7 @@
 #include "impl/dispatch/system_memory_manager.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -285,7 +286,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
 
     mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
     // TODO #20966: Remove these calls
-    for (auto device : extract_locals(root_devices)) {
+    for (auto* device : extract_locals(root_devices)) {
         dynamic_cast<Device*>(device)->set_mesh_device(mesh_device);
     }
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
@@ -425,7 +426,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
         allocator_config.worker_l1_size,
         allocator_config.l1_bank_remap);
     // TODO #20966: Remove these calls
-    for (auto device : submesh->get_devices()) {
+    for (auto* device : submesh->get_devices()) {
         dynamic_cast<Device*>(device)->set_mesh_device(submesh);
     }
 
@@ -468,7 +469,7 @@ MeshDevice::~MeshDevice() {
 }
 
 IDevice* MeshDevice::get_device(ChipId physical_device_id) const {
-    for (auto device : this->get_devices()) {
+    for (auto* device : this->get_devices()) {
         if (device->id() == physical_device_id) {
             return device;
         }
@@ -497,14 +498,14 @@ MeshCommandQueue& MeshDevice::mesh_command_queue(std::optional<uint8_t> cq_id) c
     auto id = cq_id.value_or(GetCurrentCommandQueueIdForThread());
 
     TT_FATAL(id < mesh_command_queues_.size(), "cq_id {} is out of range", id);
-    auto& command_queue = mesh_command_queues_[id];
+    const auto& command_queue = mesh_command_queues_[id];
     TT_FATAL(id == command_queue->id(), "MeshCommandQueue id mismatch, expected {}, got {}", id, command_queue->id());
     return *command_queue;
 }
 
 DeviceIds MeshDevice::get_device_ids() const {
     DeviceIds device_ids;
-    for (auto device : this->get_devices()) {
+    for (auto* device : this->get_devices()) {
         device_ids.push_back(device->id());
     }
     return device_ids;
@@ -598,8 +599,39 @@ bool MeshDevice::close() {
     }
 
     // TODO #20966: Remove these calls
-    for (auto device : view_->get_devices()) {
+    for (auto* device : view_->get_devices()) {
         dynamic_cast<Device*>(device)->set_mesh_device(parent_mesh_);
+    }
+
+    // Only one mesh device can use a CQ on a physical device at a time, or else teardown or some other operation will
+    // hang. Validate this.
+    for (uint32_t cq_id = 0; cq_id < mesh_command_queues_.size(); cq_id++) {
+        if (mesh_command_queues_[cq_id]->in_use()) {
+            auto parent_mesh = get_parent_mesh();
+            if (parent_mesh) {
+                auto parent_mesh_id = parent_mesh->get_parent_mesh_id_with_in_use_cq(cq_id);
+                if (parent_mesh_id) {
+                    TT_THROW(
+                        "MeshDevice cq ID {} is in use by parent mesh ID {} during close of mesh ID {}",
+                        cq_id,
+                        *parent_mesh_id,
+                        id());
+                }
+            }
+
+            for (const auto& submesh : submeshes_) {
+                if (auto submesh_ptr = submesh.lock()) {
+                    auto child_mesh_id = submesh_ptr->get_child_mesh_id_with_in_use_cq(cq_id);
+                    if (child_mesh_id) {
+                        TT_THROW(
+                            "MeshDevice cq ID {} is in use by child submesh ID {} during close of mesh ID {}",
+                            cq_id,
+                            *child_mesh_id,
+                            id());
+                    }
+                }
+            }
+        }
     }
 
     mesh_command_queues_.clear();
@@ -608,6 +640,31 @@ bool MeshDevice::close() {
     parent_mesh_.reset();
     is_internal_state_initialized = false;
     return true;
+}
+
+std::optional<int> MeshDevice::get_parent_mesh_id_with_in_use_cq(uint32_t cq_id) const {
+    if (cq_id < mesh_command_queues_.size() && mesh_command_queues_[cq_id]->in_use()) {
+        return id();
+    }
+    if (parent_mesh_) {
+        return parent_mesh_->get_parent_mesh_id_with_in_use_cq(cq_id);
+    }
+    return std::nullopt;
+}
+
+std::optional<int> MeshDevice::get_child_mesh_id_with_in_use_cq(uint32_t cq_id) const {
+    if (cq_id < mesh_command_queues_.size() && mesh_command_queues_[cq_id]->in_use()) {
+        return id();
+    }
+    for (const auto& submesh : submeshes_) {
+        if (auto submesh_ptr = submesh.lock()) {
+            auto child_mesh_id = submesh_ptr->get_child_mesh_id_with_in_use_cq(cq_id);
+            if (child_mesh_id) {
+                return child_mesh_id;
+            }
+        }
+    }
+    return std::nullopt;
 }
 
 std::string MeshDevice::to_string() const {

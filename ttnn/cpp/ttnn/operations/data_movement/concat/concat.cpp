@@ -19,7 +19,7 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
 #include <ranges>
 #include <utility>
@@ -235,6 +235,14 @@ ttnn::Tensor ConcatOperation::invoke(
     //    return input_tensor.layout() == ttnn::TILE_LAYOUT and not has_tile_padding(input_tensor, dim);
     //});
     // TT_FATAL(all_tensors_are_tile_layout_without_padding, "Not Implemented");
+
+    // TODO: Issue #22541: fix crash with 1D tiled tensors with padding
+    const bool tensors_are_1d_tiled_with_padding =
+        std::all_of(input_tensors.begin(), input_tensors.end(), [](const ttnn::Tensor& input_tensor) {
+            return input_tensor.layout() == ttnn::TILE_LAYOUT and input_tensor.logical_shape().rank() == 1 and
+                   input_tensor.logical_shape()[0] % ttnn::TILE_SIZE != 0;
+        });
+    TT_FATAL(!tensors_are_1d_tiled_with_padding, "1D tiled tensors with padding is not implemented. See Issue #22541.");
 
     const ttnn::Tensor& first_tensor = input_tensors.front();
     const int rank = first_tensor.logical_shape().rank();

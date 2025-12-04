@@ -78,7 +78,7 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
     const uint32_t sequence_size = input_shape[1];
     const uint32_t sequence_size_padded = padded_input_shape[1];
 
-    if (num_kv_heads.has_value()) {
+    if (num_kv_heads.has_value() && !input_tensor_kv.has_value()) {
         TT_FATAL(
             !transpose_key,
             "Invalid configuration: Transpose is set to true, but this is not supported when separate num_kv_heads is "
@@ -130,10 +130,22 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
             input_shape[1]);
 
         TT_FATAL(
-            input_shape_kv[2] == 2 * input_shape[2],
-            "Dimension mismatch: KV tensor hidden size ({}) must be twice the Q tensor hidden size ({}).",
+            (input_shape[2] % num_heads) == 0,
+            "Query dimension ({}) must be divisible by num_heads ({}).",
+            input_shape[2],
+            num_heads);
+
+        TT_FATAL(
+            (input_shape_kv[2] % (2 * num_kv_heads.value_or(num_heads))) == 0,
+            "KV dimension ({}) must be divisible by 2 * num_kv_heads ({}).",
             input_shape_kv[2],
-            2 * input_shape[2]);
+            (2 * num_kv_heads.value_or(num_heads)));
+
+        TT_FATAL(
+            (input_shape_kv[2] / (2 * num_kv_heads.value_or(num_heads))) == (input_shape[2] / num_heads),
+            "Dimension mismatch: KV head size ({}) must be equal to query head size ({}).",
+            (input_shape_kv[2] / (2 * num_kv_heads.value_or(num_heads))),
+            (input_shape[2] / num_heads));
 
         hidden_dim = input_shape[2];
         hidden_dim_padded = padded_input_shape[2];

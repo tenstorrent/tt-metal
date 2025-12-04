@@ -7,7 +7,7 @@
 #include <circular_buffer_constants.h>
 #include <tt_stl/assert.hpp>
 #include <cstdint>
-#include <device_pool.hpp>
+#include "tt_metal/impl/device/device_pool.hpp"
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
@@ -34,7 +34,7 @@
 #include <filesystem>
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
-#include "kernels/kernel_impl.hpp"
+#include "kernels/kernel.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "device/device_impl.hpp"
 #include "hal_types.hpp"
@@ -359,6 +359,14 @@ std::string get_platform_architecture_name() {
     return tt::get_string_lowercase(tt::tt_metal::get_platform_architecture({}));
 }
 
+IDevice* GetActiveDevice(ChipId device_id) {
+    IDevice* device = nullptr;
+    if (tt::DevicePool::instance().is_device_active(device_id)) {
+        device = tt::DevicePool::instance().get_active_device(device_id);
+    }
+    return device;
+}
+
 std::map<ChipId, IDevice*> CreateDevices(
     const std::vector<ChipId>& device_ids,
     const uint8_t num_hw_cqs,
@@ -405,7 +413,7 @@ std::map<ChipId, IDevice*> CreateDevices(
 void CloseDevices(const std::map<ChipId, IDevice*>& devices) {
     std::vector<IDevice*> devices_to_close;
     devices_to_close.reserve(devices.size());
-    for (auto& [id, device] : devices) {
+    for (const auto& [id, device] : devices) {
         devices_to_close.push_back(device);
     }
     tt::DevicePool::instance().close_devices(devices_to_close);
@@ -442,7 +450,7 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
     uint32_t page_size = buffer.page_size();
     TT_ASSERT(page_size == 0 ? buffer.size() == 0 : buffer.size() % page_size == 0);
 
-    auto device = buffer.device();
+    auto* device = buffer.device();
     const auto& allocator = device->allocator();
 
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
@@ -495,7 +503,7 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
     size_t page_size = buffer.page_size();
     size_t num_pages = buffer.num_pages();
 
-    auto device = buffer.device();
+    auto* device = buffer.device();
     size_t num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
     size_t bank_index = 0;
     size_t data_index = 0;
@@ -546,19 +554,19 @@ void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buf
     size_t page_size = buffer.page_size();
     size_t num_pages = buffer.num_pages();
 
-    auto device = buffer.device();
+    auto* device = buffer.device();
     size_t num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
 
     size_t host_idx = 0;
     size_t bank_index = 0;
-    std::vector<uint32_t> page;
-    page.resize(page_size / sizeof(uint32_t));
+    std::vector<uint8_t> page(page_size);
     for (size_t page_index = 0; page_index < num_pages; page_index++) {
         const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
-        page.clear();
         switch (buffer.buffer_type()) {
             case BufferType::DRAM:
-            case BufferType::TRACE: ReadFromDeviceDRAMChannel(device, bank_index, address, page_size, page); break;
+            case BufferType::TRACE: {
+                ReadFromDeviceDRAMChannel(device, bank_index, address, std::span<uint8_t>(page));
+            } break;
             case BufferType::L1:
             case BufferType::L1_SMALL: {
                 auto core_coordinates = device->worker_core_from_logical_core(
@@ -603,7 +611,7 @@ void read_pages_to_host_helper(
 }
 
 void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer) {
-    auto device = buffer.device();
+    auto* device = buffer.device();
 
     uint32_t page_size = buffer.page_size();
 
@@ -969,7 +977,7 @@ IDevice* CreateDevice(
 
     tt::DevicePool::initialize(
         {device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config, l1_bank_remap, worker_l1_size);
-    auto dev = tt::DevicePool::instance().get_active_device(device_id);
+    auto* dev = tt::DevicePool::instance().get_active_device(device_id);
     return dev;
 }
 
@@ -978,7 +986,7 @@ IDevice* CreateDeviceMinimal(
     ZoneScoped;
     tt::tt_metal::MetalContext::instance().initialize(
         dispatch_core_config, num_hw_cqs, {}, DEFAULT_L1_SMALL_SIZE, true);
-    auto dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
+    auto* dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
     tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(true);
     return dev;
 }
@@ -1094,19 +1102,68 @@ KernelHandle CreateEthernetKernel(
         "cores because both NOCs are in use!",
         kernel->name());
 
-    // Due to conflict with eth fw using noc0 at the same time, ensure each risc only uses their own noc
-    // https://github.com/tenstorrent/tt-metal/issues/25058
-    // E.g., risc0 -> noc0, risc1 -> noc1
-    if (config.processor != DataMovementProcessor::RISCV_0 && config.eth_mode != Eth::IDLE &&
-        !tt::tt_metal::MetalContext::instance().hal().get_eth_fw_is_cooperative()) {
+    //
+    // Valid configurations for Blackhole ERISC
+    //
+    // |                | Valid NOC Configuration     |                             |
+    // |----------------|-----------------------------|-----------------------------|
+    // | **ERISC Mode** | **Physical ERISC0**         | **Physical ERISC1**         |
+    // | Single         | Not enabled for dispatch    | Dedicated NOC1              |
+    // | Dual           | Dedicated NOC0, Dynamic NOC | Dedicated NOC1, Dynamic NOC |
+    //
+    if (!tt::tt_metal::MetalContext::instance().hal().get_eth_fw_is_cooperative() && config.eth_mode != Eth::IDLE &&
+        config.noc_mode != NOC_MODE::DM_DYNAMIC_NOC) {
+        bool is_dual_erisc_mode = tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode();
+        bool is_erisc0 = (config.processor == DataMovementProcessor::RISCV_0);
+        bool is_erisc1 = (config.processor == DataMovementProcessor::RISCV_1);
+
+        if (is_dual_erisc_mode) {
+            // Dual ERISC mode: ERISC0 uses NOC0, ERISC1 uses NOC1 (when in dedicated mode)
+            if (is_erisc0) {
+                TT_FATAL(
+                    config.noc == NOC::NOC_0,
+                    "EthernetKernel creation failure: In dual ERISC mode, ERISC0 in dedicated mode must use NOC0. "
+                    "Kernel: {}, Current NOC: {}, Required NOC: NOC_0. Use Dynamic NOC mode for flexible routing.",
+                    kernel->name(),
+                    config.noc);
+            } else if (is_erisc1) {
+                TT_FATAL(
+                    config.noc == NOC::NOC_1,
+                    "EthernetKernel creation failure: In dual ERISC mode, ERISC1 in dedicated mode must use NOC1. "
+                    "Kernel: {}, Current NOC: {}, Required NOC: NOC_1. Use Dynamic NOC mode for flexible routing.",
+                    kernel->name(),
+                    config.noc);
+            }
+        } else {
+            // ERISC1 must use NOC1 in dedicated mode
+            TT_FATAL(
+                config.noc == NOC::NOC_1,
+                "EthernetKernel creation failure: In single ERISC mode, ERISC0 must use NOC1. "
+                "Kernel: {}, Current NOC: {}, Required NOC: NOC_1.",
+                kernel->name(),
+                config.noc);
+        }
+    }
+
+    // Dynamic noc is not supported on single erisc mode
+    if (!tt::tt_metal::MetalContext::instance().hal().get_eth_fw_is_cooperative() &&
+        !tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
         TT_FATAL(
-            static_cast<uint32_t>(config.noc) == static_cast<uint32_t>(config.processor),
-            "EthernetKernel creation failure: Cannot create data movement kernels for {} across specified "
-            "cores because NOC {} is not supported for processor {}. Dynamic NOC is not supported for Ethernet "
-            "kernels.",
+            config.noc_mode == NOC_MODE::DM_DEDICATED_NOC,
+            "EthernetKernel creation failure: Dynamic NOC is not supported on single ERISC mode. "
+            "Kernel: {}, Current NOC Mode: {}, Required NOC Mode: DM_DEDICATED_NOC.",
             kernel->name(),
-            config.noc,
-            config.processor);
+            config.noc_mode);
+    }
+
+    if (tt::tt_metal::MetalContext::instance().hal().get_eth_fw_is_cooperative()) {
+        // Dynamic NOC is not supported with this configuration
+        TT_FATAL(
+            config.noc_mode != NOC_MODE::DM_DYNAMIC_NOC,
+            "EthernetKernel creation failure: Cannot create data movement kernels for {} across specified "
+            "cores because NOC Mode {} is not supported on this platform",
+            kernel->name(),
+            config.noc_mode);
     }
     return program.impl().add_kernel(kernel, eth_core_type);
 }

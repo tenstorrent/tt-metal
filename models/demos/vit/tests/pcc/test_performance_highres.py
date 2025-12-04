@@ -13,13 +13,7 @@ from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-    is_blackhole,
-    is_wormhole_b0,
-    torch_random,
-)
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch_random
 from models.demos.grayskull.vit.tt import ttnn_optimized_vit_highres_gs as ttnn_optimized_vit_highres
 from models.demos.vit.common import load_torch_model
 from models.demos.vit.tt import ttnn_functional_vit_highres
@@ -144,7 +138,6 @@ def test_performance_vit_encoder(
         tt_output = ttnn.from_device(tt_output)
         end = time.time()
         durations.append(end - start)
-        enable_persistent_kernel_cache()
 
     inference_and_compile_time, inference_time, *_ = durations
 
@@ -177,8 +170,6 @@ def test_performance_vit_encoder(
 def test_performance_vit_e2e(
     device, model_name, batch_size, image_size, sequence_size, functional_vit, model_location_generator
 ):
-    disable_persistent_kernel_cache()
-
     model = load_torch_model(model_location_generator, embedding=True)
     config = model.config
 
@@ -259,7 +250,6 @@ def test_performance_vit_e2e(
         tt_output = ttnn.from_device(tt_output)
         end = time.time()
         durations.append(end - start)
-        enable_persistent_kernel_cache()
 
     inference_and_compile_time, inference_time, *_ = durations
 

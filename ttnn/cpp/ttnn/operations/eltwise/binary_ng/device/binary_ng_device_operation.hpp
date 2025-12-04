@@ -34,15 +34,17 @@ struct BinaryNgDeviceOperation {
         ttnn::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations;
         ttnn::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations;
         ttnn::SmallVector<unary::EltwiseUnaryWithParam> post_activations;
-        std::optional<float> scalar;
+        std::optional<unary::ScalarVariant> scalar;
         tt::tt_metal::MemoryConfig memory_config;
         DataType input_dtype;
         std::optional<DataType> dtype;
         const CoreRangeSet worker_grid;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
+        std::optional<CoreRangeSet> sub_core_grids;
         SubtileBroadcastType subtile_broadcast_type = SubtileBroadcastType::NONE;
         bool is_sfpu = false;
         bool is_quant_op = false;
+        bool is_where_op = false;
 
         tt::stl::hash::hash_t to_hash() const;
         DataType get_dtype() const;
@@ -99,7 +101,9 @@ struct BinaryNgDeviceOperation {
         const std::optional<bool>& fast_and_approximate_mode,
         tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
         tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations);
+        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+        std::optional<unary::ScalarVariant> scalar_value,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     // tensor-scalar invocation
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
@@ -112,7 +116,9 @@ struct BinaryNgDeviceOperation {
         const std::optional<bool>& fast_and_approximate_mode,
         tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
         tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations);
+        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+        std::optional<unary::ScalarVariant> scalar_value,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 }  // namespace ttnn::operations::binary_ng
