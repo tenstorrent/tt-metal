@@ -7,6 +7,7 @@
 #include <fstream>
 #include <filesystem>
 #include <google/protobuf/text_format.h>
+#include <yaml-cpp/yaml.h>
 
 #include <cabling_generator/cabling_generator.hpp>
 #include <factory_system_descriptor/utils.hpp>
@@ -17,6 +18,83 @@
 #include "protobuf/cluster_config.pb.h"
 
 namespace tt::scaleout_tools {
+
+// Helper function to create a modified GSD with some connections removed
+// Returns path to the modified GSD file
+std::string create_gsd_with_missing_connections(
+    const std::string& original_gsd_path,
+    const std::string& output_path,
+    uint32_t connections_to_remove_per_asic_pair,
+    uint32_t min_connections_to_keep_per_pair) {
+    YAML::Node gsd = YAML::LoadFile(original_gsd_path);
+
+    auto make_asic_key = [](const YAML::Node& endpoint) {
+        return endpoint["host_name"].as<std::string>() + "_" + std::to_string(endpoint["tray_id"].as<uint32_t>()) +
+               "_" + std::to_string(endpoint["asic_location"].as<uint32_t>());
+    };
+
+    auto make_pair_key = [](const std::string& a, const std::string& b) {
+        return (a < b) ? (a + "|" + b) : (b + "|" + a);
+    };
+
+    // Process both local and global eth connections
+    auto process_connections = [&](const std::string& connection_type) {
+        if (!gsd[connection_type] || gsd[connection_type].IsNull() || gsd[connection_type].size() == 0) {
+            return;
+        }
+
+        YAML::Node original_connections = gsd[connection_type];
+        YAML::Node modified_connections;
+
+        // Track connections per ASIC pair
+        std::map<std::string, uint32_t> asic_pair_counts;
+        std::map<std::string, uint32_t> asic_pair_removed;
+
+        // First pass: count connections per ASIC pair
+        for (const auto& conn : original_connections) {
+            std::string key_a = make_asic_key(conn[0]);
+            std::string key_b = make_asic_key(conn[1]);
+            std::string pair_key = make_pair_key(key_a, key_b);
+            asic_pair_counts[pair_key]++;
+            asic_pair_removed[pair_key] = 0;
+        }
+
+        // Second pass: selectively remove connections
+        for (const auto& conn : original_connections) {
+            std::string key_a = make_asic_key(conn[0]);
+            std::string key_b = make_asic_key(conn[1]);
+            std::string pair_key = make_pair_key(key_a, key_b);
+
+            uint32_t total_for_pair = asic_pair_counts[pair_key];
+            uint32_t removed_for_pair = asic_pair_removed[pair_key];
+            uint32_t remaining = total_for_pair - removed_for_pair;
+
+            // Remove connection if we haven't removed enough yet and we can still keep min
+            bool should_remove = (removed_for_pair < connections_to_remove_per_asic_pair) &&
+                                 (remaining > min_connections_to_keep_per_pair);
+
+            if (should_remove) {
+                asic_pair_removed[pair_key]++;
+            } else {
+                modified_connections.push_back(conn);
+            }
+        }
+
+        gsd[connection_type] = modified_connections;
+    };
+
+    // Process both local and global connections
+    process_connections("local_eth_connections");
+    process_connections("global_eth_connections");
+
+    // Write modified GSD to output file
+    std::filesystem::create_directories(std::filesystem::path(output_path).parent_path());
+    std::ofstream out_file(output_path);
+    out_file << gsd;
+    out_file.close();
+
+    return output_path;
+}
 
 static const std::string root_output_dir = "generated/tests/";
 
@@ -207,95 +285,119 @@ TEST(Cluster, TestGenerateMultiHostClusterDescriptorFromFSD) {
     EXPECT_GT(std::filesystem::file_size(result_file), 0);
 }
 
-TEST(Cluster, TestMinConnectionsRelaxedModePassesWhenEnoughConnections) {
+TEST(Cluster, TestMinConnectionsPassesWithMatchingConnections) {
+    // When FSD and GSD connections match perfectly, validation passes.
+    // The min_connections parameter doesn't affect the result when there are no mismatches.
     CablingGenerator cabling_generator(
-        "tools/tests/scaleout/cabling_descriptors/5_wh_galaxy_y_torus_superpod.textproto",
-        "tools/tests/scaleout/deployment_descriptors/5_wh_galaxy_y_torus_deployment.textproto");
+        "tools/tests/scaleout/cabling_descriptors/16_n300_lb_cluster.textproto",
+        "tools/tests/scaleout/deployment_descriptors/16_lb_deployment.textproto");
 
-    const std::string fsd_file =
-        root_output_dir + "fsd/factory_system_descriptor_5_wh_galaxy_y_torus_min_conn_test.textproto";
+    const std::string fsd_file = root_output_dir + "fsd/factory_system_descriptor_16_n300_lb_min_conn_test.textproto";
     cabling_generator.emit_factory_system_descriptor(fsd_file);
 
-    // With min_connections = 1 (very low threshold), relaxed mode should pass
-    // even though there are missing connections, because we have at least 1 discovered connection
+    // With matching connections, validation should pass regardless of min_connections value
     auto missing_connections = validate_fsd_against_gsd(
         fsd_file,
-        "tools/tests/scaleout/global_system_descriptors/5_wh_galaxy_y_torus_physical_desc.yaml",
+        "tools/tests/scaleout/global_system_descriptors/16_lb_physical_desc.yaml",
         true,   // strict_validation
         true,   // assert_on_connection_mismatch
         false,  // log_output
-        1);     // min_connections - relaxed mode with very low threshold
+        1);     // min_connections - specified but not used since no mismatches
 
-    // In relaxed mode with enough connections, should return empty set (no errors)
     EXPECT_TRUE(missing_connections.empty());
 }
 
-TEST(Cluster, TestMinConnectionsRelaxedModeFailsWhenNotEnoughConnections) {
+TEST(Cluster, TestMinConnectionsRelaxedModePassesWithPartialMismatches) {
+    // Create a GSD with some connections removed (but at least 1 per ASIC pair remains)
+    // Relaxed mode with min_connections=1 should pass because each ASIC pair still has >= 1 connection
     CablingGenerator cabling_generator(
-        "tools/tests/scaleout/cabling_descriptors/5_wh_galaxy_y_torus_superpod.textproto",
-        "tools/tests/scaleout/deployment_descriptors/5_wh_galaxy_y_torus_deployment.textproto");
+        "tools/tests/scaleout/cabling_descriptors/16_n300_lb_cluster.textproto",
+        "tools/tests/scaleout/deployment_descriptors/16_lb_deployment.textproto");
 
-    const std::string fsd_file =
-        root_output_dir + "fsd/factory_system_descriptor_5_wh_galaxy_y_torus_min_conn_fail_test.textproto";
+    const std::string fsd_file = root_output_dir + "fsd/factory_system_descriptor_16_n300_lb_relaxed_test.textproto";
     cabling_generator.emit_factory_system_descriptor(fsd_file);
 
-    // With min_connections set to an impossibly high value (e.g., 999999),
-    // the relaxed mode should NOT be satisfied and should throw
-    EXPECT_THROW(
-        {
-            validate_fsd_against_gsd(
-                fsd_file,
-                "tools/tests/scaleout/global_system_descriptors/5_wh_galaxy_y_torus_physical_desc.yaml",
-                true,    // strict_validation
-                true,    // assert_on_connection_mismatch
-                false,   // log_output
-                999999); // min_connections - impossibly high threshold
-        },
-        std::runtime_error);
+    // Create modified GSD with some connections removed (remove up to 2 per pair, keep at least 1)
+    const std::string modified_gsd = create_gsd_with_missing_connections(
+        "tools/tests/scaleout/global_system_descriptors/16_lb_physical_desc.yaml",
+        root_output_dir + "gsd/16_lb_physical_desc_partial_missing.yaml",
+        2,   // connections_to_remove_per_asic_pair
+        1);  // min_connections_to_keep_per_pair
+
+    // With min_connections=1, relaxed mode should pass because each ASIC pair has at least 1 connection
+    auto missing_connections = validate_fsd_against_gsd(
+        fsd_file,
+        modified_gsd,
+        true,   // strict_validation
+        true,   // assert_on_connection_mismatch
+        false,  // log_output
+        1);     // min_connections - each ASIC pair must have at least 1 connection
+
+    // Relaxed mode satisfied: returns empty set (treated as success)
+    EXPECT_TRUE(missing_connections.empty());
 }
 
-TEST(Cluster, TestMinConnectionsNotSpecifiedUsesStrictMode) {
-    CablingGenerator cabling_generator(
-        "tools/tests/scaleout/cabling_descriptors/5_wh_galaxy_y_torus_superpod.textproto",
-        "tools/tests/scaleout/deployment_descriptors/5_wh_galaxy_y_torus_deployment.textproto");
-
-    const std::string fsd_file =
-        root_output_dir + "fsd/factory_system_descriptor_5_wh_galaxy_y_torus_strict_test.textproto";
-    cabling_generator.emit_factory_system_descriptor(fsd_file);
-
-    // Without min_connections (std::nullopt), strict validation should throw on mismatch
-    EXPECT_THROW(
-        {
-            validate_fsd_against_gsd(
-                fsd_file,
-                "tools/tests/scaleout/global_system_descriptors/5_wh_galaxy_y_torus_physical_desc.yaml",
-                true,        // strict_validation
-                true,        // assert_on_connection_mismatch
-                false,       // log_output
-                std::nullopt); // min_connections - not specified, use strict mode
-        },
-        std::runtime_error);
-}
-
-TEST(Cluster, TestMinConnectionsWithMatchingConnectionsStillPasses) {
+TEST(Cluster, TestMinConnectionsRelaxedModeFailsWhenAsicPairHasInsufficientConnections) {
+    // Create a GSD with connections removed such that some ASIC pairs have fewer than min_connections
     CablingGenerator cabling_generator(
         "tools/tests/scaleout/cabling_descriptors/16_n300_lb_cluster.textproto",
         "tools/tests/scaleout/deployment_descriptors/16_lb_deployment.textproto");
 
     const std::string fsd_file =
-        root_output_dir + "fsd/factory_system_descriptor_16_n300_lb_min_conn_test.textproto";
+        root_output_dir + "fsd/factory_system_descriptor_16_n300_lb_insufficient_test.textproto";
     cabling_generator.emit_factory_system_descriptor(fsd_file);
 
-    // With matching connections, both strict mode and relaxed mode should pass
-    auto missing_connections = validate_fsd_against_gsd(
-        fsd_file,
+    // Create modified GSD with connections removed (remove up to 3 per pair, keep at least 1)
+    const std::string modified_gsd = create_gsd_with_missing_connections(
         "tools/tests/scaleout/global_system_descriptors/16_lb_physical_desc.yaml",
-        true,  // strict_validation
-        true,  // assert_on_connection_mismatch
-        false, // log_output
-        1);    // min_connections - relaxed mode
+        root_output_dir + "gsd/16_lb_physical_desc_insufficient.yaml",
+        3,   // connections_to_remove_per_asic_pair
+        1);  // min_connections_to_keep_per_pair
 
-    EXPECT_TRUE(missing_connections.empty());
+    // With min_connections=4, relaxed mode should fail because ASIC pairs only have ~1-2 connections left
+    EXPECT_THROW(
+        {
+            validate_fsd_against_gsd(
+                fsd_file,
+                modified_gsd,
+                true,   // strict_validation
+                true,   // assert_on_connection_mismatch
+                false,  // log_output
+                4);     // min_connections - requires 4 per pair, but we only have 1-2
+        },
+        std::runtime_error);
+}
+
+TEST(Cluster, TestMinConnectionsStrictModeFailsWithMismatches) {
+    // Create a GSD with some connections removed
+    // Strict mode (no min_connections) should fail on any mismatch
+    CablingGenerator cabling_generator(
+        "tools/tests/scaleout/cabling_descriptors/16_n300_lb_cluster.textproto",
+        "tools/tests/scaleout/deployment_descriptors/16_lb_deployment.textproto");
+
+    const std::string fsd_file =
+        root_output_dir + "fsd/factory_system_descriptor_16_n300_lb_strict_fail_test.textproto";
+    cabling_generator.emit_factory_system_descriptor(fsd_file);
+
+    // Create modified GSD with some connections removed
+    const std::string modified_gsd = create_gsd_with_missing_connections(
+        "tools/tests/scaleout/global_system_descriptors/16_lb_physical_desc.yaml",
+        root_output_dir + "gsd/16_lb_physical_desc_strict_fail.yaml",
+        1,   // connections_to_remove_per_asic_pair
+        1);  // min_connections_to_keep_per_pair
+
+    // Without min_connections, strict validation should fail on any mismatch
+    EXPECT_THROW(
+        {
+            validate_fsd_against_gsd(
+                fsd_file,
+                modified_gsd,
+                true,           // strict_validation
+                true,           // assert_on_connection_mismatch
+                false,          // log_output
+                std::nullopt);  // min_connections - not specified, use strict mode
+        },
+        std::runtime_error);
 }
 
 }  // namespace tt::scaleout_tools

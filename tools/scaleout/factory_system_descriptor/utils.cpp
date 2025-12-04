@@ -470,30 +470,90 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
         }
     }
 
-    // Handle validation results
-    bool relaxed_mode_satisfied = min_connections.has_value() &&
-                                  discovered_connections.size() >= min_connections.value();
+    // Handle validation results - check relaxed mode at per-ASIC-pair granularity
+    // An AsicId uniquely identifies an ASIC by (hostname, tray_id, asic_location)
+    using AsicId = std::tuple<std::string, uint32_t, uint32_t>;  // hostname, tray_id, asic_location
+
+    // Helper to extract AsicId from PhysicalChannelEndpoint
+    auto get_asic_id = [](const PhysicalChannelEndpoint& endpoint) -> AsicId {
+        return std::make_tuple(endpoint.hostname, *endpoint.tray_id, endpoint.asic_channel.asic_location);
+    };
+
+    // Helper to create ordered pair of AsicIds (for consistent map keys)
+    auto make_asic_pair = [](const AsicId& a, const AsicId& b) {
+        return (a < b) ? std::make_pair(a, b) : std::make_pair(b, a);
+    };
+
+    bool relaxed_mode_satisfied = false;
+    std::vector<std::pair<std::pair<AsicId, AsicId>, uint32_t>> insufficient_connections;
+
+    if (min_connections.has_value()) {
+        // Build map of expected ASIC pairs from generated_connections (FSD)
+        // Initialize all expected pairs with count = 0
+        std::map<std::pair<AsicId, AsicId>, uint32_t> asic_pair_connection_counts;
+
+        for (const auto& conn : generated_connections) {
+            auto asic_a = get_asic_id(conn.first);
+            auto asic_b = get_asic_id(conn.second);
+            auto asic_pair = make_asic_pair(asic_a, asic_b);
+            // Initialize to 0 if not present (we count from discovered connections)
+            if (asic_pair_connection_counts.find(asic_pair) == asic_pair_connection_counts.end()) {
+                asic_pair_connection_counts[asic_pair] = 0;
+            }
+        }
+
+        // Count actual discovered connections for each ASIC pair
+        for (const auto& conn : discovered_connections) {
+            auto asic_a = get_asic_id(conn.first);
+            auto asic_b = get_asic_id(conn.second);
+            auto asic_pair = make_asic_pair(asic_a, asic_b);
+            // Only count if this pair is expected (exists in FSD)
+            if (asic_pair_connection_counts.find(asic_pair) != asic_pair_connection_counts.end()) {
+                asic_pair_connection_counts[asic_pair]++;
+            }
+        }
+
+        // Check if all ASIC pairs have at least min_connections
+        relaxed_mode_satisfied = true;
+        for (const auto& [asic_pair, count] : asic_pair_connection_counts) {
+            if (count < min_connections.value()) {
+                relaxed_mode_satisfied = false;
+                insufficient_connections.push_back({asic_pair, count});
+            }
+        }
+    }
 
     if (!missing_in_gsd.empty() || !extra_in_gsd.empty()) {
         std::string mode_text = strict_validation ? "" : " in non-strict validation";
 
-        // In relaxed mode, skip throwing errors if we have enough connections
+        // In relaxed mode, skip throwing errors if all ASIC pairs have enough connections
         if (relaxed_mode_satisfied) {
             if (log_output) {
-                std::cout << "Relaxed validation mode: " << discovered_connections.size()
-                          << " connections discovered (minimum required: " << min_connections.value() << ")"
-                          << std::endl;
+                std::cout << "Relaxed validation mode: All ASIC pairs have at least " << min_connections.value()
+                          << " connections." << std::endl;
                 if (!missing_in_gsd.empty()) {
                     std::cout << "Note: " << missing_in_gsd.size()
-                              << " missing connections detected but ignored due to relaxed mode." << std::endl;
+                              << " missing channel connections detected but ignored due to relaxed mode." << std::endl;
                 }
                 if (!extra_in_gsd.empty()) {
                     std::cout << "Note: " << extra_in_gsd.size()
-                              << " extra connections detected but ignored due to relaxed mode." << std::endl;
+                              << " extra channel connections detected but ignored due to relaxed mode." << std::endl;
                 }
             }
             // Return empty set since we're treating this as success in relaxed mode
             return {};
+        }
+
+        // If min_connections was specified but not satisfied, report which ASIC pairs are insufficient
+        if (min_connections.has_value() && !insufficient_connections.empty() && log_output) {
+            std::cout << "Relaxed validation mode FAILED: The following ASIC pairs have fewer than "
+                      << min_connections.value() << " connections:" << std::endl;
+            for (const auto& [asic_pair, count] : insufficient_connections) {
+                const auto& [asic_a, asic_b] = asic_pair;
+                std::cout << "  - (" << std::get<0>(asic_a) << ", tray " << std::get<1>(asic_a) << ", asic "
+                          << std::get<2>(asic_a) << ") <-> (" << std::get<0>(asic_b) << ", tray " << std::get<1>(asic_b)
+                          << ", asic " << std::get<2>(asic_b) << "): " << count << " connections" << std::endl;
+            }
         }
 
         if (assert_on_connection_mismatch) {

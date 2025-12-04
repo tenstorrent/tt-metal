@@ -37,7 +37,7 @@ const std::unordered_map<std::string_view, std::string_view> VALIDATION_ARGS = {
     {"--data-size", "Data size (bytes) sent across each link per iteration"},
     {"--packet-size-bytes", "Packet size (bytes) sent across each link"},
     {"--sweep-traffic-configs", "Sweep pre-generated traffic configurations across detected links (stress testing)"},
-    {"--min-connections", "Minimum number of total connections required (relaxed validation mode)"}};
+    {"--min-connections", "Minimum connections per ASIC pair required for relaxed validation mode"}};
 
 // link_reset subcommand arguments and their descriptions
 const std::unordered_map<std::string_view, std::string_view> LINK_RETRAIN_ARGS = {
@@ -203,7 +203,7 @@ void parse_validation_args(const std::vector<std::string>& args_vec, InputArgs& 
         TT_FATAL(min_conn_value > 0, "Minimum connections must be a positive integer.");
         input_args.min_connections = static_cast<uint32_t>(min_conn_value);
         log_output_rank0(
-            "Relaxed validation mode enabled. Minimum connections required: " +
+            "Relaxed validation mode enabled. Minimum connections per ASIC pair: " +
             std::to_string(input_args.min_connections.value()));
     }
 }
