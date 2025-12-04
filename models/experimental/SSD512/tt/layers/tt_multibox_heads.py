@@ -235,9 +235,43 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
     else:
         shape = input_tensor.shape
         batch_size = 1
-        input_height = shape[1]
-        input_width = shape[2]
-        in_channels = shape[3]
+
+        # Check expected input channels from layer config
+        config = layer_with_weights.get("config", {})
+        expected_in_channels = layer_with_weights.get("in_channels", config.get("in_channels", None))
+
+        input_height_nhwc = shape[1]
+        input_width_nhwc = shape[2]
+        in_channels_nhwc = shape[3]
+
+        in_channels_nchw = shape[1]
+        input_height_nchw = shape[2]
+        input_width_nchw = shape[3]
+
+        # Determine format based on expected channels
+        needs_permute = False
+        if expected_in_channels is not None:
+            if in_channels_nchw == expected_in_channels:
+                # Tensor is in NCHW format, need to permute to NHWC
+                needs_permute = True
+                input_height = input_height_nchw
+                input_width = input_width_nchw
+                in_channels = in_channels_nchw
+            elif in_channels_nhwc == expected_in_channels:
+                # Tensor is already in NHWC format
+                input_height = input_height_nhwc
+                input_width = input_width_nhwc
+                in_channels = in_channels_nhwc
+            else:
+                # Default to NHWC interpretation
+                input_height = input_height_nhwc
+                input_width = input_width_nhwc
+                in_channels = in_channels_nhwc
+        else:
+            # No expected channels, default to NHWC
+            input_height = input_height_nhwc
+            input_width = input_width_nhwc
+            in_channels = in_channels_nhwc
 
     # Use L1 for smaller feature maps (<=128x128), DRAM for larger ones
     tensor_size_estimate = batch_size * input_height * input_width * in_channels
@@ -250,19 +284,25 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
         x_torch = input_tensor.permute(0, 2, 3, 1)
         x = ttnn.from_torch(
             x_torch,
-            device=None,
+            device=device,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
+            memory_config=memory_config,
         )
     else:
+        # Input is already a TTNN tensor
         x = input_tensor
-        x_torch = ttnn.to_torch(x)
-        x = ttnn.from_torch(
-            x_torch,
-            device=None,
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-        )
+
+        # Permute from NCHW to NHWC if needed (must be done before layout conversion)
+        if needs_permute:
+            # Convert to ROW_MAJOR for permute if needed
+            if x.layout != ttnn.ROW_MAJOR_LAYOUT:
+                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x = ttnn.permute(x, (0, 2, 3, 1))
+
+        # Ensure it's in TILE_LAYOUT for operations
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
     weight = layer_with_weights["weight"]
     bias = layer_with_weights.get("bias", None)

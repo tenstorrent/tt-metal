@@ -23,6 +23,7 @@ def create_ssd512_pipeline_model(ttnn_model, dtype=ttnn.bfloat16):
     """
     Create a pipeline model function for SSD512.
     The function receives L1 device tensors and returns device tensors.
+    Now works directly with TTNN tensors - no torch conversion needed.
     """
 
     def run(l1_input_tensor):
@@ -35,25 +36,28 @@ def create_ssd512_pipeline_model(ttnn_model, dtype=ttnn.bfloat16):
         input_height = l1_input_tensor.shape[1]
         input_width = l1_input_tensor.shape[2]
 
+        # Convert TTNN tensor to torch for model forward
         input_torch = ttnn.to_torch(l1_input_tensor)
         if input_torch.dim() == 4 and input_torch.shape[3] == 3:
             input_torch = input_torch.permute(0, 3, 1, 2)
 
+        # Forward pass expects torch tensor
         loc, conf = ttnn_model.forward(input_torch, dtype=dtype, memory_config=ttnn.L1_MEMORY_CONFIG, debug=False)
 
+        # Convert outputs back to TTNN tensors in DRAM
         loc_ttnn = ttnn.from_torch(
             loc,
             device=ttnn_model.device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         conf_ttnn = ttnn.from_torch(
             conf,
             device=ttnn_model.device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         return (loc_ttnn, conf_ttnn)
@@ -164,9 +168,9 @@ def test_ssd512_e2e_performant(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
     )
 
-    logger.info(f"Configuring pipeline (Trace + 2CQ)...")
+    logger.info(f"Configuring pipeline (2CQ without trace)...")
     pipeline_config = PipelineConfig(
-        use_trace=True,
+        use_trace=False,
         num_command_queues=2,
         all_transfers_on_separate_command_queue=False,
     )
