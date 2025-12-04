@@ -20,6 +20,7 @@
 #include "tt_align.hpp"
 #include <bit>
 #include <algorithm>
+#include <utility>
 
 namespace tt::tt_fabric {
 
