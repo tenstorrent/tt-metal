@@ -2217,32 +2217,29 @@ void kernel_main() {
     // We make sure to do this before we handshake to guarantee that the registers are
     // initialized before the other side has any possibility of modifying them.
     init_ptr_val<to_receiver_packets_sent_streams[0]>(0);
-    if constexpr (NUM_RECEIVER_CHANNELS > 1) {
-        init_ptr_val<to_receiver_packets_sent_streams[1]>(0);
-    }
     init_ptr_val<to_sender_packets_acked_streams[0]>(0);
     init_ptr_val<to_sender_packets_acked_streams[1]>(0);
-    init_ptr_val<to_sender_packets_acked_streams[2]>(0);
     init_ptr_val<to_sender_packets_completed_streams[0]>(0);
     init_ptr_val<to_sender_packets_completed_streams[1]>(0);
-    init_ptr_val<to_sender_packets_completed_streams[2]>(0);
     // The first sender channel in the array is always for the transient/worker connection
     init_ptr_val<sender_channel_free_slots_stream_ids[0]>(SENDER_NUM_BUFFERS_ARRAY[0]);  // LOCAL WORKER
     init_ptr_val<sender_channel_free_slots_stream_ids[1]>(SENDER_NUM_BUFFERS_ARRAY[1]);  // Compact index 0
-    init_ptr_val<sender_channel_free_slots_stream_ids[2]>(SENDER_NUM_BUFFERS_ARRAY[2]);  // Compact index 1
-    // TODO: change to per channel downstream buffers.
-    init_ptr_val<vc_0_free_slots_from_downstream_edge_1_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
-    init_ptr_val<vc_0_free_slots_from_downstream_edge_2_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
-    init_ptr_val<vc_0_free_slots_from_downstream_edge_3_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
 
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
     }
 
     if constexpr (is_2d_fabric) {
-        init_ptr_val<sender_channel_free_slots_stream_ids[3]>(SENDER_NUM_BUFFERS_ARRAY[3]);  // Compact index 2
+        init_ptr_val<to_receiver_packets_sent_streams[1]>(0);
+        init_ptr_val<to_sender_packets_acked_streams[2]>(0);
         init_ptr_val<to_sender_packets_acked_streams[3]>(0);
+        init_ptr_val<to_sender_packets_completed_streams[2]>(0);
         init_ptr_val<to_sender_packets_completed_streams[3]>(0);
+        init_ptr_val<to_sender_packets_completed_streams[4]>(0);
+        init_ptr_val<to_sender_packets_completed_streams[5]>(0);
+        init_ptr_val<to_sender_packets_completed_streams[6]>(0);
+        init_ptr_val<sender_channel_free_slots_stream_ids[2]>(SENDER_NUM_BUFFERS_ARRAY[2]);  // Compact index 1
+        init_ptr_val<sender_channel_free_slots_stream_ids[3]>(SENDER_NUM_BUFFERS_ARRAY[3]);  // Compact index 2
     }
 
     if constexpr (code_profiling_enabled_timers_bitfield != 0) {
