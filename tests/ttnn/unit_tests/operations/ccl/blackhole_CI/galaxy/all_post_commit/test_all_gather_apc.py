@@ -242,7 +242,7 @@ def test_all_gather_4D_line(
 @pytest.mark.parametrize("chunks_per_sync", [20])
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [2])
-def test_all_gather_everything_RING(
+def test_all_gather_everything_ring(
     bh_2d_mesh_device,
     num_devices,
     ag_output_shape,
