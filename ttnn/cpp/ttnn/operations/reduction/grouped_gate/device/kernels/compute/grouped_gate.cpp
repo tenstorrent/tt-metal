@@ -201,6 +201,7 @@ void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_
     pack_reconfig_data_format(input_cb_index);
     for (uint32_t i = 0; i < tiles; i++) {
         cb_wait_front(input_cb_index, 1);
+        UNPACK(print_tile(input_cb_index, 0, true, 0, 32, 0, 1));
         // UNPACK(DPRINT << "Waiting for input cb DONE" << ENDL());
 
         cb_reserve_back(output_cb_index, 1);
@@ -277,6 +278,7 @@ void topk(
     cb_reserve_back(unnormalized_scores_cb_index, 1);
     pack_reconfig_data_format(unnormalized_scores_cb_index);
     pack_tile(0, unnormalized_scores_cb_index);
+    PACK(print_tile(unnormalized_scores_cb_index, 0, true, 0, 32, 0, 1));
     cb_push_back(unnormalized_scores_cb_index, 1);
 
     cb_reserve_back(intermediate_local_sort_indices_cb_index, 1);
@@ -297,10 +299,10 @@ void normalize_scores(
     compute_kernel_hw_startup(unnormalized_scores_cb_index, reduce_scalar_cb_index, normalized_scores_cb_index);
     reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL>(
         unnormalized_scores_cb_index, reduce_scalar_cb_index, normalized_scores_cb_index);
+    cb_wait_front(epsilon_cb_index, 1);
     cb_wait_front(unnormalized_scores_cb_index, 1);
+    UNPACK(print_tile(unnormalized_scores_cb_index, 0, true, 0, 32, 0, 1));
     cb_wait_front(reduce_scalar_cb_index, 1);
-    // UNPACK(print_tile(unnormalized_scores_cb_index, 0, true, 0, 32, 0, 1));
-    // UNPACK(print_tile(reduce_scalar_cb_index, 0, true, 0, 32, 0, 1));
     acquire_dst();
 
     reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL>(unnormalized_scores_cb_index, reduce_scalar_cb_index, 0, 0, 0);
@@ -325,19 +327,45 @@ void normalize_scores(
 
     cb_wait_front(intermediate_reduce_cb_index, 1);
     UNPACK(print_tile(intermediate_reduce_cb_index, 0, true, 0, 1, 0, 1));
-    // UNPACK(print_tile(intermediate_reduce_cb_index, 0, true, 0, 32, 0, 1));
-    mul_bcast_cols_init_short(unnormalized_scores_cb_index, intermediate_reduce_cb_index);
+
+    // why the hell is mul_tiles_bcast templated but not mul_bcast_rows_init_short???
+    mul_bcast_rows_init_short(unnormalized_scores_cb_index, intermediate_reduce_cb_index);
 
     acquire_dst();
     cb_reserve_back(normalized_scores_cb_index, 1);
-    UNPACK(print_tile(unnormalized_scores_cb_index, 0, true, 0, 32, 0, 1));
-    mul_tiles_bcast<BroadcastType::COL>(
+    mul_tiles_bcast<BroadcastType::ROW>(
         unnormalized_scores_cb_index, intermediate_reduce_cb_index, 0, 0, 0);  // tile *= 1/(sum_col(tile))
     pack_tile(0, normalized_scores_cb_index);
     cb_push_back(normalized_scores_cb_index, 1);
+
+    cb_pop_front(intermediate_reduce_cb_index, 1);
+    cb_pop_front(unnormalized_scores_cb_index, 1);
     release_dst();
+}
+
+void scale_and_transpose(
+    const uint32_t normalized_scores_cb_index,
+    const uint32_t scales_cb_index,
+    const uint32_t transpose_cb_index,
+    const uint32_t weights_cb_index) {
     cb_wait_front(normalized_scores_cb_index, 1);
     UNPACK(print_tile(normalized_scores_cb_index, 0, true, 0, 32, 0, 1));
+    cb_wait_front(scales_cb_index, 1);
+    cb_reserve_back(transpose_cb_index, 1);
+
+    mul_tiles_bcast_scalar_init_short(normalized_scores_cb_index, scales_cb_index);
+
+    acquire_dst();
+
+    mul_tiles_bcast<BroadcastType::SCALAR>(normalized_scores_cb_index, scales_cb_index, 0, 0, 0);
+
+    pack_tile(0, transpose_cb_index);
+
+    cb_push_back(transpose_cb_index, 1);
+    cb_pop_front(normalized_scores_cb_index, 1);
+    release_dst();
+
+    transpose_and_pack(transpose_cb_index, weights_cb_index, 1);
 }
 
 }  // namespace blocks
@@ -381,6 +409,9 @@ void MAIN {
         get_named_compile_time_arg_val("pre_normalized_scores_cb_index");
     constexpr uint32_t reduce_scalar_cb_index = get_named_compile_time_arg_val("reduce_scalar_cb_index");
     constexpr uint32_t epsilon_cb_index = get_named_compile_time_arg_val("epsilon_cb_index");
+    constexpr uint32_t scales_cb_index = get_named_compile_time_arg_val("scales_cb_index");
+    constexpr uint32_t normalized_cb_index = get_named_compile_time_arg_val("normalized_cb_index");
+    constexpr uint32_t transpose_cb_index = get_named_compile_time_arg_val("transpose_cb_index");
 
     constexpr uint32_t n_groups = get_named_compile_time_arg_val("n_groups");
     constexpr uint32_t log_n_groups = get_named_compile_time_arg_val("log_n_groups");
@@ -464,7 +495,9 @@ void MAIN {
             reduce_scalar_cb_index,
             intermediate_local_sort_cb_index,
             epsilon_cb_index,
-            weights_cb_index);
+            normalized_cb_index);
+
+        blocks::scale_and_transpose(normalized_cb_index, scales_cb_index, transpose_cb_index, weights_cb_index);
     }
 }
 }  // namespace NAMESPACE

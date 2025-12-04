@@ -191,10 +191,31 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
     auto epsilon_cb_index = tt::CBIndex::c_19;
     tt::tt_metal::create_cb(epsilon_cb_index, program, all_cores, scores.buffer()->page_size(), 1, scores_data_format);
 
+    auto scales_cb_index = tt::CBIndex::c_20;
+    tt::tt_metal::create_cb(scales_cb_index, program, all_cores, scores.buffer()->page_size(), 1, scores_data_format);
+
+    auto normalized_cb_index = tt::CBIndex::c_21;
+    tt::tt_metal::create_cb(
+        normalized_cb_index,
+        program,
+        all_cores,
+        scores.buffer()->page_size(),
+        2 * n_activated_expert_tiles,
+        scores_data_format);
+
+    auto transpose_cb_index = tt::CBIndex::c_22;
+    tt::tt_metal::create_cb(
+        transpose_cb_index,
+        program,
+        all_cores,
+        scores.buffer()->page_size(),
+        2 * n_activated_expert_tiles,
+        scores_data_format);
     // Reader kernel compile time arguments
     std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
         {"scores_cb_index", scores_cb_index},
         {"bias_cb_index", bias_cb_index},
+        {"scales_cb_index", scales_cb_index},
         {"width_tiles", width_tiles},
         {"scores_page_size", scores.buffer()->page_size()},
         {"bias_page_size", bias.buffer()->page_size()},
@@ -249,6 +270,9 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         {"pre_normalized_scores_cb_index", pre_normalized_scores_cb_index},
         {"reduce_scalar_cb_index", reduce_scalar_cb_index},
         {"epsilon_cb_index", epsilon_cb_index},
+        {"scales_cb_index", scales_cb_index},
+        {"normalized_cb_index", normalized_cb_index},
+        {"transpose_cb_index", transpose_cb_index},
     };
 
     std::vector<uint32_t> compute_compile_time_args = {};
@@ -295,7 +319,10 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         {"packed_one_scalar", static_cast<uint32_t>(std::bit_cast<uint16_t>(bfloat16(1.0f))) << 16},
         {"packed_epsilon",
          static_cast<uint32_t>(std::bit_cast<uint16_t>(bfloat16(operation_attributes.epsilon))) << 16},
+        {"packed_route_scale",
+         static_cast<uint32_t>(std::bit_cast<uint16_t>(bfloat16(operation_attributes.route_scale))) << 16},
         {"epsilon_cb_index", epsilon_cb_index},
+        {"scales_cb_index", scales_cb_index},
     };
 
     std::vector<uint32_t> writer_compile_time_args = {};
