@@ -72,6 +72,20 @@ void py_graph_module(py::module& m) {
         py::arg("trace"));
 
     m.def(
+        "extract_levelized_graph",
+        [](const py::object& py_trace, size_t max_level) {
+            auto json_module = py::module::import("json");
+            std::string trace_str = py::str(json_module.attr("dumps")(py_trace));
+            nlohmann::json trace = nlohmann::json::parse(trace_str);
+            nlohmann::json levelized_graph = extract_levelized_graph(trace, max_level);
+            auto levelized_graph_str = levelized_graph.dump();
+            return json_module.attr("loads")(levelized_graph_str);
+        },
+        "Extracts levelized graph from the graph trace",
+        py::arg("trace"),
+        py::arg("max_level") = 1);
+
+    m.def(
         "extract_peak_L1_memory_usage",
         [](const py::object& py_trace) {
             auto json_module = py::module::import("json");
