@@ -132,7 +132,7 @@ jobs:
 
           # Set the "Opened On" field value
           UPDATE_RESP=$(gh api graphql -f query='
-          mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $date:String!){
+          mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $date:Date!){
             updateProjectV2ItemFieldValue(input:{
               projectId:$projectId,
               itemId:$itemId,
