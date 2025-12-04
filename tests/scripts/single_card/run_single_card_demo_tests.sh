@@ -174,13 +174,13 @@ run_bert_func() {
 
 run_resnet_stability() {
 
-  pytest models/demos/wormhole/resnet50/tests/test_resnet50_stability.py -k "short"
+  pytest models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_stability.py -k "short"
 
 }
 
 run_resnet_func() {
 
-  pytest models/demos/wormhole/resnet50/demo/demo.py
+  pytest models/demos/vision/classification/resnet50/wormhole/demo/demo.py
 
 }
 
