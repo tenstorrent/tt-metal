@@ -14,6 +14,10 @@ uint32_t get_sender_channel_count(const bool is_2D_routing) {
     return is_2D_routing ? builder_config::num_sender_channels_2d : builder_config::num_sender_channels_1d;
 }
 
+uint32_t get_receiver_channel_count(const bool is_2D_routing) {
+    return is_2D_routing ? builder_config::num_receiver_channels_2d : builder_config::num_receiver_channels_1d;
+}
+
 uint32_t get_num_tensix_sender_channels(Topology topology, tt::tt_fabric::FabricTensixConfig fabric_tensix_config) {
     // TODO: once we support inserting tensix as downstream in UDM mode, add back the channel count for UDM mode
     TT_FATAL(
@@ -38,11 +42,16 @@ uint32_t get_num_tensix_sender_channels(Topology topology, tt::tt_fabric::Fabric
 }
 
 uint32_t get_downstream_edm_count(bool is_2D_routing) {
-    return is_2D_routing ? builder_config::num_downstream_edms_2d : builder_config::num_downstream_edms;
+    return is_2D_routing ? builder_config::num_downstream_edms_2d : builder_config::num_downstream_edms_1d;
 }
 
 uint32_t get_vc0_downstream_edm_count(bool is_2D_routing) {
     return is_2D_routing ? builder_config::num_downstream_edms_2d_vc0 : builder_config::num_downstream_edms_vc0;
+}
+
+uint32_t get_vc1_downstream_edm_count(bool is_2D_routing) {
+    TT_FATAL(is_2D_routing, "VC1 is only supported for 2D routing");
+    return builder_config::num_downstream_edms_2d_vc1;
 }
 
 }  // namespace builder_config
