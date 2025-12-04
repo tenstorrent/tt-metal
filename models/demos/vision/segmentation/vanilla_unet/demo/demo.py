@@ -14,25 +14,25 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import run_for_wormhole_b0
-from models.demos.vanilla_unet.demo import demo_utils
-from models.demos.vanilla_unet.tt.common import (
+from models.demos.vision.segmentation.vanilla_unet.demo import demo_utils
+from models.demos.vision.segmentation.vanilla_unet.tt.common import (
     VANILLA_UNET_L1_SMALL_SIZE,
     VANILLA_UNET_TRACE_SIZE,
     create_unet_preprocessor,
     load_reference_model,
 )
-from models.demos.vanilla_unet.tt.config import create_unet_configs_from_parameters
-from models.demos.vanilla_unet.tt.model import create_unet_from_configs
+from models.demos.vision.segmentation.vanilla_unet.tt.config import create_unet_configs_from_parameters
+from models.demos.vision.segmentation.vanilla_unet.tt.model import create_unet_from_configs
 
 # Constants
 DEFAULT_RESOLUTION = (480, 640)
 INPUT_CHANNELS = 3
-DEMO_IMAGE_DIR = "models/demos/vanilla_unet/demo/images"
+DEMO_IMAGE_DIR = "models/demos/vision/segmentation/vanilla_unet/demo/images"
 DEMO_IMAGE_NAME = "TCGA_CS_4944_20010208_1.tif"
 DEMO_MASK_NAME = "TCGA_CS_4944_20010208_1_mask.tif"
-WEIGHTS_PATH = "models/demos/vanilla_unet/unet.pt"
-WEIGHTS_DOWNLOAD_SCRIPT = "models/demos/vanilla_unet/weights_download.sh"
-PRED_DIR = "models/demos/vanilla_unet/demo/pred"
+WEIGHTS_PATH = "models/demos/vision/segmentation/vanilla_unet/unet.pt"
+WEIGHTS_DOWNLOAD_SCRIPT = "models/demos/vision/segmentation/vanilla_unet/weights_download.sh"
+PRED_DIR = "models/demos/vision/segmentation/vanilla_unet/demo/pred"
 
 
 def get_weights_path(model_location_generator):
