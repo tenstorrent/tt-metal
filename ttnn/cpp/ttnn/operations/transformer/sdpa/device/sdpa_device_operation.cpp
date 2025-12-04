@@ -108,7 +108,7 @@ void SDPAOperation::validate_on_program_cache_miss(const operation_attributes_t&
             TT_FATAL(mask_shape[3] == k_shape[2], "Mask sequence length must match K sequence length");
 
             // When given a mask, we must check that the mask can be divided by chunk size. Otherwise we'd need to pad
-            // the mask
+            // the mask.
             const auto q_chunk_size = get_q_chunk_size(attrs);
             const auto k_chunk_size = get_k_chunk_size(attrs);
             TT_FATAL(
