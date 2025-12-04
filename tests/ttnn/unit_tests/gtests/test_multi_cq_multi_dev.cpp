@@ -62,7 +62,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }
                 // Pre-compute expected output: input goes through dispatch_ops_to_device which applies -32x + 128
-                float expected_val = -1 * (i + dev_idx) * 32 + 128;
+                float expected_val = (-1 * (i + dev_idx) * 32) + 128;
                 for (uint32_t j = 0; j < buf_size_datums; j++) {
                     expected_data[j] = bfloat16(expected_val);
                 }
@@ -123,7 +123,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }
                 // Pre-compute expected output: input goes through dispatch_ops_to_device which applies -32x + 128
-                float expected_val = -1 * (i + dev_idx) * 32 + 128;
+                float expected_val = (-1 * (i + dev_idx) * 32) + 128;
                 for (uint32_t j = 0; j < buf_size_datums; j++) {
                     expected_data[j] = bfloat16(expected_val);
                 }
@@ -178,7 +178,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }
                 // Pre-compute expected output: input goes through dispatch_ops_to_device which applies -32x + 128
-                float expected_val = -1 * (i + dev_idx) * 32 + 128;
+                float expected_val = (-1 * (i + dev_idx) * 32) + 128;
                 for (uint32_t j = 0; j < buf_size_datums; j++) {
                     expected_data[j] = bfloat16(expected_val);
                 }
