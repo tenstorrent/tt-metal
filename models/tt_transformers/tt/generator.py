@@ -464,7 +464,7 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
-        reset_batch=True,
+        reset_batch=False,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
     ):
@@ -524,14 +524,13 @@ class Generator:
             "sampling_on_device": sampling_on_device,
         }
         if enable_trace:
-            tt_decode_output = self._decode_forward_trace_text(**decode_kwargs)
+            tt_decode_output = self._decode_forward_trace_text(**decode_kwargs, reset_batch=reset_batch)
         else:
             tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
 
         if read_from_device:
             to_host = self.read_decode_output(tt_decode_output)
             return self.process_decode_output_host(to_host, is_tokens=(sampling_params is not None))
-
         return tt_decode_output
 
     def _decode_forward_no_trace_text(
@@ -643,12 +642,7 @@ class Generator:
         return trace_ids, tt_out_trace, *device_inputs
 
     def _decode_forward_trace_text(
-        self,
-        tokens,
-        current_pos,
-        page_table=None,
-        kv_cache=None,
-        sampling_on_device=False,
+        self, tokens, current_pos, page_table=None, kv_cache=None, sampling_on_device=False, reset_batch=False
     ):
         """
         Run decode forward text with tracing
@@ -662,11 +656,12 @@ class Generator:
             self.trace_inputs_decode[sampling_on_device] = device_inputs
             self.trace_output_decode[sampling_on_device] = tt_out_trace
 
-        reset_inputs = not sampling_on_device
+        # reset inputs when vllm signals that inputs are shuffled
+        reset_inputs = reset_batch or not sampling_on_device
         if self.prev_page_table is None or any(
             not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table)
         ):
-            # If the page table has changed, it means that the inputs have shuffled, so we need to copy them from host again
+            # If the page table has changed, it means additional pages have been added
             reset_inputs = True
             if page_table is not None:
                 self.prev_page_table = tuple(pt.clone() for pt in page_table)
