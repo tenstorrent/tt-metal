@@ -282,6 +282,9 @@ private:
     // Number of downstream mux connections (all directions except self = 3)
     static constexpr uint32_t NUM_DOWNSTREAM_MUX_CONNECTIONS = 3;
 
+    // Channel storage size for storing channel arrays in L1
+    static constexpr size_t channel_storage_size_ = 4096;  // 4KB for channel storage
+
     // ==================================================================================
     // Mux-specific: Support for inter-mux connections (mux → downstream mux)
     // Each mux can connect to 3 other muxes (all directions except itself)
@@ -315,6 +318,15 @@ private:
     // Buffer index synchronization (mux → downstream mux direction) for each downstream mux connection
     // - Stored in current MUX's L1 memory
     std::array<MemoryRegion, NUM_DOWNSTREAM_MUX_CONNECTIONS> downstream_mux_buffer_index_semaphore_regions_{};
+
+    // Channel storage region: L1 memory for storing channel objects and interfaces
+    // Used by the kernel to place channel buffers and interfaces instead of global memory
+    MemoryRegion channel_storage_region_{};
+
+public:
+    // Getter for channel storage address
+    size_t get_channel_storage_base_address() const { return channel_storage_region_.get_address(); }
+    size_t get_channel_storage_size() const { return channel_storage_region_.get_total_size(); }
 };
 
 /**
@@ -410,7 +422,8 @@ public:
         uint32_t noc_x,
         uint32_t noc_y,
         std::shared_ptr<FabricTensixDatamoverMuxConfig> config,
-        eth_chan_directions direction);
+        eth_chan_directions direction,
+        bool has_fabric_router);
 
     void create_and_compile(tt::tt_metal::Program& program);
 
@@ -447,6 +460,10 @@ private:
 
     std::shared_ptr<FabricTensixDatamoverMuxConfig> config_;
 
+    // Whether this mux has a fabric router to connect to
+    // False for missing directions in UDM mode (inter-mux forwarding only)
+    bool has_fabric_router_ = true;
+
     // Channel connection liveness check disable array
     mutable std::array<bool, builder_config::num_sender_channels> channel_connection_liveness_check_disable_array_{};
 
@@ -473,7 +490,8 @@ public:
         uint32_t noc_x,
         uint32_t noc_y,
         std::shared_ptr<FabricTensixDatamoverRelayConfig> config,
-        eth_chan_directions direction);
+        eth_chan_directions direction,
+        bool /*has_fabric_router*/);
 
     void create_and_compile(tt::tt_metal::Program& program);
 

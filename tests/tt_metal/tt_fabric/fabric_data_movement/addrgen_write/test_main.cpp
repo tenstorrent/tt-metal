@@ -135,9 +135,9 @@ INSTANTIATE_TEST_SUITE_P(
             tt::tt_fabric::test::AddrgenApiVariant::ScatterWrite,
             tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteWithState,
             tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteSetState),
-        ::testing::Values(100, 112, 2048),  // Page sizes: non-power-of-2 and power-of-2
-        ::testing::Bool()                   // Destination: false=L1, true=DRAM
-    ),
+        ::testing::Values(100, 112, 2048, 10000, 10100, 99999),  // Page sizes: Aligned and unaligned
+        ::testing::Bool()                                        // Destination: false=L1, true=DRAM
+        ),
     [](const ::testing::TestParamInfo<AddrgenComprehensiveTest::ParamType>& info) {
         auto api_variant = std::get<0>(info.param);
         auto page_size = std::get<1>(info.param);
