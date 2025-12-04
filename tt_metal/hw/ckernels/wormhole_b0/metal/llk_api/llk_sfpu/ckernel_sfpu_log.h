@@ -11,7 +11,7 @@
 namespace ckernel {
 namespace sfpu {
 
-template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en = false>
+template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat in, const uint log_base_scale_factor) {
     ///////////////////////////////////
     // "normalize to calculation range"
@@ -188,7 +188,7 @@ template <
     bool APPROXIMATION_MODE,
     bool FAST_APPROX,
     bool HAS_BASE_SCALING,
-    bool is_fp32_dest_acc_en = false,
+    bool is_fp32_dest_acc_en,
     int ITERATIONS = 8>
 inline void calculate_log(uint log_base_scale_factor) {
 #pragma GCC unroll 8
@@ -205,7 +205,7 @@ inline void calculate_log(uint log_base_scale_factor) {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en = false>
+template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
 inline void log_init() {
     if constexpr (!is_fp32_dest_acc_en) {
         sfpi::vConstFloatPrgm0 = 0.693147182464599609375;  // ln(2)
