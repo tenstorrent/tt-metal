@@ -79,7 +79,7 @@ def try_read_magic_with_elf(
     try:
         loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
         mailboxes = fw_elf.read_global("mailboxes", loc_mem_access)
-        return  int.from_bytes(mailboxes.core_info.core_magic_number.read_bytes(), byteorder="little")
+        return int.from_bytes(mailboxes.core_info.core_magic_number.read_bytes(), byteorder="little")
     except Exception as e:
         return None
 
@@ -180,9 +180,7 @@ def run(args, context: Context):
     magic_values = CoreMagicValues(dispatcher_data._brisc_elf)
 
     run_checks.run_per_core_check(
-        lambda location, risc_name: check_core_magic(
-            location, risc_name, dispatcher_data, elfs_cache, magic_values
-        ),
+        lambda location, risc_name: check_core_magic(location, risc_name, dispatcher_data, elfs_cache, magic_values),
         block_filter=BLOCK_TYPES_TO_CHECK,
         core_filter=RISC_CORES_TO_CHECK,
     )
@@ -190,4 +188,3 @@ def run(args, context: Context):
 
 if __name__ == "__main__":
     run_script()
-
