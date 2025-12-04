@@ -32,14 +32,14 @@ struct RegisteredResponse {
     uint8_t transaction_id;
 
     // Memory pool tracking for reads (bytes-based, no slot counting)
-    uint16_t bytes_remaining_;  // Bytes in memory pool waiting to be sent
+    uint32_t bytes_remaining;  // Bytes in memory pool waiting to be sent
 
     // Padding to reach 32 bytes
-    uint8_t padding[5];
+    uint8_t padding[3];
 
     // Read-specific fields
     uint32_t src_l1_address;
-    uint32_t bytes_to_allocate_;  // Bytes remaining to allocate from source
+    uint32_t bytes_to_allocate;   // Bytes remaining to allocate from source
     uint64_t read_noc_address;    // Where to read from next (updated after allocation)
 
     // Helper to populate fields from header
@@ -60,37 +60,37 @@ struct RegisteredResponse {
         // For reads, populate read-specific fields (compile-time check)
         if constexpr (noc_send_type == tt::tt_fabric::NocSendType::NOC_UNICAST_READ) {
             src_l1_address = header.src_l1_address;
-            bytes_to_allocate_ = header.size_bytes;
+            bytes_to_allocate = header.size_bytes;
             read_noc_address = noc_addr;
-            bytes_remaining_ = 0;
+            bytes_remaining = 0;
         }
     }
 
     // Check if there are bytes in memory pool to send
-    FORCE_INLINE bool has_data_to_send() const volatile { return bytes_remaining_ > 0; }
+    FORCE_INLINE bool has_data_to_send() const volatile { return bytes_remaining > 0; }
 
     // Check if this is the last slot to send (for fused atomic on final packet)
     // True when: all bytes allocated AND only one slot's worth (or less) remaining
     FORCE_INLINE bool is_last_send(uint32_t slot_size) const volatile {
-        return bytes_to_allocate_ == 0 && bytes_remaining_ <= slot_size;
+        return bytes_to_allocate == 0 && bytes_remaining <= slot_size;
     }
 
     // Called after allocating: advance read address, update byte counters
     FORCE_INLINE void complete_allocation(uint32_t bytes_allocated) volatile {
         read_noc_address += bytes_allocated;
-        bytes_to_allocate_ -= bytes_allocated;
-        bytes_remaining_ += bytes_allocated;
+        bytes_to_allocate -= bytes_allocated;
+        bytes_remaining += bytes_allocated;
     }
 
     // Called after sending ONE slot: advance dest address, decrement bytes
     // Returns true if all data has been sent
     FORCE_INLINE bool complete_send(uint32_t slot_size) volatile {
-        uint32_t bytes_sent = std::min((uint32_t)bytes_remaining_, slot_size);
+        uint32_t bytes_sent = std::min((uint32_t)bytes_remaining, slot_size);
 
         src_l1_address += bytes_sent;
-        bytes_remaining_ -= bytes_sent;
+        bytes_remaining -= bytes_sent;
 
-        return bytes_remaining_ == 0 && bytes_to_allocate_ == 0;
+        return bytes_remaining == 0 && bytes_to_allocate == 0;
     }
 } __attribute__((packed));
 

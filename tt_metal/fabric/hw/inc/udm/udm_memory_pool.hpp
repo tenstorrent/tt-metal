@@ -61,14 +61,15 @@ public:
     FORCE_INLINE uint32_t get_next_slot_idx(uint32_t idx) const { return advance_slot_idx(idx); }
 
     // Allocate slots for a read response - bytes based
-    // Reads from response->read_noc_address (auto-advanced), updates bytes_remaining
-    // Returns true if we allocated any bytes
+    // Performs partial allocation: allocates min(bytes_needed, available_space).
+    // Reads from response->read_noc_address (auto-advanced), updates bytes_remaining and bytes_to_allocate.
+    // Callers should check response->bytes_to_allocate to determine if more allocation is needed.
     FORCE_INLINE void cb_allocate_and_fill_slots(volatile RegisteredResponse* response) {
-        uint32_t bytes_to_allocate = response->bytes_to_allocate_;
+        uint32_t bytes_to_allocate = response->bytes_to_allocate;
         uint32_t available_slots = get_num_available_slots();
         bool can_allocate = (bytes_to_allocate != 0) && (available_slots != 0);
         if (can_allocate) {
-            // Calculate bytes to read: min of bytes needed and available space
+            // Partial allocation: allocate as much as available space allows
             uint32_t bytes_to_read = std::min(bytes_to_allocate, available_slots * SlotSize);
             uint32_t bytes_allocated = bytes_to_read;
 

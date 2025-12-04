@@ -190,6 +190,8 @@ void setup_channel(
 }
 
 // Helper function to register a response in the response pool
+// Precondition: response_pool.has_space() must be true before calling.
+// This invariant is critical for the deadlock avoidance mechanism.
 template <uint32_t Direction, tt::tt_fabric::NocSendType noc_send_type, typename RegisteredResponsePoolType>
 FORCE_INLINE void register_write_or_atomic_response(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* const packet_header, RegisteredResponsePoolType& response_pool) {
@@ -205,6 +207,8 @@ FORCE_INLINE void register_write_or_atomic_response(
 }
 
 // Helper function to register a read response in the response pool
+// Precondition: response_pool.has_space() must be true before calling.
+// This invariant is critical for the deadlock avoidance mechanism.
 template <uint32_t Direction, typename RegisteredResponsePoolType, typename UDMMemoryPoolType>
 FORCE_INLINE void register_read_response(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* const packet_header,
@@ -418,8 +422,7 @@ FORCE_INLINE bool process_read_response(
     allocate_read_memory(memory_pool, response);
 
     // Send if we have bytes in memory pool
-    bool response_completed;
-    response_completed = send_read_response_data<Direction>(mux_connections, memory_pool, response);
+    bool response_completed = send_read_response_data<Direction>(mux_connections, memory_pool, response);
     return response_completed;
 }
 
