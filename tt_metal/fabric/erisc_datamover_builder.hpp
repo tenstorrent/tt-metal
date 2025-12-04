@@ -521,6 +521,9 @@ private:
 
     // Internal implementation for connect_to_downstream_edm
     void connect_to_downstream_edm_impl(FabricDatamoverBuilderBase* downstream_builder);
+
+    // Configure telemetry settings for all RISC cores
+    void configure_telemetry_settings();
 };
 
 }  // namespace tt::tt_fabric

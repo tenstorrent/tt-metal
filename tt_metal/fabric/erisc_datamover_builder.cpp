@@ -234,17 +234,6 @@ bool requires_forced_assignment_to_noc1() {
     //
     return tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE && get_num_riscv_cores() == 1;
 }
-
-bool telemetry_erisc_selected(
-    const tt::llrt::FabricTelemetrySettings& settings, uint32_t chip_id, uint32_t channel_id, uint32_t risc_id) {
-    if (!settings.chips.matches(chip_id)) {
-        return false;
-    }
-    if (!settings.channels.matches(channel_id)) {
-        return false;
-    }
-    return settings.eriscs.matches(risc_id);
-}
 }  // anonymous namespace
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topology(topology) {
@@ -736,6 +725,10 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         config.num_used_receiver_channels,
         static_cast<int>(direction));
 
+    configure_telemetry_settings();
+}
+
+void FabricEriscDatamoverBuilder::configure_telemetry_settings() {
     auto& telemetry_rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const auto& telemetry_settings = telemetry_rtoptions.get_fabric_telemetry_settings();
     const bool telemetry_globally_enabled = telemetry_rtoptions.get_enable_fabric_telemetry() &&
@@ -744,12 +737,11 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_chip_id_from_fabric_node_id(
             this->local_fabric_node_id);
     for (uint32_t risc_id = 0; risc_id < this->config.num_riscv_cores; risc_id++) {
-        bool erisc_enabled = telemetry_globally_enabled && telemetry_erisc_selected(
-                                                               telemetry_settings,
-                                                               static_cast<uint32_t>(local_physical_chip_id),
-                                                               static_cast<uint32_t>(this->my_eth_channel),
-                                                               risc_id);
-        this->config.risc_configs[risc_id].set_telemetry_enabled(erisc_enabled);
+        bool telemetry_enabled_on_erisc =
+            telemetry_globally_enabled &&
+            telemetry_settings.is_telemetry_enabled(
+                static_cast<uint32_t>(local_physical_chip_id), static_cast<uint32_t>(this->my_eth_channel), risc_id);
+        this->config.risc_configs[risc_id].set_telemetry_enabled(telemetry_enabled_on_erisc);
         this->config.risc_configs[risc_id].set_telemetry_stats_mask(telemetry_settings.stats_mask);
     }
 }

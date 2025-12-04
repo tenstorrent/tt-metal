@@ -124,6 +124,9 @@ struct FabricTelemetrySettings {
     FabricTelemetrySelection<uint32_t> channels;
     FabricTelemetrySelection<uint32_t> eriscs;
     uint8_t stats_mask = kAllStatsMask;
+    bool is_telemetry_enabled(uint32_t phys_chip_id, uint32_t channel_id, uint32_t risc_id) const {
+        return chips.matches(phys_chip_id) && channels.matches(channel_id) && eriscs.matches(risc_id);
+    }
 };
 
 class RunTimeOptions {
