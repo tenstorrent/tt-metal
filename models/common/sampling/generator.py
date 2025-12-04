@@ -151,7 +151,7 @@ class SamplingGenerator:
     ):
         if penalties_on:
             self.tt_penalties.apply(logits)
-        tt_tokens, tt_log_probs = self.tt_sampling(logits, seed=seed, tt_out_tok=tt_out_tok)
+        tt_tokens, tt_log_probs = self.tt_sampling(logits, tt_out_tok=tt_out_tok)
         return tt_tokens, tt_log_probs
 
     def capture_trace(

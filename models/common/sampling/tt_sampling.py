@@ -119,7 +119,7 @@ class TTSampling(LightweightModule):
         self._create_indices_tensors()
         # Log-probs tensor to store the log-probs for the batch
         self.tt_log_probs = None
-        self.log_probs_calculator = LogProbsCalculator(self.vocab_size, self.mesh_device)
+        self.log_probs_calculator = LogProbsCalculator(self.padded_vocab_size, self.mesh_device)
 
     def set_log_probs_mode(self, enable_log_probs: bool = False):
         self.log_probs_calculator.enable_log_probs = enable_log_probs
