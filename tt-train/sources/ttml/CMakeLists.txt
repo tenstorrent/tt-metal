@@ -603,34 +603,6 @@ endif()
 # Use PUBLIC so any code linking against ttml also gets this definition
 target_compile_definitions(ttml PUBLIC FLATBUFFERS_LARGE_SIZE)
 
-# Link zstd library for compression support
-if(zstd_ADDED)
-    # zstd creates different targets depending on build configuration
-    # Try common target names in order of preference
-    if(TARGET zstd::libzstd_static)
-        target_link_libraries(ttml PRIVATE zstd::libzstd_static)
-    elseif(TARGET libzstd_static)
-        target_link_libraries(ttml PRIVATE libzstd_static)
-    elseif(TARGET zstd::libzstd_shared)
-        target_link_libraries(ttml PRIVATE zstd::libzstd_shared)
-    elseif(TARGET libzstd_shared)
-        target_link_libraries(ttml PRIVATE libzstd_shared)
-    elseif(TARGET zstd)
-        target_link_libraries(ttml PRIVATE zstd)
-    else()
-        message(WARNING "zstd was added but no known target found. Available targets may differ.")
-        # Try to find and link zstd library directly
-        find_library(ZSTD_LIBRARY zstd)
-        if(ZSTD_LIBRARY)
-            target_link_libraries(ttml PRIVATE ${ZSTD_LIBRARY})
-        else()
-            message(FATAL_ERROR "zstd library not found and no CMake target available")
-        endif()
-    endif()
-else()
-    message(WARNING "zstd package was not added, zstd compression will not work")
-endif()
-
 find_package(
     Python3
     COMPONENTS
