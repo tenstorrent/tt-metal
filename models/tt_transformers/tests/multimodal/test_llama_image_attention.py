@@ -87,6 +87,7 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds, ensure
 
     # config contains paramters for the whole multimodal network the subeset of vision branch is chosen instead
     config = AutoConfig.from_pretrained(os.getenv("HF_MODEL"))
+    config.vision_config._attn_implementation = "sdpa"
     reference_model = MllamaVisionAttention(config.vision_config)
     # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
     partial_state_dict = load_partial_weights(
