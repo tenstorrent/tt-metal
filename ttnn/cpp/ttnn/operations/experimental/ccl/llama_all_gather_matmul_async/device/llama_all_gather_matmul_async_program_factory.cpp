@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_program_factory.hpp"
+#include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_program_factory.hpp"
 
 #include <algorithm>
 #include <sstream>
@@ -63,7 +63,7 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
     auto& output_tensor = tensor_return_value.mm;
     const auto& aggregated_tensor = tensor_return_value.aggregated;
 
-    auto& compute_kernel_config = args.matmul_struct.compute_kernel_config.value();
+    const auto& compute_kernel_config = args.matmul_struct.compute_kernel_config.value();
     const auto& program_config = args.matmul_struct.program_config.value();
     const auto& global_cb = args.matmul_struct.global_cb;
 
