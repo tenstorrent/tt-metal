@@ -20,8 +20,6 @@
 
 #include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_last_dim.hpp"
 
-constexpr uint32_t READ_ALIGNMENT = 64;
-
 namespace ttnn::operations::data_movement::repeat::program {
 
 RepeatProgramFactoryLastDim::cached_program_t RepeatProgramFactoryLastDim::create(
