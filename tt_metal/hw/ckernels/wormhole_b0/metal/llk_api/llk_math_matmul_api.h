@@ -42,7 +42,7 @@ inline void llk_math_matmul_init(
         kt_dim);
 }
 
-template <int NUM_FIDELITY_PHASES, int THROTTLE_LEVEL = 0, uint32_t num_faces = 4 /*not used*/>
+template <int NUM_FIDELITY_PHASES, int THROTTLE_LEVEL = 0>
 inline void llk_math_matmul(
     const uint dst_index,
     const bool transpose = false,

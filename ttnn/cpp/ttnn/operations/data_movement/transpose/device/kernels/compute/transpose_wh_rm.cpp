@@ -65,13 +65,13 @@ ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, uint32_t c
         if (w == Wt - 1) {  // last row
             cb_reserve_back(cb_out, pack_num_pages_last_row_col);
             tile_regs_wait();
-            pack_untilize_dest<Ht, Ht, false, use_narrow_row, row_size>(cb_out);
+            pack_untilize_dest<Ht, Ht, use_narrow_row, row_size>(cb_out);
             tile_regs_release();
             cb_push_back(cb_out, pack_num_pages_last_row_col);
         } else {
             cb_reserve_back(cb_out, pack_num_pages_last_col);
             tile_regs_wait();
-            pack_untilize_dest<Ht, Ht, false, use_narrow_row, row_size>(cb_out);
+            pack_untilize_dest<Ht, Ht, use_narrow_row, row_size>(cb_out);
             tile_regs_release();
             cb_push_back(cb_out, pack_num_pages_last_col);
         }

@@ -75,7 +75,7 @@ void math_main() {
     constexpr bool spill = num_blocks > 1U;
     bool enable_reload = false;
 
-    llk_math_hw_configure_disaggregated(0, 1);
+    llk_math_hw_configure(0, 1);
 
     for (uint32_t block = 0U; block < num_blocks; block++) {
         bool last_out = block == num_blocks - 1U;
@@ -93,6 +93,7 @@ void math_main() {
                         llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(i);
                     }
                 }
+                // NC: This doesn't have a second runtime param?
                 llk_math_matmul_init<MATH_FIDELITY>(0);
 
                 int dst_index = 0;

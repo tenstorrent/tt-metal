@@ -36,8 +36,8 @@ namespace ckernel {
  * NOTE: This function allows the user to specify `face_r_dim` and `num_faces` through function parameters. Setting these
  * parameters results in an expensive MMIO write and cannot be avoided currently.
  * This should be addressed more systematically within the issue tt-metal#22820, since these two values can be inferred
- * from the circular buffer description, the same way as it is done in `llk_pack_hw_configure_disaggregated`. This
- * would remove the need for `llk_pack_untilize_hw_configure_disaggregated` altogether and we would pay the price
+ * from the circular buffer description, the same way as it is done in `llk_pack_hw_configure`. This
+ * would remove the need for `llk_pack_hw_configure` altogether and we would pay the price
  * of the MMIO write only once, in `compute_kernel_hw_startup`.
  *
  * Return value: None
@@ -61,15 +61,14 @@ template <
 ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4) {
 #ifdef ARCH_BLACKHOLE
     // Needed for setting swizzle_32b:
-    MATH((llk_math_hw_configure_disaggregated(0, 0)));
+    MATH((llk_math_hw_configure(0, 0)));
     // TODO LP, set swizzle here
 #endif
     // A workaround for tt-metal#17132. Should be addressed more systematically.
-    PACK(
-        (llk_pack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE, false /*untilize*/>(ocb, face_r_dim, num_faces)));
-    PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, false, narrow_row, row_num_datums>(
-        ocb, face_r_dim, num_faces)));
-    PACK((llk_init_packer_dest_offset_registers<true, false>()));
+    // NC: Need to pass face_r_dim and num_faces as CB metadata, not as runtime arg
+    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb, face_r_dim, num_faces)));
+    PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, narrow_row, row_num_datums>(ocb, face_r_dim, num_faces)));
+    PACK((llk_init_packer_dest_offset_registers<true>(ocb)));
 }
 
 // clang-format off
@@ -90,8 +89,8 @@ ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t face_r_dim = 16, uint32
  * NOTE: This function uses default `face_r_dim` and `num_faces` values (16 and 4, respectively). Setting these
  * parameters results in an expensive MMIO write and cannot be avoided currently.
  * This should be addressed more systematically within the issue tt-metal#22820, since these two values can be inferred
- * from the circular buffer description, the same way as it is done in `llk_pack_hw_configure_disaggregated`. This
- * would remove the need for `llk_pack_untilize_hw_configure_disaggregated` altogether and we would pay the price
+ * from the circular buffer description, the same way as it is done in `llk_pack_hw_configure`. This
+ * would remove the need for `llk_pack_hw_configure` altogether and we would pay the price
  * of the MMIO write only once, in `compute_kernel_hw_startup`.
  *
  * Return value: None
@@ -176,7 +175,6 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
  * |------------|--------------------|------------------------------------------------------------------------------|-----------|-----------------------------------------|---------------------|
  * | Template   | block_ct_dim       | Width of a single block in tiles                                             | uint32_t  | 1 to max (see note)                     | False (default = 8) |
  * | Template   | full_ct_dim        | Width of a full input in tiles                                               | uint32_t  | Divisible by block_ct_dim               | False               |
- * | Template   | diagonal           | Whether to use diagonal packing                                              | bool      | true/false                              | False               |
  * | Template   | narrow_row         | Whether the provided input is narrow                                         | bool      | true/false                              | False               |
  * | Template   | row_num_datums     | Number of datums per row                                                     | uint32_t  | >= 1                                    | False               |
  * | Template   | tile_dst_ct_offset | Compile time offset for the index of the tile in the dest from which to pack | uint32_t  | 0 to 7 (0 to 3 if fp32 dest is enabled) | False (default=0)   |
@@ -191,7 +189,6 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
 template <
     uint32_t block_ct_dim = 8,
     uint32_t full_ct_dim = block_ct_dim,
-    bool diagonal = false,
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
     uint32_t tile_dst_ct_offset = 0>
@@ -202,7 +199,7 @@ ALWI void pack_untilize_dest(
     uint32_t face_r_dim = 16,
     uint32_t num_faces = 4,
     uint32_t tile_dst_rt_offset = 0) {
-    PACK((llk_pack_untilize<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
+    PACK((llk_pack_untilize<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, tile_dst_ct_offset>(
         block_rt_dim, ocb, face_r_dim, num_faces, block_c_index, tile_dst_rt_offset)));
 }
 

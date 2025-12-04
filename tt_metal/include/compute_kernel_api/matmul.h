@@ -89,16 +89,16 @@ ALWI void matmul_block_math_dynamic_throttle(
  */
 // clang-format on
 ALWI void mm_init(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t out_cb_id, const uint32_t transpose = 0) {
-    UNPACK((llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
 
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure_disaggregated(in0_cb_id, in1_cb_id)));
+    MATH((llk_math_hw_configure(in0_cb_id, in1_cb_id)));
 
-    PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(out_cb_id)));
+    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
     PACK((llk_pack_init(out_cb_id)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE>()));
 }
 
 // clang-format off
@@ -214,20 +214,20 @@ ALWI void mm_block_init(
     uint32_t ct_dim = 1,
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
-    UNPACK((llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
 
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure_disaggregated(in0_cb_id, in1_cb_id)));
+    MATH((llk_math_hw_configure(in0_cb_id, in1_cb_id)));
 #ifdef ARCH_BLACKHOLE
     // Dynamic throttling is only available on Blackhole architecture
     MATH((throttled_mop_status = 0));
 #endif
 
-    PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(out_cb_id)));
+    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
     PACK((llk_pack_init<false, false>(out_cb_id)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE>()));
 }
 
 // clang-format off

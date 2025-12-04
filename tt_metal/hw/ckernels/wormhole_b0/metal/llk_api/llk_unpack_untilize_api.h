@@ -9,31 +9,6 @@
 /*************************************************************************
  * LLK UNPACK UNTILIZE
  *************************************************************************/
-template <bool is_fp32_dest_acc_en>
-inline void llk_unpack_untilize_hw_configure(const llk_unpack_A_params_t* unpack_untilize_params) {
-    constexpr bool is_row_pool = false;
-    constexpr bool within_face_16x16_transpose = false;
-    constexpr StochRndType stoch_rnd_mode = StochRndType::None;
-
-    const uint32_t unpA_operand_id = get_operand_id(unpack_untilize_params->unpA_operand);
-    const uint32_t unpA_num_faces = 4;
-    const uint32_t unpA_face_r_dim = FACE_R_DIM;
-
-    _llk_unpack_untilize_hw_configure_<is_fp32_dest_acc_en, stoch_rnd_mode>(
-        unpack_src_format[unpA_operand_id],
-        unpack_dst_format[unpA_operand_id],
-        unpA_face_r_dim,
-        within_face_16x16_transpose,
-        unpA_num_faces);
-}
-
-template <bool is_fp32_dest_acc_en>
-inline void llk_unpack_untilize_hw_configure_disaggregated(const std::uint32_t unpA_operand) {
-    const llk_unpack_A_params_t unpack_untilize_params = {
-        .unpA_operand = unpA_operand,
-    };
-    llk_unpack_untilize_hw_configure<is_fp32_dest_acc_en>(&unpack_untilize_params);
-}
 
 inline void llk_unpack_untilize_mop_config() { _llk_unpack_untilize_mop_config_(); }
 
