@@ -226,6 +226,7 @@ TransposeWHProgramFactory::cached_program_t TransposeWHProgramFactory::create(
         split_work_to_cores(compute_with_storage_grid_size, row_major ? NC : num_tensor_tiles);
 
     Buffer* dst_buffer = output_tensor.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = row_major ? wt * 2 : 2;
