@@ -51,8 +51,6 @@ static constexpr std::size_t num_sender_channels_2d_torus = 4;
 static constexpr std::size_t num_sender_channels_1d = 2;
 static constexpr std::size_t num_sender_channels_2d = 7;
 static constexpr std::size_t num_sender_channels = std::max(num_sender_channels_1d, num_sender_channels_2d);
-// static constexpr std::size_t num_downstream_sender_channels = num_sender_channels - 1;
-
 static constexpr std::size_t num_receiver_channels_1d = 1;
 static constexpr std::size_t num_receiver_channels_2d = 2;
 static constexpr std::size_t num_receiver_channels = std::max(num_receiver_channels_1d, num_receiver_channels_2d);
