@@ -354,6 +354,18 @@ jobs:
             echo "should-skip-release=false" >> "$GITHUB_OUTPUT"
           fi
 
+  debug-release-output:
+    needs: check-existing-release
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+    steps:
+      - name: Debug should-skip-release value
+        run: |
+          echo "should-skip-release output value: '${{ needs.check-existing-release.outputs.should-skip-release }}'"
+          echo "check-existing-release job result: ${{ needs.check-existing-release.result }}"
+          echo "Condition != 'true': ${{ needs.check-existing-release.outputs.should-skip-release != 'true' }}"
+          echo "Condition == 'false': ${{ needs.check-existing-release.outputs.should-skip-release == 'false' }}"
+
   # Candidate for breaking up
   create-and-upload-draft-release:
     needs: [check-existing-release, create-tag]
