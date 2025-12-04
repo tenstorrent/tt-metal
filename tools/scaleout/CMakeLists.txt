@@ -75,7 +75,6 @@ target_link_libraries(
 target_link_libraries(
     run_cluster_validation
     PRIVATE
-        TT::ScaleoutTools
         enchantum::enchantum
         protobuf::libprotobuf
         tt_metal
@@ -93,6 +92,8 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${CMAKE_BINARY_DIR}/tools/scaleout
 )
+
+add_dependencies(2d_big_mesh_cabling_gen scaleout_generated_protos)
 
 target_include_directories(2d_big_mesh_cabling_gen SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
@@ -113,10 +114,33 @@ set_target_properties(
             ${CMAKE_BINARY_DIR}/tools/scaleout
 )
 
+add_dependencies(run_cabling_generator scaleout_generated_protos)
+
 target_include_directories(run_cabling_generator SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 target_link_libraries(
     run_cabling_generator
+    PRIVATE
+        scaleout_tools
+        protobuf::libprotobuf
+        cxxopts::cxxopts
+)
+
+add_executable(generate_cluster_descriptor src/generate_cluster_descriptor.cpp)
+
+set_target_properties(
+    generate_cluster_descriptor
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${CMAKE_BINARY_DIR}/tools/scaleout
+)
+
+add_dependencies(generate_cluster_descriptor scaleout_generated_protos)
+
+target_include_directories(generate_cluster_descriptor SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
+target_link_libraries(
+    generate_cluster_descriptor
     PRIVATE
         scaleout_tools
         protobuf::libprotobuf

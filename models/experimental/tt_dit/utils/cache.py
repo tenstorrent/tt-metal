@@ -26,7 +26,7 @@ def get_cache_path(model_name, subfolder, parallel_config, mesh_shape, dtype="bf
     cache_dir = os.environ.get("TT_DIT_CACHE_DIR")
     assert cache_dir is not None, "TT_DIT_CACHE_DIR environment variable must be set if using caching."
 
-    model_path = os.path.join(cache_dir, model_name)
+    model_path = os.path.join(os.path.abspath(cache_dir), model_name)
     model_path = os.path.join(model_path, subfolder)
     parallel_name = f"{config_id(parallel_config)}mesh{mesh_shape[0]}x{mesh_shape[1]}_{dtype}"
     cache_path = os.path.join(model_path, parallel_name) + os.sep
@@ -54,7 +54,7 @@ def cache_dict_exists(cache_path):
     return os.path.exists(os.path.join(cache_path, CACHE_DICT_FILE))
 
 
-def initialize_from_cache(tt_model, torch_model, model_name, subfolder, parallel_config, mesh_shape, dtype="bf16"):
+def initialize_from_cache(tt_model, torch_state_dict, model_name, subfolder, parallel_config, mesh_shape, dtype="bf16"):
     if cache_dir_is_set():
         cache_path = get_and_create_cache_path(
             model_name=model_name,
@@ -70,7 +70,7 @@ def initialize_from_cache(tt_model, torch_model, model_name, subfolder, parallel
             logger.info(
                 f"Cache does not exist. Creating cache: {cache_path} and loading {subfolder} from PyTorch state dict"
             )
-            tt_model.load_torch_state_dict(torch_model.state_dict())
+            tt_model.load_torch_state_dict(torch_state_dict)
             save_cache_dict(tt_model.to_cached_state_dict(cache_path), cache_path)
         return True
     return False

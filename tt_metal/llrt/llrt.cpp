@@ -21,15 +21,16 @@
 
 #include "hal.hpp"
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "hal_types.hpp"
 #include "llrt.hpp"
 #include <umd/device/driver_atomics.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace {
 void print_aerisc_training_status(tt::ChipId device_id, const CoreCoord& virtual_core) {
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     if (!hal.get_dispatch_feature_enabled(tt::tt_metal::DispatchFeature::ETH_MAILBOX_API)) {
         return;
     }
@@ -281,7 +282,9 @@ void wait_until_cores_done(
     auto start = std::chrono::high_resolution_clock::now();
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     bool is_simulator = rtoptions.get_simulator_enabled();
-    if (is_simulator) timeout_ms = 0;
+    if (is_simulator) {
+        timeout_ms = 0;
+    }
     while (!not_done_phys_cores.empty()) {
         if (timeout_ms > 0) {
             auto now = std::chrono::high_resolution_clock::now();

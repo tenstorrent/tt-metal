@@ -39,7 +39,11 @@ void kernel_main() {
 
     start_page_size = page_size[0];
 
-    constexpr uint32_t cb_id = 0;
+    experimental::Noc noc_if{noc};
+    experimental::RemoteCircularBuffer remote_cb{remote_cb_id};
+
+    constexpr uint32_t local_cb_id = 0;
+    experimental::CircularBuffer local_cb{local_cb_id};
 
     for (uint32_t l = 0; l < num_layers; ++l) {
         uint32_t curr_coalesced_page_size = coalesced_page_size[l];
@@ -51,25 +55,18 @@ void kernel_main() {
         uint32_t curr_receiver_block_num_tiles = curr_block_num_tiles / num_receivers;
 
         uint32_t curr_block_size = curr_receiver_block_num_tiles * curr_page_size;
-        experimental::resize_remote_sender_cb_interface(remote_cb_id, curr_block_size, noc_index);
+        remote_cb.set_receiver_page_size(noc_if, curr_block_size);
 
         for (uint32_t block = 0; block < curr_num_blocks; ++block) {
-            cb_wait_front(cb_id, curr_block_num_tiles);
+            local_cb.wait_front(curr_block_num_tiles);
 
-            uint32_t local_cb_addr = get_read_ptr(cb_id);
-            experimental::remote_cb_reserve_back(remote_cb_id, 1);
-            experimental::remote_cb_push_back_and_write_pages(
-                remote_cb_id,
-                local_cb_addr,
-                1,
-                curr_num_tile_rows,
-                curr_coalesced_num_pages,
-                curr_coalesced_page_size,
-                noc);
+            remote_cb.reserve_back(1);
+            remote_cb.push_back(
+                noc_if, local_cb, 1, curr_num_tile_rows, curr_coalesced_num_pages, curr_coalesced_page_size);
 
-            cb_pop_front(cb_id, curr_block_num_tiles);
+            local_cb.pop_front(curr_block_num_tiles);
         }
         layer++;
     }
-    experimental::update_remote_cb_config_in_l1(remote_cb_id);
+    remote_cb.commit();
 }

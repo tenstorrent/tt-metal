@@ -12,10 +12,9 @@ from models.tt_transformers.tt.common import PagedAttentionConfig
 
 def create_tt_model(
     mesh_device,
-    instruct,
     max_batch_size,
-    optimizations,
     max_seq_len,
+    optimizations=None,
     paged_attention_config: PagedAttentionConfig = None,
     dtype=ttnn.bfloat8_b,
     state_dict=None,
@@ -40,7 +39,6 @@ def create_tt_model(
     # Create GPT-OSS ModelArgs
     gpt_oss_model_args = ModelArgs(
         mesh_device,
-        instruct=instruct,
         max_batch_size=max_batch_size,
         optimizations=optimizations,
         max_seq_len=max_seq_len,
@@ -49,7 +47,11 @@ def create_tt_model(
 
     # Avoid loading state_dict for every DP model
     if not state_dict:
-        state_dict = gpt_oss_model_args.load_state_dict()
+        state_dict = gpt_oss_model_args.load_state_dict(
+            weights_path=gpt_oss_model_args.model_path,
+            dummy_weights=gpt_oss_model_args.dummy_weights,
+            convert_to_meta_format=True,
+        )
 
     # Create GPT-OSS model using transformer-compatible constructor
     model = Model.create_transformer_compatible(

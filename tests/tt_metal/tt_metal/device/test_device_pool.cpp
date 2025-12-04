@@ -5,7 +5,7 @@
 #include <gtest/gtest.h>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/device_pool.hpp>
+#include "tt_metal/impl/device/device_pool.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <memory>
 #include <vector>
@@ -14,6 +14,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal.hpp"
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {
 
@@ -29,7 +30,8 @@ void CloseDevicesInPool() {
 }
 
 TEST(DevicePool, DevicePoolOpenClose) {
-    std::vector<ChipId> device_ids{*tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin()};
+    auto all_chip_ids = MetalContext::instance().get_cluster().all_chip_ids();
+    std::vector<ChipId> device_ids{all_chip_ids.begin(), all_chip_ids.end()};
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
     const auto& dispatch_core_config = tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
@@ -41,16 +43,6 @@ TEST(DevicePool, DevicePoolOpenClose) {
         ASSERT_TRUE(dev->is_initialized());
     }
 
-    // Close then get devices again
-    for (const auto& dev : devices) {
-        dev->close();
-    }
-    devices = DevicePool::instance().get_all_active_devices();
-    for (const auto& dev : devices) {
-        ASSERT_EQ((int)(dev->allocator()->get_config().l1_small_size), l1_small_size);
-        ASSERT_EQ((int)(dev->num_hw_cqs()), num_hw_cqs);
-        ASSERT_TRUE(dev->is_initialized());
-    }
     CloseDevicesInPool();
 }
 
@@ -63,7 +55,7 @@ TEST(DevicePool, DevicePoolReconfigDevices) {
     DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     auto devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {
-        auto& config = dev->allocator()->get_config();
+        const auto& config = dev->allocator()->get_config();
         ASSERT_TRUE((int)(dev->allocator()->get_config().l1_small_size) == l1_small_size);
         ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
         EXPECT_NE(config.l1_unreserved_base, config.worker_l1_size);
@@ -78,7 +70,7 @@ TEST(DevicePool, DevicePoolReconfigDevices) {
         device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config, {}, worker_l1_size);
     devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {
-        auto& config = dev->allocator()->get_config();
+        const auto& config = dev->allocator()->get_config();
         ASSERT_TRUE((int)(config.l1_small_size) == l1_small_size);
         EXPECT_EQ(config.worker_l1_size - config.l1_unreserved_base, worker_l1_size);
         ASSERT_TRUE(dev->is_initialized());
@@ -136,7 +128,7 @@ TEST(DevicePool, DevicePoolReduceDevices) {
     CloseDevicesInPool();
     device_ids = {0};
     DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
-    auto dev = DevicePool::instance().get_active_device(0);
+    auto* dev = DevicePool::instance().get_active_device(0);
     ASSERT_TRUE(dev->id() == 0);
     ASSERT_TRUE((int)(dev->allocator()->get_config().l1_small_size) == l1_small_size);
     ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);

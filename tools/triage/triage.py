@@ -19,7 +19,7 @@ Options:
                                      Controls which columns/fields are displayed:
                                      Level 0 (default): Essential fields (Kernel ID:Name, Go Message, Subdevice, Preload, Waypoint, PC, Callstack)
                                      Level 1 (-v): Include detailed dispatcher fields (Firmware/Kernel Path, Host Assigned ID, Kernel Offset, Previous Kernel)
-                                     Level 2 (-vv): Include internal debug fields (RD PTR, Base, Offset)
+                                     Level 2 (-vv): Include internal debug fields (RD PTR, Base, Offset, Kernel XIP Path)
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -34,6 +34,7 @@ Description:
 # Check if tt-exalens is installed
 import inspect
 import os
+import traceback
 import utils
 from collections.abc import Iterable
 from pathlib import Path
@@ -208,7 +209,7 @@ class TriageScript:
         except Exception as e:
             if log_error:
                 self.failed = True
-                self.failure_message = str(e)
+                self.failure_message = traceback.format_exc()
                 return None
             else:
                 raise
@@ -321,7 +322,9 @@ def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScri
     return script_queue
 
 
-def parse_arguments(scripts: dict[str, TriageScript], script_path: str | None = None) -> ScriptArguments:
+def parse_arguments(
+    scripts: dict[str, TriageScript], script_path: str | None = None, argv: list[str] | None = None
+) -> ScriptArguments:
     from docopt import (
         parse_defaults,
         parse_pattern,
@@ -359,11 +362,13 @@ def parse_arguments(scripts: dict[str, TriageScript], script_path: str | None = 
             utils.ERROR(f"Error parsing arguments for script {script_name}: {e}")
             continue
 
-    argv = parse_argv(TokenStream(sys.argv[1:], DocoptExit), list(combined_options), options_first=False)
+    if argv is None:
+        argv = sys.argv[1:]
+    parsed_argv = parse_argv(TokenStream(argv, DocoptExit), list(combined_options), options_first=False)
     pattern_options = set(combined_pattern.flat(Option))
     for ao in combined_pattern.flat(AnyOptions):
         ao.children = list(set(combined_options) - pattern_options)
-    matched, left, collected = combined_pattern.fix().match(argv)
+    matched, left, collected = combined_pattern.fix().match(parsed_argv)
     if matched and left == []:
         return ScriptArguments(dict((a.name, a.value) for a in (combined_pattern.flat() + collected)))
 
@@ -382,6 +387,8 @@ def parse_arguments(scripts: dict[str, TriageScript], script_path: str | None = 
                 script_options = parse_defaults(script.module.__doc__)
                 if len(script_options) > 0:
                     help_message += f"\n{script.module.__doc__}\n"
+        print(help_message)
+        sys.exit(0)
     else:
         help_message = printable_usage(doc)
         for script in scripts.values():
@@ -404,6 +411,24 @@ def log_check(success: bool, message: str) -> None:
         FAILURE_CHECKS.append(message)
 
 
+def log_check_device(device: Device, success: bool, message: str) -> None:
+    formatted_message = f"Device {device._id}: {message}"
+    log_check(success, formatted_message)
+
+
+def log_check_location(location: OnChipCoordinate, success: bool, message: str) -> None:
+    device = location.device
+    block_type = device.get_block_type(location)
+    location_str = location.to_user_str()
+    formatted_message = f"{block_type} [{location_str}]: {message}"
+    log_check_device(device, success, formatted_message)
+
+
+def log_check_risc(risc_name: str, location: OnChipCoordinate, success: bool, message: str) -> None:
+    formatted_message = f"{risc_name}: {message}"
+    log_check_location(location, success, formatted_message)
+
+
 def serialize_result(script: TriageScript | None, result):
     from dataclasses import fields, is_dataclass
 
@@ -415,10 +440,12 @@ def serialize_result(script: TriageScript | None, result):
     failures = FAILURE_CHECKS
     FAILURE_CHECKS = []
     if result is None:
-        if len(failures) > 0:
+        if len(failures) > 0 or script.failed:
             utils.ERROR("  fail")
             for failure in failures:
                 utils.ERROR(f"    {failure}")
+            if script.failed:
+                utils.ERROR(f"    {script.failure_message}")
         else:
             utils.INFO("  pass")
         return
@@ -581,7 +608,11 @@ def _init_ttexalens(args: ScriptArguments) -> Context:
 
 
 def run_script(
-    script_path: str | None = None, args: ScriptArguments | None = None, context: Context | None = None
+    script_path: str | None = None,
+    args: ScriptArguments | None = None,
+    context: Context | None = None,
+    argv: list[str] | None = None,
+    return_result: bool = False,
 ) -> Any:
     # Resolve script path
     if script_path is None:
@@ -608,7 +639,7 @@ def run_script(
 
     # Parse arguments
     if args is None:
-        args = parse_arguments(scripts, script_path)
+        args = parse_arguments(scripts, script_path, argv)
 
         # Setting verbosity level
         try:
@@ -633,6 +664,8 @@ def run_script(
             if script.config.data_provider and result is None:
                 raise TTTriageError(f"{script.name}: Data provider script did not return any data.")
     script = scripts[script_path] if script_path in scripts else None
+    if return_result:
+        return result
     serialize_result(script, result)
 
 
