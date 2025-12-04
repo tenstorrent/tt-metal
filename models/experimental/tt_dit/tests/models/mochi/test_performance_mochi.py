@@ -290,10 +290,14 @@ def test_mochi_pipeline_performance(
                     value=benchmark_profiler.get_duration(step_name, iteration),
                     target=expected_metrics[step_name],
                 )
-        run_type = f"{'BH' if is_blackhole() else 'WH'}_{'T3K' if tuple(mesh_device.shape) == (2, 4) else 'TG'}"
+        device_name_map = {
+            (1, 4): "BH_QB",
+            (2, 4): "WH_T3K",
+            (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
+        }
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
-            run_type=run_type,
+            run_type=device_name_map[tuple(mesh_device.shape)],
             ml_model_name="Mochi",
             batch_size=1,
             config_params={

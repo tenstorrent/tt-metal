@@ -232,9 +232,6 @@ def test_flux1_pipeline_performance(
 
     print("=" * 80)
 
-    # Clean up
-    pipeline.timing_collector = None
-
     # Validate performance
     measurements = {
         "clip_encoding_time": statistics.mean(clip_times),
@@ -291,7 +288,7 @@ def test_flux1_pipeline_performance(
             (1, 2): "BH_P300",
             (2, 2): "BH_QB",
             (2, 4): "WH_T3K",
-            (4, 8): "WH_GLX",
+            (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
         }
         benchmark_data = BenchmarkData()
         for iteration in range(num_perf_runs):

@@ -858,8 +858,6 @@ class Flux1Pipeline:
         timer: BenchmarkProfiler = None,
         timer_iteration: int = 0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        timer = self.timing_collector
-
         tokenizer_max_length = self._tokenizer_1.model_max_length
 
         with timer("clip_encoding", timer_iteration) if timer else nullcontext():
