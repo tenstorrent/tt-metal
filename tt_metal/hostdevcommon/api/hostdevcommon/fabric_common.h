@@ -121,9 +121,9 @@ struct __attribute__((packed)) compressed_route_2d_t {
 
 static_assert(sizeof(compressed_route_2d_t) == 2, "2D route must be 2 bytes");
 
-static const uint16_t MAX_CHIPS_LOWLAT_1D = 16;
+static const uint16_t MAX_CHIPS_LOWLAT_1D = 32;
 static const uint16_t MAX_CHIPS_LOWLAT_2D = 256;
-static const uint16_t SINGLE_ROUTE_SIZE_1D = 4;
+static const uint16_t SINGLE_ROUTE_SIZE_1D = 8;
 static const uint16_t SINGLE_ROUTE_SIZE_2D = 32;
 
 template <uint8_t dim, bool compressed>
@@ -134,7 +134,7 @@ struct __attribute__((packed)) intra_mesh_routing_path_t {
     static const uint32_t FIELD_WIDTH = 2;
     static const uint32_t WRITE_ONLY = 0b01;
     static const uint32_t FORWARD_ONLY = 0b10;
-    static const uint32_t FWD_ONLY_FIELD = 0xAAAAAAAA;
+    static const uint64_t FWD_ONLY_FIELD = 0xAAAAAAAAAAAAAAAAULL;
 
     static const uint8_t NOOP = 0b0000;
     static const uint8_t FORWARD_EAST = 0b0001;
@@ -176,8 +176,8 @@ struct __attribute__((packed)) intra_mesh_routing_path_t {
         uint16_t dst_chip_id, volatile uint8_t* out_route_buffer, bool prepend_one_hop = false) const;
 #endif
 };
-// 16 chips * 4 bytes = 64
-static_assert(sizeof(intra_mesh_routing_path_t<1, false>) == 64, "1D uncompressed routing path must be 64 bytes");
+// 32 chips * 8 bytes = 256
+static_assert(sizeof(intra_mesh_routing_path_t<1, false>) == 256, "1D uncompressed routing path must be 256 bytes");
 static_assert(sizeof(intra_mesh_routing_path_t<1, true>) == 0, "1D compressed routing path must be 0 bytes");
 // 256 chips * 2 bytes = 512
 static_assert(sizeof(intra_mesh_routing_path_t<2, true>) == 512, "2D compressed routing path must be 512 bytes");

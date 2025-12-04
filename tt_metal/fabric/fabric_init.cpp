@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "fabric.hpp"
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include <umd/device/types/arch.hpp>
+#include <set>
 #include <variant>
 
 #include "erisc_datamover_builder.hpp"
@@ -16,7 +17,7 @@
 #include "tt_metal/fabric/builder/fabric_core_placement.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "device.hpp"
-#include "control_plane.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "metal_soc_descriptor.h"
 #include "hostdevcommon/fabric_common.h"
 #include "impl/context/metal_context.hpp"
@@ -30,121 +31,6 @@ extern "C" bool isFabricUnitTest() __attribute__((weak));
 bool isFabricUnitTest() { return false; }
 
 namespace tt::tt_fabric {
-
-std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDatamoverAxis> get_fabric_edm_type(
-    const tt::tt_fabric::ControlPlane& control_plane,
-    const tt::tt_fabric::RoutingDirection direction,
-    tt::tt_fabric::MeshId mesh_id0,
-    tt::tt_fabric::MeshId mesh_id1,
-    ChipId chip0,
-    ChipId chip1,
-    bool wrap_around_mesh) {
-    auto fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default;
-    auto fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short;
-
-    const auto& fabric_context = control_plane.get_fabric_context();
-
-    const auto eth_chan_direction = control_plane.routing_direction_to_eth_direction(direction);
-    if (mesh_id0 != mesh_id1 || !fabric_context.need_deadlock_avoidance_support(eth_chan_direction)) {
-        return {fabric_edm_type, fabric_edm_axis};
-    }
-
-    // Need global mesh shape to determine dateline placement for multi-host setups
-    auto physical_mesh_shape = control_plane.get_physical_mesh_shape(mesh_id0, tt::tt_fabric::MeshScope::GLOBAL);
-    TT_FATAL(physical_mesh_shape.dims() == 2, "Dateline routing only supported for 2D mesh");
-
-    auto mesh_num_rows = physical_mesh_shape[0];
-    auto mesh_num_columns = physical_mesh_shape[1];
-
-    auto smaller_chip_id = std::min(chip0, chip1);
-    auto larger_chip_id = std::max(chip0, chip1);
-
-    // Refactor this once mesh_id0 has row/col control
-    // wrap_around_mesh is used to fold the edm connections on the corner chips of a 2D mesh to form an outer ring of
-    // devices on the mesh.
-    if (wrap_around_mesh) {
-        // Wrap around dateline
-        if (smaller_chip_id == 0 && larger_chip_id == mesh_num_columns) {
-            fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Dateline;
-        } else if ((chip0 == 0 || chip0 == mesh_num_columns) && chip1 == chip0 + 1) {
-            fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream;
-        } else if ((chip1 == 0 || chip1 == mesh_num_columns) && chip0 == chip1 + 1) {
-            fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
-        }
-        // check if edm is on the longer axis
-        if ((mesh_num_rows * mesh_num_columns) >=
-            tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD) {
-            fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Long;
-        }
-    } else {
-        bool is_dateline_edm_along_column =
-            smaller_chip_id % mesh_num_columns == 0 && larger_chip_id == (smaller_chip_id + mesh_num_columns - 1);
-        bool is_dateline_edm_along_row = smaller_chip_id < mesh_num_columns &&
-                                         larger_chip_id >= (mesh_num_columns * (mesh_num_rows - 1)) &&
-                                         smaller_chip_id == larger_chip_id % mesh_num_columns;
-        bool is_dateline_upstream_edm_along_column =
-            (chip0 % mesh_num_columns == 0 && chip1 == chip0 + 1) ||
-            (chip0 % mesh_num_columns == mesh_num_columns - 1 && chip1 == chip0 - 1);
-        bool is_dateline_upstream_edm_along_row =
-            (chip0 < mesh_num_columns && chip1 == chip0 + mesh_num_columns) ||
-            (chip0 >= (mesh_num_columns * (mesh_num_rows - 1)) && chip1 == chip0 - mesh_num_columns);
-        bool is_dateline_upstream_adjacent_edm_along_column =
-            (chip1 % mesh_num_columns == 0 && chip0 == chip1 + 1) ||
-            (chip1 % mesh_num_columns == mesh_num_columns - 1 && chip0 == chip1 - 1);
-        bool is_dateline_upstream_adjacent_edm_along_row =
-            (chip1 < mesh_num_columns && chip0 == chip1 + mesh_num_columns) ||
-            (chip1 >= (mesh_num_columns * (mesh_num_rows - 1)) && chip0 == chip1 - mesh_num_columns);
-        bool is_edm_along_row = ((larger_chip_id - smaller_chip_id) == mesh_num_columns) ||
-                                (smaller_chip_id == larger_chip_id % mesh_num_columns);
-
-        // Column dateline
-        if (is_dateline_edm_along_column) {
-            fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Dateline;
-        }
-        // Row dateline
-        else if (is_dateline_edm_along_row) {
-            fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Dateline;
-        }
-        // Column dateline upstream
-        else if (is_dateline_upstream_edm_along_column) {
-            fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream;
-        }
-        // Row dateline upstream
-        else if (is_dateline_upstream_edm_along_row) {
-            fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream;
-        }
-        // Column dateline upstream adjacent
-        else if (is_dateline_upstream_adjacent_edm_along_column) {
-            fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
-        }
-        // Row dateline upstream adjacent
-        else if (is_dateline_upstream_adjacent_edm_along_row) {
-            fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
-        }
-
-        // check if edm is on the longer axis
-        if ((mesh_num_columns >= tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD &&
-             !is_edm_along_row) ||
-            (mesh_num_rows >= tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD &&
-             is_edm_along_row)) {
-            fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Long;
-        }
-    }
-
-    if (fabric_context.is_2D_routing_enabled()) {
-        // for 2D fabric, we need to re-work the buffer space optimization, cannot use 1D optimizations because
-        // of more number of sender channels in 2D
-        // only handling default and dateline edm types for now
-        if (fabric_edm_type != tt::tt_fabric::FabricEriscDatamoverType::Default &&
-            fabric_edm_type != tt::tt_fabric::FabricEriscDatamoverType::Dateline) {
-            // reset to default if set to a non-dateline config
-            fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default;
-            fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short;
-        }
-    }
-
-    return {fabric_edm_type, fabric_edm_axis};
-}
 
 void build_tt_fabric_program(
     tt::tt_metal::IDevice* device,
@@ -240,43 +126,28 @@ void build_tt_fabric_program(
 
     const bool wrap_around_mesh = fabric_context.is_wrap_around_mesh(fabric_node_id.mesh_id);
 
-    // check whether using tensix extension for connection between worker and fabric routers.
-    bool fabric_tensix_extension_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
-                                           tt::tt_fabric::FabricTensixConfig::DISABLED;
-
     for (const auto& [direction, remote_fabric_node_id] : chip_neighbors) {
-        const auto& [fabric_edm_type, fabric_edm_axis] = get_fabric_edm_type(
-            control_plane,
-            direction,
-            fabric_node_id.mesh_id,
-            remote_fabric_node_id.mesh_id,
-            fabric_node_id.chip_id,
-            remote_fabric_node_id.chip_id,
-            wrap_around_mesh);
-
         // Create fabric tensix builder for this ethernet channel
         // Skip the link used by dispatch using relay mux API
         uint32_t dispatch_link_idx =
             tt::tt_metal::RelayMux::get_dispatch_link_index(fabric_node_id, remote_fabric_node_id, device);
 
-        auto get_fabric_router_config =
-            [&](bool fabric_tensix_extension_enabled, bool is_dispatch_link, auto eth_direction) {
-                auto fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED;
-                // if not the link used by dispatch, get the fabric router config with tensix extension.
-                if (fabric_tensix_extension_enabled && !is_dispatch_link) {
-                    fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::MUX;
-                }
-                return fabric_context.get_fabric_router_config(
-                    fabric_edm_type, fabric_edm_axis, fabric_tensix_config, eth_direction);
-            };
+        auto get_fabric_router_config = [&](bool is_dispatch_link, auto eth_direction) {
+            auto fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED;
+            // if not the link used by dispatch, get the fabric router config with tensix extension.
+            if (!is_dispatch_link) {
+                fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+            }
+            return fabric_context.get_fabric_router_config(
+                fabric_tensix_config, eth_direction);
+        };
 
         for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
             auto eth_direction = control_plane.routing_direction_to_eth_direction(direction);
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
 
             bool dispatch_link = is_dispatch_link(eth_chan, dispatch_link_idx);
-            const auto& curr_edm_config =
-                get_fabric_router_config(fabric_tensix_extension_enabled, dispatch_link, eth_direction);
+            const auto& curr_edm_config = get_fabric_router_config(dispatch_link, eth_direction);
 
             const auto topology = fabric_context.get_fabric_topology();
             auto router_builder = tt::tt_fabric::FabricRouterBuilder::build(
@@ -286,9 +157,7 @@ void build_tt_fabric_program(
                 fabric_node_id,
                 remote_fabric_node_id,
                 curr_edm_config,
-                fabric_edm_type,
                 eth_direction,
-                fabric_tensix_extension_enabled,
                 dispatch_link,
                 eth_chan,
                 topology);
@@ -313,9 +182,6 @@ void build_tt_fabric_program(
 
         router_builder1->connect_to_downstream_router_over_noc(*router_builder2, 0);
         router_builder2->connect_to_downstream_router_over_noc(*router_builder1, 0);
-
-        router_builder1->connect_to_downstream_router_over_noc(*router_builder2, 1);
-        router_builder2->connect_to_downstream_router_over_noc(*router_builder1, 1);
     };
 
     auto connect_downstream_builders = [&](RoutingDirection dir1, RoutingDirection dir2) {
@@ -401,9 +267,35 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
     // Compile all fabric tensix builders through router builders
     if (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
         tt::tt_fabric::FabricTensixConfig::DISABLED) {
+        // First pass: compile all existing tensix builders (from active eth channels)
         for (auto& [eth_chan, router_builder] : router_builders) {
             if (router_builder->has_tensix_builder()) {
-                router_builder->get_tensix_builder().create_and_compile(device, *fabric_program_ptr);
+                router_builder->get_tensix_builder().create_and_compile(*fabric_program_ptr);
+            }
+        }
+
+        // Second pass (UDM mode only): build and compile tensix builders for missing directions
+        // Edge devices (e.g., top-left corner of a 4x2 mesh) only have east/south builders,
+        // leaving north/west empty. We need to build and compile them for inter-mux communication.
+        if (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() ==
+            tt::tt_fabric::FabricTensixConfig::UDM) {
+            const auto& tensix_config = fabric_context.get_tensix_config();
+            if (tensix_config.has_missing_directions(device->id())) {
+                const auto& missing_directions = tensix_config.get_missing_directions(device->id());
+                auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
+
+                for (const auto& [routing_plane_id, missing_dir] : missing_directions) {
+                    log_warning(
+                        tt::LogMetal,
+                        "Building missing direction tensix builder for fabric_node {}, routing_plane {}, direction {}",
+                        fabric_node_id,
+                        routing_plane_id,
+                        static_cast<uint32_t>(missing_dir));
+                    // Build and compile tensix builder for this missing (routing_plane_id, direction) pair
+                    auto tensix_builder = tt::tt_fabric::FabricTensixDatamoverBuilder::build_for_missing_direction(
+                        device, *fabric_program_ptr, fabric_node_id, routing_plane_id, missing_dir);
+                    tensix_builder.create_and_compile(*fabric_program_ptr);
+                }
             }
         }
     }
@@ -486,12 +378,14 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(tt::tt_
 }
 
 void configure_fabric_cores(tt::tt_metal::IDevice* device) {
-    std::vector<uint32_t> router_zero_buf(1, 0);
     auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
     const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
     const auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
-    const auto addresses_to_clear = control_plane.get_fabric_context().get_fabric_router_addresses_to_clear();
+    const auto& fabric_context = control_plane.get_fabric_context();
+    const auto addresses_to_clear = fabric_context.get_fabric_router_addresses_to_clear();
+    const auto& router_config = fabric_context.get_fabric_router_config();
+    std::vector<uint32_t> router_zero_buf(router_config.router_buffer_clear_size_words, 0);
     for (const auto& [router_chan, _] : router_chans_and_direction) {
         auto router_logical_core = soc_desc.get_eth_core_for_channel(router_chan, CoordSystem::LOGICAL);
         for (const auto& address : addresses_to_clear) {

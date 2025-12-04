@@ -5,7 +5,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "point_to_point_device_op.hpp"
@@ -19,7 +19,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     const MeshCoordinate& receive_coord,
     PointToPointOp::tensor_return_value_t& output_tensors,
     const tt::tt_metal::GlobalSemaphore& semaphore) {
-    auto mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor.device());
+    auto* mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor.device());
     const auto& topology = operation_attributes.topology;
     const auto& input_tensor = tensor_args.input_tensor;
 

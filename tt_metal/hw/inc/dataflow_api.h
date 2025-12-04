@@ -2055,13 +2055,13 @@ inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
  * | skip_ptr_update (template argument) | Whether to skip updating counters              | bool      | true or false | False    |
  */
 // clang-format on
-template <bool skip_ptr_update = false>
+template <bool skip_ptr_update = false, bool skip_cmdbuf_chk = false>
 FORCE_INLINE void noc_async_read_one_packet_with_state_with_trid(
     uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid = 0, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT(NocEventType::READ_WITH_STATE_AND_TRID);
 
     WAYPOINT("NRDW");
-    ncrisc_noc_fast_read_with_transaction_id<noc_mode, skip_ptr_update>(
+    ncrisc_noc_fast_read_with_transaction_id<noc_mode, skip_ptr_update, skip_cmdbuf_chk>(
         noc, read_cmd_buf, src_base_addr, src_addr, dest_addr, trid);
     WAYPOINT("NRDD");
 }
@@ -2352,6 +2352,26 @@ struct MulticastEndpoint;
 template <typename T>
 struct noc_traits_t {
     static_assert(sizeof(T) == 0, "NoC transactions are not supported for this type");
+};
+
+/**
+ * @brief RAII style wrapper for a scoped lock
+ *
+ * @tparam ReleaseFunc The function to call when this instance goes out of scope.
+ */
+template <typename ReleaseFunc>
+class Lock {
+public:
+    inline __attribute__((always_inline)) Lock(ReleaseFunc release_func) : release_func_(release_func) {}
+    inline __attribute__((always_inline)) ~Lock() { release_func_(); }
+
+    Lock(const Lock&) = delete;
+    Lock(Lock&&) = delete;
+    Lock& operator=(const Lock&) = delete;
+    Lock& operator=(Lock&&) = delete;
+
+private:
+    ReleaseFunc release_func_;
 };
 
 /**
@@ -2760,7 +2780,16 @@ public:
         return rd_ptr_bytes;
     }
 
+    [[nodiscard]] auto scoped_lock() {
+        // TODO: Register with the debugger to track the lock
+        return Lock([this]() { release_scoped_lock(); });
+    }
+
 private:
+    void release_scoped_lock() {
+        // TODO: Unregister with the debugger
+    }
+
     uint32_t cb_id_;
 };
 
@@ -3369,6 +3398,10 @@ public:
         return byte_diff / sizeof(T);
     }
 
+    [[nodiscard]] auto scoped_lock() {
+        return Lock([this]() { release_scoped_lock(); });
+    }
+
     bool operator==(const CoreLocalMem& other) const { return address_ == other.address_; }
     bool operator!=(const CoreLocalMem& other) const { return address_ != other.address_; }
     bool operator<(const CoreLocalMem& other) const { return address_ < other.address_; }
@@ -3378,6 +3411,10 @@ public:
     explicit operator bool() const { return address_ != 0; }
 
 private:
+    void release_scoped_lock() {
+        // TODO: Unregister with the debugger
+    }
+
     AddressType address_;
 };
 
