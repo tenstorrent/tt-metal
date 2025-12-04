@@ -299,7 +299,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
             .defines = defines});
     tt::tt_metal::SetRuntimeArgs(sender_prog, reader_k, p.sender_core, {(uint32_t)src_buf->address()});
 
-    // Writer kernel (CB->Fabric->dst + final sem INC) - now uses unified kernel with compile-time args
+    // Writer kernel (CB->Fabric->dst + final sem INC) - select kernel based on route variant
     std::vector<uint32_t> writer_cta;
     tt::tt_metal::TensorAccessorArgs(*dst_buf).append_to(writer_cta);
     writer_cta.push_back(static_cast<uint32_t>(operation_type));  // OPERATION_TYPE
@@ -309,9 +309,13 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     writer_cta.push_back(dst_aligned_page_size);  // Aligned page size (dest buffer addressing)
     writer_cta.push_back(src_aligned_page_size);  // Source aligned page size (CB stride for scatter)
 
+    // Select kernel based on route variant
+    const std::string writer_kernel_name =
+        is_route_variant ? "multicast_tx_writer_addrgen_route.cpp" : "multicast_tx_writer_addrgen.cpp";
+
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,
-        std::string(KDIR) + "multicast_tx_writer_addrgen.cpp",  // Unified multicast writer kernel
+        std::string(KDIR) + writer_kernel_name,
         p.sender_core,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,

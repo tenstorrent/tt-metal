@@ -171,7 +171,7 @@ void run_unicast_write_test(HelpersFixture* fixture, const AddrgenTestParams& p)
          p.api_variant == AddrgenApiVariant::ScatterWriteWithStateRoute ||
          p.api_variant == AddrgenApiVariant::ScatterWriteSetStateRoute);
 
-    // For route variants: set up second destination chip (hardcoded to chip 2)
+    // For route variants: set up second destination chip (hardcoded to chip 5)
     tt::tt_fabric::FabricNodeId dst2{tt::tt_fabric::MeshId{p.mesh_id}, 5};
     ChipId dst2_phys = 0;
     tt::tt_metal::IDevice* dst2_dev = nullptr;
@@ -374,7 +374,7 @@ Notes:
             .defines = defines});
     tt::tt_metal::SetRuntimeArgs(sender_prog, reader_k, p.sender_core, {(uint32_t)src_buf->address()});
 
-    // Writer kernel (CB->Fabric->dst + final sem INC) - now uses unified kernel with compile-time args
+    // Writer kernel (CB->Fabric->dst + final sem INC) - select kernel based on route variant
     std::vector<uint32_t> writer_cta;
     tt::tt_metal::TensorAccessorArgs(*dst_buf).append_to(writer_cta);
     writer_cta.push_back(static_cast<uint32_t>(operation_type));  // OPERATION_TYPE
@@ -384,20 +384,24 @@ Notes:
     writer_cta.push_back(dst_aligned_page_size);  // Aligned page size (dest buffer addressing)
     writer_cta.push_back(src_aligned_page_size);  // Source aligned page size (CB stride for scatter)
 
+    // Check if this is a route variant to select the appropriate kernel
+    const bool is_route_variant =
+        (api_variant == ApiVariant::RouteBasic || api_variant == ApiVariant::RouteWithState ||
+         api_variant == ApiVariant::RouteSetState);
+
+    // Select kernel based on route variant
+    const std::string writer_kernel_name =
+        is_route_variant ? "unicast_tx_writer_addrgen_route.cpp" : "unicast_tx_writer_addrgen.cpp";
+
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,
-        KDIR + "unicast_tx_writer_addrgen.cpp",  // Unified unicast writer kernel
+        KDIR + writer_kernel_name,
         p.sender_core,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::RISCV_1_default,
             .compile_args = writer_cta,
             .defines = defines});
-
-    // Check if this is a route variant
-    const bool is_route_variant =
-        (api_variant == ApiVariant::RouteBasic || api_variant == ApiVariant::RouteWithState ||
-         api_variant == ApiVariant::RouteSetState);
 
     std::vector<uint32_t> writer_rt = {
         (uint32_t)dst_buf->address(),  // 0: dst_base (receiver L1 offset)
