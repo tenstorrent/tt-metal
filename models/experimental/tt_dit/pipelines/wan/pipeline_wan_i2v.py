@@ -44,7 +44,7 @@ EXAMPLE_DOC_STRING = """
         >>> from diffusers.schedulers.scheduling_unipc_multistep import UniPCMultistepScheduler
 
         >>> # Available models: Wan-AI/Wan2.1-T2V-14B-Diffusers, Wan-AI/Wan2.1-T2V-1.3B-Diffusers
-        >>> model_id = "Wan-AI/Wan2.1-T2V-14B-Diffusers"
+        >>> model_id = "Wan-AI/Wan2.1-I2V-14B-Diffusers"
         >>> vae = AutoencoderKLWan.from_pretrained(model_id, subfolder="vae", torch_dtype=torch.float32)
         >>> pipe = WanPipeline.from_pretrained(model_id, vae=vae, torch_dtype=torch.bfloat16)
         >>> flow_shift = 5.0  # 5.0 for 720P, 3.0 for 480P
@@ -54,9 +54,12 @@ EXAMPLE_DOC_STRING = """
         >>> prompt = "A cat and a dog baking a cake together in a kitchen. The cat is carefully measuring flour, while the dog is stirring the batter with a wooden spoon. The kitchen is cozy, with sunlight streaming through the window."
         >>> negative_prompt = "Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards"
 
+        >>> image = PIL.Image.open("image.png")
+
         >>> output = pipe(
         ...     prompt=prompt,
         ...     negative_prompt=negative_prompt,
+        ...     image=image,
         ...     height=720,
         ...     width=1280,
         ...     num_frames=81,
@@ -86,7 +89,7 @@ def prompt_clean(text):
 
 class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
     r"""
-    Pipeline for text-to-video generation using Wan.
+    Pipeline for image-to-video generation using Wan.
 
     This model inherits from [`DiffusionPipeline`]. Check the superclass documentation for the generic methods
     implemented for all pipelines (downloading, saving, running on a particular device, etc.).
@@ -662,6 +665,8 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
             negative_prompt (`str` or `List[str]`, *optional*):
                 The prompt or prompts to avoid during image generation. If not defined, pass `negative_prompt_embeds`
                 instead. Ignored when not using guidance (`guidance_scale` < `1`).
+            image (`PIL.Image.Image`):
+                The image to guide the video generation.
             height (`int`, defaults to `480`):
                 The height in pixels of the generated image.
             width (`int`, defaults to `832`):
