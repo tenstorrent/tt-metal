@@ -40,7 +40,7 @@ jobs:
             organization(login:$org){
               projectV2(number:$number){
                 id
-                fields(first:200){
+                fields(first:100){
                   nodes {
                     ... on ProjectV2FieldCommon {
                       id
