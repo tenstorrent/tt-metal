@@ -32,7 +32,7 @@
 ### [Qwen 2.5-VL](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/qwen25_vl)
 - Added support for windowed SDPA in the vision attention module.
 
-### [Whisper](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/whisper)
+### [Whisper](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/audio/whisper)
 - Added support for batch data parallel on any number of devices.
 
 ## September 8, 2025
@@ -107,7 +107,7 @@
 - Moved and renamed `models/demos/llama3` to [models/tt_transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers) which is a commonized library for running LLMs similar to the Llama3 family.
 - Added support for hybrid data / tensor parallelism to the models that are part of [TT-Transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers).
 
-### [Whisper](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/whisper)
+### [Whisper](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/audio/whisper)
 - Added support for the Whisper (distil-large-v3) model on N150.
 
 ## March 10, 2025
