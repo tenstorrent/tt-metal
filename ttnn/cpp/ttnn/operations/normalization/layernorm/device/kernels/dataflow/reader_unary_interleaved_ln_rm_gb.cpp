@@ -10,11 +10,12 @@
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t NCHt = get_arg_val<uint32_t>(1);
-    uint32_t tile_offset = get_arg_val<uint32_t>(2);
+    uint32_t Wt = get_arg_val<uint32_t>(2);
+    uint32_t tile_offset = get_arg_val<uint32_t>(3);
 
-    uint32_t gamma_addr = get_arg_val<uint32_t>(5);
-    uint32_t beta_addr = get_arg_val<uint32_t>(6);
-    uint32_t b_addr = get_arg_val<uint32_t>(7);
+    uint32_t gamma_addr = get_arg_val<uint32_t>(6);
+    uint32_t beta_addr = get_arg_val<uint32_t>(7);
+    uint32_t b_addr = get_arg_val<uint32_t>(8);
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0, cb_id_in1 = tt::CBIndex::c_1;
     constexpr uint32_t cb_id_gamma = tt::CBIndex::c_5;
@@ -25,9 +26,8 @@ void kernel_main() {
     const DataFormat src0_data_format = get_dataformat(cb_id_in0);
 
     constexpr uint32_t blk = get_compile_time_arg_val(0);  // needed for correctness of softmax/LN kernels
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    constexpr bool use_welford = get_compile_time_arg_val(2) == 1;
-    constexpr auto src0_args = TensorAccessorArgs<3>();
+    constexpr bool use_welford = get_compile_time_arg_val(1) == 1;
+    constexpr auto src0_args = TensorAccessorArgs<2>();
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
@@ -51,11 +51,11 @@ void kernel_main() {
     // Generate constant tiles for layernorm compute
     if constexpr (!use_welford) {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
-        uint32_t scaler = get_arg_val<uint32_t>(3);
+        uint32_t scaler = get_arg_val<uint32_t>(4);
         generate_reduce_scaler(cb_in_2, scaler);
     }
     constexpr uint32_t eps_cb_id = 3;
-    const uint32_t eps = get_arg_val<uint32_t>(4);
+    const uint32_t eps = get_arg_val<uint32_t>(5);
     generate_bcast_col_scalar(eps_cb_id, eps);
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker

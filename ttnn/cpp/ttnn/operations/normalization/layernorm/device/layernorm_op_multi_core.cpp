@@ -308,7 +308,7 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
 
     const auto fuse_pre_add = b.has_value();
 
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_size, Wt};
+    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_size};
     if (!large_tensor_needed) {
         reader_compile_time_args.push_back((std::uint32_t)use_welford);
     }
@@ -549,6 +549,7 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
             core,
             {a_addr,
              num_tile_rows_per_core,
+             Wt,
              tile_offset,
              packed_one_value,
              e.u,  // 0-5
