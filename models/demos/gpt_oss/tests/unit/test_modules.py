@@ -266,6 +266,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
         dtype=setup["dtype"],
         mesh_config=setup["mesh_config"],
         transformation_mats=transformation_mats,
+        tensor_cache_path=setup["tensor_cache_path"] / "module_tests",
     )
 
     # Create input
