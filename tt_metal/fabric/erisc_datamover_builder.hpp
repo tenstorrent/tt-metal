@@ -446,7 +446,6 @@ public:
     bool is_first_level_ack_enabled() const { return this->enable_first_level_ack; }
 
     //    protected:
-    friend class EdmLineFabricOpInterface;
     CoreCoord my_eth_core_logical;
     chan_id_t my_eth_channel;
 
