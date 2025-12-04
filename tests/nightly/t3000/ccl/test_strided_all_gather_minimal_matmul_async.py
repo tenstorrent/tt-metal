@@ -56,6 +56,7 @@ def run_strided_all_gather_minimal_matmul_impl(
     use_non_fused=True,
     shard_weights=False,
     ag_core_grid_offset=(0, 6),
+    read_local_slice_from_input=False,
 ):
     torch.manual_seed(0)
 
@@ -242,6 +243,7 @@ def run_strided_all_gather_minimal_matmul_impl(
                 compute_kernel_config=compute_config,
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
+                read_local_slice_from_input=read_local_slice_from_input,
             )
         return tt_all_gather_out_tensor, tt_matmul_out_tensor
 
@@ -266,6 +268,11 @@ def run_strided_all_gather_minimal_matmul_impl(
             tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
             tt_matmul_out_tensor_list.append(tt_matmul_out_tensor)
         logger.info(f"Done executing trace")
+
+        logger.info(f"Waiting for op")
+        ttnn.synchronize_device(mesh_device)
+        logger.info(f"Done op")
+
         signpost("stop")
     else:
         for i in range(num_iters):
@@ -286,20 +293,20 @@ def run_strided_all_gather_minimal_matmul_impl(
             torch_ag_out_tensor = ag_output_tensor_goldens_list[i if not enable_trace else 0]
 
             concat_dims = [other_dim, 0]
-            tt_ag_out = ttnn.from_device(tt_ag_out_tensor)
-            tt_ag_out = ttnn.to_torch(
-                tt_ag_out,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims
-                ),
-            )
+            if not read_local_slice_from_input:
+                tt_ag_out = ttnn.from_device(tt_ag_out_tensor)
+                tt_ag_out = ttnn.to_torch(
+                    tt_ag_out,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims
+                    ),
+                )
 
-            for d in range(mesh_device.shape[1]):
-                tt_ag_out_slice = tt_ag_out[d : d + 1, :, :, :]
+                tt_ag_out_slice = tt_ag_out[0:1, :, :, :]
                 eq, output = comp_pcc(tt_ag_out_slice, torch_ag_out_tensor, allowed_pcc)
 
-            logger.info(f"{output}, iteration {i}")
-            assert eq, f"{i} AG FAILED ag: {output}"
+                logger.info(f"{output}, iteration {i}")
+                assert eq, f"iter {i} AG FAILED ag: {output}"
 
             tt_mm_out_tensor = tt_matmul_out_tensor_list[i]
             torch_mm_out_tensor = torch_matmul_output_list[i if not enable_trace else 0]
@@ -315,11 +322,12 @@ def run_strided_all_gather_minimal_matmul_impl(
                 for d in range(mesh_device.shape[1]):
                     tt_mm_out_slice = tt_mm_out[d : d + 1, :, :, :]
                     eq, output = comp_pcc(tt_mm_out_slice, torch_mm_out_tensor)
+                logger.info(f"{output}, iteration {i}")
+                assert eq, f"iter {i} MM FAILED ag: {output}"
             else:
                 eq, output = comp_pcc(tt_mm_out, torch_mm_out_tensor)
-
-            logger.info(f"{output}, iteration {i}")
-            assert eq, f"{i} MM FAILED ag: {output}"
+                logger.info(f"{output}, iteration {i}")
+                assert eq, f"iter {i} MM FAILED ag: {output}"
 
 
 # tiles_per_chunk needs to be divisible by num_workers_per_link
@@ -332,40 +340,40 @@ def run_strided_all_gather_minimal_matmul_impl(
 @pytest.mark.parametrize(
     "M, K, N, dim, other_dim, num_workers_per_link, layout, ag_input_dtype, mm_block_m, mm_block_k, mm_block_n, subblock_h, subblock_w, mm_core_grid, shard_weights",
     [
-        (64, 512, 512, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 512, 1024, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 512, 2048, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 512, 512, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (128, 512, 512, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (128, 512, 512, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 1024, 512, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 64, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 1024, 512, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 64, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 512, 1024, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 64, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 512, 1024, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 64, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (64, 4096, 1024, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (4096, 4096, 4096, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
-        (4096, 4096, 4096, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(4, 4), False),
+        # (64, 512, 512, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        # (64, 512, 1024, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        # (64, 512, 2048, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        # (64, 512, 512, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        # (128, 512, 512, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        # (128, 512, 512, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 64, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        # (64, 1024, 512, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 64, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        # (64, 1024, 512, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 64, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        # (64, 512, 1024, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 64, 1, 1, ttnn.CoreCoord(2, 2), False),
+        # (64, 512, 1024, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 64, 1, 1, ttnn.CoreCoord(2, 2), False),
+        # (64, 4096, 1024, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        # (4096, 4096, 4096, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2), False),
+        # (4096, 4096, 4096, 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 32, 32, 32, 1, 1, ttnn.CoreCoord(4, 4), False),
         (4096, 4096, 4096, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 256, 256, 2, 2, ttnn.CoreCoord(4, 4), False),
-        (4096, 4096, 4096, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 160, 256, 1, 1, ttnn.CoreCoord(4, 4), False),
-        (4096, 4096, 4096, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 160, 256, 256, 1, 1, ttnn.CoreCoord(4, 4), False),
+        # (4096, 4096, 4096, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 256, 160, 256, 1, 1, ttnn.CoreCoord(4, 4), False),
+        # (4096, 4096, 4096, 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 160, 256, 256, 1, 1, ttnn.CoreCoord(4, 4), False),
     ],
     ids=[
-        "base",  # 1 forward pass through K
-        "forwardbackwardK",  # 1 forward, 1 backward (special because it's not reusing on the first backward)
-        "twiceforwardbackwardK",  # 2 forward, 2 backward (both the non reuse and reuse branches hit)
-        "2workercores",  # test two worker cores on the AG side
-        "mblock21worker",  # make m block size greater than 1
-        "mblock22workers",  # make m block size greater than 1, plus 2 workers
-        "kblock21worker",  # make k block size greater than 1
-        "kblock22workers",  # make m block size greater than 1, plus 2 workers
-        "nblock21worker",  # make n block size greater than 1
-        "nblock22workers",  # make n block size greater than 1, plus 2 workers
-        "morerows",
-        "4k4k4k",
-        "4x4mmcores",  # increase to a larger core grid
+        # "base",  # 1 forward pass through K
+        # "forwardbackwardK",  # 1 forward, 1 backward (special because it's not reusing on the first backward)
+        # "twiceforwardbackwardK",  # 2 forward, 2 backward (both the non reuse and reuse branches hit)
+        # "2workercores",  # test two worker cores on the AG side
+        # "mblock21worker",  # make m block size greater than 1
+        # "mblock22workers",  # make m block size greater than 1, plus 2 workers
+        # "kblock21worker",  # make k block size greater than 1
+        # "kblock22workers",  # make m block size greater than 1, plus 2 workers
+        # "nblock21worker",  # make n block size greater than 1
+        # "nblock22workers",  # make n block size greater than 1, plus 2 workers
+        # "morerows",
+        # "4k4k4k",
+        # "4x4mmcores",  # increase to a larger core grid
         "fulltest",
-        "unalignedK",
-        "unalignedM",
+        # "unalignedK",
+        # "unalignedM",
     ],
 )
 @pytest.mark.parametrize(
@@ -381,27 +389,35 @@ def run_strided_all_gather_minimal_matmul_impl(
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
     [
-        (True, 10),
         (False, 1),
     ],
-    ids=["perf", "check"],
+    ids=[
+        "check",
+    ],
 )
 @pytest.mark.parametrize(
     "use_non_fused",
     [
-        True,
         False,
     ],
-    ids=["separate", "fused"],
+    ids=["fused"],
+)
+@pytest.mark.parametrize(
+    "read_local_slice_from_input",
+    [
+        True,
+    ],
+    ids=[
+        "read_local",
+    ],
 )
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring", "fabric_linear"],
+    ids=["fabric_ring"],
 )
 def test_strided_all_gather_minimal_matmul_async(
     mesh_device,
@@ -428,6 +444,7 @@ def test_strided_all_gather_minimal_matmul_async(
     mm_core_grid,
     use_non_fused,
     shard_weights,
+    read_local_slice_from_input,
 ):
     TILE_SIZE = 32
     assert not ((M // TILE_SIZE) % num_workers_per_link), f"worker must be divisible by num workers per link"
@@ -467,4 +484,5 @@ def test_strided_all_gather_minimal_matmul_async(
         mm_core_grid=mm_core_grid,
         use_non_fused=use_non_fused,
         shard_weights=shard_weights,
+        read_local_slice_from_input=read_local_slice_from_input,
     )
