@@ -292,7 +292,7 @@ run_mamba_perf() {
 run_whisper_perf() {
 
   # Whisper conditional generation
-  $PYTEST_CMD models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
+  $PYTEST_CMD models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
 
 }
 

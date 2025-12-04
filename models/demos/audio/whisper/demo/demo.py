@@ -27,7 +27,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.utils.llm_demo_utils import verify_perf
-from models.demos.whisper.tt.ttnn_optimized_functional_whisper import (
+from models.demos.audio.whisper.tt.ttnn_optimized_functional_whisper import (
     WHISPER_BATCH_SIZE,
     WHISPER_L1_SMALL_SIZE,
     WHISPER_TRACE_REGION_SIZE,
@@ -37,7 +37,7 @@ from models.demos.whisper.tt.ttnn_optimized_functional_whisper import (
     init_kv_cache,
     preprocess_encoder_inputs,
 )
-from models.demos.whisper.tt.whisper_generator import GenerationParams, WhisperGenerator
+from models.demos.audio.whisper.tt.whisper_generator import GenerationParams, WhisperGenerator
 
 available_devices = len(ttnn.get_device_ids()) if ttnn.get_device_ids() else 1
 
@@ -621,7 +621,7 @@ def run_demo_whisper_for_translation_dataset(
 )
 @pytest.mark.parametrize(
     "input_path",
-    (["models/demos/whisper/demo/dataset/audio_classification"]),
+    (["models/demos/audio/whisper/demo/dataset/audio_classification"]),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
@@ -697,7 +697,7 @@ def test_demo_for_audio_classification_dataset(
 )
 @pytest.mark.parametrize(
     "input_path",
-    (["models/demos/whisper/demo/dataset/conditional_generation"]),
+    (["models/demos/audio/whisper/demo/dataset/conditional_generation"]),
 )
 @pytest.mark.parametrize(
     "language",
