@@ -13,8 +13,8 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import is_grayskull, is_wormhole_b0
-from models.demos.mnist.reference.mnist import MnistModel
-from models.demos.mnist.tt import tt_mnist
+from models.demos.vision.classification.mnist.reference.mnist import MnistModel
+from models.demos.vision.classification.mnist.tt import tt_mnist
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
 
