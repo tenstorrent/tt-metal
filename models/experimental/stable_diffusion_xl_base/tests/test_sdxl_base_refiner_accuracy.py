@@ -168,9 +168,9 @@ def test_accuracy_sdxl_base_and_refiner(
 
     accuracy_metrics = calculate_accuracy_metrics(images, prompts, coco_statistics_path)
 
-    model_name = "sdxl-base-refiner" if use_refiner else "sdxl"
+    model_name = ("sdxl-base-refiner" if use_refiner else "sdxl") + ("-tp" if use_cfg_parallel else "")
     metadata = {
-        "model_name": model_name + "-tp" if use_cfg_parallel else model_name,
+        "model_name": model_name,
         "device": get_device_name(),
         "device_vae": vae_on_device,
         "capture_trace": capture_trace,
