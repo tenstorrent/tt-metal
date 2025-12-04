@@ -7,11 +7,10 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
+#include "llk_defs.h"
 #include "noc_nonblocking_api.h"
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_exp.h"
-#include "llk_defs.h"
-
 using namespace sfpi;
 
 namespace ckernel::sfpu {
@@ -61,7 +60,7 @@ sfpi_inline vFloat sfpu_tan<ApproximationMode::Fast>(vFloat x) {
 }
 
 template <>
-sfpi_inline vFloat sfpu_tan<false>(vFloat x) {
+sfpi_inline vFloat sfpu_tan<ApproximationMode::Precise>(vFloat x) {
     const vFloat xx = x * x;
 
     v_if(sfpi::abs(x) <= 1.0f) {
@@ -100,7 +99,7 @@ sfpi_inline vFloat sfpu_sinpi<ApproximationMode::Fast>(vFloat x) {
 }
 
 template <>
-sfpi_inline vFloat sfpu_sinpi<false>(vFloat x) {
+sfpi_inline vFloat sfpu_sinpi<ApproximationMode::Precise>(vFloat x) {
     vFloat xx = x * x;
 
     return x *
