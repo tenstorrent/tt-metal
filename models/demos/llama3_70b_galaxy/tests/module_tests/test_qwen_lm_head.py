@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@ import pytest
 from loguru import logger
 import ttnn
 from models.demos.llama3_70b_galaxy.tt.lm_head import LMHead
-from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
+from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.demos.llama3_70b_galaxy.reference.qwen import ColumnParallelLinear
 from models.common.utility_functions import (
     comp_pcc,
@@ -43,10 +43,10 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
     ],
     indirect=True,
 )
-def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
+def test_qwen_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len, dummy_weights=True)
+    model_args = TtQwenModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len, dummy_weights=False)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -70,7 +70,7 @@ def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
         [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
     )
 
-    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id)
+    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, is_qwen=True)
 
     tt_model = LMHead(
         args=model_args,
@@ -84,33 +84,30 @@ def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
     )
 
     torch_input = torch.randn(1, 1, seq_len, model_args.dim)
-    reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device, dims=(None, 3) if model_args.is_galaxy else (None, None), mesh_shape=model_args.cluster_shape
-        ),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 3), mesh_shape=model_args.cluster_shape),
         dtype=ttnn.bfloat8_b,
         memory_config=model_args.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"],
         layout=ttnn.TILE_LAYOUT,
     )
 
-    logger.info("Run Llama_LM_Head")
+    logger.info("Run Qwen_LM_Head")
     # Pre-allocated output of AllReduce in LM Head to avoid memory cloberring
     tt_ccl.tt_lm_head_buffer_l1 = ttnn.to_memory_config(tt_ccl.tt_lm_head_buffer, tt_ccl.lm_head_buffer_mem_cfg)
     tt_outputs = tt_model(tt_input, prefetcher_setup.worker_sub_device_id, mode="decode")
     tt_outputs = [
         ttnn.to_torch(
             tt_output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(
-                mesh_device, model_args.cluster_shape, dims=(3, 1) if model_args.is_galaxy else (1, 3)
-            ),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, model_args.cluster_shape, dims=(3, 1)),
         )
         for tt_output in tt_outputs
     ]
     tt_output_torch = torch.concat(tt_outputs, dim=-1)
     tt_output_torch = tt_output_torch[:, 0:1, :, : model_args.vocab_size]
+
+    reference_output = reference_model(torch_input)
 
     pcc_required = 0.99
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
@@ -118,10 +115,10 @@ def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
     if passing:
-        logger.info("Llama_LM_Head Passed!")
+        logger.info("Qwen_LM_Head Passed!")
     else:
-        logger.warning("Llama_LM_Head Failed!")
+        logger.warning("Qwen_LM_Head Failed!")
 
     tt_ccl.close()
 
-    assert passing, f"Llama_LM_Head output does not meet PCC requirement {pcc_required}: {pcc_message}."
+    assert passing, f"Qwen_LM_Head output does not meet PCC requirement {pcc_required}: {pcc_message}."

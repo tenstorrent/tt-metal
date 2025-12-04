@@ -9,7 +9,6 @@ import ttnn
 from pathlib import Path
 from loguru import logger
 import torch
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.tt_transformers.tt.common import (
     precompute_freqs,
     freqs_to_rotation_matrix,
@@ -24,395 +23,99 @@ from models.tt_transformers.tt.common import (
 from typing import Tuple
 from models.common.utility_functions import nearest_32
 from pathlib import Path
-from enum import Enum, auto
-from dataclasses import dataclass
 from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
-    load_meta_state_dict,
     load_hf_state_dict,
     convert_hf_to_meta,
     standardize_hf_keys,
 )
+from models.demos.llama3_70b_galaxy.tt.model_config import (
+    TtModelArgs,
+    CheckpointType,
+    get_core_ranges,
+    PREFETCHER_NOC1_GRID,
+    LM_HEAD_32_GRID,
+    LM_HEAD_16_GRID,
+    LM_HEAD_INPUT_GRID,
+    LM_HEAD_OUTPUT_GRID,
+    LlamaOptimizations,
+    num_to_core_range_set,
+    num_to_coregrid,
+)
 
 
-PREFETCHER_NOC1_GRID = [
-    (6, 6),
-    (6, 7),
-    (6, 9),
-    (6, 0),
-    (6, 1),
-    (6, 2),
-    (6, 4),
-    (6, 5),
-    (5, 5),
-    (5, 6),
-    (5, 7),
-    (5, 9),
-    (5, 0),
-    (5, 1),
-    (5, 2),
-    (5, 4),
-    (1, 4),
-    (1, 5),
-    (1, 9),
-    (1, 0),
-    (2, 0),
-    (2, 4),
-    (2, 5),
-    (2, 9),
-]
-
-LM_HEAD_16_GRID = [
-    (1, 0),
-    (1, 1),
-    (1, 2),
-    (1, 3),
-    (1, 4),
-    (1, 5),
-    (1, 6),
-    (1, 7),
-    (1, 8),
-    (1, 9),
-    (2, 0),
-    (2, 1),
-    (2, 2),
-    (2, 3),
-    (2, 4),
-    (2, 5),
-]
-
-LM_HEAD_32_GRID = [
-    (1, 0),
-    (1, 1),
-    (1, 2),
-    (1, 3),
-    (1, 4),
-    (1, 5),
-    (1, 6),
-    (1, 7),
-    (1, 8),
-    (1, 9),
-    (2, 0),
-    (2, 1),
-    (2, 2),
-    (2, 3),
-    (2, 4),
-    (2, 5),
-    (2, 6),
-    (2, 7),
-    (2, 8),
-    (2, 9),
-    (3, 0),
-    (3, 1),
-    (3, 2),
-    (3, 3),
-    (3, 4),
-    (3, 5),
-    (3, 6),
-    (3, 7),
-    (3, 8),
-    (3, 9),
-    (5, 0),
-    (5, 1),
-]
-
-LM_HEAD_INPUT_GRID = [
-    (6, 6),
-    (6, 7),
-    (6, 9),
-    (6, 0),
-    (6, 1),
-    (6, 2),
-    (6, 4),
-    (6, 5),
-    (5, 5),
-    (5, 6),
-    (5, 7),
-    (5, 9),
-    (5, 0),
-    (5, 1),
-    (5, 2),
-    (5, 4),
-    (1, 4),
-    (1, 5),
-    (1, 9),
-    (1, 0),
-    (2, 0),
-    (2, 4),
-    (2, 5),
-    (2, 9),
-]
-
-LM_HEAD_OUTPUT_GRID = [
-    (1, 9),
-    (2, 9),
-    (1, 0),
-    (2, 0),
-    (1, 4),
-    (2, 4),
-    (1, 5),
-    (2, 5),
-    (5, 0),
-    (6, 0),
-    (5, 9),
-    (6, 9),
-    (5, 1),
-    (6, 1),
-    (5, 7),
-    (6, 7),
-    (5, 6),
-    (6, 6),
-    (5, 2),
-    (6, 2),
-    (5, 4),
-    (6, 4),
-    (5, 5),
-    (6, 5),
-]
-
-
-def get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_test):
-    """
-    Helper function to get all the relevant core ranges for dram prefetcher + matmul configuration
-    """
-
-    all_dram_cores = [ttnn.CoreCoord(idx, 0) for idx in range(12)]  # 12 DRAM banks
-
-    all_sender_cores = [
-        ttnn.CoreCoord(0, 9),
-        ttnn.CoreCoord(0, 0),
-        ttnn.CoreCoord(0, 4),
-        ttnn.CoreCoord(0, 5),
-        ttnn.CoreCoord(4, 0),
-        ttnn.CoreCoord(4, 9),
-        ttnn.CoreCoord(4, 1),
-        ttnn.CoreCoord(4, 7),
-        ttnn.CoreCoord(4, 6),
-        ttnn.CoreCoord(4, 2),
-        ttnn.CoreCoord(4, 4),
-        ttnn.CoreCoord(4, 5),
-    ]
-    dummy_sender_cores = [
-        ttnn.CoreCoord(0, 1),
-        ttnn.CoreCoord(0, 2),
-        ttnn.CoreCoord(0, 3),
-        ttnn.CoreCoord(0, 6),
-        ttnn.CoreCoord(0, 7),
-        ttnn.CoreCoord(0, 8),
-        ttnn.CoreCoord(4, 3),
-        ttnn.CoreCoord(4, 8),
-    ]
-
-    all_receiver_cores_list = [
-        (1, 9),
-        (2, 9),
-        (1, 0),
-        (2, 0),
-        (1, 4),
-        (2, 4),
-        (1, 5),
-        (2, 5),
-        (5, 0),
-        (6, 0),
-        (5, 9),
-        (6, 9),
-        (5, 1),
-        (6, 1),
-        (5, 7),
-        (6, 7),
-        (5, 6),
-        (6, 6),
-        (5, 2),
-        (6, 2),
-        (5, 4),
-        (6, 4),
-        (5, 5),
-        (6, 5),
-    ]
-
-    all_receiver_cores = [
-        ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(*all_receiver_cores_list[idx]),
-                    ttnn.CoreCoord(*all_receiver_cores_list[idx + 1 if num_global_cb_receivers == 2 else idx]),
-                ),
-            ]
-        )
-        for idx in range(0, len(all_receiver_cores_list), 2)
-    ]
-
-    dummy_receiver_cores = [
-        ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(3, 0),
-                    ttnn.CoreCoord(3, 0),
-                ),
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(1, 1),
-                    ttnn.CoreCoord(3, 1),
-                ),
-            ]
-        ),
-        ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(1, 2),
-                    ttnn.CoreCoord(3, 2),
-                ),
-            ]
-        ),
-        ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(1, 3),
-                    ttnn.CoreCoord(3, 3),
-                ),
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(3, 4),
-                    ttnn.CoreCoord(3, 4),
-                ),
-            ]
-        ),
-        ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(3, 5),
-                    ttnn.CoreCoord(3, 5),
-                ),
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(1, 6),
-                    ttnn.CoreCoord(3, 6),
-                ),
-            ]
-        ),
-        ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(1, 7),
-                    ttnn.CoreCoord(3, 7),
-                ),
-            ]
-        ),
-        ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(1, 8),
-                    ttnn.CoreCoord(3, 8),
-                ),
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(3, 9),
-                    ttnn.CoreCoord(3, 9),
-                ),
-            ]
-        ),
-        ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(5, 3),
-                    ttnn.CoreCoord(6, 3),
-                ),
-            ]
-        ),
-        ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(5, 8),
-                    ttnn.CoreCoord(6, 8),
-                ),
-            ]
-        ),
-    ]
-
-    dram_cores = all_dram_cores[:num_reader_cores]
-    hop_grid = []
-    mm_optimised_ring_cores = []
-    if not is_functional_test:
-        sender_cores = all_sender_cores
-        active_sender_cores = all_sender_cores[:num_reader_cores]
-        sender_cores.extend(dummy_sender_cores)
-        active_receiver_cores_list = all_receiver_cores_list[: num_reader_cores * num_global_cb_receivers]
-        receiver_cores = all_receiver_cores
-        receiver_cores.extend(dummy_receiver_cores)
-
-        worker_cores_range_set = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-            ]
-        )
-
-        mm_optimised_ring_cores = PREFETCHER_NOC1_GRID
-        hop_grid = [
-            (3, 6),
+def set_tg_attention_config(model_config, dim):
+    sub_core_grids = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
         ]
-    else:
-        sender_cores = [ttnn.CoreCoord(0, y) for y in range(num_reader_cores)]
-        active_sender_cores = sender_cores
-
-        active_receiver_cores_list = [
-            (x, y) for y in range(num_reader_cores) for x in range(1, num_global_cb_receivers + 1)
-        ]
-
-        receiver_cores = [
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(
-                        ttnn.CoreCoord(*active_receiver_cores_list[idx * num_global_cb_receivers]),
-                        ttnn.CoreCoord(*active_receiver_cores_list[(idx + 1) * num_global_cb_receivers - 1]),
-                    )
-                ]
-            )
-            for idx in range(num_reader_cores)
-        ]
-
-        worker_cores_range_set = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 1)),
-            ]
-        )
-
-    return (
-        active_sender_cores,
-        dram_cores,
-        sender_cores,
-        active_receiver_cores_list,
-        receiver_cores,
-        worker_cores_range_set,
-        mm_optimised_ring_cores,
-        hop_grid,
+    )
+    start_core = ttnn.CoreCoord(1, 0)
+    shard_spec_n_cores_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+        start_core, 10, sub_core_grids, row_wise=False
     )
 
+    #
+    model_config["CREATE_HEAD_INPUT_MEMCFG"] = (
+        None
+        if dim < 4096
+        else ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                shard_spec_n_cores_grid,
+                [
+                    32,
+                    128,
+                ],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+    )
 
-@dataclass
-class LlamaOptimizations:
-    bfp4_mlp: bool
-    # Future fields will go here:
-    # bfp8_activations: bool
-    # bfp8_layernorm: bool
-    # bfp8_ccl: bool
+    # Memory layout for create heads output
+    model_config["CREATE_HEAD_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            sub_core_grids,
+            [
+                32,
+                128,
+            ],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
 
-    @classmethod
-    def accuracy(cls, model_name):
-        """Configuration optimized for accuracy
-        Only 3.1-70B uses bfp4 MLPs in this configuration
-        """
-        return cls(bfp4_mlp="70B" in model_name)
+    num_cores = 40 if dim == 8192 else (24 if dim == 4096 else (20 if dim == 3072 else 12))
 
-    @classmethod
-    def performance(cls, model_name):
-        """Configuration optimized for performance
-        All models use bfp4 MLPs in this configuration
-        """
-        return cls(bfp4_mlp=True)
+    model_config["QKV_OUT_GATHERED_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
+        shape=(32 * mesh_cols, 32),  # mesh_cols = 4
+        core_grid=num_to_coregrid(num_cores),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    model_config["SELF_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
+        shape=(32 * mesh_rows, dim // 4 // min(32, dim // 4 // 32)),
+        core_grid=num_to_coregrid(min(32, dim // 4 // 32)),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    model_config["GATHER_USERS_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
+        shape=(32, 128),  # mesh_cols = 4
+        core_grid=ttnn.num_cores_to_corerangeset_in_subcoregrids(start_core, 32, sub_core_grids, row_wise=True),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    return model_config
 
 
-class CheckpointType(Enum):
-    Meta = auto()
-    HuggingFace = auto()
-
-
-class TtModelArgs:
+class TtQwenModelArgs(TtModelArgs):
     OP_KEYS = (
         # Embedding
         "EMB_WEIGHTS",
@@ -433,6 +136,7 @@ class TtModelArgs:
         "CONCAT_HEADS_OUTPUT",
         "ATTN_OUTPUT",
         "ATTN_W_LAYOUT",
+        "QK_NORM_WEIGHTS",
         # Decoder
         "DECODE_RESIDUAL",
         "OUTPUT_MM",
@@ -443,13 +147,17 @@ class TtModelArgs:
         "LLAMA3_3_70B_PARAMS": "models/demos/llama3_70b_galaxy/model_params/Llama-3.3-70B-Instruct",
     }
 
+    LOCAL_HF_PARAMS = {
+        "Qwen3-32B": "models/tt_transformers/model_params/Qwen3-32B",
+    }
+
     def __init__(
         self,
         mesh_device,
         instruct=False,
         dummy_weights=False,
         max_batch_size=1,
-        max_seq_len=1024 * 128,
+        max_seq_len=128 * 1024,
         optimizations=LlamaOptimizations.accuracy,
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
@@ -460,14 +168,29 @@ class TtModelArgs:
         self.max_batch_size = max_batch_size
         self.tile_size = 32
         self.is_70b = False
-        self.from_hf_url = False  # updated below if true
-        self.max_prefill_chunk_size = max_seq_len
+        self.from_hf_url = True  # updated below if true
+        self.max_prefill_chunk_size = 40960
         self.use_prefetcher = False
         self.max_top_k = 32
 
-        self.qk_norm = False
-        self.is_qwen = False
-        self.unfuse_res_add = False
+        self.dim_tp_factor = 4
+        self.intermediate_dim_tp_factor = 8
+
+        # Model-side constants from Llama3 to avoid code duplication
+        self.dim = 5120  # This replaces 8192
+        self.dim_padded_24_cores = 6144  # This replaces 9216
+        self.dim_per_tp = 5120 // self.dim_tp_factor  # This replaces 2048; == 1280
+
+        self.intermediate_dim = 25600  # This replaces 28672
+        self.intermediate_dim_per_tp = 25600 // self.intermediate_dim_tp_factor  # This replaces 3584; == 3200
+        self.intermediate_dim_per_tp_padded_24_cores = 3840  # This replaces 3840
+
+        self.n_q_heads = 64
+        self.n_kv_heads = 8
+
+        self.qk_norm = True
+        self.is_qwen = True
+        self.unfuse_res_add = True
 
         if self.num_devices == 32:
             self.use_prefetcher = True
@@ -488,19 +211,8 @@ class TtModelArgs:
         )
         self.start_core = ttnn.CoreCoord(1, 0)
 
-        LLAMA_DIR = os.getenv("LLAMA_DIR")
         HF_MODEL = os.getenv("HF_MODEL")
-        assert not (LLAMA_DIR and HF_MODEL), "Only one of LLAMA_DIR or HF_MODEL should be set"
-        if LLAMA_DIR:
-            if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH")]):
-                logger.warning("LLAMA_DIR will override LLAMA_CKPT_DIR and LLAMA_TOKENIZER_PATH")
-            self.CKPT_DIR = LLAMA_DIR
-            self.TOKENIZER_PATH = LLAMA_DIR
-            self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
-            if not self.CACHE_PATH:
-                self.CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
-            self.model_name = os.path.basename(LLAMA_DIR)  # May be overridden by config
-        elif HF_MODEL:
+        if HF_MODEL:
             self.CKPT_DIR = HF_MODEL
             self.TOKENIZER_PATH = HF_MODEL
             self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
@@ -511,16 +223,7 @@ class TtModelArgs:
             self.model_name = HF_MODEL  # May be overridden by config
             self.from_hf_url = True
         else:
-            assert (
-                False
-            ), "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct or LLAMA_DIR to a Meta-style checkpoint directory"
-
-        if not dummy_weights and not HF_MODEL:
-            # Assert if all folders and files exist
-            assert os.path.exists(
-                self.CKPT_DIR
-            ), f"Checkpoint directory {self.CKPT_DIR} does not exist, please set LLAMA_DIR=... or LLAMA_CKPT_DIR=..."
-            os.makedirs(self.CACHE_PATH, exist_ok=True)
+            assert False, "Please set HF_MODEL to a HuggingFace name e.g. Qwen/Qwen3-32B"
 
         logger.info(f"Checkpoint directory: {self.CKPT_DIR}")
         logger.info(f"Tokenizer file: {self.TOKENIZER_PATH + '/tokenizer.model'}")
@@ -531,7 +234,6 @@ class TtModelArgs:
         self.model_cache_path = Path(self.CACHE_PATH)
 
         # Load weights and tokenizer
-        self.consolidated_weights_path = self.CKPT_DIR + "/consolidated.00.pth"
         self.tokenizer_path = self.TOKENIZER_PATH + "/tokenizer.model"
 
         self.instruct = instruct
@@ -547,24 +249,9 @@ class TtModelArgs:
             self.checkpoint_type = self.detect_checkpoint_type()
             self._set_model_params(self.CKPT_DIR)
         else:  # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
-            self.checkpoint_type = CheckpointType.Meta
-            if "3.2-1B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_1B_PARAMS"
-            elif "3.2-3B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_3B_PARAMS"
-            elif "3.1-8B" in self.CKPT_DIR:
-                local_params = "LLAMA3_1_8B_PARAMS"
-            elif "3.2-11B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_11B_PARAMS"
-            elif "3.1-70B" in self.CKPT_DIR:
-                local_params = "LLAMA3_1_70B_PARAMS"
-            elif "3.3-70B" in self.CKPT_DIR:
-                local_params = "LLAMA3_3_70B_PARAMS"
-            else:
-                raise ValueError(
-                    f"No local params found for {self.CKPT_DIR}, dummy weights are not supported for this model"
-                )
-            self._set_model_params(self.LOCAL_LLAMA_PARAMS[local_params])
+            raise ValueError(
+                f"No local params found for {self.CKPT_DIR}, dummy weights are not supported for this model"
+            )
 
         if callable(optimizations):
             self.optimizations = optimizations(self.model_name)
@@ -605,18 +292,15 @@ class TtModelArgs:
 
         device = mesh_device if mesh_device is not None else None
         self.cluster_shape = list(mesh_device.shape)
-        self.is_galaxy = self.num_devices == 32
-        self.galaxy_type = None
 
-        if self.is_galaxy:
-            self.galaxy_type = "6U" if ttnn.GetNumPCIeDevices() == 32 else "4U"
-        else:
+        # Always assume Galaxy 6U configuration
+        if self.num_devices != 32:
             raise ValueError(
                 f"Unsupported number of devices: {self.num_devices}. Only 32 devices (Galaxy) are supported."
             )
-        self.model_config["GALAXY_NUM_LINKS"] = {"6U": 4, "4U": 3}.get(self.galaxy_type)
-        self.model_config["CCL_TOPOLOGY"] = {"6U": ttnn.Topology.Ring, "4U": ttnn.Topology.Linear}.get(self.galaxy_type)
-        if device is not None:  # Avoid issue with test_llama_torch.py not having a device
+        self.model_config["GALAXY_NUM_LINKS"] = 4  # 6U configuration
+        self.model_config["CCL_TOPOLOGY"] = ttnn.Topology.Ring  # 6U configuration
+        if device is not None:
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
 
             grid = device.compute_with_storage_grid_size()
@@ -667,34 +351,32 @@ class TtModelArgs:
             )
 
             self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
-            core_grid_ln, grid_offset = (8, 2), ttnn.CoreCoord(1, 0)
+            # core_grid_ln, grid_offset = (8, 2), ttnn.CoreCoord(1, 0)
+            core_grid_ln, grid_offset = (5, 2), ttnn.CoreCoord(1, 0)
             core_range = ttnn.CoreRange(
                 grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
             )
-            num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
+            # num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
+            # num_cores_ln = 20
+            num_cores_ln = 10
             residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
-            self.model_config["DECODE_RESIDUAL_MEMCFG"] = (
-                ttnn.create_sharded_memory_config(
-                    shape=(1, 1, 32, 2048 // num_cores_ln),
-                    core_grid=ttnn.CoreRangeSet(
-                        {
-                            core_range,
-                        }
-                    ),
-                    strategy=ttnn.ShardStrategy.WIDTH,
-                    use_height_and_width_as_shard_shape=True,
-                )
-                if self.is_galaxy
-                else ttnn.create_sharded_memory_config(
-                    (
-                        self.tile_padded_batch_rows,
-                        self.dim // residual_grid.num_cores // self.num_devices,
-                    ),
-                    residual_grid,
-                    ttnn.ShardStrategy.WIDTH,
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
+            # Always use Galaxy configuration
+            self.model_config["DECODE_RESIDUAL_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(
+                    1,
+                    1,
+                    32,
+                    1280 // num_cores_ln,
+                ),
+                core_grid=ttnn.CoreRangeSet(
+                    [
+                        core_range,
+                        # ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
+                        # ttnn.CoreRange(ttnn.CoreCoord(3, 3), ttnn.CoreCoord(3, 5)),  # use 16 + 4 = 20 cores here
+                    ]
+                ),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                use_height_and_width_as_shard_shape=True,
             )
 
             start_core = ttnn.CoreCoord(1, 0)
@@ -734,7 +416,7 @@ class TtModelArgs:
                 compute_with_storage_grid_size=(7, 10),
                 exp_approx_mode=False,
                 q_chunk_size=256 if seqlen >= 2048 else 64,
-                k_chunk_size=512 if seqlen >= 2048 else 64,
+                k_chunk_size=256 if seqlen >= 2048 else 64,
             )
 
             def find_largest_divisor(n, max_divisor=8):
@@ -748,16 +430,8 @@ class TtModelArgs:
                 self.n_heads % self.cluster_shape[1] == 0
             ), f"n_heads must be divisible by num_devices: {self.n_heads} % {self.cluster_shape[1]}"
 
-            self.model_config["ATTN_OUTPUT_PROGCFG"] = (
-                None
-                if self.is_galaxy
-                else self.dram_matmul_config(
-                    m=self.tile_padded_batch_rows,
-                    k=self.dim // self.num_devices,
-                    n=self.dim,
-                    num_cores=self.n_heads // self.num_devices,
-                )
-            )
+            # Always use Galaxy configuration (None)
+            self.model_config["ATTN_OUTPUT_PROGCFG"] = None
 
             # All Gather Matmul for Dense Out (DO)
             # TODO: Is there a better way to decide if fused all gather matmul should be used? And is there a better way to use the flag, instead of passing it into model_config?
@@ -793,17 +467,18 @@ class TtModelArgs:
 
             def w1_w3_prg_config(seq_len, use_interleaved):
                 if seq_len == 128:
-                    return self.matmul_1d_config(128, 2048, 3584, grid=ttnn.CoreGrid(x=7, y=4), overwrite_per_core_k=16)
+                    # return self.matmul_1d_config(128, 2048, 3584, grid=ttnn.CoreGrid(x=7, y=4), overwrite_per_core_k=16)
+                    return self.matmul_1d_config(128, 1280, 3200, grid=ttnn.CoreGrid(x=7, y=4), overwrite_per_core_k=10)
                 if not use_interleaved:
                     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                        compute_with_storage_grid_size=(7, 10),
-                        in0_block_w=8,
+                        compute_with_storage_grid_size=(5, 8),
+                        in0_block_w=5,
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                         per_core_M=max(
                             1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8  # 8 rows
                         ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                        per_core_N=math.ceil(28672 / 8 / 32 / 7),  # N / TILE_WIDTH / grid width
+                        per_core_N=math.ceil(self.intermediate_dim / 8 / 32 / 5),  # N / TILE_WIDTH / grid width
                         transpose_mcast=False,
                         fused_activation=None,
                         fuse_batch=seq_len <= 2048,
@@ -840,10 +515,178 @@ class TtModelArgs:
                         fused_activation=None,
                         fuse_batch=False,
                     )
+                elif seq_len % 1024 == 0:
+                    per_core_M = 10 * seq_len // 1024
+
+                    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(7, 7),
+                        in0_block_w=4,
+                        out_subblock_h=1,
+                        out_subblock_w=8,
+                        out_block_h=10,
+                        out_block_w=16,
+                        per_core_M=per_core_M,
+                        per_core_N=16,
+                        transpose_mcast=False,
+                        fused_activation=None,
+                        fuse_batch=False,
+                    )
                 else:
                     raise NotImplementedError(
                         f"W1 Program config generation for sequence length {seq_len} not implemented"
                     )
+
+            self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = w1_w3_prg_config
+
+            def w2_prg_config(seq_len):
+                if seq_len == 128:
+                    return self.matmul_1d_config(
+                        # 128, 3584, 2048, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=14
+                        128,
+                        3200,
+                        1280,
+                        grid=ttnn.CoreGrid(x=7, y=10),
+                        overwrite_per_core_k=10,
+                    )
+                # For sequence lengths < 4096, we use this config as it performs better that what would be generated below
+                if seq_len < 4096:
+                    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(5, 10),
+                        in0_block_w=4,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
+                        out_subblock_h=1,  # Must be divisible by per_core_M
+                        out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                        per_core_M=max(1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8),  # 8~10 rows
+                        per_core_N=math.ceil(1280 / 32 / 5),  # N / TILE_WIDTH / grid width
+                        transpose_mcast=False,
+                        fused_activation=None,
+                        fuse_batch=seq_len <= 2048,
+                    )
+
+                # For very large activation heights (arbitrarily chosen to be > 320) we want the per_core_M to have many divisors
+                # so that there are many options for out_block_h and out_block_w. Padding to the next multiple of 8 ensures that
+                # per_core_M can at least be divisible by 2, 4, and 8 in addition to 1 and itself.
+                #
+                # If the number is less than or equal to 320 we still wouldn't want it to be prime so we'll add one if thats the case.
+                next_multiple_of_8 = lambda x: int(x + (8 - x % 8) % 8)
+                add_one_if_prime = (
+                    lambda n: n + 1 if n > 1 and all(n % i != 0 for i in range(2, int(n**0.5) + 1)) else n
+                )
+                total_per_core_out_M = add_one_if_prime(math.ceil(seq_len / (7 * self.tile_size)))
+                per_core_M = (
+                    next_multiple_of_8(total_per_core_out_M) if total_per_core_out_M > 320 else total_per_core_out_M
+                )
+                per_core_N = 10
+
+                # Want out_block_h and out_block_w such that:
+                # out_block_h * out block_w <= 320
+                # out_block_h % per_core_M == 0
+                # out_block_w % per_core_N == 0
+                # Since we're fixing per_core_N = 10, out_block_w can only be 5 or 10
+
+                def find_out_block_h(out_block_w):
+                    max_out_block_h = -1
+                    for i in range(1, per_core_M + 1):
+                        if i * out_block_w > 320:
+                            break
+                        if per_core_M % i == 0:
+                            if i > max_out_block_h:
+                                max_out_block_h = i
+                    if max_out_block_h == -1:
+                        return None
+                    return max_out_block_h
+
+                out_block_h_if_w_5 = find_out_block_h(5)
+                out_block_h_if_w_10 = find_out_block_h(10)
+
+                if out_block_h_if_w_5 is None and out_block_h_if_w_10 is None:
+                    assert False, "This should never happen"
+
+                # Pick the configuration that exists if one of them does not
+                if out_block_h_if_w_5 is None:
+                    out_block_w = 10
+                    out_block_h = out_block_h_if_w_10
+                elif out_block_h_if_w_10 is None:
+                    out_block_w = 5
+                    out_block_h = out_block_h_if_w_5
+                # If both exist, pick the one that is larger in volume
+                elif out_block_h_if_w_5 * 5 > out_block_h_if_w_10 * 10:
+                    out_block_h = out_block_h_if_w_5
+                    out_block_w = 5
+                elif out_block_h_if_w_10 * 10 > out_block_h_if_w_5 * 5:
+                    out_block_h = out_block_h_if_w_10
+                    out_block_w = 10
+                # If both have the same volume, pick the configuration that is more "square"
+                else:
+                    # Want to use the out_block_h/w combination which is the most "square"
+                    # This calculates the height/width ratio of the blocks and then gets their
+                    # distance from 1 (1 is the ideal ratio) to determine which is more square
+                    squareness_5 = abs(1 - (max(out_block_h_if_w_5, 5) / min(out_block_h_if_w_5, 5)))
+                    squareness_10 = abs(1 - (max(out_block_h_if_w_10, 10) / min(out_block_h_if_w_10, 10)))
+
+                    if squareness_5 < squareness_10:
+                        out_block_w = 5
+                        out_block_h = out_block_h_if_w_5
+                    else:
+                        out_block_w = 10
+                        out_block_h = out_block_h_if_w_10
+
+                return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(7, 7),
+                    in0_block_w=2,  # seeing this to 2 because 4 gives oom for long seqlen continuous batching
+                    out_subblock_h=1,
+                    out_subblock_w=5,
+                    out_block_h=out_block_h,
+                    out_block_w=out_block_w,
+                    per_core_M=per_core_M,
+                    per_core_N=per_core_N,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                    fuse_batch=False,
+                )
+
+            self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = w2_prg_config
+
+            self.model_config["WO_PREFILL_PROGCFG"] = (
+                lambda seq_len: self.matmul_1d_config(
+                    seq_len, 1024, 1280, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=16
+                )
+                if seq_len == 128
+                else (
+                    ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(7, 10),
+                        in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
+                        out_subblock_h=1,  # Must be divisible by per_core_M
+                        out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                        per_core_M=max(1, 4 if seq_len >= 1024 else seq_len // self.tile_size // 8),  # 8~10 rows
+                        per_core_N=math.ceil(1280 / 32 / 7),  # N / TILE_WIDTH / grid width
+                        transpose_mcast=False,
+                        fused_activation=None,
+                        fuse_batch=seq_len <= 1024,
+                    )
+                )
+            )
+
+            def prefill_wo_minimal_matmul_config(seq_len):
+                if seq_len <= 128:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=1,
+                        subblock_w=8,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 7),
+                    )
+                else:
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=4,
+                        subblock_w=2,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                    )
+
+            self.model_config["WO_PREFILL_MINIMAL_PROGCFG"] = prefill_wo_minimal_matmul_config
 
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = w1_w3_prg_config
 
@@ -940,151 +783,6 @@ class TtModelArgs:
 
             self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"] = prefill_ff2_minimal_matmul_config
 
-            def w2_prg_config(seq_len):
-                if seq_len == 128:
-                    return self.matmul_1d_config(
-                        128, 3584, 2048, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=14
-                    )
-                # For sequence lengths < 4096, we use this config as it performs better that what would be generated below
-                if seq_len < 4096:
-                    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                        compute_with_storage_grid_size=(7, 10),
-                        in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
-                        out_subblock_h=1,  # Must be divisible by per_core_M
-                        out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                        per_core_M=max(1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8),  # 8~10 rows
-                        per_core_N=math.ceil(2048 / 32 / 7),  # N / TILE_WIDTH / grid width
-                        transpose_mcast=False,
-                        fused_activation=None,
-                        fuse_batch=seq_len <= 2048,
-                    )
-
-                # For very large activation heights (arbitrarily chosen to be > 320) we want the per_core_M to have many divisors
-                # so that there are many options for out_block_h and out_block_w. Padding to the next multiple of 8 ensures that
-                # per_core_M can at least be divisible by 2, 4, and 8 in addition to 1 and itself.
-                #
-                # If the number is less than or equal to 320 we still wouldn't want it to be prime so we'll add one if thats the case.
-                next_multiple_of_8 = lambda x: int(x + (8 - x % 8) % 8)
-                add_one_if_prime = (
-                    lambda n: n + 1 if n > 1 and all(n % i != 0 for i in range(2, int(n**0.5) + 1)) else n
-                )
-                total_per_core_out_M = add_one_if_prime(math.ceil(seq_len / (7 * self.tile_size)))
-                per_core_M = (
-                    next_multiple_of_8(total_per_core_out_M) if total_per_core_out_M > 320 else total_per_core_out_M
-                )
-                per_core_N = 10
-
-                # Want out_block_h and out_block_w such that:
-                # out_block_h * out block_w <= 320
-                # out_block_h % per_core_M == 0
-                # out_block_w % per_core_N == 0
-                # Since we're fixing per_core_N = 10, out_block_w can only be 5 or 10
-
-                def find_out_block_h(out_block_w):
-                    max_out_block_h = -1
-                    for i in range(1, per_core_M + 1):
-                        if i * out_block_w > 320:
-                            break
-                        if per_core_M % i == 0:
-                            if i > max_out_block_h:
-                                max_out_block_h = i
-                    if max_out_block_h == -1:
-                        return None
-                    return max_out_block_h
-
-                out_block_h_if_w_5 = find_out_block_h(5)
-                out_block_h_if_w_10 = find_out_block_h(10)
-
-                if out_block_h_if_w_5 is None and out_block_h_if_w_10 is None:
-                    assert False, "This should never happen"
-
-                # Pick the configuration that exists if one of them does not
-                if out_block_h_if_w_5 is None:
-                    out_block_w = 10
-                    out_block_h = out_block_h_if_w_10
-                elif out_block_h_if_w_10 is None:
-                    out_block_w = 5
-                    out_block_h = out_block_h_if_w_5
-                # If both exist, pick the one that is larger in volume
-                elif out_block_h_if_w_5 * 5 > out_block_h_if_w_10 * 10:
-                    out_block_h = out_block_h_if_w_5
-                    out_block_w = 5
-                elif out_block_h_if_w_10 * 10 > out_block_h_if_w_5 * 5:
-                    out_block_h = out_block_h_if_w_10
-                    out_block_w = 10
-                # If both have the same volume, pick the configuration that is more "square"
-                else:
-                    # Want to use the out_block_h/w combination which is the most "square"
-                    # This calculates the height/width ratio of the blocks and then gets their
-                    # distance from 1 (1 is the ideal ratio) to determine which is more square
-                    squareness_5 = abs(1 - (max(out_block_h_if_w_5, 5) / min(out_block_h_if_w_5, 5)))
-                    squareness_10 = abs(1 - (max(out_block_h_if_w_10, 10) / min(out_block_h_if_w_10, 10)))
-
-                    if squareness_5 < squareness_10:
-                        out_block_w = 5
-                        out_block_h = out_block_h_if_w_5
-                    else:
-                        out_block_w = 10
-                        out_block_h = out_block_h_if_w_10
-
-                return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(7, 7),
-                    in0_block_w=2,  # seeing this to 2 because 4 gives oom for long seqlen continuous batching
-                    out_subblock_h=1,
-                    out_subblock_w=5,
-                    out_block_h=out_block_h,
-                    out_block_w=out_block_w,
-                    per_core_M=per_core_M,
-                    per_core_N=per_core_N,
-                    transpose_mcast=False,
-                    fused_activation=None,
-                    fuse_batch=False,
-                )
-
-            self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = w2_prg_config
-
-            self.model_config["WO_PREFILL_PROGCFG"] = (
-                lambda seq_len: self.matmul_1d_config(
-                    seq_len, 1024, 2048, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=16
-                )
-                if seq_len == 128
-                else (
-                    ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                        compute_with_storage_grid_size=(7, 10),
-                        in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
-                        out_subblock_h=1,  # Must be divisible by per_core_M
-                        out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                        per_core_M=max(1, 4 if seq_len >= 1024 else seq_len // self.tile_size // 8),  # 8~10 rows
-                        per_core_N=math.ceil(2048 / 32 / 7),  # N / TILE_WIDTH / grid width
-                        transpose_mcast=False,
-                        fused_activation=None,
-                        fuse_batch=seq_len <= 1024,
-                    )
-                )
-            )
-
-            def prefill_wo_minimal_matmul_config(seq_len):
-                if seq_len <= 128:
-                    return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=1,
-                        subblock_w=8,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 7),
-                    )
-                else:
-                    return ttnn.MinimalMatmulConfig(
-                        M_block_size=8,
-                        K_block_size=8,
-                        N_block_size=8,
-                        subblock_h=4,
-                        subblock_w=2,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
-                    )
-
-            self.model_config["WO_PREFILL_MINIMAL_PROGCFG"] = prefill_wo_minimal_matmul_config
-
             # Calculate largest number of lm_head_num_rows such that self.dim % (lm_head_num_rows * 8) == 0
             if self.num_devices == 32:
                 lm_head_num_rows = 4
@@ -1102,7 +800,9 @@ class TtModelArgs:
             self.model_config["LM_HEAD_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 (
                     self.tile_padded_batch_rows,
-                    nearest_32((self.dim // (4 if self.is_galaxy else 1)) // self.lm_head_core_grid.num_cores),
+                    nearest_32(
+                        (self.dim // 4) // self.lm_head_core_grid.num_cores
+                    ),  # Always use Galaxy configuration (div by 4)
                 ),  # Shard shape: [32, 128] -> 1 shard per core
                 self.lm_head_core_grid,
                 ttnn.ShardStrategy.WIDTH,
@@ -1113,7 +813,7 @@ class TtModelArgs:
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
             self.model_config["XQKV_PREFILL_PROGCFG"] = (
                 lambda seq_len: self.matmul_1d_config(
-                    seq_len, 2048, 1280, grid=ttnn.CoreGrid(x=4, y=10), overwrite_per_core_k=16
+                    seq_len, 1280, 1280, grid=ttnn.CoreGrid(x=4, y=10), overwrite_per_core_k=10
                 )
                 if seq_len == 128
                 else (
@@ -1251,12 +951,8 @@ class TtModelArgs:
                 ),
             )
 
-            # MLP configs
-            mlp_core_grid = (
-                self.dram_shard_core_grid_for_k(self.dim)
-                if self.is_galaxy
-                else self.dram_shard_core_grid_for_k_and_n(self.dim, self.hidden_dim // self.num_devices)
-            )
+            # MLP configs - Always use Galaxy configuration
+            mlp_core_grid = self.dram_shard_core_grid_for_k(self.dim)
 
             self.model_config["SHARDED_MLP_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 (
@@ -1275,15 +971,12 @@ class TtModelArgs:
                 num_cores=mlp_core_grid.num_cores,
             )
 
-            mlp2_core_grid = (
-                ttnn.CoreGrid(y=1, x=8)
-                if self.is_galaxy
-                else self.dram_shard_core_grid_for_k_and_n(self.hidden_dim // self.num_devices, self.dim)
-            )
+            # Always use Galaxy configuration
+            mlp2_core_grid = ttnn.CoreGrid(y=1, x=8)
 
             self.model_config["SHARDED_MLP2_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 (
-                    32 if self.is_galaxy else self.tile_padded_batch_rows,
+                    32,  # Always use Galaxy configuration
                     self.hidden_dim // self.cluster_shape[1] // mlp2_core_grid.num_cores,
                 ),
                 mlp2_core_grid,
@@ -1320,28 +1013,15 @@ class TtModelArgs:
                 ]
             )
 
-            # QKV
-            self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"] = (
-                ttnn.create_sharded_memory_config(
-                    shape=(32, 2304 // RING_SIZE),  # Use padded K
-                    core_grid=ring_core_range_set,
-                    strategy=ttnn.ShardStrategy.WIDTH,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-                if self.is_galaxy
-                else ttnn.create_sharded_memory_config(
-                    (
-                        self.tile_padded_batch_rows,
-                        self.dim // attn_input_grid.num_cores,
-                    ),  # Shard shape: [32, 128] -> 1 shard per core
-                    attn_input_grid,
-                    ttnn.ShardStrategy.WIDTH,
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
+            # QKV - Always use Galaxy configuration
+            self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, 6144 // 4 // RING_SIZE),  # Use padded K
+                core_grid=ring_core_range_set,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
             )
-            qkv_shape_ring = (8192 // 4, 12288 // 8)  # Use padded K and N
+            qkv_shape_ring = (5120 // 4, 12288 // 8)  # Use padded K and N
             self.model_config["SHARDED_QKV_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
                 k=qkv_shape_ring[0],
                 n=qkv_shape_ring[1],
@@ -1358,7 +1038,7 @@ class TtModelArgs:
             self.model_config["XQKV_DECODE_RING_PROGCFG"] = self.matmul_1d_ring_config(
                 1,
                 32,
-                8192 // 4,
+                self.dim // 4,
                 12288 // 8,  # Use padded N
                 RING_SIZE,
                 untilize_out=True,
@@ -1386,13 +1066,14 @@ class TtModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
 
-            wo_shape_ring = (8192 // 8, 9216 // 4)  # Use padded K and N
+            wo_shape_ring = (8192 // 8, 6144 // 4)  # Use padded K and N
+            # wo_shape_ring = (8192 // 8, 6144 // 4)  # Use padded K and N
             self.model_config["SHARDED_WO_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
                 k=wo_shape_ring[0],
                 n=wo_shape_ring[1],
             )
 
-            wo_out_shard_shape_ring = (32, 9216 // 4 // RING_SIZE)  # Use padded N
+            wo_out_shard_shape_ring = (32, self.dim_padded_24_cores // 4 // RING_SIZE)  # Use padded N
             self.model_config["SHARDED_WO_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=wo_out_shard_shape_ring,
                 core_grid=pf_mm_out_core_range_set,
@@ -1405,26 +1086,27 @@ class TtModelArgs:
                 1,
                 32,
                 10240 // 8,
-                9216 // 4,  # Use padded N
+                self.dim_padded_24_cores // 4,  # Use padded N
                 RING_SIZE,
             )
 
             # Use padded K and N
             self.model_config["W1W3_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
-                k=8192 // 4,
+                k=1280,
                 n=3840,
             )
 
             # Use padded K and N
             self.model_config["W2_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
-                k=3584,
-                n=9216 // 4,
+                # k=3584,
+                k=3200,
+                n=6144 // 4,
             )
 
             self.model_config["FF1_3_TG_RING_PROGCFG"] = self.matmul_1d_ring_config(
-                1,
-                32,
-                8192 // 4,
+                1,  # B
+                32,  # M
+                5120 // 4,  # K = 1280
                 3840,  # Use padded N
                 RING_SIZE,
             )
@@ -1432,13 +1114,14 @@ class TtModelArgs:
             self.model_config["FF2_TG_RING_PROGCFG"] = self.matmul_1d_ring_config(
                 1,
                 32,
-                3584,
-                9216 // 4,  # Use padded N
+                # 3584,
+                3200,
+                6144 // 4,  # Use padded N
                 RING_SIZE,
             )
 
             self.model_config["SHARDED_FF12_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, 9216 // 4 // RING_SIZE),  # Use padded N
+                shape=(32, 6144 // 4 // RING_SIZE),  # Use padded N
                 core_grid=ring_core_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -1466,7 +1149,8 @@ class TtModelArgs:
                 self.start_core, 28, self.sub_core_grids, row_wise=True
             )
             self.model_config["MUL_IN_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, 3584 // 28),  # Use padded K
+                # shape=(32, 3584 // 28),  # Use padded K
+                shape=(32, 3840 // 28),  # Use padded K
                 core_grid=mul_core_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -1482,7 +1166,7 @@ class TtModelArgs:
             )
 
             self.model_config["FF2_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, 9216 // 4 // RING_SIZE),  # Use padded N
+                shape=(32, 6144 // 4 // RING_SIZE),  # Use padded N
                 core_grid=pf_mm_out_core_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -1494,7 +1178,8 @@ class TtModelArgs:
                 grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
             )
             LM_HEAD_RING_SIZE = 24
-            self.lm_head_shape = (8192 // 4, 128 * 1024 // 8)
+            # self.lm_head_shape = (self.dim // 4, 151936 // 8)
+            self.lm_head_shape = (6144 // 4, 155648 // 8)
 
             lm_head_ring_core_range_set = ttnn.CoreRangeSet(
                 [
@@ -1536,7 +1221,7 @@ class TtModelArgs:
                 ]
             )
             self.model_config["SHARDED_LM_HEAD_INPUT_32_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, 2304 // LM_HEAD_RING_SIZE),  # padded shape
+                shape=(32, 1536 // LM_HEAD_RING_SIZE),  # padded shape
                 core_grid=lm_head_ring_core_input_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -1550,7 +1235,8 @@ class TtModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
             self.model_config["LM_HEAD_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, 16896 // LM_HEAD_RING_SIZE),  # padded shape
+                # shape=(32, 16896 // LM_HEAD_RING_SIZE),  # padded shape
+                shape=(32, 19968 // LM_HEAD_RING_SIZE),  # padded shape
                 core_grid=lm_head_ring_core_output_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -1566,75 +1252,51 @@ class TtModelArgs:
             self.model_config["LM_HEAD_TG_RING_PROGCFG"] = self.matmul_1d_ring_lm_head_config(
                 1,
                 32,
-                self.dim // 4,
-                16896,  # use padded shape
+                # self.dim // 4,
+                6144 // 4,
+                # 16896,  # use padded shape
+                # 155648 // 8,
+                19968,
                 LM_HEAD_RING_SIZE,
                 prefetch=False,
             )
 
             self.model_config["LM_HEAD_PREFILL_PROGCFG"] = self.matmul_1d_config_from_tensor_shapes(
-                in0_shape=(1, 1, 32, 2048),
-                in1_shape=(1, 1, 2048, 16384),
+                # in0_shape=(1, 1, 32, 2048),
+                in0_shape=(1, 1, 32, 1280),
+                # in1_shape=(1, 1, 2048, 16384),
+                in1_shape=(1, 1, 1280, 18992),
                 grid=ttnn.CoreGrid(x=7, y=7),  # (7,10) leads to hangs
                 act=None,
                 is_fp32_accumulate=False,
                 # overwrite_subblock_w=1,
                 # overwrite_subblock_h=1,
             )
-            # self.model_config["LM_HEAD_PREFILL_PROGCFG"] = ttnn.MinimalMatmulConfig(
-            #     M_block_size=8,
-            #     K_block_size=8,
-            #     N_block_size=8,
-            #     subblock_h=1,
-            #     subblock_w=1,
-            #     compute_with_storage_grid_size=ttnn.CoreCoord(7, 10),
-            # )
 
             attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)
             attn_input_sub_core_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
                 self.start_core, 32, self.sub_core_grids, row_wise=True
             )
-            self.model_config["SHARDED_ATTN_INPUT_MEMCFG"] = (
-                ttnn.create_sharded_memory_config(
-                    shape=(32, nearest_32(self.dim // (8 * lm_head_num_rows) // 4)),
-                    core_grid=attn_input_sub_core_grid,
-                    strategy=ttnn.ShardStrategy.WIDTH,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-                if self.is_galaxy
-                else ttnn.create_sharded_memory_config(
-                    (
-                        self.tile_padded_batch_rows,
-                        self.dim // attn_input_grid.num_cores,
-                    ),  # Shard shape: [32, 128] -> 1 shard per core
-                    attn_input_grid,
-                    ttnn.ShardStrategy.WIDTH,
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
+            # Always use Galaxy configuration
+            self.model_config["SHARDED_ATTN_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, nearest_32(self.dim // (8 * lm_head_num_rows) // 4)),
+                core_grid=attn_input_sub_core_grid,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
             )
 
-            # glx doesn't support DRAM sharded matmuls yet
-            self.model_config["XQKV_DECODE_PROGCFG"] = (
-                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(8, 5 if self.is_70b else lm_head_num_rows),
-                    in0_block_w=2 if self.is_70b else 1,
-                    out_subblock_h=1,
-                    out_subblock_w=1,
-                    per_core_M=1,
-                    per_core_N=1,
-                    fuse_batch=True,
-                    fused_activation=None,
-                    mcast_in0=True,
-                )
-                if self.is_galaxy
-                else self.dram_matmul_config(
-                    m=self.tile_padded_batch_rows,
-                    k=self.dim,
-                    n=self.qkv_size // self.num_devices,
-                    num_cores=attn_input_grid.num_cores,
-                )
+            # Always use Galaxy configuration
+            self.model_config["XQKV_DECODE_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(8, 5 if self.is_70b else lm_head_num_rows),
+                in0_block_w=2 if self.is_70b else 1,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=1,
+                per_core_N=1,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
             )
 
             full_grid = ttnn.CoreRangeSet(
@@ -1749,6 +1411,7 @@ class TtModelArgs:
                     ttnn.CoreRange(ttnn.CoreCoord(1, 3), ttnn.CoreCoord(2, 3)),
                 ]
             )
+
             self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32, 512),
                 core_grid=PACKET_WORKER_CRS,
@@ -1796,116 +1459,6 @@ class TtModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
 
-            # Vision model configs
-            self.model_config["IMAGE_MLP_FC_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
-                m=min(seq_len, max_seq),
-                k=self.vision_dim,
-                n=self.vision_hidden_dim // self.num_devices,
-                grid_size=(8, 8),
-                in0_block_w=1,
-                fuse_batch=seq_len <= max_seq,
-            )
-            self.model_config["IMAGE_MLP_PROJ_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
-                m=min(seq_len, max_seq),
-                k=self.vision_hidden_dim // self.num_devices,
-                n=self.vision_dim,
-                grid_size=(8, 8),
-                in0_block_w=1,
-                fuse_batch=seq_len <= max_seq,
-            )
-            self.model_config["IMAGE_ATTN_QKV_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
-                m=min(seq_len, max_seq),
-                k=self.vision_dim,
-                n=(nearest_32(self.vision_head_dim) * self.vision_attn_n_heads * 3)
-                // self.num_devices,  # Head dim was padded to nearest 32
-                grid_size=(8, 8),
-                in0_block_w=1,
-                fuse_batch=seq_len <= max_seq,
-            )
-            self.model_config["IMAGE_ATTN_OUT_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
-                m=min(seq_len, max_seq),
-                k=(nearest_32(self.vision_head_dim) * self.vision_attn_n_heads * 3) // self.num_devices,
-                n=self.vision_dim,
-                grid_size=(8, 8),
-                in0_block_w=1,
-                fuse_batch=seq_len <= max_seq,
-            )
-            self.model_config["VISION_XATTN_Q_PROGCFG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, 1024),
-                k=self.dim,
-                n=(self.head_dim * self.n_heads) // self.num_devices,
-                grid_size=(8, 8),
-                in0_block_w=1,
-                fuse_batch=seq_len <= 1024,
-            )
-            self.model_config["VISION_XATTN_KV_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
-                m=min(seq_len, max_seq),
-                k=self.dim,
-                n=(self.head_dim * self.n_kv_heads) // self.num_devices,
-                grid_size=(8, 8),
-                in0_block_w=1,
-                fuse_batch=seq_len <= max_seq,
-            )
-            self.model_config["VISION_XATTN_SCORE_PROGCFG"] = lambda seq_len, cache_seq_len: self.matmul_config(
-                m=seq_len,
-                k=self.head_dim,
-                n=cache_seq_len,
-                grid_size=(8, 8),
-                in0_block_w=1,
-                fuse_batch=False,
-            )
-            self.model_config["VISION_XATTN_OUTPUT_PROGCFG"] = lambda seq_len, cache_seq_len: self.matmul_config(
-                m=seq_len,
-                k=cache_seq_len,
-                n=self.head_dim,
-                grid_size=(8, 8),
-                # in0_block_w=1, # TODO: Remove this when we get non-causal FlashDecode
-                fuse_batch=False,
-            )
-            self.model_config["VISION_XATTN_DENSE_PROGCFG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, 1024),
-                k=self.dim // self.num_devices,
-                n=self.dim,
-                grid_size=(8, 8),
-                in0_block_w=1,
-                fuse_batch=False,
-            )
-
-            self.model_config["VISION_PROJ_PROGCFG"] = lambda seq_len: self.matmul_config(
-                m=seq_len,
-                k=self.vision_dim * 6,
-                n=self.dim // self.num_devices,
-                grid_size=(8, 8),
-                in0_block_w=1,
-                fuse_batch=False,
-            )
-
-            self.model_config["CROSS_TRANSFORMER_TEXT_OUTPUT_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
-                m=min(seq_len, max_seq),
-                k=self.dim,
-                n=self.vocab_size // 8,  # Magic number. LM Head always contains 8 splits
-                grid_size=(8, 8),
-                in0_block_w=1,
-                fuse_batch=seq_len <= max_seq,
-            )
-
-            def _get_xattn_kv_prefill_mem_cfg(seq_len):
-                M = (self.n_kv_heads // self.num_devices) * seq_len
-                cores_x, cores_y = self.find_grid(M // self.tile_size)
-                return ttnn.create_sharded_memory_config(
-                    (
-                        nearest_32(M // (cores_x * cores_y)),
-                        self.head_dim,
-                    ),
-                    ttnn.CoreGrid(y=cores_y, x=cores_x),
-                    ttnn.ShardStrategy.HEIGHT,
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-
-            self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = _get_xattn_kv_prefill_mem_cfg
-
-            self.VISION_MAX_MM_SEQ = nearest_32(self.vision_chunk_ntok)
             # RMS NORM
             self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"] = self.create_sharded_norm_config(attn_input_grid)
             self.model_config["SHARDED_NORM_MLP_PRGM_CFG"] = self.create_sharded_norm_config(mlp_core_grid)
@@ -1930,9 +1483,7 @@ class TtModelArgs:
 
             self.is_multichip = self.num_devices > 1
             self.num_reduce_scatter_links = 1
-            self.num_all_gather_links = (
-                2 if self.is_galaxy else 1
-            )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
+            self.num_all_gather_links = 2  # Always use Galaxy configuration
             self.ccl_dtype = ttnn.bfloat8_b
 
     def is_distributed_norm(self, mode):
@@ -2032,14 +1583,16 @@ class TtModelArgs:
         self.full_model_n_layers = self.n_layers
         self.norm_eps = params.get("norm_eps", params.get("rms_norm_eps"))
         self.vocab_size = params["vocab_size"]
-        self.padded_vocab_size = 128 * 1024
+        self.padded_vocab_size = 155648
         self.head_dim = params.get("head_dim", self.dim // self.n_heads)
         if is_hf:
             self.max_context_len = params.get("max_position_embeddings")
+            self.max_context_len = 190190
         else:
             self.max_context_len = (
-                128 * 1024
-            )  # For Llama3 Meta weights TODO: Remove this when we move to HF weights only
+                # 128 * 1024
+                190190  # For Llama3 Meta weights TODO: Remove this when we move to HF weights only
+            )
 
         # Handle different MLP dimension specifications
         if "intermediate_size" in params:
@@ -2106,25 +1659,6 @@ class TtModelArgs:
             self.rope_scaling_factor = None
             self.orig_context_len = None
 
-        # Vision params (Meta-specific)
-        self.vision_chunk_size = params.get("vision_chunk_size", -1)
-        self.vision_max_num_chunks = params.get("vision_max_num_chunks", 4)
-        self.vision_num_cross_attention_layers = params.get("vision_num_cross_attention_layers", -1)
-
-        # Vision constants
-        self.vision_dim = 1280
-        self.vision_mlp_ratio = 4
-        self.vision_hidden_dim = int(self.vision_dim * self.vision_mlp_ratio)
-        self.vision_act_layer = ttnn.UnaryOpType.GELU
-        self.vision_dropout = 0.0
-        self.vision_attn_n_heads = 16
-        self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
-        self.vision_n_layers = 32
-        self.vision_n_global_layers = 8
-        self.vision_max_num_tiles = 4
-        self.vision_patch_size = 14
-        self.vision_in_channels = 3
-
     @property
     def use_scaled_rope(self):
         return self.rope_scaling_factor is not None
@@ -2132,13 +1666,6 @@ class TtModelArgs:
     @property
     def base_model_name(self):
         return get_base_model_name(self.model_name)
-
-    @property
-    def vision_chunk_ntok(self):
-        """
-        Returns the number of tokens per chunk, accounting for the extra class token
-        """
-        return (self.vision_chunk_size // self.vision_patch_size) ** 2 + 1
 
     def _set_model_params(self, checkpoint_dir):
         if self.checkpoint_type == CheckpointType.Meta:
@@ -2154,34 +1681,7 @@ class TtModelArgs:
         with open(params_file, "r") as f:
             params = json.load(f)
         self._set_params_from_dict(params)
-
-        # Meta-style config dicts don't specity model name or rope_scaling_factor so hard-code these
-        # Set the model name based on the checkpoint directory being loaded
-        if "3.2-1B" in checkpoint_dir:
-            self.model_name = "Llama-3.2-1B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 32
-        elif "3.2-3B" in checkpoint_dir:
-            self.model_name = "Llama-3.2-3B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 32
-        elif "3.1-8B" in checkpoint_dir:
-            self.model_name = "Llama-3.1-8B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 8
-        elif "3.2-11B" in checkpoint_dir:
-            self.model_name = "Llama-3.2-11B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 8  # shared with 3.1-8B
-        elif "3.1-70B" in checkpoint_dir:
-            self.model_name = "Llama-3.1-70B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 8
-            self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
-            self.max_prefill_chunk_size = 128 * 1024
-        elif "3.3-70B" in checkpoint_dir:
-            self.model_name = "Llama-3.3-70B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 8
-            self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
-            self.max_prefill_chunk_size = 128 * 1024
-        else:
-            logger.warning(f"Unknown Meta-style model: {checkpoint_dir}")
-        self.orig_context_len = 8192
+        self.orig_context_len = 40960
 
     def _set_hf_params(self, checkpoint_dir):
         if self.from_hf_url:
@@ -2194,16 +1694,9 @@ class TtModelArgs:
             with open(config_file, "r") as f:
                 config = json.load(f)
         self._set_params_from_dict(config, is_hf=True)
-        self.is_70b = self.dim == 8192 and self.n_layers == 80
+        self.is_70b = self.dim == 5120 and self.n_layers == 64
         if self.is_70b:
-            self.max_prefill_chunk_size = 128 * 1024
-        # TODO Hack for deepseek distill 70b. generalize if needed
-        if "Llama-70B" in checkpoint_dir:  # if we're using a distill version of 70B, use same settings as Llama-70b
-            self.model_name = "Deepseek-R1-Distill-70B"
-            self.rope_scaling_factor = 8
-            self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
-            self.max_prefill_chunk_size = 128 * 1024
-            self.orig_context_len = 8192
+            self.max_prefill_chunk_size = 40960
 
     def __repr__(self):
         return f"""ModelArgs(
@@ -2220,16 +1713,10 @@ class TtModelArgs:
     use_scaled_rope={self.use_scaled_rope},
     max_batch_size={self.max_batch_size},
     max_seq_len={self.max_seq_len},
-    vision_chunk_size={self.vision_chunk_size},
-    vision_max_num_chunks={self.vision_max_num_chunks},
-    vision_num_cross_attention_layers={self.vision_num_cross_attention_layers}
 )"""
 
-    def is_vision(self):
-        return self.vision_chunk_size > 0
-
     def get_state_dict_prefix(self, module_name, layer_num):
-        text_prefix = "text_model." if self.is_vision() else ""
+        # text_prefix = "text_model."
         layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
         module_map = {
             "TtLlamaMLP": "feed_forward",
@@ -2237,7 +1724,7 @@ class TtModelArgs:
             "TtTransformerBlock": "",
             "": "",  # If no module is given, just get layer prefix
         }
-        return text_prefix + layer_prefix + module_map[module_name]
+        return layer_prefix + module_map[module_name]
 
     def weight_cache_path(self, dtype):
         # Keep the weight cache separate for generative and instruct weights
@@ -2257,24 +1744,26 @@ class TtModelArgs:
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
         """Generate or load state_dict for n_layers of the model"""
-        if self.dummy_weights:
-            reference_model = Transformer(self)
-            state_dict = reference_model.state_dict()
-            state_dict_prefix = self.get_state_dict_prefix("", None)
-            state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
-        elif self.checkpoint_type == CheckpointType.Meta:
-            state_dict = load_meta_state_dict(self.CKPT_DIR, self.n_layers)
-        else:
-            assert self.checkpoint_type == CheckpointType.HuggingFace
-            if self.from_hf_url:
-                from transformers import AutoModelForCausalLM
+        assert self.checkpoint_type == CheckpointType.HuggingFace
 
-                model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
-                state_dict = model.state_dict()
-            else:
-                state_dict = load_hf_state_dict(self.CKPT_DIR)
-            state_dict = standardize_hf_keys(state_dict)
-            state_dict = convert_hf_to_meta(state_dict, self.head_dim)
+        if self.dummy_weights:
+            from transformers import AutoConfig, AutoModelForCausalLM
+
+            config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
+            config.num_layers = self.n_layers
+            config.num_hidden_layers = self.n_layers
+            model = AutoModelForCausalLM.from_config(config)
+            state_dict = model.state_dict()
+
+        elif self.from_hf_url:
+            from transformers import AutoModelForCausalLM
+
+            model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+            state_dict = model.state_dict()
+        else:
+            state_dict = load_hf_state_dict(self.CKPT_DIR)
+        state_dict = standardize_hf_keys(state_dict)
+        state_dict = convert_hf_to_meta(state_dict, self.head_dim)
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
         for k in keys_dict:
@@ -2323,9 +1812,7 @@ class TtModelArgs:
         per_core_N = math.ceil(n / (self.tile_size * grid_size[0]))
 
         out_subblock_h = 1
-        out_subblock_w = (
-            get_out_subblock_w(per_core_N, out_subblock_h) if not self.is_galaxy else 1
-        )  # TODO: Needed for TG hang workaround
+        out_subblock_w = 1  # Always use Galaxy configuration (TG hang workaround)
 
         if in0_block_w is None:
             in0_block_w = min(4, max(1, k // (self.tile_size * grid_size[0])))
@@ -2363,6 +1850,7 @@ class TtModelArgs:
             AssertionError: If it's not possible to find such a grid configuration.
         """
         max_rows = 8
+        # max_rows = 10
         max_cols = 8
         max_cores = max_rows * max_cols
 
@@ -2513,14 +2001,14 @@ class TtModelArgs:
     ):
         M *= B  # Fuse batch always enabled
 
-        in0_block_h = M // ttnn.TILE_SIZE
-        in0_block_w = K // num_cores // ttnn.TILE_SIZE
-        out_block_h = M // ttnn.TILE_SIZE
-        out_block_w = N // num_cores // ttnn.TILE_SIZE
+        in0_block_h = M // ttnn.TILE_SIZE  # 1
+        in0_block_w = K // num_cores // ttnn.TILE_SIZE  # 1
+        out_block_h = M // ttnn.TILE_SIZE  # 1
+        out_block_w = N // num_cores // ttnn.TILE_SIZE  # 24
 
-        num_blocks_y = (M // ttnn.TILE_SIZE - 1) // out_block_h + 1
-        num_blocks_x = (N // ttnn.TILE_SIZE - 1) // out_block_w + 1
-        num_blocks_total = num_blocks_y * num_blocks_x
+        num_blocks_y = (M // ttnn.TILE_SIZE - 1) // out_block_h + 1  # 1
+        num_blocks_x = (N // ttnn.TILE_SIZE - 1) // out_block_w + 1  # 24
+        num_blocks_total = num_blocks_y * num_blocks_x  # 24
 
         if num_blocks_total != num_cores:
             assert False, f"num_blocks_total {num_blocks_total} != num_cores {num_cores}"
@@ -2695,21 +2183,15 @@ class TtModelArgs:
 
     def create_tokenizer(self):
         """Create and return a Tokenizer instance based on the checkpoint type."""
-        if self.checkpoint_type == CheckpointType.Meta:
-            # Use the Meta Tokenizer
-            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
+        # Create a HuggingFace AutoTokenizer
+        from transformers import AutoTokenizer
 
-            return Tokenizer(self.tokenizer_path)
-        else:
-            # Create a HuggingFace AutoTokenizer
-            from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
 
-            tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
-
-            # Add meta-compatible stop token list to the HF tokenizer
-            if not "stop_tokens" in tokenizer.__dict__:
-                tokenizer.stop_tokens = [tokenizer.eos_token_id]
-            return tokenizer
+        # Add meta-compatible stop token list to the HF tokenizer
+        if not "stop_tokens" in tokenizer.__dict__:
+            tokenizer.stop_tokens = [tokenizer.eos_token_id]
+        return tokenizer
 
     def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
         if self.checkpoint_type == CheckpointType.Meta:
@@ -2726,92 +2208,3 @@ class TtModelArgs:
                     logger.warning(f"Falling back to base model encoding with no chat template")
 
             return self.tokenizer.encode(prompt_text, add_special_tokens=False)
-
-
-def num_to_corerange(x):
-    assert x < 8 or x % 8 == 0
-    num_x = min(x, 8)
-    num_y = x // num_x
-    assert num_x * num_y == x
-    return ttnn.CoreRange(
-        ttnn.CoreCoord(0, 0),
-        ttnn.CoreCoord(num_x - 1, num_y - 1),
-    )
-
-
-def num_to_coregrid(x):
-    if x % 8 == 0:
-        return ttnn.CoreGrid(y=x // 8, x=8)
-    if x == 12:
-        return ttnn.CoreGrid(y=2, x=6)
-    if x == 20:
-        return ttnn.CoreGrid(y=4, x=5)
-
-
-def set_tg_attention_config(model_config, dim):
-    sub_core_grids = ttnn.CoreRangeSet(
-        [
-            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-        ]
-    )
-    start_core = ttnn.CoreCoord(1, 0)
-    shard_spec_n_cores_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-        start_core, 10, sub_core_grids, row_wise=False
-    )
-
-    model_config["CREATE_HEAD_INPUT_MEMCFG"] = (
-        None
-        if dim < 4096
-        else ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(
-                shard_spec_n_cores_grid,
-                [
-                    32,
-                    128,
-                ],
-                ttnn.ShardOrientation.ROW_MAJOR,
-            ),
-        )
-    )
-    model_config["CREATE_HEAD_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            sub_core_grids,
-            [
-                32,
-                128,
-            ],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
-    )
-
-    num_cores = 40 if dim == 8192 else (24 if dim == 4096 else (20 if dim == 3072 else 12))
-
-    model_config["QKV_OUT_GATHERED_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
-        shape=(32 * mesh_cols, 32),  # mesh_cols = 4
-        core_grid=num_to_coregrid(num_cores),
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-
-    model_config["SELF_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
-        shape=(32 * mesh_rows, dim // 4 // min(32, dim // 4 // 32)),
-        core_grid=num_to_coregrid(min(32, dim // 4 // 32)),
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-    model_config["GATHER_USERS_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
-        shape=(32, 128),  # mesh_cols = 4
-        core_grid=ttnn.num_cores_to_corerangeset_in_subcoregrids(start_core, 32, sub_core_grids, row_wise=True),
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-
-    return model_config
