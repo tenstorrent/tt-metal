@@ -132,7 +132,7 @@ public:
 
     // UDM mode: Worker assignment info
     struct WorkerTensixInfo {
-        CoreCoord tensix_core;   // The tensix mux core assigned to this worker
+        CoreCoord tensix_core;     // The tensix mux core assigned to this worker (virtual coordinate)
         uint32_t channel_index{};  // The channel index on that tensix mux core
     };
 
