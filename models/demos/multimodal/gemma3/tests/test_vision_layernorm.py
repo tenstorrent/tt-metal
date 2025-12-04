@@ -10,7 +10,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
-from models.demos.gemma3.tt.model_config import ModelArgs
+from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm  # Updated import for LayerNorm
 
 

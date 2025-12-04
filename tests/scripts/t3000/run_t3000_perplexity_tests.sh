@@ -207,7 +207,7 @@ run_t3000_gemma3_accuracy_tests() {
   gemma3_27b=google/gemma-3-27b-it
   tt_cache_gemma3_27b=$TT_CACHE_HOME/$gemma3_27b
 
-  HF_MODEL=$gemma3_27b TT_CACHE_PATH=$tt_cache_gemma3_27b pytest models/demos/gemma3/demo/text_demo.py -k "ci-token-matching"
+  HF_MODEL=$gemma3_27b TT_CACHE_PATH=$tt_cache_gemma3_27b pytest models/demos/multimodal/gemma3/demo/text_demo.py -k "ci-token-matching"
 
   # Record the end time
   end_time=$(date +%s)

@@ -65,8 +65,8 @@ def create_multimodal_model(
     num_layers=None,
     paged_attention_config=None,
 ):
-    from models.demos.gemma3.tt.gemma_e2e_model import TtGemmaModel
-    from models.demos.gemma3.tt.model_config import ModelArgs
+    from models.demos.multimodal.gemma3.tt.gemma_e2e_model import TtGemmaModel
+    from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
 
     # limit length or we'll run out of space
     tt_model_args = ModelArgs(

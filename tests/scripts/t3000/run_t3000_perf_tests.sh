@@ -120,7 +120,7 @@ run_t3000_gemma3_tests() {
   fail=0
   start_time=$(date +%s)
 
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/gemma3/tests/test_perf_vision_cross_attention_transformer.py ; fail+=$?
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/multimodal/gemma3/tests/test_perf_vision_cross_attention_transformer.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
