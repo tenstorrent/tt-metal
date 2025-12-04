@@ -184,8 +184,6 @@ void topk_group_scores(
     // pack index tile into sorted_group_indices_cb_index
     pack_reconfig_data_format(sorted_group_indices_cb_index);
     pack_tile(2, sorted_group_indices_cb_index);
-    // CVELE: If copy_tile_to_dst_init_short_with_dt is called, this will print correct values
-    // PACK(print_tile(sorted_group_indices_cb_index, 0, true, 0, 8, 0, 16));
 
     cb_pop_front(group_scores_cb_index, 1);
     // don't pop group indices as it gets re-used for the next tile heights
@@ -195,14 +193,11 @@ void topk_group_scores(
 }
 
 void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_index, const uint32_t tiles) {
-    // UNPACK(DPRINT << "Transpose and pack tiles: " << tiles << ENDL());
     reconfig_data_format_srca(input_cb_index);
     transpose_wh_init_short(input_cb_index);
     pack_reconfig_data_format(input_cb_index);
     for (uint32_t i = 0; i < tiles; i++) {
         cb_wait_front(input_cb_index, 1);
-        UNPACK(print_tile(input_cb_index, 0, true, 0, 32, 0, 1));
-        // UNPACK(DPRINT << "Waiting for input cb DONE" << ENDL());
 
         cb_reserve_back(output_cb_index, 1);
 
@@ -213,7 +208,6 @@ void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_
         tile_regs_wait();
         pack_tile(0, output_cb_index);
         tile_regs_release();
-        // PACK(print_tile(output_cb_index, i, true, 0, 8, 0, 1));
         cb_push_back(output_cb_index, 1);
 
         cb_pop_front(input_cb_index, 1);
@@ -278,7 +272,6 @@ void topk(
     cb_reserve_back(unnormalized_scores_cb_index, 1);
     pack_reconfig_data_format(unnormalized_scores_cb_index);
     pack_tile(0, unnormalized_scores_cb_index);
-    PACK(print_tile(unnormalized_scores_cb_index, 0, true, 0, 32, 0, 1));
     cb_push_back(unnormalized_scores_cb_index, 1);
 
     cb_reserve_back(intermediate_local_sort_indices_cb_index, 1);
@@ -301,7 +294,6 @@ void normalize_scores(
         unnormalized_scores_cb_index, reduce_scalar_cb_index, normalized_scores_cb_index);
     cb_wait_front(epsilon_cb_index, 1);
     cb_wait_front(unnormalized_scores_cb_index, 1);
-    UNPACK(print_tile(unnormalized_scores_cb_index, 0, true, 0, 32, 0, 1));
     cb_wait_front(reduce_scalar_cb_index, 1);
     acquire_dst();
 
@@ -326,7 +318,6 @@ void normalize_scores(
     // reduce_uninit();
 
     cb_wait_front(intermediate_reduce_cb_index, 1);
-    UNPACK(print_tile(intermediate_reduce_cb_index, 0, true, 0, 1, 0, 1));
 
     // why the hell is mul_tiles_bcast templated but not mul_bcast_rows_init_short???
     mul_bcast_rows_init_short(unnormalized_scores_cb_index, intermediate_reduce_cb_index);
@@ -336,6 +327,7 @@ void normalize_scores(
     mul_tiles_bcast<BroadcastType::ROW>(
         unnormalized_scores_cb_index, intermediate_reduce_cb_index, 0, 0, 0);  // tile *= 1/(sum_col(tile))
     pack_tile(0, normalized_scores_cb_index);
+    // PACK(print_tile(normalized_scores_cb_index, 0, true, 0, 8, 0, 1));
     cb_push_back(normalized_scores_cb_index, 1);
 
     cb_pop_front(intermediate_reduce_cb_index, 1);
@@ -349,7 +341,7 @@ void scale_and_transpose(
     const uint32_t transpose_cb_index,
     const uint32_t weights_cb_index) {
     cb_wait_front(normalized_scores_cb_index, 1);
-    UNPACK(print_tile(normalized_scores_cb_index, 0, true, 0, 32, 0, 1));
+    // UNPACK(print_tile(normalized_scores_cb_index, 0, true, 0, 8, 0, 1));
     cb_wait_front(scales_cb_index, 1);
     cb_reserve_back(transpose_cb_index, 1);
 
@@ -360,7 +352,7 @@ void scale_and_transpose(
     mul_tiles_bcast<BroadcastType::SCALAR>(normalized_scores_cb_index, scales_cb_index, 0, 0, 0);
 
     pack_tile(0, transpose_cb_index);
-
+    PACK(print_tile(transpose_cb_index, 0, true, 0, 8, 0, 1));
     cb_push_back(transpose_cb_index, 1);
     cb_pop_front(normalized_scores_cb_index, 1);
     release_dst();
@@ -442,9 +434,6 @@ void MAIN {
             tile_regs_wait();
             pack_tile<true>(0, sigmoid_input_cb_index, 0);
             tile_regs_release();
-            // if (width_tile == 5 || width_tile == 0 || width_tile == 1 || width_tile == 3) {
-            //     PACK(print_tile(sigmoid_input_cb_index, 0, true, 0, 1));
-            // }
             cb_push_back(sigmoid_input_cb_index, 1);
         }
 

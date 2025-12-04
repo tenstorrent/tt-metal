@@ -104,8 +104,8 @@ def test_grouped_gate(device):
     summed_experts_per_group = 2  # number of experts to sum per group
     topk_groups = 4  # top groups to keep
     n_activated_experts = 8  # chosen experts per token
-    route_scale = 1.0  # scales for the final weights
-    epsilon = 1e-5  # epsilon for stability
+    route_scale = 1.5  # scales for the final weights
+    epsilon = 1e-20  # epsilon for stability
 
     golden_scores, golden_top_k_experts_indices = grouped_gate_golden(
         scores, bias, route_scale, epsilon, n_groups, summed_experts_per_group, topk_groups, n_activated_experts
