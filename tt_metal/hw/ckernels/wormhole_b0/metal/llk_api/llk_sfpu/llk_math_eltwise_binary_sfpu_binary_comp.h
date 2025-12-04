@@ -27,6 +27,22 @@ inline void llk_math_eltwise_binary_sfpu_lt_int32(
 }
 
 template <bool APPROXIMATE>
+inline void llk_math_eltwise_binary_sfpu_lt_uint32_init() {
+    llk_math_eltwise_binary_sfpu_init<SfpuType::lt, APPROXIMATE>();
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_binary_sfpu_lt_uint32(
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::calculate_binary_comp_uint32<APPROXIMATE, 8, SfpuType::lt>,
+        dst_index0,
+        dst_index1,
+        odst,
+        vector_mode);
+}
+
+template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_gt_int32_init() {
     llk_math_eltwise_binary_sfpu_init<SfpuType::gt, APPROXIMATE>();
 }

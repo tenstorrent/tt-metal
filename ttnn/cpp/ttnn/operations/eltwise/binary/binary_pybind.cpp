@@ -2243,7 +2243,7 @@ void py_module(py::module& module) {
         R"doc(Compares if :attr:`input_tensor_a` is less than :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i < \mathrm{{input\_tensor\_b}}_i))doc",
         ". ",
-        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32)doc",
+        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT32)doc",
         "INT32 supported only for tensor-tensor.");
 
     detail::bind_binary_operation(
@@ -2252,7 +2252,7 @@ void py_module(py::module& module) {
         R"doc(Compares if :attr:`input_tensor_a` is less than or equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i <= \mathrm{{input\_tensor\_b}}_i))doc",
         ". ",
-        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32)doc",
+        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT32)doc",
         "INT32 supported only for tensor-tensor.");
 
     detail::bind_binary_operation(
@@ -2261,7 +2261,7 @@ void py_module(py::module& module) {
         R"doc(Compares if :attr:`input_tensor_a` is greater than :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i > \mathrm{{input\_tensor\_b}}_i))doc",
         ". ",
-        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32)doc",
+        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT32)doc",
         "INT32 supported only for tensor-tensor.");
 
     detail::bind_binary_operation(
@@ -2270,7 +2270,7 @@ void py_module(py::module& module) {
         R"doc(Compares if :attr:`input_tensor_a` is greater than or equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i >= \mathrm{{input\_tensor\_b}}_i))doc",
         ". ",
-        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32)doc",
+        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT32)doc",
         "INT32 supported only for tensor-tensor.");
 
     detail::bind_binary_operation(

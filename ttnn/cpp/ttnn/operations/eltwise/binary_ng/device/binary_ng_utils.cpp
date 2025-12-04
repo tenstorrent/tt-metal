@@ -168,7 +168,7 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
             }
             break;
         case BinaryOpType::LT:
-            if (dtype != DataType::INT32) {
+            if (dtype != DataType::INT32 && dtype != DataType::UINT32) {
                 postprocess = unary::UnaryOpType::LTZ;
             } else {
                 binary_op = SfpuBinaryOp::LT;
@@ -486,10 +486,30 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case DEQUANT:
             return {"dequant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "dequant_tile"};
         case XLOGY: return {"xlogy_binary_tile_init();", "xlogy_binary_tile"};
-        case LT: return {"lt_int32_tile_init();", "lt_int32_tile"};
-        case GT: return {"gt_int32_tile_init();", "gt_int32_tile"};
-        case GE: return {"ge_int32_tile_init();", "ge_int32_tile"};
-        case LE: return {"le_int32_tile_init();", "le_int32_tile"};
+        case LT:
+            if (dtype == DataType::UINT32) {
+                return {"lt_uint32_tile_init();", "lt_uint32_tile"};
+            } else {
+                return {"lt_int32_tile_init();", "lt_int32_tile"};
+            }
+        case GT:
+            if (dtype == DataType::UINT32) {
+                return {"gt_int32_tile_init();", "gt_uint32_tile_init"};
+            } else {
+                return {"gt_int32_tile_init();", "gt_int32_tile"};
+            }
+        case GE:
+            if (dtype == DataType::UINT32) {
+                return {"ge_int32_tile_init();", "ge_uint32_tile"};
+            } else {
+                return {"ge_int32_tile_init();", "ge_int32_tile"};
+            }
+        case LE:
+            if (dtype == DataType::UINT32) {
+                return {"le_int32_tile_init();", "le_uint32_tile"};
+            } else {
+                return {"le_int32_tile_init();", "le_int32_tile"};
+            }
         case WHERE:
             if (dtype == DataType::INT32) {
                 return {"where_tile_init();", "where_int32_tile"};

@@ -7,6 +7,7 @@
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_binary_sfpu_binary_comp.h"
+// #include "llk_math_eltwise_binary_sfpu_binary_comp_uint32.h"
 #endif
 
 namespace ckernel {
@@ -46,6 +47,10 @@ ALWI void le_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((llk_math_eltwise_binary_sfpu_le_int32<APPROX>(idst0, idst1, odst)));
 }
 
+ALWI void lt_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_lt_uint32<APPROX>(idst0, idst1, odst)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */
@@ -56,5 +61,7 @@ ALWI void gt_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_gt_int32_ini
 ALWI void ge_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_ge_int32_init<APPROX>())); }
 
 ALWI void le_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_le_int32_init<APPROX>())); }
+
+ALWI void lt_uint32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_lt_uint32_init<APPROX>())); }
 
 }  // namespace ckernel

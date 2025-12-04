@@ -106,4 +106,47 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
     }
 }
 
+// Comparison ops use int32 subtract (whose result is also in the int32 range) + sign check.
+// In order to avoid overflow for inputs of opposite signs, the output is determined directly from a sign check.
+template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
+inline void calculate_binary_comp_uint32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        // size of each tile in Dest is 64 rows
+        constexpr uint dst_tile_size = 64;
+        // operand A
+        TT_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_3, dst_index_in0 * dst_tile_size);
+        // operand B
+        TT_SFPLOAD(p_sfpu::LREG1, INT32, ADDR_MOD_3, dst_index_in1 * dst_tile_size);
+        // if constexpr (R
+
+        if constexpr (RELATIONAL_OP == SfpuType::lt) {
+            // Load mask = 0x80000000 into LREG_XOR_MASK
+            TT_SFPLOADI(LREG_XOR_MASK, SFPLOADI_MOD0_UINT, 0x80000000);
+            TT_SFPLOADI(p_sfpu::LREG1, 10, scale & 0xFFFF);
+            TT_SFPLOADI(p_sfpu::LREG1, 8, scale >> 16);
+
+            // XOR to map unsigned → signed
+            TTI_SFPXOR(0, LREG0, LREG_XOR_MASK, LREG0);
+            TTI_SFPXOR(0, LREG1, LREG_XOR_MASK, LREG1);
+            // if (LREG_3 == 0) -> use int32 subtract + extract sign
+            TTI_SFPSETCC(0, p_sfpu::LREG3, 0 /*unused*/, SFPSETCC_MOD1_LREG_EQ0);
+            // (A - B) -> Use 6 or LO16 as imod to convert operand B to 2's complement
+            TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, 6);
+            TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, 1);
+            // else -> load 0 for inputs of opposite signs
+            TTI_SFPCOMPC(0 /*unused*/, 0 /*unused*/, 0 /*unused*/, 0 /*unused*/);
+            TTI_SFPLOADI(p_sfpu::LREG1, SFPLOADI_MOD0_USHORT, 0x00);
+            // Load 1 if input A is negative
+            TTI_SFPSETCC(0, p_sfpu::LREG2, 0, SFPSETCC_MOD1_LREG_NE0);
+            TTI_SFPLOADI(p_sfpu::LREG1, SFPLOADI_MOD0_USHORT, 0x01);
+            TTI_SFPENCC(0, 0, 0, 0);
+
+            // LREG_1 -> dest
+            TT_SFPSTORE(p_sfpu::LREG1, INT32, ADDR_MOD_3, dst_index_out * dst_tile_size);
+
+            sfpi::dst_reg++;
+        }
+    }
+
 }  //  namespace ckernel::sfpu

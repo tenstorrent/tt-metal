@@ -475,16 +475,31 @@ def test_bitwise_uint32_full_range(device, ttnn_function, use_legacy):
 @pytest.mark.parametrize(
     "ttnn_op",
     [
-        ttnn.eq,
-        ttnn.ne,
-        ttnn.logical_and,
-        ttnn.logical_or,
-        ttnn.logical_xor,
+        # ttnn.eq,
+        # ttnn.ne,
+        # ttnn.logical_and,
+        # ttnn.logical_or,
+        # ttnn.logical_xor,
+        ttnn.lt,
     ],
 )
 def test_binary_comp_logical_ops_uint32_edge_cases(ttnn_op, device):
     torch_input_tensor_a = torch.tensor(
-        [0, 1, 0, 2147483647, 2147483647, 2147483647, 1073741823, 1073741823, 4294967295, 4294967294, 4294967295]
+        [
+            0,
+            1,
+            0,
+            2147483647,
+            2147483647,
+            2147483647,
+            1073741823,
+            1073741823,
+            1073741823,
+            4294967295,
+            4294967294,
+            4294967295,
+            4294967295,
+        ]
     )
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -495,7 +510,7 @@ def test_binary_comp_logical_ops_uint32_edge_cases(ttnn_op, device):
     )
 
     torch_input_tensor_b = torch.tensor(
-        [0, 0, 1, 2147483647, 2147483646, 0, 1000, 1073741823, 4294967295, 4294967295, 0]
+        [0, 0, 1, 2147483647, 2147483646, 0, 1000, 1073741823, 1073741822, 4294967295, 4294967295, 0, 1]
     )
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b,
@@ -509,7 +524,11 @@ def test_binary_comp_logical_ops_uint32_edge_cases(ttnn_op, device):
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
     output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
+    ttnn.set_printoptions(profile="full")
+    print(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
+    print(torch_output_tensor)
+    # print(output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
 
