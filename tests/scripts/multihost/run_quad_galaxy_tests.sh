@@ -8,7 +8,8 @@ if [ -z "${ARCH_NAME}" ]; then
 fi
 
 reset_machine_state () {
-  mpirun-ulfm --hostfile /etc/mpirun/hostfile --mca btl self,tcp --mca hwloc_base_binding_policy none --tag-output bash -c "pkill -9 python && source python_env/bin/activate && tt-smi -glx_reset --snapshot_no_tty && sudo /dev/shm/*"
+  #mpirun-ulfm --hostfile /etc/mpirun/rankfile_g05glx01_g05glx02 --mca btl self,tcp --mca hwloc_base_binding_policy none --tag-output bash -c "pkill -9 python && source python_env/bin/activate && tt-smi -glx_reset --snapshot_no_tty && sudo /dev/shm/*"
+  mpirun-ulfm --hostfile /etc/mpirun/rankfile_g05glx01_g05glx02 --mca btl self,tcp --mca hwloc_base_binding_policy none --tag-output bash -c "source python_env/bin/activate && tt-smi -glx_reset --snapshot_no_tty && sudo /dev/shm/*"
 }
 
 run_quad_galaxy_unit_tests() {
@@ -22,11 +23,14 @@ run_quad_galaxy_unit_tests() {
 
   source python_env/bin/activate
 
-  local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
-  #local mpi_args="--host g05glx01,g05glx02,g05glx03,g05glx04 $mpi_args_base"
-  local mpi_args="--host g05glx04,g05glx03,g05glx02,g05glx01 $mpi_args_base"
-  local rank_binding="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
+  #local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
+  local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile_g05glx01_g05glx02 --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
 
+  #local mpi_args="--host g05glx01,g05glx02,g05glx03,g05glx04 $mpi_args_base"
+  local mpi_args="--host g05glx02,g05glx01 $mpi_args_base"
+
+  #local rank_binding="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
+  local rank_binding="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
 
   tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/tt_fabric/test_system_health --gtest_filter="Cluster.ReportIntermeshLinks" ; fail+=$?
 
@@ -36,12 +40,12 @@ run_quad_galaxy_unit_tests() {
   mpirun-ulfm $mpi_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation --print-connectivity --send-traffic --hard-fail ; fail+=$?
   tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/tt_fabric/test_system_health --gtest_filter="Cluster.ReportIntermeshLinks" ; fail+=$?
 
-  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" bash -c "source ./python_env/bin/activate && pytest -svv \"tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace\"" ; fail+=$?
+  #tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" bash -c "source ./python_env/bin/activate && pytest -svv \"tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace\"" ; fail+=$?
 
   # TODO: Currently failing on 1D/2D tests
   #tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" bash -c "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=\"MultiHost.TestQuadGalaxy*\"" ; fail+=$?
 
-  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" bash -c "source python_env/bin/activate && pytest -svv \"tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x16_quad_galaxy\"" ; fail+=$?
+  #tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" bash -c "source python_env/bin/activate && pytest -svv \"tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x16_quad_galaxy\"" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
