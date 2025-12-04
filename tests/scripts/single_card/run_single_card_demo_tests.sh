@@ -312,7 +312,7 @@ run_yolov8s_perf() {
 run_mobilenetv2_perf(){
 
 #  mobilenetv2 demo
- $PYTEST_CMD models/demos/mobilenetv2/demo/demo.py
+ $PYTEST_CMD models/demos/vision/classification/mobilenetv2/demo/demo.py
 
 }
 

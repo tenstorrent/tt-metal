@@ -6,12 +6,12 @@ import torch
 import torch.nn as nn
 
 import ttnn
-from models.demos.mobilenetv2.reference.mobilenetv2 import (  # Import Conv2dNormActivation
+from models.demos.utils.common_demo_utils import get_mesh_mappers
+from models.demos.vision.classification.mobilenetv2.reference.mobilenetv2 import (  # Import Conv2dNormActivation
     Conv2dNormActivation,
     InvertedResidual,
     Mobilenetv2,
 )
-from models.demos.utils.common_demo_utils import get_mesh_mappers
 
 
 def preprocess_linear_weight(weight, *, dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=None):
