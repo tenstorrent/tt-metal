@@ -1,1 +1,1 @@
-../../../../models/demos/whisper/tests/test_whisper_modules.py
+../../../../models/demos/audio/whisper/tests/test_whisper_modules.py
