@@ -83,6 +83,7 @@ enum class UnaryOpType {
     UNARY_LE,
     TILED_PROD,
     TYPECAST,
+    BITCAST,
     BITWISE_XOR,
     BITWISE_NOT,
     BITWISE_AND,
