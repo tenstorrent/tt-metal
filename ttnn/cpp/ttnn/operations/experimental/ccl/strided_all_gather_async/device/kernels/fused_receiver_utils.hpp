@@ -63,9 +63,12 @@ struct MinimalMatmulOpReceiver {
     uint32_t my_chip_id = 0;
     uint32_t input_tensor_Wt = 0;
     uint32_t num_k_blocks = 0;
+    uint32_t local_k_start = 0;
+    uint32_t local_k_end = 0;
     std::array<volatile tt_l1_ptr uint32_t*, 3> signal_op_semaphore_addr_ptrs = {};  // backward, forward, self
     std::array<uint32_t, 3> sem_targets = {};
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring;
+    bool read_local_slice_from_input;
 
     uint8_t* k_block_device_expected;
     uint8_t* k_block_device_received;
@@ -107,6 +110,9 @@ struct MinimalMatmulOpReceiver {
         input_tensor_Wt = get_arg_val<uint32_t>(rt_args_idx++);
         uint32_t k_block_tiles = get_arg_val<uint32_t>(rt_args_idx++);
         topology = static_cast<ttnn::ccl::Topology>(get_arg_val<uint32_t>(rt_args_idx++));
+        read_local_slice_from_input = (bool)get_arg_val<uint32_t>(rt_args_idx++);
+        local_k_start = get_arg_val<uint32_t>(rt_args_idx++);
+        local_k_end = get_arg_val<uint32_t>(rt_args_idx++);
 
         if (this->wait_for_op_signal) {
             this->signal_op_semaphore_addr_ptrs[0] =
@@ -213,13 +219,12 @@ struct MinimalMatmulOpReceiver {
 
         if (is_first_n_block_iter) {
             while (true) {
-                if (wait_for_op_signal) {
+                if (wait_for_op_signal && !(read_local_slice_from_input && (curr_k_block_dir == 2))) {
                     volatile tt_l1_ptr uint32_t* semaphore = signal_op_semaphore_addr_ptrs[curr_k_block_dir];
                     uint32_t sem_target = sem_targets[curr_k_block_dir];
                     noc_semaphore_wait_min(semaphore, sem_target + 1);
                     sem_targets[curr_k_block_dir]++;
                 }
-
                 int32_t k_block = process_chunk(
                     device_id, device_chunk_id, curr_k_block_dir, devices_received, next_forward, next_backward);
                 if (k_block >= 0) {

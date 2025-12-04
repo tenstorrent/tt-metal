@@ -64,9 +64,9 @@ def _read_symbol_value(
     """
     try:
         return int(elf_obj.get_global(symbol, mem_access).read_value())
-    except Exception:
+    except Exception as e:
         if check_value:
-            log_check(False, f"Failed to read symbol {symbol}")
+            log_check(False, f"Failed to read symbol {symbol} from kernel {elf_obj.elf_file_path} with error {str(e)}")
         return None
 
 

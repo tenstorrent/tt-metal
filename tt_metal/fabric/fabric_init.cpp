@@ -5,6 +5,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include <umd/device/types/arch.hpp>
+#include <set>
 #include <variant>
 
 #include "erisc_datamover_builder.hpp"
@@ -30,62 +31,6 @@ extern "C" bool isFabricUnitTest() __attribute__((weak));
 bool isFabricUnitTest() { return false; }
 
 namespace tt::tt_fabric {
-
-tt::tt_fabric::FabricEriscDatamoverAxis get_fabric_edm_type(
-    const tt::tt_fabric::ControlPlane& control_plane,
-    const tt::tt_fabric::RoutingDirection direction,
-    tt::tt_fabric::MeshId mesh_id0,
-    tt::tt_fabric::MeshId mesh_id1,
-    ChipId chip0,
-    ChipId chip1,
-    bool wrap_around_mesh) {
-    auto fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short;
-
-    const auto& fabric_context = control_plane.get_fabric_context();
-
-    const auto eth_chan_direction = control_plane.routing_direction_to_eth_direction(direction);
-    if (mesh_id0 != mesh_id1 || !fabric_context.need_deadlock_avoidance_support(eth_chan_direction)) {
-        return fabric_edm_axis;
-    }
-
-    // Need global mesh shape to determine dateline placement for multi-host setups
-    auto physical_mesh_shape = control_plane.get_physical_mesh_shape(mesh_id0, tt::tt_fabric::MeshScope::GLOBAL);
-    TT_FATAL(physical_mesh_shape.dims() == 2, "Dateline routing only supported for 2D mesh");
-
-    auto mesh_num_rows = physical_mesh_shape[0];
-    auto mesh_num_columns = physical_mesh_shape[1];
-
-    auto smaller_chip_id = std::min(chip0, chip1);
-    auto larger_chip_id = std::max(chip0, chip1);
-
-    // Refactor this once mesh_id0 has row/col control
-    // wrap_around_mesh is used to fold the edm connections on the corner chips of a 2D mesh to form an outer ring of
-    // devices on the mesh.
-    if (wrap_around_mesh) {
-        // check if edm is on the longer axis
-        if ((mesh_num_rows * mesh_num_columns) >=
-            tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD) {
-            fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Long;
-        }
-    } else {
-        bool is_edm_along_row = ((larger_chip_id - smaller_chip_id) == mesh_num_columns) ||
-                                (smaller_chip_id == larger_chip_id % mesh_num_columns);
-
-        // check if edm is on the longer axis
-        if ((mesh_num_columns >= tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD &&
-             !is_edm_along_row) ||
-            (mesh_num_rows >= tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD &&
-             is_edm_along_row)) {
-            fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Long;
-        }
-    }
-
-    if (fabric_context.is_2D_routing_enabled()) {
-        fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short;
-    }
-
-    return fabric_edm_axis;
-}
 
 void build_tt_fabric_program(
     tt::tt_metal::IDevice* device,
@@ -322,9 +267,35 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
     // Compile all fabric tensix builders through router builders
     if (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
         tt::tt_fabric::FabricTensixConfig::DISABLED) {
+        // First pass: compile all existing tensix builders (from active eth channels)
         for (auto& [eth_chan, router_builder] : router_builders) {
             if (router_builder->has_tensix_builder()) {
                 router_builder->get_tensix_builder().create_and_compile(*fabric_program_ptr);
+            }
+        }
+
+        // Second pass (UDM mode only): build and compile tensix builders for missing directions
+        // Edge devices (e.g., top-left corner of a 4x2 mesh) only have east/south builders,
+        // leaving north/west empty. We need to build and compile them for inter-mux communication.
+        if (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() ==
+            tt::tt_fabric::FabricTensixConfig::UDM) {
+            const auto& tensix_config = fabric_context.get_tensix_config();
+            if (tensix_config.has_missing_directions(device->id())) {
+                const auto& missing_directions = tensix_config.get_missing_directions(device->id());
+                auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
+
+                for (const auto& [routing_plane_id, missing_dir] : missing_directions) {
+                    log_warning(
+                        tt::LogMetal,
+                        "Building missing direction tensix builder for fabric_node {}, routing_plane {}, direction {}",
+                        fabric_node_id,
+                        routing_plane_id,
+                        static_cast<uint32_t>(missing_dir));
+                    // Build and compile tensix builder for this missing (routing_plane_id, direction) pair
+                    auto tensix_builder = tt::tt_fabric::FabricTensixDatamoverBuilder::build_for_missing_direction(
+                        device, *fabric_program_ptr, fabric_node_id, routing_plane_id, missing_dir);
+                    tensix_builder.create_and_compile(*fabric_program_ptr);
+                }
             }
         }
     }

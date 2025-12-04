@@ -48,7 +48,6 @@ tt_metal/distributed/ @cfjchu @aliuTT @tt-asaigal @jbaumanTT @tenstorrent/codeow
 tt_metal/distributed/**/CMakeLists.txt @cfjchu @aliuTT @tt-asaigal @jbaumanTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @Riddy21 @tenstorrent/codeowner-bypass
 tt_metal/fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @Riddy21 @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-tt_metal/lite_fabric/ @nhuang-tt @abhullar-tt @tenstorrent/codeowner-bypass
 tt_metal/graph/ @ayerofieiev-tt @dmakoviichuk-tt @tenstorrent/codeowner-bypass
 tt_metal/hostdevcommon/ @abhullar-tt @jbaumanTT @kstevensTT @tenstorrent/codeowner-bypass # this should go away
 tt_metal/hw @abhullar-tt @jbaumanTT @nathan-TT @kstevensTT @tenstorrent/codeowner-bypass
@@ -139,8 +138,7 @@ ttnn/**/kernels/ @tenstorrent/codeowner-bypass # Removes the owners above from o
 ttnn/core/tensor/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
 ttnn/**/CMakeLists.txt @tenstorrent/metalium-developers-ttnn-core @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 
-ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @tenstorrent/codeowner-bypass
-ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @ayerofieiev-tt @razorback3 @dongjin-na @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/deprecated/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @tenstorrent/codeowner-bypass
 
 ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @nmauriceTT @jbbieniekTT @aczajkowskiTT @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/moreh*/**/CMakeLists.txt @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
@@ -248,6 +246,21 @@ tests/sweep_framework/sweep_utils/conv2d_common.py @tenstorrent/metalium-develop
 tests/sweep_framework/sweep_utils/conv_transpose2d_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 tests/sweep_framework/sweep_utils/max_pool2d_with_indices_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 
+# OP docs examples
+tests/ttnn/docs_examples/test_backward_examples.py @tenstorrent/metalium-developers-eltwise @tenstorrent/codeowner-bypass
+tests/ttnn/docs_examples/test_complex_unary_examples.py @tenstorrent/metalium-developers-eltwise @tenstorrent/codeowner-bypass
+tests/ttnn/docs_examples/test_core_examples.py @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
+tests/ttnn/docs_examples/test_data_movement_examples.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
+tests/ttnn/docs_examples/test_eltwise_*_examples.py @tenstorrent/metalium-developers-eltwise @tenstorrent/codeowner-bypass
+tests/ttnn/docs_examples/test_embedding_examples.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
+tests/ttnn/docs_examples/test_losses_examples.py @tenstorrent/metalium-developers-eltwise @tenstorrent/codeowner-bypass
+tests/ttnn/docs_examples/test_matrix_multiplication_examples.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
+tests/ttnn/docs_examples/test_normalization_examples.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
+tests/ttnn/docs_examples/test_pointwise_*_examples.py @tenstorrent/metalium-developers-eltwise @tenstorrent/codeowner-bypass
+tests/ttnn/docs_examples/test_pooling_examples.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
+tests/ttnn/docs_examples/test_reduction_examples.py @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
+tests/ttnn/docs_examples/test_tensor_creation_examples.py @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
+
 # TTNN Distributed
 ttnn/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
 tests/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
@@ -325,6 +338,7 @@ models/experimental/vovnet @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorr
 models/experimental/swin_v2 @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/tt_transformers_v2 @gwangTT @yieldthought @uaydonat @tenstorrent/codeowner-bypass
 models/**/requirements*.txt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+models/vllm_test_utils/ @skhorasganiTT @uaydonat @tenstorrent/codeowner-bypass
 
 # tracy
 tools/tracy/ @mo-tenstorrent @sagarwalTT @tenstorrent/codeowner-bypass
@@ -346,7 +360,16 @@ docs/source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/ @abhullar-tt @r
 dockerfile/upstream_test_images/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 
 # tt-train
-tt-train/** @dmakoviichuk-tt @rfurko-tt @ayerofieiev-tt @tenstorrent/codeowner-bypass
+# primary owners
+tt-train/** @dmakoviichuk-tt @ayerofieiev-tt @tenstorrent/codeowner-bypass
+# kernel development
+tt-train/sources/ttml/metal/** @mdragulaTT @vmelnykovTT @dyurshevichTT @zbaczewskiTT @tenstorrent/codeowner-bypass
+# ops
+tt-train/sources/ttml/ops/** @mdragulaTT @vmelnykovTT @dyurshevichTT @tenstorrent/codeowner-bypass
+# optimizers
+tt-train/sources/ttml/optimizers/** @zbaczewskiTT @tenstorrent/codeowner-bypass
+# tests
+tt-train/tests/** @mdragulaTT @vmelnykovTT @dyurshevichTT @zbaczewskiTT @athompsonTT @abustamanteTT @tenstorrent/codeowner-bypass
 
 # tt-telemetry
 tt_telemetry/** @btrzynadlowski-tt @tt-asaigal @kluongTT @cfjchu @tt-aho @SeanNijjar @aliuTT @Riddy21 @agupta-tt @tenstorrent/codeowner-bypass
