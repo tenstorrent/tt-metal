@@ -62,7 +62,7 @@ void PaddedSliceDeviceOperation::validate_on_program_cache_miss(
             args.padded_slice_end[i]);
     }
     if (tensor_args.preallocated_output.has_value()) {
-        const auto output_shape_required = compute_output_specs(args, tensor_args).logical_shape();
+        const auto output_shape_required = compute_output_specs(args, tensor_args).padded_shape();
         const auto& out_tensor = tensor_args.preallocated_output.value();
         TT_FATAL(
             out_tensor.padded_shape() == output_shape_required,
