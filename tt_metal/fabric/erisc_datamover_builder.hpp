@@ -446,7 +446,6 @@ public:
     bool is_first_level_ack_enabled() const { return this->enable_first_level_ack; }
 
     //    protected:
-    friend class EdmLineFabricOpInterface;
     CoreCoord my_eth_core_logical;
     chan_id_t my_eth_channel;
 
@@ -497,7 +496,7 @@ public:
     bool wait_for_host_signal = false;
     bool has_tensix_extension = false;
     uint32_t num_downstream_tensix_connections = 0;
-    bool udm_mode = false;  // UDM mode: router connects to local tensix relay
+    bool udm_mode = false;                        // UDM mode: router connects to local tensix relay
     uint32_t local_tensix_relay_num_buffers = 0;  // Number of buffers in the local relay channel
 
 private:
