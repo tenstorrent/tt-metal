@@ -140,7 +140,56 @@ else
 fi
 
 # ============================================
-# 4. IOMMU Configuration
+# 4. Virtualization Detection
+# ============================================
+section "Virtualization Environment"
+
+IS_VM=false
+VM_TYPE="none"
+
+# Detect if running in a VM
+if [[ -f /sys/class/dmi/id/product_name ]]; then
+    PRODUCT=$(cat /sys/class/dmi/id/product_name 2>/dev/null)
+    case "$PRODUCT" in
+        *"Virtual Machine"*|*"VMware"*|*"VirtualBox"*|*"KVM"*|*"QEMU"*|*"Hyper-V"*)
+            IS_VM=true
+            VM_TYPE="$PRODUCT"
+            ;;
+    esac
+fi
+
+# Additional VM detection methods
+if [[ -d /proc/xen ]] || grep -q "hypervisor" /proc/cpuinfo 2>/dev/null; then
+    IS_VM=true
+fi
+
+if systemd-detect-virt --quiet 2>/dev/null; then
+    IS_VM=true
+    VM_TYPE=$(systemd-detect-virt 2>/dev/null || echo "unknown")
+fi
+
+if $IS_VM; then
+    warn "Running inside a Virtual Machine: $VM_TYPE"
+    info "VM passthrough mode requires specific configuration"
+    echo ""
+
+    # Check for vIOMMU
+    VIOMMU_PRESENT=false
+    if [[ -d /sys/devices/virtual/iommu ]] || dmesg 2>/dev/null | grep -qi "viommu\|vIOMMU"; then
+        VIOMMU_PRESENT=true
+        ok "vIOMMU appears to be present"
+    else
+        error "vIOMMU not detected - required for Blackhole in VM"
+        info "Configure your hypervisor to enable vIOMMU for this VM"
+        info "  - KVM/QEMU: Add <iommu model='intel'/> to VM XML"
+        info "  - VMware: Enable 'Expose IOMMU to guest OS'"
+    fi
+else
+    ok "Running on bare metal (not a VM)"
+fi
+
+# ============================================
+# 5. IOMMU Configuration
 # ============================================
 section "IOMMU Configuration"
 
@@ -199,6 +248,9 @@ if [[ $IOMMU_GROUPS -gt 0 ]]; then
     done
 else
     warn "No IOMMU groups found - IOMMU may not be properly enabled"
+    if $IS_VM; then
+        error "In a VM, this likely means vIOMMU is not configured on the hypervisor"
+    fi
 fi
 
 # ============================================
@@ -394,7 +446,7 @@ else
 fi
 
 # ============================================
-# 10. Summary and Recommendations
+# 11. Summary and Recommendations
 # ============================================
 section "Summary"
 
@@ -403,9 +455,43 @@ if [[ $ISSUES_FOUND -eq 0 ]]; then
 else
     echo -e "${YELLOW}Found $ISSUES_FOUND potential issue(s)${NC}"
     echo ""
+
+    if $IS_VM; then
+        echo "============================================"
+        echo "  VIRTUAL MACHINE SPECIFIC FIXES"
+        echo "============================================"
+        echo ""
+        echo "For Blackhole in a VM, you need BOTH host and guest configuration:"
+        echo ""
+        echo "=== ON THE HOST SERVER ==="
+        echo ""
+        echo "1. Enable IOMMU in BIOS/UEFI (Intel VT-d or AMD-Vi)"
+        echo ""
+        echo "2. Host kernel parameters (/etc/default/grub):"
+        if [[ "$CPU_VENDOR" == "GenuineIntel" ]]; then
+            echo "   GRUB_CMDLINE_LINUX_DEFAULT=\"intel_iommu=on iommu=pt\""
+        else
+            echo "   GRUB_CMDLINE_LINUX_DEFAULT=\"amd_iommu=on iommu=pt\""
+        fi
+        echo ""
+        echo "3. Configure PCIe passthrough for device 1e52:401e"
+        echo "   - KVM: Use vfio-pci driver binding"
+        echo "   - VMware: Enable DirectPath I/O"
+        echo ""
+        echo "4. Enable vIOMMU for the VM:"
+        echo "   - KVM/libvirt: Add to VM XML:"
+        echo "     <iommu model='intel'>"
+        echo "       <driver intremap='on' caching_mode='on'/>"
+        echo "     </iommu>"
+        echo "   - VMware: Enable 'Expose IOMMU to guest OS'"
+        echo ""
+        echo "=== INSIDE THE VM (Guest) ==="
+        echo ""
+    fi
+
     echo "Common fixes for TLB allocation errors:"
     echo ""
-    echo "1. Enable IOMMU properly:"
+    echo "1. Enable IOMMU properly (in guest kernel if VM):"
     if [[ "$CPU_VENDOR" == "GenuineIntel" ]]; then
         echo "   Add to /etc/default/grub GRUB_CMDLINE_LINUX_DEFAULT:"
         echo "   intel_iommu=on iommu=pt"
@@ -424,6 +510,13 @@ else
     echo "4. Kill any orphaned processes using the device:"
     echo "   lsof /dev/tenstorrent* | awk 'NR>1 {print \$2}' | xargs -r kill"
     echo ""
+
+    if $IS_VM; then
+        echo "5. Verify vIOMMU is working:"
+        echo "   ls /sys/kernel/iommu_groups/"
+        echo "   (Should show numbered directories if vIOMMU is active)"
+        echo ""
+    fi
 fi
 
 # ============================================
