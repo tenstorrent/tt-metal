@@ -54,7 +54,7 @@ void NeighborPadAsyncDeviceOperation::validate_on_program_cache_miss(
         for (int d = 0; d < args.dim; d++) {
             outer_dim_size *= input_tensor_shape[d];
         }
-        TT_FATAL(outer_dim_size >= args.num_links, "Not enough work to split among links, reduce num links");
+        TT_FATAL(outer_dim_size >= args.num_links, "Not enough work ({}) to split among {} links, reduce num links", outer_dim_size, args.num_links);
     } else {
         uint32_t num_sticks_per_halo_dim = 1;
         for (int d = args.dim + 1; d < input_tensor_shape.size() - 1; d++) {
