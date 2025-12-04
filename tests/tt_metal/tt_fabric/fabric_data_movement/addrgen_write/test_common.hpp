@@ -59,6 +59,7 @@ enum class AddrgenApiVariant {
 inline constexpr uint32_t kDefaultMeshId = 0;
 inline constexpr ChipId kDefaultSrcChip = 0;
 inline constexpr ChipId kDefaultDstChip = 1;
+inline constexpr ChipId kDefaultDst2Chip = 5;  // Second destination for route variants
 inline constexpr bool kDefaultUseDramDst = false;
 inline constexpr uint32_t kDefaultTensorBytes = 1u << 20;  // 1 MiB
 inline constexpr uint32_t kDefaultPageSize = 4096;         // 4 KiB
@@ -72,6 +73,7 @@ struct AddrgenTestParams {
     uint32_t mesh_id = kDefaultMeshId;
     ChipId src_chip = kDefaultSrcChip;
     ChipId dst_chip = kDefaultDstChip;
+    ChipId dst2_chip = kDefaultDst2Chip;  // Second destination for route variants
     bool use_dram_dst = kDefaultUseDramDst;
     uint32_t tensor_bytes = kDefaultTensorBytes;
     uint32_t page_size = kDefaultPageSize;

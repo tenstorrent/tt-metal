@@ -171,8 +171,8 @@ void run_unicast_write_test(HelpersFixture* fixture, const AddrgenTestParams& p)
          p.api_variant == AddrgenApiVariant::ScatterWriteWithStateRoute ||
          p.api_variant == AddrgenApiVariant::ScatterWriteSetStateRoute);
 
-    // For route variants: set up second destination chip (hardcoded to chip 5)
-    tt::tt_fabric::FabricNodeId dst2{tt::tt_fabric::MeshId{p.mesh_id}, 5};
+    // For route variants: set up second destination chip
+    tt::tt_fabric::FabricNodeId dst2{tt::tt_fabric::MeshId{p.mesh_id}, p.dst2_chip};
     ChipId dst2_phys = 0;
     tt::tt_metal::IDevice* dst2_dev = nullptr;
     Dist::MeshCoordinate dst2_coord{0, 0};
