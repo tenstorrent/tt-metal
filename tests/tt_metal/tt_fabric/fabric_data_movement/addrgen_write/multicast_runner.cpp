@@ -299,19 +299,40 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
             .defines = defines});
     tt::tt_metal::SetRuntimeArgs(sender_prog, reader_k, p.sender_core, {(uint32_t)src_buf->address()});
 
-    // Writer kernel (CB->Fabric->dst + final sem INC) - select kernel based on route variant
+    // Writer kernel (CB->Fabric->dst + final sem INC) - select kernel based on route variant and operation type
     std::vector<uint32_t> writer_cta;
     tt::tt_metal::TensorAccessorArgs(*dst_buf).append_to(writer_cta);
-    writer_cta.push_back(static_cast<uint32_t>(operation_type));  // OPERATION_TYPE
-    writer_cta.push_back(static_cast<uint32_t>(api_variant));     // API_VARIANT
-    writer_cta.push_back(NUM_PAGES);       // TOTAL_PAGES
-    writer_cta.push_back(p.page_size);     // Raw page size (actual data size to transfer)
-    writer_cta.push_back(dst_aligned_page_size);  // Aligned page size (dest buffer addressing)
-    writer_cta.push_back(src_aligned_page_size);  // Source aligned page size (CB stride for scatter)
 
-    // Select kernel based on route variant
-    const std::string writer_kernel_name =
-        is_route_variant ? "multicast_tx_writer_addrgen_route.cpp" : "multicast_tx_writer_addrgen.cpp";
+    // Select kernel based on route variant and operation type
+    std::string writer_kernel_name;
+    if (is_route_variant) {
+        // Route variants: split kernels by operation type (OPERATION_TYPE removed from CT args)
+        writer_cta.push_back(static_cast<uint32_t>(api_variant));  // API_VARIANT
+        writer_cta.push_back(NUM_PAGES);                           // TOTAL_PAGES
+        writer_cta.push_back(p.page_size);                         // Raw page size (actual data size to transfer)
+        writer_cta.push_back(dst_aligned_page_size);               // Aligned page size (dest buffer addressing)
+        writer_cta.push_back(src_aligned_page_size);               // Source aligned page size (CB stride for scatter)
+
+        if (operation_type == OperationType::BasicWrite) {
+            writer_kernel_name = "multicast_tx_writer_addrgen_route_basic.cpp";
+        } else if (operation_type == OperationType::Scatter) {
+            writer_kernel_name = "multicast_tx_writer_addrgen_route_scatter.cpp";
+        } else if (operation_type == OperationType::FusedAtomicInc) {
+            writer_kernel_name = "multicast_tx_writer_addrgen_route_fused.cpp";
+        } else {
+            TT_FATAL(false, "Unknown operation type for route variant");
+        }
+    } else {
+        // Non-route variants: unified kernel (still needs OPERATION_TYPE)
+        writer_cta.push_back(static_cast<uint32_t>(operation_type));  // OPERATION_TYPE
+        writer_cta.push_back(static_cast<uint32_t>(api_variant));     // API_VARIANT
+        writer_cta.push_back(NUM_PAGES);                              // TOTAL_PAGES
+        writer_cta.push_back(p.page_size);                            // Raw page size (actual data size to transfer)
+        writer_cta.push_back(dst_aligned_page_size);                  // Aligned page size (dest buffer addressing)
+        writer_cta.push_back(src_aligned_page_size);  // Source aligned page size (CB stride for scatter)
+
+        writer_kernel_name = "multicast_tx_writer_addrgen.cpp";
+    }
 
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,
