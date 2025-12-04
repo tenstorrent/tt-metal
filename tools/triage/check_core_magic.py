@@ -129,19 +129,6 @@ def check_core_magic(
         )
         return
 
-    # Mismatch detected - try to identify what firmware type is actually present
-    actual_type_name = magic_values.get_name(actual_magic)
-
-    if actual_type_name:
-        # The magic at the expected location matches a different known type
-        log_check_location(
-            location,
-            False,
-            f"{risc_name}: core_magic_number mismatch! Expected {expected_type} (0x{expected_magic:08X}), "
-            f"found {actual_type_name} (0x{actual_magic:08X}) at expected location",
-        )
-        return
-
     # Unknown magic at expected location - try other firmware ELFs to find a match
     other_elfs_to_try = []
 
