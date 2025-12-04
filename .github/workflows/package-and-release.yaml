@@ -46,6 +46,7 @@ jobs:
     outputs:
       is-release-candidate: ${{ steps.get-is-release-candidate-and-tag-type.outputs.is-release-candidate }}
       tag-type: ${{ steps.get-is-release-candidate-and-tag-type.outputs.tag-type }}
+      hardcoded-version: test-tag1
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -101,16 +102,15 @@ jobs:
 
   create-tag:
     needs: release-precheck
-    uses: tenstorrent/tt-metal/.github/workflows/release-verify-or-create-tag.yaml@main
-    secrets: inherit
-    with:
-      fetch_depth: 0
-      bump_each_commit: false
-      # tag-type is now set in release-precheck and passed as output
-      tag-type: ${{ needs.release-precheck.outputs.tag-type }}
-      force-bump-type: ${{ inputs.force-bump-type }}
-      ignore-commits: ${{ inputs.ignore-commits }}
-      dry-run: ${{ inputs.dry-run || false }}
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.set-version.outputs.version }}
+    steps:
+      - name: Set hardcoded version for testing
+        id: set-version
+        run: |
+          echo "version=test-tag1" >> "$GITHUB_OUTPUT"
+          echo "Using hardcoded version: test-tag1"
 
 
   build-test-publish:
