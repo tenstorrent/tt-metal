@@ -1598,6 +1598,11 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                     termination_master_virtual_core,
                     num_workers_per_direction,
                     writer_rt_args);
+                log_info(
+                    tt::LogOp,
+                    "fabric_mux_connection_rt_args writer core : {}, num_workers_per_direction : {}",
+                    core,
+                    num_workers_per_direction);
                 if (output_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(output_tensor, writer_rt_args);
                 }
@@ -1610,6 +1615,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                         1);
                 }
                 tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
+                log_info(tt::LogOp, "SetRuntimeArgs writer core : {}", core);
             }
         }
     }
@@ -2556,7 +2562,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                 uint32_t chunks_per_sync_val = chunks_per_sync.value_or(std::min(
                     std::max((input_tile_id_end - input_tile_id_start) / num_tiles_to_write_per_packet, (uint32_t)1),
                     HEURISTIC_MAX_CHUNKS_PER_SYNC));
-                log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
+                log_info(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
                 uint32_t start_pages_read_in_row = input_tile_id_start % input_tensor_Wt;
                 uint32_t start_row_offset = input_tile_id_start / input_tensor_Wt * output_tensor_Wt;
@@ -2645,7 +2651,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                     all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + 0];
                 // CoreCoord termination_master_virtual_core =
                 //     mesh_device->worker_core_from_logical_core(termination_master_logical_core);
-                
+
                 log_info(tt::LogOp, "link {}: worker {}: termination_master_logical_core {}", link, worker, termination_master_logical_core);
                 // Writer
                 std::vector<uint32_t> sender_writer_compile_args = {
@@ -2724,7 +2730,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                         : 0,
                     opposite_core_coord.x,
                     opposite_core_coord.y};
-                
+
                 // fabric_mux_connection_rt_args(
                 //     mux_connection_valid,
                 //     core,
@@ -2740,7 +2746,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                     const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                     tt::tt_fabric::append_fabric_connection_rt_args(src_node_id, dst_node_id, link, program, {core}, writer_rt_args);
                 }
-                
+
                 if (output_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(output_tensor, writer_rt_args);
                 }
@@ -2807,7 +2813,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                             all_gather_async_minimal_default_helper_override_runtime_arguments;
 
     auto no_mux = true;
-
     if (no_mux) {
         func_p = build_all_gather_async_minimal_default_program_artifacts_no_mux;
         func_override = all_gather_async_minimal_default_helper_override_runtime_arguments_no_mux;

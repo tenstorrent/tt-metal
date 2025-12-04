@@ -13,7 +13,7 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
 
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-csv_path = f"/tmp/all_gather_results_{timestamp}.csv"
+csv_path = f"/tmp/reduce_scatter_results_{timestamp}.csv"
 
 
 def append_csv_row(row):
@@ -28,24 +28,21 @@ def append_csv_row(row):
         writer.writerow(row)
 
 
-num_links_ids = ["1link", "2link", "4link"]
-# num_links_ids = ["1link", "4link"]
-# num_links_ids = ["1link"]
-# num_workers_ids = ["2worker", "4worker"]
+# num_links_ids = ["1link", "2link", "4link"]
+num_links_ids = ["4link"]
 # num_workers_ids = ["1worker", "2worker", "4worker"]
-num_workers_ids = ["1worker"]
+num_workers_ids = ["1worker", "2worker"]
 topology_ids = ["1D_Ring"]
-llama_ids = ["llama_1", "llama_2", "llama_3", "llama_4", "llama_5", "llama_6"]
-# llama_ids = ["llama_1", "llama_2", "llama_3", "llama_4", "llama_6"]
-# llama_ids = ["llama_3"]
+# topology_ids = ["2D_Linear"]
+llama_ids = ["llama_1"]
 
 
 @pytest.mark.parametrize("warmup_iters", [3])
 @pytest.mark.models_device_performance_bare_metal
-def test_all_gather_llama_sweep(warmup_iters):
+def test_all_reduce_scatter_llama_sweep(warmup_iters):
     profiler = BenchmarkProfiler()
     cols = ["DEVICE KERNEL"]
-    op_name = "AllGatherAsync"
+    op_name = "ReduceScatterMinimalAsync"
 
     logger.info(f"CSV file: {csv_path}")
 
@@ -54,7 +51,7 @@ def test_all_gather_llama_sweep(warmup_iters):
         subdir = f"llama_ccl_perf/{link}_{worker}_{topo}_{llama_case}"
 
         cmd = (
-            "pytest ./tests/nightly/tg/ccl/test_minimal_all_gather_async.py::test_all_gather_llama "
+            "pytest ./tests/nightly/tg/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async_llama "
             f'-k "{case_filter}"'
         )
 
@@ -62,7 +59,7 @@ def test_all_gather_llama_sweep(warmup_iters):
 
         try:
             results = run_device_perf_detailed(
-                cmd, subdir, cols, op_name, has_signposts=True, warmup_iters=warmup_iters
+                cmd, subdir, cols, op_name, has_signposts=False, warmup_iters=warmup_iters
             )
             avg_us = results[cols[0]]["MAX"] / 1000
 

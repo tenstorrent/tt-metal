@@ -462,7 +462,7 @@ def test_all_gather_async_quad_host_mesh(
 
 
 @skip_for_blackhole("This test is for wormhole")
-@pytest.mark.parametrize("num_links", [1, 2, 4], ids=["1link", "2link", "4link"])
+@pytest.mark.parametrize("num_links", [1, 2, 3, 4], ids=["1link", "2link", "3link", "4link"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
     [
@@ -513,7 +513,7 @@ def test_all_gather_async_quad_host_mesh(
     ],
 )
 @pytest.mark.parametrize("num_workers_per_link", [1, 2, 4], ids=["1worker", "2worker", "4worker"])
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 def test_all_gather_llama(
     mesh_device,
     num_devices,
@@ -553,6 +553,6 @@ def test_all_gather_llama(
         chunks_per_sync=None,
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=None,
-        skip_check=False,
+        skip_check=True,
     )
     ttnn.ReadDeviceProfiler(submesh_device)

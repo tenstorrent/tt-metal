@@ -84,7 +84,7 @@ constexpr ccl_routing_utils::line_multicast_route_info_t barrier_multicast_route
 inline constexpr uint32_t sharded_args_start_idx =
     26 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
 
-constexpr uint8_t NUM_EDM_BUFFERS = 4;
+constexpr uint8_t NUM_EDM_BUFFERS = 8;
 namespace tt::tt_fabric {
 using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
 }  // namespace tt::tt_fabric
@@ -188,12 +188,12 @@ void kernel_main() {
     uint32_t self_write_done_semaphore_addr;
     if constexpr (fuse_op) {
         self_write_done_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-        uint32_t rt_args_idx = arg_idx;  
+        uint32_t rt_args_idx = arg_idx;
         op_signaler_sender = OpSignaler(rt_args_idx);
     }
 
     constexpr bool use_worker_allocated_credit_address = CORE_TYPE == ProgrammableCoreType::IDLE_ETH;
-    
+
     if (mux_connection_valid) {
         // tt::tt_fabric::fabric_client_connect(*mux_connection_handle);
         fabric_connection.open<use_worker_allocated_credit_address>();
