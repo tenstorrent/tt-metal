@@ -527,7 +527,7 @@ inline void DeviceData::overflow_check(IDevice* device) {
 }
 
 template <bool is_dram_variant, bool is_host_variant>
-void configure_kernel_variant(
+KernelHandle configure_kernel_variant(
     Program& program,
     const std::string& path,
     const std::map<std::string, std::string>& defines_in,
@@ -565,7 +565,7 @@ void configure_kernel_variant(
 
     defines.insert(defines_in.begin(), defines_in.end());
 
-    tt::tt_metal::CreateKernel(
+    return tt::tt_metal::CreateKernel(
         program,
         path,
         {my_core},
