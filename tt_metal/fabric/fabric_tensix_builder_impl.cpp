@@ -11,7 +11,6 @@
 
 #include "impl/context/metal_context.hpp"
 #include "llrt/core_descriptor.hpp"
-#include <tt-metalium/device_pool.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"

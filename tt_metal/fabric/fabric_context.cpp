@@ -10,6 +10,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <enchantum/enchantum.hpp>
+#include <tt_stl/reflection.hpp>
 #include "erisc_datamover_builder.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -57,6 +58,11 @@ tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::F
 
 bool FabricContext::is_2D_topology(tt::tt_fabric::Topology topology) {
     return topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Torus;
+}
+
+std::ostream& operator<<(std::ostream& os, const tt::tt_fabric::Topology& topology) {
+    tt::stl::reflection::operator<<(os, topology);
+    return os;
 }
 
 size_t FabricContext::compute_packet_header_size_bytes() const {
