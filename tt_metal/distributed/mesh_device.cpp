@@ -464,13 +464,19 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
         allocator_config.worker_l1_size,
         allocator_config.l1_bank_remap);
     // TODO #20966: Remove these calls
-    for (auto* device : submesh->get_devices()) {
-        dynamic_cast<Device*>(device)->set_mesh_device(submesh);
+    if (!submesh->get_view().get_devices().empty()) {
+        for (auto* device : submesh->get_devices()) {
+            dynamic_cast<Device*>(device)->set_mesh_device(submesh);
+        }
     }
 
     submeshes_.push_back(submesh);
     log_trace(LogMetal, "Instantiating submesh {}: {} with offset: {}", submesh->id(), submesh_shape, offset);
-    log_trace(LogMetal, "Submesh {} instantiated with {} devices", submesh->id(), submesh->get_devices().size());
+    if (!submesh->get_view().get_devices().empty()) {
+        log_trace(LogMetal, "Submesh {} instantiated with {} devices", submesh->id(), submesh->get_devices().size());
+    } else {
+        log_trace(LogMetal, "Submesh {} instantiated with only remote devices", submesh->id());
+    }
     return submesh;
 }
 
@@ -1006,6 +1012,11 @@ bool MeshDevice::initialize(
     tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
     bool /*minimal*/) {
     TT_FATAL(!this->is_initialized(), "MeshDevice is already initialized!");
+
+    // If the mesh device has no local devices, do not attempt to initialize it.
+    if (view_->get_devices().empty()) {
+        return false;
+    }
 
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
     const auto& compute_grid_size = this->compute_with_storage_grid_size();

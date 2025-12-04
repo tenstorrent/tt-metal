@@ -209,4 +209,19 @@ TEST_F(BigMeshDualRankTest2x4, SimpleShardedBufferTest) {
     }
 }
 
+TEST_F(BigMeshDualRankTest2x4, SubmeshCreationSingleSubmesh) {
+    auto submesh = mesh_device_->create_submesh(MeshShape(2, 2));
+    ASSERT_NE(submesh, nullptr);
+    EXPECT_EQ(submesh->shape(), MeshShape(2, 2));
+}
+
+TEST_F(BigMeshDualRankTest2x4, SubmeshCreationMultipleSubmeshes) {
+    auto submeshes = mesh_device_->create_submeshes(MeshShape(2, 2));
+    EXPECT_EQ(submeshes.size(), 2);
+    for (const auto& submesh : submeshes) {
+        ASSERT_NE(submesh, nullptr);
+        EXPECT_EQ(submesh->shape(), MeshShape(2, 2));
+    }
+}
+
 }  // namespace tt::tt_metal::distributed
