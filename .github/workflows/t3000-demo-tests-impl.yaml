@@ -61,14 +61,6 @@ jobs:
               "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
             },
             {
-              "name": "t3k_llama3_load_checkpoints tests",
-              "model": "llama3_load_checkpoints",
-              "arch": "wormhole_b0",
-              "cmd": "run_t3000_llama3_load_checkpoints_tests",
-              "timeout": 30,
-              "owner_id": "U07RY6B5FLJ" # Gongyu Wang
-            },
-            {
               "name": "t3k_llama3_vision_tests",
               "model": "llama3_vision",
               "arch": "wormhole_b0",
@@ -147,6 +139,13 @@ jobs:
               "cmd": "run_t3000_mixtral_tests",
               "timeout": 50,
               "owner_id": "U03PUAKE719" # Miguel Tairum Cruz
+            },
+            { 
+              "name": "t3k_whisper_tests", 
+              "arch": "wormhole_b0", 
+              "cmd": "run_t3000_whisper_tests", 
+              "timeout": 90, 
+              "owner_id": "U088413NP0Q", # Ashai Reddy
             },
             {
               "name": "t3k_qwen3_tests",
@@ -239,8 +238,13 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
