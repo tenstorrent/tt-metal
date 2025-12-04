@@ -13,7 +13,7 @@ namespace ttnn::operations::experimental::isin::detail {
 using namespace ttnn;
 
 void bind_isin_operation(py::module& module) {
-    auto doc =
+    const auto *doc =
         R"doc(
             This operator returns a uint32 tensor with the same shape, layout, and memory config as the elements tensor, where elements are filled with 0xFFFFFFFF (true) or 0x00000000 (false) based on their presence in test_elements.
             Parameters:
