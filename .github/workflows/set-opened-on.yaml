@@ -21,6 +21,32 @@ jobs:
       PROJECT_ID: "PVT_kwDOA9MHEM4AgKVv"
       FIELD_ID: "PVTF_lADOA9MHEM4AgKVvzg4bxWU"
     steps:
+      - name: Check Rate Limit Status
+        run: |
+          set -e
+          
+          echo "Checking rate limit status before workflow operations..."
+          RATE_RESP=$(gh api rate_limit --include 2>&1)
+          
+          # Extract rate limit info from headers
+          GRAPHQL_LIMIT=$(echo "$RATE_RESP" | grep -i "x-ratelimit-limit" | head -1 | cut -d: -f2 | tr -d ' \r')
+          GRAPHQL_REMAINING=$(echo "$RATE_RESP" | grep -i "x-ratelimit-remaining" | head -1 | cut -d: -f2 | tr -d ' \r')
+          GRAPHQL_RESET=$(echo "$RATE_RESP" | grep -i "x-ratelimit-reset" | head -1 | cut -d: -f2 | tr -d ' \r')
+          
+          # Get detailed breakdown from response body
+          echo "$RATE_RESP" | tail -1 | jq -r '
+            "=== Rate Limit Status ===",
+            "GraphQL: \(.resources.graphql.remaining)/\(.resources.graphql.limit) remaining (used: \(.resources.graphql.used))",
+            "Core API: \(.resources.core.remaining)/\(.resources.core.limit) remaining (used: \(.resources.core.used))",
+            "Reset time: \(.resources.graphql.reset | strftime("%Y-%m-%d %H:%M:%S UTC"))",
+            "========================"
+          '
+          
+          # Warn if running low
+          if [ "$GRAPHQL_REMAINING" -lt 100 ]; then
+            echo "⚠️  WARNING: GraphQL rate limit is low ($GRAPHQL_REMAINING remaining)" >&2
+          fi
+
       - name: Extract Issue Date
         id: setup
         run: |
@@ -50,10 +76,21 @@ jobs:
             }
           }' \
           -F projectId="$PROJECT_ID" \
-          -F contentId='${{ github.event.issue.node_id }}' 2>&1) || {
+          -F contentId='${{ github.event.issue.node_id }}' --include 2>&1) || {
             if echo "$ADD_RESP" | grep -q "API rate limit"; then
               echo "Error: GitHub API rate limit exceeded for DATE_AUTOMATION token" >&2
-              echo "Workflow will retry when rate limit resets" >&2
+              
+              # Extract rate limit details from headers if available
+              RESET_TIME=$(echo "$ADD_RESP" | grep -i "x-ratelimit-reset" | cut -d: -f2 | tr -d ' \r')
+              REMAINING=$(echo "$ADD_RESP" | grep -i "x-ratelimit-remaining" | cut -d: -f2 | tr -d ' \r')
+              RESOURCE=$(echo "$ADD_RESP" | grep -i "x-ratelimit-resource" | cut -d: -f2 | tr -d ' \r')
+              
+              if [ -n "$RESET_TIME" ]; then
+                RESET_DATE=$(date -u -d "@$RESET_TIME" 2>/dev/null || date -u -r "$RESET_TIME" 2>/dev/null || echo "unknown")
+                echo "Rate limit resource: $RESOURCE" >&2
+                echo "Remaining: $REMAINING" >&2
+                echo "Resets at: $RESET_DATE" >&2
+              fi
               exit 1
             fi
             echo "Error: Failed to add issue to project" >&2
@@ -94,9 +131,21 @@ jobs:
           -F projectId="$PROJECT_ID" \
           -F itemId="$ITEM_ID" \
           -F fieldId="$FIELD_ID" \
-          -F date='${{ steps.setup.outputs.opened_date }}' 2>&1) || {
+          -F date='${{ steps.setup.outputs.opened_date }}' --include 2>&1) || {
             if echo "$UPDATE_RESP" | grep -q "API rate limit"; then
               echo "Error: GitHub API rate limit exceeded" >&2
+              
+              # Extract rate limit details from headers if available
+              RESET_TIME=$(echo "$UPDATE_RESP" | grep -i "x-ratelimit-reset" | cut -d: -f2 | tr -d ' \r')
+              REMAINING=$(echo "$UPDATE_RESP" | grep -i "x-ratelimit-remaining" | cut -d: -f2 | tr -d ' \r')
+              RESOURCE=$(echo "$UPDATE_RESP" | grep -i "x-ratelimit-resource" | cut -d: -f2 | tr -d ' \r')
+              
+              if [ -n "$RESET_TIME" ]; then
+                RESET_DATE=$(date -u -d "@$RESET_TIME" 2>/dev/null || date -u -r "$RESET_TIME" 2>/dev/null || echo "unknown")
+                echo "Rate limit resource: $RESOURCE" >&2
+                echo "Remaining: $REMAINING" >&2
+                echo "Resets at: $RESET_DATE" >&2
+              fi
               exit 1
             fi
             echo "Error: Failed to set field value" >&2
