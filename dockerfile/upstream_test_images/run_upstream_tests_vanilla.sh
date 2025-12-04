@@ -256,7 +256,7 @@ UnitMeshCQSingleCardFixture.TensixTestReadWriteMultipleCoresL1"
 test_suite_bh_glx_python_unit_tests() {
     echo "[upstream-tests] running BH GLX upstream python unit tests"
     # CCL / Ops
-    pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_galaxy_mesh.py
+    pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_galaxy_torus.py
 }
 
 test_suite_bh_glx_llama_demo_tests() {
