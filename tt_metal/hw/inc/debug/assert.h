@@ -47,6 +47,7 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
 
 #define ASSERT_ENABLED 1
 #define WATCHER_ASSERT_ENABLED 1
+#define LIGHTWEIGHT_ASSERT_ENABLED 0
 
 #else  // !WATCHER_ENABLED
 
@@ -60,12 +61,15 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
 
 #define ASSERT_ENABLED 1
 #define LIGHTWEIGHT_ASSERT_ENABLED 1
+#define WATCHER_ASSERT_ENABLED 0
 
 #else  // !LIGHTWEIGHT_KERNEL_ASSERTS
 
 #define ASSERT(condition, ...)
 
+#define ASSERT_ENABLED 0
 #define WATCHER_ASSERT_ENABLED 0
+#define LIGHTWEIGHT_ASSERT_ENABLED 0
 
 #endif  // !LIGHTWEIGHT_KERNEL_ASSERTS
 
