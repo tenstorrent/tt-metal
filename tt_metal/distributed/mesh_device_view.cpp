@@ -190,9 +190,6 @@ bool MeshDeviceView::is_mesh_2d() const { return shape_2d_.has_value(); }
 
 std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates(
     size_t length, const Shape2D& mesh_shape, const Shape2D& mesh_offset) {
-    // Iterate in a zigzag pattern from top-left to bottom-right, starting at the offset.
-    std::vector<MeshCoordinate> line_coords;
-    line_coords.reserve(length);
     const auto [num_rows, num_cols] = mesh_shape;
     auto [start_row, start_col] = mesh_offset;
 
@@ -205,8 +202,35 @@ std::vector<MeshCoordinate> MeshDeviceView::get_line_coordinates(
         num_rows,
         num_cols);
 
-    const MeshCoordinate start_coord(start_row, start_col);
+    // Iterate in a zigzag pattern from top-left to bottom-right, starting at the offset.
+    std::vector<MeshCoordinate> line_coords;
+    line_coords.reserve(length);
 
+    // NOTE: Special case: For 2x4 or 4x2 mesh shapes, use perimeter traversal to avoid snake patterns
+    // that cause fabric initialization issues on T3K
+    // https://github.com/tenstorrent/tt-metal/issues/33737
+    if (mesh_shape == Shape2D(2, 4) || mesh_shape == Shape2D(4, 2)) {
+        auto ring_coords = get_ring_coordinates(mesh_shape, mesh_shape);
+        MeshCoordinate start_coord(start_row, start_col);
+        auto start_it = std::find(ring_coords.begin(), ring_coords.end(), start_coord);
+        TT_FATAL(
+            start_it != ring_coords.end(), "Mesh offset ({}, {}) not found in ring coordinates", start_row, start_col);
+
+        // check the length is less than or equal to the number of ring coordinates
+        TT_FATAL(
+            length <= ring_coords.size(),
+            "Length {} is greater than the number of ring coordinates {}",
+            length,
+            ring_coords.size());
+
+        size_t start_idx = std::distance(ring_coords.begin(), start_it);
+        for (size_t i = 0; i < length; ++i) {
+            line_coords.push_back(ring_coords[(start_idx + i) % ring_coords.size()]);
+        }
+        return line_coords;
+    }
+
+    const MeshCoordinate start_coord(start_row, start_col);
     // Lambda to check if two coordinates are adjacent (direct neighbors only: up, down, left, right)
     // Does NOT consider diagonal neighbors
     auto are_adjacent = [](const MeshCoordinate& a, const MeshCoordinate& b) -> bool {
