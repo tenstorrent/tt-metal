@@ -140,7 +140,8 @@ run_t3000_ttnn_multiprocess_tests() {
   tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/ttnn/multiprocess/unit_tests_dual_rank_2x2
 
   # Test opening/closing mesh devices on compute mesh and TT-Switch
-  tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/t3k_2x2_ttswitch_rank_bindings.yaml ./build/test/ttnn/unit_tests_ttnn --gtest_filter="MeshDeviceTTSwitchFixture.TestOpenCloseComputeMeshDevice"
+  tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/t3k_2x2_ttswitch_rank_bindings.yaml ./build/test/ttnn/unit_tests_ttnn --gtest_filter="MeshDeviceTTSwitchFixture.*"
+
   # Currently hangs because of barrier hanging on multi-host when exceptions are thrown https://github.com/tenstorrent/tt-metal/issues/33125
   #tt-run --mpi-args "$mpi_args" --rank-binding tests/tt_metal/distributed/config/t3k_2x2_ttswitch_rank_bindings.yaml ./build/test/ttnn/unit_tests_ttnn --gtest_filter="MeshDeviceTTSwitchFixture.TestOpenCloseSwitchMeshDevice"
 

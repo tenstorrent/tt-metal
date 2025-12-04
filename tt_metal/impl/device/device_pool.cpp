@@ -16,6 +16,7 @@
 #include <future>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 #include <tt_stl/assert.hpp>
@@ -347,6 +348,30 @@ void DevicePool::initialize(
     }
 
     _inst->skip_remote_devices = skip;
+
+    // Automatically add switch devices to the pool if the local host is on a switch mesh
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    if (control_plane.is_local_host_on_switch_mesh()) {
+        auto switch_device_ids = control_plane.get_switch_mesh_device_ids();
+        if (!switch_device_ids.empty()) {
+            log_info(
+                tt::LogMetal,
+                "Detected switch mesh on local host. Adding {} switch devices to pool",
+                switch_device_ids.size());
+            // Add switch devices to the list of devices to open
+            // Error out if any switch device is already in device_ids_to_open (shouldn't happen)
+            for (auto switch_device_id : switch_device_ids) {
+                TT_ASSERT(
+                    std::find(device_ids_to_open.begin(), device_ids_to_open.end(), switch_device_id) ==
+                        device_ids_to_open.end(),
+                    "Switch device {} is already in the list of devices to open. This should not happen.",
+                    switch_device_id);
+                device_ids_to_open.push_back(switch_device_id);
+                log_critical(tt::LogMetal, "Added switch device {} to pool", switch_device_id);
+            }
+        }
+    }
+
     _inst->add_devices_to_pool(device_ids_to_open);
 
     // Initialize fabric tensix datamover config after devices are added to the pool

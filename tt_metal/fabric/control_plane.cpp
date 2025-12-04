@@ -2925,6 +2925,35 @@ std::string ControlPlane::get_galaxy_cabling_descriptor_path(tt::tt_fabric::Fabr
     return root_dir + std::string(it->second);
 }
 
+bool ControlPlane::is_local_host_on_switch_mesh() const {
+    const auto& local_mesh_ids = this->get_local_mesh_id_bindings();
+    const auto& mesh_graph = this->get_mesh_graph();
+    for (const auto& mesh_id : local_mesh_ids) {
+        if (mesh_graph.is_switch(mesh_id)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::vector<ChipId> ControlPlane::get_switch_mesh_device_ids() const {
+    const auto& local_mesh_ids = this->get_local_mesh_id_bindings();
+    const auto& mesh_graph = this->get_mesh_graph();
+
+    std::vector<ChipId> switch_device_ids;
+    for (const auto& mesh_id : local_mesh_ids) {
+        if (mesh_graph.is_switch(mesh_id)) {
+            const auto& chip_ids = mesh_graph.get_chip_ids(mesh_id);
+            for (const auto& chip_id : chip_ids.values()) {
+                auto fabric_node_id = FabricNodeId(mesh_id, chip_id);
+                auto physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(fabric_node_id);
+                switch_device_ids.push_back(physical_chip_id);
+            }
+        }
+    }
+    return switch_device_ids;
+}
+
 ControlPlane::~ControlPlane() = default;
 
 }  // namespace tt::tt_fabric
