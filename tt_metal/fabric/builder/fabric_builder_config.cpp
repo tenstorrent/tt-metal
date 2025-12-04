@@ -50,7 +50,7 @@ uint32_t get_vc0_downstream_edm_count(bool is_2D_routing) {
 }
 
 uint32_t get_vc1_downstream_edm_count(bool is_2D_routing) {
-    TT_FATAL(is_2D_routing == true, "VC1 is only supported for 2D routing");
+    TT_FATAL(is_2D_routing, "VC1 is only supported for 2D routing");
     return builder_config::num_downstream_edms_2d_vc1;
 }
 
