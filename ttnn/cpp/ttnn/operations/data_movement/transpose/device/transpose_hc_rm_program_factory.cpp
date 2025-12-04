@@ -152,6 +152,7 @@ TransposeHCRMProgramFactory::cached_program_t TransposeHCRMProgramFactory::creat
         split_work_to_cores(compute_with_storage_grid_size, NCH);
 
     Buffer* dst_buffer = output_tensor.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = 0;
 
