@@ -18,7 +18,7 @@ from ..test_transformer_wan import (
     [(4, 32)],
     indirect=True,
 )
-@pytest.mark.parametrize("num_links", [1], ids=["num_links_1"])
+@pytest.mark.parametrize("num_links", [3], ids=["num_links_3"])
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT}],

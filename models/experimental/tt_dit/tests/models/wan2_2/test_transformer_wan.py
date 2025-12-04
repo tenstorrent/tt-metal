@@ -200,20 +200,29 @@ def run_test_wan_transformer(
     logger.info(
         f"Running TT model with spatial shape {tt_spatial.shape}, prompt shape {tt_prompt.shape}, rope_cos shape {tt_rope_cos.shape}, rope_sin shape {tt_rope_sin.shape}"
     )
-    tt_spatial_out = tt_model(
-        spatial_1BND=tt_spatial,
-        prompt_1BLP=tt_prompt,
-        temb_1BTD=tt_temb,
-        N=spatial_seq_len,
-        rope_cos=tt_rope_cos,
-        rope_sin=tt_rope_sin,
-        trans_mat=tt_trans_mat,
-    )
 
-    from tracy import signpost
+    from tracy import Profiler, signpost
+
+    profiler = Profiler()
+
+    profiler.disable()
+
+    for i in range(3):
+        logger.info(f"Running TT model iteration {i}")
+        tt_spatial_out = tt_model(
+            spatial_1BND=tt_spatial,
+            prompt_1BLP=tt_prompt,
+            temb_1BTD=tt_temb,
+            N=spatial_seq_len,
+            rope_cos=tt_rope_cos,
+            rope_sin=tt_rope_sin,
+            trans_mat=tt_trans_mat,
+        )
+
+    logger.info("Running cached model")
+    profiler.enable()
 
     signpost("cached")
-    logger.info("Running cached model")
 
     tt_spatial_out = tt_model(
         spatial_1BND=tt_spatial,
@@ -224,6 +233,7 @@ def run_test_wan_transformer(
         rope_sin=tt_rope_sin,
         trans_mat=tt_trans_mat,
     )
+    profiler.disable()
 
     spatial_concat_dims = [None, None]
     spatial_concat_dims[sp_axis] = 2
@@ -463,7 +473,7 @@ def run_test_wan_transformer_model(
     [
         [(2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear],
         # WH (ring) on 4x8
-        [(4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring],
+        [(4, 8), 1, 0, 4, line_params, ttnn.Topology.Linear],
         # BH (linear) on 4x8
         [(4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear],
     ],
