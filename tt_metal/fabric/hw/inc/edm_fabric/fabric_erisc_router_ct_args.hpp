@@ -21,7 +21,7 @@
 
 constexpr size_t NUM_ROUTER_CARDINAL_DIRECTIONS = 4;
 
-constexpr size_t MAX_NUM_RECEIVER_CHANNELS = 1;
+constexpr size_t MAX_NUM_RECEIVER_CHANNELS = 2;
 constexpr size_t MAX_NUM_SENDER_CHANNELS = 7;
 constexpr size_t MAX_NUM_SENDER_CHANNELS_VC0 = 4;  // Channels 0-3
 constexpr size_t MAX_NUM_SENDER_CHANNELS_VC1 = 3;  // Channels 4-6 (2D only)
@@ -486,7 +486,7 @@ constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> RX_CH_TRID_STARTS =
 
 constexpr std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS> to_receiver_packets_sent_streams =
     take_first_n_elements<MAX_NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint32_t>(
-        std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS>{to_receiver_0_pkts_sent_id});
+        std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS>{to_receiver_0_pkts_sent_id, to_receiver_1_pkts_sent_id});
 
 // not in symbol table - because not used
 constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_acked_streams =

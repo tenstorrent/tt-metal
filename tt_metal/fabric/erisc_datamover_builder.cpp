@@ -392,8 +392,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     // TODO: For 2D routing, if there is only one mesh, we need to discount for inter-mesh vc.
     if (topology == Topology::Mesh && is_2D_routing) {
-        this->num_used_sender_channels -= 3;
-        this->num_fwd_paths -= 3;
+        this->num_used_sender_channels -= builder_config::get_vc1_downstream_edm_count(is_2D_routing);
+        this->num_used_receiver_channels = 1;
+        this->num_fwd_paths -= builder_config::get_vc1_downstream_edm_count(is_2D_routing);
     }
 
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
@@ -919,6 +920,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         config.risc_configs[risc_id].is_sender_channel_serviced(5),
         config.risc_configs[risc_id].is_sender_channel_serviced(6),
         config.risc_configs[risc_id].is_receiver_channel_serviced(0),
+        config.risc_configs[risc_id].is_receiver_channel_serviced(1),
         config.risc_configs[risc_id].enable_handshake(),
         config.risc_configs[risc_id].enable_context_switch(),
         config.risc_configs[risc_id].enable_interrupts(),

@@ -2214,6 +2214,9 @@ void kernel_main() {
     // We make sure to do this before we handshake to guarantee that the registers are
     // initialized before the other side has any possibility of modifying them.
     init_ptr_val<to_receiver_packets_sent_streams[0]>(0);
+    if constexpr (NUM_RECEIVER_CHANNELS > 1) {
+        init_ptr_val<to_receiver_packets_sent_streams[1]>(0);
+    }
     init_ptr_val<to_sender_packets_acked_streams[0]>(0);
     init_ptr_val<to_sender_packets_acked_streams[1]>(0);
     init_ptr_val<to_sender_packets_acked_streams[2]>(0);
