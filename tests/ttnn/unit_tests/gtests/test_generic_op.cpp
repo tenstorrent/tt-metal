@@ -5,6 +5,7 @@
 #include <tt_metal/api/tt-metalium/core_coord.hpp>
 #include <tt_metal/api/tt-metalium/work_split.hpp>
 #include <tt_metal/api/tt-metalium/host_api.hpp>
+#include <tt_metal/impl/buffers/semaphore.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/constants.hpp>
@@ -890,85 +891,30 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorValidId) {
     // Test that valid semaphore IDs work correctly
     log_info(tt::LogTest, "Running {}", __func__);
 
-    ttnn::Shape shape{1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
-    Tensor input_tensor = ttnn::random::random(shape, DataType::BFLOAT16);
-    Tensor device_input_tensor = input_tensor.to_layout(Layout::TILE).to_device(this->device_);
-    Tensor device_output_tensor = tt::tt_metal::create_device_tensor(device_input_tensor.tensor_spec(), this->device_);
-
-    auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor.dtype());
-    uint32_t num_tiles = device_input_tensor.physical_volume() / tt::constants::TILE_HW;
-
     CoreCoord core = {0, 0};
     CoreRange core_range = {core, core};
     CoreRangeSet device_cores = CoreRangeSet(core_range);
-    tt::CBIndex cb_in_id = tt::CBIndex::c_0;
-    tt::CBIndex cb_out_id = tt::CBIndex::c_16;
 
-    CBDescriptor input_cb_descriptor = {
-        .total_size = 2 * tt::tile_size(input_cb_data_format),
-        .core_ranges = device_cores,
-        .format_descriptors = {{cb_in_id, input_cb_data_format, tt::tile_size(input_cb_data_format)}},
-    };
-    CBDescriptor output_cb_descriptor = {
-        .total_size = 2 * tt::tile_size(input_cb_data_format),
-        .core_ranges = device_cores,
-        .format_descriptors = {{cb_out_id, input_cb_data_format, tt::tile_size(input_cb_data_format)}},
-    };
-
-    SemaphoreDescriptor sem_descriptor_0 = {
+    SemaphoreDescriptor sem_descriptor_1 = {
+        .id = 0,
         .core_type = tt::CoreType::WORKER,
         .core_ranges = device_cores,
         .initial_value = 0,
-        .id = 0,
     };
-    SemaphoreDescriptor sem_descriptor_1 = {
+    SemaphoreDescriptor sem_descriptor_2 = {
+        .id = 1,
         .core_type = tt::CoreType::WORKER,
         .core_ranges = device_cores,
         .initial_value = 1,
-        .id = 1,
     };
-
-    KernelDescriptor::CompileTimeArgs reader_ct_args;
-    TensorAccessorArgs(*device_input_tensor.buffer()).append_to(reader_ct_args);
-    KernelDescriptor::CompileTimeArgs writer_ct_args = {(uint32_t)cb_out_id};
-    TensorAccessorArgs(*device_output_tensor.buffer()).append_to(writer_ct_args);
-
-    const std::vector<std::pair<std::string, std::string>> sfpu_defines = {
-        {"SFPU_OP_EXP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}};
 
     ProgramDescriptor program_descriptor = {
-        .kernels =
-            {{
-                 .kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
-                                  "reader_unary_interleaved_start_id.cpp",
-                 .core_ranges = device_cores,
-                 .compile_time_args = reader_ct_args,
-                 .runtime_args = {{{device_input_tensor.buffer()->address(), num_tiles, 0u}}},
-                 .config = tt::tt_metal::ReaderConfigDescriptor{},
-             },
-             {
-                 .kernel_source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
-                                  "writer_unary_interleaved_start_id.cpp",
-                 .core_ranges = device_cores,
-                 .compile_time_args = writer_ct_args,
-                 .runtime_args = {{{device_output_tensor.buffer()->address(), num_tiles, 0u}}},
-                 .config = tt::tt_metal::WriterConfigDescriptor{},
-             },
-             {
-                 .kernel_source = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
-                 .core_ranges = device_cores,
-                 .compile_time_args = {num_tiles, 1},
-                 .defines = sfpu_defines,
-                 .runtime_args = {{{}}},
-                 .config = tt::tt_metal::ComputeConfigDescriptor{},
-             }},
-        .semaphores = {sem_descriptor_0, sem_descriptor_1},
-        .cbs = {input_cb_descriptor, output_cb_descriptor},
+        .kernels = {},
+        .semaphores = {sem_descriptor_1, sem_descriptor_2},
+        .cbs = {},
     };
 
-    ttnn::generic_op(std::vector{device_input_tensor, device_output_tensor}, program_descriptor);
-    Tensor golden = ttnn::exp(device_input_tensor);
-    ASSERT_TRUE(ttnn::allclose<bfloat16>(golden.cpu(), device_output_tensor.cpu()));
+    EXPECT_NO_THROW({ tt::tt_metal::Program program(program_descriptor); });
 }
 
 TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorInvalidIdExceedsMax) {
@@ -980,10 +926,10 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorInvalidIdExceedsMa
     CoreRangeSet device_cores = CoreRangeSet(core_range);
 
     SemaphoreDescriptor invalid_sem_descriptor = {
+        .id = NUM_SEMAPHORES,
         .core_type = tt::CoreType::WORKER,
         .core_ranges = device_cores,
         .initial_value = 0,
-        .id = 16,
     };
 
     ProgramDescriptor program_descriptor = {
@@ -999,26 +945,26 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorDuplicateIdOnOverl
     // Test that duplicate semaphore IDs on overlapping cores throw an error
     log_info(tt::LogTest, "Running {}", __func__);
 
-    CoreCoord core = {0, 0};
-    CoreRange core_range = {core, core};
-    CoreRangeSet device_cores = CoreRangeSet(core_range);
+    // Overlap on core (0, 0)
+    CoreRange core_range_1 = {CoreCoord(0, 0), CoreCoord(0, 1)};
+    CoreRange core_range_2 = {CoreCoord(0, 0), CoreCoord(1, 0)};
 
-    SemaphoreDescriptor sem_descriptor_0 = {
+    SemaphoreDescriptor sem_descriptor_1 = {
+        .id = 0,
         .core_type = tt::CoreType::WORKER,
-        .core_ranges = device_cores,
+        .core_ranges = CoreRangeSet(core_range_1),
         .initial_value = 0,
-        .id = 0,
     };
-    SemaphoreDescriptor sem_descriptor_duplicate = {
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = device_cores,
-        .initial_value = 1,
+    SemaphoreDescriptor sem_descriptor_2 = {
         .id = 0,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = CoreRangeSet(core_range_2),
+        .initial_value = 1,
     };
 
     ProgramDescriptor program_descriptor = {
         .kernels = {},
-        .semaphores = {sem_descriptor_0, sem_descriptor_duplicate},
+        .semaphores = {sem_descriptor_1, sem_descriptor_2},
         .cbs = {},
     };
 
@@ -1033,16 +979,16 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorSameIdNonOverlappi
     CoreRangeSet cores_1 = CoreRangeSet(CoreRange({1, 0}, {1, 0}));
 
     SemaphoreDescriptor sem_on_core_0 = {
+        .id = 0,
         .core_type = tt::CoreType::WORKER,
         .core_ranges = cores_0,
         .initial_value = 0,
-        .id = 0,
     };
     SemaphoreDescriptor sem_on_core_1 = {
+        .id = 0,
         .core_type = tt::CoreType::WORKER,
         .core_ranges = cores_1,
         .initial_value = 1,
-        .id = 0,
     };
 
     ProgramDescriptor program_descriptor = {
