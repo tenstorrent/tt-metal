@@ -1234,31 +1234,40 @@ FORCE_INLINE void update_telemetry(
     bool rx_progress,
     LocalTelemetryT& local_fabric_telemetry,
     volatile tt_l1_ptr LocalTelemetryT* fabric_telemetry) {
-    // Helper to safely write to volatile BandwidthTelemetry destinations without discarding qualifiers
-    auto store_bandwidth_telemetry = [](volatile BandwidthTelemetry* dst, const BandwidthTelemetry& src) {
-        dst->elapsed_active_cycles.full = src.elapsed_active_cycles.full;
-        dst->elapsed_cycles.full = src.elapsed_cycles.full;
-        dst->num_words_sent = src.num_words_sent;
-        dst->num_packets_sent = src.num_packets_sent;
-    };
-
-    bool sender_idle = !any_sender_channels_active(local_sender_channel_free_slots_stream_ids_ordered);
-    bool receiver_idle = (get_ptr_val<to_receiver_packets_sent_streams[0]>() == 0);
-
-    {  // heartbeat update
-        volatile RiscTimestampV2* tx_heartbeat_addr = &fabric_telemetry->dynamic_info.erisc[MY_ERISC_ID].tx_heartbeat;
-        volatile RiscTimestampV2* rx_heartbeat_addr = &fabric_telemetry->dynamic_info.erisc[MY_ERISC_ID].rx_heartbeat;
-        if (sender_idle || tx_progress) {
+    if constexpr (FABRIC_TELEMETRY_HEARTBEAT_TX) {
+        bool sender_idle = false;
+        if (!tx_progress) {
+            sender_idle = !any_sender_channels_active(local_sender_channel_free_slots_stream_ids_ordered);
+        }
+        if (tx_progress || sender_idle) {
+            volatile RiscTimestampV2* tx_heartbeat_addr =
+                &fabric_telemetry->dynamic_info.erisc[MY_ERISC_ID].tx_heartbeat;
             local_fabric_telemetry.dynamic_info.erisc[MY_ERISC_ID].tx_heartbeat.full++;
             tx_heartbeat_addr->full = local_fabric_telemetry.dynamic_info.erisc[MY_ERISC_ID].tx_heartbeat.full;
         }
-        if (receiver_idle || rx_progress) {
+    }
+    if constexpr (FABRIC_TELEMETRY_HEARTBEAT_RX) {
+        bool receiver_idle = false;
+        if (!rx_progress) {
+            receiver_idle = (get_ptr_val<to_receiver_packets_sent_streams[0]>() == 0);
+        }
+        if (rx_progress || receiver_idle) {
+            volatile RiscTimestampV2* rx_heartbeat_addr =
+                &fabric_telemetry->dynamic_info.erisc[MY_ERISC_ID].rx_heartbeat;
             local_fabric_telemetry.dynamic_info.erisc[MY_ERISC_ID].rx_heartbeat.full++;
             rx_heartbeat_addr->full = local_fabric_telemetry.dynamic_info.erisc[MY_ERISC_ID].rx_heartbeat.full;
         }
     }
 
-    {  // bandwidth update
+    if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
+        // Helper to safely write to volatile BandwidthTelemetry destinations without discarding qualifiers
+        auto store_bandwidth_telemetry = [](volatile BandwidthTelemetry* dst, const BandwidthTelemetry& src) {
+            dst->elapsed_active_cycles.full = src.elapsed_active_cycles.full;
+            dst->elapsed_cycles.full = src.elapsed_cycles.full;
+            dst->num_words_sent = src.num_words_sent;
+            dst->num_packets_sent = src.num_packets_sent;
+        };
+
         if constexpr (NUM_ACTIVE_ERISCS == 1) {
             store_bandwidth_telemetry(
                 &fabric_telemetry->dynamic_info.tx_bandwidth, local_fabric_telemetry.dynamic_info.tx_bandwidth);
@@ -1399,7 +1408,7 @@ FORCE_INLINE bool run_sender_channel_step_impl(
             remote_receiver_channel,
             perf_telemetry_recorder);
         // Update local TX counters: split responsibility in multi-ERISC mode
-        if constexpr (ENABLE_FABRIC_TELEMETRY) {
+        if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(pkt_header, local_fabric_telemetry);
         }
         increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
@@ -1600,7 +1609,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             did_something = true;
             progress = true;
             // Count RX bytes/packets (header + payload) when consuming a packet from receiver buffer
-            if constexpr (ENABLE_FABRIC_TELEMETRY) {
+            if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 update_bw_counters(packet_header, local_fabric_telemetry);
             }
             uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
@@ -1802,7 +1811,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 
         uint32_t tx_progress = 0;
         uint32_t rx_progress = 0;
-        if constexpr (ENABLE_FABRIC_TELEMETRY) {
+        if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             loop_start_cycles = get_timestamp();
         }
 
@@ -1871,10 +1880,12 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         }
 
         // Compute idle conditions and update heartbeats in one helper
-        if constexpr (ENABLE_FABRIC_TELEMETRY) {
-            uint64_t loop_end_cycles = get_timestamp();
-            uint64_t loop_delta_cycles = loop_end_cycles - loop_start_cycles;
-            update_bw_cycles(loop_delta_cycles, tx_progress, rx_progress, local_fabric_telemetry);
+        if constexpr (FABRIC_TELEMETRY_ANY_DYNAMIC_STAT) {
+            if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
+                uint64_t loop_end_cycles = get_timestamp();
+                uint64_t loop_delta_cycles = loop_end_cycles - loop_start_cycles;
+                update_bw_cycles(loop_delta_cycles, tx_progress, rx_progress, local_fabric_telemetry);
+            }
             update_telemetry(
                 local_sender_channel_free_slots_stream_ids,
                 tx_progress,
