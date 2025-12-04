@@ -18,11 +18,11 @@ Resource link - [source](https://huggingface.co/google/gemma-3-27b-it)
 Use the following command(s) to run the model:
 - Vision Demo
 ```
-HF_MODEL=google/gemma-3-27b-it pytest models/demos/gemma3/demo/vision_demo.py -k “batch1-trace”
+HF_MODEL=google/gemma-3-27b-it pytest models/demos/multimodal/gemma3/demo/vision_demo.py -k “batch1-trace”
 ```
 - Text only Demo
 ```
-HF_MODEL=google/gemma-3-27b-it pytest models/demos/gemma3/demo/text_demo.py -k “performance and batch1”
+HF_MODEL=google/gemma-3-27b-it pytest models/demos/multimodal/gemma3/demo/text_demo.py -k “performance and batch1”
 ```
 
 ### vLLM offline
@@ -33,7 +33,7 @@ HF_MODEL=google/gemma-3-27b-it MESH_DEVICE=T3K python examples/offline_inference
 ```
 
 ## Details
-- The entry point to the model is located at:`models/demos/gemma3/tt/gemma_e2e_model.py`
+- The entry point to the model is located at:`models/demos/multimodal/gemma3/tt/gemma_e2e_model.py`
 - Batch Size :1-32
 - The image pre-processing is performed using PyTorch on host before passing to the on-device vision model.
 
