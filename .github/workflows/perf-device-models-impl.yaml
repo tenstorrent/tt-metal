@@ -186,8 +186,7 @@ jobs:
           device_perf_model_name: "non-civ2_tests"
           commands: |
             pytest models/demos/mnist/tests -m models_device_performance_bare_metal
-            # TODO: return this once issue https://github.com/tenstorrent/tt-metal/issues/33467 is resolved
-            # pytest models/demos/falcon7b_common/tests -m models_device_performance_bare_metal
+            pytest models/demos/falcon7b_common/tests -m models_device_performance_bare_metal
             pytest models/demos/segformer/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && !matrix.test-info.civ2-compatible && fromJSON(needs.define-models.outputs.models-to-run)['non-civ2'] }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
