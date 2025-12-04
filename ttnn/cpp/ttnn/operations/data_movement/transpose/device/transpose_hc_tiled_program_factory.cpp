@@ -149,6 +149,7 @@ TransposeHCTiledProgramFactory::cached_program_t TransposeHCTiledProgramFactory:
         split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
 
     Buffer* dst_buffer = output_tensor.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = 0;
     // TODO: noc_async_write only require 16B alignment for both DRAM and L1 for Blackhole, so instead of reading in
