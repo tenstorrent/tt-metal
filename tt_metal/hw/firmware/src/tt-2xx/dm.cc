@@ -80,7 +80,7 @@ inline void start_subordinate_kernel_run_early(uint32_t enables) {
 
 inline void wait_subordinates() {
     WAYPOINT("NTW");
-    while (mailboxes->subordinate_sync.allQsr != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
+    while (mailboxes->subordinate_sync.allDMs != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
     WAYPOINT("NTD");
 }
 
