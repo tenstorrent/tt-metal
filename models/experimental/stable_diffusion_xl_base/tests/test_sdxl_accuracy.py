@@ -18,6 +18,7 @@ from models.experimental.stable_diffusion_xl_base.utils.accuracy_utils import (
     calculate_accuracy_metrics,
     create_report_json,
     save_report_json,
+    check_clip_scores,
 )
 
 test_demo_base_and_refiner.__test__ = False
@@ -190,3 +191,6 @@ def test_accuracy_sdxl_base_and_refiner(
 
     save_report_json(report_json, metadata)
     print(json.dumps(report_json, indent=4))
+
+    logger.info(f"clip_scores: {accuracy_metrics['clip_scores']}")  # TODO: remove this
+    check_clip_scores(start_from, num_prompts, prompts, accuracy_metrics["clip_scores"])
