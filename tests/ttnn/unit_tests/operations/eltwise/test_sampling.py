@@ -251,11 +251,14 @@ def test_log_probs_calculation(shape, mesh_device):
     torch.manual_seed(seed)
 
     log_probs_calculator = LogProbsCalculator(shape[-1], mesh_device)
+    # load specific tensors since randn doesn't produce relevant distribution
+    torch_tensor = torch.load("qwen_logits.pt")
+    indices_tensor = torch.load("qwen_indices.pt")
 
-    torch_tensor = torch.randn(shape)
-    # shuffle the tensor in last 2 dimensions
-    for i in range(shape[-2]):
-        torch_tensor[:, :, i, :] = torch_tensor[:, :, i, torch.randperm(shape[-1])]
+    # torch_tensor = torch.randn(shape)
+    # # shuffle the tensor in last 2 dimensions
+    # for i in range(shape[-2]):
+    #     torch_tensor[:, :, i, :] = torch_tensor[:, :, i, torch.randperm(shape[-1])]
 
     logits_tensor = ttnn.from_torch(
         torch_tensor,
@@ -268,10 +271,12 @@ def test_log_probs_calculation(shape, mesh_device):
     log_probs_calculator.set_log_probs_mode(True)
     log_probs_calculator.compute_global_stats(logits_tensor)
 
-    argmax_tensor = torch.argmax(torch_tensor, dim=-1, keepdim=True)
-    indices_tensor = argmax_tensor.reshape(
-        argmax_tensor.shape[0], argmax_tensor.shape[1], argmax_tensor.shape[-1], argmax_tensor.shape[-2]
-    )
+    indices_tensor = torch.load("qwen_indices.pt")
+    argmax_tensor = indices_tensor.reshape(1, 1, 32, 1).to(torch.int64)
+    # argmax_tensor = torch.argmax(torch_tensor, dim=-1, keepdim=True)
+    # indices_tensor = argmax_tensor.reshape(
+    #     argmax_tensor.shape[0], argmax_tensor.shape[1], argmax_tensor.shape[-1], argmax_tensor.shape[-2]
+    # )
 
     ttnn_indices_tensor = ttnn.from_torch(
         indices_tensor,
