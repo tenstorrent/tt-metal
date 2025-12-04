@@ -250,6 +250,7 @@ void DeviceManager::initialize(
     l1_bank_remap.assign(a_l1_bank_remap.begin(), a_l1_bank_remap.end());
 
     initialize_devices(a_device_ids);
+    is_initialized_ = true;
 }
 
 void DeviceManager::initialize_devices(const std::vector<ChipId>& a_device_ids) {

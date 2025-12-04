@@ -1609,4 +1609,9 @@ bool MetalContext::is_coord_in_range(CoreCoord coord, CoreType core_type) {
     return cluster_->is_ethernet_core(virtual_coord, id) || cluster_->is_worker_core(virtual_coord, id);
 }
 
+std::unique_ptr<DeviceManager>& MetalContext::device_manager() {
+    TT_FATAL(device_manager_ != nullptr && device_manager_->is_initialized(), "Device manager is not initialized");
+    return device_manager_;
+}
+
 }  // namespace tt::tt_metal

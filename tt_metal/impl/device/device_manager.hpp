@@ -20,6 +20,8 @@ public:
     ~DeviceManager();
     DeviceManager();
 
+    bool is_initialized() { return is_initialized_; }
+
     void initialize(
         const std::vector<ChipId>& device_ids,
         uint8_t num_hw_cqs,
@@ -51,12 +53,13 @@ private:
     size_t worker_l1_size{};
     std::vector<uint32_t> l1_bank_remap;
     bool using_fast_dispatch_ = false;
-    bool init_profiler_ = false;
+    bool init_profiler_ = true;
     bool initialize_fabric_and_dispatch_fw_ = false;
     // This variable tracks the state of dispatch firmware on device.
     // It is set to true when dispatch firmware is launched, and reset
     // after the terimnate command is sent.
     bool dispatch_firmware_active_ = false;
+    bool is_initialized_ = false;
 
     mutable std::mutex lock;
     std::vector<std::unique_ptr<tt_metal::IDevice>> devices;
