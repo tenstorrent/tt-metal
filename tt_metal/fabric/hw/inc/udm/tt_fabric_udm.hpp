@@ -642,7 +642,7 @@ FORCE_INLINE void fabric_fast_read_ack(
     uint32_t slot_size = memory_pool.get_slot_size();
 
     // Bytes to send: min of bytes in pool and slot size (handles partial last slot)
-    uint32_t bytes_to_send = std::min((uint32_t)response->bytes_remaining_, slot_size);
+    uint32_t bytes_to_send = std::min((uint32_t)response->bytes_remaining, slot_size);
 
     if (response->is_last_send(slot_size)) {
         // Last packet - use fused atomic increment
