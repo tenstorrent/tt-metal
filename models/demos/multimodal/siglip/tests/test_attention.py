@@ -12,10 +12,10 @@ from transformers import AutoConfig
 from transformers.models.siglip.modeling_siglip import SiglipAttention
 
 import ttnn
-from models.demos.siglip.compare import comp_pcc
-from models.demos.siglip.reference.functional import siglip_attention
-from models.demos.siglip.tests.common import convert_state_dict
-from models.demos.siglip.tt.attention import siglip_attention_ttnn
+from models.demos.multimodal.siglip.compare import comp_pcc
+from models.demos.multimodal.siglip.reference.functional import siglip_attention
+from models.demos.multimodal.siglip.tests.common import convert_state_dict
+from models.demos.multimodal.siglip.tt.attention import siglip_attention_ttnn
 
 
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
