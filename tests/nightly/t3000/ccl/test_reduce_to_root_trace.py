@@ -5,6 +5,9 @@
 import pytest
 import torch
 import ttnn
+from loguru import logger
+from tracy import signpost
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 
 def compute_reference_reduce_to_root(
@@ -77,7 +80,7 @@ def compute_reference_reduce_to_root(
 @pytest.mark.parametrize(
     "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 207872}),
     ],
     indirect=["device_params"],
     ids=["fabric_1d_linear_trace"],
@@ -229,6 +232,7 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
         l_data_per_device, s_data_per_device, m_data_per_device, root_device_idx
     )
 
+    profiler = BenchmarkProfiler()
     # Run once to compile
     print("Running reduce_to_root (compiling)...")
     out_l_compile, out_s_compile, out_m_compile = ttnn.reduce_to_root(
@@ -241,10 +245,27 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
         topology=ttnn.Topology.Linear,
     )
     ttnn.synchronize_device(submesh_device)
+
+    logger.info("Capturing trace")
+    print("Warmup iterations...")
+    trace_id_warmup = ttnn.begin_trace_capture(submesh_device, cq_id=0)
+    for i in range(15):
+        out_l_trace, out_s_trace, out_m_trace = ttnn.reduce_to_root(
+            l_tensor,
+            s_tensor,
+            m_tensor,
+            root_coord=ttnn.MeshCoordinate(root_coord),
+            intermediate_tensor_l=intermediate_l,
+            intermediate_tensor_s_m=intermediate_sm,
+            topology=ttnn.Topology.Linear,
+        )
+    ttnn.end_trace_capture(submesh_device, trace_id_warmup, cq_id=0)
+    ttnn.synchronize_device(submesh_device)
+
     # Capture trace
     print("Capturing trace...")
     trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
-    for i in range(5):
+    for i in range(30):
         out_l_trace, out_s_trace, out_m_trace = ttnn.reduce_to_root(
             l_tensor,
             s_tensor,
@@ -255,13 +276,27 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
             topology=ttnn.Topology.Linear,
         )
 
+    logger.info("Starting Trace perf test...")
     ttnn.end_trace_capture(submesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(submesh_device)
-    print("Trace captured successfully!")
 
-    ttnn.execute_trace(submesh_device, trace_id)
+    # for warmup
+    profiler.start("reduce-to-root-warmup")
+    ttnn.execute_trace(submesh_device, trace_id_warmup, blocking=False)
+    ttnn.release_trace(submesh_device, trace_id_warmup)
+    ttnn.synchronize_device(submesh_device)
+    profiler.end("reduce-to-root-warmup")
+
+    signpost("start")
+    profiler.start("reduce-to-root-trace")
+
+    ttnn.execute_trace(submesh_device, trace_id, blocking=False)
     ttnn.release_trace(submesh_device, trace_id)
     ttnn.synchronize_device(submesh_device)
+
+    profiler.end("reduce-to-root-trace")
+    signpost("stop")
+    time_taken = profiler.get_duration("reduce-to-root-trace") - profiler.get_duration("reduce-to-root-warmup")
 
     # Verify the output from the last trace execution
     print("\nVerifying trace output...")
