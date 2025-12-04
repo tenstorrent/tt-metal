@@ -133,13 +133,13 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     // Get OP Config, topology config
     uint32_t page_size = tensor_args.input_tensor.buffer()->page_size();
     uint32_t num_sticks_per_halo_dim = 1;
-    for (int d = operation_attributes.dim + 1; d < input_tensor_shape.size() - 1; d++) {
+    for (size_t d = operation_attributes.dim + 1; d < input_tensor_shape.size() - 1; d++) {
         num_sticks_per_halo_dim *= input_tensor_shape[d];
     }
     uint32_t input_halo_dim_size = input_tensor_shape[operation_attributes.dim];
     uint32_t output_halo_dim_size = output_tensor_shape[operation_attributes.dim];
     uint32_t outer_dim_size = 1;
-    for (int d = 0; d < operation_attributes.dim; d++) {
+    for (size_t d = 0; d < operation_attributes.dim; d++) {
         outer_dim_size *= input_tensor_shape[d];
     }
 
