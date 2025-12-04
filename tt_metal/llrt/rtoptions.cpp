@@ -1283,40 +1283,31 @@ void RunTimeOptions::ParseFabricTelemetryEnv(const char* value) {
         }
     };
 
-    auto parse_uint32_selection = [&](const std::string& raw_value,
-                                      FabricTelemetrySelection<uint32_t>& selection,
-                                      const char* key,
-                                      const char* non_negative_error_fmt,
-                                      bool format_error_with_key) {
-        if (raw_value.empty() || equals_all(raw_value)) {
-            selection.set_monitor_all(true);
-            return;
-        }
-        selection.set_monitor_all(false);
-        selection.ids.clear();
-        std::stringstream value_stream(raw_value);
-        std::string token;
-        bool parsed_any = false;
-        while (std::getline(value_stream, token, ',')) {
-            token = trim_copy(token);
-            if (token.empty()) {
-                continue;
+    auto parse_uint32_selection =
+        [&](const std::string& raw_value, FabricTelemetrySelection<uint32_t>& selection, const char* key) {
+            if (raw_value.empty() || equals_all(raw_value)) {
+                selection.set_monitor_all(true);
+                return;
             }
-            int parsed_value = parse_int_token<int>(token, key);
-            if (parsed_value < 0) {
-                if (non_negative_error_fmt == nullptr) {
-                    TT_THROW("TT_METAL_FABRIC_TELEMETRY {}= requires non-negative IDs", key);
-                } else if (format_error_with_key) {
-                    TT_THROW(fmt::runtime(non_negative_error_fmt), key);
-                } else {
-                    TT_THROW(fmt::runtime(non_negative_error_fmt));
+            selection.set_monitor_all(false);
+            selection.ids.clear();
+            std::stringstream value_stream(raw_value);
+            std::string token;
+            bool parsed_any = false;
+            while (std::getline(value_stream, token, ',')) {
+                token = trim_copy(token);
+                if (token.empty()) {
+                    continue;
                 }
+                int parsed_value = parse_int_token<int>(token, key);
+                if (parsed_value < 0) {
+                    TT_THROW("TT_METAL_FABRIC_TELEMETRY {}= requires non-negative IDs", key);
+                }
+                parsed_any = true;
+                selection.ids.insert(static_cast<uint32_t>(parsed_value));
             }
-            parsed_any = true;
-            selection.ids.insert(static_cast<uint32_t>(parsed_value));
-        }
-        handle_required_entries(parsed_any, key);
-    };
+            handle_required_entries(parsed_any, key);
+        };
 
     std::stringstream section_stream(spec);
     std::string section;
@@ -1336,26 +1327,11 @@ void RunTimeOptions::ParseFabricTelemetryEnv(const char* value) {
         std::string key_lower = to_lower_copy(key);
 
         if (key_lower == "chips") {
-            parse_uint32_selection(
-                raw_value,
-                parsed_settings.chips,
-                "chips",
-                "TT_METAL_FABRIC_TELEMETRY {}= requires non-negative chip IDs",
-                true);
+            parse_uint32_selection(raw_value, parsed_settings.chips, key_lower.c_str());
         } else if (key_lower == "eth") {
-            parse_uint32_selection(
-                raw_value,
-                parsed_settings.channels,
-                "eth",
-                "TT_METAL_FABRIC_TELEMETRY {}= requires non-negative channel IDs",
-                true);
+            parse_uint32_selection(raw_value, parsed_settings.channels, key_lower.c_str());
         } else if (key_lower == "erisc") {
-            parse_uint32_selection(
-                raw_value,
-                parsed_settings.eriscs,
-                "erisc",
-                "TT_METAL_FABRIC_TELEMETRY erisc= requires indices >= 0",
-                false);
+            parse_uint32_selection(raw_value, parsed_settings.eriscs, key_lower.c_str());
         } else if (key_lower == "stats") {
             if (raw_value.empty() || equals_all(raw_value)) {
                 parsed_settings.stats_mask = FabricTelemetrySettings::kAllStatsMask;
