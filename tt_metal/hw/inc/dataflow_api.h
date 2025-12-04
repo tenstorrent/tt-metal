@@ -2055,13 +2055,13 @@ inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
  * | skip_ptr_update (template argument) | Whether to skip updating counters              | bool      | true or false | False    |
  */
 // clang-format on
-template <bool skip_ptr_update = false>
+template <bool skip_ptr_update = false, bool skip_cmdbuf_chk = false>
 FORCE_INLINE void noc_async_read_one_packet_with_state_with_trid(
     uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid = 0, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT(NocEventType::READ_WITH_STATE_AND_TRID);
 
     WAYPOINT("NRDW");
-    ncrisc_noc_fast_read_with_transaction_id<noc_mode, skip_ptr_update>(
+    ncrisc_noc_fast_read_with_transaction_id<noc_mode, skip_ptr_update, skip_cmdbuf_chk>(
         noc, read_cmd_buf, src_base_addr, src_addr, dest_addr, trid);
     WAYPOINT("NRDD");
 }
