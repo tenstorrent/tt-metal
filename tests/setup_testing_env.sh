@@ -150,7 +150,7 @@ main() {
         exit 0
     fi
 
-    if [[ -z $sfpi_md5 ]] ; then
+    if [[ -z $sfpi_hash ]] ; then
 	echo "[ERROR] SFPI $sfpi_version $sfpi_pkg package for $sfpi_arch $sfpi_dist is not available" >&2
 	exit 1
     fi
@@ -162,9 +162,9 @@ main() {
         echo "ERROR: Failed to download $sfpi_url/$sfpi_filename" >&2
         exit 1
     fi
-    if [ $(md5sum -b "${TEMP_DIR}/$sfpi_filename" | cut -d' ' -f1) \
-	     != "$sfpi_md5" ] ; then
-	echo "[ERROR] SFPI $sfpi_filename md5 mismatch" >&2
+    if [ $(${sfpi_hashtype}sum -b "${TEMP_DIR}/$sfpi_filename" | cut -d' ' -f1) \
+	     != "$sfpi_hash" ] ; then
+	echo "[ERROR] SFPI $sfpi_filename ${sfpi_hashtype} mismatch" >&2
 	rm -rf $TEMP_DIR
 	exit 1
     fi
