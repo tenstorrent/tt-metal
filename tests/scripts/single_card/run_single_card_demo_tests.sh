@@ -140,12 +140,6 @@ run_ufld_v2_func() {
   pytest models/demos/wormhole/ufld_v2/demo/demo.py
 }
 
-run_ufld_v2_with_ops_recording() {
-  # Run ufld_v2 with operation recording enabled
-  # This sets TTNN_CONFIG_OVERRIDES and extracts operations from db.sqlite
-  bash "$(dirname "${BASH_SOURCE[0]}")/record_and_list_operations.sh" "ufld_v2_ops" "pytest models/demos/wormhole/ufld_v2/demo/demo.py"
-}
-
 run_vgg_func() {
 
   #VGG11/VGG16
@@ -214,6 +208,12 @@ run_mnist_func() {
 
   pytest models/demos/mnist/demo/demo.py
 
+}
+
+run_mnist_with_ops_recording() {
+  # Run mnist with operation recording enabled
+  # This sets TTNN_CONFIG_OVERRIDES and extracts operations from db.sqlite
+  bash "$(dirname "${BASH_SOURCE[0]}")/record_and_list_operations.sh" "mnist_ops" "pytest models/demos/mnist/demo/demo.py"
 }
 
 run_squeezebert_func() {
