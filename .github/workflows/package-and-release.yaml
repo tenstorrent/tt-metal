@@ -234,7 +234,7 @@ jobs:
           echo "Checking release creation conditions..."
 
           # Check if we should create release based on git ref
-          should_create_for_ref=false
+          should_create_for_ref=true
           if [[ "${{ github.ref }}" == "refs/heads/main" ]] || \
              [[ "${{ github.ref }}" == "refs/heads/stable" ]] || \
              [[ "${{ github.ref }}" == refs/tags/v* ]] || \
