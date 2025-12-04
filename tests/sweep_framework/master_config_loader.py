@@ -128,28 +128,29 @@ class MasterConfigLoader:
         print(f"⚠️ No configurations found for operation: {operation_name}")
         return []
 
-    def _normalize_configs(self, configs: List) -> List[List[Dict]]:
+    def _normalize_configs(self, configs: List) -> List[Tuple[List[Dict], str]]:
         """
-        Normalize configurations to always return list of argument lists.
+        Normalize configurations to always return list of (argument list, source) tuples.
         Handles both old format (list) and new format (dict with source).
 
         Args:
             configs: List of configurations (either list of args or dict with 'arguments' and 'source')
 
         Returns:
-            List of argument lists (backward compatible format)
+            List of (arguments, source) tuples for traceability
         """
         normalized = []
         for config in configs:
             if isinstance(config, dict) and "arguments" in config:
-                # New format: extract arguments
-                normalized.append(config["arguments"])
+                # New format: extract arguments and source
+                source = config.get("source", "unknown")
+                normalized.append((config["arguments"], source))
             elif isinstance(config, list):
-                # Old format: use as-is
-                normalized.append(config)
+                # Old format: use as-is with unknown source
+                normalized.append((config, "unknown"))
             else:
-                # Fallback: wrap in list
-                normalized.append(config if isinstance(config, list) else [config])
+                # Fallback: wrap in list with unknown source
+                normalized.append((config if isinstance(config, list) else [config], "unknown"))
         return normalized
 
     def parse_dtype(self, dtype_str: str) -> Any:
@@ -570,7 +571,7 @@ class MasterConfigLoader:
         failed_configs = 0
         seen_input_signatures = set() if deduplicate_inputs else None
 
-        for config_idx, config in enumerate(configs):
+        for config_idx, (config, source) in enumerate(configs):
             try:
                 # Extract first tensor from each config
                 # Config is a list of arguments: [{"UnparsedElement": ...}, {"arg1": "nullopt"}, ...]
@@ -736,6 +737,7 @@ class MasterConfigLoader:
                             "memory_config": parsed_mem_config,
                             "output_memory_config": output_mem_config,
                             "storage_type": storage_type_str,
+                            "traced_source": source,
                         }
 
                         # Extract operation-specific parameters using registry extractors
@@ -858,6 +860,7 @@ class MasterConfigLoader:
                 input_a_memory_configs = []
                 output_memory_configs = []
                 storage_types = []
+                traced_source_list = []
                 traced_config_names = []
                 dims_list = [] if (operation_name == "permute" or operation_name == "ttnn::permute") else None
                 end_shape_list = [] if operation_name == "untilize_with_unpadding" else None
@@ -937,6 +940,7 @@ class MasterConfigLoader:
                     input_a_memory_configs.append(cfg["memory_config"])
                     output_memory_configs.append(cfg["output_memory_config"])
                     storage_types.append(cfg.get("storage_type", "StorageType::DEVICE"))
+                    traced_source_list.append(cfg.get("traced_source", "unknown"))
                     traced_config_names.append(f"{operation_name}_traced_{idx}")
                     if (operation_name == "permute" or operation_name == "ttnn::permute") and "dims" in cfg:
                         dims_list.append(cfg["dims"])
@@ -1017,6 +1021,7 @@ class MasterConfigLoader:
                     "input_a_memory_config",
                     "output_memory_config",
                     "storage_type",
+                    "traced_source",
                 ]
                 param_lists = [
                     input_shapes,
@@ -1025,6 +1030,7 @@ class MasterConfigLoader:
                     input_a_memory_configs,
                     output_memory_configs,
                     storage_types,
+                    traced_source_list,
                 ]
 
                 # Add operation-specific parameters
@@ -1169,7 +1175,7 @@ class MasterConfigLoader:
         paired_configs = []
         failed_configs = 0
 
-        for config_idx, config in enumerate(configs):
+        for config_idx, (config, source) in enumerate(configs):
             try:
                 # Extract BOTH tensors from each config
                 tensor_configs = []
@@ -1226,6 +1232,7 @@ class MasterConfigLoader:
                                 "memory_config_a": parsed_mem_config_a,
                                 "memory_config_b": parsed_mem_config_b,
                                 "output_memory_config": parsed_mem_config_a,  # Use first input's memory config as default
+                                "traced_source": source,
                             }
                         )
                     else:
@@ -1311,6 +1318,7 @@ class MasterConfigLoader:
                 input_a_memory_configs = []
                 input_b_memory_configs = []
                 output_memory_configs = []
+                traced_source_list = []
                 traced_config_names = []
 
                 for idx, cfg in enumerate(paired_configs):
@@ -1322,6 +1330,7 @@ class MasterConfigLoader:
                     input_a_memory_configs.append(cfg["memory_config_a"])
                     input_b_memory_configs.append(cfg["memory_config_b"])
                     output_memory_configs.append(cfg["output_memory_config"])
+                    traced_source_list.append(cfg.get("traced_source", "unknown"))
                     traced_config_names.append(f"{operation_name}_traced_{idx}")
 
                 # Convert to exact configurations format (prevents Cartesian product)
@@ -1335,6 +1344,7 @@ class MasterConfigLoader:
                     "input_a_memory_config",
                     "input_b_memory_config",
                     "output_memory_config",
+                    "traced_source",
                     # NOTE: traced_config_name is metadata only, not passed to run()
                     # "traced_config_name",
                 ]
@@ -1347,6 +1357,7 @@ class MasterConfigLoader:
                     input_a_memory_configs,
                     input_b_memory_configs,
                     output_memory_configs,
+                    traced_source_list,
                     # traced_config_names,
                 ]
 
@@ -1386,7 +1397,7 @@ class MasterConfigLoader:
         paired_configs = []
         failed_configs = 0
 
-        for config_idx, config in enumerate(configs):
+        for config_idx, (config, source) in enumerate(configs):
             try:
                 # Extract ALL tensors from each config
                 tensor_configs = []
@@ -1402,7 +1413,7 @@ class MasterConfigLoader:
                     continue
 
                 # Parse all tensor configs
-                parsed_config = {}
+                parsed_config = {"traced_source": source}
                 for i, tc in enumerate(tensor_configs):
                     suffix = chr(97 + i)  # a, b, c, d, ...
                     try:
@@ -1414,7 +1425,9 @@ class MasterConfigLoader:
                         failed_configs += 1
                         break
 
-                if len(parsed_config) == tensor_count * 4:  # shape, dtype, layout, mem_config for each tensor
+                if (
+                    len(parsed_config) == tensor_count * 4 + 1
+                ):  # shape, dtype, layout, mem_config for each tensor + traced_source
                     paired_configs.append(parsed_config)
 
             except Exception as e:
@@ -1474,6 +1487,7 @@ class MasterConfigLoader:
                 dtypes = [[] for _ in range(tensor_count)]
                 layouts = [[] for _ in range(tensor_count)]
                 memory_configs = [[] for _ in range(tensor_count)]
+                traced_source_list = []
                 traced_config_names = []
 
                 for idx, cfg in enumerate(paired_configs):
@@ -1488,6 +1502,7 @@ class MasterConfigLoader:
                         layouts[i].append(cfg[f"layout_{suffix}"])
                         memory_configs[i].append(cfg[f"memory_config_{suffix}"])
 
+                    traced_source_list.append(cfg.get("traced_source", "unknown"))
                     traced_config_names.append(f"{operation_name}_traced_{idx}")
 
                 # Convert to exact configurations format (prevents Cartesian product)
@@ -1502,6 +1517,10 @@ class MasterConfigLoader:
                         [f"input_{suffix}_dtype", f"input_{suffix}_layout", f"input_{suffix}_memory_config"]
                     )
                     param_lists.extend([dtypes[i], layouts[i], memory_configs[i]])
+
+                # Add traced_source for traceability
+                param_names.append("traced_source")
+                param_lists.append(traced_source_list)
 
                 # NOTE: traced_config_name is metadata only, not passed to run()
                 # param_names.append("traced_config_name")
@@ -1672,8 +1691,9 @@ class MasterConfigLoader:
             compute_configs_list = []
             dtypes_list = []
             config_tensors_in_dram_list = []
+            traced_source_list = []
 
-            for config in configs:
+            for config, source in configs:
                 params = self._extract_conv2d_parameters(config)
                 if params:
                     # Build input_specs list:
@@ -1703,12 +1723,14 @@ class MasterConfigLoader:
                     dtypes_list.append(params.get("dtype", "bfloat16"))
                     # Extract config_tensors_in_dram if available (default True for model_traced to help with OOM)
                     config_tensors_in_dram_list.append(params.get("config_tensors_in_dram", True))
+                    # Track source for traceability
+                    traced_source_list.append(source)
 
             if input_specs_list:
                 print(
                     f"✅ Loaded {len(input_specs_list)} traced configurations for {operation_name} (model_traced suite)"
                 )
-                # Pair input_specs with is_conv1d, compute_config, dtype, and config_tensors_in_dram to prevent Cartesian product
+                # Pair input_specs with is_conv1d, compute_config, dtype, config_tensors_in_dram, and traced_source to prevent Cartesian product
                 # Use comma-separated parameter name to pass tuples together
                 paired_configs = list(
                     zip(
@@ -1717,10 +1739,11 @@ class MasterConfigLoader:
                         compute_configs_list,
                         dtypes_list,
                         config_tensors_in_dram_list,
+                        traced_source_list,
                     )
                 )
                 return {
-                    "input_specs,is_conv1d,compute_config,dtype,config_tensors_in_dram": paired_configs,
+                    "input_specs,is_conv1d,compute_config,dtype,config_tensors_in_dram,traced_source": paired_configs,
                 }
 
             return {"input_specs": [], "is_conv1d": []}
@@ -1738,7 +1761,7 @@ class MasterConfigLoader:
         try:
             paired_configs = []
 
-            for config in configs:
+            for config, source in configs:
                 # Extract base tensor config for input tensor
                 tensor_config = None
                 for arg in config:
@@ -1775,6 +1798,7 @@ class MasterConfigLoader:
                         "transpose_a": linear_params["transpose_a"],
                         "transpose_b": linear_params["transpose_b"],
                         "has_bias": linear_params["has_bias"],
+                        "traced_source": source,
                     }
                     paired_configs.append(config_dict)
 
@@ -1784,7 +1808,7 @@ class MasterConfigLoader:
                 # Build parameter dict
                 param_names = [
                     "input_shape,weight_shape,bias_shape,input_a_dtype,input_b_dtype,input_a_layout,input_b_layout,"
-                    + "input_a_memory_config,input_b_memory_config,output_memory_config,transpose_a,transpose_b,has_bias"
+                    + "input_a_memory_config,input_b_memory_config,output_memory_config,transpose_a,transpose_b,has_bias,traced_source"
                 ]
                 param_lists = [
                     [
@@ -1802,6 +1826,7 @@ class MasterConfigLoader:
                             cfg["transpose_a"],
                             cfg["transpose_b"],
                             cfg["has_bias"],
+                            cfg["traced_source"],
                         )
                         for cfg in paired_configs
                     ]
@@ -1825,12 +1850,14 @@ class MasterConfigLoader:
             # Clean operation name (remove namespace prefix if present)
             clean_op_name = operation_name.replace("ttnn::", "")
 
-            # First extract parameters from each config
+            # First extract parameters from each config, tracking sources
             extracted_params = []
-            for config in configs:
+            extracted_sources = []
+            for config, source in configs:
                 params = OperationParameterExtractors.extract_parameters(clean_op_name, config)
                 if params:
                     extracted_params.append(params)
+                    extracted_sources.append(source)
 
             # Then transform the extracted parameters
             if extracted_params:
@@ -1851,7 +1878,7 @@ class MasterConfigLoader:
                     if clean_op_name == "embedding":
                         param_tuples = []
 
-                        for cfg in transformed_configs:
+                        for idx, cfg in enumerate(transformed_configs):
                             # Convert input_shape dict to embedding_args tuple format
                             # input_shape is {"self": [batch_size, seq_length], "other": [num_embeddings, embeddings_dim]}
                             # embedding_args should be (batch_size, seq_length, embeddings_dim, num_embeddings)
@@ -1890,17 +1917,18 @@ class MasterConfigLoader:
                                     cfg["input_a_memory_config"],
                                     cfg["input_b_memory_config"],
                                     cfg["output_memory_config"],
+                                    extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
                                 )
                             )
 
                         # Return as comma-separated parameter name with tuple list (like linear)
-                        param_name = "embedding_args,input_dtype,weight_dtype,output_dtype,input_layout,weight_layout,input_memory_config,weight_memory_config,output_memory_config"
+                        param_name = "embedding_args,input_dtype,weight_dtype,output_dtype,input_layout,weight_layout,input_memory_config,weight_memory_config,output_memory_config,traced_source"
                         return {param_name: param_tuples}
 
                     elif clean_op_name == "linear":
                         param_names = [
                             "input_shape,weight_shape,bias_shape,input_a_dtype,input_b_dtype,input_a_layout,input_b_layout,"
-                            + "input_a_memory_config,input_b_memory_config,output_memory_config,transpose_a,transpose_b,has_bias"
+                            + "input_a_memory_config,input_b_memory_config,output_memory_config,transpose_a,transpose_b,has_bias,traced_source"
                         ]
                         param_lists = [
                             [
@@ -1918,8 +1946,9 @@ class MasterConfigLoader:
                                     cfg["transpose_a"],
                                     cfg["transpose_b"],
                                     cfg["has_bias"],
+                                    extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
                                 )
-                                for cfg in transformed_configs
+                                for idx, cfg in enumerate(transformed_configs)
                             ]
                         ]
                         return {param_names[0]: param_lists[0]}
@@ -1942,7 +1971,7 @@ class MasterConfigLoader:
 
                         # Create tuples of exact configurations
                         param_names = [
-                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,output_memory_config"
+                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,output_memory_config,traced_source"
                         ]
                         param_lists = [
                             [
@@ -1952,8 +1981,9 @@ class MasterConfigLoader:
                                     cfg.get("input_layout", ttnn.TILE_LAYOUT),
                                     cfg.get("input_memory_config"),
                                     cfg.get("output_memory_config"),
+                                    extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
                                 )
-                                for cfg in transformed_configs
+                                for idx, cfg in enumerate(transformed_configs)
                             ]
                         ]
                         return {param_names[0]: param_lists[0]}
@@ -2003,7 +2033,7 @@ class MasterConfigLoader:
 
                         # Create tuples of exact configurations
                         param_names = [
-                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,input_c_dtype,input_c_layout,input_c_memory_config,input_d_dtype,input_d_layout,input_d_memory_config,input_e_dtype,input_e_layout,input_e_memory_config,output_memory_config"
+                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,input_c_dtype,input_c_layout,input_c_memory_config,input_d_dtype,input_d_layout,input_d_memory_config,input_e_dtype,input_e_layout,input_e_memory_config,output_memory_config,traced_source"
                         ]
                         param_lists = [
                             [
@@ -2025,8 +2055,9 @@ class MasterConfigLoader:
                                     cfg.get("input_e_layout", ttnn.TILE_LAYOUT),
                                     cfg.get("input_e_memory_config"),
                                     cfg.get("output_memory_config"),
+                                    extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
                                 )
-                                for cfg in transformed_configs
+                                for idx, cfg in enumerate(transformed_configs)
                             ]
                         ]
                         return {param_names[0]: param_lists[0]}
@@ -2051,7 +2082,7 @@ class MasterConfigLoader:
             paired_configs = []
             failed_configs = 0
 
-            for config_idx, config in enumerate(configs):
+            for config_idx, (config, source) in enumerate(configs):
                 try:
                     # Concat takes a vector of tensors as arg0, dim as arg1, memory_config as arg2
                     # Extract vector of tensors from arg0 (may be UnparsedElement)
@@ -2148,6 +2179,7 @@ class MasterConfigLoader:
                             "input_shape": input_shape_dict,
                             "dim": dim,
                             "output_memory_config": memory_config or ttnn.DRAM_MEMORY_CONFIG,
+                            "traced_source": source,
                         }
 
                         # Add dtype, layout, memory_config for each input (at least 2)
@@ -2179,6 +2211,7 @@ class MasterConfigLoader:
                     "input_b_layout",
                     "input_b_memory_config",
                     "output_memory_config",
+                    "traced_source",
                 ]
                 param_lists = [
                     [cfg.get("input_shape") for cfg in paired_configs],
@@ -2190,6 +2223,7 @@ class MasterConfigLoader:
                     [cfg.get("input_b_layout") for cfg in paired_configs],
                     [cfg.get("input_b_memory_config") for cfg in paired_configs],
                     [cfg.get("output_memory_config") for cfg in paired_configs],
+                    [cfg.get("traced_source", "unknown") for cfg in paired_configs],
                 ]
 
                 # Create tuples of exact configurations
@@ -2214,7 +2248,7 @@ class MasterConfigLoader:
             paired_configs = []
             failed_configs = 0
 
-            for config_idx, config in enumerate(configs):
+            for config_idx, (config, source) in enumerate(configs):
                 try:
                     # Extract input tensor (arg0)
                     tensor_config = None
@@ -2272,6 +2306,7 @@ class MasterConfigLoader:
                             "output_memory_config": output_mem_config,
                             "num_q_heads": num_q_heads,
                             "num_kv_heads": num_kv_heads,
+                            "traced_source": source,
                         }
                         paired_configs.append(config_dict)
 
@@ -2291,6 +2326,7 @@ class MasterConfigLoader:
                     "num_q_heads",
                     "num_kv_heads",
                     "output_memory_config",
+                    "traced_source",
                 ]
                 param_lists = [
                     [cfg["shape"] for cfg in paired_configs],
@@ -2300,6 +2336,7 @@ class MasterConfigLoader:
                     [cfg["num_q_heads"] for cfg in paired_configs],
                     [cfg["num_kv_heads"] for cfg in paired_configs],
                     [cfg["output_memory_config"] for cfg in paired_configs],
+                    [cfg.get("traced_source", "unknown") for cfg in paired_configs],
                 ]
 
                 # Create tuples of exact configurations
@@ -2324,7 +2361,7 @@ class MasterConfigLoader:
             paired_configs = []
             failed_configs = 0
 
-            for config_idx, config in enumerate(configs):
+            for config_idx, (config, source) in enumerate(configs):
                 try:
                     # Extract input tensor (arg0)
                     tensor_config = None
@@ -2382,6 +2419,7 @@ class MasterConfigLoader:
                             "output_memory_config": output_mem_config,
                             "num_heads": num_heads,
                             "num_kv_heads": num_kv_heads,
+                            "traced_source": source,
                         }
                         paired_configs.append(config_dict)
 
@@ -2401,6 +2439,7 @@ class MasterConfigLoader:
                     "num_heads",
                     "num_kv_heads",
                     "output_memory_config",
+                    "traced_source",
                 ]
                 param_lists = [
                     [cfg["shape"] for cfg in paired_configs],
@@ -2410,6 +2449,7 @@ class MasterConfigLoader:
                     [cfg["num_heads"] for cfg in paired_configs],
                     [cfg["num_kv_heads"] for cfg in paired_configs],
                     [cfg["output_memory_config"] for cfg in paired_configs],
+                    [cfg.get("traced_source", "unknown") for cfg in paired_configs],
                 ]
 
                 # Create tuples of exact configurations
