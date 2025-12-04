@@ -26,7 +26,8 @@ struct ToLayout {
         const ttnn::Tensor& tensor_arg,
         ttnn::Layout layout,
         const std::optional<ttnn::DataType>& dtype = std::nullopt,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 }  // namespace core

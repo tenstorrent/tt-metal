@@ -2,16 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "topk_pybind.hpp"
+#include "ttnn/operations/reduction/topk/topk_pybind.hpp"
 
-#include "ttnn/operations/reduction/topk/topk.hpp"
+#include <cstdint>
+#include <optional>
+
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
 #include "ttnn-pybind/decorators.hpp"
+#include "ttnn/operations/reduction/topk/topk.hpp"
 
 namespace ttnn::operations::reduction::detail {
 namespace py = pybind11;
 
 void bind_reduction_topk_operation(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Returns the :attr:`k` largest or :attr:`k` smallest elements of the :attr:`input_tensor` along a given dimension :attr:`dim`.
 
@@ -62,7 +68,8 @@ void bind_reduction_topk_operation(py::module& module) {
                     * - UINT16, UINT32
                       - TILE
 
-                The :attr:`output_value_tensor` will have the same data type as :attr:`input_tensor` and :attr:`output_index_tensor` will have UINT16 data type.
+                The :attr:`output_value_tensor` will have the same data type as :attr:`input_tensor` and will be in TILE layout.
+                The :attr:`output_index_tensor` will be UINT16 and will be in TILE layout.
 
             Memory Support:
                 - Interleaved: DRAM and L1
@@ -80,6 +87,7 @@ void bind_reduction_topk_operation(py::module& module) {
         )doc";
 
     using OperationType = decltype(ttnn::topk);
+
     bind_registered_operation(
         module,
         ttnn::topk,
@@ -91,7 +99,7 @@ void bind_reduction_topk_operation(py::module& module) {
                const int8_t dim,
                const bool largest,
                const bool sorted,
-               std::optional<std::tuple<ttnn::Tensor, ttnn::Tensor>> optional_output_tensors,
+               const std::optional<std::tuple<ttnn::Tensor, ttnn::Tensor>>& preallocated_output_tensors,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::CoreRangeSet>& sub_core_grids,
                const std::optional<ttnn::Tensor>& indices_tensor) {
@@ -104,7 +112,7 @@ void bind_reduction_topk_operation(py::module& module) {
                     memory_config,
                     sub_core_grids,
                     indices_tensor,
-                    optional_output_tensors);
+                    preallocated_output_tensors);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("k") = 32,

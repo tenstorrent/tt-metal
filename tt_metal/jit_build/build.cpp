@@ -26,6 +26,7 @@
 #include "env_lib.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/profiler/profiler_state_manager.hpp"
 #include "jit_build/kernel_args.hpp"
 #include "jit_build/depend.hpp"
 #include "jit_build_settings.hpp"
@@ -176,7 +177,14 @@ void JitBuildEnv::init(
         if (rtoptions.get_profiler_trace_only()) {
             profiler_options |= PROFILER_OPT_DO_TRACE_ONLY;
         }
+        if (rtoptions.get_profiler_sum()) {
+            profiler_options |= PROFILER_OPT_DO_SUM;
+        }
         this->defines_ += "-DPROFILE_KERNEL=" + std::to_string(profiler_options) + " ";
+
+        const uint32_t profiler_dram_bank_size_per_risc_bytes = get_profiler_dram_bank_size_per_risc_bytes();
+        this->defines_ +=
+            "-DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=" + std::to_string(profiler_dram_bank_size_per_risc_bytes) + " ";
     }
     if (rtoptions.get_profiler_noc_events_enabled()) {
         // force profiler on if noc events are being profiled
@@ -184,6 +192,11 @@ void JitBuildEnv::init(
             this->defines_ += "-DPROFILE_KERNEL=1 ";
         }
         this->defines_ += "-DPROFILE_NOC_EVENTS=1 ";
+    }
+    if (rtoptions.get_profiler_perf_counter_mode() != 0) {
+        // force profiler on if perf counters are being captured
+        TT_ASSERT(tt::tt_metal::getDeviceProfilerState());
+        this->defines_ += "-DPROFILE_PERF_COUNTERS=" + std::to_string(rtoptions.get_profiler_perf_counter_mode()) + " ";
     }
 
     if (rtoptions.get_watcher_enabled()) {
@@ -195,7 +208,7 @@ void JitBuildEnv::init(
     if (rtoptions.get_watcher_noc_sanitize_linked_transaction()) {
         this->defines_ += "-DWATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION ";
     }
-    for (auto& feature : rtoptions.get_watcher_disabled_features()) {
+    for (const auto& feature : rtoptions.get_watcher_disabled_features()) {
         this->defines_ += "-DWATCHER_DISABLE_" + feature + " ";
     }
 
@@ -248,8 +261,7 @@ void JitBuildEnv::init(
         root_ + "tt_metal/hw/inc",
         root_ + "tt_metal/hostdevcommon/api",
         root_ + "tt_metal/hw/inc/debug",
-        root_ + "tt_metal/api/",
-        root_ + "tt_metal/api/tt-metalium/"};
+        root_ + "tt_metal/api/"};
 
     std::ostringstream oss;
     for (size_t i = 0; i < includeDirs.size(); ++i) {
@@ -340,6 +352,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         auto srcs = jit_build_query.srcs(params);
         this->srcs_.insert(this->srcs_.end(), std::move_iterator(srcs.begin()), std::move_iterator(srcs.end()));
     }
+    this->firmware_is_kernel_object_ = jit_build_query.firmware_is_kernel_object(params);
 
     // Create the objs from the srcs
     for (const string& src : srcs_) {
@@ -498,9 +511,12 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
     // 2. Weakened firmware elf (for kernels)
     std::vector<std::string> link_deps = {this->linker_script_};
     if (!this->is_fw_) {
-        std::string weakened_elf = weakened_firmeware_elf_name();
-        cmd += "-Wl,--just-symbols=" + weakened_elf + " ";
-        link_deps.push_back(weakened_elf);
+        std::string weakened = weakened_firmware_name();
+        link_deps.push_back(weakened);
+        if (!this->firmware_is_kernel_object_) {
+            cmd += "-Wl,--just-symbols=";
+        }
+        cmd += weakened + " ";
     }
 
     // Append common args provided by the build state
@@ -534,17 +550,21 @@ void JitBuildState::weaken(const string& out_dir) const {
     // ZoneScoped;
 
     std::string pathname_in = out_dir + target_name_ + ".elf";
-    std::string pathname_out = out_dir + target_name_ + "_weakened.elf";
+    std::string pathname_out = weakened_firmware_name();
 
     ll_api::ElfFile elf;
     elf.ReadImage(pathname_in);
     static std::string_view const strong_names[] = {"__fw_export_*", "__global_pointer$"};
     elf.WeakenDataSymbols(strong_names);
+    if (this->firmware_is_kernel_object_) {
+        elf.ObjectifyExecutable();
+    }
     elf.WriteImage(pathname_out);
 }
 
-std::string JitBuildState::weakened_firmeware_elf_name() const {
-    return fmt::format("{}{}/{}_weakened.elf", this->env_.out_firmware_root_, this->target_name_, this->target_name_);
+std::string JitBuildState::weakened_firmware_name() const {
+    std::string_view name = this->firmware_is_kernel_object_ ? "object.o" : "weakened.elf";
+    return fmt::format("{}{}/{}_{}", this->env_.out_firmware_root_, this->target_name_, this->target_name_, name);
 }
 
 void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const {
@@ -592,13 +612,13 @@ void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
 
 void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings) {
     std::vector<std::shared_future<void>> events;
-    for (auto& build : build_subset) {
+    for (const auto& build : build_subset) {
         // Capture the necessary objects by reference
         launch_build_step([&build, settings] { build.build(settings); }, events);
     }
 
     sync_build_steps(events);
-    for (auto& build : build_subset) {
+    for (const auto& build : build_subset) {
         write_successful_jit_build_marker(build, settings);
     }
 }

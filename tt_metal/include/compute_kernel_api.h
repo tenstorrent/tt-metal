@@ -79,7 +79,7 @@ ALWI void sigmoid_tile_init() {
 // clang-format on
 template <int vec_mode = VectorMode::RC, bool fast_and_approx = false>
 ALWI void sigmoid_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_sigmoid<fast_and_approx>(idst, vec_mode)));
+    MATH((llk_math_eltwise_unary_sfpu_sigmoid<fast_and_approx, DST_ACCUM_MODE>(idst, vec_mode)));
 }
 
 /**
@@ -87,7 +87,7 @@ ALWI void sigmoid_tile(uint32_t idst) {
  */
 template <bool fast_and_approx = false>
 ALWI void log_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_log_init<APPROX, fast_and_approx>()));  // TODO(AP): move out init
+    MATH((llk_math_eltwise_unary_sfpu_log_init<APPROX, fast_and_approx, DST_ACCUM_MODE>()));  // TODO(AP): move out init
 }
 
 // clang-format off
@@ -97,16 +97,19 @@ ALWI void log_tile_init() {
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
+ * Note: The base scale is the bit representation of the inverse of the log base.
+ * e.g. 1/ln(2) for log2(x) is 0x3fb8aa3b.
+ *
  * Return value: None
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
- // clang-format on
+// clang-format on
 template <bool fast_and_approx = false>
 ALWI void log_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_log<APPROX, fast_and_approx>(idst)));
+    MATH((llk_math_eltwise_unary_sfpu_log<APPROX, fast_and_approx, DST_ACCUM_MODE>(idst)));
 }
 
 /**
@@ -114,7 +117,8 @@ ALWI void log_tile(uint32_t idst) {
  */
 template <bool fast_and_approx = false>
 ALWI void log_with_base_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_log_with_base_init<APPROX, fast_and_approx>()));  // TODO(AP): move out init
+    MATH((llk_math_eltwise_unary_sfpu_log_with_base_init<APPROX, fast_and_approx, DST_ACCUM_MODE>()));  // TODO(AP):
+                                                                                                        // move out init
 }
 
 // clang-format off
@@ -129,12 +133,12 @@ ALWI void log_with_base_tile_init() {
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | base_scale      | The log base                                                               | uint32_t | Postive integers                                      | True     |
+ * | base_scale      | Bit representation of Inverse of log base e.g. 1/ln(2) to compute log2(x)  | uint32_t | Postive integers                                      | True     |
  */
 // clang-format on
 template <bool fast_and_approx = false>
 ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
-    MATH((llk_math_eltwise_unary_sfpu_log_with_base<APPROX, fast_and_approx>(idst, base_scale)));
+    MATH((llk_math_eltwise_unary_sfpu_log_with_base<APPROX, fast_and_approx, DST_ACCUM_MODE>(idst, base_scale)));
 }
 
 // TODO: Move to trigonometry.h
@@ -625,24 +629,33 @@ ALWI void max_reduce_with_indices_init() {
 template <PoolType pool_type, DataFormat format, ReduceDim reduce_dim = ReduceDim::REDUCE_COL>
 ALWI void sfpu_reduce(uint32_t idst) {
     static_assert(reduce_dim == ReduceDim::REDUCE_COL, "Only column reduction (REDUCE_COL) is currently supported");
-    static_assert(pool_type != PoolType::MAX, "MAX pool type is not supported for reduce operations");
     static_assert(
-        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32,
-        "Unsupported data format. Supported formats: Float32, Int32, UInt32");
+        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32 || format == DataFormat::UInt16 || format == DataFormat::Float16_b,
+        "Unsupported data format. Supported formats: Float32, Int32, UInt32, UInt16, Float16_b");
+    static_assert(
+        pool_type == PoolType::SUM || pool_type == PoolType::AVG || pool_type == PoolType::MAX || pool_type == PoolType::MIN,
+        "Unsupported pool type. Supported pool types: SUM, AVG, MAX, MIN");
 
     // This kernel is optimized for 32x32 tiles and uses RC_custom vector mode for custom reduction
     MATH((llk_math_eltwise_unary_sfpu_reduce<true, pool_type, reduce_dim, format>(idst, VectorMode::RC_custom)));
 }
 
 /**
- * Please refer to documentation for any_init.
+ * @brief Initialization for SFPU reduce kernel.
+ *        Must be called before sfpu_reduce() to set up the necessary configurations for reduction operations.
+ * @tparam pool_type The reduction operation, currently supported: (SUM, AVG, MAX, MIN)
+ * @tparam format The data format, currently supported: (Float32, Int32, UInt32, UInt16, Float16_b)
  */
-template <DataFormat format>
+template <PoolType pool_type, DataFormat format>
 ALWI void sfpu_reduce_init() {
     static_assert(
-        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32,
-        "Unsupported data format. Supported formats: Float32, Int32, UInt32");
-    MATH((llk_math_eltwise_unary_sfpu_reduce_init<true, format>()));
+        pool_type == PoolType::SUM || pool_type == PoolType::AVG || pool_type == PoolType::MAX || pool_type == PoolType::MIN,
+        "Unsupported pool type. Supported pool types: SUM, AVG, MAX, MIN");
+    static_assert(
+        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32 || format == DataFormat::UInt16 || format == DataFormat::Float16_b,
+        "Unsupported data format. Supported formats: Float32, Int32, UInt32, UInt16, Float16_b");
+
+    MATH((llk_math_eltwise_unary_sfpu_reduce_init<true, pool_type, format>()));
 }
 
 // clang-format off

@@ -8,7 +8,7 @@
 #include <utility>
 
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include "ttnn/operations/conv/conv_transpose2d/prepare_conv_transpose2d_weights.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
@@ -158,7 +158,9 @@ Result ConvTranpose2dOperation::invoke(
             0,
             false,
             parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
-            input_tensor_post_tm.memory_config());
+            input_tensor_post_tm.memory_config(),
+            /*is_out_tiled*/ true,
+            conv_config.config_tensors_in_dram);
 
         if (conv_config.deallocate_activation) {
             input_tensor_post_tm.deallocate(/*force*/ true);
@@ -268,8 +270,14 @@ Result ConvTranpose2dOperation::invoke(
         }
         return matmul_output;
     }
+    const std::array<std::uint32_t, 4> input_tensor_shape = {
+        batch_size,
+        input_height,
+        input_width,
+        in_channels,
+    };
     // call conv micro op
-    auto conv_output = ttnn::operations::conv::conv2d::conv2d(
+    auto conv_output = ttnn::prim::conv2d(
         halo_output,
         weight_tensor_on_device,
         bias_tensor_on_device,
@@ -282,13 +290,13 @@ Result ConvTranpose2dOperation::invoke(
         opt_conv_op_block_config,
         conv_out_memory_config,
         output_dtype,
-        {batch_size, input_height, input_width, in_channels},
+        input_tensor_shape,
         compute_config,
         conv_config.enable_act_double_buffer,
         conv_config.enable_weights_double_buffer,
         false,  // full_inner_dim
         false,  // enable_activation_reuse
-        false,  // config_tensors_in_dram
+        conv_config.config_tensors_in_dram,
         conv_config.force_split_reader);
     if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
         conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
