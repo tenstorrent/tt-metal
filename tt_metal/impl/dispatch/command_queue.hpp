@@ -55,6 +55,7 @@ public:
 
     // needed interface items
     virtual void terminate() = 0;
+    virtual void finish(tt::stl::Span<const SubDeviceId> sub_device_ids) = 0;
 };
 
 struct ReadBufferDescriptor;

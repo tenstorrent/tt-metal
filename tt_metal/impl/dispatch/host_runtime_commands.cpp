@@ -125,7 +125,7 @@ void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
         return;
     }
     detail::DispatchStateCheck(true);
-    //cq.finish(sub_device_ids);
+    cq.finish(sub_device_ids);
     // If in testing mode, don't need to check dprint/watcher errors, since the tests will induce/handle them.
     if (!MetalContext::instance().rtoptions().get_test_mode_enabled()) {
         TT_FATAL(
