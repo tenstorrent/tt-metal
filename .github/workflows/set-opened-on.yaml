@@ -60,7 +60,7 @@ jobs:
           if echo "$RESP" | jq -e '.errors' > /dev/null 2>&1; then
             echo "Error: GraphQL returned errors:" >&2
             echo "$RESP" | jq '.errors' >&2
-            
+
             # Check specifically for scope issues
             if echo "$RESP" | jq -e '.errors[] | select(.type == "INSUFFICIENT_SCOPES")' > /dev/null 2>&1; then
               echo "" >&2
@@ -72,7 +72,7 @@ jobs:
           fi
 
           PROJECT_ID=$(echo "$RESP" | jq -r '.data.organization.projectV2.id // empty')
-          
+
           if [ -z "$PROJECT_ID" ]; then
             echo "Error: Project '$PROJECT_NUMBER' not found in org '$ORG'" >&2
             echo "This may be due to:" >&2
@@ -115,7 +115,7 @@ jobs:
           if echo "$ADD_RESP" | jq -e '.errors' > /dev/null 2>&1; then
             echo "Error: Failed to add issue to project:" >&2
             echo "$ADD_RESP" | jq '.errors' >&2
-            
+
             # Check for scope/permission issues
             if echo "$ADD_RESP" | jq -e '.errors[] | select(.type == "INSUFFICIENT_SCOPES" or .message | contains("permission"))' > /dev/null 2>&1; then
               echo "" >&2
@@ -153,7 +153,7 @@ jobs:
           if echo "$UPDATE_RESP" | jq -e '.errors' > /dev/null 2>&1; then
             echo "Error: Failed to set field value:" >&2
             echo "$UPDATE_RESP" | jq '.errors' >&2
-            
+
             # Check for scope/permission issues
             if echo "$UPDATE_RESP" | jq -e '.errors[] | select(.type == "INSUFFICIENT_SCOPES" or .message | contains("permission"))' > /dev/null 2>&1; then
               echo "" >&2
