@@ -83,8 +83,12 @@ jobs:
         test-group:
           - name: DeskBox Demo tests
             runner-label: BH-DeskBox
-            extra-tag: pipeline-functional
+            extra-tag: issue-miw-740
             num_devices: 2
+          - name: LoudBox Demo tests
+            runner-label: BH-LoudBox
+            extra-tag: issue-miw-740
+            num_devices: 8
     with:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
