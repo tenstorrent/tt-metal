@@ -358,7 +358,7 @@ class TTSampling(LightweightModule):
 
         if self.log_probs_calculator.enable_log_probs:
             self.log_probs_calculator.compute_global_stats(x)
-            relevant_logits = self.log_probs_calculator.prepare_relevant_logits(x, tt_out_tok)
+            relevant_logits = self.log_probs_calculator.prepare_relevant_logits(tt_out_tok)
             self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(relevant_logits)
         else:
             # Return dummy log-probs tensor with same shape as regular log-probs would be

@@ -133,8 +133,13 @@ class LogProbsCalculator:
             self.global_max = None
             self.global_exp_sum = None
             return
+        # Calculating log-probs requires bfloat16 precision for near-stable sum-exp calculation
+        if logits_tensor.dtype == ttnn.bfloat8_b:
+            self.logits_tensor = ttnn.typecast(logits_tensor, ttnn.bfloat16)
+        else:
+            self.logits_tensor = logits_tensor
         # Calculate local max
-        local_max_tensor = ttnn.max(logits_tensor, dim=-1, keepdim=True)
+        local_max_tensor = ttnn.max(self.logits_tensor, dim=-1, keepdim=True)
 
         # All-gather local max to get global max
         gathered_max_tensors = ttnn.all_gather(
@@ -148,7 +153,7 @@ class LogProbsCalculator:
         self.global_max = ttnn.max(gathered_max_tensors, dim=-1, keepdim=True)
 
         # Calculate stable local sum-exp using subtract of global-max from each local logit
-        subtracted_tensor = ttnn.subtract(logits_tensor, self.global_max)
+        subtracted_tensor = ttnn.subtract(self.logits_tensor, self.global_max)
         sum_exp_tensor = ttnn.sum(ttnn.exp(subtracted_tensor), dim=-1, keepdim=True)
 
         # All-gather stable local sum-exp to get global sum-exp
@@ -166,7 +171,7 @@ class LogProbsCalculator:
         self.global_max = ttnn.reshape(self.global_max, (1, 1, 1, 32))
         self.global_exp_sum = ttnn.reshape(self.global_exp_sum, (1, 1, 1, 32))
 
-    def prepare_relevant_logits(self, logits_tensor: ttnn.Tensor, global_idx_tensor: ttnn.Tensor):
+    def prepare_relevant_logits(self, global_idx_tensor: ttnn.Tensor):
         """
         Prepare global idx tensor with correct values on all devices.
         """
@@ -180,7 +185,7 @@ class LogProbsCalculator:
         if not self.enable_log_probs:
             return logits_tensor
 
-        size_per_device = logits_tensor.shape[-1]
+        size_per_device = self.logits_tensor.shape[-1]
 
         # convert global_idx_tensor to ttnn.TILE_LAYOUT
         global_idx_tilized_tensor = ttnn.to_layout(global_idx_tensor, ttnn.TILE_LAYOUT)
@@ -202,7 +207,7 @@ class LogProbsCalculator:
         remainder_tensor = ttnn.reshape(ttnn.typecast(remainder_tensor, ttnn.uint32), (1, 1, 32, 1))
 
         # Get logits for each user on each chip based on local index
-        selected_logits_tensor = ttnn.gather(logits_tensor, dim=3, index=remainder_tensor)
+        selected_logits_tensor = ttnn.gather(self.logits_tensor, dim=3, index=remainder_tensor)
 
         selected_logits_tensor = ttnn.reshape(selected_logits_tensor, (1, 1, 1, 32))
         # Compare mask to chip_ids tensor and select correct positions for each user on all chips inplace
