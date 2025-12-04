@@ -45,12 +45,32 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
             assert_and_hang(__LINE__, ##__VA_ARGS__); \
     } while (0)
 
+#define ASSERT_ENABLED 1
 #define WATCHER_ASSERT_ENABLED 1
+#define LIGHTWEIGHT_ASSERT_ENABLED 0
 
 #else  // !WATCHER_ENABLED
 
+#if defined(LIGHTWEIGHT_KERNEL_ASSERTS)
+
+#define ASSERT(condition, ...)         \
+    do {                               \
+        if (!(condition))              \
+            asm volatile("ebreak");    \
+    } while (0)
+
+#define ASSERT_ENABLED 1
+#define LIGHTWEIGHT_ASSERT_ENABLED 1
+#define WATCHER_ASSERT_ENABLED 0
+
+#else  // !LIGHTWEIGHT_KERNEL_ASSERTS
+
 #define ASSERT(condition, ...)
 
+#define ASSERT_ENABLED 0
 #define WATCHER_ASSERT_ENABLED 0
+#define LIGHTWEIGHT_ASSERT_ENABLED 0
+
+#endif  // !LIGHTWEIGHT_KERNEL_ASSERTS
 
 #endif  // WATCHER_ENABLED
