@@ -34,11 +34,11 @@ cmake --build build --target generate_traffic_tests
 
 ### Test Profiles
 
-| Profile | Description | Runtime |
-|---------|-------------|---------|
-| `sanity` | Quick validation | ~1 min |
-| `stress` | Thorough testing with flow control | ~5-15 min |
-| `benchmark` | Performance measurement, varied sizes | ~2-5 min |
+| Profile | Tests | Packets | Sizes |
+|---------|-------|---------|-------|
+| `sanity` | simple, inter-mesh, all-to-all | 100 | 1024, 2048 |
+| `stress` | all categories | 1000 | 1024, 2048, 4096 |
+| `benchmark` | simple, inter-mesh, all-to-all, flow-control | 1000 | 512-8192 |
 
 ## Examples
 

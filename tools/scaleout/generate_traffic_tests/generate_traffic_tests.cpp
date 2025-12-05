@@ -460,40 +460,6 @@ void apply_profile_defaults(TrafficTestConfig& config) {
     }
 }
 
-uint32_t estimate_test_duration_seconds(const MeshTopologyInfo& topology, const TrafficTestConfig& config) {
-    size_t devices = topology.total_devices();
-    uint32_t packets = config.num_packets.value_or(100);
-    size_t sizes = config.packet_sizes.has_value() ? config.packet_sizes->size() : 2;
-    size_t ntypes = config.noc_types.empty() ? 1 : config.noc_types.size();
-
-    uint32_t base_time = 0;
-    const auto& cat = config.categories;
-    if (cat.simple_unicast) {
-        base_time += 2;
-    }
-    if (cat.inter_mesh && !topology.connected_pairs.empty()) {
-        base_time += 5;
-    }
-    if (cat.all_to_all) {
-        base_time += 10 * ntypes * sizes;
-    }
-    if (cat.random_pairing) {
-        base_time += 15;
-    }
-    if (cat.all_to_one) {
-        base_time += 10 * sizes;
-    }
-    if (cat.flow_control) {
-        base_time += 30 * ntypes * sizes;
-    }
-    if (cat.sequential) {
-        base_time += 60;
-    }
-
-    double scale = (devices / 8.0) * (packets / 100.0);
-    return static_cast<uint32_t>(base_time * std::max(1.0, scale));
-}
-
 std::string generate_traffic_tests_yaml(
     const MeshTopologyInfo& topology,
     const std::filesystem::path& mgd_path,
@@ -506,19 +472,6 @@ std::string generate_traffic_tests_yaml(
     uint32_t num_packets = cfg.num_packets.value_or(100);
     std::vector<std::string> noc_types =
         cfg.noc_types.empty() ? std::vector<std::string>{"unicast_write"} : cfg.noc_types;
-
-    if (verbose) {
-        uint32_t est = estimate_test_duration_seconds(topology, cfg);
-        std::cout << "Generating tests: ~" << est << "s estimated runtime\n";
-        std::cout << "  Packets: " << num_packets << ", Sizes: ";
-        for (size_t i = 0; i < sizes.size(); ++i) {
-            if (i > 0) {
-                std::cout << ",";
-            }
-            std::cout << sizes[i];
-        }
-        std::cout << "\n";
-    }
 
     YAML::Emitter out;
     out << YAML::Comment("Auto-generated traffic tests");
