@@ -75,6 +75,7 @@ jobs:
               echo "run-perf-device-models=true" >> $GITHUB_OUTPUT
               echo "run-ttnn-models-frequent=true" >> $GITHUB_OUTPUT
               echo "run-cpp-unit=true" >> $GITHUB_OUTPUT
+              ;;
             "models-extended")
               echo "run-demo=true" >> $GITHUB_OUTPUT
               echo "run-perf-models=true" >> $GITHUB_OUTPUT
