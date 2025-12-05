@@ -45,11 +45,11 @@ public:
     std::size_t get_max_num_eth_cores_across_all_devices() const;
 
 private:
-    uint8_t num_hw_cqs{};
-    size_t l1_small_size{};
-    size_t trace_region_size{};
-    size_t worker_l1_size{};
-    std::vector<uint32_t> l1_bank_remap;
+    uint8_t num_hw_cqs_{};
+    size_t l1_small_size_{};
+    size_t trace_region_size_{};
+    size_t worker_l1_size_{};
+    std::vector<uint32_t> l1_bank_remap_;
     bool using_fast_dispatch_ = false;
     bool init_profiler_ = true;
     bool initialize_fabric_and_dispatch_fw_ = false;
@@ -59,14 +59,14 @@ private:
     bool dispatch_firmware_active_ = false;
     bool is_initialized_ = false;
 
-    mutable std::mutex lock;
-    std::vector<std::unique_ptr<tt_metal::IDevice>> devices;
+    mutable std::mutex lock_;
+    std::vector<std::unique_ptr<tt_metal::IDevice>> devices_;
 
     bool skip_remote_devices{};
 
     // Determine which CPU cores the worker threads need to be placed on for each device
-    std::unordered_map<uint32_t, uint32_t> worker_thread_to_cpu_core_map;
-    std::unordered_map<uint32_t, uint32_t> completion_queue_reader_to_cpu_core_map;
+    std::unordered_map<uint32_t, uint32_t> worker_thread_to_cpu_core_map_;
+    std::unordered_map<uint32_t, uint32_t> completion_queue_reader_to_cpu_core_map_;
     void init_firmware_on_active_devices();
     void activate_device(ChipId id);
 
