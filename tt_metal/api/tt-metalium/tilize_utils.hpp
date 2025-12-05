@@ -15,6 +15,22 @@
 #include <vector>
 #include <iosfwd>
 
+// Used in ops
+std::uint32_t round_up_to_mul32(std::uint32_t val);
+
+// Used in sdpa decode op and tt-train examples
+std::uint32_t round_up_to_tile(int val, int tile_val);
+
+// Used in programming examples
+template <typename T>
+std::vector<T> tilize_nfaces(const std::vector<T>& input, uint32_t m, uint32_t n);
+
+// Used in programming examples
+template <typename T>
+std::vector<T> untilize_nfaces(const std::vector<T>& input, uint32_t m, uint32_t n);
+
+// Below are functions used either only in tests/ or for implementing tensor
+
 // Only used in tensor_impl
 enum class TensorLayoutType {
     LIN_ROW_MAJOR = 0,   // standard element-wise row-major
@@ -26,12 +42,6 @@ std::ostream& operator<<(std::ostream& os, TensorLayoutType layout);
 
 // Awful name
 using PhysicalSize = std::array<uint32_t, 2>;
-
-// Used in ops
-std::uint32_t round_up_to_mul32(std::uint32_t val);
-
-// Used in sdpa decode op and tt-train examples
-std::uint32_t round_up_to_tile(int val, int tile_val);
 
 // Used only in tests/
 template <class T>
@@ -84,11 +94,3 @@ std::vector<T> tilize_swizzled(const std::vector<T>& input, uint32_t m, uint32_t
 // Used only in tests
 template <typename T>
 std::vector<T> untilize_swizzled(const std::vector<T>& input, uint32_t m, uint32_t n);
-
-// Used in programming examples
-template <typename T>
-std::vector<T> tilize_nfaces(const std::vector<T>& input, uint32_t m, uint32_t n);
-
-// Used in programming examples
-template <typename T>
-std::vector<T> untilize_nfaces(const std::vector<T>& input, uint32_t m, uint32_t n);
