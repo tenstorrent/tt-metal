@@ -131,7 +131,7 @@ class McastSingleCore:
             named_compile_time_args=sender_named_compile_args,
             common_runtime_args=sender_rt_args,
             config=ttnn.DataMovementConfigDescriptor(
-                processor=ttnn.DataMovementProcessor.RISCV_0,
+                processor=ttnn.DataMovementProcessor.RISCV_1,  # NCRISC (sender)
                 noc=noc,
             ),
         )
@@ -146,7 +146,7 @@ class McastSingleCore:
             core_ranges=output_core_grid,
             compile_time_args=receiver_compile_time_args,
             config=ttnn.DataMovementConfigDescriptor(
-                processor=ttnn.DataMovementProcessor.RISCV_1,
+                processor=ttnn.DataMovementProcessor.RISCV_0,  # BRISC (receiver)
                 noc=receiver_noc,
             ),
         )
