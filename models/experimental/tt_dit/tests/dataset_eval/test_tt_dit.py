@@ -171,8 +171,6 @@ def test_tt_dit_accuracy(
 
         # Generate image using TT-Metal pipeline
         generated_images = pipeline.run_single_prompt(
-            width=image_w,
-            height=image_h,
             prompt=prompt,
             num_inference_steps=num_inference_steps,
             seed=0,
