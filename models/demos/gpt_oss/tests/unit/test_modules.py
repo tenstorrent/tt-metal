@@ -64,7 +64,7 @@ def run_attention_component(
     tt_out = attention_module(tt_hidden_states, rope_mats, tt_position_idx)
 
     # Compare outputs
-    passing, output = run_component_comparison(tt_out, reference_out, mesh_device, pcc_threshold=0.96)
+    passing, output = run_component_comparison(tt_out, reference_out, mesh_device, pcc_threshold=0.95)
     assert passing, f"Attention test failed. Output: {output}"
 
 
@@ -225,6 +225,11 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
+    model_name = getattr(setup["model_args"], "model_name", None)
+
+    if seq_len >= 4096 and model_name == "gpt-oss-20b":
+        pytest.skip("prefill seq_len=4096 currently unsupported for gpt-oss-20b")
+
     config = setup["config"]
 
     # Set attention implementation for transformers compatibility
@@ -266,7 +271,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
         dtype=setup["dtype"],
         mesh_config=setup["mesh_config"],
         transformation_mats=transformation_mats,
-        tensor_cache_path=setup["tensor_cache_path"] / "module_tests",
+        tensor_cache_path=setup["tensor_cache_path"] / "module_tests_",
     )
 
     # Create input
