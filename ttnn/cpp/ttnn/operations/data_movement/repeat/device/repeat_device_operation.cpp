@@ -72,15 +72,15 @@ RepeatDeviceOperation::tensor_return_value_t RepeatDeviceOperation::create_outpu
         compute_output_specs(operation_attributes, input_tensors), input_tensors.input.device());
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
+tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>
 RepeatDeviceOperation::create_op_performance_model(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) const {
     const auto& input_tensor = tensor_args.input;
     int ideal_dev_clock_cycles = operations::data_movement::common_tm_bw_model(input_tensor, output_tensor);
-    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
-        {input_tensor}, {output_tensor}, ideal_dev_clock_cycles);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
+        {input_tensor}, output_tensor, ideal_dev_clock_cycles);
     return result;
 }
 
