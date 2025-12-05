@@ -158,7 +158,6 @@ class SchedulerConfig:
         self.beta1_warmup_steps = int(sc.get("beta1_warmup_steps", 0))
 
 
-
 class PipelineParallelHostConfig:
     """Host-side representation of pipeline-parallel configuration.
 
@@ -195,6 +194,7 @@ class MultiHostConfig:
             PipelineParallelHostConfig(pp_cfg) if isinstance(pp_cfg, dict) else None
         )
 
+
 def yaml_deep_update(original: dict, updates: dict) -> dict:
     """Recursively update a dictionary with another dictionary.
 
@@ -206,13 +206,16 @@ def yaml_deep_update(original: dict, updates: dict) -> dict:
         Updated dictionary
     """
     for key, value in updates.items():
-        if isinstance(value, dict) and key in original and isinstance(
-            original[key], dict
+        if (
+            isinstance(value, dict)
+            and key in original
+            and isinstance(original[key], dict)
         ):
             original[key] = yaml_deep_update(original[key], value)
         else:
             original[key] = value
     return original
+
 
 def load_config(path: str, configs_root: str = None) -> dict:
     """Load configuration from YAML file.
