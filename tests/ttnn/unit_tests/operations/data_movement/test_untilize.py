@@ -1320,7 +1320,9 @@ def test_untilize_multi_core_buffer_type_variations(
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("tensor_shape", [[1, 1, 128, 7168], [1, 1, 2048, 7168], [1, 1, 4096, 7168]])
+@pytest.mark.parametrize(
+    "tensor_shape", [[1, 1, 32, 7168], [1, 1, 8, 7168], [1, 1, 128, 7168], [1, 1, 2048, 7168], [1, 1, 4096, 7168]]
+)
 @pytest.mark.parametrize("end_core_coord", [(0, 0), (0, 1), (0, 3)])
 @pytest.mark.parametrize("input_buffer_type", [ttnn.BufferType.DRAM])
 @pytest.mark.parametrize("output_buffer_type", [ttnn.BufferType.DRAM])

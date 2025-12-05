@@ -5,12 +5,12 @@
 #include "all_to_all_dispatch_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <vector>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/device_pool.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
-// #include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-// #include "cpp/ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/sub_device.hpp>
@@ -42,12 +42,10 @@ auto launch_fused_untilize(
     IDevice* device,
     const Tensor& input_tensor,
     const Tensor& untilize_output_tensor,
+    const GlobalSemaphore& sync_semaphore,
     const CoreRangeSet& subdevice_cores,
     const CoreRangeSet& sender_core_grid) {
     const auto untilize_cores = subdevice_cores.subtract(sender_core_grid);
-    // TODO this may allocate the semaphore on cores that the op doesn't need.
-    GlobalSemaphore sync_semaphore(device, subdevice_cores, 0u);
-
     auto callback = data_movement::untilize::untilize_row_wise_fuseable(
         program,
         input_tensor,
@@ -58,7 +56,7 @@ auto launch_fused_untilize(
         sync_semaphore,
         subdevice_cores);
 
-    return std::make_tuple(sync_semaphore, callback);
+    return callback;
 }
 
 std::pair<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_cb_sizes(
@@ -118,12 +116,19 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_mesh_workload(
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    auto* mesh_device = tensor_args.input_tensor.device();
+    auto mesh_device = tensor_args.input_tensor.device();
 
     auto init_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
     auto final_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
+
+    std::optional<GlobalSemaphore> untilize_sync_semaphore;
+    if (tensor_args.input_tensor.layout() == tt::tt_metal::Layout::TILE) {
+        untilize_sync_semaphore =
+            ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
+    }
+
     tt::tt_metal::distributed::Synchronize(
         mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
 
@@ -135,7 +140,8 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_mesh_workload(
             tensor_return_value,
             tensor_coords,
             init_barrier_semaphore,
-            final_barrier_semaphore);
+            final_barrier_semaphore,
+            untilize_sync_semaphore);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(coord, std::move(cached_program.shared_variables));
     }
@@ -150,7 +156,8 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     tensor_return_value_t& tensor_return_value,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const GlobalSemaphore& init_semaphore,
-    const GlobalSemaphore& cross_device_semaphore) {
+    const GlobalSemaphore& cross_device_semaphore,
+    const std::optional<GlobalSemaphore>& untilize_sync_semaphore) {
     tt::tt_metal::Program program{};
 
     const bool input_tiled = (tensor_args.input_tensor.layout() == tt::tt_metal::Layout::TILE);
@@ -164,7 +171,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
 
-    auto* mesh_device = input_tensor.device();
+    auto mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
     auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
@@ -319,17 +326,16 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     std::vector<CoreCoord> sender_cores = corerange_to_cores(sender_core_grid);
 
     // launch fused untilize if input is tiled
-    std::optional<GlobalSemaphore> untilize_sync_semaphore;
     std::optional<data_movement::untilize::FuseableUntilizeCallback> untilize_callback;
     if (input_tiled) {
         const auto& untilize_output_tensor = std::get<2>(tensor_return_value);
         TT_FATAL(untilize_output_tensor.has_value(), "Expected untilize intermediate buffer");
-        // !TODO deal with override RTs
-        std::tie(untilize_sync_semaphore, untilize_callback) = detail::launch_fused_untilize(
+        untilize_callback = detail::launch_fused_untilize(
             program,
             mesh_device,
             tensor_args.input_tensor,
             untilize_output_tensor.value(),
+            *untilize_sync_semaphore,
             worker_core_range_set,
             sender_core_grid);
     }
@@ -481,7 +487,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         writer_runtime_args[7] = tokens_per_core_start;
         writer_runtime_args[8] = reader_runtime_args[7];
         tokens_per_core_start = reader_runtime_args[7];
-        for (const auto& neighbor_coordinate : neighbors) {
+        for (auto& neighbor_coordinate : neighbors) {
             log_debug(
                 tt::LogOp,
                 "Connection between mesh coord ({}, {}) and ({}, {}) at core {} will choose link_id: {} and handles "
@@ -526,9 +532,9 @@ void AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::override_runtime_a
     tensor_return_value_t& tensor_return_value) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
-        const auto& ternary_reader_kernel_id = shared_variables.ternary_reader_kernel_id;
-        const auto& binary_writer_kernel_id = shared_variables.binary_writer_kernel_id;
-        const auto& cores = shared_variables.cores;
+        auto& ternary_reader_kernel_id = shared_variables.ternary_reader_kernel_id;
+        auto& binary_writer_kernel_id = shared_variables.binary_writer_kernel_id;
+        auto& cores = shared_variables.cores;
 
         const auto& maybe_untilize_semaphore = shared_variables.untilize_sync_semaphore;
 
@@ -536,9 +542,10 @@ void AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::override_runtime_a
         const auto& metadata_tensor = std::get<1>(tensor_return_value);
         const auto& untilized_tensor = std::get<2>(tensor_return_value);
 
-        const auto& input_tensor = (untilized_tensor.has_value()) ? untilized_tensor.value() : tensor_args.input_tensor;
+        const bool input_tiled = (tensor_args.input_tensor.layout() == tt::tt_metal::Layout::TILE);
+        const auto& input_tensor = (input_tiled) ? untilized_tensor.value() : tensor_args.input_tensor;
 
-        for (const auto& core : cores) {
+        for (auto& core : cores) {
             auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, ternary_reader_kernel_id, core);
             auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, binary_writer_kernel_id, core);
             reader_runtime_args.at(0) = input_tensor.buffer()->address();
@@ -561,7 +568,7 @@ void AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::override_runtime_a
             writer_runtime_args.at(6) = (uint32_t)shared_variables.init_semaphore.address();
         }
         auto& maybe_untilize_callback = shared_variables.untilize_callback;
-        if (maybe_untilize_callback.has_value()) {
+        if (input_tiled) {
             (*maybe_untilize_callback)(
                 *maybe_untilize_semaphore, program, tensor_args.input_tensor, untilized_tensor.value());
         }
