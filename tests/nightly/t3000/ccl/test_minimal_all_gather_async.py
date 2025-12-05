@@ -408,7 +408,7 @@ def run_all_gather_impl(
             3,
             ttnn.TILE_LAYOUT,
             ttnn.bfloat8_b,
-            True,
+            False,
             1,
             True,
             True,
