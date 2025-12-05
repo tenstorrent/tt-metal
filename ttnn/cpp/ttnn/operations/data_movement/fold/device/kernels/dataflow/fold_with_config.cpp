@@ -4,10 +4,24 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 
 // Special marker for padding pixels - kernel fills with zeros
 constexpr uint16_t PADDING_NOC_MARKER = 0xFFFF;
+
+// Helper to copy zeros in chunks (MEM_ZEROS_SIZE may be smaller than write_size)
+FORCE_INLINE void copy_zeros_chunked(uint64_t zeros_noc_addr, uint32_t dst_addr, uint32_t total_bytes) {
+    constexpr uint32_t max_chunk_size = MEM_ZEROS_SIZE;
+
+    uint32_t remaining = total_bytes;
+    uint32_t current_dst = dst_addr;
+
+    while (remaining > 0) {
+        uint32_t chunk_size = (remaining > max_chunk_size) ? max_chunk_size : remaining;
+        noc_async_read(zeros_noc_addr, current_dst, chunk_size);
+        current_dst += chunk_size;
+        remaining -= chunk_size;
+    }
+}
 
 void kernel_main() {
     // Compile-time args
@@ -23,10 +37,10 @@ void kernel_main() {
     const uint32_t output_l1_addr = get_write_ptr(output_cb_index);
     const uint32_t config_l1_addr = get_read_ptr(config_cb_index);
 
-    DPRINT << "fold_with_config: num_transfers=" << num_transfers << " pixel_size=" << pixel_size
-           << " aligned_pixel_size=" << aligned_pixel_size << ENDL();
-    DPRINT << "  input_l1=" << input_l1_addr << " output_l1=" << output_l1_addr << " config_l1=" << config_l1_addr
-           << ENDL();
+    // Get this core's NOC coordinates for zero padding via MEM_ZEROS_BASE
+    const uint16_t my_noc_x = NOC_X(my_x[noc_index]);
+    const uint16_t my_noc_y = NOC_Y(my_y[noc_index]);
+    const uint64_t zeros_noc_addr = get_noc_addr(my_noc_x, my_noc_y, MEM_ZEROS_BASE);
 
     // Cast config to uint16_t pointer
     volatile tt_l1_ptr uint16_t* config_data = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(config_l1_addr);
@@ -51,11 +65,9 @@ void kernel_main() {
 
         // Check if this is a padding pixel (fill with zeros)
         if (src_noc_x == PADDING_NOC_MARKER) {
-            // Fill with zeros for padding
-            volatile tt_l1_ptr uint8_t* dst_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(dst_l1_addr);
-            for (uint32_t j = 0; j < write_size; ++j) {
-                dst_ptr[j] = 0;
-            }
+            // Efficient zero padding using MEM_ZEROS_BASE via NOC read
+            // Copy in chunks to handle cases where write_size > MEM_ZEROS_SIZE
+            copy_zeros_chunked(zeros_noc_addr, dst_l1_addr, write_size);
         } else {
             // Normal NOC read from source core
             uint32_t src_offset = src_local_idx * pixel_size;
