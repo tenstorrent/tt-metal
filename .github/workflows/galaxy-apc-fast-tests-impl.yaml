@@ -1,4 +1,4 @@
-name: "[internal] Galaxy APC fast tests"
+name: "[internal] Galaxy fast tests"
 
 on:
   workflow_call:
@@ -25,6 +25,10 @@ on:
         default: false
         required: false
         type: boolean
+      timeout:
+        required: false
+        type: number
+        default: 10
 
 jobs:
   galaxy-apc-fast-tests:
@@ -63,8 +67,13 @@ jobs:
           shell: bash
           working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}

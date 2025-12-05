@@ -63,6 +63,7 @@ namespace distributed {
 class MeshCommandQueue;
 class MeshDeviceView;
 struct MeshTraceBuffer;
+class MeshCommandQueueBase;
 
 using DeviceIds = std::vector<int>;
 
@@ -72,7 +73,7 @@ private:
     class ScopedDevices {
     private:
         std::vector<MaybeRemote<IDevice*>> devices_;
-        std::map<chip_id_t, IDevice*> opened_local_devices_;
+        std::map<ChipId, IDevice*> opened_local_devices_;
 
     public:
         // Constructor acquires physical resources
@@ -114,7 +115,7 @@ private:
     std::shared_ptr<MeshDevice> parent_mesh_;
     std::vector<std::weak_ptr<MeshDevice>> submeshes_;
 
-    tt::stl::SmallVector<std::unique_ptr<MeshCommandQueue>> mesh_command_queues_;
+    tt::stl::SmallVector<std::unique_ptr<MeshCommandQueueBase>> mesh_command_queues_;
 
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
     uint32_t trace_buffers_size_ = 0;
@@ -126,12 +127,16 @@ private:
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
+    // Recursively quiesce all submeshes.
+    void quiesce_internal();
+
+    // Check if the mesh device or any of its parents have a CQ in use, and returns one of the parent mesh IDs if found.
+    std::optional<int> get_parent_mesh_id_with_in_use_cq(uint32_t cq_id) const;
+    // Check if the mesh device or any of its children have a CQ in use, and returns one of the child mesh IDs if found.
+    std::optional<int> get_child_mesh_id_with_in_use_cq(uint32_t cq_id) const;
 
     void mark_allocations_unsafe();
     void mark_allocations_safe();
-
-    // Returns the devices in row-major order for the new mesh shape
-    std::vector<IDevice*> get_row_major_devices(const MeshShape& new_shape) const;
 
     std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
 
@@ -153,7 +158,7 @@ public:
     // IDevice interface implementation
     tt::ARCH arch() const override;
     int id() const override;
-    chip_id_t build_id() const override;
+    ChipId build_id() const override;
     uint8_t num_hw_cqs() const override;
     bool is_initialized() const override;
 
@@ -178,8 +183,8 @@ public:
     std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores = false) const override;
     std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const override;
     bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores = false) const override;
-    std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
-    std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const override;
+    std::tuple<ChipId, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
+    std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
     uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) override;
     CoreCoord compute_with_storage_grid_size() const override;
@@ -258,7 +263,7 @@ public:
 
     // Returns the devices in the mesh in row-major order.
     std::vector<IDevice*> get_devices() const;
-    IDevice* get_device(chip_id_t physical_device_id) const;
+    IDevice* get_device(ChipId physical_device_id) const;
     IDevice* get_device(const MeshCoordinate& coord) const;
     tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
 
@@ -299,7 +304,19 @@ public:
     std::string to_string() const;
     bool is_parent_mesh() const;
 
+    const std::shared_ptr<MeshDevice>& get_parent_mesh() const;
     std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const;
+
+    /**
+     * @brief Synchronize with all devices derived from this mesh (including submeshes).
+     *
+     * Blocks until all in-flight work enqueued on every submesh derived from this mesh has completed. Use this to
+     * insert a barrier between phases that use overlapping submeshes on the same physical devices. After this call
+     * returns, it is safe to enqueue new work on this mesh or any submesh derived from this mesh that may overlap with
+     * submeshes that were previously active. All submeshes must be using the default subdevice manager when this is
+     * called.
+     */
+    void quiesce_devices();
 
     std::shared_ptr<MeshDevice> create_submesh(
         const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset = std::nullopt);

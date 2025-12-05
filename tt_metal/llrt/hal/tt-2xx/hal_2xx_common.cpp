@@ -15,17 +15,15 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
     auto processor_index = MetalContext::instance().hal().get_processor_index(
         params.core_type, params.processor_class, params.processor_id);
     defines.push_back(fmt::format("PROCESSOR_INDEX={}", processor_index));
-    if (l1_cache_enable_processors.contains(params.core_type, processor_index)) {
+    if (rtoptions.get_feature_enabled(tt::llrt::RunTimeDebugFeatureEnableL1DataCache) and
+        l1_cache_enable_processors.contains(params.core_type, processor_index)) {
         defines.push_back("ENABLE_L1_DATA_CACHE");
     }
     switch (params.core_type) {
         case HalProgrammableCoreType::TENSIX:
             switch (params.processor_class) {
                 case HalProcessorClassType::DM:
-                    switch (params.processor_id) {
-                        case 0: defines.push_back("COMPILE_FOR_BRISC"); break;
-                        case 1: defines.push_back("COMPILE_FOR_NCRISC"); break;
-                    }
+                    defines.push_back(fmt::format("COMPILE_FOR_DM={}", params.processor_id));
                     break;
                 case HalProcessorClassType::COMPUTE: {
                     switch (params.processor_id) {
@@ -41,6 +39,7 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
                             defines.push_back("UCK_CHLKC_PACK");
                             defines.push_back("NAMESPACE=chlkc_pack");
                             break;
+                        default: TT_THROW("Invalid processor id {}", params.processor_id);
                     }
                     defines.push_back(fmt::format("COMPILE_FOR_TRISC={}", params.processor_id));
                     break;
@@ -71,22 +70,10 @@ std::vector<std::string> HalJitBuildQueryBase::srcs(const HalJitBuildQueryInterf
         case HalProgrammableCoreType::TENSIX:
             switch (params.processor_class) {
                 case HalProcessorClassType::DM:
-                    switch (params.processor_id) {
-                        case 0:
-                            if (params.is_fw) {
-                                srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/brisc.cc");
-                            } else {
-                                srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/brisck.cc");
-                            }
-                            break;
-                        case 1:
-                            if (params.is_fw) {
-                                srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/ncrisc.cc");
-                            } else {
-                                srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc");
-                            }
-                            break;
-                        default: TT_ASSERT(false, "Invalid processor id {} for TENSIX DM", params.processor_id);
+                    if (params.is_fw) {
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-2xx/dm.cc");
+                    } else {
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-2xx/dmk.cc");
                     }
                     break;
                 case HalProcessorClassType::COMPUTE:
@@ -99,7 +86,7 @@ std::vector<std::string> HalJitBuildQueryBase::srcs(const HalJitBuildQueryInterf
             }
             break;
         case HalProgrammableCoreType::ACTIVE_ETH:
-            // This is different on Wormhole vs Blackhole.
+
             break;
         case HalProgrammableCoreType::IDLE_ETH:
             switch (params.processor_id) {
@@ -117,6 +104,7 @@ std::vector<std::string> HalJitBuildQueryBase::srcs(const HalJitBuildQueryInterf
                         srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/idle_erisck.cc");
                     }
                     break;
+                default: TT_THROW("Invalid processor id {}", params.processor_id);
             }
             break;
         default: TT_ASSERT(false, "Unsupported programmable core type {} to query srcs", params.core_type); break;
@@ -128,7 +116,7 @@ std::string HalJitBuildQueryBase::target_name(const HalJitBuildQueryInterface::P
     switch (params.core_type) {
         case HalProgrammableCoreType::TENSIX:
             switch (params.processor_class) {
-                case HalProcessorClassType::DM: return params.processor_id == 0 ? "brisc" : "ncrisc"; break;
+                case HalProcessorClassType::DM: return fmt::format("dm{}", params.processor_id); break;
                 case HalProcessorClassType::COMPUTE: return fmt::format("trisc{}", params.processor_id);
             }
         case HalProgrammableCoreType::ACTIVE_ETH: return "erisc";

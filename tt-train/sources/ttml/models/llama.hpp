@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
 #include "base_transformer.hpp"
 #include "common/transformer_common.hpp"
 #include "modules/llama_block.hpp"
+#include "modules/module_base.hpp"
 #include "ops/rope_op.hpp"
 #include "yaml-cpp/yaml.h"
 namespace ttml::models::llama {
@@ -27,7 +27,7 @@ struct LlamaConfig {
     uint32_t vocab_size = 256U;
     uint32_t max_sequence_length = 256U;
     RunnerType runner_type = RunnerType::Default;
-    WeightTyingType weight_tying = WeightTyingType::Disabled;
+    WeightTyingType weight_tying = WeightTyingType::Enabled;
 
     // RoPE NTK-aware scaling parameters
     float scaling_factor = 0.0F;  // 0.0 means no scaling
@@ -39,16 +39,25 @@ struct LlamaConfig {
 class Llama : public BaseTransformer {
 private:
     RunnerType runner_type = RunnerType::Default;
-    std::shared_ptr<ttml::autograd::ModuleBase> tok_emb;
+    LlamaConfig m_config;
+    std::shared_ptr<ttml::modules::ModuleBase> tok_emb;
     std::vector<std::shared_ptr<ModuleBase>> blocks;
     std::shared_ptr<ModuleBase> ln_fc;
-    std::shared_ptr<ttml::autograd::ModuleBase> fc;
+    std::shared_ptr<ttml::modules::ModuleBase> fc;
     ops::RotaryEmbeddingParams m_rope_params;
+    uint32_t m_original_vocab_size = 0U;
 
 public:
     explicit Llama(const LlamaConfig& config);
+    virtual ~Llama() = default;
+    void load_from_safetensors(const std::filesystem::path& model_path) override;
+    ttml::autograd::TensorPtr operator()(
+        const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) override;
 
-    ttml::autograd::TensorPtr operator()(const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask);
+    // Get the original vocabulary size for token validation
+    [[nodiscard]] uint32_t get_original_vocab_size() const {
+        return m_original_vocab_size;
+    }
 };
 
 [[nodiscard]] LlamaConfig read_config(const YAML::Node& config);
@@ -56,4 +65,6 @@ public:
 [[nodiscard]] std::shared_ptr<Llama> create(const LlamaConfig& config);
 [[nodiscard]] std::shared_ptr<Llama> create(const YAML::Node& config);
 
+void load_model_from_safetensors(
+    const std::filesystem::path& path, serialization::NamedParameters& parameters, const LlamaConfig& config);
 }  // namespace ttml::models::llama

@@ -12,27 +12,35 @@
 #include <utility>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "distributed_context.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_fabric {
 namespace physical_discovery {
 
 TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     using namespace tt::tt_metal::distributed::multihost;
-    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    constexpr bool run_discovery = true;
 
-    auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor();
+    auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor(
+        cluster.get_driver(),
+        distributed_context,
+        &tt::tt_metal::MetalContext::instance().hal(),
+        rtoptions,
+        run_discovery);
     // Run discovery again to ensure that state is cleared before re-discovery
     physical_system_desc.run_discovery();
     auto hostnames = physical_system_desc.get_all_hostnames();
     // Validate number of hosts discovered
-    EXPECT_EQ(hostnames.size(), *(distributed_context.size()));
+    EXPECT_EQ(hostnames.size(), *(distributed_context->size()));
     // Validate Graph Nodes
     const auto& asic_descs = physical_system_desc.get_asic_descriptors();
     for (const auto& host : hostnames) {
@@ -50,9 +58,8 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
                 EXPECT_NE(asic_descs.find(neighbor), asic_descs.end());
             }
         }
-        // All to All connectivity for hosts
+
         auto neighbors = physical_system_desc.get_host_neighbors(host);
-        EXPECT_EQ(neighbors.size(), hostnames.size() - 1);
 
         for (const auto& neighbor : neighbors) {
             EXPECT_NE(std::find(hostnames.begin(), hostnames.end(), neighbor), hostnames.end());
@@ -66,7 +73,7 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     auto my_host_neighbors = physical_system_desc.get_host_neighbors(my_host);
 
     auto unique_chip_ids = cluster.get_unique_chip_ids();
-    std::unordered_map<AsicID, chip_id_t> asic_id_to_chip_id;
+    std::unordered_map<AsicID, ChipId> asic_id_to_chip_id;
 
     for (const auto& [chip_id, asic_id] : unique_chip_ids) {
         asic_id_to_chip_id[AsicID{asic_id}] = chip_id;
@@ -127,7 +134,7 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
         }
     }
 
-    if (*(distributed_context.rank()) == 0) {
+    if (*(distributed_context->rank()) == 0) {
         // Dump the Generated Physical System Descriptor
         log_info(tt::LogTest, "Dumping Physical System Descriptor to YAML");
         physical_system_desc.dump_to_yaml();

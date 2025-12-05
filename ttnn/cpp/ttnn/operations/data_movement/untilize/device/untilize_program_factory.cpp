@@ -185,8 +185,8 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* src_buffer = input_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
         {
             auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
             for (const CoreCoord& core : cores_with_rtargs) {
@@ -414,8 +414,8 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* src_buffer = input_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
         {
             auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
             for (const CoreCoord& core : cores_with_rtargs) {
@@ -474,7 +474,8 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
          full_cores_per_col] =
             ttnn::split_blocks_for_tilize_wh(grid_size, num_blocks, num_tiles_per_row, num_tiles_per_col);
 
-    uint32_t total_tiles_per_row = full_cores_per_row * single_block_size + has_cliff_row * single_block_size_cliff_row;
+    uint32_t total_tiles_per_row =
+        (full_cores_per_row * single_block_size) + (has_cliff_row * single_block_size_cliff_row);
     uint32_t row_size_bytes;
 
     uint32_t el_size = a.element_size();
@@ -684,7 +685,7 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
         SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
         SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
 
-        uint32_t end_column_id = start_column_id + single_block_size_row_arg * TILE_WIDTH * el_size;
+        uint32_t end_column_id = start_column_id + (single_block_size_row_arg * TILE_WIDTH * el_size);
         start_column_id = end_column_id % row_size_bytes;
         if (end_column_id % row_size_bytes == 0 && end_column_id != 0) {
             start_row_id += single_block_size_col_arg * TILE_HEIGHT;
@@ -700,13 +701,13 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
 
     auto override_runtime_args_callback =
         [reader_kernel_id = unary_reader_kernel_id, writer_kernel_id = unary_writer_kernel_id, cores = cores](
-                                              const void* operation,
-                                              Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
-                                              const std::vector<Tensor>& output_tensors) {
-            auto src_buffer = input_tensors.at(0).buffer();
-            auto dst_buffer = output_tensors.at(0).buffer();
+            const void* operation,
+            Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_tensors,
+            const std::vector<Tensor>& output_tensors) {
+            auto* src_buffer = input_tensors.at(0).buffer();
+            auto* dst_buffer = output_tensors.at(0).buffer();
 
             auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
             auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
@@ -850,8 +851,8 @@ operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_type_
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* src_buffer = input_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
 
         UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
         UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
@@ -1261,8 +1262,8 @@ operation::ProgramWithCallbacks untilize_multi_core(
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* src_buffer = input_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
 
         bool input_is_sharded = input_tensors.at(0).is_sharded();
 
@@ -1325,7 +1326,7 @@ operation::ProgramWithCallbacks untilize_single_core(
     // Determine how much L1 space we can use for input and output CBs,
     // ensuring that we don't intrude into other L1 storage space
     uint32_t max_l1_size =
-        a.device()->l1_size_per_core() / 2 - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
+        (a.device()->l1_size_per_core() / 2) - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
 
     // Determine the max number of tiles that can be in any CB at a given time (1 input CB + 1 output CB = 2 total CBs)
     uint32_t max_tiles_per_cb = max_l1_size / (input_single_tile_size + output_single_tile_size);
@@ -1470,8 +1471,8 @@ operation::ProgramWithCallbacks untilize_single_core(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>& optional_tensors,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto* src_buffer = input_tensors.at(0).buffer();
+        auto* dst_buffer = output_tensors.at(0).buffer();
 
         CoreCoord core = {0, 0};
 

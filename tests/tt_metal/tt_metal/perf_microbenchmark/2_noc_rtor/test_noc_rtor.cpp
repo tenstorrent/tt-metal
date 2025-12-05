@@ -119,13 +119,7 @@ int main(int argc, char** argv) {
     }
 
     if (use_device_profiler) {
-#if !defined(TRACY_ENABLE)
-        log_error(
-            LogTest,
-            "Metal library and test code should be build with "
-            "profiler option using ./build_metal.sh --enable-profiler");
-#endif
-        auto device_profiler = getenv("TT_METAL_DEVICE_PROFILER");
+        bool device_profiler = tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled();
         TT_FATAL(
             device_profiler,
             "Before running the program, do one of the following in a shell: "
@@ -194,7 +188,7 @@ int main(int argc, char** argv) {
         for (int i = 0; i < num_cores_r; i++) {
             for (int j = 0; j < num_cores_c; j++) {
                 CoreCoord core = {(std::size_t)j, (std::size_t)i};
-                uint32_t core_index = i * num_cores_c + j;
+                uint32_t core_index = (i * num_cores_c) + j;
                 uint32_t l1_buffer_addr = l1_mesh_buffer->address();
 
                 const std::array noc_runtime_args = {core_index, l1_buffer_addr, num_tiles, num_cores_r * num_cores_c};

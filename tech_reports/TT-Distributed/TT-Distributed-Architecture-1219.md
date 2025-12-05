@@ -255,7 +255,7 @@ class MeshDevice {
    Allocator lock_step_allocator_;
    std::array<MeshCommandQueue, NUM_DISPATCH_INTERFACES> physical_dispatch_interface_;
    MeshConfig virtual_mesh_config_;
-   std::vector<chip_id_t> ordered_physical_device_ids_ = {};
+   std::vector<ChipId> ordered_physical_device_ids_ = {};
    uint8_t num_virtual_cqs_ = 1;
 
    // ==== These functions are called when MeshDevice is constructed ====
@@ -337,7 +337,7 @@ In a single-device context, a DeviceHandle to a Device can be requested as follo
 ```cpp
 // Creation API for Device
 DeviceHandle CreateDevice(
-   chip_id_t device_id,
+   ChipId device_id,
    const uint8_t num_hw_cqs,
    const size_t l1_small_size,
    const size_t trace_region_size,
@@ -1630,13 +1630,13 @@ The functions listed below allow a MeshTrace to be captured, binarized and run/r
 // Maps to BeginTraceCapture
 void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
 
-// Maps to EndTraceCapture
+
 void MeshDevice::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
 
-// Maps to ReplayTrace
+
 void MeshDevice::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
 
-// Maps to ReleaseTrace
+
 void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id);
 
 // Get the underlying MeshTrace metadata corresponding to an ID.
@@ -2320,10 +2320,10 @@ std::unordered_set<CoreCoord> Device::get_inactive_ethernet_cores() const;
 bool Device::is_inactive_ethernet_core(CoreCoord logical_core) const;
 
 // Get the chip and coords of the ethernet core connected to the input.
-std::tuple<chip_id_t, CoreCoord> Device::get_connected_ethernet_core(CoreCoord eth_core) const;
+std::tuple<ChipId, CoreCoord> Device::get_connected_ethernet_core(CoreCoord eth_core) const;
 
 // Get the ethernet sockets on this device that are connected to the input chip_id
-std::vector<CoreCoord> Device::get_ethernet_sockets(chip_id_t connected_chip_id) const;
+std::vector<CoreCoord> Device::get_ethernet_sockets(ChipId connected_chip_id) const;
 
 // Check if the device is accessible over MMIO.
 bool Device::is_mmio_capable() const;
@@ -2331,37 +2331,37 @@ bool Device::is_mmio_capable() const;
 // ======== These APIs use tt_cluster directly. Not exposed through Device ========
 
 // Get the SOC descriptor for this chip
-const metal_SocDescriptor& tt_cluster::get_soc_desc(chip_id_t chip) const;
+const metal_SocDescriptor& tt_cluster::get_soc_desc(ChipId chip) const;
 
 // Get harvesting information for this chip
-uint32_t tt_cluster::get_harvesting_mask(chip_id_t chip) const;
+uint32_t tt_cluster::get_harvesting_mask(ChipId chip) const;
 
 // Get the clock frequency for this chip
-int tt_cluster::get_device_aiclk(const chip_id_t& chip_id) const;
+int tt_cluster::get_device_aiclk(const ChipId& chip_id) const;
 
 // Get the MMIO mapped chip connected to the input device id
-chip_id_t tt_cluster::get_associated_mmio_device(chip_id_t device_id) const;
+ChipId tt_cluster::get_associated_mmio_device(ChipId device_id) const;
 
 // Get the assigned Host Memory channel for this device
-uint16_t tt_cluster::get_assigned_channel_for_device(chip_id_t device_id) const;
+uint16_t tt_cluster::get_assigned_channel_for_device(ChipId device_id) const;
 
 // Get the number of host channels for this device
-uint32_t tt_cluster::get_num_host_channels(chip_id_t device_id) const;
+uint32_t tt_cluster::get_num_host_channels(ChipId device_id) const;
 
 // Get the host channel size for this device
-uint32_t tt_cluster::get_host_channel_size(chip_id_t device_id, uint32_t channel) const;
+uint32_t tt_cluster::get_host_channel_size(ChipId device_id, uint32_t channel) const;
 
 // Get the architecture for this cluster
 ARCH tt_cluster::arch();
 
 // Get the product type for this device
-BoardType tt_cluster::get_board_type(chip_id_t chip_id) const;
+BoardType tt_cluster::get_board_type(ChipId chip_id) const;
 
 // Check if the cluster is a galaxy system
 bool tt_cluster::is_galaxy_cluster() const;
 
 // Get chip id to ethernet coord map
-unordered_map<chip_id_t, eth_coord_t> tt_cluster::get_user_chip_ethernet_coordinates() const;
+unordered_map<ChipId, EthCoord> tt_cluster::get_user_chip_ethernet_coordinates() const;
 
 // Get the number of devices in the Physical Cluster
 size_t tt_cluster::number_of_devices();

@@ -154,15 +154,54 @@ def create_tt_model(
             False,  # stop_at_eos
             True,  # ci_only
         ),
-        (  # Batch-1 run with 300 dpi scanned document (Latency) - single user, real-world test
+        (  # Batch-4 run with 300 dpi scanned document (Latency) - 16k long context, real-world test
             "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
             True,  # instruct mode
-            4,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
-            12288,  # max_seq_len, allow for image tokens
+            1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
+            16384,  # max_seq_len, allow for image tokens
+            4,  # batch_size -- samples to load from the prompt JSON
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+        ),
+        (  # Batch-2 run with 300 dpi scanned document (Latency) - 32k long context, real-world test
+            "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
+            True,  # instruct mode
+            1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
+            32768,  # max_seq_len, allow for image tokens
+            2,  # batch_size -- samples to load from the prompt JSON
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+        ),
+        (  # Batch-1 run with 300 dpi scanned document (Latency) - 64k long context, real-world test
+            "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
+            True,  # instruct mode
+            1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
+            65536,  # max_seq_len, allow for image tokens
             1,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+        ),
+        (  # Batch-1 run with 300 dpi scanned document (Latency) - 128k long context, real-world test
+            "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
+            True,  # instruct mode
+            1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
+            131072,  # max_seq_len, allow for image tokens
+            1,  # batch_size -- samples to load from the prompt JSON
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
@@ -173,7 +212,10 @@ def create_tt_model(
         "batch-32",  # 32 users (special because it fills tile size)
         "ci-only-bert-score",  # ci_only batch-bert-score for testing coverage in CI pipelines
         "ci-only-text-only",  # ci_only batch-text-only for testing coverage in CI pipelines
-        "real-world-test",  # real-world test for 300DPI scanned document
+        "long-context-16k",  # real-world test for 300DPI scanned document with 16k long context
+        "long-context-32k",  # real-world test for 300DPI scanned document with 32k long context
+        "long-context-64k",  # real-world test for 300DPI scanned document with 64k long context
+        "long-context-128k",  # real-world test for 300DPI scanned document with 128k long context
     ],
 )
 @pytest.mark.parametrize(
@@ -333,6 +375,7 @@ def test_demo(
             mesh_device,
             max_batch_size=batch_size,
             max_seq_len=max_seq_len,
+            optimizations=DecodersPrecision.accuracy(config.vision_config.depth, ref_model_name),
         )
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
         visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args, debug=False)  # show PCC
@@ -399,7 +442,9 @@ def test_demo(
             pad_embedding=reference_model.model.language_model.embed_tokens(torch.tensor(pad_token_id)),
         )
         # Get user-specific rotary position embeddings
-        cos, sin = multimodal_rope_from_hf(inputs, input_embeds, reference_model, model_args, pad_token_id=pad_token_id)
+        cos, sin, rope_deltas = multimodal_rope_from_hf(
+            inputs, input_embeds, reference_model, model_args, pad_token_id=pad_token_id
+        )
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
         logger.info("Starting prefill warmup...")
@@ -425,7 +470,7 @@ def test_demo(
             prompt_lens=decoding_pos,
         )
         # [INFO] update the cos/sin matrices in the rope_setup to get ready for decode
-        generator.update_cos_sin(cos_matrix_pt=cos, sin_matrix_pt=sin)
+        generator.update_rope_deltas([rope_delta.item() for rope_delta in rope_deltas])
         # torch.save(logits, f"ttnn_logits.pt")
         prefilled_token = torch.argmax(logits, dim=-1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
@@ -436,10 +481,14 @@ def test_demo(
 
         # Start decoding
         iteration = 0
-        argmax_on_device = sampling_params["temperature"] == 0
+        argmax_on_device = model._supports_on_device_sampling
         if argmax_on_device:
+            logger.info(f"Using on-device sampling with temperature=0.0, top_k=-1, top_p=1.0")
             device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
         else:
+            logger.info(
+                f"Using host sampling with temperature={sampling_params['temperature']}, top_p={sampling_params['top_p']}"
+            )
             device_sampling_params = None
 
         users_decoding = True
@@ -579,8 +628,13 @@ def test_demo(
     # Finish profiling at the end of inference for all repeated batches
     profiler.end("run")
 
-    if is_ci_env and "bert-score" in test_id and "Qwen2.5-VL-3B" not in model_args.base_model_name:
-        # todo)) fix this issue before enabling BERTScore check for 3B model:
+    if (
+        is_ci_env
+        and "bert-score" in test_id
+        and "Qwen2.5-VL-3B" not in model_args.base_model_name
+        and "Qwen2.5-VL-7B" not in model_args.base_model_name
+    ):
+        # todo)) fix this issue before enabling BERTScore check for 3B and 7B models:
         #        https://github.com/tenstorrent/tt-metal/issues/28442
         assert mesh_device.get_num_devices() > 2, "BERTScore is only supported for T3K for now"
         expected_output = load_expected_text(model_args.base_model_name)
@@ -759,6 +813,7 @@ def test_demo(
             ml_model_type="llm",
             num_layers=model_args.n_layers,
             batch_size=batch_size,
+            config_params={"data_parallel": 1, "tensor_parallel": mesh_device.get_num_devices()},
             input_sequence_length=max(prefill_lens),
             output_sequence_length=num_tokens_generated_decode[0],
         )

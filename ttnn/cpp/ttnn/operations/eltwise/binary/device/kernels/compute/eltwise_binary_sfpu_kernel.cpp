@@ -16,6 +16,8 @@
 #include "compute_kernel_api/sub_int_sfpu.h"
 #include "compute_kernel_api/mul_int_sfpu.h"
 #include "compute_kernel_api/mul_int32_sfpu.h"
+#include "compute_kernel_api/div_int32_floor.h"
+#include "compute_kernel_api/div_int32_sfpu.h"
 #include "compute_kernel_api/binary_max_min.h"
 #include "compute_kernel_api/xlogy.h"
 #include "compute_kernel_api/gcd.h"
@@ -135,6 +137,12 @@ void MAIN {
 #endif
 #ifdef GT_INT32_INIT
             GT_INT32_INIT
+#endif
+#ifdef GE_INT32_INIT
+            GE_INT32_INIT
+#endif
+#ifdef LE_INT32_INIT
+            LE_INT32_INIT
 #endif
 #ifdef BITWISE_INIT
             BITWISE_INIT

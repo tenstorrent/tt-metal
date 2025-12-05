@@ -112,7 +112,8 @@ struct ExecuteDiv {
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        const std::optional<bool>& use_legacy = std::nullopt);
+        const std::optional<bool>& use_legacy = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     static Tensor invoke(
         const Tensor& lhs,
@@ -125,7 +126,8 @@ struct ExecuteDiv {
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        const std::optional<bool>& use_legacy = std::nullopt);
+        const std::optional<bool>& use_legacy = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 template <BinaryOpType binary_op_type>
@@ -139,7 +141,8 @@ struct ExecuteBiasGelu {
         tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt) {
+        std::optional<bool> use_legacy = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
         return BinaryOperation<binary_op_type>::invoke(
             input_tensor_a_arg,
             input_tensor_b_arg,
@@ -149,7 +152,8 @@ struct ExecuteBiasGelu {
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy);
+            use_legacy,
+            sub_core_grids);
     }
 
     static Tensor invoke(
@@ -161,7 +165,8 @@ struct ExecuteBiasGelu {
         tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt) {
+        std::optional<bool> use_legacy = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
         return ttnn::gelu(
             ttnn::add(input_tensor_a, bias, std::nullopt, memory_config, optional_output_tensor),
             true,
@@ -177,7 +182,8 @@ struct ExecuteBiasGelu {
         const std::optional<Tensor>& output = std::nullopt,
         tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {}) {
+        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
         return BinaryOperation<binary_op_type>::invoke(
             input_tensor_a,
             input_tensor_b,
@@ -186,7 +192,8 @@ struct ExecuteBiasGelu {
             output,
             lhs_activations,
             rhs_activations,
-            post_activations);
+            post_activations,
+            sub_core_grids);
     }
 
     static Tensor invoke(
@@ -224,20 +231,28 @@ struct ExecuteBinaryFmod {
     static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     static Tensor invoke(
-        const Tensor& input_tensor, float scalar, const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const Tensor& input_tensor,
+        float scalar,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 struct ExecuteBinaryRemainder {
     static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     static Tensor invoke(
-        const Tensor& input_tensor, float scalar, const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const Tensor& input_tensor,
+        float scalar,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 struct ExecuteLCM {
@@ -280,7 +295,7 @@ struct ExecuteMaximum {
 
     static Tensor invoke(
         const Tensor& input_a,
-        std::variant<int32_t, float> value,
+        unary::ScalarVariant value,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
@@ -304,7 +319,7 @@ struct ExecuteMinimum {
 
     static Tensor invoke(
         const Tensor& input_a,
-        std::variant<int32_t, float> value,
+        unary::ScalarVariant value,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
@@ -471,9 +486,6 @@ struct ExecuteLogicalLeftShift : ExecuteBitwiseLeftShift {
 }  // namespace binary
 }  // namespace operations
 
-constexpr auto hypot = ttnn::register_operation<
-    "ttnn::hypot",
-    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::HYPOT>>();
 constexpr auto minimum = ttnn::register_operation<"ttnn::minimum", operations::binary::ExecuteMinimum>();
 constexpr auto maximum = ttnn::register_operation<"ttnn::maximum", operations::binary::ExecuteMaximum>();
 constexpr auto atan2 = ttnn::register_operation<

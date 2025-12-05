@@ -6,8 +6,8 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_conv)
 set_target_properties(
     ttnn_op_conv
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            false
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
@@ -15,6 +15,10 @@ file(GLOB_RECURSE kernels conv2d/device/kernels/*)
 target_sources(
     ttnn_op_conv
     PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -23,7 +27,7 @@ target_sources(
         conv2d/conv2d.cpp
         conv2d/conv2d_utils.cpp
         conv2d/conv2d_op_program_factory_common.cpp
-        conv2d/device/conv2d_op.cpp
+        conv2d/device/conv2d_device_operation.cpp
         conv2d/device/conv2d_op_sharded_program_factory.cpp
         conv2d/device/conv2d_op_width_sharded_program_factory.cpp
         conv_transpose2d/conv_transpose2d.cpp

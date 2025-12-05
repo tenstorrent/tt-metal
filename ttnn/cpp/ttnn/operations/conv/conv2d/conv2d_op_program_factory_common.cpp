@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "conv2d_op_program_factory_common.hpp"
-#include <umd/device/types/arch.h>
+#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
+#include <umd/device/types/arch.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <tuple>
-#include <umd/device/types/arch.hpp>
 #include <unordered_map>
 #include <vector>
 #include <tt_stl/assert.hpp>
@@ -43,7 +43,7 @@ uint32_t calculate_act_cb_size_with_reuse(
                                   (1 + image_width_tile_leftover * kernel_size[0]) * dtype_size_bytes;
     const uint32_t reuse_tiles = tt::div_up(reuse_length, input_tile_size);
 
-    return image_width_tiles * act_block_w_tiles + reuse_tiles;
+    return (image_width_tiles * act_block_w_tiles) + reuse_tiles;
 }
 
 std::vector<CBInfo> get_cb_info(
@@ -76,6 +76,7 @@ std::vector<CBInfo> get_cb_info(
                                                         ? tt::tt_metal::DataType::FLOAT32
                                                         : tt::tt_metal::DataType::BFLOAT16;
     const uint32_t input_datum_size = conv_input_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
+
     const tt::DataFormat conv_input_df = datatype_to_dataformat_converter(conv_input_dtype);
     const uint32_t input_tile_size = tt::tile_size(datatype_to_dataformat_converter(conv_input_dtype));
 
@@ -103,6 +104,7 @@ std::vector<CBInfo> get_cb_info(
     const bool split_reader_enabled =
         is_split_reader_supported(sharding_scheme, is_1d_depthwise_conv, block_config.act_block_h_ntiles) &&
         conv_config.force_split_reader.value_or(is_split_reader_viable(
+            sharding_scheme,
             block_config.act_block_h_ntiles,
             input_channels_padded,
             kernel_size[1],
@@ -118,19 +120,8 @@ std::vector<CBInfo> get_cb_info(
             conv_config.enable_activation_reuse));
 
     // Block dims
-    if (sharding_scheme != TensorMemoryLayout::HEIGHT_SHARDED || !split_reader_enabled || is_1d_depthwise_conv) {
-        if (!conv_config.enable_activation_reuse) {
-            act_block_num_tiles = block_config.act_block_h_ntiles * block_config.act_block_w_ntiles;
-        } else {
-            act_block_num_tiles = calculate_act_cb_size_with_reuse(
-                block_config.act_block_h_ntiles,
-                block_config.act_block_w_ntiles,
-                output_image_width,
-                padded_in_channels,
-                kernel_size,
-                input_tile_size,
-                input_datatype);
-        }
+    if (!split_reader_enabled || is_1d_depthwise_conv) {
+        act_block_num_tiles = block_config.act_block_h_ntiles * block_config.act_block_w_ntiles;
     } else {
         // Calculate split reader parameters
         uint32_t act_block_h_nsubblocks = block_config.act_block_h_ntiles;
@@ -186,11 +177,13 @@ std::vector<CBInfo> get_cb_info(
             (is_1d_depthwise_conv ? block_config.act_block_h_ntiles : block_config.act_block_w_ntiles);
         if (sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
             // If activation reuse is enabled, we already have full inner dim
-            const bool enable_fully_buffered_weights = num_blocks_act_h > 1 && !conv_config.enable_activation_reuse;
-            if (enable_fully_buffered_weights) {
-                weight_block_num_tiles *= kernel_size[0];
-            } else if (conv_config.enable_weights_double_buffer) {
-                weight_block_num_tiles *= 2;
+            if (!conv_config.enable_activation_reuse) {
+                const bool enable_fully_buffered_weights = num_blocks_act_h > 1;
+                if (enable_fully_buffered_weights) {
+                    weight_block_num_tiles *= kernel_size[0];
+                } else if (conv_config.enable_weights_double_buffer) {
+                    weight_block_num_tiles *= 2;
+                }
             }
         } else if (conv_config.enable_weights_double_buffer) {
             weight_block_num_tiles *= 2;
@@ -211,6 +204,8 @@ std::vector<CBInfo> get_cb_info(
         .is_globally_allocated = (!untilize_out && partial_dtype == output_datatype && !is_1d_depthwise_conv),
         .data_format = partial_df});
 
+    const bool overlap_im2col_cb =
+        sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED && conv_input_df == output_df && !skip_act_cb_create;
     {
         // ACT and ACT_SECOND_READER CB
         if (conv_config.enable_act_double_buffer) {
@@ -223,17 +218,28 @@ std::vector<CBInfo> get_cb_info(
         const tt::DataFormat act_cb_data_format =
             sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED ? conv_input_df : output_df;
         const bool overlap_act_cb = sharding_scheme != TensorMemoryLayout::HEIGHT_SHARDED && skip_act_cb_create;
+        // ACT CB plays a different role depending on the sharding scheme
+        // In block sharded convs, ACT CB is used for mcasting activations and needs full activation block size
+        // regardless of split reader.
+        // In height sharded convs, ACT CB is used for storing img2col data and its size can
+        // be approx halved by using split reader (ACT_SECOND_READER CB stores the other half then).
         cb_info.emplace_back(CBInfo{
             .name = Conv2dCb::ACT,
-            .num_pages = overlap_act_cb ? 0 : act_block_num_tiles,
+            .num_pages = overlap_act_cb ? 0
+                         : (sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED)
+                             ? act_block_num_tiles
+                             : act_block_num_tiles + act_block_split_num_tiles,
             .page_size = act_cb_tile_size,
             .data_format = act_cb_data_format,
             .overlapped_by_cb = overlap_act_cb ? std::optional<Conv2dCb>(Conv2dCb::ACT_TILIZED) : std::nullopt});
+
+        // In block sharded convs when overlapping of the img2col cb is done, we don't need this cb, the main one will
+        // just be full size (Conv2dCb::ACT)
         cb_info.emplace_back(CBInfo{
             .name = Conv2dCb::ACT_SECOND_READER,
-            .num_pages = act_block_split_num_tiles,
-            .page_size = act_cb_tile_size,
-            .data_format = act_cb_data_format});
+            .num_pages = overlap_im2col_cb ? 0 : act_block_split_num_tiles,
+            .page_size = input_tile_size,
+            .data_format = conv_input_df});
     }
 
     // Temp sum CB (1d depthwise conv only)
@@ -266,14 +272,12 @@ std::vector<CBInfo> get_cb_info(
             row_major_act_cb_num_tiles = act_block_num_tiles;
         }
 
-        const bool overlap_act_cb =
-            sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED && conv_input_df == output_df && !skip_act_cb_create;
         cb_info.emplace_back(CBInfo{
             .name = Conv2dCb::ACT_ROW_MAJOR_BFLOAT16,
-            .num_pages = overlap_act_cb ? 0 : row_major_act_cb_num_tiles,
+            .num_pages = overlap_im2col_cb ? 0 : row_major_act_cb_num_tiles,
             .page_size = input_tile_size,
             .data_format = conv_input_df,
-            .overlapped_by_cb = overlap_act_cb ? std::optional<Conv2dCb>(Conv2dCb::ACT) : std::nullopt});
+            .overlapped_by_cb = overlap_im2col_cb ? std::optional<Conv2dCb>(Conv2dCb::ACT) : std::nullopt});
     }
 
     // Output CB
@@ -409,7 +413,7 @@ static float get_local_l1_noc_transfer_rate(uint32_t transfer_size_bytes, tt::AR
         (params.peak_rate_gbps - params.min_rate_gbps) /
         static_cast<float>(params.linear_growth_threshold_bytes - min_transfer_size_bytes);
 
-    return params.min_rate_gbps + rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes);
+    return params.min_rate_gbps + (rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes));
 }
 /**
  * Calculates NOC transfer rate for DRAM transfers using empirical data.
@@ -446,7 +450,7 @@ static float get_all_dram_noc_transfer_rate(uint32_t transfer_size_bytes, tt::AR
         (params.peak_rate_gbps - params.min_rate_gbps) /
         static_cast<float>(params.linear_growth_threshold_bytes - min_transfer_size_bytes);
 
-    return params.min_rate_gbps + rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes);
+    return params.min_rate_gbps + (rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes));
 }
 /**
  * Calculates NOC transfer rate for multicast L1-linked transfers using empirical data.
@@ -483,7 +487,7 @@ static float get_mcast_many_l1_linked_noc_transfer_rate(uint32_t transfer_size_b
         (params.peak_rate_gbps - params.min_rate_gbps) /
         static_cast<float>(params.linear_growth_threshold_bytes - min_transfer_size_bytes);
 
-    return params.min_rate_gbps + rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes);
+    return params.min_rate_gbps + (rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes));
 }
 /**
  * Determines if split reader optimization is supported for the given configuration.
@@ -495,7 +499,9 @@ static float get_mcast_many_l1_linked_noc_transfer_rate(uint32_t transfer_size_b
  */
 bool is_split_reader_supported(
     TensorMemoryLayout memory_layout, bool is_1d_depthwise_conv, uint32_t act_block_h_ntiles) {
-    return memory_layout == TensorMemoryLayout::HEIGHT_SHARDED && !is_1d_depthwise_conv && act_block_h_ntiles > 1;
+    return (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+            memory_layout == TensorMemoryLayout::BLOCK_SHARDED) &&
+           !is_1d_depthwise_conv && act_block_h_ntiles > 1;
 }
 
 static uint32_t get_tilize_cycles_per_tile(
@@ -583,6 +589,7 @@ static uint32_t get_tilize_cycles_per_tile(
     which is why we use it to convert transfer rates to cycles.
 */
 bool is_split_reader_viable(
+    TensorMemoryLayout memory_layout,
     uint32_t act_block_h_ntiles,
     uint32_t input_channels_padded,
     uint32_t kernel_width,
@@ -596,6 +603,9 @@ bool is_split_reader_viable(
     bool fp32_dest_acc,
     DataType output_datatype,
     bool act_reuse_enabled) {
+    if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        return true;
+    }
     // If activation reuse is enabled, we always enable split_reader
     if (act_reuse_enabled) {
         return true;
@@ -655,6 +665,91 @@ bool is_split_reader_viable(
         is_viable);
 
     return is_viable;
+}
+
+void post_conv2d_op_memory_checks(
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
+    const auto& input_tensor_a = tensor_args.a;
+    const auto& input_tensor_b = tensor_args.b;
+    const auto& input_tensor_bias = tensor_args.bias;
+    const bool has_bias = input_tensor_bias.has_value();
+    auto *device = input_tensor_a.device();
+    const auto& weights_shape = input_tensor_b.padded_shape();
+    const auto& sliding_window_config = operation_attributes.sliding_window_config;
+    const auto& parallelization_config = operation_attributes.parallelization_config;
+    const auto& memory_config = operation_attributes.memory_config;
+    const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
+    const auto& block_config = operation_attributes.block_config;
+    const auto dtype = operation_attributes.dtype;
+    const auto& input_tensor_shape = operation_attributes.input_tensor_shape;
+    const auto& enable_act_double_buffer = operation_attributes.enable_act_double_buffer;
+    const auto& enable_weights_double_buffer = operation_attributes.enable_weights_double_buffer;
+    const auto& enable_activation_reuse = operation_attributes.enable_activation_reuse;
+    const auto& config_tensors_in_dram = operation_attributes.config_tensors_in_dram;
+    const auto& pre_op_l1_allocation_size_bytes = operation_attributes.pre_op_l1_allocation_size_bytes;
+    const auto& force_split_reader = operation_attributes.force_split_reader;
+    const auto output_channels = operation_attributes.output_channels;
+    const auto groups = operation_attributes.groups;
+    const auto untilize_out = operation_attributes.untilize_out;
+
+    const uint32_t post_op_l1_allocation_size =
+        device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
+
+    auto actual_cb_size = calculate_total_cb_size(program);
+
+    auto kernel_dims =
+        std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second});
+
+    const SkipMcast skip_mcast = conv_skip_mcast(parallelization_config, memory_config.memory_layout());
+    const uint32_t output_image_width = sliding_window_config.get_output_shape()[2];
+
+    const std::array<uint32_t, 2> shard_shape = input_tensor_a.shard_spec().value().shape;
+    const uint32_t input_channels_padded = shard_shape[1];
+    conv_op_l1_usage l1_usage = calculate_L1_usage(
+        compute_kernel_config,
+        block_config,
+        parallelization_config,
+        weights_shape,
+        sliding_window_config,
+        std::array<uint32_t, 2>({sliding_window_config.dilation_hw.first, sliding_window_config.dilation_hw.second}),
+        Conv2dConfig{
+            .weights_dtype = input_tensor_b.dtype(),
+            .config_tensors_in_dram = config_tensors_in_dram,
+            .shard_layout = memory_config.memory_layout(),
+            .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
+            .enable_act_double_buffer = enable_act_double_buffer,
+            .enable_weights_double_buffer = enable_weights_double_buffer,
+            .enable_activation_reuse = enable_activation_reuse,
+            .force_split_reader = force_split_reader},
+        input_tensor_a.dtype(),
+        dtype,
+        output_image_width,
+        has_bias,
+        is_1d_deptwise_conv(
+            groups, input_tensor_shape[3], output_channels, kernel_dims[1], output_image_width, has_bias),
+        input_channels_padded,
+        skip_mcast.skip_activation_mcast);
+
+    TT_FATAL(
+        actual_cb_size == l1_usage.CB_allocation_size,
+        "Calculated CB size {} does not match with the actual CB size {}",
+        l1_usage.CB_allocation_size,
+        actual_cb_size);
+
+    // For now assume that if post_op_l1_allocation_size == 0 op is being run
+    // in graph capture NO_DISPATCH mode.
+    // ToDo: Device should offer an API to inform the op if it is running in NO_DISPATCH mode.
+    bool is_graph_capture_no_dispatch_mode = post_op_l1_allocation_size == 0;
+    TT_FATAL(
+        post_op_l1_allocation_size == (pre_op_l1_allocation_size_bytes + l1_usage.tensor_allocation_size) ||
+            is_graph_capture_no_dispatch_mode,
+        "Mismatch!! L1 Allocation Pre Op =  {}, Post Op = {} Calculated Size = {}",
+        pre_op_l1_allocation_size_bytes,
+        post_op_l1_allocation_size,
+        l1_usage.tensor_allocation_size);
 }
 
 }  // namespace conv2d

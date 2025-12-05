@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -11,7 +10,6 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 
-using namespace tt::constants;
 using namespace tt;
 
 namespace reuse_optimized_helpers {
@@ -171,6 +169,36 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     }
     if (output_is_sharded) {
         mm_kernel_in1_reader_writer_defines["OUT_SHARDED"] = "1";
+    }
+
+    // Intermediate CB read
+    /*
+    Blackhole architecture alignment issue workaround for tiny tiles:
+    Problem: When reading tiny tiles from DRAM to circular buffers (CB), address alignment
+    issues occur. DRAM tile addresses are 64-byte aligned within each block, but L1 CB
+    addresses are not necessarily aligned due to non-64-byte-aligned page sizes.
+    Example scenario:
+    - Two consecutive 544-byte tiles (16x32 tile of dtype bfloat8_b) stored on different DRAM banks
+    - CB configured with size=2 to hold both tiles
+    Result:
+    - Tile 0: DRAM Bank 0, Address 64    → CB L1 Address 0   (64-byte aligned ✓)
+    - Tile 1: DRAM Bank 1, Address 64    → CB L1 Address 544 (not 64-byte aligned ✗)
+    Solution: Use an intermediate single-tile CB as a staging area. Read each tile into
+    the intermediate CB first, then copy to the destination CB. This ensures proper
+    alignment at the cost of additional memory bandwidth overhead.
+    Note: This workaround should only be used for this specific alignment issue case.
+    */
+    bool in0_needs_intermediate_cb_read = false;
+    bool in1_needs_intermediate_cb_read = false;
+    if (device->arch() == tt::ARCH::BLACKHOLE) {
+        in0_needs_intermediate_cb_read = ((in0_single_tile_size % 64) != 0);
+        if (in0_needs_intermediate_cb_read) {
+            mm_kernel_in0_reader_defines["INTERMEDIATE_CB_READ"] = "1";
+        }
+        in1_needs_intermediate_cb_read = ((in1_single_tile_size % 64) != 0);
+        if (in1_needs_intermediate_cb_read) {
+            mm_kernel_in1_reader_writer_defines["INTERMEDIATE_CB_READ"] = "1";
+        }
     }
 
     tt::tt_metal::KernelHandle mm_kernel_in0_reader_id = tt_metal::CreateKernel(
@@ -339,6 +367,24 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     }
     auto cb_output = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), output_cb_config);
 
+    // Intermediate CB read
+    if (in1_needs_intermediate_cb_read) {
+        uint32_t in1_intermediate_cb_index = tt::CBIndex::c_9;
+        tt_metal::CircularBufferConfig cb_in1_intermediate_config =
+            tt_metal::CircularBufferConfig(in1_single_tile_size, {{in1_intermediate_cb_index, in1_data_format}})
+                .set_page_size(in1_intermediate_cb_index, in1_single_tile_size)
+                .set_tile_dims(in1_intermediate_cb_index, in1_tile);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_in1_intermediate_config);
+    }
+    if (in0_needs_intermediate_cb_read) {
+        uint32_t in0_intermediate_cb_index = tt::CBIndex::c_8;
+        tt_metal::CircularBufferConfig cb_in0_intermediate_config =
+            tt_metal::CircularBufferConfig(in0_single_tile_size, {{in0_intermediate_cb_index, in0_data_format}})
+                .set_page_size(in0_intermediate_cb_index, in0_single_tile_size)
+                .set_tile_dims(in0_intermediate_cb_index, in0_tile);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_in0_intermediate_config);
+    }
+
     // Write runtime args to device
     std::vector<uint32_t> mm_reader_args = {
         (std::uint32_t)num_blocks,  // num_blocks
@@ -421,10 +467,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            auto src_buffer_a = input_tensors.at(0).buffer();
-            auto src_buffer_b = input_tensors.at(1).buffer();
+            auto* src_buffer_a = input_tensors.at(0).buffer();
+            auto* src_buffer_b = input_tensors.at(1).buffer();
 
-            auto dst_buffer = output_tensors.at(0).buffer();
+            auto* dst_buffer = output_tensors.at(0).buffer();
 
             const bool src0_sharded = input_tensors[0].memory_config().is_sharded();
             const bool src1_sharded = input_tensors[1].memory_config().is_sharded();

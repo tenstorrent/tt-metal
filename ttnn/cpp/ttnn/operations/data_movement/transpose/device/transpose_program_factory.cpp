@@ -35,8 +35,8 @@ void override_runtime_args_mc_cn(
     uint32_t num_tiles_per_core_group_1,
     const CoreRangeSet& core_group_2,
     uint32_t num_tiles_per_core_group_2) {
-    auto input_buffer = input_tensor.buffer();
-    auto output_buffer = output_tensor.buffer();
+    auto* input_buffer = input_tensor.buffer();
+    auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
@@ -70,7 +70,7 @@ void override_runtime_args_mc_cn(
         uint32_t hw = num_tiles_read % HtWt;
         uint32_t curr_c = num_tiles_read / HtWt;
         uint32_t n = curr_c % N;
-        uint32_t start_tile = num_tiles_read + curr_c * batch_step - curr_c / N * channel_step;
+        uint32_t start_tile = num_tiles_read + (curr_c * batch_step) - (curr_c / N * channel_step);
 
         if constexpr (IS_CREATING) {
             tt::tt_metal::SetRuntimeArgs(
@@ -223,8 +223,8 @@ void override_runtime_args_mc_hc(
     uint32_t num_tiles_per_core_group_1,
     const CoreRangeSet& core_group_2,
     uint32_t num_tiles_per_core_group_2) {
-    auto input_buffer = input_tensor.buffer();
-    auto output_buffer = output_tensor.buffer();
+    auto* input_buffer = input_tensor.buffer();
+    auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1];
@@ -321,8 +321,8 @@ void override_runtime_args_mc_hc_rm(
     uint32_t num_w_sticks_per_core_group_1,
     const CoreRangeSet& core_group_2,
     uint32_t num_w_sticks_per_core_group_2) {
-    auto input_buffer = input_tensor.buffer();
-    auto output_buffer = output_tensor.buffer();
+    auto* input_buffer = input_tensor.buffer();
+    auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1];
@@ -419,8 +419,8 @@ void override_runtime_args_mc_hc_tiled_interleaved(
     tt::tt_metal::KernelHandle writer_kernel_id,
     const Tensor& input_tensor,
     Tensor& output_tensor) {
-    auto input_buffer = input_tensor.buffer();
-    auto output_buffer = output_tensor.buffer();
+    auto* input_buffer = input_tensor.buffer();
+    auto* output_buffer = output_tensor.buffer();
 
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     auto tile_hw = (tile_shape[0] * tile_shape[1]);
@@ -1225,8 +1225,8 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor& a,
             const auto& src_tensor = input_tensors.at(0);
             const auto& dst_tensor = output_tensors.at(0);
 
-            const auto src_buffer = src_tensor.buffer();
-            const auto dst_buffer = dst_tensor.buffer();
+            auto* const src_buffer = src_tensor.buffer();
+            auto* const dst_buffer = dst_tensor.buffer();
 
             UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
             UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
@@ -1297,7 +1297,7 @@ void override_runtime_args_wh(
                 core,
                 {input_tensor.buffer()->address(),
                  num_tiles_per_core,
-                 tt::round_down(num_tiles_read, HtWt) + h * Wt + w,
+                 tt::round_down(num_tiles_read, HtWt) + (h * Wt) + w,
                  h,
                  w,
                  Ht,
@@ -1759,10 +1759,10 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
     uint32_t H = padded_shape[2];
     uint32_t Hs = shard_shape[0], Ws = shard_shape[1];
 
-    uint32_t Hts = Hs / tile.tile_shape[0];
-    uint32_t Wts = Ws / tile.tile_shape[1];
+    uint32_t Hts = Hs / tile.get_height();
+    uint32_t Wts = Ws / tile.get_width();
 
-    uint32_t Ht = H / tile.tile_shape[0];
+    uint32_t Ht = H / tile.get_height();
     uint32_t Ht_per_shard = std::min(Ht, Hts);
 
     uint32_t num_hw_blocks_per_shard = Hts > Ht ? Hts / Ht : 1;
@@ -1811,8 +1811,8 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
         const auto& src_tensor = input_tensors.at(0);
         const auto& dst_tensor = output_tensors.at(0);
 
-        const auto src_buffer = src_tensor.buffer();
-        const auto dst_buffer = dst_tensor.buffer();
+        auto* const src_buffer = src_tensor.buffer();
+        auto* const dst_buffer = dst_tensor.buffer();
 
         bool src0_sharded = src_tensor.is_sharded();
         bool out_sharded = dst_tensor.is_sharded();
@@ -1840,10 +1840,10 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
         uint32_t H = padded_shape[2];
         uint32_t Hs = shard_shape[0], Ws = shard_shape[1];
 
-        uint32_t Hts = Hs / tile.tile_shape[0];
-        uint32_t Wts = Ws / tile.tile_shape[1];
+        uint32_t Hts = Hs / tile.get_height();
+        uint32_t Wts = Ws / tile.get_width();
 
-        uint32_t Ht = H / tile.tile_shape[0];
+        uint32_t Ht = H / tile.get_height();
         uint32_t Ht_per_shard = std::min(Ht, Hts);
 
         uint32_t num_hw_blocks_per_shard = Hts > Ht ? Hts / Ht : 1;
@@ -2071,8 +2071,8 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
             const auto& src_tensor = input_tensors.at(0);
             const auto& dst_tensor = output_tensors.at(0);
 
-            const auto src_buffer = src_tensor.buffer();
-            const auto dst_buffer = dst_tensor.buffer();
+            auto* const src_buffer = src_tensor.buffer();
+            auto* const dst_buffer = dst_tensor.buffer();
 
             UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
             UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);

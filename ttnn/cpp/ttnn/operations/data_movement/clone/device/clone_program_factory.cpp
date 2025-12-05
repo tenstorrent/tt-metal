@@ -6,6 +6,7 @@
 
 #include "clone_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/math.hpp"
 
@@ -57,8 +58,8 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
         CreateCircularBuffer(program, all_cores, dst_cb_config);
     }
 
-    auto input_buffer = input.buffer();
-    auto output_buffer = output.buffer();
+    auto* input_buffer = input.buffer();
+    auto* output_buffer = output.buffer();
 
     std::vector<uint32_t> reader_compile_time_args, writer_compile_time_args;
     if (tilized) {

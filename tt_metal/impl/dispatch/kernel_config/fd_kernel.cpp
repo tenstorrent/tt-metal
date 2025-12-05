@@ -19,12 +19,12 @@
 #include "prefetch.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
+#include <impl/debug/dprint_server.hpp>
 
 using namespace tt::tt_metal;
 
-chip_id_t FDKernel::GetUpstreamDeviceId(chip_id_t device_id) {
-    chip_id_t mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+ChipId FDKernel::GetUpstreamDeviceId(ChipId device_id) {
+    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
     for (auto tunnel :
          tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
         for (int idx = 0; idx < tunnel.size(); idx++) {
@@ -38,9 +38,8 @@ chip_id_t FDKernel::GetUpstreamDeviceId(chip_id_t device_id) {
     return device_id;
 }
 
-chip_id_t FDKernel::GetDownstreamDeviceId(chip_id_t device_id, int tunnel) {
-    chip_id_t mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+ChipId FDKernel::GetDownstreamDeviceId(ChipId device_id, int tunnel) {
+    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
     auto tunnels = tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
     if (tunnel < -1 || tunnel >= static_cast<int>(tunnels.size())) {
         TT_THROW("Tunnel {} is out of range. {} tunnels exist", tunnel, tunnels.size());
@@ -64,9 +63,8 @@ chip_id_t FDKernel::GetDownstreamDeviceId(chip_id_t device_id, int tunnel) {
     return device_id;
 }
 
-uint32_t FDKernel::GetTunnelStop(chip_id_t device_id) {
-    chip_id_t mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+uint32_t FDKernel::GetTunnelStop(ChipId device_id) {
+    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
     for (auto tunnel :
          tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
         for (uint32_t idx = 0; idx < tunnel.size(); idx++) {
@@ -81,8 +79,8 @@ uint32_t FDKernel::GetTunnelStop(chip_id_t device_id) {
 
 FDKernel* FDKernel::Generate(
     int node_id,
-    chip_id_t device_id,
-    chip_id_t servicing_device_id,
+    ChipId device_id,
+    ChipId servicing_device_id,
     uint8_t cq_id,
     noc_selection_t noc_selection,
     DispatchWorkerType type,
@@ -162,7 +160,7 @@ KernelHandle FDKernel::configure_kernel_variant(
     }
 
     if (GetCoreType() == CoreType::WORKER) {
-        return tt::tt_metal::CreateKernel(
+        kernel_handle_ = tt::tt_metal::CreateKernel(
             *program_,
             path,
             logical_core_,
@@ -174,7 +172,7 @@ KernelHandle FDKernel::configure_kernel_variant(
                 .defines = defines,
                 .opt_level = opt_level});
     } else {
-        return tt::tt_metal::CreateKernel(
+        kernel_handle_ = tt::tt_metal::CreateKernel(
             *program_,
             path,
             logical_core_,
@@ -185,10 +183,19 @@ KernelHandle FDKernel::configure_kernel_variant(
                 .defines = defines,
                 .opt_level = opt_level});
     }
+
+    return kernel_handle_;
 }
 
 void FDKernel::create_edm_connection_sems(FDKernelEdmConnectionAttributes& attributes) {
     attributes.worker_flow_control_sem = tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
     attributes.worker_buffer_index_sem = tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
     attributes.worker_teardown_sem = tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+}
+
+void FDKernel::SetRuntimeArgs() {
+    TT_ASSERT(program_ != nullptr, "Program must be set before setting runtime args");
+    if (not runtime_args_.empty()) {
+        tt_metal::SetRuntimeArgs(*program_, kernel_handle_, logical_core_, runtime_args_);
+    }
 }

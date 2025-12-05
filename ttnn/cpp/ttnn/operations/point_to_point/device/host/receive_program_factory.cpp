@@ -3,13 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include "point_to_point_device_op.hpp"
-
-using tt::tt_fabric::get_fabric_node_id_from_physical_chip_id;
 
 namespace ttnn::operations::point_to_point {
 
@@ -17,7 +15,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     const PointToPointOp::operation_attributes_t& operation_attributes,
     PointToPointOp::tensor_return_value_t& output_tensors,
     const tt::tt_metal::GlobalSemaphore& semaphore) {
-    auto mesh_device = dynamic_cast<MeshDevice*>(output_tensors.at(0).device());
+    auto* mesh_device = dynamic_cast<MeshDevice*>(output_tensors.at(0).device());
 
     const auto& send_coord = operation_attributes.send_coord;
     const auto& receive_coord = operation_attributes.receive_coord;
@@ -73,8 +71,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     CreateCircularBuffer(program, all_cores, cb_receiver_config);
 
     const auto& topology = operation_attributes.topology;
-    auto this_device = mesh_device->get_device(receive_coord);
-    const auto this_fabric_id = get_fabric_node_id_from_physical_chip_id(this_device->id());
+    const auto this_fabric_id = mesh_device->get_fabric_node_id(receive_coord);
     const auto [num_hops, sender_is_forward, next_fabric_id] =
         detail::fabric_1d_routing(mesh_device, receive_coord, send_coord, topology);
 
@@ -114,7 +111,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
             page_idx_start,
             page_idx_end,
             num_pages_per_packet,
-            intermediate_tensor.mesh_buffer()->get_device_buffer(receive_coord)->address(),
+            intermediate_tensor.buffer()->address(),
             packet_size_bytes,
             output_page_size_bytes,
             num_page_segments,
@@ -135,10 +132,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         tt::tt_metal::SetRuntimeArgs(program, receive_unary_reader_kernel_id, c, reader_runtime_args);
 
         const std::vector<uint32_t> writer_runtime_args = {
-            output_tensor.mesh_buffer()->get_device_buffer(receive_coord)->address(),
-            increment,
-            page_idx_start,
-            output_page_size_bytes};
+            output_tensor.buffer()->address(), increment, page_idx_start, output_page_size_bytes};
 
         tt::tt_metal::SetRuntimeArgs(program, receive_unary_writer_kernel_id, c, writer_runtime_args);
 

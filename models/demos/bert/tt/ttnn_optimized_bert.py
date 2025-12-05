@@ -107,7 +107,7 @@ def bert_intermediate(
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
         core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
-        activation="gelu",
+        activation="gelu_approx",
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,

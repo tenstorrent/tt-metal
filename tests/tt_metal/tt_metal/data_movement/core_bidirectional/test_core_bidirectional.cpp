@@ -21,8 +21,8 @@ namespace unit_tests::dm::core_to_and_from_core {
 // Test config, i.e. test parameters
 struct CoreBidirectionalConfig {
     uint32_t test_id = 0;
-    CoreCoord master_core_coord = CoreCoord();
-    CoreCoord subordinate_core_coord = CoreCoord();
+    CoreCoord master_core_coord;
+    CoreCoord subordinate_core_coord;
     uint32_t num_of_transactions = 0;
     uint32_t pages_per_transaction = 0;
     uint32_t bytes_per_page = 0;
@@ -63,7 +63,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const CoreBi
 
     // Assigns a "safe" L1 local address for the master and subordinate cores
     uint32_t l1_base_write_address = master_l1_info.base_address;
-    uint32_t l1_base_read_address = l1_base_write_address + master_l1_info.size / 2;
+    uint32_t l1_base_read_address = l1_base_write_address + (master_l1_info.size / 2);
 
     // Physical Core Coordinates
     CoreCoord physical_subordinate_core = device->worker_core_from_logical_core(test_config.subordinate_core_coord);

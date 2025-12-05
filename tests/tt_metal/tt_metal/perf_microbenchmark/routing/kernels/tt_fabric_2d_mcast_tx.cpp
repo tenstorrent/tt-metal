@@ -23,7 +23,6 @@ tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(t
 constexpr uint32_t target_address = get_compile_time_arg_val(2);
 constexpr uint32_t mcast_mode = get_compile_time_arg_val(4);
 constexpr bool is_2d_fabric = get_compile_time_arg_val(5);
-constexpr bool use_dynamic_routing = get_compile_time_arg_val(6);
 
 inline void setup_connection_and_headers(
     tt::tt_fabric::WorkerToFabricEdmSender& connection,
@@ -75,7 +74,7 @@ void set_mcast_header(
         s_hops = 0;
     }
 
-    fabric_set_mcast_route((LowLatencyMeshPacketHeader*)packet_header, 0, 0, e_hops, w_hops, n_hops, s_hops);
+    fabric_set_mcast_route((HybridMeshPacketHeader*)packet_header, 0, 0, e_hops, w_hops, n_hops, s_hops);
 }
 
 inline void teardown_connection(tt::tt_fabric::WorkerToFabricEdmSender& connection) { connection.close(); }

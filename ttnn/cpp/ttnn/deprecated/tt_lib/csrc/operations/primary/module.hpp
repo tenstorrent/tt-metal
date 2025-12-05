@@ -13,7 +13,7 @@ namespace tt {
 namespace operations {
 namespace primary {
 
-void py_module(py::module& m_primary) {}
+inline void py_module(py::module& m_primary) {}
 
 }  // namespace
    // primary

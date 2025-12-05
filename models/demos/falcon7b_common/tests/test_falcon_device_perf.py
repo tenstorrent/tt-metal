@@ -2,9 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+
 import pytest
 
-from models.common.utility_functions import disable_persistent_kernel_cache
 from models.demos.falcon7b_common.tests.run_falcon_end_to_end import (
     DECODE_CONFIG_TO_PCC,
     PREFILL_CONFIG_TO_PCC,
@@ -13,6 +14,7 @@ from models.demos.falcon7b_common.tests.run_falcon_end_to_end import (
 )
 from models.demos.falcon7b_common.tt.model_config import get_model_config
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
+from models.tt_transformers.tt.common import get_hf_tt_cache_path
 
 
 @pytest.mark.parametrize(
@@ -48,16 +50,10 @@ def test_device_perf_wh_bare_metal(
     kv_cache_len,
     num_layers,
     model_config_str,
-    model_location_generator,
-    get_tt_cache_path,
     mesh_device,
 ):
     model_config = get_model_config(model_config_str, seq_len, batch)
-    tt_cache_path = get_tt_cache_path(
-        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
-    )
-
-    disable_persistent_kernel_cache()
+    tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 
     if llm_mode == "prefill":
         expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc = PREFILL_CONFIG_TO_PCC[
@@ -80,7 +76,6 @@ def test_device_perf_wh_bare_metal(
         model_config,
         model_config_str,
         tt_cache_path,
-        model_location_generator,
         device_perf=True,
     )
 

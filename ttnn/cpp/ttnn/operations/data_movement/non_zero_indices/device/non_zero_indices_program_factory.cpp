@@ -1,26 +1,25 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-
-#include "non_zero_indices_op.hpp"
-#include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/math.hpp"
+#include "ttnn/operations/data_movement/non_zero_indices/device/non_zero_indices_program_factory.hpp"
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
 
-using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn {
+namespace ttnn::operations::data_movement::nonzero::program {
 
-namespace operations::data_movement {
+NonZeroIndicesProgramFactory::cached_program_t NonZeroIndicesProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensors) {
+    const auto& input = tensor_args.input;
+    const auto& out_num_indices = std::get<0>(output_tensors);
+    const auto& out_indices = std::get<1>(output_tensors);
 
-operation::ProgramWithCallbacks non_zero_indices_single_core(
-    const Tensor& input, const Tensor& out_num_indices, const Tensor& out_indices) {
     tt::tt_metal::Program program{};
 
     uint32_t alignment_base = 32 / input.element_size();
@@ -87,29 +86,33 @@ operation::ProgramWithCallbacks non_zero_indices_single_core(
 
     tt::tt_metal::SetRuntimeArgs(program, kernel_id, core, run_time_args);
 
-    auto override_runtime_args_callback = [kernel_id, core, page_size](
-                                              const void* operation,
-                                              const tt::tt_metal::Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        const auto& output_0 = output_tensors.at(0);
-        const auto& output_1 = output_tensors.at(1);
-        const auto& input = input_tensors.at(0);
-        uint32_t alignment_base = 32 / input.element_size();
-        uint32_t aligned_elements = tt::div_up(input.padded_shape()[-1], alignment_base) * alignment_base;
-        uint32_t actual_elements = input.padded_shape()[-1];
-        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, kernel_id, core);
-        runtime_args[0] = input.buffer()->address();
-        runtime_args[1] = output_0.buffer()->address();
-        runtime_args[2] = output_1.buffer()->address();
-        runtime_args[3] = aligned_elements;
-        runtime_args[4] = actual_elements;
-        runtime_args[5] = input.element_size();
-    };
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return cached_program_t{std::move(program), {kernel_id, core, page_size}};
 }
 
-}  // namespace operations::data_movement
+void NonZeroIndicesProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensors) {
+    auto& program = cached_program.program;
+    auto& shared_vars = cached_program.shared_variables;
+    auto& kernel_id = shared_vars.kernel_id;
+    auto& core = shared_vars.core;
 
-}  // namespace ttnn
+    const auto& input = tensor_args.input;
+    const auto& out_num_indices = std::get<0>(output_tensors);
+    const auto& out_indices = std::get<1>(output_tensors);
+
+    uint32_t alignment_base = 32 / input.element_size();
+    uint32_t aligned_elements = tt::div_up(input.padded_shape()[-1], alignment_base) * alignment_base;
+    uint32_t actual_elements = input.padded_shape()[-1];
+    auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, kernel_id, core);
+    runtime_args[0] = input.buffer()->address();
+    runtime_args[1] = out_num_indices.buffer()->address();
+    runtime_args[2] = out_indices.buffer()->address();
+    runtime_args[3] = aligned_elements;
+    runtime_args[4] = actual_elements;
+    runtime_args[5] = input.element_size();
+}
+
+}  // namespace ttnn::operations::data_movement::nonzero::program

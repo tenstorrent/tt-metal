@@ -48,9 +48,9 @@ FreeListOpt::FreeListOpt(
     DeviceAddr min_allocation_size,
     DeviceAddr alignment,
     SearchPolicy policy) :
-    policy_(policy),
+    Algorithm(max_size_bytes, offset_bytes, min_allocation_size, alignment),
     size_segregated_count((num_segerated_classes(max_size_bytes, size_segregated_base))),
-    Algorithm(max_size_bytes, offset_bytes, min_allocation_size, alignment) {
+    policy_(policy) {
     // Reduce reallocations by reserving memory for free list components
     constexpr size_t initial_block_count = 64;
     block_address_.reserve(initial_block_count);
@@ -403,6 +403,9 @@ Statistics FreeListOpt::get_statistics() const {
     std::vector<uint32_t> largest_free_block_addrs;
 
     for (size_t i = 0; i < block_address_.size(); i++) {
+        if (!meta_block_is_allocated_[i]) {
+            continue;
+        }
         if (block_is_allocated_[i]) {
             total_allocated_bytes += block_size_[i];
         } else {

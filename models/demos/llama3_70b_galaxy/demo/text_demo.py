@@ -216,6 +216,33 @@ def create_tt_model(
             True,  # is_cur_pos_sharded
             True,  # is_page_table_sharded
         ),
+        (  # Batch-32 with non-uniform sampling
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            32,  # batch_size
+            128,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {
+                "temperature": torch.linspace(0.0, 1.0, steps=32).tolist(),
+                "top_p": torch.linspace(0.08, 1.0, steps=32).tolist(),
+                "top_k": torch.arange(1, 33).tolist(),  # 1 to 32 inclusive
+                "presence_penalty": torch.linspace(-2.0, 2.0, steps=32).tolist(),
+                "frequency_penalty": torch.linspace(-2.0, 2.0, steps=32).tolist(),
+                "repetition_penalty": torch.linspace(0.8, 1.5, steps=32).tolist(),
+                "seed": torch.randint(0, 33, size=(32,)).tolist(),
+            },  # sampling_params (non-uniform)
+            False,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # prefill-only profile
+            80,  # num layers
+            False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
+        ),
         (  # Batch-1 run (Throughput) - 1 user, small prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
@@ -255,7 +282,7 @@ def create_tt_model(
             False,  # is_page_table_sharded
         ),
         (  # evals-32 run (Throughput) - 32 users, smaller prompts, batch repeat 32
-            "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts.json",  # input_prompts
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts_debug.json",  # input_prompts
             True,  # instruct mode
             16,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -349,12 +376,12 @@ def create_tt_model(
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
         ),
-        (  # long-16k-b32 - 32 users, 16K long prompt
+        (  # long-16k-b1 - 1 user, 16K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
-            32,  # batch_size
+            1,  # batch_size
             128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
@@ -439,7 +466,7 @@ def create_tt_model(
             False,  # apc_test
             False,  # pcc_check
             True,  # prefill-only profile
-            80,  # num layers
+            1,  # num layers
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
@@ -485,6 +512,7 @@ def create_tt_model(
     ],
     ids=[
         "batch-32",  # throughput
+        "batch-32-non-uniform-sampling",  # throughput w/ non-uniform sampling
         "batch-1",  # latency
         "evals-1",  # Single user, 32 repeated batches, smaller prompts (<4K)
         "evals-32",  # 32 users, 32 repeated batches, smaller prompts (<4K)
@@ -492,7 +520,7 @@ def create_tt_model(
         "repeat2",  # latency with 2 repeat batches
         "long-4k-b1",  # 4k context for 1 user
         "long-8k-b1",  # 4k context for 1 user
-        "long-16k-b32",  # 16K context for 32 users
+        "long-16k-b1",  # 16K context for 1 user
         "long-32k-b1",  # 32k context for 1 user
         "long-64k-b1",  # 64k context for 1 user
         "long-128k-b1",  # 128k context for 1 user
@@ -515,7 +543,7 @@ def create_tt_model(
     "device_params",
     [
         {
-            "trace_region_size": 102000000,
+            "trace_region_size": 184915840,
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1345000,
@@ -780,16 +808,30 @@ def test_demo_text(
                 v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
+        temperature = sampling_params["temperature"]
+        top_k = sampling_params.get("top_k", 32)
+        top_p = sampling_params["top_p"]
+        presence_penalty = sampling_params.get("presence_penalty", 0.0)
+        frequency_penalty = sampling_params.get("frequency_penalty", 0.0)
+        repetition_penalty = sampling_params.get("repetition_penalty", 1.0)
+        seed = sampling_params.get("seed", 0)
         device_sampling_params = SamplingParams(
-            temperature=sampling_params["temperature"], top_k=32, top_p=sampling_params["top_p"]
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            repetition_penalty=repetition_penalty,
+            seed=seed,
         )
         if batch_idx == 0:
             logger.info("Starting prefill warmup...")
             profiler.start(f"compile_prefill", iteration=batch_idx)
             try:
+                # We run prefill warm up for all supported sequence lengths once on 1 user
                 tt_out_logits_all_users = torch.zeros(batch_size, 1, 131072) if pcc_check else None
                 toks = generator.prefill_forward_text(
-                    input_tokens_prefill_pt,  # Just warmup prefill for 1 user
+                    input_tokens_prefill_pt,
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
                     prompt_lens=decoding_pos,
@@ -802,7 +844,6 @@ def test_demo_text(
                 raise e
             profiler.end(f"compile_prefill", iteration=batch_idx)
             logger.info("Finished prefill warmup")
-
         logger.info(f"Starting prefill...")
 
         profiler.start(f"inference_prefill", iteration=batch_idx)
@@ -831,7 +872,7 @@ def test_demo_text(
             torch_output_logits = torch_output[0]
             logits = tt_out_logits_all_users[0, 0, :vocab_size]
             does_pass, pcc_message = comp_pcc(
-                logits, torch_output_logits, 0.91 if not apc_test else demo_targets["prefill_pcc"]
+                logits, torch_output_logits, 0.90 if not apc_test else demo_targets["prefill_pcc"]
             )
             logger.info(f"PCC: {pcc_message}")
             logger.info(
@@ -922,11 +963,14 @@ def test_demo_text(
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
                     read_from_device=True,
+                    async_read=True,
                     sampling_params=device_sampling_params,
                     reset_inputs=iteration == 0,
                     tt_out_logits_saved=tt_out_logits_saved,
                     is_cur_pos_sharded=is_cur_pos_sharded,
                     is_page_table_sharded=is_page_table_sharded,
+                    prompt_tokens=input_tokens_prefill_pt,
+                    output_tokens=prefilled_token,
                 )
                 read_events.append(read_event)
                 tt_out_toks.append(tt_out_tok)

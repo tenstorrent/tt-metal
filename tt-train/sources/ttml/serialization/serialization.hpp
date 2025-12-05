@@ -7,8 +7,8 @@
 #include <core/ttnn_all_includes.hpp>
 #include <string_view>
 
-#include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
+#include "modules/module_base.hpp"
 
 namespace ttml::optimizers {
 class OptimizerBase;
@@ -30,8 +30,8 @@ void read_named_parameters(MsgPackFile& file, std::string_view name, ttml::seria
 void write_optimizer(MsgPackFile& file, std::string_view name, const optimizers::OptimizerBase* optimizer);
 void read_optimizer(MsgPackFile& file, std::string_view name, optimizers::OptimizerBase* optimizer);
 
-void write_module(MsgPackFile& file, std::string_view name, const autograd::ModuleBase* module);
-void read_module(MsgPackFile& file, std::string_view name, autograd::ModuleBase* module);
+void write_module(MsgPackFile& file, std::string_view name, const modules::ModuleBase* module);
+void read_module(MsgPackFile& file, std::string_view name, modules::ModuleBase* module);
 
 void write_state_dict(MsgPackFile& file, std::string_view name, const serialization::StateDict& state_dict);
 void read_state_dict(MsgPackFile& file, std::string_view name, serialization::StateDict& state_dict);

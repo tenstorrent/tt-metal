@@ -7,6 +7,7 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include <algorithm>
 #include <tt-metalium/work_split.hpp>
 
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -58,9 +59,7 @@ std::vector<ttnn::TensorSpec> AllGatherConcat::compute_output_specs(const std::v
     auto head_dim = input_shape[3];
     // pad batch to 32 if necessary
     uint32_t batch_size = 32;
-    if (batch < batch_size) {
-        batch = batch_size;
-    }
+    batch = std::max(batch, batch_size);
     auto hidden_dim = num_heads * head_dim;
 
     Shape output_shape({sequence_length, 1, batch, hidden_dim});
@@ -86,11 +85,11 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program_at
     log_debug(tt::LogOp, "DEBUG: create_program is called");
 
     const auto& input_tensor = input_tensors[0];
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
-    const auto target_device = mesh_device->get_device(mesh_coord);
+    auto* const target_device = mesh_device->get_device(mesh_coord);
     std::vector<IDevice*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(mesh_coord[1])
                                                         : mesh_view.get_devices_on_row(mesh_coord[0]);
 

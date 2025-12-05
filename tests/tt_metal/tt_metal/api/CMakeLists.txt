@@ -44,10 +44,12 @@ target_sources(
         test_simple_dram_buffer.cpp
         test_simple_l1_buffer.cpp
         test_soc_descriptor.cpp
+        test_stream_scratch_register.cpp
         test_tilize_untilize.cpp
         test_worker_config_buffer.cpp
         test_blockfloat_common.cpp
         test_duplicate_kernel.cpp
+        test_core_local_mem_api.cpp
 )
 
 target_include_directories(

@@ -67,8 +67,8 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     uint32_t weight_num_tile = weight_has_value ? div_up(channel_size, tt::constants::TILE_WIDTH) : 0;
     uint32_t intermed_num_tile = 1;
     uint32_t output_num_tile = 1;
-    uint32_t cb_usage = target_num_tile * target_tile_size + weight_num_tile * data_tile_size +
-                        intermed_num_tile * intermed_tile_size + output_num_tile * data_tile_size;
+    uint32_t cb_usage = (target_num_tile * target_tile_size) + (weight_num_tile * data_tile_size) +
+                        (intermed_num_tile * intermed_tile_size) + (output_num_tile * data_tile_size);
 
     const bool use_large_algorithm = cb_usage >= available_L1;
 
@@ -114,12 +114,12 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     if (fp32_dest_acc_en) {
         reader_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto reader_kernel_file = use_large_algorithm
-                                        ? "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step1/device/"
-                                          "kernels/reader_moreh_nll_loss_step1_large.cpp"
-                                        : "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step1/device/"
-                                          "kernels/reader_moreh_nll_loss_step1.cpp";
-    const auto writer_kernel_file =
+    const auto* const reader_kernel_file =
+        use_large_algorithm ? "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step1/device/"
+                              "kernels/reader_moreh_nll_loss_step1_large.cpp"
+                            : "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step1/device/"
+                              "kernels/reader_moreh_nll_loss_step1.cpp";
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step1/device/kernels/"
         "writer_moreh_nll_loss_step1.cpp";
 

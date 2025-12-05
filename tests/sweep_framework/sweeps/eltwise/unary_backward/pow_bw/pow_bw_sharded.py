@@ -34,7 +34,7 @@ random.seed(0)
 parameters = {
     "nightly": {
         "input_spec": gen_sharded_spec_unary(4, max_tensor_size_per_core=20 * 1024, layouts=["TILE_LAYOUT"]),
-        "exponent": [torch.tensor(exp) for exp in range(1, 19)],
+        "exponent": [exponent_val for exponent_val in range(1, 19)],
         "grad_dtype": [ttnn.bfloat16, ttnn.bfloat16],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat16],
     },

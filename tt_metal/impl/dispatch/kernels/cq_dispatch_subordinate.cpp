@@ -59,6 +59,9 @@ extern "C" {
 // These variables are used by triage to help report dispatcher state.
 volatile uint32_t last_wait_count = 0;
 volatile uint32_t last_wait_stream = 0;
+constexpr uint32_t stream_addr0 = STREAM_REG_ADDR(0, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+constexpr uint32_t stream_addr1 = STREAM_REG_ADDR(1, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+constexpr uint32_t stream_width = MEM_WORD_ADDR_WIDTH;
 }
 
 // When dispatch_d and dispatch_s run on separate cores, dispatch_s gets the go signal update from workers.
@@ -143,12 +146,14 @@ uint32_t stream_wrap_gt(uint32_t a, uint32_t b) {
 
 FORCE_INLINE
 void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
+    WAYPOINT("WCW");
     last_wait_count = wait_count;
     last_wait_stream = wait_stream;
     volatile uint32_t* worker_sem =
         (volatile uint32_t*)STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
     while (stream_wrap_gt(wait_count, *worker_sem)) {
     }
+    WAYPOINT("WCD");
 }
 
 template <bool flush_write = false>
@@ -208,6 +213,7 @@ void process_go_signal_mcast_cmd() {
     volatile tt_l1_ptr uint32_t* sync_sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dispatch_s_sync_sem_base_addr + sync_index * L1_ALIGNMENT);
 
+    WAYPOINT("DCW");
     // Wait for notification from dispatch_d, signalling that it's safe to send the go signal
     uint32_t& mcasts_sent = num_mcasts_sent[sync_index];
     while (wrap_ge(mcasts_sent, *sync_sem_addr)) {

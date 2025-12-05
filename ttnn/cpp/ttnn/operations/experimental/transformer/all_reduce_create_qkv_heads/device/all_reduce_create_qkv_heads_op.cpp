@@ -181,7 +181,7 @@ std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
     k_shard_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(next_core_coord, batch, sub_core_grid, true);
 
     CoreRangeSet q_two_batch_grid =
-        tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core_coord, 2 * batch + 1, sub_core_grid, true);
+        tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core_coord, (2 * batch) + 1, sub_core_grid, true);
     if (!q_two_batch_grid.ranges().empty()) {
         next_core_coord = q_two_batch_grid.ranges().back().end_coord;
     }
@@ -224,10 +224,10 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceCreateQkvHeads::create_pr
     log_debug(tt::LogOp, "DEBUG: create_program is called");
 
     const auto& input_tensor = input_tensors[0];
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
-    const auto target_device = mesh_device->get_device(mesh_coord);
+    auto* const target_device = mesh_device->get_device(mesh_coord);
     std::vector<IDevice*> devices = (this->cluster_axis == 0) ? mesh_view.get_devices_on_column(mesh_coord[1])
                                                               : mesh_view.get_devices_on_row(mesh_coord[0]);
 

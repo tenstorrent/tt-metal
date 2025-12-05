@@ -11,7 +11,7 @@ from transformers import AutoTokenizer, DistilBertForQuestionAnswering
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, profiler
+from models.common.utility_functions import is_blackhole, profiler
 from models.demos.wormhole.distilbert.tt import ttnn_optimized_distilbert
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
@@ -21,7 +21,7 @@ from models.perf.perf_utils import prep_perf_report
 @pytest.mark.parametrize("model_name", ["distilbert-base-uncased-distilled-squad"])
 @pytest.mark.parametrize(
     "batch_size, seq_len, expected_inference_time, expected_compile_time",
-    ([8, 384, 15.00, 16.00],),
+    ([8, 384, 0.0165 if is_blackhole() else 0.0338, 16.00],),
 )
 def test_performance_distilbert_for_qa(
     mesh_device,
@@ -39,8 +39,6 @@ def test_performance_distilbert_for_qa(
     # set up tokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     config = HF_model.config
-
-    disable_persistent_kernel_cache()
 
     cpu_key = "ref_key"
 
@@ -130,7 +128,6 @@ def test_performance_distilbert_for_qa(
             end = time.time()
 
             durations.append(end - start)
-            enable_persistent_kernel_cache()
 
     inference_and_compile_time, inference_time, *_ = durations
 

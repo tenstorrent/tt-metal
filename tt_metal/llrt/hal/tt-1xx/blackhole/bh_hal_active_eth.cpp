@@ -7,6 +7,7 @@
 
 #include "tt_align.hpp"
 #include "dev_msgs.h"
+#include "fabric_telemetry_msgs.h"
 using namespace tt::tt_metal::blackhole::active_eth;
 
 #include <cstdint>
@@ -30,7 +31,45 @@ namespace active_eth_dev_msgs {
 #include "hal/generated/dev_msgs_impl.hpp"
 }
 
-HalCoreInfoType create_active_eth_mem_map() {
+namespace active_eth_fabric_telemetry {
+#include "hal/generated/fabric_telemetry_impl.hpp"
+}
+
+std::vector<std::vector<HalJitBuildConfig>> configure_for_1erisc() {
+    return {
+        // DM
+        {
+            // ERISC0
+            {.fw_base_addr = MEM_AERISC_FIRMWARE_BASE,
+             .local_init_addr = MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH,
+             .fw_launch_addr = SUBORDINATE_AERISC_RESET_PC,
+             .fw_launch_addr_value = MEM_AERISC_FIRMWARE_BASE,
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+        },
+    };
+}
+
+std::vector<std::vector<HalJitBuildConfig>> configure_for_2erisc() {
+    return {
+        // DM
+        {
+            // ERISC0
+            {.fw_base_addr = MEM_AERISC_FIRMWARE_BASE,
+             .local_init_addr = MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH,
+             .fw_launch_addr = MEM_AERISC_VOID_LAUNCH_FLAG,
+             .fw_launch_addr_value = MEM_AERISC_FIRMWARE_BASE,
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            // ERISC1
+            {.fw_base_addr = MEM_SUBORDINATE_AERISC_FIRMWARE_BASE,
+             .local_init_addr = MEM_SUBORDINATE_AERISC_INIT_LOCAL_L1_BASE_SCRATCH,
+             .fw_launch_addr = SUBORDINATE_AERISC_RESET_PC,
+             .fw_launch_addr_value = MEM_SUBORDINATE_AERISC_FIRMWARE_BASE,
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+        },
+    };
+}
+
+HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
     std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
     static_assert(MEM_IERISC_MAP_END % L1_ALIGNMENT == 0);
@@ -59,8 +98,8 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::APP_ROUTING_INFO)] = MEM_ERISC_APP_ROUTING_INFO_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] = MEM_RETRAIN_COUNT_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] = MEM_RETRAIN_FORCE_ADDR;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
-        MEM_ERISC_FABRIC_ROUTER_CONFIG_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_TELEMETRY)] = MEM_AERISC_FABRIC_TELEMETRY_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_AERISC_ROUTING_TABLE_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_FW_MAILBOX)] = MEM_SYSENG_ETH_MAILBOX_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = MEM_SYSENG_BOOT_RESULTS_BASE +
                                                                          offsetof(boot_results_t, eth_live_status) +
@@ -87,8 +126,8 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::APP_ROUTING_INFO)] = MEM_ERISC_APP_ROUTING_INFO_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] = sizeof(uint32_t);
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
-        MEM_ERISC_FABRIC_ROUTER_CONFIG_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_TELEMETRY)] = MEM_AERISC_FABRIC_TELEMETRY_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_AERISC_ROUTING_TABLE_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ETH_FW_MAILBOX)] =
         sizeof(uint32_t) + (sizeof(uint32_t) * MEM_SYSENG_ETH_MAILBOX_NUM_ARGS);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = sizeof(uint32_t);
@@ -110,19 +149,16 @@ HalCoreInfoType create_active_eth_mem_map() {
     fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::PORT_STATUS)] =
         (uint64_t)&((eth_status_t*)MEM_SYSENG_ETH_STATUS)->port_status;
 
-    std::vector<std::vector<HalJitBuildConfig>> processor_classes = {
-        // DM
-        {
-            // BH active ethernet runs idle erisc FW on the second ethernet
-            // TODO: add config for ERISC0
-            // ERISC1
-            {.fw_base_addr = MEM_AERISC_FIRMWARE_BASE,
-             .local_init_addr = MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH,
-             .fw_launch_addr = SUBORDINATE_IERISC_RESET_PC,
-             .fw_launch_addr_value = MEM_AERISC_FIRMWARE_BASE,
-             .memory_load = ll_api::memory::Loading::CONTIGUOUS},
-        },
-    };
+    std::vector<std::vector<HalJitBuildConfig>> processor_classes;
+    std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names;
+    if (enable_2_erisc_mode) {
+        processor_classes = configure_for_2erisc();
+        processor_classes_names = {{{"ER0", "ERISC0"}, {"ER1", "ERISC1"}}};
+    } else {
+        processor_classes = configure_for_1erisc();
+        processor_classes_names = {{{"ER", "ERISC"}}};
+    }
+
     static_assert(sizeof(mailboxes_t) <= MEM_AERISC_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::ACTIVE_ETH,
@@ -131,9 +167,11 @@ HalCoreInfoType create_active_eth_mem_map() {
         std::move(mem_map_bases),
         std::move(mem_map_sizes),
         std::move(fw_mailbox_addr),
+        std::move(processor_classes_names),
         false /*supports_cbs*/,
         false /*supports_receiving_multicast_cmds*/,
-        active_eth_dev_msgs::create_factory()};
+        active_eth_dev_msgs::create_factory(),
+        active_eth_fabric_telemetry::create_factory()};
 }
 
 }  // namespace tt::tt_metal::blackhole

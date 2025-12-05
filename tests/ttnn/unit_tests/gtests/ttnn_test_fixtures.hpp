@@ -21,6 +21,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "hostdevcommon/common_values.hpp"
+#include "common/tt_backend_api_types.hpp"
 
 using namespace tt::tt_metal;  // For test
 
@@ -34,7 +35,7 @@ protected:
 
 public:
     bool check_dispatch_mode() {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         return slow_dispatch == nullptr;
     }
 
@@ -59,7 +60,7 @@ protected:
 
     void TearDown() override { device_->close(); }
 
-    TTNNFixtureWithDevice() : TTNNFixtureBase() {}
+    TTNNFixtureWithDevice() = default;
 
     TTNNFixtureWithDevice(int trace_region_size, int l1_small_size) :
         TTNNFixtureBase(trace_region_size, l1_small_size) {}
@@ -90,7 +91,7 @@ protected:
 
 class MultiCommandQueueT3KFixture : public TTNNFixtureBase {
 protected:
-    std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devs;
+    std::map<tt::ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devs;
 
     void SetUp() override {
         if (!check_dispatch_mode()) {

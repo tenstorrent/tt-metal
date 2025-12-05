@@ -13,9 +13,8 @@
 #include "env_lib.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include "trace/trace_buffer.hpp"
-#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
-#include "flatbuffer/base_types_from_flatbuffer.hpp"
 #include "flatbuffer/program_types_from_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_from_flatbuffer.hpp"
 
@@ -36,12 +35,12 @@ TraceDescriptor from_flatbuffer(const flatbuffer::TraceDescriptor* fb_desc) {
     TraceDescriptor trace_desc;
 
     // Deserialize trace_data
-    if (auto trace_data_fb = fb_desc->trace_data()) {
+    if (const auto* trace_data_fb = fb_desc->trace_data()) {
         trace_desc.data.assign(trace_data_fb->begin(), trace_data_fb->end());
     }
 
     // Deserialize sub_device_descriptors
-    if (auto sub_device_descriptors_fb = fb_desc->sub_device_descriptors()) {
+    if (const auto* sub_device_descriptors_fb = fb_desc->sub_device_descriptors()) {
         for (const auto* mapping : *sub_device_descriptors_fb) {
             if (mapping) {
                 TraceWorkerDescriptor descriptor;
@@ -58,7 +57,7 @@ TraceDescriptor from_flatbuffer(const flatbuffer::TraceDescriptor* fb_desc) {
     }
 
     // Deserialize sub_device_ids
-    if (auto sub_device_ids_fb = fb_desc->sub_device_ids()) {
+    if (const auto* sub_device_ids_fb = fb_desc->sub_device_ids()) {
         for (const auto id : *sub_device_ids_fb) {
             trace_desc.sub_device_ids.emplace_back(SubDeviceId{id});
         }
@@ -243,7 +242,7 @@ void LightMetalReplayImpl::setup_devices() {
     TT_FATAL(!device_, "Device already setup in LightMetalReplay, no need to call setup_devices()");
     const size_t trace_region_size = 4096;  // Default is 0
     const auto dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
-    const chip_id_t mmio_device_id = 0;
+    const ChipId mmio_device_id = 0;
     auto devices_map = tt::tt_metal::detail::CreateDevices(
         {mmio_device_id}, 1, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_type);
     this->device_ = devices_map.at(mmio_device_id);
@@ -333,10 +332,6 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::Command* comm
             execute(command->cmd_as_ProgramConstructorCommand());
             break;
         }
-        case ::tt::tt_metal::flatbuffer::CommandType::EnqueueProgramCommand: {
-            execute(command->cmd_as_EnqueueProgramCommand());
-            break;
-        }
         case ::tt::tt_metal::flatbuffer::CommandType::CreateKernelCommand: {
             execute(command->cmd_as_CreateKernelCommand());
             break;
@@ -366,7 +361,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::Command* comm
 
 // Per API command handlers.
 // No longer supported due to trace API deprecation. See Issue #24955
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueTraceCommand* cmd) {
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueTraceCommand* cmd [[maybe_unused]]) {
     log_debug(
         tt::LogMetalTrace,
         "LightMetalReplay(EnqueueTrace) cq_id: {} tid: {} blocking: {}",
@@ -378,7 +373,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueTraceC
 }
 
 // No longer supported due to trace API deprecation. See Issue #24955
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReplayTraceCommand* cmd) {
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReplayTraceCommand* cmd [[maybe_unused]]) {
     log_debug(
         tt::LogMetalTrace,
         "LightMetalReplay(ReplayTrace) cq_id: {} tid: {} blocking: {}",
@@ -390,7 +385,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReplayTraceCo
 }
 
 // No longer supported due to trace API deprecation. See Issue #24955
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* cmd) {
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* cmd [[maybe_unused]]) {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(LoadTrace) cq_id: {} tid: {}", cmd->cq_id(), cmd->tid());
     TT_THROW("Light Metal Trace is no longer supported.");
     // Get the trace descriptor from flatbuffer and load it to device.
@@ -399,7 +394,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::LoadTraceComm
 }
 
 // No longer supported due to trace API deprecation. See Issue #24955
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* cmd) {
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* cmd [[maybe_unused]]) {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(ReleaseTrace) tid: {}", cmd->tid());
     TT_THROW("Light Metal Trace is no longer supported.");
     // ReleaseTrace(this->device_, cmd->tid());
@@ -530,25 +525,6 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ProgramConstr
     add_program_to_map(cmd->global_id(), std::make_shared<Program>());
 }
 
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueProgramCommand* cmd) {
-    auto program = get_program_from_map(cmd->program_global_id());
-    TT_FATAL(
-        program,
-        "Attempted to EnqueueProgram() program w/ global_id: {} that was not previously created.",
-        cmd->program_global_id());
-
-    log_debug(
-        tt::LogMetalTrace,
-        "LightMetalReplay(EnqueueProgram) program_global_id: {} cq_global_id: {}",
-        cmd->program_global_id(),
-        cmd->cq_global_id());
-
-    // TODO (kmabee) - consider storing/getting CQ from global map instead.
-    // CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
-    // Issue #24955: Enable after Light-Metal rearchitecture
-    // EnqueueProgram(cq, *program, cmd->blocking());
-}
-
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateKernelCommand* cmd) {
     log_debug(
         tt::LogMetalTrace,
@@ -630,7 +606,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateCircula
 
     // Convert global_id to optional Shadow Buffer here to keep from_flatbuffer standalone function.
     ::tt::tt_metal::Buffer* shadow_global_buffer = nullptr;
-    auto shadow_buf_global_id = cmd->config()->shadow_buf_global_id();
+    const auto* shadow_buf_global_id = cmd->config()->shadow_buf_global_id();
 
     if (shadow_buf_global_id) {
         auto global_id = shadow_buf_global_id->value();

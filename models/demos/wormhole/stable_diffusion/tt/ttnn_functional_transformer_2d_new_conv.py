@@ -80,16 +80,10 @@ class transformer_2d_model:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-            self.norm_input_mask_torch_tensor = ttnn.create_group_norm_input_mask(
-                in_channels, norm_num_groups, num_cores_across_channel
+            self.norm_input_mask = ttnn.create_group_norm_input_mask(
+                in_channels, norm_num_groups, num_cores_across_channel, ttnn.bfloat8_b
             )
-            self.norm_input_mask = ttnn.from_torch(
-                self.norm_input_mask_torch_tensor,
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            self.norm_input_mask = ttnn.to_device(self.norm_input_mask, device)
 
         parameters.proj_out.weight, parameters.proj_out.bias = permute_conv_parameters(
             parameters.proj_out.weight, parameters.proj_out.bias
@@ -249,6 +243,7 @@ class transformer_2d_model:
             "groups": 1,
             "device": self.device,
             "conv_config": conv_config,
+            "slice_config": ttnn.Conv2dL1FullSliceConfig,
         }
 
         hidden_states, [self.proj_in_conv_weights, self.proj_in_conv_bias] = ttnn.conv2d(
@@ -311,6 +306,7 @@ class transformer_2d_model:
                     "groups": 1,
                     "device": self.device,
                     "conv_config": conv_config,
+                    "slice_config": ttnn.Conv2dL1FullSliceConfig,
                 }
 
                 hidden_states, [self.proj_out_conv_weights, self.proj_out_conv_bias] = ttnn.conv2d(

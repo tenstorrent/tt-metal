@@ -508,10 +508,10 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWrite) {
             std::vector<MeshCommandQueue::ShardDataTransfer> input_shards = {};
             std::vector<MeshCommandQueue::ShardDataTransfer> output_shards = {};
 
-            for (auto& coord : coord_range) {
+            for (const auto& coord : coord_range) {
                 input_shards.push_back({coord, src_vec.data()});
             }
-            for (auto& coord : coord_range) {
+            for (const auto& coord : coord_range) {
                 dst_vec[coord] = std::vector<uint32_t>(global_buffer_size / num_devices / sizeof(uint32_t), 0);
                 output_shards.push_back({coord, dst_vec[coord].data()});
             }
@@ -533,7 +533,7 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWriteMultiThread) {
 
     std::vector<std::thread> threads;
     for (int thread_idx = 0; thread_idx < 2; thread_idx += 1) {
-        threads.push_back(std::thread([&, thread_idx]() {
+        threads.push_back(std::thread([&]() {
             std::uniform_int_distribution<int> gen_num_datums(32, 128);
             std::mt19937 rng(seed);
 
@@ -569,10 +569,10 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWriteMultiThread) {
                     std::vector<MeshCommandQueue::ShardDataTransfer> input_shards = {};
                     std::vector<MeshCommandQueue::ShardDataTransfer> output_shards = {};
 
-                    for (auto& coord : coord_range) {
+                    for (const auto& coord : coord_range) {
                         input_shards.push_back({coord, src_vec.data()});
                     }
-                    for (auto& coord : coord_range) {
+                    for (const auto& coord : coord_range) {
                         dst_vec[coord] = std::vector<uint32_t>(global_buffer_size / num_devices / sizeof(uint32_t), 0);
                         output_shards.push_back({coord, dst_vec[coord].data()});
                     }

@@ -3,7 +3,6 @@ project(nano_gpt)
 set(MAIN_SOURCES
     main.cpp
     utils.cpp
-    3tier/remote_optimizer.cpp
     3tier/common.cpp
 )
 

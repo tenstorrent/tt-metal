@@ -14,7 +14,7 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_tilize_with_val_padding(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Changes data layout of input tensor to TILE. Pads to specified shape with a user-provided value.
 
@@ -46,7 +46,7 @@ void bind_tilize_with_val_padding(py::module& module) {
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::Shape& output_padded_shape,
-               const PadValue value,
+               const tt::tt_metal::PadValue value,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<DataType> output_dtype,
                bool use_multicore) {
@@ -64,10 +64,8 @@ void bind_tilize_with_val_padding(py::module& module) {
 }
 
 void bind_tilize_with_zero_padding(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
-            tilize_with_zero_padding(input_tensor: ttnn.Tensor, *, memory_config: Optional[MemoryConfig] = None, dtype: Optional[DataType] = None, use_multicore: bool = False)) -> ttnn.Tensor
-
             Changes data layout of input tensor to TILE. Pads to the nearest multiple of TILE width/height with zero value.
 
             Input tensor must be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 or UINT32 data type.

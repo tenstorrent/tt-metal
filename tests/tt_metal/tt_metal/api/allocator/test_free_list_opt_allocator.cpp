@@ -9,7 +9,6 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/allocator_types.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 

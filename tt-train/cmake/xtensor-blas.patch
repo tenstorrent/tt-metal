@@ -1,0 +1,70 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 8886cda..8e1333b 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -5,11 +5,11 @@
+ # Distributed under the terms of the BSD 3-Clause License.                 #
+ #                                                                          #
+ # The full license is in the file LICENSE, distributed with this software. #
+ ############################################################################
+
+-cmake_minimum_required(VERSION 3.29)
++cmake_minimum_required(VERSION 3.15..3.30)
+ project(xtensor-blas)
+
+ set(INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
+ set(XTENSOR_BLAS_INCLUDE_DIR ${INCLUDE_DIR})
+
+diff --git a/benchmark/CMakeLists.txt b/benchmark/CMakeLists.txt
+index 1b66d74..8aeb775 100644
+--- a/benchmark/CMakeLists.txt
++++ b/benchmark/CMakeLists.txt
+@@ -4,11 +4,11 @@
+ # Distributed under the terms of the BSD 3-Clause License.                 #
+ #                                                                          #
+ # The full license is in the file LICENSE, distributed with this software. #
+ ############################################################################
+
+-cmake_minimum_required(VERSION 3.29)
++cmake_minimum_required(VERSION 3.15..3.30)
+
+ if (CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+     project(xtensor-benchmark)
+
+     find_package(xtensor REQUIRED CONFIG)
+diff --git a/test/CMakeLists.txt b/test/CMakeLists.txt
+index 025233f..72fd0e6 100644
+--- a/test/CMakeLists.txt
++++ b/test/CMakeLists.txt
+@@ -5,11 +5,11 @@
+ # Distributed under the terms of the BSD 3-Clause License.                 #
+ #                                                                          #
+ # The full license is in the file LICENSE, distributed with this software. #
+ ############################################################################
+
+-cmake_minimum_required(VERSION 3.29)
++cmake_minimum_required(VERSION 3.15..3.30)
+
+ if (CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+     project(xtensor-blas-test)
+
+     enable_testing()
+diff --git a/test/downloadGTest.cmake.in b/test/downloadGTest.cmake.in
+index e06bb06..b315e46 100644
+--- a/test/downloadGTest.cmake.in
++++ b/test/downloadGTest.cmake.in
+@@ -5,11 +5,11 @@
+ # Distributed under the terms of the BSD 3-Clause License.                 #
+ #                                                                          #
+ # The full license is in the file LICENSE, distributed with this software. #
+ ############################################################################
+
+-cmake_minimum_required(VERSION 3.29)
++cmake_minimum_required(VERSION 3.15..3.30)
+
+ project(googletest-download NONE)
+
+ include(ExternalProject)
+ ExternalProject_Add(googletest
+--
+2.49.0

@@ -251,9 +251,11 @@ Tensor QuantOp::invoke(
                     c_dtype,
                     memory_config,
                     optional_output_tensor,
+                    /*fast_and_approximate_mode*/ false,
                     none,
                     none,
-                    post_activation);
+                    post_activation,
+                    std::nullopt);
             },
             [&](const Tensor& scale, const int32_t zero_point) {
                 check_per_tensor_scale(scale);
@@ -267,9 +269,11 @@ Tensor QuantOp::invoke(
                     c_dtype,
                     memory_config,
                     optional_output_tensor,
+                    /*fast_and_approximate_mode*/ false,
                     none,
                     none,
-                    post_activation);
+                    post_activation,
+                    std::nullopt);
             },
             [&](const float scale, const Tensor& zero_point) {
                 check_per_tensor_zero_point(zero_point);
@@ -443,7 +447,7 @@ Tensor RequantOp::invoke(
                 // Expansion of q' = [(q - z_in) * s_in] / s_out + z_out
                 const float scale_recip = in_scale / out_scale;
                 // z is passed to and consumed by the LLK as f32 anyway, might as well preserve some accuracy here.
-                const float zero_point = out_zero_point - in_zero_point * scale_recip;
+                const float zero_point = out_zero_point - (in_zero_point * scale_recip);
 
                 const std::array post_activation{
                     unary::EltwiseUnaryWithParam{unary::UnaryOpType::ZERO_POINT, zero_point}};
@@ -454,9 +458,11 @@ Tensor RequantOp::invoke(
                     c_dtype,
                     memory_config,
                     optional_output_tensor,
+                    /*fast_and_approximate_mode*/ false,
                     none,
                     none,
-                    post_activation);
+                    post_activation,
+                    std::nullopt);
             },
             [&](const auto& in_scale, const auto& in_zero_point, const auto& out_scale, const auto& out_zero_point) {
                 // Pass axis only to operations that have tensor parameters.
@@ -545,9 +551,11 @@ Tensor DequantOp::invoke(
                     c_dtype,
                     memory_config,
                     optional_output_tensor,
+                    /*fast_and_approximate_mode*/ false,
                     none,
                     none,
-                    post_activation);
+                    post_activation,
+                    std::nullopt);
             },
             [&](const Tensor& scale, const int32_t zero_point) {
                 check_per_tensor_scale(scale);
@@ -560,9 +568,11 @@ Tensor DequantOp::invoke(
                     c_dtype,
                     memory_config,
                     optional_output_tensor,
+                    /*fast_and_approximate_mode*/ false,
                     none,
                     none,
-                    post_activation);
+                    post_activation,
+                    std::nullopt);
             },
             [&](const float scale, const Tensor& zero_point) {
                 check_per_tensor_zero_point(zero_point);

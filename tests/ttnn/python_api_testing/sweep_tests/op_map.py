@@ -297,6 +297,10 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_mish,
         "pytorch_op": pytorch_ops.mish,
     },
+    "eltwise-hardmish": {
+        "tt_op": ttnn_ops.eltwise_hardmish,
+        "pytorch_op": pytorch_ops.hardmish,
+    },
     "eltwise-multigammaln": {
         "tt_op": ttnn_ops.eltwise_multigammaln,
         "pytorch_op": pytorch_ops.multigammaln,

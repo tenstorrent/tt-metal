@@ -21,9 +21,9 @@ namespace unit_tests::dm::core_from_all {
 struct OneFromAllConfig {
     uint32_t test_id = 0;
 
-    CoreCoord master_core_coord = CoreCoord();
-    CoreCoord sub_start_core_coord = CoreCoord();
-    CoreCoord sub_grid_size = CoreCoord();
+    CoreCoord master_core_coord;
+    CoreCoord sub_start_core_coord;
+    CoreCoord sub_grid_size;
 
     uint32_t num_of_transactions = 0;
     uint32_t transaction_size_pages = 0;
@@ -332,7 +332,7 @@ void custom_test(
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
     uint32_t test_id = 15;
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_start_coord = {0, 0};
     CoreCoord subordinate_grid_size = {
@@ -346,7 +346,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllDirectedIdeal) {
     uint32_t test_id = 30;
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_start_coord = {0, 0};
     CoreCoord subordinate_grid_size = {
@@ -362,7 +362,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllVirtualChannels) {
     // Test ID (Arbitrary)
     uint32_t test_id = 156;
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_start_coord = {0, 0};
@@ -378,7 +378,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllCustom) {
 
     uint32_t test_id = 157;
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_start_coord = {0, 0};

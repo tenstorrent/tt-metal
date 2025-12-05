@@ -146,7 +146,8 @@ def run_test_matmul_in1_dram_sharded(
         fused_activation=None,
     )
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=fidelity,
         math_approx_mode=True,
         fp32_dest_acc_en=True,
@@ -336,7 +337,8 @@ def run_test_matmul_in1_dram_sharded_mm_chain(
         fused_activation=None,
     )
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=fidelity,
         math_approx_mode=True,
         fp32_dest_acc_en=True,
@@ -560,7 +562,8 @@ def test_matmul_2d_in1_dram_sharded(
         fuse_batch=fuse_batch,
     )
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=fidelity,
         math_approx_mode=True,
         fp32_dest_acc_en=fp32_acc_mode,

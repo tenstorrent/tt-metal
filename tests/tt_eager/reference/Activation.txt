@@ -1,5 +1,5 @@
 operator,
-clip, 
+clip,
 elu,
 hardshrink
 hardswish
@@ -8,6 +8,7 @@ heaviside
 leaky_relu
 log_sigmoid
 mish
+hardmish
 prelu
 relu
 relu_max

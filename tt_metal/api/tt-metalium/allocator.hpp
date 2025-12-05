@@ -6,14 +6,12 @@
 
 #include <cstdint>
 #include <fstream>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
-#include <tt-metalium/allocator_types.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
@@ -23,15 +21,46 @@ namespace tt {
 
 namespace tt_metal {
 
+/*
+MemoryBlockTable is a list of memory blocks in the following format:
+[{"blockID": "0", "address": "0", "size": "0", "prevID": "0", "nextID": "0", "allocated": true}]
+address: bytes
+size: bytes
+*/
+using MemoryBlockTable = std::vector<std::unordered_map<std::string, std::string>>;
+
+struct Statistics {
+    size_t total_allocatable_size_bytes = 0;
+    size_t total_allocated_bytes = 0;
+    size_t total_free_bytes = 0;
+    size_t largest_free_block_bytes = 0;
+    // addresses (relative to bank) that can hold the largest_free_block_bytes
+    std::vector<uint32_t> largest_free_block_addrs;
+};
+
+// Fwd declares
 class BankManager;
 class Buffer;
-// Fwd declares
+// These are supplied from impl
 enum class BufferType;
+struct AllocatorConfig;
+class AllocatorState;
 
 // THREAD SAFETY: Allocator is thread safe.
 class Allocator {
 public:
-    Allocator(const AllocatorConfig& alloc_config);
+    // AllocatorConfig is not in the API directory, thus Allocator currently cannot be constructed publicly,
+    // this is because we are in the middle of moving Allocator into implementation details.
+    // This initiative is established from our analysis that Allocator is only used to query memory profiles
+    // (e.g. how much memory is left in L1?)
+    // but not for allocator-specific operations (managing allocations).
+    //
+    // While in the middle of this refactor,
+    // runtime (river) splits moving AllocatorConfig out of public API,
+    // coming up with a memory profile access interface to replace current Allocator API into two (or more) PRs.
+    //
+    // See: #29569
+    explicit Allocator(const AllocatorConfig& alloc_config);
 
     ~Allocator();
 
@@ -62,9 +91,14 @@ public:
     // so client code does not need to condition based on BufferType
     uint32_t get_alignment(BufferType buffer_type) const;
 
+    // This a proxy of get_config().worker_l1_size,
+    // this helper function is made for reports.cpp in TTNN and act as a transient member function
+    // before we figure out a good memory profile accessor.
+    size_t get_worker_l1_size() const;
+
     Statistics get_statistics(const BufferType& buffer_type) const;
     MemoryBlockTable get_memory_block_table(const BufferType& buffer_type) const;
-    void dump_memory_blocks(const BufferType& buffer_type, std::ofstream& out) const;
+    void dump_memory_blocks(const BufferType& buffer_type, std::ostream& out) const;
 
     std::optional<DeviceAddr> get_lowest_occupied_l1_address(uint32_t bank_id) const;
 
@@ -75,6 +109,13 @@ public:
     void mark_allocations_safe();
 
     void clear();
+
+    // AllocatorState Methods
+    // Extracts the current state of the allocator.
+    AllocatorState extract_state() const;
+
+    // Overrides the current state with the given state, deallocating all of existing buffers.
+    void override_state(const AllocatorState& state);
 
 protected:
     // Initializers for mapping banks to DRAM channels / L1 banks
@@ -103,7 +144,10 @@ private:
     std::unordered_map<BufferType, std::unordered_map<CoreCoord, std::vector<uint32_t>>> logical_core_to_bank_ids_;
     std::unordered_set<Buffer*> allocated_buffers_;
 
-    const AllocatorConfig config_;
+    // config_ is stored in a unique_ptr because AllocatorConfig is current an incomplete type in API directory.
+    //
+    // TODO(river): revert this to inplace storage if we can shove Allocator into impl.
+    std::unique_ptr<AllocatorConfig> config_;
 };
 
 namespace detail {

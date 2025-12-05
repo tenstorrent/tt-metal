@@ -39,12 +39,10 @@ NlpCreateHeadsBoltzDeviceOperation::Interleaved::create(
 
     tt_metal::Buffer* in1_buffer = nullptr;
     uint32_t in1_buffer_addr = 0;
-    tt_metal::BufferType in1_buffer_type = tt_metal::BufferType::DRAM;
     if (read_from_input_tensor_kv) {
         in1_buffer = input_tensor_kv.value().buffer();
         TT_ASSERT(in1_buffer->size() % single_tile_size == 0);
         in1_buffer_addr = in1_buffer->address();
-        in1_buffer_type = in1_buffer->buffer_type();
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -206,10 +204,13 @@ NlpCreateHeadsBoltzDeviceOperation::Interleaved::create(
         };
 
         uint32_t q_out_h_dim = num_blocks_written % q_out_h_tiles;
-        uint32_t q_out_tensor_tile_id = num_blocks_written / q_out_h_tiles * q_out_CHtWt + q_out_h_dim * q_out_w_tiles;
-        uint32_t v_out_tensor_tile_id = num_blocks_written / q_out_h_tiles * kv_out_CHtWt + q_out_h_dim * q_out_w_tiles;
-        uint32_t k_out_tensor_tile_id =
-            transpose_k_heads ? num_blocks_written / q_out_h_tiles * kv_out_CHtWt + q_out_h_dim : v_out_tensor_tile_id;
+        uint32_t q_out_tensor_tile_id =
+            (num_blocks_written / q_out_h_tiles * q_out_CHtWt) + (q_out_h_dim * q_out_w_tiles);
+        uint32_t v_out_tensor_tile_id =
+            (num_blocks_written / q_out_h_tiles * kv_out_CHtWt) + (q_out_h_dim * q_out_w_tiles);
+        uint32_t k_out_tensor_tile_id = transpose_k_heads
+                                            ? (num_blocks_written / q_out_h_tiles * kv_out_CHtWt) + q_out_h_dim
+                                            : v_out_tensor_tile_id;
 
         std::vector<uint32_t> writer_runtime_args = {
             (std::uint32_t)q_buffer->address(),  // q_tensor_addr
@@ -236,16 +237,16 @@ void NlpCreateHeadsBoltzDeviceOperation::Interleaved::override_runtime_arguments
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto src_buffer = tensor_args.input_tensor_q.buffer();
+    auto* src_buffer = tensor_args.input_tensor_q.buffer();
 
     uint32_t src_kv_buffer_addr = 0;
     if (cached_program.shared_variables.read_from_input_tensor_kv) {
         src_kv_buffer_addr = tensor_args.input_tensor_kv.value().buffer()->address();
     }
 
-    auto dst_buffer_query = std::get<0>(tensor_return_value).buffer();
-    auto dst_buffer_key = std::get<1>(tensor_return_value).buffer();
-    auto dst_buffer_value = std::get<2>(tensor_return_value).buffer();
+    auto* dst_buffer_query = std::get<0>(tensor_return_value).buffer();
+    auto* dst_buffer_key = std::get<1>(tensor_return_value).buffer();
+    auto* dst_buffer_value = std::get<2>(tensor_return_value).buffer();
 
     for (uint32_t i = 0; i < cached_program.shared_variables.num_cores; i++) {
         CoreCoord core = {
@@ -275,8 +276,8 @@ NlpCreateHeadsBoltzDeviceOperation::Sharded::cached_program_t NlpCreateHeadsBolt
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto& input_tensor = tensor_args.input_tensor_q;
-    auto& input_tensor_kv = tensor_args.input_tensor_kv;
+    const auto& input_tensor = tensor_args.input_tensor_q;
+    const auto& input_tensor_kv = tensor_args.input_tensor_kv;
     auto& output = tensor_return_value;
     auto head_dim = operation_attributes.head_dim;
     auto num_q_heads = operation_attributes.num_q_heads;
@@ -345,7 +346,7 @@ NlpCreateHeadsBoltzDeviceOperation::Sharded::cached_program_t NlpCreateHeadsBolt
     } else {
         k_base_addr = q_base_addr + per_core_in_q_heads * head_tiles * single_tile_size;
     }
-    uint32_t v_base_addr = k_base_addr + per_core_in_kv_heads * head_tiles * single_tile_size;
+    uint32_t v_base_addr = k_base_addr + (per_core_in_kv_heads * head_tiles * single_tile_size);
 
     std::vector<uint32_t> reader_compile_time_args = {q_output_cb_index, k_output_cb_index};
     std::vector<uint32_t> writer_compile_time_args = {q_output_cb_index, v_output_cb_index};
@@ -483,9 +484,9 @@ void NlpCreateHeadsBoltzDeviceOperation::Sharded::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto dst_buffer_query = std::get<0>(tensor_return_value).buffer();
-    auto dst_buffer_key = std::get<1>(tensor_return_value).buffer();
-    auto dst_buffer_value = std::get<2>(tensor_return_value).buffer();
+    auto* dst_buffer_query = std::get<0>(tensor_return_value).buffer();
+    auto* dst_buffer_key = std::get<1>(tensor_return_value).buffer();
+    auto* dst_buffer_value = std::get<2>(tensor_return_value).buffer();
 
     UpdateDynamicCircularBufferAddress(
         cached_program.program, cached_program.shared_variables.cb_q_output, *dst_buffer_query);
@@ -503,9 +504,9 @@ void NlpCreateHeadsBoltzDeviceOperation::Sharded::override_runtime_arguments(
                                         cached_program.shared_variables.head_tiles *
                                         cached_program.shared_variables.single_tile_size;
     }
-    uint32_t v_base_addr = k_base_addr + cached_program.shared_variables.per_core_in_kv_heads *
-                                             cached_program.shared_variables.head_tiles *
-                                             cached_program.shared_variables.single_tile_size;
+    uint32_t v_base_addr =
+        k_base_addr + (cached_program.shared_variables.per_core_in_kv_heads *
+                       cached_program.shared_variables.head_tiles * cached_program.shared_variables.single_tile_size);
 
     uint32_t remote_q_head_start_idx = 0;
     uint32_t remote_kv_head_start_idx = 0;

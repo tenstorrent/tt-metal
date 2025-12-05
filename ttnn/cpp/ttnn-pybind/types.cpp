@@ -37,10 +37,10 @@ void py_module_types(py::module& module) {
 
     export_enum<ttnn::BcastOpMath>(module, "BcastOpMath");
     export_enum<ttnn::BcastOpDim>(module, "BcastOpDim");
-    export_enum<CoreType>(module, "CoreType");
+    export_enum<tt::CoreType>(module, "CoreType");
 
     py::implicitly_convertible<py::int_, ttnn::QueueId>();
-    py::implicitly_convertible<py::int_, CoreType>();
+    py::implicitly_convertible<py::int_, tt::CoreType>();
 
     module.attr("DRAM_MEMORY_CONFIG") = py::cast(DRAM_MEMORY_CONFIG);
     module.attr("L1_MEMORY_CONFIG") = py::cast(L1_MEMORY_CONFIG);

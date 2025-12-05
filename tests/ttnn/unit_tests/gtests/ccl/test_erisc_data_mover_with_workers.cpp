@@ -50,6 +50,7 @@
 #include "ttnn/types.hpp"
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include "common/tt_backend_api_types.hpp"
 
 // #include <tt-metalium/kernel_types.hpp>
 
@@ -88,7 +89,7 @@ public:
 
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() >= 2 and
             tt::tt_metal::GetNumPCIeDevices() >= 1) {
-            std::vector<chip_id_t> ids(num_devices_, 0);
+            std::vector<ChipId> ids(num_devices_, 0);
             std::iota(ids.begin(), ids.end(), 0);
             devices_ = distributed::MeshDevice::create_unit_meshes(ids);
 
@@ -110,7 +111,7 @@ public:
         }
     }
 
-    std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
+    std::map<ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -151,7 +152,7 @@ void generate_receiver_worker_kernels(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     // Just want a dummy DF
     uint32_t src0_cb_index = CBIndex::c_0;
@@ -238,7 +239,7 @@ void generate_sender_worker_kernels(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     std::vector<uint32_t> sender_worker_reader_compile_args{
         num_pages_total,  //
@@ -711,12 +712,12 @@ int TestEntrypoint(
     N300TestDevice test_fixture;
 
     const auto& mesh_device_0 = test_fixture.devices_.at(0);
-    auto device_0 = mesh_device_0->get_devices()[0];
+    auto* device_0 = mesh_device_0->get_devices()[0];
 
     auto const& active_eth_cores = device_0->get_active_ethernet_cores(true);
     auto eth_sender_core_iter = active_eth_cores.begin();
     auto eth_sender_core_iter_end = active_eth_cores.end();
-    chip_id_t device_id = std::numeric_limits<chip_id_t>::max();
+    ChipId device_id = std::numeric_limits<ChipId>::max();
     tt_xy_pair eth_receiver_core;
     tt_xy_pair eth_sender_core;
     do {

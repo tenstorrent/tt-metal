@@ -5,11 +5,16 @@
 #include "physical_system_descriptor_serialization.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "protobuf/physical_system_descriptor.pb.h"
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt_metal/llrt/tt_target_device.hpp>
+
+#include <umd/device/cluster.hpp>
 
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
 #include <fstream>
 #include <sstream>
+#include <enchantum/enchantum.hpp>
 
 namespace tt::tt_metal {
 
@@ -187,12 +192,28 @@ void physical_system_descriptor_to_proto(
             exit_node_connection_to_proto(exit_conn, proto_table->add_exit_connections());
         }
     }
+
+    // Set target device type
+    proto_desc->set_target_device_type(static_cast<uint32_t>(descriptor.get_target_device_type()));
+    // Set ethernet firmware version
+    proto_desc->mutable_ethernet_firmware_version()->set_major(descriptor.get_ethernet_firmware_version().major);
+    proto_desc->mutable_ethernet_firmware_version()->set_minor(descriptor.get_ethernet_firmware_version().minor);
+    proto_desc->mutable_ethernet_firmware_version()->set_patch(descriptor.get_ethernet_firmware_version().patch);
 }
 
 // Convert protobuf to PhysicalSystemDescriptor
 std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
     const tt::fabric::proto::PhysicalSystemDescriptor& proto_desc) {
-    auto descriptor = std::make_unique<PhysicalSystemDescriptor>(false);  // Don't run discovery
+    auto target_device_type = enchantum::cast<TargetDevice>(proto_desc.target_device_type());
+    if (!target_device_type.has_value()) {
+        throw std::runtime_error("Invalid target device type: " + std::to_string(proto_desc.target_device_type()));
+    }
+    auto descriptor = std::make_unique<PhysicalSystemDescriptor>(
+        PhysicalSystemDescriptor::null_cluster,
+        nullptr,
+        nullptr,
+        *target_device_type,
+        false);  // Don't run discovery
 
     // Convert system graph
     auto& system_graph = descriptor->get_system_graph();
@@ -246,6 +267,11 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
         exit_node_connection_table[proto_table.host_name()] = std::move(exit_connections);
     }
 
+    // Set ethernet firmware version
+    descriptor->get_ethernet_firmware_version().major = proto_desc.ethernet_firmware_version().major();
+    descriptor->get_ethernet_firmware_version().minor = proto_desc.ethernet_firmware_version().minor();
+    descriptor->get_ethernet_firmware_version().patch = proto_desc.ethernet_firmware_version().patch();
+
     return descriptor;
 }
 
@@ -296,4 +322,20 @@ PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_bytes(const
     return std::move(*proto_to_physical_system_descriptor(proto_desc));
 }
 
+PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_text_proto_file(
+    const std::string& text_proto_file) {
+    std::ifstream gsd_file(text_proto_file);
+    if (!gsd_file.is_open()) {
+        throw std::runtime_error("Failed to open file for reading: " + text_proto_file);
+    }
+
+    std::string text_proto((std::istreambuf_iterator<char>(gsd_file)), std::istreambuf_iterator<char>());
+    gsd_file.close();
+    tt::fabric::proto::PhysicalSystemDescriptor physical_system_descriptor;
+    if (!google::protobuf::TextFormat::ParseFromString(text_proto, &physical_system_descriptor)) {
+        throw std::runtime_error("Failed to parse PhysicalSystemDescriptor from text proto file: " + text_proto_file);
+    }
+
+    return std::move(*proto_to_physical_system_descriptor(physical_system_descriptor));
+}
 }  // namespace tt::tt_metal

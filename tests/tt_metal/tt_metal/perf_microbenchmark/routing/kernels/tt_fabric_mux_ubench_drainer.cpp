@@ -26,7 +26,8 @@ constexpr size_t my_eth_channel_id = get_compile_time_arg_val(8);
 namespace tt::tt_fabric {
 using DrainerChannelBuffer = EthChannelBuffer<PACKET_HEADER_TYPE, NUM_BUFFERS>;
 using DrainerChannelClientLocationInfo = EDMChannelWorkerLocationInfo;
-using DrainerChannelWorkerInterface = EdmChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, NUM_BUFFERS>;
+using DrainerChannelWorkerInterface =
+    StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, NUM_BUFFERS>;
 using DrainerStatus = EDMStatus;
 }  // namespace tt::tt_fabric
 

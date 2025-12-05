@@ -31,6 +31,10 @@ CCLResources::CCLResources() {
             reduce_scatter_semaphores.push_back(
                 tt::tt_metal::CreateGlobalSemaphore(device, core_range_set, /* initial_value */ 0));
         }
+        for (uint32_t rdx = 0; rdx < kNumSemaphoresPerAllReduceBarrierCall; ++rdx) {
+            all_reduce_barrier_semaphores.push_back(
+                tt::tt_metal::CreateGlobalSemaphore(device, core_range_set, /* initial_value */ 0));
+        }
     }
 }
 
@@ -60,6 +64,19 @@ std::vector<tt::tt_metal::GlobalSemaphore> CCLResources::get_reduce_scatter_sema
         std::back_inserter(semaphores));
     reduce_scatter_semaphore_index = (reduce_scatter_semaphore_index + kNumSemaphoresPerReduceScatterCall) %
                                      (kNumSemaphoresPairs * kNumSemaphoresPerReduceScatterCall);
+    return semaphores;
+}
+
+std::vector<tt::tt_metal::GlobalSemaphore> CCLResources::get_all_reduce_barrier_semaphores() {
+    std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
+    semaphores.reserve(kNumSemaphoresPerAllReduceBarrierCall);
+    std::copy(
+        all_reduce_barrier_semaphores.begin() + all_reduce_barrier_semaphore_index,
+        all_reduce_barrier_semaphores.begin() + all_reduce_barrier_semaphore_index +
+            kNumSemaphoresPerAllReduceBarrierCall,
+        std::back_inserter(semaphores));
+    all_reduce_barrier_semaphore_index = (all_reduce_barrier_semaphore_index + kNumSemaphoresPerAllReduceBarrierCall) %
+                                         (kNumSemaphoresPairs * kNumSemaphoresPerAllReduceBarrierCall);
     return semaphores;
 }
 

@@ -1,6 +1,6 @@
 # Programming Mesh of Devices with TT-NN
 
-Author: Joseph Chu
+Authors: Scale-Out Team
 
 ## Contents
 
@@ -11,6 +11,7 @@ Author: Joseph Chu
   - [2.2 MeshDevice Management](#22-meshdevice-management)
     - [2.2.1 MeshDevice Initialization/Close](#221-meshdevice-initializationclose)
     - [2.2.2 MeshDevice Visualization](#222-meshdevice-visualization)
+  - [2.3 Controlling Device Visibility](#23-controlling-device-visibility)
 - [3. Distributing Tensor to MeshDevice](#3-distributing-tensor-to-meshdevice)
   - [3.1 Distribution Strategies](#31-distribution-strategies)
   - [3.2 Programming Example: Sharding](#32-programming-example-sharding)
@@ -57,7 +58,7 @@ MeshDevice is a virtual device abstraction that bundles together multiple physic
 
 To optimize performance, MeshDevice implements several key optimizations:
 - **Kernel Compilation Broadcasting**: When kernels are compiled for execution on a MeshDevice, the compilation artifacts are automatically broadcasted to all devices in the mesh where applicable, avoiding redundant per-device compilation.
-- **Data Broadcasting**: For replicated tensors (where the same data needs to exist on multiple devices), MeshDevice leverages the mesh topology to efficiently broadcast data across devices rather than performing individual writes to each device.
+- **Data Broadcasting**: For replicated tensors (where the same data needs to exist on multiple devices), the runtime leverages the replicated topology to minimize any host-side processing and efficiently broadcast data across devices.
 - **Unified Command Dispatch**: Operations are dispatched through mesh-aware command queues that coordinate execution across all devices, ensuring lock-step parallel execution.
 
 While MeshDevice provides these performance optimizations, it maintains explicit control over data distribution and communication patterns. MeshDevice does not hide the distributed nature of the computation - users must explicitly specify:
@@ -138,6 +139,248 @@ ttnn.visualize_mesh_device(mesh_device)
 ```
 
 ##
+
+### 2.3 Controlling Device Visibility
+
+In multi-device systems, the set of *PCIe*-visible devices can be narrowed using the `TT_VISIBLE_DEVICES` environment variable.
+
+Set `TT_VISIBLE_DEVICES` to a comma-separated list of device IDs (matching `/dev/tenstorrent/<id>`) to restrict which devices are visible to your process. If unset, all devices are visible; if set, only the listed devices are available. This is useful for:
+
+- Partitioning devices to run independent jobs so that they do not collide.
+- **Running concurrent processes across different devices**, so each process uses its own card(s) without overlap.
+- Prototyping a smaller mesh inside a larger topology (for example, emulating an N300 within a T3000).
+- Emulating a multi-host configuration by simultaneously launching multiple processes working on independent parts of the available system mesh.
+
+#### Usage Examples
+
+1. Expose a single PCIe device. For N300, this exposes both the PCIe and the remote / ethernet-connected device.
+```bash
+TT_VISIBLE_DEVICES="0" python your_script.py
+```
+
+2. Expose two PCIe devices. On a T3000, using `TT_VISIBLE_DEVICES="0,1"` exposes two PCIe devices and their associated remote / ethernet-connected device. If PCIe device {0,1} is connected, then this effectively exposes a 2x2 mesh.
+```bash
+TT_VISIBLE_DEVICES="0,1" ./your_cpp_program
+```
+
+#### Running Concurrent Processes On A Single Host
+
+On a single host with multiple cards, you can run multiple independent processes concurrently, with each process having exclusive access to a different card. This enables running parallel workloads or independent experiments across different cards on the same host.
+
+**Important**:
+- `TT_VISIBLE_DEVICES` uses PCIe device IDs (matching `/dev/tenstorrent/<id>`). For example, a WH T3000 with 4 N300 boards has 8 total devices but only 4 PCIe-accessible devices (IDs 0-3).
+- When running concurrent processes, you must also set `TT_METAL_CACHE` to a unique path for each process to avoid kernel compilation conflicts.
+
+**Example: Running Two Concurrent Processes**
+
+```python
+import os
+import multiprocessing
+from pathlib import Path
+import torch
+import ttnn
+
+def run_on_device(process_name, pcie_device_id):
+    os.environ["TT_VISIBLE_DEVICES"] = str(pcie_device_id)
+    # Use separate cache directories to avoid compilation conflicts
+    os.environ["TT_METAL_CACHE"] = f"{Path.home()}/.cache/tt_metal_{pcie_device_id}"
+
+    # Your workload here
+    torch_a = torch.rand((32 * 32, 64), dtype=torch.bfloat16)
+    torch_b = torch.rand((32 * 32, 64), dtype=torch.bfloat16)
+
+    # Device ID is always 0 from this process's perspective since only one PCIe device is visible
+    device = ttnn.open_device(device_id=0)
+
+    a = ttnn.from_torch(
+        torch_a, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+    b = ttnn.from_torch(
+        torch_b, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+
+    output = ttnn.add(a, b)
+    print(f"{process_name}: {output}")
+
+    ttnn.close_device(device)
+
+if __name__ == "__main__":
+    # Run two processes concurrently, each on a different PCIe device
+    # For WH T3000: PCIe device IDs range from 0-3
+    processes = [
+        ("Process 1", "0"),
+        ("Process 2", "1"),
+    ]
+
+    jobs = []
+    for process_name, pcie_device_id in processes:
+        p = multiprocessing.Process(target=run_on_device, args=(process_name, pcie_device_id))
+        jobs.append(p)
+        p.start()
+
+    for job in jobs:
+        job.join()
+```
+
+For more examples, please see `tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh`.
+
+### 2.4 Distributed Process Launch with tt-run
+
+#### 2.4.1 Overview and Design Philosophy
+
+`tt-run` is a distributed process launcher for TT-Metal/TTNN workloads supporting both **single-host multi-process** and **multi-host distributed** configurations. It provides a declarative YAML-based interface to orchestrate MPI-based distributed execution, abstracting the complexity of environment management, device partitioning, and mesh topology configuration.
+
+**Design Patterns Supported**
+
+`tt-run` enables two primary distributed execution patterns:
+
+1. **SPMD "Big-Mesh" Pattern**: Multiple MPI ranks coordinate to present a single, unified logical mesh spanning multiple hosts. Each rank manages a local sub-mesh while executing identical program code. This pattern is ideal for:
+   - Tensor Parallelism (TP) across large meshes
+   - Data Parallelism (DP) with uniform data distribution
+   - Hybrid TP+DP workloads that scale uniformly across the mesh
+   - Described in detail: [TT-Distributed: Multi-Host Runtime](../../tech_reports/TT-Distributed/MultiHostMeshRuntime.md)
+
+2. **Multi-Mesh Pattern**: Different MPI ranks manage independent meshes, potentially running different workload stages. This pattern supports:
+   - Pipeline Parallelism where each rank handles different model layers
+   - Multi-model inference where independent models run on separate meshes
+   - Heterogeneous workloads requiring different mesh configurations per stage
+
+**Core Abstraction: Rank Bindings**
+
+The central concept in `tt-run` is the **rank binding**, which maps each MPI rank to:
+- A mesh identifier (`mesh_id`) - which logical mesh this rank belongs to
+- A mesh host rank (`mesh_host_rank`) - position within a multi-host mesh (for SPMD Big-Mesh)
+- Environment overrides - global and rank-specific environment variables
+
+**Mesh Graph Descriptors (MGD 2.0)**
+
+The Mesh Graph Descriptor defines the topology of the distributed system, including host topology for multi-host meshes and inter-mesh connections for multi-mesh scenarios.
+
+MGD 2.0 uses Protobuf text format (`.textproto` extension). For detailed schema documentation and examples, see: [`tt_metal/fabric/MGD_README.md`](../../tt_metal/fabric/MGD_README.md)
+
+**Automatic Environment Isolation**
+
+To ensure safe multi-process execution, `tt-run` automatically manages per-rank environments:
+- **TT_METAL_CACHE**: Unique cache directory per rank (default: `~/.cache/{hostname}_rank{N}`) prevents kernel compilation conflicts
+- **TT_VISIBLE_DEVICES**: Controls PCIe device visibility per rank (see [Section 2.3](#23-controlling-device-visibility)). By default, all devices are visible.
+- **TT_MESH_GRAPH_DESC_PATH**: Path to topology descriptor
+- **TT_MESH_ID** & **TT_MESH_HOST_RANK**: Mesh identification for runtime coordination
+
+#### 2.4.2 Configuration and Usage
+
+**Basic Configuration Example**
+
+```yaml
+rank_bindings:
+  - rank: 0
+    mesh_id: 0                 # Mesh identifier
+    mesh_host_rank: 0          # Position within multi-host mesh
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0,1"  # Devices visible to this rank
+
+  - rank: 1
+    mesh_id: 0
+    mesh_host_rank: 1
+    env_overrides:
+      TT_VISIBLE_DEVICES: "2,3"
+
+mesh_graph_desc_path: "mesh_descriptor.textproto"  # MGD 2.0 topology definition
+
+global_env:                    # Environment variables for all ranks
+  TT_METAL_LOGGER_LEVEL: "INFO"
+```
+
+**Command-Line Invocation**
+
+```bash
+tt-run --rank-binding config.yaml [--mpi-args "<mpi_args>"] <program> [args...]
+```
+
+Common options:
+- `--dry-run`: Preview generated MPI command without execution
+- `--verbose`: Enable detailed logging
+- `--mpi-args`: Pass additional MPI arguments (rankfiles, network options, etc.)
+
+#### 2.4.3 Usage Patterns
+
+**Pattern 1: SPMD Big-Mesh**
+
+Multiple ranks collaborate to form a single logical mesh spanning hosts. All ranks share the same `mesh_id` but have different `mesh_host_rank` values.
+
+```yaml
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    env_overrides: {TT_VISIBLE_DEVICES: "0,1"}
+  - rank: 1
+    mesh_id: 0
+    mesh_host_rank: 1
+    env_overrides: {TT_VISIBLE_DEVICES: "2,3"}
+
+mesh_graph_desc_path: "dual_host_mesh.textproto"  # Multi-host topology
+```
+
+**Pattern 2: Multi-Mesh (Independent Meshes)**
+
+Each rank manages an independent mesh, enabling pipeline parallelism or multi-model scenarios. Ranks have different `mesh_id` values.
+
+```yaml
+rank_bindings:
+  - rank: 0
+    mesh_id: 0      # First pipeline stage
+    env_overrides: {TT_VISIBLE_DEVICES: "0"}
+  - rank: 1
+    mesh_id: 1      # Second pipeline stage
+    env_overrides: {TT_VISIBLE_DEVICES: "1"}
+
+mesh_graph_desc_path: "multi_mesh.textproto"
+```
+
+**Pattern 3: Single-Host Emulation**
+
+Emulate multi-host workloads on a single host by partitioning devices across processes:
+
+```yaml
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: "0,1"}}
+  - {rank: 1, mesh_id: 0, mesh_host_rank: 1, env_overrides: {TT_VISIBLE_DEVICES: "2,3"}}
+mesh_graph_desc_path: "emulated_dual_host.textproto"
+```
+
+**Pattern 4: Multi-Host Cluster Deployment**
+
+For multi-host clusters, combine rank bindings with MPI rankfiles to specify physical host assignments:
+
+```bash
+# Rankfile specifies physical host assignment
+# rank 0=host1 slot=0
+# rank 1=host2 slot=0
+
+tt-run --rank-binding config.yaml \
+       --mpi-args "--rankfile hosts.txt --mca btl tcp" \
+       python distributed_workload.py
+```
+
+
+**Example Files and Tests**
+
+Configuration examples:
+- `tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml` - Single-host multi-process configuration
+- `tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto` - T3000 mesh topology (MGD 2.0)
+- `tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto` - Galaxy mesh topology (MGD 2.0)
+
+Test scripts demonstrating `tt-run` usage:
+- `tests/scripts/run_t3000_unit_tests.sh` - T3000 multi-process test launcher
+- `tests/scripts/run_dual_galaxy_tests.sh` - Multi-host Galaxy test launcher
+- `tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh` - Device visibility examples
+
+**Related Documentation**
+
+- Section 2.3: [Controlling Device Visibility](#23-controlling-device-visibility) - for `TT_VISIBLE_DEVICES` details
+- Section 2.1: [System Topology](#21-system-topology) - for understanding mesh configurations
+- [`tt_metal/fabric/MGD_README.md`](../../tt_metal/fabric/MGD_README.md) - MGD 2.0 schema and examples
+- [TT-Distributed: Multi-Host Runtime](../../tech_reports/TT-Distributed/MultiHostMeshRuntime.md) - SPMD architecture details
 
 ## 3. Distributing Tensor to MeshDevice
 

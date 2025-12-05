@@ -4,16 +4,15 @@
 
 #include <tt-metalium/work_split.hpp>
 #include <vector>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "cpp/ttnn/operations/ccl/all_to_all_combine/device/all_to_all_combine_device_operation.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include "ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::ccl {
@@ -27,7 +26,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_mesh_workload(
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    auto mesh_device = tensor_args.input_tensor.device();
+    auto* mesh_device = tensor_args.input_tensor.device();
     auto init_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
     auto final_barrier_semaphore =
@@ -74,7 +73,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
 
     const auto input_dtype = input_tensor.dtype();
 
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
     const auto fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
@@ -295,7 +294,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
             reader_runtime_args[4],
             (uint32_t)cross_device_semaphore.address());
 
-        for (auto& neighbor_coordinate : neighbors) {
+        for (const auto& neighbor_coordinate : neighbors) {
             const auto neighbor_fabric_id = mesh_device->get_fabric_node_id(neighbor_coordinate);
             append_fabric_connection_rt_args(
                 fabric_node_id, neighbor_fabric_id, link_id, program, sender_cores.at(i), writer_runtime_args);
@@ -324,11 +323,11 @@ void AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::override_runtime
         TT_FATAL(coord == range.end_coord(), "Expected single coordinate per program but got range of {} to {}", coord, range.end_coord());
 
         const auto& shared_variables = cached_workload.shared_variables.at(range);
-        auto& ternary_reader_kernel_id = shared_variables.ternary_reader_kernel_id;
-        auto& unary_writer_kernel_id = shared_variables.unary_writer_kernel_id;
-        auto& cores = shared_variables.cores;
+        const auto& ternary_reader_kernel_id = shared_variables.ternary_reader_kernel_id;
+        const auto& unary_writer_kernel_id = shared_variables.unary_writer_kernel_id;
+        const auto& cores = shared_variables.cores;
 
-        for (auto& core : cores) {
+        for (const auto& core : cores) {
             auto& reader_runtime_args = GetRuntimeArgs(program, ternary_reader_kernel_id, core);
             auto& writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
 

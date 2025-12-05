@@ -65,7 +65,7 @@ std::vector<std::uint32_t> transpose_tiles(
     for (int c = 0; c < col_tiles; c += in0_block_w) {
         for (int r = 0; r < row_tiles; r++) {
             for (int k = 0; k < in0_block_w; k++) {
-                int offset = tile_size * col_tiles * r + c * tile_size + k * tile_size;
+                int offset = (tile_size * col_tiles * r) + (c * tile_size) + (k * tile_size);
                 for (int i = 0; i < tile_size; i++) {
                     result.push_back(data.at(offset + i));
                 }
@@ -101,7 +101,7 @@ void print_faces(std::vector<bfloat16> data, const std::string& name) {
 int main(int argc, char** argv) {
     bool pass = true;
 
-    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     try {

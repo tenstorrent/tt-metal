@@ -72,8 +72,8 @@ std::vector<bfloat16> gold_cumsum(std::vector<bfloat16>& src, const std::vector<
         for (int k = 0; k < dim_a; k++) {
             float res = 0;
             for (int j = 0; j < dim_b; j++) {
-                res += static_cast<float>(src[i * W * H + j * j_mul + k * k_mul]);
-                golden[i * W * H + j * j_mul + k * k_mul] = res;
+                res += static_cast<float>(src[(i * W * H) + (j * j_mul) + (k * k_mul)]);
+                golden[(i * W * H) + (j * j_mul) + (k * k_mul)] = res;
             }
         }
     }
@@ -90,7 +90,7 @@ void run_single_core_cumsum(
     Program program = tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
 
     CoreCoord core = {0, 0};
 

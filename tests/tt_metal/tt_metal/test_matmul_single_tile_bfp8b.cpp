@@ -48,7 +48,7 @@ using namespace tt;
 int main(int argc, char** argv) {
     bool pass = true;
 
-    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    auto* slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     try {
@@ -150,7 +150,7 @@ int main(int argc, char** argv) {
         int num_float_in_tile = 32 * 32;
         std::vector<float> vec(num_float_in_tile, (float)0);
         for (int i = 0; i < 32; i++) {
-            vec.at(i * 32 + i) = (float)1;
+            vec.at((i * 32) + i) = (float)1;
         }
         std::vector<uint32_t> weights =
             pack_as_bfp8_tiles(tt::stl::make_const_span(vec), /*row_major_input=*/true, /*is_exp_a=*/false);

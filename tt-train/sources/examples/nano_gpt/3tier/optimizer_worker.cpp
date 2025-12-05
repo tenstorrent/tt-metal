@@ -14,7 +14,6 @@
 #include "models/distributed/gpt2.hpp"
 #include "models/gpt2.hpp"
 #include "optimizers/adamw.hpp"
-#include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
@@ -107,7 +106,7 @@ int main(int argc, char **argv) {
         config.transformer_config);
 
     auto model = std::visit(
-        [&device_config](auto &&arg) -> std::shared_ptr<ttml::autograd::ModuleBase> {
+        [&device_config](auto &&arg) -> std::shared_ptr<ttml::modules::ModuleBase> {
             if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
                 if (device_config.enable_tp) {
                     return ttml::models::distributed::llama::create(arg);

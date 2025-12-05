@@ -19,11 +19,12 @@
 
 #include <gtest/gtest.h>
 #include <tt-metalium/distributed.hpp>
+#include "impl/context/metal_context.hpp"
 
 namespace {
 
 // We recursively scan this directory for kernels named '*.cpp'.
-constexpr std::string_view KernelDir = "tests/tt_metal/tt_metal/test_kernels/sfpi";
+constexpr auto KernelDir = "tests/tt_metal/tt_metal/test_kernels/sfpi";
 
 using namespace tt::tt_metal;
 
@@ -59,7 +60,7 @@ bool runTest(
     auto pos = path.find_last_of('.');
     // NOLINTNEXTLINE(bugprone-inc-dec-in-conditions)
     while (--pos && path[pos] >= '0' && path[pos] <= '9') {
-        continue;
+        continue;  // NOLINT(readability-redundant-control-flow)
     }
     if (path[pos] == '-') {
         while (path[++pos] != '.') {
@@ -119,18 +120,10 @@ bool runTests(
 }
 
 bool runTestsuite(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const tt::tt_metal::CoreCoord coord) {
-    std::string path;
-    if (auto* var = std::getenv("TT_METAL_HOME")) {
-        path.append(var);
-        if (!path.empty()) {
-            path.push_back('/');
-        }
-    }
-    path.append(KernelDir);
+    std::string path = tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir();
+    path += KernelDir;
     return runTests(mesh_device, coord, path, path.find_last_of('/') + 1);
 }
-
-using tt::tt_metal::UnitMeshCQSingleCardProgramFixture;
 
 TEST_F(UnitMeshCQFixture, TensixSFPI) {
     CoreCoord core{0, 0};

@@ -7,7 +7,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <bmm_op.hpp>
 #include <tt-metalium/device.hpp>
@@ -61,7 +60,7 @@ void matmul_single_core(
     const std::vector<bfloat16>& a,
     const std::vector<bfloat16>& b,
     std::vector<bfloat16>& output,
-    bool bcast_batch,
+    bool /*bcast_batch*/,
     uint32_t M,
     uint32_t N,
     uint32_t K,
