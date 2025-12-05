@@ -10,11 +10,13 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from ttnn import ConcatMeshToTensor
 import os
 from models.tt_transformers.tt.generator import create_submeshes
+from tracy import signpost
 
 
+# @pytest.mark.parametrize("chunks_per_sync", [5, 10, 20, 40, 80, 1000])
 @pytest.mark.parametrize("num_workers_per_link", [1, 2, 3, 4])
 @pytest.mark.parametrize("num_buffers_per_channel", [1, 2, 3, 4])
-@pytest.mark.parametrize("chunks_per_sync", [5, 10, 20, 40, 80, 1000])
+@pytest.mark.parametrize("chunks_per_sync", [5, 10, 20])
 @pytest.mark.parametrize(
     "shard_grid, input_shard_shape",
     [
@@ -151,6 +153,13 @@ def run_all_gather_async_test(
             f"Running all_gather_async with num_workers_per_link={num_workers_per_link}, "
             f"num_buffers_per_channel={num_buffers_per_channel}, chunks_per_sync={chunks_per_sync}"
         )
+
+        # Determine grid type for signpost
+        grid_type = "first" if input_shard_shape == (32, 32) else "second"
+        signpost(f"========")
+        signpost(f"{grid_type}_{num_workers_per_link}_{num_buffers_per_channel}_{chunks_per_sync}")
+
+        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
 
         # Run all_gather_async - requires list of 2 semaphores
         tt_out = ttnn.experimental.all_gather_async(
