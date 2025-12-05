@@ -122,6 +122,7 @@ private:
     void clear_dram_state(ChipId device_id);
     void clear_launch_messages_on_eth_cores(ChipId device_id);
     void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
+    void construct_control_plane();
     void initialize_control_plane_impl();  // Private implementation without mutex
     void teardown_fabric_config();
     void teardown_base_objects();

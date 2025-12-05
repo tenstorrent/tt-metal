@@ -383,7 +383,11 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyMeshAPIs) {
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
     EXPECT_EQ(user_meshes.size(), 1);
     EXPECT_EQ(user_meshes[0], MeshId{0});
-    EXPECT_EQ(control_plane.get_physical_mesh_shape(MeshId{0}), tt::tt_metal::distributed::MeshShape(8, 4));
+    auto mesh_shape = control_plane.get_physical_mesh_shape(MeshId{0});
+    EXPECT_TRUE(
+        mesh_shape == tt::tt_metal::distributed::MeshShape(8, 4) ||
+        mesh_shape == tt::tt_metal::distributed::MeshShape(4, 8))
+        << "Expected mesh shape to be either 8x4 or 4x8, got: (" << mesh_shape[0] << "x" << mesh_shape[1] << ")";
 }
 
 TEST(MeshGraphValidation, TestT3kDualHostMeshGraph) {
