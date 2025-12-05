@@ -1610,7 +1610,7 @@ bool MetalContext::is_coord_in_range(CoreCoord coord, CoreType core_type) {
 }
 
 std::unique_ptr<DeviceManager>& MetalContext::device_manager() {
-    TT_FATAL(device_manager_ != nullptr && device_manager_->is_initialized(), "Device manager is not initialized");
+    TT_FATAL(device_manager_->is_initialized(), "Device manager is not initialized");
     return device_manager_;
 }
 

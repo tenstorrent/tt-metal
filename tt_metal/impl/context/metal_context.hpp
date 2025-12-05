@@ -44,8 +44,6 @@ class DispatchMemMap;
 // Dispatch-dependent state (FW, dispatch, fabric) is initialized explicitly with a MetalContext::initialize() call, and
 // only accessible after that.
 class MetalContext {
-    friend DeviceManager;
-
 public:
     MetalContext& operator=(const MetalContext&) = delete;
     MetalContext& operator=(MetalContext&& other) noexcept = delete;

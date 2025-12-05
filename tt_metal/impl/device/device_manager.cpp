@@ -16,6 +16,10 @@
 #include "context/metal_context.hpp"
 
 #include <experimental/fabric/control_plane.hpp>
+#include <experimental/fabric/fabric_types.hpp>
+#include <experimental/fabric/fabric.hpp>
+#include "fabric/fabric_context.hpp"
+#include "fabric/fabric_builder_context.hpp"
 
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/topology.hpp"
@@ -24,10 +28,6 @@
 #include <tt_metal_profiler.hpp>
 #include "profiler/profiler_state.hpp"
 #include "profiler/profiler_state_manager.hpp"
-
-#include <experimental/fabric/fabric_types.hpp>
-#include <experimental/fabric/fabric.hpp>
-#include "fabric/fabric_context.hpp"
 
 #include <device.hpp>
 #include "device_impl.hpp"
@@ -644,21 +644,22 @@ void DeviceManager::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
 
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
+    const auto& builder_context = fabric_context.get_builder_context();
 
     auto wait_for_handshake = [&](IDevice* dev) {
         if (!dev) {
             TT_THROW("Fabric router sync on null device. All devices must be opened for Fabric.");
         }
-        if (fabric_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
+        if (builder_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
             return;
         }
 
-        const auto master_router_chan = fabric_context.get_fabric_master_router_chan(dev->id());
+        const auto master_router_chan = builder_context.get_fabric_master_router_chan(dev->id());
         const auto master_router_logical_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(dev->id()).get_eth_core_for_channel(
                 master_router_chan, CoordSystem::LOGICAL);
 
-        const auto [router_sync_address, expected_status] = fabric_context.get_fabric_router_sync_address_and_status();
+        const auto [router_sync_address, expected_status] = builder_context.get_fabric_router_sync_address_and_status();
         std::vector<std::uint32_t> master_router_status{0};
         auto start_time = std::chrono::steady_clock::now();
         while (master_router_status[0] != expected_status) {
@@ -688,7 +689,7 @@ void DeviceManager::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
             }
         }
 
-        auto ready_address_and_signal = fabric_context.get_fabric_router_ready_address_and_signal();
+        auto ready_address_and_signal = builder_context.get_fabric_router_ready_address_and_signal();
         if (ready_address_and_signal) {
             std::vector<uint32_t> signal(1, ready_address_and_signal->second);
             tt_metal::detail::WriteToDeviceL1(
@@ -904,7 +905,8 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
     if (tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
         const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
         const auto& fabric_context = control_plane.get_fabric_context();
-        auto [termination_signal_address, signal] = fabric_context.get_fabric_router_termination_address_and_signal();
+        const auto& builder_ctx = fabric_context.get_builder_context();
+        auto [termination_signal_address, signal] = builder_ctx.get_fabric_router_termination_address_and_signal();
         std::vector<uint32_t> termination_signal(1, signal);
 
         // Terminate fabric tensix configs (mux cores) if enabled
@@ -912,10 +914,10 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
         bool tensix_config_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
                                      tt::tt_fabric::FabricTensixConfig::DISABLED;
         if (tensix_config_enabled) {
-            const auto& tensix_config = fabric_context.get_tensix_config();
+            const auto& tensix_config = builder_ctx.get_tensix_config();
 
             for (const auto& dev : this->get_all_active_devices()) {
-                if (fabric_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
+                if (builder_ctx.get_num_fabric_initialized_routers(dev->id()) == 0) {
                     continue;
                 }
 
@@ -939,13 +941,13 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
         }
 
         for (const auto& dev : this->get_all_active_devices()) {
-            if (fabric_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
+            if (builder_ctx.get_num_fabric_initialized_routers(dev->id()) == 0) {
                 continue;
             }
 
             auto master_router_logical_core =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(dev->id()).get_eth_core_for_channel(
-                    fabric_context.get_fabric_master_router_chan(dev->id()), CoordSystem::LOGICAL);
+                    builder_ctx.get_fabric_master_router_chan(dev->id()), CoordSystem::LOGICAL);
             tt_metal::detail::WriteToDeviceL1(
                 dev, master_router_logical_core, termination_signal_address, termination_signal, CoreType::ETH);
         }

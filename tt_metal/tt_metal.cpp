@@ -7,7 +7,7 @@
 #include <circular_buffer_constants.h>
 #include <tt_stl/assert.hpp>
 #include <cstdint>
-#include "tt_metal/impl/device/device_manager.hpp"
+#include "device/device_manager.hpp"
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
@@ -33,7 +33,7 @@
 #include <umd/device/cluster_descriptor.hpp>
 #include <filesystem>
 #include "device.hpp"
-#include "impl/context/metal_context.hpp"
+#include "context/metal_context.hpp"
 #include "kernels/kernel.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "device/device_impl.hpp"
