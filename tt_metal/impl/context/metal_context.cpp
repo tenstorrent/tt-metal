@@ -567,7 +567,7 @@ void MetalContext::set_custom_fabric_topology(
     const std::string& mesh_graph_desc_file,
     const std::map<tt_fabric::FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     TT_FATAL(
-        !device_manager_ || device_manager_->get_all_active_devices().empty(),
+        !device_manager_->is_initialized() || device_manager_->get_all_active_devices().empty(),
         "Modifying control plane requires no devices to be active");
     // Set the user specified mesh graph descriptor file and FabricNodeID to physical chip mapping.
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_ = logical_mesh_chip_id_to_physical_chip_id_mapping;
@@ -577,7 +577,7 @@ void MetalContext::set_custom_fabric_topology(
 
 void MetalContext::set_default_fabric_topology() {
     TT_FATAL(
-        !device_manager_ || device_manager_->get_all_active_devices().empty(),
+        !device_manager_->is_initialized() || device_manager_->get_all_active_devices().empty(),
         "Modifying control plane requires no devices to be active");
     // Reset the control plane, since it was initialized with custom parameters.
     control_plane_.reset();

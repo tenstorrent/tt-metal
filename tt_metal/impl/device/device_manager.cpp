@@ -219,11 +219,6 @@ void DeviceManager::init_profiler() const {
 #endif
 }
 
-DeviceManager::DeviceManager() {
-    ZoneScoped;
-    log_debug(tt::LogMetal, "DeviceManager constructor");
-}
-
 void DeviceManager::initialize(
     const std::vector<ChipId>& a_device_ids,
     const uint8_t a_num_hw_cqs,
@@ -746,6 +741,11 @@ void DeviceManager::init_firmware_on_active_devices() {
     if (initialize_fabric_and_dispatch_fw_) {
         this->initialize_fabric_and_dispatch_fw();
     }
+}
+
+DeviceManager::DeviceManager() {
+    ZoneScoped;
+    log_debug(tt::LogMetal, "DeviceManager constructor");
 }
 
 IDevice* DeviceManager::get_active_device(ChipId device_id) const {
