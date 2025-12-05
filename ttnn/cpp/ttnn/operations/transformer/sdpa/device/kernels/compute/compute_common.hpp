@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #define REDUCE_OP (PoolType::MAX)
-#define REDUCE_DIM (ReduceDim::REDUCE_ROW)
+#define REDUCE_DIM (ReduceDim::REDUCE_COL)
 
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/eltwise_binary.h"
@@ -32,6 +32,7 @@ ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transp
           false   // tilize
           >(cbid)));
 }
+#include "compute_kernel_api/transpose_wh.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 template <uint32_t num_tiles>
@@ -172,8 +173,48 @@ void recip_tile_first_column(uint32_t idst) {
         calculate_recip_first_column<legacy_compat>, idst, (int)VectorMode::C);
 }
 #endif
+
+template <PoolType pool_type, ReduceDim reduce_dim, uint32_t in0_cb, uint32_t scale_cb, uint32_t rows, uint32_t cols>
+void reduce_c_transposed_tiles(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
+    DeviceZoneScopedN("reduce_c");
+    // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
+    // Precondition: scale_cb has 1 produced
+    // Precondition: out_cb has rows free
+    // Postcondition: in0_cb has rows*cols produced
+    // Precondition: scale_cb has 1 produced
+    // Postcondition: out_cb has rows produced
+
+    constexpr uint32_t num_tiles = rows * cols;
+    cb_wait_front(scale_cb, 1);
+    cb_wait_front(in0_cb, num_tiles);
+    cb_reserve_back(out_cb, rows);
+
+    max_tile_init();
+    constexpr uint32_t reduce_dst_idx = 0;
+    constexpr uint32_t prev_max_dst_idx = 1;
+
+    for (uint32_t i = 0; i < rows; i++) {
+        acquire_dst();
+        reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
+        for (uint32_t j = 0; j < cols; j++) {
+            reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
+        }
+        reduce_uninit();
+        if (do_eltwise_max) {
+            copy_tile_to_dst_init_short(prev_cb);
+            copy_tile(prev_cb, i, prev_max_dst_idx);
+            max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(VectorMode::R));
+        }
+
+        pack_tile(reduce_dst_idx, out_cb);
+        release_dst();
+    }
+
+    cb_push_back(out_cb, rows);
+}
+
 template <uint32_t in0_cb, uint32_t scale_cb, uint32_t rows, uint32_t cols>
-void reduce_c_transposed(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
+void reduce_c_transposed_tiles(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     DeviceZoneScopedN("reduce_c");
     /**
      * in0_cb: rows*cols tiles, where each tile is transposed
@@ -297,6 +338,65 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
             // Granular write output to enable following matmul unpack to start early.
             cb_push_back(in0_cb, cols);
         }
+    }
+    cb_push_back(reduce_cb, rows);
+}
+
+template <uint32_t in0_cb, uint32_t rows, uint32_t cols, uint32_t scale_fp32, bool write_result_inplace = true>
+void sub_exp_block_bcast_rows_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
+    DeviceZoneScopedN("sub_exp_block_bcast_rows_inplace");
+    // Precondition: in0_cb has rows*cols produced
+    // Precondition: in1_cb has rows produced
+    // Postcondition: in0_cb has rows*cols produced
+    // Postcondition: in1_cb has rows produced
+    sub_bcast_rows_init_short(in0_cb, in1_cb);
+
+    exp_tile_init<true, true, scale_fp32>();
+    cb_wait_front(in0_cb, rows * cols);
+    cb_wait_front(in1_cb, rows);
+    cb_reserve_back(reduce_cb, rows);
+
+    constexpr uint32_t dst_tiles = (cols < SUB_EXP_GRANULARITY) ? cols : SUB_EXP_GRANULARITY;
+    constexpr uint32_t granularity = (cols >= SUB_EXP_GRANULARITY) ? (cols >> LOG2_SUB_EXP_GRANULARITY) : 1;
+    uint32_t in0_index = 0;
+    for (uint32_t i = 0; i < rows; ++i) {
+        for (uint32_t u = 0; u < granularity; u++) {
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                sub_tiles_bcast_rows(in0_cb, in1_cb, in0_index, i, j);
+                exp_tile<true, true>(j);
+                in0_index++;
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+
+            if constexpr (write_result_inplace) {
+                for (uint32_t j = 0; j < dst_tiles; ++j) {
+                    pack_tile(j, in0_cb);
+                }
+            }
+
+            // While we have results in DST, take advantage of L1 accumulation
+            // to reduce row x cols tiles to rows x 1 tiles.
+            if (u > 0) {
+                // If on the same row, keep accumulating
+                PACK((llk_pack_reconfig_l1_acc(1)));
+            }
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                pack_tile<true>(j, reduce_cb, i);
+                if (u == 0 && j == 0) {
+                    // If this was the first tile of a row, start accumulating
+                    PACK((llk_pack_reconfig_l1_acc(1)));
+                }
+            }
+            tile_regs_release();
+            PACK((llk_pack_reconfig_l1_acc(0)));
+        }
+    }
+    if constexpr (write_result_inplace) {
+        cb_pop_front(in0_cb, rows * cols);
+        cb_reserve_back(in0_cb, rows * cols);
+        cb_push_back(in0_cb, rows * cols);
     }
     cb_push_back(reduce_cb, rows);
 }
@@ -497,6 +597,27 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     cb_push_back(in0_cb, num_tiles);
 }
 
+void transpose_tiles_inplace(uint32_t in0_cb, uint32_t num_tiles) {
+    DeviceZoneScopedN("transpose_tiles_inplace");
+    // Precondition: in0_cb and in1_cb have num_tiles produced
+    // Postcondition: in0_cb has num_tiles produced
+    // Postcondition: in1_cb has num_tiles consumed
+
+    transpose_wh_init_short(in0_cb);
+
+    cb_wait_front(in0_cb, num_tiles);
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        acquire_dst();
+        transpose_wh_tile(in0_cb, i, 0);
+        pack_tile(0, in0_cb);
+        release_dst();
+    }
+
+    cb_pop_front(in0_cb, num_tiles);
+    cb_reserve_back(in0_cb, num_tiles);
+    cb_push_back(in0_cb, num_tiles);
+}
+
 void mul_tiles_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     DeviceZoneScopedN("mul_tiles_bcast_cols_inplace");
     /**
@@ -513,6 +634,30 @@ void mul_tiles_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
         mul_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
+        cb_pop_front(in0_cb, 1);
+        cb_reserve_back(in0_cb, 1);
+        pack_tile(0, in0_cb);
+        cb_push_back(in0_cb, 1);
+        release_dst();
+    }
+}
+
+void mul_tiles_bcast_rows_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
+    DeviceZoneScopedN("mul_tiles_bcast_cols_inplace");
+    /**
+     * Given in0_cb and in1_cb, multiply each tile of in0_cb by the corresponding tile of in1_cb
+     * and bcast cols of in1_cb.
+     */
+    // Precondition: in0_cb and in1_cb have num_tiles produced
+    // Postcondition: in0_cb has num_tiles produced
+    // Postcondition: in1_cb has num_tiles produced
+
+    mul_bcast_rows_init_short(in0_cb, in1_cb);
+    cb_wait_front(in0_cb, num_tiles);
+    cb_wait_front(in1_cb, num_tiles);
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        acquire_dst();
+        mul_tiles_bcast_rows(in0_cb, in1_cb, 0, i, 0);
         cb_pop_front(in0_cb, 1);
         cb_reserve_back(in0_cb, 1);
         pack_tile(0, in0_cb);
@@ -591,6 +736,37 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 
         // exp_tile<EXP_APPROX_MODE, false, true, true>(0, static_cast<int>(VectorMode::C), scale_bf16);
         MATH((exp_tile_first_column<EXP_APPROX_MODE>(0, scale_bf16)));
+
+        pack_tile(0, out_cb);
+
+        cb_push_back(out_cb, 1);
+        release_dst();
+    }
+}
+
+template <uint32_t scale_fp32>
+void sub_exp_block_transposed(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
+    DeviceZoneScopedN("sub_exp_block");
+    // Precondition: in0_cb and in1_cb have num_tiles produced
+    // Postcondition: out_cb has num_tiles produced
+    // Postcondition: in0_cb and in1_cb has num_tiles produced
+
+    sub_tiles_init(in0_cb, in1_cb);
+    exp_tile_init<EXP_APPROX_MODE, false>();
+    cb_wait_front(in0_cb, num_tiles);
+    cb_wait_front(in1_cb, num_tiles);
+    cb_reserve_back(out_cb, num_tiles);
+
+    // Convert scale_fp32 to bf16 scale
+    constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        acquire_dst();
+
+        sub_tiles(in0_cb, in1_cb, i, i, 0);
+
+        exp_tile<EXP_APPROX_MODE, false, true, true>(0, static_cast<int>(VectorMode::R), scale_bf16);
+        // MATH((exp_tile_first_column<EXP_APPROX_MODE>(0, scale_bf16)));
 
         pack_tile(0, out_cb);
 
@@ -747,7 +923,8 @@ void matmul_blocks(
     const uint32_t& in0_block_w,
     const uint32_t& subblock_h,
     const uint32_t& subblock_w,
-    const bool& transpose) {
+    const bool& transpose,
+    const bool output_transpose_order = false) {
     DeviceZoneScopedN("matmul_blocks");
     // precondition: in0_cb has M*K produced
     // preconditino: in1_cb has K*N produced
@@ -766,7 +943,7 @@ void matmul_blocks(
     uint32_t in0_wait_tiles = in0_subblock_num_tiles;
 
     reconfig_data_format(in1_cb, in0_cb);
-    cb_wait_front(in1_cb, K * N);
+    // cb_wait_front(in1_cb, K * N);
     cb_reserve_back(out_cb, output_num_tiles);
 
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
@@ -791,9 +968,16 @@ void matmul_blocks(
             uint32_t dst_idx = 0;
             uint32_t out_col_offset = in1_subblock * subblock_w;
             for (uint32_t r = 0; r < subblock_h; r++) {
+<<<<<<< HEAD
                 uint32_t out_row_offset = r * N;
+=======
+                uint32_t global_r = r + subblock_h * in0_subblock;
+                // uint32_t out_row_offset = (r + subblock_h * in0_subblock) * N;
+>>>>>>> 08c23c6494 (First pass at transposed SDPA complete. Good correctness. Reduce on FPU)
                 for (uint32_t c = 0; c < subblock_w; c++) {
-                    pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset + c);
+                    uint32_t global_c = c + out_col_offset;
+                    uint32_t global_idx = output_transpose_order ? global_c * M + global_r : global_r * N + global_c;
+                    pack_tile<true>(dst_idx, out_cb, global_idx);
                     dst_idx++;
                 }
             }
@@ -805,7 +989,12 @@ void matmul_blocks(
         // Somewhat granularize the push of in0 subblocks
         cb_push_back(out_cb, in0_subblock_all_cols_num_tiles);
     }
+<<<<<<< HEAD
     cb_pop_front(in1_cb, K * N);
+=======
+    // cb_pop_front(in1_cb, K * N);
+    cb_push_back(out_cb, output_num_tiles);
+>>>>>>> 08c23c6494 (First pass at transposed SDPA complete. Good correctness. Reduce on FPU)
 }
 
 template <uint32_t M>

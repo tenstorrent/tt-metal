@@ -180,7 +180,15 @@ void kernel_main() {
                     const uint32_t q_row_tile_count = q_row_end_tile - q_row_start_tile;
                     const uint32_t q_tile_id = q_tile_shape.id_of(nb, nq, read_offset + q_row_start_tile, 0);
                     read_chunk_with_padding<q_tile_bytes>(
-                        q_reader, cb_q_in, q_tile_id, q_row_tile_count, DHt, Sq_chunk_t, DHt, barrier_threshold);
+                        q_reader,
+                        cb_q_in,
+                        q_tile_id,
+                        q_row_tile_count,
+                        DHt,
+                        Sq_chunk_t,
+                        DHt,
+                        barrier_threshold,
+                        true /*transpose Q*/);
                     q_chunk = chunked_q_chunk_offset + q_chunk;
                     uint32_t q_low_idx =
                         q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
@@ -230,7 +238,7 @@ void kernel_main() {
                                 Sk_chunk_t,
                                 DHt,
                                 barrier_threshold,
-                                true  // transpose=true for K reads
+                                false  // transpose=true for K reads
                             );
                         }
 
