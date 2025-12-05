@@ -85,13 +85,15 @@ class MLP:
 
     def __call__(self, hidden_states):
         """Forward pass: route -> experts"""
-        router_scores, router_indices, router_logits = self.router(hidden_states)
+        # router_scores, router_indices, router_logits = self.router(hidden_states)
+        expert_indices, expert_weights = self.router(hidden_states)
 
         # Save router indices for analysis (convert to CPU before deallocation)
-        if hasattr(self, "track_routing") and self.track_routing:
-            self.last_router_indices = ttnn.to_torch(router_indices).cpu()
+        # if hasattr(self, "track_routing") and self.track_routing:
+        #     self.last_router_indices = ttnn.to_torch(router_indices).cpu()
 
-        router_logits.deallocate()
-        router_indices.deallocate()
-        expert_output = self.experts(hidden_states, router_scores)
-        return expert_output, router_scores
+        # router_logits.deallocate()
+        # router_indices.deallocate()
+        # expert_output = self.experts(hidden_states, router_scores)
+        expert_output = self.throughput_experts(hidden_states, expert_indices, expert_weights)
+        return expert_output

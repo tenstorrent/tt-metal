@@ -55,8 +55,9 @@ def topk_router(g, experts_per_token):
         packer_l1_acc=False,
     )
     expert_weights = ttnn.softmax(expert_weights, dim=1, numeric_stable=True, compute_kernel_config=compute_config)
-    router_scores = ttnn.scatter(ttnn.zeros_like(g), dim=1, index=expert_indices, src=expert_weights)
-    return router_scores, expert_weights, expert_indices
+    # router_scores = ttnn.scatter(ttnn.zeros_like(g), dim=1, index=expert_indices, src=expert_weights)
+    # return router_scores, expert_weights, expert_indices
+    return expert_indices, expert_weights
 
 
 class TopKRouter:
@@ -138,7 +139,8 @@ class TopKRouter:
         """
         # Detect decode mode for L1_WIDTH_SHARDED optimization (like tt-transformers MLP)
         is_decode_mode = hidden_states.shape[1] == 1
-        mem_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if is_decode_mode else ttnn.DRAM_MEMORY_CONFIG
+        # mem_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if is_decode_mode else ttnn.DRAM_MEMORY_CONFIG
+        mem_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if (is_decode_mode and self.weight.shape[1] > 32) else ttnn.DRAM_MEMORY_CONFIG
 
         hidden_states = ttnn.reshape(hidden_states, (-1, self.hidden_dim))
         router_logits = ttnn.linear(
@@ -153,5 +155,8 @@ class TopKRouter:
         if is_decode_mode:
             router_logits = ttnn.to_memory_config(router_logits, ttnn.DRAM_MEMORY_CONFIG)
 
-        router_scores, _expert_weights, router_indices = topk_router(router_logits, self.top_k)
-        return router_scores, router_indices, router_logits
+        # router_scores, _expert_weights, router_indices = topk_router(router_logits, self.top_k)
+        # return router_scores, router_indices, router_logits
+        expert_indices, expert_weights = topk_router(router_logits, self.top_k)
+        ttnn.deallocate(router_logits)
+        return expert_indices, expert_weights

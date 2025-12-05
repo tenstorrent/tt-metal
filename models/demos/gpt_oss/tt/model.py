@@ -40,6 +40,7 @@ class Model:
         paged_attention_config=None,
         mesh_config=None,
         create_kv_cache=True,
+        max_batch_size=1,
     ):
         """
         Initialize GPT-OSS model
@@ -59,6 +60,7 @@ class Model:
         self.hf_config = hf_config
         self.core_grid = mesh_device.compute_with_storage_grid_size()
         self.head_dim = hf_config.head_dim
+        self.max_batch_size = max_batch_size
 
         self.ccl_manager = ccl_manager
 
@@ -110,6 +112,7 @@ class Model:
                 mesh_config=self.mesh_config,
                 create_kv_cache=create_kv_cache,
                 transformation_mats=self.transformation_mats,
+                max_batch_size=max_batch_size,
             )
             for layer_idx in range(hf_config.num_hidden_layers)
         ]

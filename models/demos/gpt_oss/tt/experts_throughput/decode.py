@@ -182,6 +182,12 @@ def decode_forward(
     Returns:
         Output tensor [batch_size_per_device, 1, seq_len, hidden_size]
     """
+    hidden_states = ttnn.reshape(hidden_states, (-1, 1, 1, config.hidden_size))
+    topk_expert_indices = ttnn.typecast(topk_expert_indices, dtype=ttnn.uint32)
+    topk_expert_indices = ttnn.reshape(topk_expert_indices, (-1, 1, 1, config.num_experts_per_tok))
+    topk_expert_indices = ttnn.typecast(topk_expert_indices, dtype=ttnn.uint16)
+    topk_expert_weights = ttnn.reshape(topk_expert_weights, (-1, 1, 1, config.num_experts_per_tok))
+
     seq_len = 1  # Decode mode always has seq_len=1
     batch_size_per_device = hidden_states.shape[0]
     num_dispatch_devices = (

@@ -92,6 +92,7 @@ class Attention:
         # Get KV memory config for decode mode
         self.kv_mem_cfg = get_kv_memory_config(
             mesh_device,
+            config.max_batch_size,
             mesh_config.shard_size(config.num_kv_heads),
             config.head_dim,
         )
@@ -117,10 +118,11 @@ class Attention:
         Returns:
             Attention output [batch, seq_len, hidden_size]
         """
-        batch_size, seq_len, hidden_size = hidden_states.shape
+        # batch_size, seq_len, hidden_size = hidden_states.shape
 
         # Determine mode based on sequence length
-        is_decode = seq_len == 1
+        # is_decode = seq_len == 1
+        is_decode = True
 
         # Use provided kv_cache or internal cache
         cache = kv_cache if kv_cache is not None else self.kv_cache

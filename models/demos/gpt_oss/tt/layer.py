@@ -25,6 +25,7 @@ class DecoderLayer:
         mesh_config=None,
         create_kv_cache=True,
         transformation_mats=None,
+        max_batch_size=1,
     ):
         self.input_layernorm = RMSNorm(
             mesh_device,
@@ -60,6 +61,7 @@ class DecoderLayer:
             head_dim=hf_config.head_dim,
             max_seq_len=hf_config.max_position_embeddings,
             sliding_window=hf_config.sliding_window,
+            max_batch_size=max_batch_size,
         )
 
         # Create attention program config
@@ -88,8 +90,13 @@ class DecoderLayer:
         page_table=None,
         kv_cache=None,
     ):
+        # hidden_states: [1, 1, tokens/num_rows, hidden_size/num_columns]
+        # residual: [1, 1, tokens/num_rows, hidden_size/num_columns]
+        breakpoint()
         residual = hidden_states
         hidden_states_post_norm = self.input_layernorm(hidden_states)
+        # additional all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
+        # hidden_states_post_norm: [1, 1, tokens/num_rows, hidden_size]
         hidden_states = self.self_attn(
             hidden_states_post_norm,
             rope_mats=position_embeddings,
@@ -97,9 +104,14 @@ class DecoderLayer:
             page_table=page_table,
             kv_cache=kv_cache,
         )
+        breakpoint()
+        # after reduce scatter at end of attn: [1, 1, global_batch//num_rows, hidden_size/num_columns]
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
         residual = hidden_states
         hidden_states_post_norm = self.post_attention_layernorm(hidden_states)
-        hidden_states, _ = self.mlp(hidden_states_post_norm)  # diff with llama: router scores
+        # another all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
+        hidden_states = self.mlp(hidden_states_post_norm)  # diff with llama: router scores
+        breakpoint()
+        # TODO: replace all_reduce at end of MLP with reduce_scatter so we get [1, 1, global_batch//num_rows, hidden_size/num_columns]
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
         return hidden_states

@@ -44,7 +44,8 @@ def decode_forward(
     Returns:
         Attention output [batch, 1, hidden_size]
     """
-    batch_size, seq_len, hidden_size = hidden_states.shape
+    # batch_size, seq_len, hidden_size = hidden_states.shape
+    seq_len, _, batch_size, hidden_size = hidden_states.shape
 
     # Validate decode mode
     if seq_len != 1:
@@ -79,6 +80,7 @@ def decode_forward(
     tt_k = ttnn.to_memory_config(tt_k, kv_mem_cfg)
     tt_v = ttnn.to_memory_config(tt_v, kv_mem_cfg)
 
+    breakpoint()
     ttnn.experimental.paged_update_cache(
         k_cache,
         tt_k,
@@ -91,6 +93,7 @@ def decode_forward(
         update_idxs_tensor=position_idx,
         page_table=page_table,
     )
+    breakpoint()
 
     tt_k.deallocate(True)
     tt_v.deallocate(True)
@@ -156,6 +159,9 @@ def decode_forward(
     )
 
     # Tensor parallel allreduce
+    # TODO: This will need to be a reduce scatter so outputs are [1, 1, global_batch//num_rows, hidden_size//num_columns
+    breakpoint()
+    ## THIS HANGS???
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, batch_size, seq_len, hidden_size)
 
     return tt_out
