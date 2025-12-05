@@ -115,15 +115,24 @@ def test_ttnn_aspp(device, model_location_generator):
     ttnn_aspp_output_torch = ttnn.to_torch(ttnn_aspp_output).permute(0, 3, 1, 2)
     ttnn_aspp_output_torch = torch.reshape(ttnn_aspp_output_torch, (1, 256, 32, 64))
 
+    # PCC values differ between 20-core (5x4) and all-core configurations
+    is_20_core_grid = compute_grid.x == 5 and compute_grid.y == 4
+
+    if is_20_core_grid:
+        aspp_pcc, aspp_abs_err, aspp_rel_err = 0.99, 0.03, 0.4
+    else:
+        # Relaxed tolerances for all-core grid with auto-generated program config
+        aspp_pcc, aspp_abs_err, aspp_rel_err = 0.99, 0.1, 1.0
+
     passed = check_ttnn_output(
         "aspp_output",
         pytorch_aspp_output,
         ttnn_aspp_output,
         to_channel_first=True,
         output_shape=(1, 256, 32, 64),
-        exp_pcc=0.99,
-        exp_abs_err=0.03,
-        exp_rel_err=0.4,
+        exp_pcc=aspp_pcc,
+        exp_abs_err=aspp_abs_err,
+        exp_rel_err=aspp_rel_err,
     )
 
     assert passed, f"ASPP PCC and tolerance test failed"

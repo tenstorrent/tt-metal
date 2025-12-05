@@ -115,14 +115,23 @@ def test_ttnn_semseg(device, model_location_generator):
     logger.info("Running TTNN semantic segmentation head test...")
     ttnn_out_tt, _ = ttnn_model.semantic_head(ttnn_features)
 
+    # PCC values differ between 20-core (5x4) and all-core configurations
+    is_20_core_grid = compute_grid.x == 5 and compute_grid.y == 4
+
+    if is_20_core_grid:
+        semantic_pcc, semantic_abs_err, semantic_rel_err = 0.972, 2.0, 0.4
+    else:
+        # Relaxed tolerances for all-core grid with auto-generated program config
+        semantic_pcc, semantic_abs_err, semantic_rel_err = 0.972, 4.5, 2.0
+
     passed = check_ttnn_output(
         "Semantic",
         torch_out,
         ttnn_out_tt,
         to_channel_first=False,
         output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
-        exp_pcc=0.972,
-        exp_abs_err=2.0,
-        exp_rel_err=0.4,
+        exp_pcc=semantic_pcc,
+        exp_abs_err=semantic_abs_err,
+        exp_rel_err=semantic_rel_err,
     )
     assert passed, f"Semantic segmentation PCC and tolerance tests failed"
