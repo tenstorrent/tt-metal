@@ -211,6 +211,25 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         scores.buffer()->page_size(),
         2 * n_activated_expert_tiles,
         scores_data_format);
+
+    auto normalized_transpose_cb_index = tt::CBIndex::c_23;
+    tt::tt_metal::create_cb(
+        normalized_transpose_cb_index,
+        program,
+        all_cores,
+        scores.buffer()->page_size(),
+        2 * n_activated_expert_tiles,
+        scores_data_format);
+
+    auto post_sort_transpose_cb_index = tt::CBIndex::c_24;
+    tt::tt_metal::create_cb(
+        post_sort_transpose_cb_index,
+        program,
+        all_cores,
+        scores.buffer()->page_size(),
+        2 * n_activated_expert_tiles,
+        scores_data_format);
+
     // Reader kernel compile time arguments
     std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
         {"scores_cb_index", scores_cb_index},
@@ -273,6 +292,8 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
         {"scales_cb_index", scales_cb_index},
         {"normalized_cb_index", normalized_cb_index},
         {"transpose_cb_index", transpose_cb_index},
+        {"normalized_transpose_cb_index", normalized_transpose_cb_index},
+        {"post_sort_transpose_cb_index", post_sort_transpose_cb_index},
     };
 
     std::vector<uint32_t> compute_compile_time_args = {};

@@ -143,40 +143,29 @@ FORCE_INLINE void generate_reduce_scalar(
     // 32x32 tile where a num_selected_experts x tokens_per_tile subset of the tile needs to be {1.0bf16, 1.0bf16,
     // ..., 1.0bf16} the rest should be {0.0bf16, 0.0bf16, ..., 0.0bf16}
     cb_reserve_back(reduce_scalar_cb_index, 1);
+    constexpr uint32_t face_size_bytes = 512;
+    constexpr uint32_t face_line_bytes = 32;
     uint32_t write_addr = get_write_ptr(reduce_scalar_cb_index);
     tt_l1_ptr uint16_t* write_ptr = reinterpret_cast<tt_l1_ptr uint16_t*>(write_addr);
     // the uint32_t contains two bf16 values, so we write one face line/2 elements through pointer access:
     uint16_t scalar = packed_scalar >> 16;
-    for (uint32_t i = 0; i < 16; i++) {
+    for (uint32_t i = 0; i < n_activated_experts; i++) {
         write_ptr[i] = scalar;
+        if (i > 15) {
+            write_ptr[i + 241] = scalar;
+        }
     }
-    // then we can use noc_async_read to write the rest of the ones
-    constexpr uint32_t face_line_bytes = 32;
-    constexpr uint32_t face_size_bytes = 512;
-    for (uint32_t i = 1; i < 32; i++) {
-        if (i < n_activated_experts) {
-            if (i > 15) {
-                noc_async_read(
-                    get_noc_addr(write_addr), write_addr + i * face_line_bytes + face_size_bytes, face_line_bytes);
-            } else {
-                noc_async_read(get_noc_addr(write_addr), write_addr + i * face_line_bytes, face_line_bytes);
-            }
-        } else {
-            // write zeros
-            if (i == 16) {
-                // one full face
-                zero_buffer(write_addr + i * face_line_bytes + face_size_bytes, face_size_bytes);
-                break;
-            } else {
-                zero_buffer(write_addr + i * face_line_bytes, face_line_bytes);
-            }
+    // rest of the face
+    for (uint32_t i = n_activated_experts; i < 32; i++) {
+        write_ptr[i] = 0;
+        if (i == 16) {
+            noc_async_read(get_noc_addr(MEM_ZEROS_BASE), write_addr + face_size_bytes, face_line_bytes);
+            break;
         }
     }
     noc_async_read_barrier();
-    // face 1 and face 3 are written, now we need to write face 2 and face 4, where face 2 = face 1 and face 4 = face 3
-    noc_async_read(get_noc_addr(write_addr), write_addr + face_size_bytes, face_size_bytes);
-    noc_async_read(get_noc_addr(write_addr) + 2 * face_size_bytes, write_addr + 3 * face_size_bytes, face_size_bytes);
-    noc_async_read_barrier();
+
+    print_tile(reduce_scalar_cb_index, 0, true, 0, 1, 0, 32);
     cb_push_back(reduce_scalar_cb_index, 1);
 }
 
@@ -398,7 +387,6 @@ void write_epsilon(const uint32_t epsilon_cb_index, const uint32_t packed_epsilo
     }
     noc_async_read(get_noc_addr(write_addr), write_addr + 512, 32);
     noc_async_read_barrier();
-    // print_tile(epsilon_cb_index, 0, true, 0, 1, 0, 32);
     cb_push_back(epsilon_cb_index, 1);
 }
 
