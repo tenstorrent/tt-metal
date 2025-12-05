@@ -58,6 +58,7 @@
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 
 namespace tt::tt_fabric {
 
@@ -473,14 +474,14 @@ void ControlPlane::init_control_plane(
         // corner node IDs of the fabric mesh. This is a performance optimization to ensure that MGD mapping does not
         // bisect a device.
 
-        // * * o o < Pinned corners marked with *
-        // * o o o
+        // * o o o < Top left corner pinned with *
         // o o o o
         // o o o o
         // o o o o
         // o o o o
         // o o o o
         // o o o o
+        // o o o * < Bottom right corner pinned with *
         const bool is_1d = this->mesh_graph_->get_mesh_shape(MeshId{0})[0] == 1 ||
                            this->mesh_graph_->get_mesh_shape(MeshId{0})[1] == 1;
         const size_t board_size = cluster.get_unique_chip_ids().size();
@@ -490,12 +491,11 @@ void ControlPlane::init_control_plane(
         // multi-host machines should be limited via rank bindings so should be ok
         if (cluster.is_ubb_galaxy() && !is_1d && board_size == 32 &&
             distributed_size == 1) {  // Using full board size for UBB Galaxy
-            int y_size = this->mesh_graph_->get_mesh_shape(MeshId{0})[1];
+            // Top left corner: index 0
             fixed_asic_position_pinnings.push_back({AsicPosition{1, 1}, FabricNodeId(MeshId{0}, 0)});
-            fixed_asic_position_pinnings.push_back({AsicPosition{1, 5}, FabricNodeId(MeshId{0}, 1)});
-            fixed_asic_position_pinnings.push_back({AsicPosition{1, 2}, FabricNodeId(MeshId{0}, y_size)});
+            // Bottom right corner: last device index
+            fixed_asic_position_pinnings.push_back({AsicPosition{4, 1}, FabricNodeId(MeshId{0}, board_size - 1)});
         }
-
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
             *this->mesh_graph_,
             *this->physical_system_descriptor_,
@@ -1724,15 +1724,21 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, Chip
         }
     }
 
-    // Write fabric connections (fabric router config) to mux cores and tensix connections (tensix config) to worker
-    // cores
-    write_to_worker_or_fabric_tensix_cores(
-        &fabric_worker_connections,      // worker_data - goes to mux cores
-        &fabric_dispatcher_connections,  // dispatcher_data - goes to dispatcher cores
-        &fabric_tensix_connections,      // tensix_extension_data - goes to worker cores
-        sizeof(tt::tt_fabric::tensix_fabric_connections_l1_info_t),
-        tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS,
-        physical_chip_id);
+    const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
+        // UDM mode: use per-worker connections
+        this->write_udm_fabric_connections_to_tensix_cores(
+            physical_chip_id, fabric_worker_connections, fabric_dispatcher_connections);
+    } else {
+        // Non UDM mode: same connection info for all workers
+        write_to_worker_or_fabric_tensix_cores(
+            &fabric_worker_connections,      // worker_data - goes to mux cores
+            &fabric_dispatcher_connections,  // dispatcher_data - goes to dispatcher cores
+            &fabric_tensix_connections,      // tensix_extension_data - goes to worker cores
+            sizeof(tt::tt_fabric::tensix_fabric_connections_l1_info_t),
+            tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS,
+            physical_chip_id);
+    }
 }
 
 std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_routing_planes_in_direction(
@@ -2139,7 +2145,8 @@ void ControlPlane::populate_fabric_connection_info(
     tt::tt_fabric::fabric_connection_info_t& tensix_connection_info,
     ChipId physical_chip_id,
     chan_id_t eth_channel_id) const {
-    constexpr uint16_t WORKER_FREE_SLOTS_STREAM_ID = 17;
+    constexpr uint16_t WORKER_FREE_SLOTS_STREAM_ID =
+        tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id;
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& fabric_context = this->get_fabric_context();
     // Sender channel 0 is always for local worker in the new design
@@ -2179,6 +2186,68 @@ void ControlPlane::populate_fabric_connection_info(
             tensix_connection_info, mux_core_virtual, tensix_config, tensix_sender_channel, core_id);
     } else {
         dispatcher_connection_info = worker_connection_info;
+    }
+}
+
+// UDM-specific: write per-worker connection info to each worker core's L1
+void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
+    ChipId physical_chip_id,
+    const tt::tt_fabric::tensix_fabric_connections_l1_info_t& fabric_mux_connections,
+    const tt::tt_fabric::tensix_fabric_connections_l1_info_t& fabric_dispatcher_connections) const {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& fabric_context = this->get_fabric_context();
+    const auto& tensix_config = fabric_context.get_tensix_config();
+
+    // Get mux and dispatcher cores
+    std::unordered_set<CoreCoord> fabric_mux_cores_translated = tensix_config.get_translated_fabric_mux_cores();
+    std::unordered_set<CoreCoord> dispatch_mux_cores_translated = tensix_config.get_translated_dispatch_mux_cores();
+
+    const auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
+    const std::vector<tt::umd::CoreCoord>& all_tensix_cores =
+        soc_desc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED);
+
+    // Build per-worker connection info and write to each worker core
+    for (const auto& tensix_core : all_tensix_cores) {
+        CoreCoord core_coord(tensix_core.x, tensix_core.y);
+
+        // Determine core type
+        const void* data_to_write = nullptr;
+        if (fabric_mux_cores_translated.find(core_coord) != fabric_mux_cores_translated.end()) {
+            // Mux core: write fabric_mux_connections (passed in from caller)
+            data_to_write = &fabric_mux_connections;
+        } else if (dispatch_mux_cores_translated.find(core_coord) != dispatch_mux_cores_translated.end()) {
+            // Dispatcher core: write fabric_dispatcher_connections (passed in from caller)
+            data_to_write = &fabric_dispatcher_connections;
+        } else {
+            // Worker core: build per-worker connection info
+            tt::tt_fabric::tensix_fabric_connections_l1_info_t worker_connections = {};
+
+            // Get worker assignment info (tensix core + channel index) with a single lookup
+            auto tensix_info = tensix_config.get_worker_tensix_info(physical_chip_id, core_coord);
+
+            // Populate worker-specific tensix mux connection for ALL eth channel indices
+            for (uint8_t eth_chan = 0;
+                 eth_chan < tt::tt_fabric::tensix_fabric_connections_l1_info_t::MAX_FABRIC_ENDPOINTS;
+                 eth_chan++) {
+                auto& connection_info = worker_connections.read_only[eth_chan];
+                fill_tensix_connection_info_fields(
+                    connection_info,
+                    tensix_info.tensix_core,
+                    tensix_config,
+                    tensix_info.channel_index,
+                    FabricTensixCoreType::MUX);
+            }
+
+            data_to_write = &worker_connections;
+        }
+
+        // Write to L1
+        cluster.write_core(
+            data_to_write,
+            sizeof(tt::tt_fabric::tensix_fabric_connections_l1_info_t),
+            tt_cxy_pair(physical_chip_id, core_coord),
+            tt_metal::MetalContext::instance().hal().get_dev_addr(
+                tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS));
     }
 }
 

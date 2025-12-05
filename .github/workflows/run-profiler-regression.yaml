@@ -106,6 +106,7 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
+          auto-triage: ${{ !inputs.enable-watcher }}
       - name: Run profiler regression tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
