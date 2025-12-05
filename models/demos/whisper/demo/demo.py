@@ -740,9 +740,9 @@ def test_demo_for_conditional_generation(
         }
         if is_blackhole():
             if mesh_device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
-                expected_perf_metrics = {"prefill_time_to_token": 0.127, "decode_t/s/u": 87.0}
+                expected_perf_metrics = {"prefill_time_to_token": 0.115, "decode_t/s/u": 145.0}
             else:
-                expected_perf_metrics = {"prefill_time_to_token": 0.119, "decode_t/s/u": 94.0}
+                expected_perf_metrics = {"prefill_time_to_token": 0.110, "decode_t/s/u": 155.0}
         else:  # wormhole_b0
             expected_perf_metrics = metrics_dictionary[mesh_device.get_num_devices()]
         total_batch = mesh_device.get_num_devices() * batch_size_per_device
