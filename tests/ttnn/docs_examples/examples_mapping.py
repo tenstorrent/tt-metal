@@ -16,6 +16,8 @@ from . import test_reduction_examples as reduction
 from . import test_normalization_examples as normalization
 from . import test_embedding_examples as embedding
 from . import test_pooling_examples as pooling
+from . import test_conv_examples as conv
+from . import test_upsample_examples as upsample
 
 FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     # Core
@@ -392,20 +394,20 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     # Embedding
     "ttnn.embedding": embedding.test_embedding,
     # Convolution
-    # "ttnn.conv1d": convolution.test_conv1d, # Lack of example
-    # "ttnn.conv2d": convolution.test_conv2d, # Lack of example
-    # "ttnn.experimental.conv3d": convolution.test_conv3d, # Lack of example
-    # "ttnn.conv_transpose2d": convolution.test_conv_transpose2d, # Lack of example
-    # "ttnn.prepare_conv_weights": convolution.test_prepare_conv_weights, # Lack of example
-    # "ttnn.prepare_conv_bias": convolution.test_prepare_conv_bias, # Lack of example
-    # "ttnn.prepare_conv_transpose2d_weights": convolution.test_prepare_conv_transpose2d_weights, # Lack of example
-    # "ttnn.prepare_conv_transpose2d_bias": convolution.test_prepare_conv_transpose2d_bias, # Lack of example
+    "ttnn.conv1d": conv.test_conv1d,
+    "ttnn.conv2d": conv.test_conv2d,
+    "ttnn.experimental.conv3d": conv.test_conv3d,
+    "ttnn.conv_transpose2d": conv.test_conv_transpose2d,
+    "ttnn.prepare_conv_weights": conv.test_prepare_conv_weights,
+    "ttnn.prepare_conv_bias": conv.test_prepare_conv_bias,
+    "ttnn.prepare_conv_transpose2d_weights": conv.test_prepare_conv_transpose2d_weights,
+    "ttnn.prepare_conv_transpose2d_bias": conv.test_prepare_conv_transpose2d_bias,
     # Pooling
     "ttnn.global_avg_pool2d": pooling.test_global_avg_pool2d,
     "ttnn.max_pool2d": pooling.test_max_pool2d,
     "ttnn.avg_pool2d": pooling.test_avg_pool2d,
     # Vision
-    # "ttnn.upsample": vision.test_upsample, # Lack of example
+    "ttnn.upsample": upsample.test_upsample,
     # KV Cache
     # "ttnn.kv_cache.fill_cache_for_user_":kv_cache.test_fill_cache_for_user_, # Lack of example
     # "ttnn.kv_cache.update_cache_for_token_":kv_cache.test_update_cache_for_token_, # Lack of example
