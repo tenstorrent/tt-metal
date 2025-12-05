@@ -32,8 +32,10 @@ RingDistributedSdpaProgramFactory::cached_program_t RingDistributedSdpaProgramFa
     const auto& ring_size = operation_attributes.ring_size;
     TT_FATAL(
         operation_attributes.ring_id.has_value(),
-        "ring_id must have a value at this point");  // At this point ring_id is guaranteed to have a value due to the
-                                                     // call in create_mesh_workload
+// At this point ring_id is guaranteed to have a value due to the call in create_mesh_workload
+        TT_FATAL(
+            operation_attributes.ring_id.has_value(),
+            "ring_id must have a value at this point");
     const auto ring_id = operation_attributes.ring_id.value();
     const auto scale = operation_attributes.scale;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
