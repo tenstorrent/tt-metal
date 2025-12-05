@@ -55,7 +55,7 @@ void kernel_main() {
         // Initialize slots
         for (uint32_t i = 0; i < num_trids; i++) {
             slot_states[i] = SlotState::IDLE;
-            scratch_write_addrs[i] = scratch_write_addr_base;
+            scratch_write_addrs[i] = scratch_write_addr_base + i * scratch_cb_page_size;
         }
 
         uint32_t rows_issued = 0;      // Number of src->scratch transfers started
