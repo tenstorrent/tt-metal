@@ -46,14 +46,22 @@ static constexpr std::size_t num_sender_channels_with_tensix_config = 1;
 static constexpr std::size_t num_sender_channels_1d_linear = 2;
 static constexpr std::size_t num_sender_channels_2d_mesh = 4;
 
+// Z router channel counts
+// VC0: 4 channels (same as 2D mesh for consistency)
+// VC1: 4 sender channels (Z→mesh, one per direction), 1 receiver channel (mesh→Z)
+static constexpr std::size_t num_sender_channels_z_router_vc0 = 4;
+static constexpr std::size_t num_sender_channels_z_router_vc1 = 4;
+static constexpr std::size_t num_sender_channels_z_router = num_sender_channels_z_router_vc0 + num_sender_channels_z_router_vc1;
+static constexpr std::size_t num_receiver_channels_z_router = 2;  // 1 for VC0, 1 for VC1
+
 static constexpr std::size_t num_sender_channels_1d = 2;
 // VC0: Up to Worker + 3 of [N/E/S/W]
 // VC1: Z + Up to 3 of [N/E/S/W]
 static constexpr std::size_t num_sender_channels_2d = 8;
-static constexpr std::size_t num_max_sender_channels = std::max(num_sender_channels_1d, num_sender_channels_2d);
+static constexpr std::size_t num_max_sender_channels = std::max(num_sender_channels_1d, num_sender_channels_2d, num_sender_channels_z_router);
 static constexpr std::size_t num_receiver_channels_1d = 1;
 static constexpr std::size_t num_receiver_channels_2d = 2;
-static constexpr std::size_t num_max_receiver_channels = std::max(num_receiver_channels_1d, num_receiver_channels_2d);
+static constexpr std::size_t num_max_receiver_channels = std::max(num_receiver_channels_1d, num_receiver_channels_2d, num_receiver_channels_z_router);
 
 static constexpr std::size_t num_downstream_edms_vc0 = 1;
 static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;

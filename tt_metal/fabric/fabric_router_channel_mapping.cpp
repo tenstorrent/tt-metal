@@ -10,8 +10,8 @@
 namespace tt::tt_fabric {
 
 FabricRouterChannelMapping::FabricRouterChannelMapping(
-    Topology topology, eth_chan_directions direction, bool downstream_is_tensix_builder) :
-    topology_(topology), direction_(direction), downstream_is_tensix_builder_(downstream_is_tensix_builder) {
+    Topology topology, eth_chan_directions direction, bool downstream_is_tensix_builder, RouterVariant variant) :
+    topology_(topology), direction_(direction), downstream_is_tensix_builder_(downstream_is_tensix_builder), variant_(variant) {
     initialize_mappings();
 }
 
@@ -59,23 +59,36 @@ void FabricRouterChannelMapping::initialize_vc0_mappings() {
 void FabricRouterChannelMapping::initialize_vc1_mappings() {
     const bool is_2d = is_2d_topology();
     if (!is_2d) {
-        // VC1 (intermesh) only exists for 2D topologies
+        // VC1 (intermesh) only exists for 2D topologies and Z routers
         return;
     }
 
-    // VC2: [0-2] for 2D, [0-3] for 2D+Z
-    // For now, we'll map to erisc/tensix builder channels
-    // The exact mapping depends on intermesh implementation details
-    // This is a placeholder - actual implementation may vary
-    uint32_t num_vc1_channels = 3;  // Default for 2D, could be 4 for 2D+Z
+    if (is_z_router()) {
+        // Z Router VC1 layout:
+        // - Sender channels 0-3: Map to erisc internal channels 4-7 (Z→mesh traffic)
+        // - Receiver channel 0: Maps to erisc internal channel 1 (mesh→Z traffic)
+        
+        // 4 sender channels for Z router (one per potential mesh router direction)
+        for (uint32_t i = 0; i < 4; ++i) {
+            sender_channel_map_[LogicalSenderChannelKey{1, i}] =
+                InternalSenderChannelMapping{BuilderType::ERISC, 4 + i};  // erisc channels 4-7
+        }
+        
+        // 1 receiver channel for Z router
+        receiver_channel_map_[LogicalReceiverChannelKey{1, 0}] =
+            InternalReceiverChannelMapping{BuilderType::ERISC, 1};  // erisc receiver channel 1
+    } else {
+        // Standard mesh router VC1: [0-2] for intermesh traffic
+        // Map to erisc builder channels 4-6 (after VC0 channels 0-3)
+        uint32_t num_vc1_channels = 3;  // Standard 2D intermesh
 
-    for (uint32_t i = 0; i < num_vc1_channels; ++i) {
-        // Map to erisc builder for now - tensix mapping would be added if needed
-        sender_channel_map_[LogicalSenderChannelKey{2, i}] =
-            InternalSenderChannelMapping{BuilderType::ERISC, i};  // VC2 is externally-facing (intermesh)
+        for (uint32_t i = 0; i < num_vc1_channels; ++i) {
+            sender_channel_map_[LogicalSenderChannelKey{1, i}] =
+                InternalSenderChannelMapping{BuilderType::ERISC, 4 + i};  // erisc channels 4-6
 
-        receiver_channel_map_[LogicalReceiverChannelKey{2, i}] =
-            InternalReceiverChannelMapping{BuilderType::ERISC, i};
+            receiver_channel_map_[LogicalReceiverChannelKey{1, i}] =
+                InternalReceiverChannelMapping{BuilderType::ERISC, 1 + i};  // erisc receiver channels 1-3
+        }
     }
 }
 
@@ -85,6 +98,10 @@ bool FabricRouterChannelMapping::is_2d_topology() const {
 
 bool FabricRouterChannelMapping::is_ring_or_torus() const {
     return topology_ == Topology::Ring || topology_ == Topology::Torus;
+}
+
+bool FabricRouterChannelMapping::is_z_router() const {
+    return variant_ == RouterVariant::Z_ROUTER;
 }
 
 InternalSenderChannelMapping FabricRouterChannelMapping::get_sender_mapping(
@@ -105,8 +122,13 @@ InternalReceiverChannelMapping FabricRouterChannelMapping::get_receiver_mapping(
 }
 
 uint32_t FabricRouterChannelMapping::get_num_virtual_channels() const {
-    // For now, only handle VC0
-    // intermesh vc suport not added yet (Issue https://github.com/tenstorrent/tt-metal/issues/32561)
+    // Z routers have 2 VCs: VC0 (mesh traffic) and VC1 (Z traffic)
+    if (is_z_router()) {
+        return 2;
+    }
+    
+    // Standard mesh routers: VC0 only for now
+    // TODO: Enable VC1 for standard mesh routers when intermesh support is fully implemented
     return 1;  // VC0 only
 }
 
@@ -114,8 +136,14 @@ uint32_t FabricRouterChannelMapping::get_num_sender_channels_for_vc(uint32_t vc)
     switch (vc) {
         case 0:  // VC0
             return is_2d_topology() ? 4 : 2;
+        case 1:  // VC1
+            if (is_z_router()) {
+                return 4;  // Z router has 4 sender channels (one per mesh router direction)
+            } else if (is_2d_topology()) {
+                return 3;  // Standard mesh router has 3 intermesh channels
+            }
+            return 0;  // 1D topologies don't have VC1
         default:
-            // intermesh vc support not added yet (Issue https://github.com/tenstorrent/tt-metal/issues/32561)
             return 0;
     }
 }

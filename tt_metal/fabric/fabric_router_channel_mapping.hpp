@@ -18,6 +18,17 @@ enum class BuilderType : uint8_t {
     TENSIX = 1,
 };
 
+/**
+ * RouterVariant - Distinguishes between mesh and Z routers
+ * 
+ * MESH: Standard mesh router (N/E/S/W directions)
+ * Z_ROUTER: Vertical Z router for inter-device connectivity
+ */
+enum class RouterVariant : uint8_t {
+    MESH = 0,
+    Z_ROUTER = 1,
+};
+
 struct LogicalSenderChannelKey {
     uint32_t vc;
     uint32_t sender_channel_idx;
@@ -56,19 +67,21 @@ struct InternalReceiverChannelMapping {
  * FabricRouterChannelMapping
  *
  * Defines the mapping from logical channels (VC + relative channel index within VC) to internal builder channels.
- * This mapping is computed based on topology, direction, and tensix extension mode.
+ * This mapping is computed based on topology, direction, router variant, and tensix extension mode.
  *
  * Channel indices are relative to each VC:
  * - VC0 (1D): [0] = local worker, [1] = forwarding from upstream
  * - VC0 (2D): [0] = local worker, [1-3] = forwarding from upstream routers
- * - VC1: [0-2] or [0-3] = intermesh channels (2D/2D+Z only)
+ * - VC1 (2D): [0-2] = intermesh channels (standard 2D)
+ * - VC1 (Z router): [0-3] = Z→mesh channels (4 sender channels mapping to 2-4 mesh routers)
  */
 class FabricRouterChannelMapping {
 public:
     FabricRouterChannelMapping(
         Topology topology,
         eth_chan_directions direction,
-        bool has_tensix_extension = false);
+        bool has_tensix_extension = false,
+        RouterVariant variant = RouterVariant::MESH);
 
     /**
      * Get the internal sender channel mapping for a logical sender channel
@@ -93,9 +106,9 @@ public:
 
 private:
     Topology topology_;
-    // will become used when Z-link support is added
-    [[maybe_unused]] eth_chan_directions direction_;
+    eth_chan_directions direction_;
     bool downstream_is_tensix_builder_;
+    RouterVariant variant_;
 
     std::map<LogicalSenderChannelKey, InternalSenderChannelMapping> sender_channel_map_;
     std::map<LogicalReceiverChannelKey, InternalReceiverChannelMapping> receiver_channel_map_;
@@ -105,6 +118,7 @@ private:
     void initialize_vc1_mappings();
     bool is_2d_topology() const;
     bool is_ring_or_torus() const;
+    bool is_z_router() const;
 };
 
 }  // namespace tt::tt_fabric
