@@ -86,39 +86,40 @@ class Generator:
         # Avoids an infinite loop
         self.prefill_traces_warmup = True
 
-        logger.info("Warming up prefill traces for all supported sequence lengths")
-        for supported_length in self.model.tt_ccl.support_seqlens:
-            logger.info(f"Creating warmup tensor for sequence length: {supported_length}")
-            # Capture trace for both
-            for batch in (1, 32):  # TODO add proper support for batched prefill == b-32
-                # For batched prefill this needs to be *32
-                if batch == 32 and supported_length == 4096:
-                    # For batched prefill max batch sequence length is 2048 or lower (128k limit)
-                    logger.info(f"Skipping warm up step on batched prefill for sequence length {supported_length}")
-                    continue
-                if batch == 32:
-                    current_batch = page_table.shape[0]
-                    if current_batch < batch:
-                        pad_rows = batch - current_batch
-                        padding = torch.full((pad_rows, page_table.shape[1]), -1, dtype=torch.int32)
-                        warmup_page_table = torch.cat([page_table, padding], dim=0)
+        for i in range(2):
+            logger.info("Warming up prefill traces for all supported sequence lengths")
+            for supported_length in self.model.tt_ccl.support_seqlens:
+                logger.info(f"Creating warmup tensor for sequence length: {supported_length}")
+                # Capture trace for both
+                for batch in (1, 32):  # TODO add proper support for batched prefill == b-32
+                    # For batched prefill this needs to be *32
+                    if batch == 32 and supported_length == 4096:
+                        # For batched prefill max batch sequence length is 2048 or lower (128k limit)
+                        logger.info(f"Skipping warm up step on batched prefill for sequence length {supported_length}")
+                        continue
+                    if batch == 32:
+                        current_batch = page_table.shape[0]
+                        if current_batch < batch:
+                            pad_rows = batch - current_batch
+                            padding = torch.full((pad_rows, page_table.shape[1]), -1, dtype=torch.int32)
+                            warmup_page_table = torch.cat([page_table, padding], dim=0)
+                        else:
+                            warmup_page_table = page_table
                     else:
                         warmup_page_table = page_table
-                else:
-                    warmup_page_table = page_table
-                warmup_tokens = torch.zeros(batch, supported_length, dtype=torch.long)
-                warmup_prompt_lens = torch.tensor([supported_length] * batch, dtype=torch.long)
-                warmup_empty_slots = list(range(batch))
-                self.prefill_forward_text(
-                    warmup_tokens,
-                    warmup_page_table,
-                    kv_cache,
-                    warmup_prompt_lens,
-                    enable_trace,
-                    sampling_params,
-                    warmup_empty_slots,
-                    tt_out_logits_all_users,
-                )
+                    warmup_tokens = torch.zeros(batch, supported_length, dtype=torch.long)
+                    warmup_prompt_lens = torch.tensor([supported_length] * batch, dtype=torch.long)
+                    warmup_empty_slots = list(range(batch))
+                    self.prefill_forward_text(
+                        warmup_tokens,
+                        warmup_page_table,
+                        kv_cache,
+                        warmup_prompt_lens,
+                        enable_trace,
+                        None if i == 0 else sampling_params,
+                        warmup_empty_slots,
+                        tt_out_logits_all_users,
+                    )
         # trace_id_prefill dict check
         logger.info("Prefill traces warmup completed")
 
