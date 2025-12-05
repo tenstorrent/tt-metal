@@ -339,15 +339,13 @@ void kernel_main() {
                     switch (tiles_to_put_in_current_packet) {
                         case 4:
                             FABRIC_UNICAST((NocUnicastScatterCommandHeader{
-                                {noc_addrs[0], noc_addrs[1], noc_addrs[2], noc_addrs[3]}, {0, 0, 0}}));
+                                {noc_addrs[0], noc_addrs[1], noc_addrs[2], noc_addrs[3]}}));
                             break;
                         case 3:
                             FABRIC_UNICAST(
-                                (NocUnicastScatterCommandHeader{{noc_addrs[0], noc_addrs[1], noc_addrs[2]}, {0, 0}}));
+                                (NocUnicastScatterCommandHeader{{noc_addrs[0], noc_addrs[1], noc_addrs[2]}}));
                             break;
-                        case 2:
-                            FABRIC_UNICAST((NocUnicastScatterCommandHeader{{noc_addrs[0], noc_addrs[1]}, {0}}));
-                            break;
+                        case 2: FABRIC_UNICAST((NocUnicastScatterCommandHeader{{noc_addrs[0], noc_addrs[1]}})); break;
                         case 1:
                             fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                                 mux_connection_handle,
@@ -368,15 +366,13 @@ void kernel_main() {
                     switch (tiles_to_put_in_current_packet) {
                         case 4:
                             FABRIC_UNICAST((NocUnicastScatterCommandHeader{
-                                {noc_addrs[0], noc_addrs[1], noc_addrs[2], noc_addrs[3]}, {0, 0, 0}}));
+                                {noc_addrs[0], noc_addrs[1], noc_addrs[2], noc_addrs[3]}}));
                             break;
                         case 3:
                             FABRIC_UNICAST(
-                                (NocUnicastScatterCommandHeader{{noc_addrs[0], noc_addrs[1], noc_addrs[2]}, {0, 0}}));
+                                (NocUnicastScatterCommandHeader{{noc_addrs[0], noc_addrs[1], noc_addrs[2]}}));
                             break;
-                        case 2:
-                            FABRIC_UNICAST((NocUnicastScatterCommandHeader{{noc_addrs[0], noc_addrs[1]}, {0}}));
-                            break;
+                        case 2: FABRIC_UNICAST((NocUnicastScatterCommandHeader{{noc_addrs[0], noc_addrs[1]}})); break;
                         case 1:
                             fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                                 mux_connection_handle,
@@ -524,14 +520,13 @@ void kernel_main() {
 
                 switch (tiles_to_put_in_current_packet) {
                     case 4:
-                        FABRIC_UNICAST((NocUnicastScatterCommandHeader{
-                            {noc_addrs[0], noc_addrs[1], noc_addrs[2], noc_addrs[3]}, {0, 0, 0}}));
+                        FABRIC_UNICAST(
+                            (NocUnicastScatterCommandHeader{{noc_addrs[0], noc_addrs[1], noc_addrs[2], noc_addrs[3]}}));
                         break;
                     case 3:
-                        FABRIC_UNICAST(
-                            (NocUnicastScatterCommandHeader{{noc_addrs[0], noc_addrs[1], noc_addrs[2]}, {0, 0}}));
+                        FABRIC_UNICAST((NocUnicastScatterCommandHeader{{noc_addrs[0], noc_addrs[1], noc_addrs[2]}}));
                         break;
-                    case 2: FABRIC_UNICAST((NocUnicastScatterCommandHeader{{noc_addrs[0], noc_addrs[1]}, {0}})); break;
+                    case 2: FABRIC_UNICAST((NocUnicastScatterCommandHeader{{noc_addrs[0], noc_addrs[1]}})); break;
                     case 1:
                         fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                             mux_connection_handle,
