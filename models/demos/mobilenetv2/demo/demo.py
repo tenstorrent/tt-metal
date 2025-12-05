@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -82,7 +84,8 @@ def run_mobilenetv2_imagenet_demo(
             use_height_and_width_as_shard_shape=True,
         )
 
-        config = PipelineConfig(use_trace=True, num_command_queues=2, all_transfers_on_separate_command_queue=False)
+        use_trace = os.environ.get("TT_DISABLE_TRACE", "0") != "1"
+        config = PipelineConfig(use_trace=use_trace, num_command_queues=2, all_transfers_on_separate_command_queue=False)
         pipe = create_pipeline_from_config(
             config,
             ttnn_model,

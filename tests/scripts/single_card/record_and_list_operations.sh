@@ -33,6 +33,12 @@ echo "Report name: $REPORT_NAME"
 echo "Test command: $TEST_CMD"
 echo ""
 
+# Export TT_DISABLE_TRACE if set (disables trace capture for ops recording compatibility)
+if [[ -n "$TT_DISABLE_TRACE" ]]; then
+    export TT_DISABLE_TRACE
+    echo "TT_DISABLE_TRACE=$TT_DISABLE_TRACE (trace capture disabled)"
+fi
+
 # Set TTNN_CONFIG_OVERRIDES to enable operation logging
 export TTNN_CONFIG_OVERRIDES='{
     "enable_fast_runtime_mode": false,

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 
 import ttnn
 from models.demos.ufld_v2.runner.performant_runner_infra import UFLDPerformanceRunnerInfra
@@ -37,7 +38,11 @@ class UFLDPerformantRunner:
             self.input_mem_config,
         ) = self.runner_infra.setup_dram_sharded_input(device)
         self.tt_image_res = self.tt_inputs_host.to(device, sharded_mem_config_DRAM)
-        self._capture_ufldv2_trace_2cqs()
+        self.use_trace = os.environ.get("TT_DISABLE_TRACE", "0") != "1"
+        if self.use_trace:
+            self._capture_ufldv2_trace_2cqs()
+        else:
+            self._warmup_no_trace()
 
     def _capture_ufldv2_trace_2cqs(self):
         # Initialize the op event so we can write
@@ -79,6 +84,12 @@ class UFLDPerformantRunner:
         ttnn.end_trace_capture(self.device, self.tid, cq_id=0)
         assert trace_input_addr == self.input_tensor.buffer_address()
 
+    def _warmup_no_trace(self):
+        """Warmup without trace capture for ops recording compatibility."""
+        self.runner_infra.input_tensor = ttnn.to_memory_config(self.tt_image_res, self.input_mem_config)
+        self.runner_infra.run()
+        self.runner_infra.validate()
+
     def _execute_ufldv2_trace_2cqs_inference(self, tt_inputs_host=None):
         tt_inputs_host = self.tt_inputs_host if tt_inputs_host is None else tt_inputs_host
         ttnn.wait_for_event(1, self.op_event)
@@ -91,6 +102,13 @@ class UFLDPerformantRunner:
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
         return self.runner_infra.output_tensor_1
 
+    def _execute_no_trace_inference(self, tt_inputs_host=None):
+        """Run inference without trace for ops recording compatibility."""
+        tt_inputs_host = self.tt_inputs_host if tt_inputs_host is None else tt_inputs_host
+        self.runner_infra.input_tensor = ttnn.to_memory_config(self.tt_image_res, self.input_mem_config)
+        self.runner_infra.run()
+        return self.runner_infra.output_tensor_1
+
     def _validate(self, input_tensor, result_output_tensor):
         torch_output_tensor = self.runner_infra.torch_output_tensor_1
         assert_with_pcc(torch_output_tensor, result_output_tensor, self.runner_infra.valid_pcc)
@@ -98,8 +116,12 @@ class UFLDPerformantRunner:
     def run(self, torch_input_tensor=None):
         tt_inputs_host, _ = self.runner_infra.setup_l1_sharded_input(self.device, torch_input_tensor)
 
-        output = self._execute_ufldv2_trace_2cqs_inference(tt_inputs_host)
+        if self.use_trace:
+            output = self._execute_ufldv2_trace_2cqs_inference(tt_inputs_host)
+        else:
+            output = self._execute_no_trace_inference(tt_inputs_host)
         return output
 
     def release(self):
-        ttnn.release_trace(self.device, self.tid)
+        if self.use_trace:
+            ttnn.release_trace(self.device, self.tid)
