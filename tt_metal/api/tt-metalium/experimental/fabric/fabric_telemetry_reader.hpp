@@ -10,6 +10,15 @@
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <hostdevcommon/fabric_common.h>
 
+// Forward declarations
+namespace tt::umd {
+class Cluster;
+}
+
+namespace tt::tt_metal {
+class Hal;
+}
+
 namespace tt::tt_fabric {
 
 /**
@@ -46,8 +55,9 @@ struct FabricTelemetrySample {
  * @param chip_id Physical chip ID to query.
  * @param channel Ethernet channel ID on that chip.
  * @return Telemetry snapshot for the requested channel.
+ * @throws std::exception if chip_id or channel is invalid, or device access fails.
  */
 [[nodiscard]] tt::tt_fabric::FabricTelemetrySnapshot read_fabric_telemetry(
-    const tt::umd::Cluster& cluster, const tt::tt_metal::Hal& hal, tt::ChipId chip_id, uint32_t channel);
+    tt::umd::Cluster& cluster, const tt::tt_metal::Hal& hal, tt::ChipId chip_id, tt::tt_fabric::chan_id_t channel);
 
 }  // namespace tt::tt_fabric

@@ -15,6 +15,7 @@
 #include "tt_metal/llrt/hal/generated/fabric_telemetry.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_stl/assert.hpp"
+#include "umd/device/types/core_coordinates.hpp"
 
 namespace tt::tt_fabric {
 
@@ -48,15 +49,17 @@ struct ChannelContext {
 }  // namespace
 
 tt::tt_fabric::FabricTelemetrySnapshot read_fabric_telemetry(
-    const tt::umd::Cluster& cluster, const tt::tt_metal::Hal& hal, tt::ChipId chip_id, uint32_t channel) {
+    tt::umd::Cluster& cluster, const tt::tt_metal::Hal& hal, tt::ChipId chip_id, tt::tt_fabric::chan_id_t channel) {
     const auto& factory = hal.get_fabric_telemetry_factory(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
     const auto telemetry_size = factory.size_of<fabric_telemetry::FabricTelemetry>();
     const auto telemetry_addr = hal.get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::FABRIC_TELEMETRY);
 
+    auto& soc_desc = cluster.get_soc_descriptor(chip_id);
+    tt::umd::CoreCoord eth_core = soc_desc.get_eth_core_for_channel(channel, tt::CoordSystem::LOGICAL);
+
     std::vector<std::byte> buffer(telemetry_size);
-    const auto virtual_core = cluster.get_virtual_eth_core_from_channel(chip_id, channel);
-    cluster.read_core(buffer.data(), telemetry_size, tt_cxy_pair(chip_id, virtual_core), telemetry_addr);
+    cluster.read_from_device(buffer.data(), chip_id, eth_core, telemetry_addr, telemetry_size);
 
     const auto view = factory.create_view<fabric_telemetry::FabricTelemetry>(buffer.data());
     return fabric_telemetry_converter::unpack_snapshot_from_hal(view);
@@ -84,7 +87,8 @@ std::vector<FabricTelemetrySample> read_fabric_telemetry(const tt::tt_fabric::Fa
         auto& sample = samples.emplace_back();
         sample.fabric_node_id = fabric_node_id;
         sample.channel_id = channel.channel_id;
-        sample.snapshot = read_fabric_telemetry(cluster, hal, physical_chip_id, channel.channel_id);
+        auto& umd_cluster = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
+        sample.snapshot = read_fabric_telemetry(umd_cluster, hal, physical_chip_id, channel.channel_id);
     }
 
     return samples;
