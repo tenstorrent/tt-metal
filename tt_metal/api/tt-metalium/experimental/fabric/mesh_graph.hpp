@@ -138,8 +138,8 @@ public:
     std::unordered_set<MeshId> get_meshes_connected_to_switch(SwitchId switch_id) const;
     bool is_mesh_connected_to_switch(MeshId mesh_id, SwitchId switch_id) const;
     std::optional<SwitchId> get_switch_for_mesh(MeshId mesh_id) const;
-    // Check if a mesh_id corresponds to a switch
-    bool is_switch(MeshId mesh_id) const;
+    // Check if a mesh_id corresponds to a switch mesh
+    bool is_switch_mesh(MeshId mesh_id) const;
 
     // Get the host rank that owns a given chip in a mesh
     std::optional<MeshHostRankId> get_host_rank_for_chip(MeshId mesh_id, ChipId chip_id) const;

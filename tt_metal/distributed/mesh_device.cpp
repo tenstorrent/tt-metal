@@ -244,7 +244,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
             // Validate that none of the fabric node IDs are on switch meshes
             for (const auto& fabric_node_id : mapped_devices.fabric_node_ids) {
                 TT_FATAL(
-                    !mesh_graph.is_switch(fabric_node_id.mesh_id),
+                    !mesh_graph.is_switch_mesh(fabric_node_id.mesh_id),
                     "Cannot create devices on tt-switch meshes. Fabric node {} maps to mesh_id {} which is a switch. "
                     "Use get_compute_mesh_ids() to get valid compute mesh IDs.",
                     fabric_node_id,
@@ -272,7 +272,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
                     MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
                         supplied_ids[i]);
                 TT_FATAL(
-                    !mesh_graph.is_switch(fabric_node_id.mesh_id),
+                    !mesh_graph.is_switch_mesh(fabric_node_id.mesh_id),
                     "Cannot create devices on tt-switch meshes. Device {} maps to mesh_id {} which is a switch. "
                     "Use get_compute_mesh_ids() to get valid compute mesh IDs.",
                     supplied_ids[i],
@@ -331,7 +331,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
         auto fabric_node_id =
             MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(device_id);
         TT_FATAL(
-            !mesh_graph.is_switch(fabric_node_id.mesh_id),
+            !mesh_graph.is_switch_mesh(fabric_node_id.mesh_id),
             "Cannot create devices on tt-switch meshes. Device {} maps to mesh_id {} which is a switch. "
             "Use get_compute_mesh_ids() to get valid compute mesh IDs.",
             device_id,

@@ -118,10 +118,11 @@ public:
 class IDistributedContextManager {
 public:
     virtual ~IDistributedContextManager() = default;
+    virtual void barrier() const = 0;
+    virtual void compute_barrier() const = 0;
 
 private:
     virtual uint32_t get_randomized_master_seed() const = 0;
-    virtual void barrier() const = 0;
 };
 
 }  // namespace fabric_tests

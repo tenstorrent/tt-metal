@@ -87,7 +87,7 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenCloseComputeMeshDevice) {
 
     // Verify this is a compute mesh, not a switch
     tt::tt_fabric::MeshId mesh_id(mesh_id_val);
-    ASSERT_FALSE(mesh_graph.is_switch(mesh_id))
+    ASSERT_FALSE(mesh_graph.is_switch_mesh(mesh_id))
         << "Mesh ID " << mesh_id_val << " should be a compute mesh, not a switch";
 
     // Get mesh shape

@@ -1468,9 +1468,15 @@ public:
     }
 
     void barrier() const override {
+        // Use global distributed context to include all meshes (including switches) in barriers
+        const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+        distributed_context.barrier();
+    }
+
+    void compute_barrier() const override {
         // Use compute-only distributed context to exclude switch meshes from barriers
         // Switch meshes don't run workloads, so they shouldn't participate in test synchronization
-        auto& distributed_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
+        const auto& distributed_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
         distributed_context.barrier();
     }
 

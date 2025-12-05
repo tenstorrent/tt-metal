@@ -231,7 +231,8 @@ int main(int argc, char** argv) {
                 test_context.compile_programs();
 
                 // multi-host barrier to synchronize before starting the test (as we could be clearing out addresses)
-                fixture->barrier();
+                // Use compute barrier to exclude switch meshes since they don't run workloads
+                fixture->compute_barrier();
 
                 log_info(tt::LogTest, "Launching programs");
                 test_context.launch_programs();
@@ -265,7 +266,8 @@ int main(int argc, char** argv) {
                     test_context.clear_telemetry();
                 }
                 // Synchronize across all hosts after running the current test variant
-                fixture->barrier();
+                // Use compute barrier to exclude switch meshes since they don't run workloads
+                fixture->compute_barrier();
                 test_context.reset_devices();
             }
         }

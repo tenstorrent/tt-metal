@@ -2929,7 +2929,7 @@ bool ControlPlane::is_local_host_on_switch_mesh() const {
     const auto& local_mesh_ids = this->get_local_mesh_id_bindings();
     const auto& mesh_graph = this->get_mesh_graph();
     for (const auto& mesh_id : local_mesh_ids) {
-        if (mesh_graph.is_switch(mesh_id)) {
+        if (mesh_graph.is_switch_mesh(mesh_id)) {
             return true;
         }
     }
@@ -2942,7 +2942,7 @@ std::vector<ChipId> ControlPlane::get_switch_mesh_device_ids() const {
 
     std::vector<ChipId> switch_device_ids;
     for (const auto& mesh_id : local_mesh_ids) {
-        if (mesh_graph.is_switch(mesh_id)) {
+        if (mesh_graph.is_switch_mesh(mesh_id)) {
             const auto& chip_ids = mesh_graph.get_chip_ids(mesh_id);
             for (const auto& chip_id : chip_ids.values()) {
                 auto fabric_node_id = FabricNodeId(mesh_id, chip_id);
