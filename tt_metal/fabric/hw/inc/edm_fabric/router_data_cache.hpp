@@ -6,9 +6,9 @@
 
 #include "risc_common.h"
 
-template <bool ENABLE_RISC_CPU_DATA_CACHE>
+template <bool RISC_CPU_DATA_CACHE_ENABLED>
 FORCE_INLINE void router_invalidate_l1_cache() {
-    if constexpr (ENABLE_RISC_CPU_DATA_CACHE) {
+    if constexpr (RISC_CPU_DATA_CACHE_ENABLED) {
         invalidate_l1_cache();
     }
 }

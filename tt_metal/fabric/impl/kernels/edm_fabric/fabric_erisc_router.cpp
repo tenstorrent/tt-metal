@@ -1218,7 +1218,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
 template <typename EdmChannelWorkerIFs>
 FORCE_INLINE void establish_edm_connection(
     EdmChannelWorkerIFs& local_sender_channel_worker_interface, uint32_t stream_id) {
-    local_sender_channel_worker_interface.template cache_producer_noc_addr<USE_DYNAMIC_CREDIT_ADDR, ENABLE_RISC_CPU_DATA_CACHE>();
+    local_sender_channel_worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE, USE_DYNAMIC_CREDIT_ADDR>();
 }
 
 bool any_sender_channels_active(
@@ -1439,7 +1439,7 @@ FORCE_INLINE bool run_sender_channel_step_impl(
     // ACKs are processed second to avoid any sort of races. If we process acks second,
     // we are guaranteed to see equal to or greater the number of acks than completions
     if constexpr (ENABLE_FIRST_LEVEL_ACK) {
-        auto acks_since_last_check = sender_channel_from_receiver_credits.get_num_unprocessed_acks_from_receiver();
+        auto acks_since_last_check = sender_channel_from_receiver_credits.template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
         if (acks_since_last_check > 0) {
             sender_channel_from_receiver_credits.increment_num_processed_acks(acks_since_last_check);
             send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
@@ -1451,7 +1451,7 @@ FORCE_INLINE bool run_sender_channel_step_impl(
         auto check_connection_status =
             !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();
         if (check_connection_status) {
-            check_worker_connections<MY_ETH_CHANNEL, WorkerInterfaceT, ENABLE_RISC_CPU_DATA_CACHE>(
+            check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
                 local_sender_channel_worker_interface,
                 channel_connection_established,
                 sender_channel_free_slots_stream_id);
@@ -2140,7 +2140,6 @@ void initialize_state_for_txq1_active_mode_sender_side() {
 }
 
 void kernel_main() {
-    static_assert(ENABLE_RISC_CPU_DATA_CACHE == false, "ENABLE_RISC_CPU_DATA_CACHE must be false");
     set_l1_data_cache<ENABLE_RISC_CPU_DATA_CACHE>();
     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
     static_assert(
@@ -2602,7 +2601,7 @@ void kernel_main() {
 
         if constexpr (wait_for_host_signal) {
             if constexpr (is_local_handshake_master) {
-                wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms - 1);
+                wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>((uint32_t)edm_local_sync_ptr, num_local_edms - 1);
                 // This master sends notification to self for multi risc in single eth core case,
                 // This still send to self even though with single risc core case, but no side effects
                 constexpr uint32_t exclude_eth_chan = std::numeric_limits<uint32_t>::max();
@@ -2610,7 +2609,7 @@ void kernel_main() {
                     edm_channels_mask, exclude_eth_chan, (uint32_t)edm_local_sync_ptr, num_local_edms);
             } else {
                 notify_master_router(local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr);
-                wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms);
+                wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>((uint32_t)edm_local_sync_ptr, num_local_edms);
             }
 
             *edm_status_ptr = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
@@ -2619,7 +2618,7 @@ void kernel_main() {
             // 2. All risc cores in master eth core receive signal from host and exits from this wait
             //    Other subordinate risc cores wait for this signal
             // 4. The other subordinate risc cores receive the READY_FOR_TRAFFIC signal and exit from this wait
-            wait_for_notification((uint32_t)edm_status_ptr, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
+            wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>((uint32_t)edm_status_ptr, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
 
             if constexpr (is_local_handshake_master) {
                 // 3. Only master risc core notifies all subordinate risc cores (except subordinate riscs in master eth
@@ -2640,7 +2639,7 @@ void kernel_main() {
     // if enable the tensix extension, then before open downstream connection, need to wait for downstream tensix ready
     // for connection.
     if constexpr (num_ds_or_local_tensix_connections) {
-        wait_for_notification((uint32_t)edm_local_tensix_sync_ptr_addr, num_ds_or_local_tensix_connections);
+        wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>((uint32_t)edm_local_tensix_sync_ptr_addr, num_ds_or_local_tensix_connections);
     }
 
     if constexpr (is_2d_fabric) {
