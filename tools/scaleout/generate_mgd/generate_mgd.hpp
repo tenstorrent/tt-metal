@@ -16,14 +16,18 @@ namespace tt::scaleout_tools {
 
 namespace proto = cabling_generator::proto;
 
+// Generate MGD from cabling descriptor protobuf object
 tt::tt_fabric::proto::MeshGraphDescriptor generate_mgd_from_cabling(
     const proto::ClusterDescriptor& cluster_desc, bool verbose = false);
 
+// Generate MGD from cabling descriptor file
 tt::tt_fabric::proto::MeshGraphDescriptor generate_mgd_from_cabling(
     const std::filesystem::path& cabling_descriptor_path, bool verbose = false);
 
+// Write MGD protobuf to file in textproto format
 void write_mgd_to_file(const tt::tt_fabric::proto::MeshGraphDescriptor& mgd, const std::filesystem::path& output_path);
 
+// Convenience function: generate and write MGD in one call
 void generate_mesh_graph_descriptor(
     const std::filesystem::path& cabling_descriptor_path,
     const std::filesystem::path& output_path,
