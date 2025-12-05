@@ -100,7 +100,6 @@ struct NdShardSpec {
 };
 
 using PadValue = std::variant<uint32_t, float>;
-std::ostream& operator<<(std::ostream& os, const NdShardSpec& spec);
 
 }  // namespace tt_metal
 }  // namespace tt
