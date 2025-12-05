@@ -94,7 +94,7 @@ The diagram below illustrates the corresponding Downsample1 module:
   - Once build with the command above to enable profiler, and once you have a pytest for your TTNN module or full model, you may follow the example bellow from the bert_tiny model replacing the path to the demo.py file with the path to your implementation:
 
     ```
-    ./tools/tracy/profile_this.py -n bert_tiny -c "pytest models/demos/bert_tiny/demo/demo.py::test_demo[models/demos/bert_tiny/demo/input_data.json-mrm8488/bert-tiny-finetuned-squadv2-128-8-device_params0]"
+    ./tools/tracy/profile_this.py -n bert_tiny -c "pytest models/demos/wormhole/bert_tiny/demo/demo.py::test_demo"
     ```
   - Once you execute such command, a .csv perf sheet will appear in your execution path. You may open the file via excel for better utilities.
   - You may refer to [TTNN profiler documentation](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/profiling_ttnn_operations.html) for a more comprehensive overview of the profiler tool and the details of the generated perf sheet by it.

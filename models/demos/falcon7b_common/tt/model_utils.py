@@ -76,11 +76,6 @@ def get_default_hifi2_kernel_config():
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
         )
-    else:
-        hifi2_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=True,
-        )
     return hifi2_kernel_config
 
 

@@ -7,7 +7,7 @@ The following set of commands will generate perf reports for ``bert_tiny`` as an
 
     cd $TT_METAL_HOME
     build_metal.sh
-    ./tools/tracy/profile_this.py -n bert_tiny -c "pytest models/demos/bert_tiny/demo/demo.py::test_demo[models/demos/bert_tiny/demo/input_data.json-mrm8488/bert-tiny-finetuned-squadv2-128-8-device_params0]"
+    ./tools/tracy/profile_this.py -n bert_tiny -c "pytest models/demos/wormhole/bert_tiny/demo/demo.py::test_demo"
 
 After the commands finish, the location of the generated csv will be printed on console similar to the image below:
 

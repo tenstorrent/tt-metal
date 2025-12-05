@@ -150,8 +150,6 @@ run_vgg_func() {
 run_bert_tiny_func() {
   fail=0
 
-  pytest models/demos/bert_tiny/demo/demo.py || fail=1
-
   pytest models/demos/wormhole/bert_tiny/demo/demo.py || fail=1
 
   if [[ $fail -ne 0 ]]; then
@@ -192,8 +190,6 @@ run_sdxl_func() {
 
 run_distilbert_func() {
   fail=0
-
-  pytest models/demos/distilbert/demo/demo.py || fail=1
 
   pytest models/demos/wormhole/distilbert/demo/demo.py || fail=1
 
