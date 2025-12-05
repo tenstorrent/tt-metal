@@ -240,6 +240,8 @@ target_link_libraries(
 # Generate Traffic Tests CLI tool
 add_executable(generate_traffic_tests generate_traffic_tests/generate_traffic_tests_main.cpp)
 
+add_dependencies(generate_traffic_tests scaleout_generated_protos)
+
 set_target_properties(
     generate_traffic_tests
     PROPERTIES
