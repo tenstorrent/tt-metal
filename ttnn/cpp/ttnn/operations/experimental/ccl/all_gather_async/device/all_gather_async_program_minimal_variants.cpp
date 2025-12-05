@@ -1508,9 +1508,9 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                 log_info(
                     tt::LogOp,
                     "termination_master_logical_core : {}",
-                    mux_core_offset + num_mux_cores_per_direction_per_link + dir * num_workers_per_direction + 0);
+                    mux_core_offset + num_mux_cores_per_direction_per_link + 0 * num_workers_per_direction + 0);
                 CoreCoord termination_master_logical_core = all_cores
-                    [mux_core_offset + num_mux_cores_per_direction_per_link + dir * num_workers_per_direction + 0];
+                    [mux_core_offset + num_mux_cores_per_direction_per_link + 0 * num_workers_per_direction + 0];
                 CoreCoord termination_master_virtual_core =
                     mesh_device->worker_core_from_logical_core(termination_master_logical_core);
 
@@ -1543,6 +1543,8 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                 };
                 log_info(tt::LogOp, "sender_writer_compile_args mux_virtual_core : {}", mux_virtual_core);
                 log_info(tt::LogOp, "dir = {}, worker = {}, worker * 2 + dir = {}", dir, worker, worker * 2 + dir);
+                log_info(tt::LogOp, "is_termination_master : {}", worker == 0 && dir == 0);
+                log_info(tt::LogOp, "worker_id : {}", worker * 2 + dir);
                 fabric_mux_connection_ct_args(
                     worker == 0 && dir == 0,
                     mux_virtual_core,
@@ -1575,7 +1577,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                 auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
                     program,
                     "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
-                    "minimal_default_writer.cpp",
+                    "minimal_default_writer_1_mux.cpp",
                     {core},
                     tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
                 writer_kernel_ids.push_back(worker_sender_writer_kernel_id);
@@ -2798,7 +2800,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     const bool reverse_order) {
     // Call the builder to create the program and get artifacts
 
-    auto mux_1 = false;
+    auto mux_1 = true;
     auto worker_1 = false;
     auto func_p =
         // mux_1 && worker_1 ? build_all_gather_async_minimal_default_program_artifacts_1mux_1worker :
@@ -2812,7 +2814,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
         !mux_1 && worker_1 ? all_gather_async_minimal_default_helper_override_runtime_arguments_1worker :
                             all_gather_async_minimal_default_helper_override_runtime_arguments;
 
-    auto no_mux = true;
+    auto no_mux = false;
     if (no_mux) {
         func_p = build_all_gather_async_minimal_default_program_artifacts_no_mux;
         func_override = all_gather_async_minimal_default_helper_override_runtime_arguments_no_mux;
