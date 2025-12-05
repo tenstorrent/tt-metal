@@ -5,6 +5,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/function.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unordered_map.h>
@@ -197,25 +198,8 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
         py_llama_config.def_rw("num_heads", &models::llama::LlamaConfig::num_heads, "Number of heads");
         py_llama_config.def_rw("num_groups", &models::llama::LlamaConfig::num_groups, "Number of groups");
         py_llama_config.def_rw("embedding_dim", &models::llama::LlamaConfig::embedding_dim, "Embedding dimensions");
-        // Custom property for intermediate_dim to handle Python int/None -> std::optional<unsigned int> conversion
-        py_llama_config.def_prop_rw(
-            "intermediate_dim",
-            [](const models::llama::LlamaConfig& self) -> nb::object {
-                if (self.intermediate_dim.has_value()) {
-                    return nb::cast(*self.intermediate_dim);
-                }
-                return nb::none();
-            },
-            [](models::llama::LlamaConfig& self, const nb::object& value) {
-                if (value.is_none()) {
-                    self.intermediate_dim = std::nullopt;
-                } else {
-                    // Convert Python int to unsigned int, then wrap in optional
-                    uint32_t int_value = nb::cast<uint32_t>(value);
-                    self.intermediate_dim = std::make_optional(int_value);
-                }
-            },
-            "Intermediate dimensions");
+        py_llama_config.def_rw(
+            "intermediate_dim", &models::llama::LlamaConfig::intermediate_dim, "Intermediate dimensions");
         py_llama_config.def_rw("dropout_prob", &models::llama::LlamaConfig::dropout_prob, "Dropout probability");
         py_llama_config.def_rw("theta", &models::llama::LlamaConfig::theta, "Theta");
         py_llama_config.def_rw("num_blocks", &models::llama::LlamaConfig::num_blocks, "Number of blocks");

@@ -85,7 +85,7 @@ uint32_t GroupedQueryAttention::update_cache_decode(
     const tt::tt_metal::Tensor& value_tensor,
     const ttml::autograd::TensorPtr& k_cache,
     const ttml::autograd::TensorPtr& v_cache,
-    uint32_t cache_position) {
+    const uint32_t cache_position) {
     tt::tt_metal::Tensor k_cache_tensor = k_cache->get_value();
     tt::tt_metal::Tensor v_cache_tensor = v_cache->get_value();
     auto cache_shape = k_cache_tensor.logical_shape();
@@ -116,7 +116,7 @@ ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
     const ttml::autograd::TensorPtr& k_cache,
     const ttml::autograd::TensorPtr& v_cache,
     const InferenceMode mode,
-    uint32_t cache_position) {
+    const uint32_t cache_position) {
     auto q = (*m_q_linear)(x);
     auto kv = (*m_kv_linear)(x);
 

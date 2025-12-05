@@ -51,7 +51,7 @@ public:
         const autograd::TensorPtr& k_cache,
         const autograd::TensorPtr& v_cache,
         const modules::InferenceMode mode,
-        uint32_t cache_position);
+        const uint32_t cache_position);
 };
 
 }  // namespace ttml::modules

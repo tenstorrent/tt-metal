@@ -48,7 +48,7 @@ private:
         const tt::tt_metal::Tensor& value_tensor,
         const autograd::TensorPtr& k_cache,
         const autograd::TensorPtr& v_cache,
-        uint32_t cache_position);
+        const uint32_t cache_position);
 
 public:
     explicit GroupedQueryAttention(const GQAConfig& config);
@@ -63,7 +63,7 @@ public:
         const autograd::TensorPtr& k_cache,
         const autograd::TensorPtr& v_cache,
         const InferenceMode mode,
-        uint32_t cache_position);
+        const uint32_t cache_position);
 };
 
 }  // namespace ttml::modules
