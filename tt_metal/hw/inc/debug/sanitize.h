@@ -504,6 +504,33 @@ void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
     }
 }
 
+// Validate that num_dests matches the actual rectangle size for multicast transactions
+void debug_sanitize_multicast_num_dests(
+    uint8_t noc_id, uint64_t noc_addr, uint32_t l1_addr, uint32_t len, uint32_t num_dests) {
+    // Extract multicast rectangle coordinates
+    uint8_t x_start = (uint8_t)NOC_MCAST_ADDR_START_X(noc_addr);
+    uint8_t y_start = (uint8_t)NOC_MCAST_ADDR_START_Y(noc_addr);
+    uint8_t x_end = (uint8_t)NOC_MCAST_ADDR_END_X(noc_addr);
+    uint8_t y_end = (uint8_t)NOC_MCAST_ADDR_END_Y(noc_addr);
+
+    // Calculate rectangle dimensions (handle both NOC0 and NOC1 coordinate ordering)
+    uint32_t width = (x_start <= x_end) ? (x_end - x_start + 1) : (x_start - x_end + 1);
+    uint32_t height = (y_start <= y_end) ? (y_end - y_start + 1) : (y_start - y_end + 1);
+    uint32_t expected_num_dests = width * height;
+
+    if (num_dests != expected_num_dests) {
+        debug_sanitize_post_addr_and_hang(
+            noc_id,
+            noc_addr,
+            l1_addr,
+            len,
+            DEBUG_SANITIZE_NOC_MULTICAST,
+            DEBUG_SANITIZE_NOC_WRITE,
+            DEBUG_SANITIZE_NOC_TARGET,
+            DebugSanitizeNocMulticastNumDestsMismatch);
+    }
+}
+
 // TODO: Clean these up with #7453
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION_FROM_STATE(noc_id, read_cmd_buf)                                       \
     DEBUG_SANITIZE_NOC_READ_TRANSACTION_(                                                                          \
@@ -556,9 +583,10 @@ void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
     debug_insert_delay((uint8_t)TransactionWrite)
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id, noc_a, worker_a, l) \
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_(noc_id, noc_a, worker_a, l, true);
-#define DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc_id, noc_a, worker_a, l)                     \
+#define DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc_id, noc_a, worker_a, l, num_dests)          \
     debug_sanitize_noc_and_worker_addr(                                                            \
         noc_id, noc_a, worker_a, l, DEBUG_SANITIZE_NOC_MULTICAST, DEBUG_SANITIZE_NOC_WRITE, true); \
+    debug_sanitize_multicast_num_dests(noc_id, noc_a, worker_a, l, num_dests);                     \
     LOG_LEN(l);                                                                                    \
     debug_insert_delay((uint8_t)TransactionWrite);
 
@@ -627,7 +655,7 @@ inline void debug_insert_delay(uint8_t transaction_type) {
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc_id, noc_a, worker_a, l) LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_MULTI_READ_TRANSACTION(noc_id, noc_a, worker_a, l) LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id, noc_a, worker_a, l) LOG_LEN(l)
-#define DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc_id, noc_a, worker_a, l) LOG_LEN(l)
+#define DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc_id, noc_a, worker_a, l, num_dests) LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id, noc_a_lower, worker_a) \
     LOG_READ_LEN_FROM_STATE(noc_id)
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_STATE(noc_id, noc_a_lower, worker_a, l) LOG_LEN(l)

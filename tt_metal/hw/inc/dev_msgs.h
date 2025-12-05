@@ -245,6 +245,7 @@ enum debug_sanitize_noc_return_code_enum {
     DebugSanitizeNocAddrMailbox = 12,
     DebugSanitizeNocLinkedTransactionViolation = 13,
     DebugSanitizeL1AddrOverflow = 14,
+    DebugSanitizeNocMulticastNumDestsMismatch = 15,
 };
 
 struct debug_assert_msg_t {

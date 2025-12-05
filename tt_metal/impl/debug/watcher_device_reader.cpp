@@ -708,6 +708,10 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
             error_msg = get_l1_target_str(programmable_core_type_, san);
             error_msg += " (read or write past the end of local memory).";
             break;
+        case dev_msgs::DebugSanitizeNocMulticastNumDestsMismatch:
+            error_msg = get_noc_target_str(reader_.device_id, programmable_core_type_, noc, san);
+            error_msg += " (multicast num_dests does not match the rectangle grid size).";
+            break;
         default:
             error_msg = fmt::format(
                 "Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}",
