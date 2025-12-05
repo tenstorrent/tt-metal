@@ -299,15 +299,6 @@ def validate(
     return np.mean(cur_val_losses)
 
 
-def tokenize_dataset(data, tokenizer):
-    X = [sample["question"] for sample in data]
-    y = [sample["answer"] for sample in data]
-
-    X = tokenizer(X, return_tensors="np", add_special_tokens=False)["input_ids"]
-    y = tokenizer(y, return_tensors="np", add_special_tokens=False)["input_ids"]
-    return X, y
-
-
 class TokenizedDataset(torch.utils.data.Dataset):
     def __init__(self, X, y):
         self.X = X
@@ -320,6 +311,14 @@ class TokenizedDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
 
+def tokenize_dataset(data, tokenizer):
+    X = [sample["question"] for sample in data]
+    y = [sample["answer"] for sample in data]
+
+    X = tokenizer(X, return_tensors="np", add_special_tokens=False)["input_ids"]
+    y = tokenizer(y, return_tensors="np", add_special_tokens=False)["input_ids"]
+    
+    return TokenizedDataset(X, y)
 
 def train():
     print("Loading tokenizer and config...")
@@ -405,10 +404,8 @@ def train():
     training_data = datasets.load_dataset("gsm8k", "main", split="train")
     testing_data = datasets.load_dataset("gsm8k", "main", split="test")
 
-    training_data_x, training_data_y = tokenize_dataset(training_data, tokenizer)
-    testing_data_x, testing_data_y = tokenize_dataset(testing_data, tokenizer)
-    training_data = TokenizedDataset(training_data_x, training_data_y)
-    testing_data = TokenizedDataset(testing_data_x, testing_data_y)
+    training_data = tokenize_dataset(training_data, tokenizer)
+    testing_data = tokenize_dataset(testing_data, tokenizer)
 
     training_dataloader = DataLoader(
         training_data,
