@@ -896,7 +896,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     TT_FATAL(receiver_channel_num_buffers > 0, "Receiver channel num buffers must be greater than 0");
 
     const auto& stream_ids = StreamRegAssignments::get_all_stream_ids();
-    static constexpr bool enable_risc_cpu_data_cache = false;
+    constexpr bool enable_risc_cpu_data_cache = false;
     auto ct_args = std::vector<uint32_t>(stream_ids.begin(), stream_ids.end());
     ct_args.push_back(0xFFEE0001);
 
