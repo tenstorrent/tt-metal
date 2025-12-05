@@ -218,7 +218,6 @@ def tt_all_reduce(
         persistent_buffer = None
         if tt_ccl.mode == "decode" and buffer_key is not None:
             persistent_buffer = tt_ccl.persistent_rs_buffers.get(buffer_key, None)
-            print("persistent buffer being used")
 
         reduced = ttnn.experimental.reduce_scatter_minimal_async(
             input_tensor,
