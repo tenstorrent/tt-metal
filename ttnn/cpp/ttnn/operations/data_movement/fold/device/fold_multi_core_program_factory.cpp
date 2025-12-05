@@ -10,6 +10,7 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/logger.hpp>
 
 using namespace tt::tt_metal;
 
@@ -38,6 +39,14 @@ std::vector<std::vector<FoldTransfer>> generate_fold_transfers(
     uint32_t out_W = W / stride_w;
 
     uint32_t output_shard_height = input_shard_height / (stride_h * stride_w);
+
+    tt::log_debug(tt::LogOp, "Fold: generate_fold_transfers");
+    tt::log_debug(tt::LogOp, "  Input shape: N={}, H={}, W={}", N, H, W);
+    tt::log_debug(tt::LogOp, "  Stride: h={}, w={}", stride_h, stride_w);
+    tt::log_debug(tt::LogOp, "  Output: H={}, W={}", out_H, out_W);
+    tt::log_debug(
+        tt::LogOp, "  Input shard height: {}, Output shard height: {}", input_shard_height, output_shard_height);
+    tt::log_debug(tt::LogOp, "  Num cores: {}", num_cores);
 
     auto logical_cores = tt::tt_metal::corerange_to_cores(
         input_shard_spec->grid, num_cores, input_shard_spec->orientation == ShardOrientation::ROW_MAJOR);
@@ -157,17 +166,27 @@ Fold::MultiCore::cached_program_t fold_multi_core(
     auto cb_dst0 = CreateCircularBuffer(program, all_cores, dst_cb_config);
 
     auto per_core_transfers = generate_fold_transfers(input, stride_h, stride_w);
+    uint32_t num_transfers = get_max_transfers_per_core(per_core_transfers);
+
+    tt::log_debug(tt::LogOp, "Fold: fold_multi_core");
+    tt::log_debug(tt::LogOp, "  Shard shape: [{}, {}]", shard_shape[0], shard_shape[1]);
+    tt::log_debug(tt::LogOp, "  Pixel size: {}, Aligned: {}", pixel_size, aligned_pixel_size);
+    tt::log_debug(tt::LogOp, "  Num pixels: {}, Num dst pixels: {}", num_pixels, num_dst_pixels);
+    tt::log_debug(tt::LogOp, "  Num transfers per core: {}", num_transfers);
+    tt::log_debug(tt::LogOp, "  Num cores: {}", all_cores.num_cores());
+
     auto config_tensor = create_fold_transfers_tensor(
         per_core_transfers, output.shard_spec()->grid, input.shard_spec()->orientation, input);
 
     uint32_t config_cb_index = tt::CBIndex::c_1;
-    uint32_t config_page_size = get_max_transfers_per_core(per_core_transfers) * 4 * sizeof(uint16_t);
+    uint32_t config_page_size = num_transfers * 4 * sizeof(uint16_t);
+
+    tt::log_debug(tt::LogOp, "  Config page size: {} bytes", config_page_size);
+
     auto config_cb_config = CircularBufferConfig(config_page_size, {{config_cb_index, tt::DataFormat::UInt16}})
                                 .set_page_size(config_cb_index, config_page_size)
                                 .set_globally_allocated_address(*config_tensor.buffer());
     CreateCircularBuffer(program, all_cores, config_cb_config);
-
-    uint32_t num_transfers = get_max_transfers_per_core(per_core_transfers);
 
     std::vector<uint32_t> compile_time_args = {
         cb_src0_index,       // 0: input CB

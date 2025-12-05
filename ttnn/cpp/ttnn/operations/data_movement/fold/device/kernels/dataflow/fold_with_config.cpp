@@ -38,10 +38,10 @@ void kernel_main() {
         uint16_t length = config_data[i * 4 + 3];
 
         // Debug: print first few transfers
-        if (i < 4) {
-            DPRINT << "  Transfer[" << i << "]: noc=(" << src_noc_x << "," << src_noc_y
-                   << ") local_idx=" << src_local_idx << " len=" << length << ENDL();
-        }
+        // if (i < 4) {
+        //     DPRINT << "  Transfer[" << i << "]: noc=(" << src_noc_x << "," << src_noc_y
+        //            << ") local_idx=" << src_local_idx << " len=" << length << ENDL();
+        // }
 
         // Skip if length is 0 (padding entry)
         if (length == 0) {
