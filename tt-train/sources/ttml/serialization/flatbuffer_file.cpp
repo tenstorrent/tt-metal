@@ -21,8 +21,7 @@
 #include <stdexcept>
 #include <string>
 #include <tt-metalium/bfloat16.hpp>
-#include <ttnn/api/ttnn/tensor/serialization.hpp>
-#include <ttnn/core/tensor/flatbuffer/tensor_flatbuffer.hpp>
+#include <ttnn/tensor/serialization.hpp>
 #include <ttnn/tensor/tensor.hpp>
 #include <type_traits>
 #include <unordered_map>

@@ -15,9 +15,9 @@
 #include <random>
 #include <string>
 #include <tt-metalium/bfloat16.hpp>
+#include <ttnn/tensor/serialization.hpp>
 #include <vector>
 
-#include "api/ttnn/tensor/serialization.hpp"
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"

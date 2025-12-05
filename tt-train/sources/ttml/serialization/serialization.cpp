@@ -11,8 +11,6 @@
 #include <fstream>
 #include <ttnn/tensor/types.hpp>
 
-#include "api/ttnn/tensor/serialization.hpp"
-#include "api/ttnn/tensor/tensor_impl.hpp"
 #include "autograd/auto_context.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -20,6 +18,9 @@
 #include "modules/module_base.hpp"
 #include "optimizers/optimizer_base.hpp"
 #include "optimizers/sgd.hpp"
+#include "ttnn/tensor/serialization.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
+
 namespace ttml::serialization {
 
 // Concept for trivially copyable types

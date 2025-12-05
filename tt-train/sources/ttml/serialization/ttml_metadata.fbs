@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-include "tensor.fbs";
-
 namespace ttml.flatbuffer;
 
 // Primitive value types
@@ -76,11 +74,6 @@ table VectorString {
     values: [string];
 }
 
-// Tensor value (references tensor.fbs Tensor)
-table TensorValue {
-    tensor: ttnn.flatbuffer.Tensor;
-}
-
 // Union type for all serializable values
 union SerializableType {
     BoolValue,
@@ -100,7 +93,6 @@ union SerializableType {
     VectorUInt32,
     VectorBFloat16,
     VectorString,
-    TensorValue,
 }
 
 // Key-value pair

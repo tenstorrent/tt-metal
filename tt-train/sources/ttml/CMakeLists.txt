@@ -393,215 +393,12 @@ else()
     message(STATUS "Metalium targets already exists")
 endif()
 
-# Generate FlatBuffer code for serialization
-# flatbuffers is provided via CPM in dependencies.cmake
+# Include helper functions for flatbuffer generation
+include(flatbuffers)
 
-# Define paths using TT_METAL_HOME
-if("$ENV{TT_METAL_HOME}" STREQUAL "")
-    message(FATAL_ERROR "TT_METAL_HOME is not set")
-endif()
-
-set(FLATBUFFERS_SCHEMA ${CMAKE_CURRENT_SOURCE_DIR}/serialization/ttml_metadata.fbs)
-set(TTNN_TENSOR_FBS_DIR "$ENV{TT_METAL_HOME}/ttnn/core/tensor/flatbuffer")
-set(TT_METAL_API_DIR "$ENV{TT_METAL_HOME}/tt_metal/api")
-set(FLATBUFFER_GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/serialization)
-
-# Verify required paths exist
-if(NOT EXISTS "${TTNN_TENSOR_FBS_DIR}/tensor.fbs")
-    message(FATAL_ERROR "Cannot find tensor.fbs at ${TTNN_TENSOR_FBS_DIR}/tensor.fbs")
-endif()
-
-file(MAKE_DIRECTORY ${FLATBUFFER_GENERATED_DIR})
-
-# Helper function to generate flatbuffer headers with custom include paths
-function(
-    generate_fbs_with_includes
-    FBS_FILE
-    OUTPUT_FILE
-    INCLUDE_DIRS
-    DEPENDENCIES
-    COMMENT_TEXT
-    USE_C_FLAG
-)
-    get_filename_component(OUTPUT_DIR ${OUTPUT_FILE} DIRECTORY)
-    file(MAKE_DIRECTORY ${OUTPUT_DIR})
-
-    # Build include path arguments
-    set(INCLUDE_ARGS "")
-    foreach(INCLUDE_DIR ${INCLUDE_DIRS})
-        list(
-            APPEND
-            INCLUDE_ARGS
-            "-I"
-            ${INCLUDE_DIR}
-        )
-    endforeach()
-
-    # Choose C or C++ code generation flag
-    if(USE_C_FLAG)
-        set(CODE_GEN_FLAG "-c")
-    else()
-        set(CODE_GEN_FLAG "--cpp")
-    endif()
-
-    add_custom_command(
-        OUTPUT
-            ${OUTPUT_FILE}
-        COMMAND
-            flatc ${CODE_GEN_FLAG} --keep-prefix --scoped-enums ${INCLUDE_ARGS} -o "${OUTPUT_DIR}" ${FBS_FILE}
-        DEPENDS
-            flatc
-            ${FBS_FILE}
-            ${DEPENDENCIES}
-        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-        COMMENT ${COMMENT_TEXT}
-        COMMAND_EXPAND_LISTS
-    )
-endfunction()
-
-# Initialize variables
-set(GENERATE_TENSOR_HEADER FALSE)
-set(MESH_COORDINATE_OUTPUT "")
-
-# Determine if we need to generate tensor flatbuffers ourselves
-if(TARGET TTNN::Core)
-    # Use TTNN::Core's generated headers
-    get_target_property(TTNN_BINARY_DIR TTNN::Core BINARY_DIR)
-    set(TTNN_FLATBUFFER_GEN_DIR "${TTNN_BINARY_DIR}/flatbuffers")
-else()
-    # Generate headers in tt-train's build directory
-    set(TTNN_FLATBUFFER_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/ttnn_flatbuffers")
-    set(GENERATE_TENSOR_HEADER TRUE)
-
-    # Define schema files and output paths
-    set(MESH_COORDINATE_FBS "${TT_METAL_API_DIR}/tt-metalium/serialized_descriptors/mesh_coordinate.fbs")
-    set(MESH_COORDINATE_GEN_DIR "${TTNN_FLATBUFFER_GEN_DIR}/tt-metalium/serialized_descriptors")
-    set(MESH_COORDINATE_OUTPUT "${MESH_COORDINATE_GEN_DIR}/mesh_coordinate_generated.h")
-
-    # Generate mesh_coordinate_generated.h (needs special handling for directory structure)
-    file(MAKE_DIRECTORY ${MESH_COORDINATE_GEN_DIR})
-    add_custom_command(
-        OUTPUT
-            ${MESH_COORDINATE_OUTPUT}
-        COMMAND
-            ${CMAKE_COMMAND} -E make_directory "${MESH_COORDINATE_GEN_DIR}"
-        COMMAND
-            flatc --keep-prefix --cpp --scoped-enums -I ${TT_METAL_API_DIR} -o "${TTNN_FLATBUFFER_GEN_DIR}"
-            ${MESH_COORDINATE_FBS}
-        COMMAND
-            ${CMAKE_COMMAND} -E copy_if_different "${TTNN_FLATBUFFER_GEN_DIR}/mesh_coordinate_generated.h"
-            "${MESH_COORDINATE_OUTPUT}"
-        DEPENDS
-            flatc
-            ${MESH_COORDINATE_FBS}
-        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-        COMMENT "Generating mesh_coordinate_generated.h for tt-train"
-    )
-
-    # Generate independent flatbuffer headers
-    generate_fbs_with_includes(
-        ${TTNN_TENSOR_FBS_DIR}/mesh_shape.fbs
-        ${TTNN_FLATBUFFER_GEN_DIR}/mesh_shape_generated.h
-        "${TTNN_TENSOR_FBS_DIR}"
-        ""
-        "Generating mesh_shape_generated.h for tt-train"
-        FALSE
-    )
-
-    generate_fbs_with_includes(
-        ${TTNN_TENSOR_FBS_DIR}/tensor_spec.fbs
-        ${TTNN_FLATBUFFER_GEN_DIR}/tensor_spec_generated.h
-        "${TTNN_TENSOR_FBS_DIR}"
-        ""
-        "Generating tensor_spec_generated.h for tt-train"
-        FALSE
-    )
-
-    # Generate tensor_topology_generated.h (depends on mesh_shape and mesh_coordinate)
-    generate_fbs_with_includes(
-        ${TTNN_TENSOR_FBS_DIR}/tensor_topology.fbs
-        ${TTNN_FLATBUFFER_GEN_DIR}/tensor_topology_generated.h
-        "${TTNN_TENSOR_FBS_DIR};${TT_METAL_API_DIR}"
-        "${TTNN_FLATBUFFER_GEN_DIR}/mesh_shape_generated.h;${MESH_COORDINATE_FBS}"
-        "Generating tensor_topology_generated.h for tt-train"
-        FALSE
-    )
-
-    # Generate tensor_generated.h (depends on all previous headers)
-    generate_fbs_with_includes(
-        ${TTNN_TENSOR_FBS_DIR}/tensor.fbs
-        ${TTNN_FLATBUFFER_GEN_DIR}/tensor_generated.h
-        "${TTNN_TENSOR_FBS_DIR};${TT_METAL_API_DIR};${TTNN_FLATBUFFER_GEN_DIR}"
-        "${TTNN_FLATBUFFER_GEN_DIR}/mesh_shape_generated.h;${TTNN_FLATBUFFER_GEN_DIR}/tensor_spec_generated.h;${TTNN_FLATBUFFER_GEN_DIR}/tensor_topology_generated.h;${MESH_COORDINATE_OUTPUT}"
-        "Generating tensor_generated.h for tt-train"
-        FALSE
-    )
-endif()
-
-# Build dependency list for ttml_metadata_generated.h
-set(TTML_METADATA_DEPS
-    flatc
-    ${FLATBUFFERS_SCHEMA}
-)
-if(GENERATE_TENSOR_HEADER)
-    list(
-        APPEND
-        TTML_METADATA_DEPS
-        ${TTNN_FLATBUFFER_GEN_DIR}/tensor_generated.h
-        ${TTNN_FLATBUFFER_GEN_DIR}/mesh_shape_generated.h
-        ${TTNN_FLATBUFFER_GEN_DIR}/tensor_spec_generated.h
-        ${TTNN_FLATBUFFER_GEN_DIR}/tensor_topology_generated.h
-        ${MESH_COORDINATE_OUTPUT}
-    )
-endif()
-
-# Generate ttml_metadata_generated.h (using -c flag to match original)
-generate_fbs_with_includes(
-    ${FLATBUFFERS_SCHEMA}
-    ${FLATBUFFER_GENERATED_DIR}/ttml_metadata_generated.h
-    "${TTNN_TENSOR_FBS_DIR};${TT_METAL_API_DIR};${TTNN_FLATBUFFER_GEN_DIR}"
-    "${TTML_METADATA_DEPS}"
-    "Generating FlatBuffer C++ code from ttml_metadata.fbs"
-    TRUE
-)
-
-# Collect generated header files
-set(GENERATED_HEADERS ${FLATBUFFER_GENERATED_DIR}/ttml_metadata_generated.h)
-if(GENERATE_TENSOR_HEADER)
-    list(
-        APPEND
-        GENERATED_HEADERS
-        ${TTNN_FLATBUFFER_GEN_DIR}/tensor_generated.h
-        ${TTNN_FLATBUFFER_GEN_DIR}/mesh_shape_generated.h
-        ${TTNN_FLATBUFFER_GEN_DIR}/tensor_spec_generated.h
-        ${TTNN_FLATBUFFER_GEN_DIR}/tensor_topology_generated.h
-        ${MESH_COORDINATE_OUTPUT}
-    )
-endif()
-
-add_library(
-    ttml
-    STATIC
-    ${SOURCES}
-    ${GENERATED_HEADERS}
-)
+add_library(ttml STATIC ${SOURCES})
 
 target_include_directories(ttml PUBLIC ${PROJECT_SOURCE_DIR})
-target_include_directories(ttml PUBLIC ${FLATBUFFER_GENERATED_DIR})
-# Add ttnn flatbuffer generated headers directory to include path
-# tensor_generated.h and related headers (including mesh_coordinate_generated.h) are generated here
-# mesh_coordinate_generated.h is included as 'tt-metalium/serialized_descriptors/mesh_coordinate_generated.h'
-# flatc creates the directory structure matching the include path, so TTNN_FLATBUFFER_GEN_DIR
-# contains all generated headers in the correct subdirectory structure
-target_include_directories(ttml PUBLIC ${TTNN_FLATBUFFER_GEN_DIR})
-# Add ttnn core include directory for flatbuffer tensor serialization headers
-if(TARGET TTNN::Core)
-    target_include_directories(ttml PRIVATE ${PROJECT_SOURCE_DIR}/ttnn/core)
-endif()
-
-# Define FLATBUFFERS_LARGE_SIZE to use uint64_t for size calculations (must be defined before any flatbuffers headers)
-# Use PUBLIC so any code linking against ttml also gets this definition
-target_compile_definitions(ttml PUBLIC FLATBUFFERS_LARGE_SIZE)
 
 find_package(
     Python3
@@ -615,6 +412,9 @@ find_package(
 foreach(lib ${BoostPackages})
     target_include_directories(ttml SYSTEM PUBLIC ${Boost${lib}_SOURCE_DIR}/include)
 endforeach()
+
+# Define FLATBUFFERS_LARGE_SIZE to use uint64_t for size calculations (must be defined before any flatbuffers headers)
+target_compile_definitions(ttml PUBLIC FLATBUFFERS_LARGE_SIZE)
 
 target_link_libraries(
     ttml
@@ -639,10 +439,38 @@ target_link_libraries(
         FlatBuffers::FlatBuffers
 )
 
-# Conditionally link TTNN::Core if available (needed for flatbuffer tensor serialization)
+# Add include directory for TTNN::Core's generated flatbuffer headers
+# These are needed because tensor_flatbuffer.hpp includes tensor_generated.h
 if(TARGET TTNN::Core)
-    target_link_libraries(ttml PRIVATE TTNN::Core)
+    # Building with tt-metal from source - get binary directory
+    get_target_property(TTNN_CORE_BINARY_DIR TTNN::Core BINARY_DIR)
+    if(TTNN_CORE_BINARY_DIR)
+        target_include_directories(ttml SYSTEM PRIVATE ${TTNN_CORE_BINARY_DIR}/flatbuffers)
+        message(STATUS "Added TTNN::Core flatbuffers directory: ${TTNN_CORE_BINARY_DIR}/flatbuffers")
+    endif()
+else()
+    # Building with installed tt-metal
+    # Try to get include directories from TTNN::TTNN which should include the flatbuffers path
+    # If the generated headers are installed, they should be in the include directories
+    get_target_property(TTNN_INCLUDES TTNN::TTNN INTERFACE_INCLUDE_DIRECTORIES)
+    if(TTNN_INCLUDES)
+        # Check if any of the include directories contain flatbuffers
+        # This is a fallback - ideally the headers should be in a standard location
+        message(STATUS "TTNN::Core not found, checking TTNN::TTNN include directories for flatbuffers")
+        # Note: If headers are not found, this may indicate an installation issue with tt-metal
+    endif()
 endif()
+
+# Generate flatbuffer header for ttml_metadata.fbs
+# Must be done after target_link_libraries so ttml has access to TTNN::TTNN's include directories
+set(FLATBUFFERS_SCHEMA ${CMAKE_CURRENT_SOURCE_DIR}/serialization/ttml_metadata.fbs)
+set(FLATBUFFER_GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/serialization)
+
+GENERATE_FBS_HEADER(${FLATBUFFERS_SCHEMA} TARGET ttml OUTPUT_DIR ${FLATBUFFER_GENERATED_DIR})
+
+# Add generated header to target sources and include directory
+target_sources(ttml PRIVATE ${FBS_GENERATED_HEADER_FILE})
+target_include_directories(ttml PUBLIC ${FLATBUFFER_GENERATED_DIR})
 
 message(STATUS "xtensor_SOURCE_DIR: ${xtensor_SOURCE_DIR}")
 message(STATUS "xtl_SOURCE_DIR: ${xtl_SOURCE_DIR}")
