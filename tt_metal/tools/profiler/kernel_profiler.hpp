@@ -293,6 +293,9 @@ __attribute__((noinline)) void finish_profiler() {
     if (profiler_control_buffer[PROFILER_DONE] == 1) {
         return;
     }
+    if (profiler_data_buffer[myRiscID].data[ID_LL] > 3072) {
+        return;
+    }
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
     bool is_dram_set = profiler_control_buffer[DRAM_PROFILER_ADDRESS] != 0;
@@ -326,14 +329,6 @@ __attribute__((noinline)) void finish_profiler() {
                 send_size = profiler_control_buffer[deviceIndex] * sizeof(uint32_t);
 
                 profiler_control_buffer[hostIndex] = currEndIndex;
-            } else if (profiler_control_buffer[RUN_COUNTER] < 1) {
-                dram_offset = (core_flat_id % profiler_core_count_per_dram) * MaxProcessorsPerCoreType *
-                                  PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
-                              hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC;
-
-                send_size = CUSTOM_MARKERS * sizeof(uint32_t);
-
-                mark_dropped_timestamps(hostIndex);
             } else {
                 do_noc = false;
                 mark_dropped_timestamps(hostIndex);
@@ -367,6 +362,9 @@ __attribute__((noinline)) void quick_push() {
     defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_IDLE_ERISC) || \
     (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)))
 
+    if (profiler_data_buffer[myRiscID].data[ID_LL] > 3072) {
+        return;
+    }
     // tt-metal/issues/22578 - forbid quick_push if any cmd buffer has NOC_CMD_VC_LINKED bit set
     auto linked_bit_is_set = [](const uint32_t reg_val) { return reg_val & NOC_CMD_VC_LINKED; };
     uint32_t read_buf_reg = NOC_CMD_BUF_READ_REG(noc_index, read_cmd_buf, NOC_CTRL);
@@ -378,9 +376,9 @@ __attribute__((noinline)) void quick_push() {
         return;
     }
 
-    SrcLocNameToHash("PROFILER-NOC-QUICK-SEND");
-    mark_time_at_index_inlined(wIndex, hash);
-    wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+    // SrcLocNameToHash("PROFILER-NOC-QUICK-SEND");
+    // mark_time_at_index_inlined(wIndex, hash);
+    // wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
 
     if (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]) {
         return;
@@ -423,8 +421,8 @@ __attribute__((noinline)) void quick_push() {
 
     wIndex = CUSTOM_MARKERS;
 
-    mark_time_at_index_inlined(wIndex, get_const_id(hash, ZONE_END));
-    wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+    // mark_time_at_index_inlined(wIndex, get_const_id(hash, ZONE_END));
+    // wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
 
 #endif
 }
@@ -563,6 +561,7 @@ inline __attribute__((always_inline)) void flush_to_dram_if_full() {
 
 template <uint32_t data_id, DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
 inline __attribute__((always_inline)) void timeStampedData(uint64_t data) {
+    data = profiler_data_buffer[myRiscID].data[ID_LL];
     if (bufferHasRoom<dispatch>()) {
         mark_time_at_index_inlined(wIndex, get_const_id(data_id, TS_DATA));
         wIndex += PROFILER_L1_MARKER_UINT32_SIZE;

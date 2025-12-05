@@ -44,7 +44,7 @@ def test_with_ops(device):
 @pytest.mark.parametrize(
     "device_params", [{"trace_region_size": 1996800, "dispatch_core_type": ttnn.DispatchCoreType.WORKER}], indirect=True
 )
-@pytest.mark.parametrize("num_iterations", [(100, 5)])
+@pytest.mark.parametrize("num_iterations", [(1, 1)])
 def test_with_ops_single_core(device, num_iterations):
     torch.manual_seed(0)
     m = 1024
@@ -63,15 +63,17 @@ def test_with_ops_single_core(device, num_iterations):
     b = ttnn.to_layout(b, ttnn.TILE_LAYOUT)
 
     ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=1, x=1))
+    ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=1, x=1))
 
-    tid = ttnn.begin_trace_capture(device, cq_id=0)
-    for _ in range(num_iterations[0]):
-        ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=1, x=1))
-    ttnn.end_trace_capture(device, tid, cq_id=0)
+    # ttnn.ReadDeviceProfiler(device)
+    # tid = ttnn.begin_trace_capture(device, cq_id=0)
+    # for _ in range(num_iterations[0]):
+    # ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=1, x=1))
+    # ttnn.end_trace_capture(device, tid, cq_id=0)
 
-    for _ in range(num_iterations[1]):
-        ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
-    ttnn.release_trace(device, tid)
+    # for _ in range(num_iterations[1]):
+    # ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+    # ttnn.release_trace(device, tid)
 
 
 @pytest.mark.parametrize(

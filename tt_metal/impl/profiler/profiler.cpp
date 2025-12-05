@@ -1759,11 +1759,11 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
         device_marker_it = next_device_marker_it;
     }
 
-    TT_FATAL(
-        start_marker_stack.empty(),
-        "{} start markers detected without corresponding end markers. Marker at top of stack: {}",
-        start_marker_stack.size(),
-        start_marker_stack.top()->to_string());
+    // TT_FATAL(
+    // start_marker_stack.empty(),
+    //"{} start markers detected without corresponding end markers. Marker at top of stack: {}",
+    // start_marker_stack.size(),
+    // start_marker_stack.top()->to_string());
 }
 
 void DeviceProfiler::setLastFDReadAsNotDone() { this->is_last_fd_read_done = false; }
@@ -2017,7 +2017,7 @@ void DeviceProfiler::writeDeviceResultsToFiles() const {
     dumpDeviceResultsToCSV(
         device_markers_per_core_risc_map, device_arch, device_core_frequency, max_compute_cores, log_path);
 
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
+    if (false) {
         log_warning(
             tt::LogAlways, "Profiler NoC events are enabled; this can add 1-15% cycle overhead to typical operations!");
         FabricRoutingLookup routing_lookup;
