@@ -23,6 +23,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <vector>
+#include <tt-metalium/tt_align.hpp>
 
 using namespace tt::tt_metal;
 
@@ -290,7 +291,7 @@ PaddedSliceRMProgramFactory::cached_program_t PaddedSliceRMProgramFactory::creat
             non_aligned_temp_cb_index,
             program,
             total_cores,
-            a.logical_shape()[-1] * a.element_size(),
+            tt::align(a.logical_shape()[-1] * a.element_size(), src_buffer_alignment),
             2,
             cb_data_format);
     }
