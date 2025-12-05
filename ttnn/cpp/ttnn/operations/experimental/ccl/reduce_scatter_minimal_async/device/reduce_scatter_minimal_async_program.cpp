@@ -10,7 +10,10 @@
 #include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -36,7 +39,80 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
+// Import types from the new TMP pattern
+using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::ReduceScatterProgramArtifacts;
+
 namespace ttnn {
+
+// Forward declarations for helper functions
+tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    Tensor& intermediate_tensor,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
+    Tensor& output_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_link,
+    std::optional<uint32_t> num_buffers_per_channel,
+    const CoreCoord core_grid_offset = {0, 0});
+
+tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    Tensor& intermediate_tensor,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
+    Tensor& output_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
+    const CoreCoord core_grid_offset = {0, 0});
+
+tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    Tensor& intermediate_tensor,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
+    Tensor& output_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
+    const CoreCoord core_grid_offset = {0, 0});
 
 namespace operations::experimental::ccl::detail {
 
@@ -1253,7 +1329,9 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
          num_directions_per_link,
          num_workers_per_direction,
          num_mux_cores_per_direction_per_link,
-         num_cores_per_link](
+         num_cores_per_link,
+         barrier_semaphore,
+         semaphore](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -1262,8 +1340,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
             const auto& input = input_tensors[0];
             const auto& output = output_tensors[1];
             const auto& intermed = output_tensors[0];
-            auto barrier_semaphore = static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->barrier_semaphore;
-            auto semaphore = static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->semaphore;
             ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                 program,
                 reader_kernel_id,
@@ -1279,7 +1355,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                 input,
                 intermed,
                 output);
-
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
@@ -1972,7 +2047,9 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
          num_directions_per_link,
          num_workers_per_direction,
          num_mux_cores_per_direction_per_link,
-         num_cores_per_link](
+         num_cores_per_link,
+         barrier_semaphore,
+         semaphore](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -1982,9 +2059,6 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             const auto& output = output_tensors[1];
             const auto& intermed = output_tensors[0];
 
-            const auto& barrier_semaphore =
-                static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->barrier_semaphore;
-            const auto& semaphore = static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->semaphore;
             line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                 program,
                 reader_kernel_id,
@@ -2005,3 +2079,227 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 }  // namespace ttnn
+
+// Implementations for the TMP namespace - wrappers to ttnn namespace functions
+namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async {
+
+ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_artifacts(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    Tensor& intermediate_tensor,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
+    Tensor& output_tensor,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
+    ttnn::ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
+    CoreCoord core_grid_offset) {
+    return ::ttnn::build_ring_reduce_scatter_minimal_async_program_artifacts(
+        program,
+        input_tensor,
+        intermediate_tensor,
+        sender_device_coord,
+        forward_coord,
+        backward_coord,
+        output_tensor,
+        dim,
+        num_links,
+        ring_size,
+        ring_index,
+        topology,
+        semaphore,
+        barrier_semaphore,
+        using_persistent_buffers,
+        sub_device_id,
+        fused_op_signaler,
+        chunks_per_sync,
+        num_workers_per_direction_opt,
+        num_buffers_per_channel,
+        core_grid_offset);
+}
+
+ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_artifacts(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    Tensor& intermediate_tensor,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
+    Tensor& output_tensor,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
+    ttnn::ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
+    CoreCoord core_grid_offset) {
+    return ::ttnn::build_line_reduce_scatter_minimal_async_program_artifacts(
+        program,
+        input_tensor,
+        intermediate_tensor,
+        sender_device_coord,
+        forward_coord,
+        backward_coord,
+        output_tensor,
+        dim,
+        num_links,
+        ring_size,
+        ring_index,
+        topology,
+        semaphore,
+        barrier_semaphore,
+        using_persistent_buffers,
+        sub_device_id,
+        fused_op_signaler,
+        chunks_per_sync,
+        num_workers_per_direction_opt,
+        num_buffers_per_channel,
+        core_grid_offset);
+}
+
+void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    tt::tt_metal::KernelHandle reader_kernel_id,
+    tt::tt_metal::KernelHandle writer_kernel_id,
+    const std::vector<tt::tt_metal::CoreCoord>& all_cores,
+    uint32_t num_links,
+    uint32_t num_directions_per_link,
+    uint32_t num_workers_per_direction,
+    uint32_t num_mux_cores_per_direction_per_link,
+    uint32_t num_cores_per_link,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& barrier_semaphore,
+    const std::vector<tt::tt_metal::GlobalSemaphore>& semaphore,
+    const Tensor& input,
+    const Tensor& intermed,
+    const Tensor& output) {
+    ::ttnn::ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
+        program,
+        reader_kernel_id,
+        writer_kernel_id,
+        all_cores,
+        num_links,
+        num_directions_per_link,
+        num_workers_per_direction,
+        num_mux_cores_per_direction_per_link,
+        num_cores_per_link,
+        barrier_semaphore,
+        semaphore,
+        input,
+        intermed,
+        output);
+}
+
+void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    tt::tt_metal::KernelHandle reader_kernel_id,
+    tt::tt_metal::KernelHandle writer_kernel_id,
+    const std::vector<tt::tt_metal::CoreCoord>& all_cores,
+    uint32_t num_links,
+    uint32_t num_directions_per_link,
+    uint32_t num_workers_per_direction,
+    uint32_t num_mux_cores_per_direction_per_link,
+    uint32_t num_cores_per_link,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& barrier_semaphore,
+    const std::vector<tt::tt_metal::GlobalSemaphore>& semaphore,
+    const Tensor& input,
+    const Tensor& intermed,
+    const Tensor& output) {
+    ::ttnn::line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
+        program,
+        reader_kernel_id,
+        writer_kernel_id,
+        all_cores,
+        num_links,
+        num_directions_per_link,
+        num_workers_per_direction,
+        num_mux_cores_per_direction_per_link,
+        num_cores_per_link,
+        barrier_semaphore,
+        semaphore,
+        input,
+        intermed,
+        output);
+}
+
+// Mesh Workload Factory implementations
+RingReduceScatterMeshWorkloadFactory::cached_mesh_workload_t RingReduceScatterMeshWorkloadFactory::create_mesh_workload(
+    const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    tt::tt_metal::distributed::MeshWorkload mesh_workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    // Implementation would go here - for now, placeholder
+    return {std::move(mesh_workload), std::move(shared_variables)};
+}
+
+ttnn::device_operation::CachedProgram<RingReduceScatterMeshWorkloadFactory::shared_variables_t>
+RingReduceScatterMeshWorkloadFactory::create_at(
+    const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinate& mesh_coordinate,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    tt::tt_metal::Program program{};
+    shared_variables_t shared_vars{};
+    // Implementation would go here - for now, placeholder
+    return {std::move(program), std::move(shared_vars)};
+}
+
+void RingReduceScatterMeshWorkloadFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    // Implementation placeholder
+}
+
+LineReduceScatterMeshWorkloadFactory::cached_mesh_workload_t LineReduceScatterMeshWorkloadFactory::create_mesh_workload(
+    const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    tt::tt_metal::distributed::MeshWorkload mesh_workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    // Implementation would go here - for now, placeholder
+    return {std::move(mesh_workload), std::move(shared_variables)};
+}
+
+ttnn::device_operation::CachedProgram<LineReduceScatterMeshWorkloadFactory::shared_variables_t>
+LineReduceScatterMeshWorkloadFactory::create_at(
+    const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinate& mesh_coordinate,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    tt::tt_metal::Program program{};
+    shared_variables_t shared_vars{};
+    // Implementation would go here - for now, placeholder
+    return {std::move(program), std::move(shared_vars)};
+}
+
+void LineReduceScatterMeshWorkloadFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    // Implementation placeholder
+}
+
+}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async

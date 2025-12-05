@@ -11,7 +11,18 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/hal.hpp>
-#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp"
+
+// Import functions from the new namespace
+using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::
+    build_line_reduce_scatter_minimal_async_program_artifacts;
+using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::
+    build_ring_reduce_scatter_minimal_async_program_artifacts;
+using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::
+    line_reduce_scatter_minimal_async_helper_override_runtime_arguments;
+using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::
+    ring_reduce_scatter_minimal_async_helper_override_runtime_arguments;
 
 namespace ttnn::operations::ccl {
 
