@@ -2180,29 +2180,26 @@ void kernel_main() {
         init_ptr_val<to_receiver_packets_sent_streams[1]>(0);
         init_ptr_val<to_sender_packets_acked_streams[2]>(0);
         init_ptr_val<to_sender_packets_acked_streams[3]>(0);
-        init_ptr_val<to_sender_packets_completed_streams[2]>(0);
-        init_ptr_val<to_sender_packets_completed_streams[3]>(0);
-        init_ptr_val<to_sender_packets_completed_streams[4]>(0);                             // VC1 channel 0
-        init_ptr_val<to_sender_packets_completed_streams[5]>(0);                             // VC1 channel 1
-        init_ptr_val<to_sender_packets_completed_streams[6]>(0);                             // VC1 channel 2
-        init_ptr_val<to_sender_packets_completed_streams[7]>(0);                             // VC1 channel 3
+
+        // Initialize completion streams for channels 2-7 using compile-time loop
+        [&]<size_t... Is>(std::index_sequence<Is...>) {
+            ((init_ptr_val<to_sender_packets_completed_streams[Is + 2]>(0)), ...);
+        }(std::make_index_sequence<6>{});
+
+        // Initialize sender channel free slots for channels 2-3 (VC0)
         init_ptr_val<sender_channel_free_slots_stream_ids[2]>(SENDER_NUM_BUFFERS_ARRAY[2]);  // Compact index 1
         init_ptr_val<sender_channel_free_slots_stream_ids[3]>(SENDER_NUM_BUFFERS_ARRAY[3]);  // Compact index 2
+
+        // Initialize sender channel free slots for channels 4-7 (VC1) conditionally based on NUM_SENDER_CHANNELS
         // SENDER_NUM_BUFFERS_ARRAY[] is sized to NUM_SENDER_CHANNELS, which is the number of used sender channels.
-        // Not the max number of sender channels. So we need to check if the number of used sender channels is greater
-        // than 4, 5, 6, or 7 before initializing the stream IDs for those channels.
-        if constexpr (NUM_SENDER_CHANNELS > 4) {
-            init_ptr_val<sender_channel_free_slots_stream_ids[4]>(SENDER_NUM_BUFFERS_ARRAY[4]);  // VC1 channel 0
-        }
-        if constexpr (NUM_SENDER_CHANNELS > 5) {
-            init_ptr_val<sender_channel_free_slots_stream_ids[5]>(SENDER_NUM_BUFFERS_ARRAY[5]);  // VC1 channel 1
-        }
-        if constexpr (NUM_SENDER_CHANNELS > 6) {
-            init_ptr_val<sender_channel_free_slots_stream_ids[6]>(SENDER_NUM_BUFFERS_ARRAY[6]);  // VC1 channel 2
-        }
-        if constexpr (NUM_SENDER_CHANNELS > 7) {
-            init_ptr_val<sender_channel_free_slots_stream_ids[7]>(SENDER_NUM_BUFFERS_ARRAY[7]);  // VC1 channel 3
-        }
+        [&]<size_t... Is>(std::index_sequence<Is...>) {
+            (([&]() {
+                 if constexpr (NUM_SENDER_CHANNELS > (Is + 4)) {
+                     init_ptr_val<sender_channel_free_slots_stream_ids[Is + 4]>(SENDER_NUM_BUFFERS_ARRAY[Is + 4]);
+                 }
+             }()),
+             ...);
+        }(std::make_index_sequence<4>{});
     }
 
     if constexpr (code_profiling_enabled_timers_bitfield != 0) {
