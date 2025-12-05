@@ -43,9 +43,11 @@ target_sources(
             connector/connector.hpp
             factory_system_descriptor/utils.hpp
             node/node_types.hpp
+            node/node_type_info.hpp
     PRIVATE
         node/node.cpp
         node/node_types.cpp
+        node/node_type_info.cpp
         board/board.cpp
         cabling_generator/cabling_generator.cpp
         connector/connector.cpp
@@ -54,7 +56,13 @@ target_sources(
 )
 
 target_include_directories(scaleout_tools PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_include_directories(scaleout_tools SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(
+    scaleout_tools
+    SYSTEM
+    PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}
+        ${CMAKE_BINARY_DIR}/tt_metal/fabric
+)
 
 target_include_directories(run_cluster_validation PRIVATE "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>")
 target_include_directories(run_cluster_validation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -148,7 +156,12 @@ target_link_libraries(
 )
 
 # Generate MGD library
-add_library(generate_mgd_lib OBJECT generate_mgd/generate_mgd.cpp)
+add_library(
+    generate_mgd_lib
+    OBJECT
+    generate_mgd/generate_mgd.cpp
+    ${CMAKE_BINARY_DIR}/tt_metal/fabric/protobuf/mesh_graph_descriptor.pb.cc
+)
 
 add_dependencies(generate_mgd_lib scaleout_generated_protos)
 
@@ -173,12 +186,8 @@ target_link_libraries(
         protobuf::libprotobuf
 )
 
-# Generate MGD CLI tool (standalone, includes proto source directly)
-add_executable(
-    generate_mgd
-    generate_mgd/generate_mgd_main.cpp
-    ${CMAKE_BINARY_DIR}/tt_metal/fabric/protobuf/mesh_graph_descriptor.pb.cc
-)
+# Generate MGD CLI tool
+add_executable(generate_mgd generate_mgd/generate_mgd_main.cpp)
 
 add_dependencies(generate_mgd scaleout_generated_protos)
 
@@ -201,11 +210,7 @@ target_link_libraries(
 )
 
 # Generate Traffic Tests library
-add_library(
-    generate_traffic_tests_lib
-    OBJECT
-    generate_traffic_tests/generate_traffic_tests.cpp
-)
+add_library(generate_traffic_tests_lib OBJECT generate_traffic_tests/generate_traffic_tests.cpp)
 
 add_dependencies(generate_traffic_tests_lib scaleout_generated_protos)
 
