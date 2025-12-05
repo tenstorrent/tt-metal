@@ -117,9 +117,10 @@ void run_inference_with_kv_cache(
 
     auto start_timer = std::chrono::high_resolution_clock::now();
 
+    const uint32_t num_steps = std::min(uint32_t(inference_config.max_new_tokens), max_seq_len - prompt_len);
+
     // Generate tokens one by one
-    for (uint32_t step = 0; step < std::min(uint32_t(inference_config.max_new_tokens), max_seq_len - prompt_len);
-         ++step) {
+    for (uint32_t step = 0; step < num_steps; ++step) {
         // For first step (prefill): use all prompt tokens
         // For subsequent steps (decode): use only the last generated token
         std::vector<uint32_t> input_tokens;
@@ -140,7 +141,7 @@ void run_inference_with_kv_cache(
         // For prefill: query_len = prompt_len, key_len = prompt_len
         // For decode: query_len = 1, key_len = cache_position + 1
         auto mask = create_causal_mask(device, input_tokens.size(), processed_tokens);
-        auto logits = (*model)(token_tensor, mask, true);  // use_cache = true
+        auto logits = (*model)(token_tensor, mask, /*use_cache=*/true);
 
         // Sample next token from the last position
         uint32_t next_token = sample_token(logits, input_tokens.size());
@@ -206,9 +207,9 @@ void run_inference_no_cache(
 
     auto start_timer = std::chrono::high_resolution_clock::now();
 
+    const uint32_t num_steps = std::min(uint32_t(inference_config.max_new_tokens), max_seq_len - prompt_len);
     // Generate tokens one by one, running full forward pass each time
-    for (uint32_t step = 0; step < std::min(uint32_t(inference_config.max_new_tokens), max_seq_len - prompt_len);
-         ++step) {
+    for (uint32_t step = 0; step < num_steps; ++step) {
         // Create tensor with ALL tokens generated so far (grows each iteration)
         auto current_seq = tokens_to_tensor(generated_tokens, device);
 
