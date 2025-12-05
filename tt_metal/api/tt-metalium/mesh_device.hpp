@@ -65,6 +65,7 @@ class MeshDeviceView;
 struct MeshTraceBuffer;
 class MeshCommandQueueBase;
 class MeshDeviceImpl;
+class D2HSocket;
 
 namespace multihost {
 class DistributedContext;
@@ -167,6 +168,8 @@ public:
         size_t worker_l1_size,
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
+    void init_realtime_profiler_socket();
+    D2HSocket* get_realtime_profiler_socket() const;
     bool close() override;
     void enable_program_cache() override;
     void clear_program_cache() override;

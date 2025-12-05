@@ -91,9 +91,9 @@ enum class FabricReliabilityMode : uint32_t {
 
 namespace tt::tt_fabric {
 
-using MeshId = tt::stl::StrongType<uint32_t, struct MeshIdTag>;
-using MeshHostRankId = tt::stl::StrongType<uint32_t, struct HostRankTag>;
-using SwitchId = tt::stl::StrongType<uint32_t, struct SwitchIdTag>;
+using MeshId = ttsl::StrongType<uint32_t, struct MeshIdTag>;
+using MeshHostRankId = ttsl::StrongType<uint32_t, struct HostRankTag>;
+using SwitchId = ttsl::StrongType<uint32_t, struct SwitchIdTag>;
 
 // Sentinel value indicating that TT_MESH_HOST_RANK environment variable is unset
 constexpr MeshHostRankId MESH_HOST_RANK_UNSET{UINT32_MAX};
@@ -142,14 +142,14 @@ struct fmt::formatter<tt::tt_fabric::MeshId> {
 
 namespace tt::tt_metal {
 
-using AsicID = tt::stl::StrongType<uint64_t, struct AsicIDTag>;
-using TrayID = tt::stl::StrongType<uint32_t, struct TrayIDTag>;
-using ASICLocation = tt::stl::StrongType<uint32_t, struct ASICLocationTag>;
+using AsicID = ttsl::StrongType<uint64_t, struct AsicIDTag>;
+using TrayID = ttsl::StrongType<uint32_t, struct TrayIDTag>;
+using ASICLocation = ttsl::StrongType<uint32_t, struct ASICLocationTag>;
 using ASICPosition = std::pair<TrayID, ASICLocation>;
-using RackID = tt::stl::StrongType<uint32_t, struct RackIDTag>;
-using UID = tt::stl::StrongType<uint32_t, struct UIDTag>;
-using HallID = tt::stl::StrongType<uint32_t, struct HallIDTag>;
-using AisleID = tt::stl::StrongType<uint32_t, struct AisleIDTag>;
+using RackID = ttsl::StrongType<uint32_t, struct RackIDTag>;
+using UID = ttsl::StrongType<uint32_t, struct UIDTag>;
+using HallID = ttsl::StrongType<uint32_t, struct HallIDTag>;
+using AisleID = ttsl::StrongType<uint32_t, struct AisleIDTag>;
 
 // Stream operators for StrongType types
 std::ostream& operator<<(std::ostream& os, const AsicID& asic_id);
