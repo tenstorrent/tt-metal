@@ -8,7 +8,6 @@
 #include <fstream>
 #include <iostream>
 #include <set>
-#include <sstream>
 
 #include <google/protobuf/text_format.h>
 #include <yaml-cpp/yaml.h>
@@ -431,10 +430,6 @@ void apply_profile_defaults(TrafficTestConfig& config) {
             break;
 
         case TestProfile::STRESS:
-            config.categories.random_pairing = true;
-            config.categories.all_to_one = true;
-            config.categories.flow_control = true;
-            config.categories.sequential = true;
             if (!config.packet_sizes) {
                 config.packet_sizes = {1024, 2048, 4096};
             }
@@ -464,7 +459,7 @@ std::string generate_traffic_tests_yaml(
     const MeshTopologyInfo& topology,
     const std::filesystem::path& mgd_path,
     const TrafficTestConfig& config,
-    bool verbose) {
+    bool /*verbose*/) {
     TrafficTestConfig cfg = config;
     apply_profile_defaults(cfg);
 
