@@ -21,18 +21,6 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::transformer::ring_distributed_sdpa::program {
 
 // Ring-distributed SDPA program factory
-// RingDistributedSdpaProgramFactory::cached_program_t create_ring_sdpa_multi_core(
-//     const Tensor& input_tensor_q,
-//     const Tensor& input_tensor_k,
-//     const Tensor& input_tensor_v,
-//     const Tensor& output_tensor,
-//     uint32_t ring_size,
-//     uint32_t ring_id,
-//     std::optional<float> scale,
-//     std::size_t q_chunk_size,
-//     std::size_t k_chunk_size,
-//     DeviceComputeKernelConfig compute_kernel_config,
-//     std::optional<SDPAProgramConfig> program_config) {
 RingDistributedSdpaProgramFactory::cached_program_t RingDistributedSdpaProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -516,39 +504,6 @@ RingDistributedSdpaProgramFactory::cached_program_t RingDistributedSdpaProgramFa
              chunked_q_chunk_offset_phase_2});
     }
 
-    // auto override_runtime_arguments_callback =
-    //     [num_cores, grid_size, reader_kernels_id, writer_kernels_id, compute_kernels_id](
-    //         const void* operation,
-    //         Program& program,
-    //         const std::vector<Tensor>& input_tensors,
-    //         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    //         const std::vector<Tensor>& output_tensors) {
-    //         auto* q_buffer = input_tensors.at(0).buffer();
-    //         auto* k_buffer = input_tensors.at(1).buffer();
-    //         auto* v_buffer = input_tensors.at(2).buffer();
-
-    //         auto* out0_buffer = output_tensors.at(0).buffer();
-    //         uint32_t q_addr = q_buffer->address();
-    //         uint32_t k_addr = k_buffer->address();
-    //         uint32_t v_addr = v_buffer->address();
-    //         uint32_t out_addr = out0_buffer->address();
-
-    //         auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
-    //         auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
-
-    //         for (uint32_t i = 0; i < num_cores; ++i) {
-    //             CoreCoord core = {i % grid_size.x, i / grid_size.x};
-
-    //             auto& reader_args = reader_args_by_core[core.x][core.y];
-    //             auto& writer_args = writer_args_by_core[core.x][core.y];
-
-    //             reader_args[0] = q_addr;
-    //             reader_args[1] = k_addr;
-    //             reader_args[2] = v_addr;
-
-    //             writer_args[0] = out_addr;
-    //         }
-    //     };
     return cached_program_t(
         std::move(program),
         shared_variables_t{
@@ -558,8 +513,6 @@ RingDistributedSdpaProgramFactory::cached_program_t RingDistributedSdpaProgramFa
             .writer_kernel_id = writer_kernels_id,
             .compute_kernel_id = compute_kernels_id,
         });
-
-    // return {std::move(program), override_runtime_arguments_callback};
 }
 
 void RingDistributedSdpaProgramFactory::override_runtime_arguments(
@@ -610,25 +563,13 @@ RingDistributedSdpaMeshWorkloadFactory::create_mesh_workload(
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
     // Filter coordinates based on mesh_coords if provided
-    // const std::optional<std::set<ttnn::MeshCoordinate>>& mesh_coords_opt = operation_attributes.mesh_coords;
     const auto& input_tensor_q = tensor_args.q;
-    // auto scale = operation_attributes.scale;
-    // if (not scale.has_value()) {
-    //     scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1]));
-    // }
 
     // Determine ring_id: use provided value or infer from device coordinate
     uint32_t curr_ring_id;
     // Create programs for each coordinate in tensor_coords (filtered by mesh_coords if provided)
     for (const auto& mesh_coord_range : tensor_coords.ranges()) {
         for (const auto& mesh_coord : mesh_coord_range) {
-            // // Skip this coordinate if mesh_coords is provided and this coordinate is not in the set
-            // if (mesh_coords_opt.has_value()) {
-            //     const auto& mesh_coords_set = mesh_coords_opt.value();
-            //     if (mesh_coords_set.find(mesh_coord) == mesh_coords_set.end()) {
-            //         continue;  // Skip this coordinate
-            //     }
-            // }
             if (operation_attributes.ring_id.has_value()) {
                 // Use explicitly provided ring_id
                 curr_ring_id = operation_attributes.ring_id.value();
