@@ -75,36 +75,74 @@ std::vector<std::vector<FoldTransfer>> generate_fold_transfers(
             for (uint32_t w = 0; w < out_W; w++) {
                 // Destination core based on OUTPUT shard height
                 uint32_t dst_core_idx = output_pixel / output_shard_height;
+
+                // For each row in the stride group, try to coalesce stride_w consecutive elements
                 for (uint32_t s_h = 0; s_h < stride_h; s_h++) {
-                    for (uint32_t s_w = 0; s_w < stride_w; s_w++) {
-                        // Calculate padded coordinates
-                        uint32_t padded_h = h * stride_h + s_h;
-                        uint32_t padded_w = w * stride_w + s_w;
+                    uint32_t padded_h = h * stride_h + s_h;
+                    uint32_t padded_w_start = w * stride_w;
 
-                        // Check if in padding region
-                        bool is_padding = (padded_h < pad_top) || (padded_h >= pad_top + H) || (padded_w < pad_left) ||
-                                          (padded_w >= pad_left + W);
+                    // Check if entire row is in height padding region
+                    bool row_h_padding = (padded_h < pad_top) || (padded_h >= pad_top + H);
 
-                        if (is_padding) {
-                            // Padding pixel - use special marker
-                            per_core_transfers[dst_core_idx].push_back({PADDING_NOC_MARKER, PADDING_NOC_MARKER, 0, 1});
-                        } else {
-                            // Real input pixel - map to unpadded coordinates
-                            uint32_t in_h = padded_h - pad_top;
-                            uint32_t in_w = padded_w - pad_left;
-                            uint32_t in_idx = (n * H * W) + (in_h * W) + in_w;
+                    if (row_h_padding) {
+                        // Entire row is padding - coalesce all stride_w as padding
+                        per_core_transfers[dst_core_idx].push_back(
+                            {PADDING_NOC_MARKER, PADDING_NOC_MARKER, 0, static_cast<uint16_t>(stride_w)});
+                    } else {
+                        // Row is not in height padding, check width elements
+                        uint32_t in_h = padded_h - pad_top;
+                        uint32_t s_w = 0;
 
-                            // Source core based on INPUT shard height
-                            uint32_t input_core_id = in_idx / input_shard_height;
-                            uint32_t src_local_idx = in_idx % input_shard_height;
+                        while (s_w < stride_w) {
+                            uint32_t padded_w = padded_w_start + s_w;
+                            bool is_w_padding = (padded_w < pad_left) || (padded_w >= pad_left + W);
 
-                            auto [src_noc_x, src_noc_y] = input_noc_coords[input_core_id];
+                            if (is_w_padding) {
+                                // Count consecutive padding elements
+                                uint32_t pad_count = 0;
+                                while (s_w + pad_count < stride_w) {
+                                    uint32_t pw = padded_w_start + s_w + pad_count;
+                                    if ((pw >= pad_left) && (pw < pad_left + W)) {
+                                        break;  // No longer padding
+                                    }
+                                    pad_count++;
+                                }
+                                per_core_transfers[dst_core_idx].push_back(
+                                    {PADDING_NOC_MARKER, PADDING_NOC_MARKER, 0, static_cast<uint16_t>(pad_count)});
+                                s_w += pad_count;
+                            } else {
+                                // Real data - try to coalesce consecutive elements on same core
+                                uint32_t in_w = padded_w - pad_left;
+                                uint32_t in_idx = (n * H * W) + (in_h * W) + in_w;
+                                uint32_t first_core_id = in_idx / input_shard_height;
+                                uint32_t first_local_idx = in_idx % input_shard_height;
 
-                            per_core_transfers[dst_core_idx].push_back(
-                                {static_cast<uint16_t>(src_noc_x),
-                                 static_cast<uint16_t>(src_noc_y),
-                                 static_cast<uint16_t>(src_local_idx),
-                                 1});
+                                // Count how many consecutive elements are on the same core and not padding
+                                uint32_t coalesce_count = 1;
+                                while (s_w + coalesce_count < stride_w) {
+                                    uint32_t next_padded_w = padded_w_start + s_w + coalesce_count;
+                                    // Check if next element is padding
+                                    if ((next_padded_w < pad_left) || (next_padded_w >= pad_left + W)) {
+                                        break;  // Next is padding
+                                    }
+                                    // Check if next element is on same core
+                                    uint32_t next_in_w = next_padded_w - pad_left;
+                                    uint32_t next_in_idx = (n * H * W) + (in_h * W) + next_in_w;
+                                    uint32_t next_core_id = next_in_idx / input_shard_height;
+                                    if (next_core_id != first_core_id) {
+                                        break;  // Different core, can't coalesce
+                                    }
+                                    coalesce_count++;
+                                }
+
+                                auto [src_noc_x, src_noc_y] = input_noc_coords[first_core_id];
+                                per_core_transfers[dst_core_idx].push_back(
+                                    {static_cast<uint16_t>(src_noc_x),
+                                     static_cast<uint16_t>(src_noc_y),
+                                     static_cast<uint16_t>(first_local_idx),
+                                     static_cast<uint16_t>(coalesce_count)});
+                                s_w += coalesce_count;
+                            }
                         }
                     }
                 }
