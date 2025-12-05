@@ -17,18 +17,12 @@
 #include <google/protobuf/io/zero_copy_stream_impl.h>
 #include <google/protobuf/text_format.h>
 
+#include <node/node_type_info.hpp>
 #include "protobuf/cluster_config.pb.h"
 
 namespace tt::scaleout_tools {
 
 namespace {
-
-// Node type information structure
-struct NodeTypeInfo {
-    std::vector<int> device_dims;
-    tt::tt_fabric::proto::Architecture arch;
-    int channel_count;
-};
 
 // Information extracted from cabling descriptor
 struct CablingDescriptorInfo {
@@ -36,29 +30,6 @@ struct CablingDescriptorInfo {
     std::string node_type;
     std::set<uint32_t> host_ids;
 };
-
-// Create lookup table for node types to shapes, architectures, and channel counts
-inline const std::unordered_map<std::string, NodeTypeInfo>& create_node_type_lookup() {
-    static const std::unordered_map<std::string, NodeTypeInfo> lookup = {
-        // Wormhole architectures
-        {"N300_LB_DEFAULT", {{2, 4}, tt::tt_fabric::proto::Architecture::WORMHOLE_B0, 2}},     // N300: 2 channels
-        {"N300_QB_DEFAULT", {{2, 4}, tt::tt_fabric::proto::Architecture::WORMHOLE_B0, 2}},     // N300: 2 channels
-        {"WH_GALAXY", {{8, 4}, tt::tt_fabric::proto::Architecture::WORMHOLE_B0, 4}},           // WH Galaxy: 4 channels
-        {"WH_GALAXY_X_TORUS", {{8, 4}, tt::tt_fabric::proto::Architecture::WORMHOLE_B0, 4}},   // WH Galaxy: 4 channels
-        {"WH_GALAXY_Y_TORUS", {{8, 4}, tt::tt_fabric::proto::Architecture::WORMHOLE_B0, 4}},   // WH Galaxy: 4 channels
-        {"WH_GALAXY_XY_TORUS", {{8, 4}, tt::tt_fabric::proto::Architecture::WORMHOLE_B0, 4}},  // WH Galaxy: 4 channels
-
-        // Blackhole architectures
-        {"P150_LB", {{2, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},             // P150: 2 channels
-        {"P150_QB_AE_DEFAULT", {{2, 2}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 4}},  // P150: 4 channels
-        {"P300_QB_GE", {{2, 2}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},          // P300: 2 channels
-        {"BH_GALAXY", {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},           // BH Galaxy: 2 channels
-        {"BH_GALAXY_X_TORUS", {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},   // BH Galaxy: 2 channels
-        {"BH_GALAXY_Y_TORUS", {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},   // BH Galaxy: 2 channels
-        {"BH_GALAXY_XY_TORUS", {{8, 4}, tt::tt_fabric::proto::Architecture::BLACKHOLE, 2}},  // BH Galaxy: 2 channels
-    };
-    return lookup;
-}
 
 // Helper function to recursively collect all host_ids from a GraphInstance
 void collect_host_ids(const proto::GraphInstance& instance, std::set<uint32_t>& host_ids) {
@@ -200,27 +171,22 @@ static tt::tt_fabric::proto::MeshGraphDescriptor generate_mgd_impl(
         }
     }
 
-    const auto& node_type_lookup = create_node_type_lookup();
     tt::tt_fabric::proto::MeshGraphDescriptor mgd;
 
-    const auto it = node_type_lookup.find(cabling_info.node_type);
-    if (it == node_type_lookup.end()) {
-        // Build list of supported types from the actual map keys
-        std::string supported_types;
-        for (const auto& [type_name, _] : node_type_lookup) {
-            if (!supported_types.empty()) {
-                supported_types += ", ";
-            }
-            supported_types += type_name;
-        }
-        throw std::runtime_error(
-            "Unknown node type '" + cabling_info.node_type + "'. " + "Supported types: " + supported_types);
+    // Get node type info from shared lookup (throws if unknown)
+    const auto& node_info = get_node_type_info(cabling_info.node_type);
+    const auto& device_dims = node_info.device_dims;
+    const auto& arch_str = node_info.architecture;
+    const auto channel_count = node_info.channel_count;
+
+    // Convert architecture string to proto enum
+    tt::tt_fabric::proto::Architecture arch;
+    if (!tt::tt_fabric::proto::Architecture_Parse(arch_str, &arch)) {
+        throw std::runtime_error("Unknown architecture: " + arch_str);
     }
 
-    const auto& [device_dims, arch, channel_count] = it->second;
-
     if (verbose) {
-        std::cout << "Architecture: " << tt::tt_fabric::proto::Architecture_Name(arch) << '\n';
+        std::cout << "Architecture: " << arch_str << '\n';
         std::cout << "Device topology: " << device_dims[0] << "x" << device_dims[1] << '\n';
         std::cout << "Channels per connection: " << channel_count << '\n';
     }
