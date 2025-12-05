@@ -96,11 +96,11 @@ target_sources(
         bcast/bcast.cpp
         bcast/bcast_types.cpp
         bcast/device/bcast_device_operation.cpp
-        bcast/device/multi_core_h/bcast_op_multi_core_h.cpp
-        bcast/device/multi_core_h/bcast_op_sharded_h.cpp
-        bcast/device/multi_core_h/bcast_op_sharded_h_optimised.cpp
-        bcast/device/multi_core_hw/bcast_op_multi_core_hw.cpp
-        bcast/device/multi_core_w/bcast_op_multi_core_w.cpp
+        bcast/device/bcast_multi_core_h_program_factory.cpp
+        bcast/device/bcast_sharded_h_program_factory.cpp
+        bcast/device/bcast_sharded_h_optimised_program_factory.cpp
+        bcast/device/bcast_multi_core_w_program_factory.cpp
+        bcast/device/bcast_multi_core_hw_program_factory.cpp
         chunk/chunk.cpp
         clone/clone.cpp
         clone/device/clone_device_operation.cpp

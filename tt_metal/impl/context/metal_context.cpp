@@ -30,7 +30,7 @@
 #include "tt_metal/llrt/get_platform_architecture.hpp"
 #include "tt_metal/llrt/llrt.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/device_pool.hpp>
+#include "tt_metal/impl/device/device_pool.hpp"
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/hal.hpp>
@@ -355,7 +355,11 @@ MetalContext::MetalContext() {
     const auto platform_arch = get_platform_architecture(rtoptions_);
 
     const auto initialize_objects = [&]() {
-        hal_ = std::make_unique<Hal>(platform_arch, is_base_routing_fw_enabled, rtoptions_.get_enable_2_erisc_mode());
+        hal_ = std::make_unique<Hal>(
+            platform_arch,
+            is_base_routing_fw_enabled,
+            rtoptions_.get_enable_2_erisc_mode(),
+            get_profiler_dram_bank_size_per_risc_bytes(rtoptions_));
         rtoptions_.ParseAllFeatureEnv(*hal_);
         cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
         distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
