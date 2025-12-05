@@ -15,7 +15,7 @@ namespace ttnn::fabric {
 
 void bind_fabric_api(nb::module_& mod) {
     // custom mapping here for interface stability
-    nb::enum_<tt::tt_fabric::FabricConfig>(module, "FabricConfig")
+    nb::enum_<tt::tt_fabric::FabricConfig>(mod, "FabricConfig")
         .value("DISABLED", tt::tt_fabric::FabricConfig::DISABLED)
         .value("FABRIC_1D", tt::tt_fabric::FabricConfig::FABRIC_1D)
         .value("FABRIC_1D_RING", tt::tt_fabric::FabricConfig::FABRIC_1D_RING)
