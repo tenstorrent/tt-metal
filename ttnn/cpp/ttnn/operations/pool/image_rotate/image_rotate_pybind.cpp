@@ -16,7 +16,7 @@ namespace py = pybind11;
 
 void py_bind_image_rotate(py::module& module) {
     const auto doc = R"doc(
-        Rotates an image tensor by an arbitrary angle around a specified center point using bilinear interpolation.
+        Rotates an image tensor by an arbitrary angle around a specified center point using configurable interpolation.
 
         The image_rotate operation performs spatial transformation by rotating each pixel position
         around a rotation center. Areas outside the rotated image are filled with a configurable
@@ -31,6 +31,7 @@ void py_bind_image_rotate(py::module& module) {
                                                     Default: ((W-1)/2, (H-1)/2) - image center
             fill (float): Fill value for areas outside the rotated image. Default: 0.0
             expand (bool): If True, return error. Only False is supported (same output dimensions). Default: False
+            interpolation_mode (str): Interpolation method - "bilinear" (smooth) or "nearest" (sharp, faster). Default: "bilinear"
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration. Default: DRAM_INTERLEAVED
 
         Returns:
@@ -40,15 +41,15 @@ void py_bind_image_rotate(py::module& module) {
             >>> # Create input tensor (N=1, H=256, W=256, C=32) - channel last format
             >>> input_tensor = ttnn.from_torch(torch.randn(1, 256, 256, 32), device=device)
             >>>
-            >>> # Rotate 45 degrees counter-clockwise around image center
+            >>> # Rotate 45 degrees counter-clockwise with bilinear interpolation (default)
             >>> output = ttnn.image_rotate(input_tensor, 45.0)
             >>> print(output.shape)  # [1, 256, 256, 32]
             >>>
-            >>> # Rotate 90 degrees clockwise (negative angle)
-            >>> output_cw = ttnn.image_rotate(input_tensor, -90.0)
+            >>> # Rotate 90 degrees clockwise with nearest interpolation (faster)
+            >>> output_cw = ttnn.image_rotate(input_tensor, -90.0, interpolation_mode="nearest")
             >>>
-            >>> # Rotate around custom center with white fill
-            >>> output_custom = ttnn.image_rotate(input_tensor, 30.0, center=(128, 128), fill=1.0)
+            >>> # Rotate around custom center with white fill and smooth interpolation
+            >>> output_custom = ttnn.image_rotate(input_tensor, 30.0, center=(128, 128), fill=1.0, interpolation_mode="bilinear")
         )doc";
 
     ttnn::bind_registered_operation(
@@ -62,6 +63,7 @@ void py_bind_image_rotate(py::module& module) {
             py::arg("center") = std::nullopt,
             py::arg("fill") = 0.0f,
             py::arg("expand") = false,
+            py::arg("interpolation_mode") = "bilinear",
             py::arg("memory_config") = std::nullopt});
 }
 

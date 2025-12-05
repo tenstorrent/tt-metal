@@ -43,7 +43,8 @@ target_sources(
         grid_sample/grid_sample.cpp
         grid_sample/grid_sample_prepare_grid.cpp
         image_rotate/device/image_rotate_device_operation.cpp
-        image_rotate/device/image_rotate_program_factory.cpp
+        image_rotate/device/image_rotate_bilinear_program_factory.cpp
+        image_rotate/device/image_rotate_nearest_program_factory.cpp
         image_rotate/image_rotate.cpp
         pool_utils.cpp
         upsample/device//upsample_bilinear_program_factory_multicore.cpp

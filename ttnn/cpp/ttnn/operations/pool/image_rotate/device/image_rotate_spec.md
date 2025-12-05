@@ -49,7 +49,13 @@ output = weight_nw * input[h0,w0] + weight_ne * input[h0,w1] +
 ```
 
 ### Semantic Description
-The image_rotate operation rotates an image tensor by an arbitrary angle around a specified center point using bilinear interpolation. Positive angles rotate counter-clockwise. Areas outside the rotated image are filled with a configurable fill value (default 0.0). The output tensor has the same dimensions as the input (no expansion mode).
+The image_rotate operation rotates an image tensor by an arbitrary angle around a specified center point using configurable interpolation (bilinear or nearest). Positive angles rotate counter-clockwise. Areas outside the rotated image are filled with a configurable fill value (default 0.0). The output tensor has the same dimensions as the input (no expansion mode).
+
+### Interpolation Modes
+| Mode | Description | Performance | Quality | Use Cases |
+|------|-------------|-------------|---------|-----------|
+| "bilinear" | Weighted interpolation using 4 neighboring pixels | Slower | Smooth, high-quality | Natural images, smooth transformations |
+| "nearest" | Copy value from single nearest pixel | Faster | Sharp, pixelated | Pixel art, categorical images, fast preview |
 
 ## API Specification
 
@@ -61,6 +67,7 @@ The image_rotate operation rotates an image tensor by an arbitrary angle around 
 | center | optional<tuple<float,float>> | No | x in [0, W-1], y in [0, H-1] | ((W-1)/2, (H-1)/2) | Rotation center point (cx, cy) in pixel coordinates |
 | fill | float | No | (-inf, +inf) | 0.0 | Fill value for areas outside the rotated image |
 | expand | bool | No | Must be false | false | If true, return error. Only false is supported (same output dimensions) |
+| interpolation_mode | string | No | "bilinear" or "nearest" | "bilinear" | Interpolation method for sampling between pixels |
 | output_mem_config | MemoryConfig | No | DRAM_INTERLEAVED | DRAM_INTERLEAVED | Output memory configuration |
 
 ### Input Tensor Requirements
@@ -123,6 +130,34 @@ The image_rotate operation rotates an image tensor by an arbitrary angle around 
 | Sharded mode | Supported | Not supported | Remove sharded code paths |
 | Split reader | Supported for sharded | Not applicable | Remove split reader logic |
 | Fill value | Implicit zero | Configurable | Pass fill value to reader |
+
+## Implementation Architecture
+
+### Bilinear vs Nearest Implementation Differences
+
+| Aspect | Bilinear Mode | Nearest Mode | Impact |
+|--------|---------------|--------------|--------|
+| **Program Factory** | `BilinearProgramFactory` | `NearestProgramFactory` | Different kernel orchestration |
+| **Reader Kernel** | `reader_image_rotate_interleaved.cpp` | `reader_writer_image_rotate_nearest_interleaved.cpp` | Nearest combines reader+writer |
+| **Compute Kernel** | `compute_pool_2d.cpp` (reduction) | None | Nearest has no interpolation computation |
+| **Writer Kernel** | `writer_grid_sample_interleaved.cpp` | Combined with reader | Simpler data flow for nearest |
+| **Circular Buffers** | 3 CBs (input, scalar, output) | 1 CB (output only) | Reduced memory usage for nearest |
+| **Pixel Sampling** | 4 corners with weights | 1 nearest pixel | 4x fewer memory reads for nearest |
+| **Coordinate Math** | Bilinear weight calculation | Simple rounding | Faster coordinate computation |
+
+### Memory and Performance Characteristics
+
+**Bilinear Mode:**
+- Memory: Higher (multiple CBs, 4 pixels per output)
+- Computation: Higher (weight calculation, reduction)
+- Bandwidth: Higher (4x pixel reads)
+- Quality: Smooth interpolation
+
+**Nearest Mode:**
+- Memory: Lower (single CB, 1 pixel per output)
+- Computation: Lower (no interpolation math)
+- Bandwidth: Lower (1x pixel reads)
+- Quality: Sharp, preserves original pixel values
 
 ## Design Decisions
 
@@ -516,6 +551,10 @@ void ImageRotate::validate(const std::vector<Tensor>& input_tensors) const {
     // Expand parameter
     TT_FATAL(!expand_,
         "expand=True is not supported. Only same-size rotation (expand=False) is implemented");
+
+    // Interpolation mode validation
+    TT_FATAL(interpolation_mode_ == "bilinear" || interpolation_mode_ == "nearest",
+        "interpolation_mode must be 'bilinear' or 'nearest', got '{}'", interpolation_mode_);
 }
 ```
 

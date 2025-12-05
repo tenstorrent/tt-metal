@@ -6,13 +6,14 @@
 
 #include <optional>
 #include <tuple>
+#include <string>
 #include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::image_rotate {
 
 struct ImageRotate {
     /**
-     * Image rotation operation with bilinear interpolation.
+     * Image rotation operation with configurable interpolation.
      *
      * Rotates an image tensor by an arbitrary angle around a specified center point.
      * Areas outside the rotated image are filled with a configurable fill value.
@@ -23,6 +24,7 @@ struct ImageRotate {
      *   center: Optional rotation center point (cx, cy). Default: image center
      *   fill: Fill value for areas outside the rotated image. Default: 0.0
      *   expand: Must be false. Only same-size rotation is supported
+     *   interpolation_mode: Interpolation method - "bilinear" or "nearest". Default: "bilinear"
      *   memory_config: Memory configuration for the output tensor
      *
      * Returns:
@@ -34,6 +36,7 @@ struct ImageRotate {
         const std::optional<std::tuple<float, float>>& center = std::nullopt,
         float fill = 0.0f,
         bool expand = false,
+        const std::string& interpolation_mode = "bilinear",
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
