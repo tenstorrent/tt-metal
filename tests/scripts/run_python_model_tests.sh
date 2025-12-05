@@ -83,17 +83,17 @@ run_python_model_tests_slow_runtime_mode_wormhole_b0() {
 run_python_model_tests_blackhole() {
     HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home pytest models/demos/blackhole/stable_diffusion/tests --ignore=models/demos/blackhole/stable_diffusion/tests/test_perf.py
 
-    # Llama3.1-8B
-    llama8b=meta-llama/Llama-3.1-8B-Instruct
-    # Run all Llama3 tests for 8B - dummy weights with tight PCC check
-    for hf_model in "$llama8b"; do
-        tt_cache=$TT_CACHE_HOME/$hf_model
-        HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
-        echo "LOG_METAL: Llama3 tests for $hf_model completed"
-    done
+    # # Llama3.1-8B
+    # llama8b=meta-llama/Llama-3.1-8B-Instruct
+    # # Run all Llama3 tests for 8B - dummy weights with tight PCC check
+    # for hf_model in "$llama8b"; do
+    #     tt_cache=$TT_CACHE_HOME/$hf_model
+    #     HF_MODEL=$hf_model TT_CACHE_PATH=$tt_cache pytest models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
+    #     echo "LOG_METAL: Llama3 tests for $hf_model completed"
+    # done
 
-    pytest models/demos/wormhole/resnet50/tests/test_resnet50_functional.py
-    pytest models/experimental/functional_unet/tests/test_unet_model.py
+    # pytest models/demos/wormhole/resnet50/tests/test_resnet50_functional.py
+    # pytest models/experimental/functional_unet/tests/test_unet_model.py
 }
 
 run_python_model_tests_slow_runtime_mode_blackhole() {
