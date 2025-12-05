@@ -662,7 +662,7 @@ const std::vector<std::string> FabricSupportedStatsMetric::telemetry_path() cons
 void FabricSupportedStatsMetric::update(
     const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
     const auto* snapshot = telemetry_reader_->get_fabric_telemetry_for_channel(channel_, start_of_update_cycle);
-    if (snapshot && snapshot->dynamic_info.has_value()) {
+    if (snapshot) {
         set_value(snapshot->static_info.supported_stats);
     }
 }

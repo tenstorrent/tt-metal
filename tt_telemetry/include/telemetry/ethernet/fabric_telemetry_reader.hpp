@@ -24,13 +24,12 @@
  */
 
 #include <chrono>
-#include <cstddef>
 #include <memory>
+#include <mutex>
 #include <unordered_map>
 
-#include <tt-metalium/types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_telemetry.hpp>
-#include <third_party/umd/device/api/umd/device/cluster.hpp>
+#include <umd/device/cluster.hpp>
 
 // Forward declarations
 namespace tt::tt_metal {
@@ -47,17 +46,19 @@ public:
         const std::unique_ptr<tt::umd::Cluster>& cluster,
         const std::unique_ptr<tt::tt_metal::Hal>& hal);
 
+    FabricTelemetryReader(const FabricTelemetryReader&) = delete;
+    FabricTelemetryReader& operator=(const FabricTelemetryReader&) = delete;
+    FabricTelemetryReader(FabricTelemetryReader&&) = delete;
+    FabricTelemetryReader& operator=(FabricTelemetryReader&&) = delete;
+
     // Returns cached telemetry snapshot for a specific channel
     // Updates from device if this is a new update cycle
     // Returns nullptr if channel not found or telemetry unavailable
     // Note: Returned pointer is valid only until next call to this method
-    // (single-threaded telemetry collector architecture)
     const tt::tt_fabric::FabricTelemetrySnapshot* get_fabric_telemetry_for_channel(
         uint32_t channel, std::chrono::steady_clock::time_point start_of_update_cycle);
 
 private:
-    void update_telemetry(std::chrono::steady_clock::time_point start_of_update_cycle);
-
     // Reads telemetry for a single channel directly from L1
     tt::tt_fabric::FabricTelemetrySnapshot read_channel_telemetry(uint32_t channel);
 
@@ -68,4 +69,6 @@ private:
     std::unordered_map<uint32_t, tt::tt_fabric::FabricTelemetrySnapshot> cached_telemetry_;
 
     std::chrono::steady_clock::time_point last_update_cycle_;
+
+    mutable std::mutex telemetry_mutex_;
 };
