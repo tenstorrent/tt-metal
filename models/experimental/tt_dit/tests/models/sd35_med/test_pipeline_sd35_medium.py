@@ -1,177 +1,274 @@
+# models/experimental/tt_dit/tests/models/sd35/test_performance_sd35_medium.py
+
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-#
 # SPDX-License-Identifier: Apache-2.0
 
-import itertools
-import os
-
+import statistics
 import pytest
 import ttnn
 from loguru import logger
+from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 
 from ....pipelines.stable_diffusion_35_medium.pipeline_stable_diffusion_35_medium import (
-    StableDiffusion3Pipeline,
-    TimingCollector,
+    StableDiffusion3MediumPipeline as TTSD35MediumPipeline,
 )
+from ....parallel.config import DiTParallelConfig, ParallelFactor
 
 
-@pytest.mark.parametrize(
-    "no_prompt",
-    [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), False)],
-)
 @pytest.mark.parametrize(
     "model_name, image_w, image_h, guidance_scale, num_inference_steps",
     [
-        ("medium", 512, 512, 4.5, 40),  # SD3.5 Medium uses guidance_scale=4.5 and 40 steps
+        ("stabilityai/stable-diffusion-3.5-medium", 1024, 1024, 4.5, 40),
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, cfg, sp, tp, topology, num_links",
+    "mesh_device, sp_axis, tp_axis, num_links",
     [
-        # [(1, 1), (1, 0), (1, 1), (1, 0), ttnn.Topology.Linear, 1],  # n150: single device, no parallelism
-        [(1, 1), (1, None), (1, None), (1, None), ttnn.Topology.Linear, 1],
+        # N150 configurations - single card
+        [(1, 1), 0, 1, 1],  # Single device, no parallelism
+        [(1, 2), 0, 1, 1],  # Tensor parallel on axis 1
+        [(1, 2), 1, 0, 1],  # Sequence parallel on axis 1
     ],
     ids=[
-        "n150",
+        "1x1",
+        "1x2sp0tp1",
+        "1x2sp1tp0",
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 25000000}],
-    indirect=True,
-)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("use_cache", [True, False], ids=["yes_use_cache", "no_use_cache"])
-@pytest.mark.parametrize("traced", [True, False], ids=["yes_traced", "no_traced"])
-def test_sd35_medium_pipeline(
+def test_sd35_medium_pipeline_performance(
     *,
     mesh_device: ttnn.MeshDevice,
-    model_name,
-    image_w,
-    image_h,
-    guidance_scale,
-    num_inference_steps,
-    cfg,
-    sp,
-    tp,
-    topology,
-    num_links,
-    no_prompt,
-    model_location_generator,
-    traced,
-    use_cache,
-    is_ci_env,
-    monkeypatch,
+    model_name: str,
+    image_w: int,
+    image_h: int,
+    guidance_scale: float,
+    num_inference_steps: int,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    use_cache: bool,
+    is_ci_env: bool,
 ) -> None:
-    """Test the SD3.5 Medium pipeline implementation."""
+    """Performance test for SD3.5 Medium pipeline on N150 with detailed timing analysis."""
 
-    model_version = f"stabilityai/stable-diffusion-3.5-{model_name}"
+    benchmark_profiler = BenchmarkProfiler()
 
-    # Setup CI environment
-    if is_ci_env:
-        if use_cache:
-            monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
-        else:
-            pytest.skip("Skipping. No use cache is implicitly tested with the configured non persistent cache path.")
-        if traced:
-            pytest.skip("Skipping traced test in CI environment. Use Performance test for detailed timing analysis.")
+    logger.info(f"  Image size: {image_w}x{image_h}")
+    logger.info(f"  Guidance scale: {guidance_scale}")
+    logger.info(f"  Inference steps: {num_inference_steps}")
 
-    # ADD THIS BLOCK HERE - for non-CI environments
-    if use_cache and not is_ci_env:
-        monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    tp_factor = tuple(mesh_device.shape)[tp_axis]
 
-    # Create timing collector
-    timing_collector = TimingCollector()
+    logger.info(f"Creating TT SD3.5 Medium pipeline with mesh device shape {mesh_device.shape}")
+    logger.info(f"SP axis: {sp_axis}, TP axis: {tp_axis}")
 
-    # Create pipeline
-    pipeline = StableDiffusion3Pipeline.create_pipeline(
+    # Create parallel config for N150
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),  # No CFG parallel on N150
+        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
+    )
+
+    # Create the TT SD3.5 Medium pipeline
+    tt_pipe = TTSD35MediumPipeline(
         mesh_device=mesh_device,
-        batch_size=1,
-        image_w=image_w,
-        image_h=image_h,
-        guidance_scale=guidance_scale,
-        prompt_sequence_length=333,
-        spatial_sequence_length=4096,
-        max_t5_sequence_length=256,
-        cfg_config=cfg,
-        sp_config=sp,
-        tp_config=tp,
+        enable_t5_text_encoder=False,  # Disable T5 for N150 to save memory
+        guidance_cond=1,  # Single condition for N150
+        parallel_config=parallel_config,
         num_links=num_links,
-        model_checkpoint_path=model_location_generator(model_version, model_subdir=""),
+        height=image_h,
+        width=image_w,
+        model_checkpoint_path=model_name,
         use_cache=use_cache,
     )
 
-    # Set timing collector
-    pipeline.timing_collector = timing_collector
+    # Test prompts
+    prompts = [
+        "A beautiful landscape with mountains and a lake",
+        "A cute cat sitting on a windowsill",
+        "A futuristic city skyline at sunset",
+    ]
 
-    # Define test prompt
-    prompt = (
-        "An epic, high-definition cinematic shot of a rustic snowy cabin glowing "
-        "warmly at dusk, nestled in a serene winter landscape. Surrounded by gentle "
-        "snow-covered pines and delicate falling snowflakes - captured in a rich, "
-        "atmospheric, wide-angle scene with deep cinematic depth and warmth."
-    )
+    # Set up timing collector
+    tt_pipe.timing_collector = TimingCollector()
 
-    if no_prompt:
-        # Run single generation
-        negative_prompt = ""
-        images = pipeline(
-            prompt_1=[prompt],
-            prompt_2=[prompt],
-            prompt_3=[prompt],
-            negative_prompt_1=[negative_prompt],
-            negative_prompt_2=[negative_prompt],
-            negative_prompt_3=[negative_prompt],
+    # First run to warm up and verify functionality
+    logger.info("Running initial validation...")
+    with benchmark_profiler("run", iteration=0):
+        images = tt_pipe.run_single_prompt(
+            prompt=prompts[0],
+            negative_prompt="blurry, low quality",
             num_inference_steps=num_inference_steps,
-            seed=0,
-            traced=traced,
+            seed=42,
         )
 
-        # Save image
-        output_filename = f"sd35_medium_{image_w}_{image_h}.png"
-        images[0].save(output_filename)
-        logger.info(f"Image saved as {output_filename}")
+    # Validate output
+    assert len(images) > 0, "Empty image list generated by the TT pipeline"
 
-        # Print timing information
-        timing_data = timing_collector.get_timing_data()
-        logger.info(f"CLIP encoding time: {timing_data.clip_encoding_time:.2f}s")
-        logger.info(f"T5 encoding time: {timing_data.t5_encoding_time:.2f}s")
-        logger.info(f"Total encoding time: {timing_data.total_encoding_time:.2f}s")
-        logger.info(f"VAE decoding time: {timing_data.vae_decoding_time:.2f}s")
-        logger.info(f"Total pipeline time: {timing_data.total_time:.2f}s")
-        if timing_data.denoising_step_times:
-            avg_step_time = sum(timing_data.denoising_step_times) / len(timing_data.denoising_step_times)
-            logger.info(f"Average denoising step time: {avg_step_time:.2f}s")
+    first_image = images[0]
+    logger.info(f"TT Pipeline generated image, size: {first_image.size}")
 
-    else:
-        # Interactive demo
-        for i in itertools.count():
-            new_prompt = input("Enter the input prompt, or q to exit: ")
-            if new_prompt:
-                prompt = new_prompt
-            if prompt[0] == "q":
-                break
+    # Performance measurement runs
+    logger.info("Running performance measurement iterations...")
+    all_timings = []
+    num_perf_runs = 3  # Multiple runs for better statistics
 
-            negative_prompt = ""
+    try:
+        for i in range(num_perf_runs):
+            logger.info(f"Performance run {i+1}/{num_perf_runs}...")
 
-            images = pipeline(
-                prompt_1=[prompt],
-                prompt_2=[prompt],
-                prompt_3=[prompt],
-                negative_prompt_1=[negative_prompt],
-                negative_prompt_2=[negative_prompt],
-                negative_prompt_3=[negative_prompt],
-                num_inference_steps=num_inference_steps,
-                seed=0,
-                traced=traced,
+            # Use different prompt for each run
+            prompt_idx = (i + 1) % len(prompts)
+
+            with benchmark_profiler("run", iteration=i):
+                images = tt_pipe.run_single_prompt(
+                    prompt=prompts[prompt_idx],
+                    negative_prompt="blurry, low quality",
+                    num_inference_steps=num_inference_steps,
+                    seed=42 + i,  # Different seed for variety
+                )
+
+            # Collect timing data
+            timing_data = tt_pipe.timing_collector.get_timing_data()
+            all_timings.append(
+                {
+                    "text_encoder": timing_data.clip_encoding_time + timing_data.t5_encoding_time,
+                    "denoising": sum(timing_data.denoising_step_times),
+                    "vae": timing_data.vae_decoding_time,
+                    "total": timing_data.total_time,
+                }
             )
+            logger.info(f"  Run {i+1} completed in {timing_data.total_time:.2f}s")
 
-            output_filename = f"sd35_medium_{image_w}_{image_h}_{i}.png"
-            images[0].save(output_filename)
-            logger.info(f"Image saved as {output_filename}")
+    except Exception as e:
+        logger.error(f"Performance test failed: {e}")
+        raise
 
-    # Synchronize all devices
-    for submesh_device in pipeline.submesh_devices:
-        ttnn.synchronize_device(submesh_device)
+    # Calculate statistics
+    text_encoder_times = [t["text_encoder"] for t in all_timings]
+    denoising_times = [t["denoising"] for t in all_timings]
+    vae_times = [t["vae"] for t in all_timings]
+    total_times = [t["total"] for t in all_timings]
 
-    logger.info("SD3.5 Medium pipeline test completed successfully!")
+    def print_stats(name, times):
+        if times:
+            logger.info(f"{name}: mean={statistics.mean(times):.2f}s, " f"min={min(times):.2f}s, max={max(times):.2f}s")
+
+    print("-" * 80)
+    print("SD3.5 Medium Pipeline Performance Statistics")
+    print("-" * 80)
+    print_stats("Text Encoding", text_encoder_times)
+    print_stats("Denoising", denoising_times)
+    print_stats("VAE Decoding", vae_times)
+    print_stats("Total Pipeline", total_times)
+    print("-" * 80)
+
+    # Validate that we got reasonable results
+    assert len(all_timings) == num_perf_runs, f"Expected {num_perf_runs} timing results, got {len(all_timings)}"
+    assert all(t["total"] > 0 for t in all_timings), "All runs should have positive total time"
+
+    # Performance validation for N150
+    measurements = {
+        "text_encoding_time": statistics.mean(text_encoder_times),
+        "denoising_time": statistics.mean(denoising_times),
+        "vae_decoding_time": statistics.mean(vae_times),
+        "total_time": statistics.mean(total_times),
+    }
+
+    # Set reasonable performance targets for N150
+    if tuple(mesh_device.shape) == (1, 1):
+        expected_metrics = {
+            "text_encoding_time": 3.0,  # CLIP only, no T5
+            "denoising_time": 45.0,  # Medium model on single device
+            "vae_decoding_time": 2.0,  # Fast VAE decoding
+            "total_time": 50.0,  # Total pipeline time
+        }
+    elif tuple(mesh_device.shape) in [(1, 2)]:
+        expected_metrics = {
+            "text_encoding_time": 3.0,
+            "denoising_time": 30.0,  # Faster with parallelism
+            "vae_decoding_time": 2.0,
+            "total_time": 35.0,
+        }
+    else:
+        assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
+
+    # Validate performance meets expectations
+    for metric, expected in expected_metrics.items():
+        actual = measurements[metric]
+        logger.info(f"{metric}: {actual:.2f}s (expected < {expected:.2f}s)")
+        assert actual < expected, f"{metric} too slow: {actual:.2f}s > {expected:.2f}s"
+
+    # Save benchmark data
+    benchmark_data = BenchmarkData()
+    benchmark_data.save_performance_json(
+        benchmark_profiler,
+        run_type="sd35_medium_performance",
+        ml_model_name="stable-diffusion-3.5-medium",
+        measurements=measurements,
+        device_config={
+            "mesh_shape": tuple(mesh_device.shape),
+            "sp_axis": sp_axis,
+            "tp_axis": tp_axis,
+            "use_cache": use_cache,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "mesh_device, sp_axis, tp_axis, num_links",
+    [
+        [(1, 1), 0, 1, 1],  # Minimal configuration for functional test
+    ],
+    ids=["1x1"],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_sd35_medium_pipeline_functional(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+) -> None:
+    """Functional test for SD3.5 Medium pipeline - validates correctness without performance checks."""
+
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        tensor_parallel=ParallelFactor(factor=1, mesh_axis=tp_axis),
+        sequence_parallel=ParallelFactor(factor=1, mesh_axis=sp_axis),
+    )
+
+    # Create pipeline with minimal configuration
+    tt_pipe = TTSD35MediumPipeline(
+        mesh_device=mesh_device,
+        enable_t5_text_encoder=False,
+        guidance_cond=1,
+        parallel_config=parallel_config,
+        num_links=num_links,
+        height=512,  # Smaller image for faster test
+        width=512,
+        model_checkpoint_path="stabilityai/stable-diffusion-3.5-medium",
+        use_cache=False,
+    )
+
+    # Test with a simple prompt
+    images = tt_pipe.run_single_prompt(
+        prompt="A red circle on a white background",
+        negative_prompt="",
+        num_inference_steps=10,  # Few steps for speed
+        seed=123,
+    )
+
+    # Basic validation
+    assert len(images) == 1, "Should generate exactly one image"
+    assert images[0].size == (512, 512), f"Image size should be 512x512, got {images[0].size}"
+
+    # Save test image for visual inspection (optional)
+    if logger.level <= "DEBUG":
+        images[0].save("test_sd35_medium_output.png")
+        logger.info("Test image saved to test_sd35_medium_output.png")

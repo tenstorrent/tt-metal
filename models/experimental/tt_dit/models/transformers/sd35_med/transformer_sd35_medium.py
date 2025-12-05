@@ -337,6 +337,31 @@ class SD35MediumMMDiTX:
         logger.info("Loading MMDiT transformer weights - checking component availability")
         logger.info("=" * 80)
 
+        # Detect actual depth from state dict
+        joint_block_indices = set()
+        for key in state_dict.keys():
+            if key.startswith("joint_blocks."):
+                # Extract block index: "joint_blocks.23.context_block..." -> 23
+                parts = key.split(".")
+                if len(parts) >= 2:
+                    try:
+                        block_idx = int(parts[1])
+                        joint_block_indices.add(block_idx)
+                    except ValueError:
+                        pass
+
+        if joint_block_indices:
+            actual_depth = max(joint_block_indices) + 1  # +1 because indices are 0-based
+            logger.info(f"Detected {actual_depth} joint blocks in state dict (indices: {sorted(joint_block_indices)})")
+            if actual_depth != self.depth:
+                logger.warning(
+                    f"⚠️  MISMATCH: State dict has {actual_depth} blocks, but transformer was created with {self.depth} blocks!"
+                )
+                logger.warning(f"    This will cause {abs(actual_depth - self.depth)} blocks to be missing or unused.")
+                logger.warning(
+                    f"    Please recreate the transformer with depth={actual_depth} to match the state dict."
+                )
+
         loaded_components = {}
         missing_components = []
 
@@ -353,6 +378,17 @@ class SD35MediumMMDiTX:
         # Check for expected components
         logger.info(f"State dict contains {len(state_dict)} total keys")
         logger.info(f"Sample keys: {list(state_dict.keys())[:10]}")
+        logger.info("")
+
+        # Print all keys for debugging
+        logger.info("=" * 80)
+        logger.info("ALL STATE DICT KEYS:")
+        logger.info("=" * 80)
+        all_keys = sorted(state_dict.keys())
+        for i, key in enumerate(all_keys):
+            shape = state_dict[key].shape if hasattr(state_dict[key], "shape") else "N/A"
+            logger.info(f"  [{i:4d}] {key:80s} shape: {shape}")
+        logger.info("=" * 80)
         logger.info("")
 
         # Load patch embedding
