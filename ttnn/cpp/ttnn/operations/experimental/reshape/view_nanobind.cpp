@@ -17,7 +17,7 @@
 namespace ttnn::operations::experimental::reshape::detail {
 
 void bind_view(nb::module_& mod) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
         Note:
         - It is recommended to use ttnn.reshape if you are not sure which operation to use
         - If this is the functionality required for your application, it will be called by ttnn.reshape

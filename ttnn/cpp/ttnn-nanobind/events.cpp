@@ -41,11 +41,11 @@ void py_module(nb::module_& mod) {
         "record_event",
         nb::overload_cast<
             MeshDevice*,
-            QueueId,
+            std::optional<QueueId>,
             const std::vector<SubDeviceId>&,
             const std::optional<MeshCoordinateRange>&>(&record_mesh_event),
         nb::arg("mesh_device"),
-        nb::arg("cq_id"),
+        nb::arg("cq_id") = nb::none(),
         nb::arg("sub_device_ids") = std::vector<SubDeviceId>(),
         nb::arg("device_range") = nb::none(),
         R"doc(
@@ -63,8 +63,8 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "wait_for_event",
-        nb::overload_cast<QueueId, const MeshEvent&>(&wait_for_mesh_event),
-        nb::arg("cq_id"),
+        nb::overload_cast<std::optional<QueueId>, const MeshEvent&>(&wait_for_mesh_event),
+        nb::arg("cq_id") = nb::none(),
         nb::arg("mesh_event"),
         R"doc(
             Inserts a barrier - makes a CQ wait until an event is recorded.

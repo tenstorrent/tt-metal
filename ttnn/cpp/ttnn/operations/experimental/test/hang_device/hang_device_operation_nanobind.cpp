@@ -12,7 +12,7 @@
 namespace ttnn::operations::experimental::test {
 
 void bind_test_hang_device_operation(nb::module_& mod) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Hangs the device, use for testing graph capture.
             Used for debugging purposes, please avoid to use in any production code

@@ -15,7 +15,7 @@
 namespace ttnn::operations::data_movement::detail {
 
 void bind_untilize(nb::module_& mod) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Changes data layout of input tensor to ROW_MAJOR.
 
@@ -35,7 +35,6 @@ void bind_untilize(nb::module_& mod) {
 
             Returns:
                 List of ttnn.Tensor: the output tensor.
-
         )doc";
 
     using OperationType = decltype(ttnn::untilize);

@@ -13,7 +13,7 @@
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_concat_heads_decode/nlp_concat_heads_decode.hpp"
 
-namespace ttnn::operations::experimental::transformer::detail {
+namespace ttnn::operations::experimental::nlp_concat_heads_decode::detail {
 
 void bind_nlp_concat_heads_decode(nb::module_& mod) {
     using OperationType = decltype(ttnn::experimental::nlp_concat_heads_decode);
@@ -28,14 +28,16 @@ void bind_nlp_concat_heads_decode(nb::module_& mod) {
                const ttnn::Tensor& input_tensor,
                const uint32_t num_heads,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> optional_output_tensor) {
-                return self(input_tensor, num_heads, memory_config, optional_output_tensor);
+               std::optional<ttnn::Tensor> optional_output_tensor,
+               const std::optional<CoreRangeSet>& sub_core_grids) {
+                return self(input_tensor, num_heads, memory_config, optional_output_tensor, sub_core_grids);
             },
             nb::arg("input_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("num_heads").noconvert(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()});
 }
 
-}  // namespace ttnn::operations::experimental::transformer::detail
+}  // namespace ttnn::operations::experimental::nlp_concat_heads_decode::detail

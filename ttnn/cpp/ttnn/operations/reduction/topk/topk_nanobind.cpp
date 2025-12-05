@@ -17,7 +17,7 @@
 namespace ttnn::operations::reduction::detail {
 
 void bind_reduction_topk_operation(nb::module_& mod) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Returns the :attr:`k` largest or :attr:`k` smallest elements of the :attr:`input_tensor` along a given dimension :attr:`dim`.
 
@@ -68,7 +68,8 @@ void bind_reduction_topk_operation(nb::module_& mod) {
                     * - UINT16, UINT32
                       - TILE
 
-                The :attr:`output_value_tensor` will have the same data type as :attr:`input_tensor` and :attr:`output_index_tensor` will have UINT16 data type.
+                The :attr:`output_value_tensor` will have the same data type as :attr:`input_tensor` and will be in TILE layout.
+                The :attr:`output_index_tensor` will be UINT16 and will be in TILE layout.
 
             Memory Support:
                 - Interleaved: DRAM and L1
@@ -83,13 +84,6 @@ void bind_reduction_topk_operation(nb::module_& mod) {
                 - To enable multicore execution, the width of :attr:`input_tensor` along :attr:`dim` must be ≥8192 and <65536, and :attr:`k` must be ≤64.
                 - All shape validations are performed on padded shapes.
                 - Sharded output memory configs are not supported for this operation.
-
-            Example:
-                .. code-block:: python
-
-                    input_tensor = ttnn.rand([1, 1, 32, 64], device=device, layout=ttnn.TILE_LAYOUT)
-                    topk_values, topk_indices = ttnn.topk(input_tensor, k=32, dim=-1, largest=True, sorted=True)
-
         )doc";
 
     using OperationType = decltype(ttnn::topk);
@@ -104,7 +98,7 @@ void bind_reduction_topk_operation(nb::module_& mod) {
                const int8_t dim,
                const bool largest,
                const bool sorted,
-               std::optional<std::tuple<ttnn::Tensor, ttnn::Tensor>> optional_output_tensors,
+               const std::optional<std::tuple<ttnn::Tensor, ttnn::Tensor>>& preallocated_output_tensors,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::CoreRangeSet>& sub_core_grids,
                const std::optional<ttnn::Tensor>& indices_tensor) {
@@ -117,7 +111,7 @@ void bind_reduction_topk_operation(nb::module_& mod) {
                     memory_config,
                     sub_core_grids,
                     indices_tensor,
-                    optional_output_tensors);
+                    preallocated_output_tensors);
             },
             nb::arg("input_tensor").noconvert(),
             nb::arg("k") = 32,

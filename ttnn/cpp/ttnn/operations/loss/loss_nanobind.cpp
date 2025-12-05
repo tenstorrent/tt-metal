@@ -40,12 +40,6 @@ void bind_mse_loss_function(nb::module_& mod) {
 
             Returns:
                 ttnn.Tensor: the output tensor.
-
-            Example:
-
-                >>> input_reference = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-                >>> input_prediction = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-                >>> output = ttnn.mse_loss(input_reference, input_prediction, reduction)
         )doc",
         ttnn::mse_loss.base_name());
 
@@ -88,12 +82,6 @@ void bind_mae_loss_function(nb::module_& mod) {
 
             Returns:
                 ttnn.Tensor: the output tensor.
-
-            Example:
-
-                >>> input_reference = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-                >>> input_prediction = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-                >>> output = ttnn.l1_loss(input_reference, input_prediction, reduction)
         )doc",
         ttnn::l1_loss.base_name());
 

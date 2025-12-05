@@ -27,12 +27,12 @@ void bind_nlp_create_qkv_heads_vit(nb::module_& mod) {
             [](const decltype(ttnn::experimental::nlp_create_qkv_heads_vit)& self,
                const ttnn::Tensor& input_tensor_q,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<std::vector<std::optional<ttnn::Tensor>>>& optional_output_tensors) {
+               const std::optional<std::vector<std::optional<ttnn::Tensor>>>& optional_output_tensors) {
                 return self(input_tensor_q, memory_config, optional_output_tensors);
             },
             nb::arg("input").noconvert(),
             nb::kw_only(),
-            nb::arg("memory_config").noconvert() = nb::none(),
-            nb::arg("output_tensors").noconvert() = nb::none()});
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensors") = nb::none()});
 };
 }  // namespace ttnn::operations::experimental::transformer::detail

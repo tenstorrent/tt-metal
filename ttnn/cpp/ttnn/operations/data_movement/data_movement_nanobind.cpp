@@ -72,6 +72,7 @@ void py_module(nb::module_& mod) {
     detail::bind_untilize(mod);
     detail::bind_untilize_with_unpadding(mod);
     detail::bind_scatter(mod);
+    detail::bind_scatter_add(mod);
     detail::bind_tosa_scatter(mod);
     detail::bind_assign(mod);
     detail::bind_bcast(mod);

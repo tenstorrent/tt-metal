@@ -12,14 +12,14 @@
 
 #include "ttnn-nanobind/decorators.hpp"
 #include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 #include "moe_expert_token_remap.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
 void bind_moe_expert_token_remap(nb::module_& mod) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
 
 Remap MoE CCL Metadata from global experts to local device experts
 

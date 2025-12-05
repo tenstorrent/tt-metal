@@ -6,9 +6,9 @@
 
 #include "ttnn-nanobind/nanobind_fwd.hpp"
 
-namespace ttnn::operations::experimental::transformer::detail {
+namespace ttnn::operations::experimental::nlp_concat_heads::detail {
 
 namespace nb = nanobind;
 void bind_nlp_concat_heads(nb::module_& mod);
 
-}  // namespace ttnn::operations::experimental::transformer::detail
+}  // namespace ttnn::operations::experimental::nlp_concat_heads::detail

@@ -19,7 +19,7 @@ namespace ttnn::operations::upsample {
 namespace {
 
 void bind_upsample(nb::module_& mod) {
-    const auto doc = R"doc(
+    const auto* const doc = R"doc(
         Upsamples a given multi-channel 2D (spatial) data.
         The input data is assumed to be of the form [N, H, W, C].
 

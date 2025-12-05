@@ -20,7 +20,7 @@
 namespace ttnn::operations::experimental::paged_cache::detail {
 
 void bind_experimental_paged_cache_operations(nb::module_& mod) {
-    auto paged_update_cache_doc =
+    const auto* paged_update_cache_doc =
         R"doc(
          Paged update cache operation. This operation expects the following inputs: cache_tensor of shape [B, 1, kv_len, head_dim] and input_tensor of shape [1, B, 1[32], head_dim] where input_tensor is height sharded on B cores. update_idxs will specify for each batch element which token to update in the cache.
         )doc";
@@ -55,7 +55,7 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
             nb::arg("cache_tensor").noconvert(),
             nb::arg("input_tensor").noconvert(),
             nb::kw_only(),
-            nb::arg("update_idxs").noconvert() = std::vector<uint32_t>(),
+            nb::arg("update_idxs").noconvert() = nb::cast(std::vector<uint32_t>()),
             nb::arg("update_idxs_tensor").noconvert() = nb::none(),
             nb::arg("share_cache").noconvert() = nb::none(),
             nb::arg("page_table").noconvert() = nb::none(),
@@ -64,7 +64,7 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
             nb::arg("mesh_coords").noconvert() = nb::none(),
         });
 
-    auto paged_fused_update_cache_doc =
+    const auto* paged_fused_update_cache_doc =
         R"doc(
             Updates the cache tensors `cache_tensor1` and `cache_tensor2` in parallel with values derived from the corresponding input tensors. This function supports fine-grained updates using specified index lists or tensors.
 
@@ -123,7 +123,7 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
             nb::arg("cache_tensor2").noconvert(),
             nb::arg("input_tensor2").noconvert(),
             nb::kw_only(),
-            nb::arg("update_idxs").noconvert() = std::vector<uint32_t>(),
+            nb::arg("update_idxs").noconvert() = nb::cast(std::vector<uint32_t>()),
             nb::arg("update_idxs_tensor").noconvert() = nb::none(),
             nb::arg("share_cache").noconvert() = nb::none(),
             nb::arg("page_table").noconvert() = nb::none(),

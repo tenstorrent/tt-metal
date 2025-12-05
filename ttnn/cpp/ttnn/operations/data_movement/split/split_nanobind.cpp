@@ -20,7 +20,7 @@
 namespace ttnn::operations::data_movement::detail {
 
 void bind_split(nb::module_& mod) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Returns a tensor that is in num_splits ways on dim.
 

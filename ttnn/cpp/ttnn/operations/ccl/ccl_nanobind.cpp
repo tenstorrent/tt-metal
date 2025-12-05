@@ -19,7 +19,7 @@
 #include "ttnn/operations/ccl/all_reduce/all_reduce_nanobind.hpp"
 
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 namespace ttnn::operations::ccl {
 

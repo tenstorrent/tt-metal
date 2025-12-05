@@ -17,9 +17,10 @@
 #include <nanobind/stl/variant.h>
 
 #include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/export_enum.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/sliding_window/sliding_window_nanobind.hpp"
 #include "ttnn/types.hpp"
@@ -188,78 +189,6 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("compute_config") = nb::none(),
         nb::arg("slice_config") = nb::none());
 
-    mod.def(
-        "convert_conv_weight_tensor_to_tiled_layout",
-        &convert_conv_weight_tensor_to_tiled_layout,
-        nb::arg("conv_weight_tensor").noconvert(),
-        nb::arg("in1_block_h"),
-        nb::arg("in1_block_w"),
-        nb::arg("output_dtype").noconvert() = nb::none());
-
-    mod.def(
-        "convert_conv_weight_tensor_to_special_padding_tiled_layout",
-        &convert_conv_weight_tensor_to_special_padding_tiled_layout,
-        nb::arg("conv_weight_tensor").noconvert(),
-        nb::arg("in1_block_h"),
-        nb::arg("in1_block_w"),
-        nb::arg("enable_activation_reuse") = false,
-        nb::arg("output_dtype").noconvert() = nb::none());
-
-    mod.def(
-        "convert_conv_weight_tensor_to_grouped_layout",
-        &convert_conv_weight_tensor_to_grouped_layout,
-        nb::arg("conv_weight_tensor").noconvert(),
-        nb::arg("num_groups"),
-        nb::arg("output_dtype").noconvert() = nb::none());
-
-    mod.def(
-        "determine_parallel_config",
-        [](const ttnn::TensorMemoryLayout& shard_layout,
-           uint32_t batch_size,
-           uint32_t input_channels,
-           uint32_t output_height,
-           uint32_t output_width,
-           uint32_t output_channels,
-           uint32_t input_channels_alignment,
-           const CoreCoord& compute_grid_size,
-           tt::tt_metal::ShardOrientation block_shard_orientation,
-           bool enable_channels_padding,
-           bool is_shard_height_tile_multiple,
-           bool is_shard_width_tile_multiple) -> ttnn::operations::sliding_window::ParallelConfig {
-            return determine_parallel_config(
-                shard_layout,
-                batch_size,
-                input_channels,
-                output_height,
-                output_width,
-                output_channels,
-                input_channels_alignment,
-                compute_grid_size,
-                block_shard_orientation,
-                enable_channels_padding,
-                is_shard_height_tile_multiple,
-                is_shard_width_tile_multiple);
-        },
-        nb::arg("shard_layout"),
-        nb::arg("batch_size"),
-        nb::arg("input_channels"),
-        nb::arg("output_height"),
-        nb::arg("output_width"),
-        nb::arg("output_channels"),
-        nb::arg("input_channels_alignment"),
-        nb::arg("compute_grid_size"),
-        nb::arg("block_shard_orientation"),
-        nb::arg("enable_channels_padding"),
-        nb::arg("is_shard_height_tile_multiple") = true,
-        nb::arg("is_shard_width_tile_multiple") = true);
-
-    mod.def(
-        "create_sharded_memory_config_from_parallel_config",
-        &create_sharded_memory_config_from_parallel_config,
-        nb::arg("tensor_shape"),
-        nb::arg("parallel_config"),
-        nb::arg("tile_size"));
-
     auto py_conv_slice_config = nb::class_<Conv2dSliceConfig>(
         mod,
         "Conv2dSliceConfig",
@@ -327,10 +256,10 @@ void bind_conv2d(nb::module_& mod) {
             bool,
             bool,
             bool,
-            bool,
             std::optional<bool>,
             bool,
-            std::optional<bool>>(),
+            std::optional<bool>,
+            bool>(),
         nb::kw_only(),
         nb::arg("weights_dtype") = nb::none(),
         nb::arg("activation") = nb::none(),
@@ -348,10 +277,10 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("enable_act_double_buffer") = false,
         nb::arg("enable_weights_double_buffer") = false,
         nb::arg("full_inner_dim") = false,
-        nb::arg("in_place") = false,
         nb::arg("enable_kernel_stride_folding") = nb::none(),
         nb::arg("enable_activation_reuse") = false,
-        nb::arg("force_split_reader") = nb::none());
+        nb::arg("force_split_reader") = nb::none(),
+        nb::arg("override_output_sharding_config") = false);
 
     py_conv_config.def_rw("weights_dtype", &Conv2dConfig::weights_dtype, R"doc(
         Optional argument which specifies the data type of the preprocessed weights & bias tensor if the Conv2D op is responsible for preparing the weights.
@@ -374,6 +303,7 @@ void bind_conv2d(nb::module_& mod) {
         Boolean that indicates whether the activation tensor should be deallocated after the conv op is done.
         If true, the activation tensor will be deallocated after the halo micro-op is done.
         Should not be used if the input to the conv op is used by another op.
+        Has no effect if input tensor is in DRAM.
         )doc");
 
     py_conv_config.def_rw("reallocate_halo_output", &Conv2dConfig::reallocate_halo_output, R"doc(
@@ -429,7 +359,7 @@ void bind_conv2d(nb::module_& mod) {
 
     py_conv_config.def_rw("core_grid", &Conv2dConfig::core_grid, R"doc(
         Core Grid to be used for sharding the input tensor.
-        This flag is only used when override_sharding_config is set to true. )doc");
+        This flag is only used when override_sharding_config or override_output_sharding_config is set to true. )doc");
 
     py_conv_config.def_rw("transpose_shards", &Conv2dConfig::transpose_shards, R"doc(
         Determines if the Shard Orientation should be Row Major or Column Major.
@@ -461,20 +391,19 @@ void bind_conv2d(nb::module_& mod) {
             This will increase perf, but it will take more L1 space.
         )doc");
 
-    py_conv_config.def_rw("in_place", &Conv2dConfig::in_place, R"doc(
-            Enables support for in_place halo.
-            This re-uses the input tensor as the output for halo, overwriting the input tensor.
-            This can be used if the input tensor is not used by any other op after the conv op.
-        )doc");
-
     py_conv_config.def_rw("enable_kernel_stride_folding", &Conv2dConfig::enable_kernel_stride_folding, R"doc(
         ===================== EXPERIMENTAL FEATURE ======================
 
-        Enables tensor folding optimization when strides match kernel dimensions.
+        Enables tensor folding optimization that transforms convolution operations by reshaping tensors
+        and adjusting stride patterns for improved computational efficiency.
 
-        This feature is under development and may change without notice.
-        Use with caution in production environments (Issue: #22378).
+        Args:
+            enable_kernel_stride_folding (Optional[bool]):
+                - None (default): Automatic enablement based on optimal conditions
+                - True: Force enable the optimization
+                - False: Disable the optimization
 
+        Behavior:
         When enabled, this optimization reshapes tensors as follows:
 
         * Input tensor (NHWC format):
@@ -484,15 +413,33 @@ void bind_conv2d(nb::module_& mod) {
         * Weight tensor:
           - From: (OC, IC, kernel[0], kernel[1])
           - To: (1, 1, IC * (kernel[0] + pad_h) * (kernel[1] + pad_w), OC)
-          Note: The zero padding applied to the weight tensor is implicit and not passed by the user via the padding argument,
-          where pad_h = kernel[0] % stride[0] and pad_w = kernel[1] % stride[1].
+          where pad_h = kernel[0] % stride[0] and pad_w = kernel[1] % stride[1]
 
-        Note: This optimization is currently only applied when all of the following conditions are met:
-        1. The input tensor is stored in DRAM memory.
-        2. The input tensor's height and width are divisible by the stride dimensions.
-        3. Stride values are equal to or less than the kernel dimensions.
-        4. Input tensor's padding must be zero.
-        5. Input tensor data type is not BFLOAT8_B.
+        * Stride: Becomes (1, 1) after folding
+
+        Automatic Enablement:
+        When set to None, automatically enabled when ALL conditions are met (transforms conv2d into Fold + MatMul):
+        1. Stride equals kernel size in both dimensions (stride == kernel_size)
+        2. Stride is greater than 1 in at least one dimension
+        3. No dilation applied (dilation == [1, 1])
+        4. Input height and width (after padding) are divisible by respective stride values
+        5. Input tensor memory: DRAM (all types except bfloat8_b) OR L1 Height-sharded (all types)
+
+        Manual Enablement:
+        Particularly beneficial for unaligned input channels (e.g., small channel counts like 3 RGB channels).
+
+        Requirements when forcing enable_kernel_stride_folding=True:
+        - Stride ≤ kernel size in both dimensions
+        - Input tensor supports folding (DRAM except bfloat8_b, or L1 Height-sharded)
+        - Input dimensions after padding are divisible by stride values
+
+        Example:
+        For small channel counts (like 3 RGB channels) with stride=2x2, kernel=7x7:
+        - Transforms 3 channels → 12 channels, stride 2x2 → 1x1
+        - Reduces required padding for alignment (3→12 uses alignment more efficiently)
+        - Kernel size reduces to kernel/stride (e.g., 7x7 kernel → 4x4 kernel with padding)
+
+        Note: The weight tensor padding is applied implicitly and not passed via the padding argument.
 
         ===============================================================
         )doc");
@@ -513,6 +460,17 @@ void bind_conv2d(nb::module_& mod) {
         This is useful when the input tensor is large, and the activation reader is a bottleneck.
         This is only supported for Height Sharded Conv2D.
         Setting this overrides the split reader heuristic.
+
+        ===============================================================
+    )doc");
+
+    py_conv_config.def_rw("override_output_sharding_config", &Conv2dConfig::override_output_sharding_config, R"doc(
+        ===================== EXPERIMENTAL FEATURE ======================
+
+        override_output_sharding_config enables the user to specify the memory config of the output tensor
+        This impacts the core grid that executes matmul part of conv2d
+        Feature is currently supported only for BLOCK_SHARDED layout, without DRAM slicing
+        Additionally, NHW number of cores must match between input and output tensors
 
         ===============================================================
     )doc");

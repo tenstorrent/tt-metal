@@ -9,4 +9,5 @@
 namespace ttnn::operations::data_movement::detail {
 namespace nb = nanobind;
 void bind_scatter(nb::module_& mod);
+void bind_scatter_add(nb::module_& mod);
 }  // namespace ttnn::operations::data_movement::detail

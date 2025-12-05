@@ -40,7 +40,7 @@ void bind_expand(nb::module_& mod, const data_movement_operation_t& operation, c
 }  // namespace
 
 void bind_expand(nb::module_& mod) {
-    auto doc =
+    const auto* doc =
         R"doc(
         Returns a new tensor where singleton dimensions are expanded to a larger side.
         Unlike :func:`torch.expand`, this function is not zero-cost and perform a memory copy to create the expanded tensor. This is due to `ttnn.Tensor`'s lack of strided tensor support.

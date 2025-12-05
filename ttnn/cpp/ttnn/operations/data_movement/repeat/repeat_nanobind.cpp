@@ -38,29 +38,19 @@ void bind_repeat_op(nb::module_& mod, const data_movement_operation_t& operation
 }  // namespace
 
 void bind_repeat(nb::module_& mod) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
+        Returns a new tensor filled with repetition of input :attr:`input_tensor` according to number of times specified in :attr:`shape`.
 
-    Returns a new tensor filled with repetition of input :attr:`input_tensor` according to number of times specified in :attr:`shape`.
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+            repetition_vector (SmallVector): The number of repetitions for each dimension.
 
-    Args:
-        input_tensor (ttnn.Tensor): the input tensor.
-        repetition_vector (SmallVector): The number of repetitions for each dimension.
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
-    Keyword Args:
-        memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-
-    Returns:
-        ttnn.Tensor: the output tensor.
-
-    Example:
-
-        >>> tensor = ttnn.repeat(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]]), [1,2],)), device)
-        >>> print(tensor)
-        tensor([[1, 2],
-        [1, 2],
-        [3, 4],
-        [3, 4]])
-            )doc";
+        Returns:
+            ttnn.Tensor: the output tensor.
+    )doc";
 
     bind_repeat_op(mod, ttnn::repeat, doc);
 }

@@ -14,7 +14,7 @@
 namespace ttnn::operations::point_to_point {
 
 void bind_point_to_point(nb::module_& mod) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Point-to-point send and receive operation. Send a tensor from one device to another.
 

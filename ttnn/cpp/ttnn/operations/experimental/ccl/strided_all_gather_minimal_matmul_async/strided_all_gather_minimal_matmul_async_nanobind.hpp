@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,8 +7,7 @@
 #include "ttnn-nanobind/nanobind_fwd.hpp"
 
 namespace ttnn::operations::experimental::ccl {
-
 namespace nb = nanobind;
-void bind_reduce_scatter_async(nb::module_& mod);
+void bind_strided_all_gather_minimal_matmul_async(nb::module_& mod);
 
 }  // namespace ttnn::operations::experimental::ccl

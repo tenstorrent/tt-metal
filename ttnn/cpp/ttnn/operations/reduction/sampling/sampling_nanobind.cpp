@@ -17,7 +17,7 @@
 
 namespace ttnn::operations::reduction::detail {
 void bind_reduction_sampling_operation(nb::module_& mod) {
-    auto doc =
+    const auto* doc =
         R"doc(
           Samples from the :attr:`input_values_tensor` based on provided top-k and top-p constraints.
 
@@ -150,31 +150,23 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
         doc,
         ttnn::nanobind_overload_t{
             [](const OperationType& self,
-               const ttnn::Tensor& input_values_tensor,
-               const ttnn::Tensor& input_indices_tensor,
-               const ttnn::Tensor& k,
-               const ttnn::Tensor& p,
-               const ttnn::Tensor& temp,
+               const Tensor& input_values_tensor,
+               const Tensor& input_indices_tensor,
+               const Tensor& k,
+               const Tensor& p,
+               const Tensor& temp,
                const std::optional<uint32_t>& seed,
                const std::optional<CoreRangeSet>& sub_core_grids,
-               std::optional<ttnn::Tensor> optional_output_tensor) {
-                return self(
-                    input_values_tensor,
-                    input_indices_tensor,
-                    k,
-                    p,
-                    temp,
-                    seed,
-                    sub_core_grids,
-                    optional_output_tensor);
+               const std::optional<Tensor>& output_tensor) {
+                return self(input_values_tensor, input_indices_tensor, k, p, temp, seed, sub_core_grids, output_tensor);
             },
             nb::arg("input_values_tensor").noconvert(),
             nb::arg("input_indices_tensor").noconvert(),
-            nb::arg("k").noconvert(),  // TODO_NANOBIND: Might need to move kw_only here
+            nb::arg("k").noconvert(),
             nb::arg("p").noconvert(),
             nb::arg("temp").noconvert(),
             nb::kw_only(),
-            nb::arg("seed").noconvert() = nb::none(),
+            nb::arg("seed") = nb::none(),
             nb::arg("sub_core_grids") = nb::none(),
             nb::arg("output_tensor") = nb::none()});
 }

@@ -31,30 +31,30 @@ void bind_nlp_create_qkv_heads_decode(nb::module_& mod) {
                const ttnn::Tensor& input_tensor,
                const uint32_t num_q_heads,
                const std::optional<uint32_t> num_kv_heads,
+               std::optional<std::array<Tensor, 3>> optional_output_tensors,
                const std::optional<const bool> overlap_qk_coregrid,
                const std::optional<const Tensor>& batch_offset,
                const std::optional<const uint32_t> slice_size,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<std::array<Tensor, 3>> optional_output_tensors) {
+               const std::optional<ttnn::MemoryConfig>& memory_config) {
                 return self(
                     input_tensor,
                     num_q_heads,
                     num_kv_heads,
+                    optional_output_tensors,
                     overlap_qk_coregrid,
                     batch_offset,
                     slice_size,
-                    memory_config,
-                    optional_output_tensors);
+                    memory_config);
             },
             nb::arg("input_tensor").noconvert(),
             nb::kw_only(),
-            nb::arg("num_heads").noconvert(),
-            nb::arg("num_kv_heads").noconvert() = nb::none(),
-            nb::arg("overlap_qk_coregrid").noconvert() = true,
-            nb::arg("batch_offset").noconvert() = nb::none(),
-            nb::arg("slice_size").noconvert() = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensors") = nb::none()});
+            nb::arg("num_heads"),
+            nb::arg("num_kv_heads") = nb::none(),
+            nb::arg("output_tensors") = nb::none(),
+            nb::arg("overlap_qk_coregrid") = true,
+            nb::arg("batch_offset") = nb::none(),
+            nb::arg("slice_size") = nb::none(),
+            nb::arg("memory_config") = nb::none()});
 }
 
 }  // namespace ttnn::operations::experimental::transformer::detail

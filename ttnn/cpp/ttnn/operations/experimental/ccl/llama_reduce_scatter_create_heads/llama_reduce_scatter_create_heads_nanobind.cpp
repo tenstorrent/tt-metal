@@ -17,7 +17,7 @@
 namespace ttnn::operations::experimental::ccl {
 
 void bind_llama_rs_create_heads(nb::module_& mod) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Reduce_scatter after FF1/3 for Llama70B.
 

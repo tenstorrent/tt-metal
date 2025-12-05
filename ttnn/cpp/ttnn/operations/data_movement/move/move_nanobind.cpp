@@ -16,7 +16,7 @@
 namespace ttnn::operations::data_movement::detail {
 
 void bind_move(nb::module_& mod) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
             Moves the elements of the input tensor ``arg0`` to a location in memory with specified memory layout.
 
             If no memory layout is specified, output memory will be the same as the input tensor memory config.

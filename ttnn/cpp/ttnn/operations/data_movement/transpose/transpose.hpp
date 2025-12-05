@@ -14,13 +14,16 @@ namespace operations::data_movement {
 struct ExecuteTranspose {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        int64_t dim1,
-        int64_t dim2,
+        const int64_t& dim1,
+        const int64_t& dim2,
         const std::optional<MemoryConfig>& memory_config_arg,
-        std::optional<float> pad_value = std::nullopt);
+        const std::optional<float>& pad_value = std::nullopt);
 
     static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor, int64_t dim1, int64_t dim2, std::optional<float> pad_value = std::nullopt);
+        const ttnn::Tensor& input_tensor,
+        const int64_t& dim1,
+        const int64_t& dim2,
+        const std::optional<float>& pad_value = std::nullopt);
 };
 
 }  // namespace operations::data_movement

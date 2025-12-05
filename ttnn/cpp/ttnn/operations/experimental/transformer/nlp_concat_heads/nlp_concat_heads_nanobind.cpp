@@ -12,7 +12,7 @@
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_concat_heads/nlp_concat_heads.hpp"
 
-namespace ttnn::operations::experimental::transformer::detail {
+namespace ttnn::operations::experimental::nlp_concat_heads::detail {
 
 void bind_nlp_concat_heads(nb::module_& mod) {
     using OperationType = decltype(ttnn::experimental::nlp_concat_heads);
@@ -25,14 +25,10 @@ void bind_nlp_concat_heads(nb::module_& mod) {
         ttnn::nanobind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> optional_output_tensor) {
-                return self(input_tensor, memory_config, optional_output_tensor);
-            },
+               const std::optional<ttnn::MemoryConfig>& memory_config) { return self(input_tensor, memory_config); },
             nb::arg("input_tensor").noconvert(),
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+            nb::arg("memory_config") = nb::none()});
 }
 
-}  // namespace ttnn::operations::experimental::transformer::detail
+}  // namespace ttnn::operations::experimental::nlp_concat_heads::detail

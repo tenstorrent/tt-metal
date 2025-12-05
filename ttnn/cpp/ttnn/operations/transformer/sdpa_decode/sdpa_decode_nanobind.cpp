@@ -19,7 +19,7 @@
 namespace ttnn::operations::transformer {
 
 void bind_sdpa_decode(nb::module_& mod) {
-    auto doc =
+    const auto* doc =
         R"doc(
         A version of scaled dot product attention specifically for decode.
         The implementation is Flash-Decode and it currently only supports MQA on decoding single token.
@@ -94,15 +94,15 @@ void bind_sdpa_decode(nb::module_& mod) {
             nb::arg("input_tensor_v").noconvert(),
             nb::kw_only(),
             nb::arg("is_causal").noconvert() = true,
-            nb::arg("attn_mask").noconvert() = nb::none(),
-            nb::arg("cur_pos").noconvert() = nb::cast(std::vector<uint32_t>()),
-            nb::arg("cur_pos_tensor").noconvert() = nb::none(),
-            nb::arg("attention_sink").noconvert() = nb::none(),
-            nb::arg("scale").noconvert() = nb::none(),
-            nb::arg("sliding_window_size").noconvert() = nb::none(),
-            nb::arg("memory_config").noconvert() = nb::none(),
-            nb::arg("program_config").noconvert() = nb::none(),
-            nb::arg("compute_kernel_config").noconvert() = nb::none()});
+            nb::arg("attn_mask") = nb::none(),
+            nb::arg("cur_pos") = nb::cast(std::vector<uint32_t>()),
+            nb::arg("cur_pos_tensor") = nb::none(),
+            nb::arg("attention_sink") = nb::none(),
+            nb::arg("scale") = nb::none(),
+            nb::arg("sliding_window_size") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("program_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 
     using PagedOperationType = decltype(ttnn::transformer::paged_scaled_dot_product_attention_decode);
     ttnn::bind_registered_operation(
@@ -145,14 +145,14 @@ void bind_sdpa_decode(nb::module_& mod) {
             nb::arg("page_table_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("is_causal") = true,
-            nb::arg("attn_mask").noconvert() = nb::none(),
-            nb::arg("cur_pos_tensor").noconvert() = nb::none(),
-            nb::arg("attention_sink").noconvert() = nb::none(),
+            nb::arg("attn_mask") = nb::none(),
+            nb::arg("cur_pos_tensor") = nb::none(),
+            nb::arg("attention_sink") = nb::none(),
             nb::arg("scale") = nb::none(),
             nb::arg("sliding_window_size") = nb::none(),
-            nb::arg("memory_config").noconvert() = nb::none(),
-            nb::arg("program_config").noconvert() = nb::none(),
-            nb::arg("compute_kernel_config").noconvert() = nb::none()});
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("program_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 
     using MLAOperationType = decltype(ttnn::transformer::flash_multi_latent_attention_decode);
     ttnn::bind_registered_operation(
@@ -194,15 +194,15 @@ void bind_sdpa_decode(nb::module_& mod) {
             nb::arg("head_dim_v").noconvert(),
             nb::kw_only(),
             nb::arg("is_causal").noconvert() = true,
-            nb::arg("attn_mask").noconvert() = nb::none(),
-            nb::arg("cur_pos").noconvert() = nb::cast(std::vector<uint32_t>()),
-            nb::arg("cur_pos_tensor").noconvert() = nb::none(),
-            nb::arg("attention_sink").noconvert() = nb::none(),
-            nb::arg("scale").noconvert() = nb::none(),
-            nb::arg("sliding_window_size").noconvert() = nb::none(),
-            nb::arg("memory_config").noconvert() = nb::none(),
-            nb::arg("program_config").noconvert() = nb::none(),
-            nb::arg("compute_kernel_config").noconvert() = nb::none()});
+            nb::arg("attn_mask") = nb::none(),
+            nb::arg("cur_pos") = nb::cast(std::vector<uint32_t>()),
+            nb::arg("cur_pos_tensor") = nb::none(),
+            nb::arg("attention_sink") = nb::none(),
+            nb::arg("scale") = nb::none(),
+            nb::arg("sliding_window_size") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("program_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 
     using PagedMLAOperationType = decltype(ttnn::transformer::paged_flash_multi_latent_attention_decode);
     ttnn::bind_registered_operation(
@@ -245,13 +245,13 @@ void bind_sdpa_decode(nb::module_& mod) {
             nb::arg("page_table_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("is_causal").noconvert() = true,
-            nb::arg("attn_mask").noconvert() = nb::none(),
-            nb::arg("cur_pos_tensor").noconvert() = nb::none(),
-            nb::arg("attention_sink").noconvert() = nb::none(),
-            nb::arg("scale").noconvert() = nb::none(),
-            nb::arg("sliding_window_size").noconvert() = nb::none(),
-            nb::arg("memory_config").noconvert() = nb::none(),
-            nb::arg("program_config").noconvert() = nb::none(),
-            nb::arg("compute_kernel_config").noconvert() = nb::none()});
+            nb::arg("attn_mask") = nb::none(),
+            nb::arg("cur_pos_tensor") = nb::none(),
+            nb::arg("attention_sink") = nb::none(),
+            nb::arg("scale") = nb::none(),
+            nb::arg("sliding_window_size") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("program_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 }
 }  // namespace ttnn::operations::transformer

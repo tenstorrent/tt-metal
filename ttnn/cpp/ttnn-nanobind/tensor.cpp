@@ -12,6 +12,7 @@
 #include <set>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -24,6 +25,7 @@
 #include <nanobind/stl/set.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
+#include <nanobind/stl/unordered_map.h>
 
 #include "ttnn-nanobind/bfloat_dtype_traits.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
@@ -211,13 +213,13 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             [](const Tile& self) {
                 return fmt::format("Tile with shape: [{}, {}]", self.get_tile_shape()[0], self.get_tile_shape()[1]);
             })
-        .def_ro("tile_shape", &Tile::tile_shape)
-        .def_ro("face_shape", &Tile::face_shape)
-        .def_ro("num_faces", &Tile::num_faces)
-        .def_ro("partial_face", &Tile::partial_face)
-        .def_ro("narrow_tile", &Tile::narrow_tile)
-        .def_ro("transpose_within_face", &Tile::transpose_within_face)
-        .def_ro("transpose_of_faces", &Tile::transpose_of_faces);
+        .def_prop_ro("tile_shape", &Tile::get_tile_shape)
+        .def_prop_ro("face_shape", &Tile::get_face_shape)
+        .def_prop_ro("num_faces", &Tile::get_num_faces)
+        .def_prop_ro("partial_face", &Tile::get_partial_face)
+        .def_prop_ro("narrow_tile", &Tile::get_narrow_tile)
+        .def_prop_ro("transpose_within_face", &Tile::get_transpose_within_face)
+        .def_prop_ro("transpose_of_faces", &Tile::get_transpose_of_faces);
 
     auto pyTensorSpec = static_cast<nb::class_<TensorSpec>>(m_tensor.attr("TensorSpec"));
     pyTensorSpec

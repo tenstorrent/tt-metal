@@ -26,13 +26,9 @@ void bind_nlp_create_qkv_heads_falcon7b(nb::module_& mod) {
         ttnn::nanobind_overload_t{
             [](const decltype(ttnn::experimental::nlp_create_qkv_heads_falcon7b)& self,
                const ttnn::Tensor& input_tensor_q,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<std::vector<std::optional<ttnn::Tensor>>>& optional_output_tensors) {
-                return self(input_tensor_q, memory_config, optional_output_tensors);
-            },
+               const std::optional<ttnn::MemoryConfig>& memory_config) { return self(input_tensor_q, memory_config); },
             nb::arg("input").noconvert(),
             nb::kw_only(),
-            nb::arg("memory_config").noconvert() = nb::none(),
-            nb::arg("output_tensors").noconvert() = nb::none()});
+            nb::arg("memory_config") = nb::none()});
 };
 }  // namespace ttnn::operations::experimental::transformer::detail

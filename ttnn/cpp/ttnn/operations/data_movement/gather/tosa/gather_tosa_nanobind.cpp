@@ -15,7 +15,7 @@
 namespace ttnn::operations::data_movement::detail {
 
 void bind_gather_tosa_operation(nb::module_& mod) {
-    auto doc =
+    const auto* doc =
         R"doc(
         Generate a tensor for which each element in the output is a subtensor of the values tensor based on the indices.
         N is the number of batches, W the number of indices in each batch, K the range of each index and C the number data channels for each index.

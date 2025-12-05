@@ -109,7 +109,6 @@ void py_module(nb::module_& mod) {
             nb::arg("s0"),
             nb::arg("s1"),
             nb::arg("s2"))
-        // TODO: might have to replace with placement new
         .def(
             nb::init<const std::vector<uint32_t>&>(),
             "Constructor with the specified ND shape. The values s0...sn are assumed to be supplied in row-major order "
@@ -132,7 +131,9 @@ void py_module(nb::module_& mod) {
         .def(
             "__getitem__", [](const MeshShape& ms, int index) { return ms[index]; }, nb::arg("index"))
         .def("dims", &MeshShape::dims)
-        .def("mesh_size", &MeshShape::mesh_size);
+        .def("mesh_size", &MeshShape::mesh_size)
+        .def("__eq__", [](const MeshShape& lhs, const MeshShape& rhs) { return lhs == rhs; })
+        .def("__ne__", [](const MeshShape& lhs, const MeshShape& rhs) { return lhs != rhs; });
 
     static_cast<nb::class_<MeshCoordinate>>(mod.attr("MeshCoordinate"))
         .def(
@@ -219,7 +220,7 @@ void py_module(nb::module_& mod) {
         .def(
             "get_device_id",
             [](MeshDevice& self, const MeshCoordinate& coord) {
-                auto device = self.get_device(coord);
+                auto* device = self.get_device(coord);
                 TT_FATAL(device, "Device ID requested for MeshCoord {} not found.", coord);
                 return device->id();
             })
@@ -470,10 +471,18 @@ void py_module(nb::module_& mod) {
     auto py_placement_replicate = static_cast<nb::class_<MeshMapperConfig::Replicate>>(mod.attr("PlacementReplicate"));
     py_placement_replicate
         .def("__init__", [](MeshMapperConfig::Replicate* t) { new (t) MeshMapperConfig::Replicate{}; })
-        .def("__repr__", [](const MeshMapperConfig::Replicate& replicate) {
-            std::ostringstream str;
-            str << replicate;
-            return str.str();
+        .def(
+            "__repr__",
+            [](const MeshMapperConfig::Replicate& replicate) {
+                std::ostringstream str;
+                str << replicate;
+                return str.str();
+            })
+        .def(
+            "__eq__",
+            [](const MeshMapperConfig::Replicate& lhs, const MeshMapperConfig::Replicate& rhs) { return true; })
+        .def("__ne__", [](const MeshMapperConfig::Replicate& lhs, const MeshMapperConfig::Replicate& rhs) {
+            return false;
         });
     auto py_mesh_mapper_config = static_cast<nb::class_<MeshMapperConfig>>(mod.attr("MeshMapperConfig"));
 
@@ -501,7 +510,7 @@ void py_module(nb::module_& mod) {
         .def(
             "__init__",
             [](MeshMapperConfig* t,
-               std::optional<size_t> row_dim,
+               std::optional<size_t> row_dim,  // TODO_NANOBIND: double check types
                std::optional<size_t> col_dim,
                const std::optional<MeshShape>& mesh_shape_override) {
                 new (t) MeshMapperConfig;
@@ -547,7 +556,7 @@ void py_module(nb::module_& mod) {
         .def(
             "__init__",
             [](MeshComposerConfig* t,
-               size_t row_dim,
+               size_t row_dim,  // TODO_NANOBIND: double check types
                size_t col_dim,
                const std::optional<MeshShape>& mesh_shape_override) {
                 new (t) MeshComposerConfig;
@@ -577,9 +586,26 @@ void py_module(nb::module_& mod) {
         .def("shape", &DistributedHostBuffer::shape, nb::rv_policy::reference_internal);
 
     auto py_tensor_topology = static_cast<nb::class_<TensorTopology>>(mod.attr("TensorTopology"));
-    py_tensor_topology.def("distribution_shape", &TensorTopology::distribution_shape, nb::rv_policy::reference_internal)
+    py_tensor_topology
+        .def(
+            nb::init<
+                tt::tt_metal::distributed::MeshShape,
+                ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
+                std::vector<tt::tt_metal::distributed::MeshCoordinate>>(),
+            nb::arg("distribution_shape"),
+            nb::arg("placements"),
+            nb::arg("mesh_coords"),
+            "Constructor for TensorTopology")
+        .def("distribution_shape", &TensorTopology::distribution_shape, nb::rv_policy::reference_internal)
         .def("placements", &TensorTopology::placements, nb::rv_policy::reference_internal)
-        .def("mesh_coords", &TensorTopology::mesh_coords, nb::rv_policy::reference_internal);
+        .def("mesh_coords", &TensorTopology::mesh_coords, nb::rv_policy::reference_internal)
+        .def("__eq__", [](const TensorTopology& self, const TensorTopology& other) { return self == other; })
+        .def("__ne__", [](const TensorTopology& self, const TensorTopology& other) { return self != other; })
+        .def("__repr__", [](const TensorTopology& self) {
+            std::ostringstream oss;
+            oss << self;
+            return oss.str();
+        });
 
     mod.def(
         "get_device_tensors",

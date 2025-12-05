@@ -6,8 +6,8 @@
 
 #include "ttnn-nanobind/nanobind_fwd.hpp"
 
-namespace ttnn::operations::experimental::transformer::detail {
+namespace ttnn::operations::experimental::create_qkv_heads::detail {
 
 namespace nb = nanobind;
 void bind_create_qkv_heads(nb::module_& mod);
-}  // namespace ttnn::operations::experimental::transformer::detail
+}  // namespace ttnn::operations::experimental::create_qkv_heads::detail

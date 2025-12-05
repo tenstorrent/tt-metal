@@ -15,11 +15,11 @@
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/operations/experimental/transformer/create_qkv_heads/create_qkv_heads.hpp"
 
-namespace ttnn::operations::experimental::transformer::detail {
+namespace ttnn::operations::experimental::create_qkv_heads::detail {
 
 namespace {
 template <typename transformer_operation_t>
-void bind_create_qkv_heads_template(nb::module_& mod, const transformer_operation_t& operation) {
+void bind_create_qkv_heads_template_op(nb::module_& mod, const transformer_operation_t& operation) {
     ttnn::bind_registered_operation(
         mod,
         operation,
@@ -48,6 +48,6 @@ void bind_create_qkv_heads_template(nb::module_& mod, const transformer_operatio
 }  // namespace
 
 void bind_create_qkv_heads(nb::module_& mod) {
-    bind_create_qkv_heads_template(mod, ttnn::experimental::create_qkv_heads);
+    bind_create_qkv_heads_template_op(mod, ttnn::experimental::create_qkv_heads);
 }
-}  // namespace ttnn::operations::experimental::transformer::detail
+}  // namespace ttnn::operations::experimental::create_qkv_heads::detail

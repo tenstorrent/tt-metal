@@ -16,7 +16,7 @@ namespace ttnn::operations::experimental::slice_write {
 namespace nb = nanobind;
 
 void bind_slice_write(nb::module_& mod) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Writes the input tensor to a slice of the output tensor.
 

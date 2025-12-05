@@ -15,7 +15,7 @@
 namespace ttnn::operations::data_movement::detail {
 
 void bind_tilize_with_val_padding(nb::module_& mod) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Changes data layout of input tensor to TILE. Pads to specified shape with a user-provided value.
 
@@ -47,7 +47,7 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::Shape& output_padded_shape,
-               const PadValue value,
+               const tt::tt_metal::PadValue value,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<DataType> output_dtype,
                bool use_multicore) {
@@ -65,7 +65,7 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
 }
 
 void bind_tilize_with_zero_padding(nb::module_& mod) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Changes data layout of input tensor to TILE. Pads to the nearest multiple of TILE width/height with zero value.
 

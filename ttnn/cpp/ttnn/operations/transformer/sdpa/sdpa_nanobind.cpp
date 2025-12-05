@@ -6,17 +6,22 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
+#include <vector>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
 
 #include "sdpa.hpp"
 #include "ttnn-nanobind/decorators.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
 
 namespace ttnn::operations::transformer {
 
 void bind_sdpa(nb::module_& mod) {
-    auto doc =
+    const auto* doc =
         R"doc(
         Causal scaled dot product attention. This API mimicks the PyTorch API of the same name.
         The implementation is FlashAttention-2."
@@ -33,8 +38,10 @@ void bind_sdpa(nb::module_& mod) {
             is_causal (bool): Defaults to `true`.
             scale (float, optional): Defaults to `None`.
             sliding_window_size (int, optional): Defaults to `None`. Size of sliding window for attention. If provided && is_causal, only attends to the last `sliding_window_size` tokens. If provided && !is_causal, attends to a window of size `sliding_window_size` centered at the current position.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
+            attention_sink (ttnn.Tensor, optional): Defaults to `None`. [1 x nqh x 1 x 1]. Single attention sink value per head. The kernel will efficiently replicate this value across all query positions.
 
 
         Returns:
@@ -58,7 +65,8 @@ void bind_sdpa(nb::module_& mod) {
                std::optional<uint32_t> sliding_window_size,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
-               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+               std::optional<ttnn::Tensor> attention_sink) {
                 return self(
                     input_tensor_q,
                     input_tensor_k,
@@ -69,21 +77,23 @@ void bind_sdpa(nb::module_& mod) {
                     sliding_window_size,
                     memory_config,
                     program_config,
-                    compute_kernel_config);
+                    compute_kernel_config,
+                    attention_sink);
             },
             nb::arg("input_tensor_q").noconvert(),
             nb::arg("input_tensor_k").noconvert(),
             nb::arg("input_tensor_v").noconvert(),
             nb::kw_only(),
-            nb::arg("attn_mask").noconvert() = nb::none(),
+            nb::arg("attn_mask") = nb::none(),
             nb::arg("is_causal").noconvert() = true,
             nb::arg("scale") = nb::none(),
             nb::arg("sliding_window_size") = nb::none(),
-            nb::arg("memory_config").noconvert() = nb::none(),
-            nb::arg("program_config").noconvert() = nb::none(),
-            nb::arg("compute_kernel_config").noconvert() = nb::none()});
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("program_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
+            nb::arg("attention_sink") = std::nullopt});
 
-    auto chunked_doc =
+    const auto* chunked_doc =
         R"doc(
         Chunked causal scaled dot product attention for processing long sequences in chunks.
         This variant allows processing of sequences longer than the maximum supported length
@@ -146,7 +156,7 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("program_config").noconvert() = nb::none(),
             nb::arg("compute_kernel_config").noconvert() = nb::none()});
 
-    auto joint_doc = R"doc(
+    const auto* joint_doc = R"doc(
         JointAttention operation that efficiently performs non-causal attention over two
         sets of query, key, and value tensors. Internally, these are concatenated in the sequence
         dimension (joint_strategy = "rear"), then attention is computed once. The
@@ -220,7 +230,7 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("scale").noconvert() = nb::none(),
             nb::arg("compute_kernel_config").noconvert() = nb::none()});
 
-    auto ring_joint_doc = R"doc(
+    const auto* ring_joint_doc = R"doc(
         RingJointAttention operation that efficiently performs non-causal attention over two
         sets of query, key, and value tensors, where the first set is sharded across devices in the sequence dimension.
         Internally, these are concatenated in the sequence dimension (joint_strategy = "rear"),
@@ -330,8 +340,8 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("joint_strategy"),
             nb::arg("logical_n"),
             nb::arg("program_config").noconvert(),
-            nb::arg("scale").noconvert() = nb::none(),
-            nb::arg("compute_kernel_config").noconvert() = nb::none(),
+            nb::arg("scale") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("dim"),
             nb::arg("multi_device_global_semaphore"),
             nb::arg("num_links"),
@@ -341,7 +351,7 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("subdevice_id") = nb::none(),
             nb::arg("ccl_core_grid_offset")});
 
-    auto mla_doc =
+    const auto* mla_doc =
         R"doc(
         Causal MLA attention."
 
@@ -404,7 +414,7 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("program_config").noconvert() = nb::none(),
             nb::arg("compute_kernel_config").noconvert() = nb::none()});
 
-    auto chunked_mla_doc =
+    const auto* chunked_mla_doc =
         R"doc(
         Chunked causal scaled dot product attention for processing long sequences in chunks.
         This variant allows processing of sequences longer than the maximum supported length
@@ -462,12 +472,12 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("page_table_tensor").noconvert(),
             nb::arg("chunk_start_idx"),
             nb::kw_only(),
-            nb::arg("scale").noconvert() = nb::none(),
-            nb::arg("memory_config").noconvert() = nb::none(),
-            nb::arg("program_config").noconvert() = nb::none(),
-            nb::arg("compute_kernel_config").noconvert() = nb::none()});
+            nb::arg("scale") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("program_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 
-    auto ring_distributed_doc =
+    const auto* ring_distributed_doc =
         R"doc(
         Ring-distributed causal scaled dot product attention for multi-device execution.
         This optimization distributes query computation across multiple devices in a ring topology,
@@ -532,11 +542,11 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("input_tensor_k").noconvert(),
             nb::arg("input_tensor_v").noconvert(),
             nb::arg("ring_size").noconvert(),
-            nb::arg("ring_id").noconvert() = nb::none(),
+            nb::arg("ring_id") = nb::none(),
             nb::kw_only(),
-            nb::arg("scale").noconvert() = nb::none(),
-            nb::arg("memory_config").noconvert() = nb::none(),
-            nb::arg("program_config").noconvert() = nb::none(),
-            nb::arg("compute_kernel_config").noconvert() = nb::none()});
+            nb::arg("scale") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("program_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none()});
 }
 }  // namespace ttnn::operations::transformer

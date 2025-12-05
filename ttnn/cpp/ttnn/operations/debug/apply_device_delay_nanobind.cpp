@@ -19,7 +19,7 @@
 namespace ttnn::operations::debug {
 
 void bind_apply_device_delay(nb::module_& mod) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Applies per-device delays by launching a single-core kernel on each device in the mesh that spins
             for the specified number of cycles. The shape of `delays` must match the mesh view shape

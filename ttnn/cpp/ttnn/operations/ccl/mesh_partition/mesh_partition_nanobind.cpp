@@ -16,7 +16,7 @@
 namespace ttnn::operations::ccl {
 
 void bind_mesh_partition(nb::module_& mod) {
-    auto doc =
+    const auto* doc =
         R"doc(
         Partitions the input tensor across the mesh such that each device has the i/num_devices-th partition of the input tensor along the specified dimension. This is the inverse of all_gather. When cluster axis is specified, we partition along the cluster axis.
 

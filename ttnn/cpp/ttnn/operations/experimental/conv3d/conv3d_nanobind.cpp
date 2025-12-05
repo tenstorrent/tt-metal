@@ -4,11 +4,15 @@
 
 #include "conv3d_nanobind.hpp"
 
+#include <array>
+#include <cstdint>
 #include <optional>
 
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 
 #include "conv3d.hpp"
 #include "ttnn-nanobind/decorators.hpp"
@@ -99,7 +103,7 @@ void bind_conv3d(nb::module_& mod) {
                                     nb::arg("padding"),
                                     nb::arg("padding_mode") = "zeros",
                                     nb::arg("groups") = 1,
-                                    nb::arg("compute_with_storage_grid_size") = CoreCoord{1, 1});
+                                    nb::arg("compute_with_storage_grid_size") = nb::cast(CoreCoord{1, 1}));
 
     py_conv3d_config.def_rw("dtype", &Conv3dConfig::dtype, "");
     py_conv3d_config.def_rw("weights_dtype", &Conv3dConfig::weights_dtype, "");

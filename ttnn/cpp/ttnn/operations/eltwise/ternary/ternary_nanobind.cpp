@@ -59,13 +59,6 @@ void bind_ternary_composite_float(
                  - 2, 3, 4
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
-
-        Example:
-            >>> value = 1.0
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor3 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor1, tensor2, tensor3, value)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -108,6 +101,7 @@ void bind_ternary_where(nb::module_& mod, const ternary_operation_t& operation, 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
 
         Note:
@@ -124,12 +118,6 @@ void bind_ternary_where(nb::module_& mod, const ternary_operation_t& operation, 
                  - 1, 2, 3, 4, 5
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
-
-        Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 0], [1, 0]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor3 = ttnn.from_torch(torch.tensor([[5, 6], [8, 9]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor1, tensor2, tensor3)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -145,15 +133,17 @@ void bind_ternary_where(nb::module_& mod, const ternary_operation_t& operation, 
                const TensorScalarVariant& true_value,
                const TensorScalarVariant& false_value,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> output_tensor) {
-                return self(predicate, true_value, false_value, memory_config, output_tensor);
+               std::optional<Tensor> output_tensor,
+               const std::optional<CoreRangeSet>& sub_core_grids) {
+                return self(predicate, true_value, false_value, memory_config, output_tensor, sub_core_grids);
             },
             nb::arg("predicate"),
             nb::arg("true_value"),
             nb::arg("false_value"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()},
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()},
 
         ttnn::nanobind_overload_t{
             [](const ternary_operation_t& self,
@@ -161,15 +151,17 @@ void bind_ternary_where(nb::module_& mod, const ternary_operation_t& operation, 
                const int32_t& true_value,
                const int32_t& false_value,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> output_tensor) {
-                return self(predicate, true_value, false_value, memory_config, output_tensor);
+               std::optional<Tensor> output_tensor,
+               const std::optional<CoreRangeSet>& sub_core_grids) {
+                return self(predicate, true_value, false_value, memory_config, output_tensor, sub_core_grids);
             },
             nb::arg("predicate"),
             nb::arg("true_value"),
             nb::arg("false_value"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()},
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()},
 
         ttnn::nanobind_overload_t{
             [](const ternary_operation_t& self,
@@ -177,15 +169,17 @@ void bind_ternary_where(nb::module_& mod, const ternary_operation_t& operation, 
                const uint32_t& true_value,
                const uint32_t& false_value,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> output_tensor) {
-                return self(predicate, true_value, false_value, memory_config, output_tensor);
+               std::optional<Tensor> output_tensor,
+               const std::optional<CoreRangeSet>& sub_core_grids) {
+                return self(predicate, true_value, false_value, memory_config, output_tensor, sub_core_grids);
             },
             nb::arg("predicate"),
             nb::arg("true_value"),
             nb::arg("false_value"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()});
 }
 
 template <typename ternary_operation_t>
@@ -223,12 +217,6 @@ void bind_ternary_lerp(nb::module_& mod, const ternary_operation_t& operation, c
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 
             end, weight tensors should have same dtype as input
-
-        Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 0], [1, 0]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor3 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor1, tensor2, tensor3/scalar)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -264,6 +252,67 @@ void bind_ternary_lerp(nb::module_& mod, const ternary_operation_t& operation, c
 }
 
 template <typename ternary_operation_t>
+void bind_ternary_addcmul(nb::module_& mod, const ternary_operation_t& operation, const std::string& description) {
+    auto doc = fmt::format(
+        R"doc(
+            {2}
+
+        Args:
+            input_a (ttnn.Tensor): the first input tensor.
+            input_b (ttnn.Tensor): the second input tensor.
+            input_c (ttnn.Tensor): the third input tensor.
+
+        Keyword Args:
+            value (float, optional): scalar value to multiply with input_b * input_c. Defaults to 1.0.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - BFLOAT16, BFLOAT8_B
+                 - TILE
+                 - 2, 3, 4
+
+            Only TTT (tensor-tensor-tensor) variant is supported.
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        description);
+
+    bind_registered_operation(
+        mod,
+        operation,
+        doc,
+        ttnn::nanobind_overload_t{
+            [](const ternary_operation_t& self,
+               const Tensor& input_a,
+               const Tensor& input_b,
+               const Tensor& input_c,
+               float value,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<Tensor> output_tensor) {
+                return self(input_a, input_b, input_c, value, memory_config, output_tensor);
+            },
+            nb::arg("input_a"),
+            nb::arg("input_b"),
+            nb::arg("input_c"),
+            nb::kw_only(),
+            nb::arg("value") = 1.0f,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none()});
+}
+
+template <typename ternary_operation_t>
 void bind_ternary_mac(nb::module_& mod, const ternary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
         R"doc(
@@ -294,12 +343,6 @@ void bind_ternary_mac(nb::module_& mod, const ternary_operation_t& operation, co
                  - 2, 3, 4
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
-
-        Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor3 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = {1}(tensor1, tensor2/scalar, tensor3/scalar)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -342,11 +385,7 @@ void bind_ternary_mac(nb::module_& mod, const ternary_operation_t& operation, co
 
 void py_module(nb::module_& mod) {
     // new imported
-    bind_ternary_composite_float(
-        mod,
-        ttnn::addcmul,
-        R"doc(Computes Addcmul on :attr:`input_tensor_a`, :attr:`input_tensor_b` and :attr:`input_tensor_c` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_ternary_addcmul(mod, ttnn::addcmul, R"doc(Computes addcmul: output = input_a + value * input_b * input_c)doc");
 
     bind_ternary_composite_float(
         mod,

@@ -6,9 +6,11 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 
 #include "ttnn-nanobind/decorators.hpp"
 
@@ -19,7 +21,7 @@
 namespace ttnn::operations::data_movement::detail {
 
 void bind_scatter(nb::module_& mod) {
-    auto doc =
+    const auto* doc =
         R"doc(
         Scatters the source tensor's values along a given dimension according to the index tensor.
 
@@ -32,24 +34,13 @@ void bind_scatter(nb::module_& mod) {
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the output tensor. Defaults to `None`.
             reduce (ttnn.ScatterReductionType, optional): reduction operation to apply when multiple values are scattered to the same location (e.g., amax, amin, sum). Currently not supported. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): specifies which cores scatter should run on. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor with scattered values.
 
         Note:
-            * Input tensors must be interleaved, tiled and on device.
-            * No reduction operations have been implemented yet.
-
-        Example:
-            >>> input_torch = torch.randn([10, 20, 30, 20, 10], dtype=torch.float32)
-            >>> index_torch = torch.randint(0, 10, [10, 20, 30, 20, 5], dtype=torch.int64)
-            >>> source_torch = torch.randn([10, 20, 30, 20, 10], dtype=input_torch.dtype)
-            >>> device = ttnn.open_device(device_id=0)
-            >>> input_ttnn = ttnn.from_torch(input_torch, dtype=ttnn.float32, device=device, layout=ttnn.TILE_LAYOUT)
-            >>> index_ttnn = ttnn.from_torch(index_torch, dtype=ttnn.int32, device=device, layout=ttnn.TILE_LAYOUT)
-            >>> source_ttnn = ttnn.from_torch(source_torch, dtype=ttnn.float32, device=device, layout=ttnn.TILE_LAYOUT)
-            >>> dim = -1
-            >>> output = ttnn.scatter(input_ttnn, dim, index_ttnn, source_ttnn)
+            * Input tensors must be interleaved and on device.
         )doc";
 
     using OperationType = decltype(ttnn::scatter);
@@ -64,8 +55,16 @@ void bind_scatter(nb::module_& mod) {
                const ttnn::Tensor& index_tensor,
                const ttnn::Tensor& source_tensor,
                const std::optional<tt::tt_metal::MemoryConfig>& opt_out_memory_config,
-               const std::optional<scatter::ScatterReductionType>& opt_reduction) -> Tensor {
-                return self(input_tensor, dim, index_tensor, source_tensor, opt_out_memory_config, opt_reduction);
+               const std::optional<std::string>& opt_reduction,
+               const std::optional<CoreRangeSet>& sub_core_grid) -> Tensor {
+                return self(
+                    input_tensor,
+                    dim,
+                    index_tensor,
+                    source_tensor,
+                    opt_out_memory_config,
+                    opt_reduction,
+                    sub_core_grid);
             },
             nb::arg("input").noconvert(),
             nb::arg("dim"),
@@ -73,7 +72,54 @@ void bind_scatter(nb::module_& mod) {
             nb::arg("src").noconvert(),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("reduce") = nb::none()});
+            nb::arg("reduce") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()});
+}
+
+void bind_scatter_add(nb::module_& mod) {
+    const auto* doc =
+        R"doc(
+        Scatters the source tensor's values along a given dimension according to the index tensor, adding source values associated with according repeated indices.
+
+        Args:
+            input (ttnn.Tensor): the input tensor to scatter values onto.
+            dim (int): the dimension to scatter along.
+            index (ttnn.Tensor): the tensor specifying indices where values from the source tensor must go to.
+            src (ttnn.Tensor): the tensor containing the source values to be scattered onto input.
+
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): specifies which cores scatter should run on. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor with scattered values.
+
+        Note:
+            * Input tensors must be interleaved and on device.
+        )doc";
+
+    using OperationType = decltype(ttnn::scatter_add);
+    bind_registered_operation(
+        mod,
+        ttnn::scatter_add,
+        doc,
+        ttnn::nanobind_overload_t{
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const int32_t& dim,
+               const ttnn::Tensor& index_tensor,
+               const ttnn::Tensor& source_tensor,
+               const std::optional<tt::tt_metal::MemoryConfig>& opt_out_memory_config,
+               const std::optional<CoreRangeSet>& sub_core_grid) -> Tensor {
+                return self(input_tensor, dim, index_tensor, source_tensor, opt_out_memory_config, sub_core_grid);
+            },
+            nb::arg("input").noconvert(),
+            nb::arg("dim"),
+            nb::arg("index").noconvert(),
+            nb::arg("src").noconvert(),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()});
 }
 
 }  // namespace ttnn::operations::data_movement::detail

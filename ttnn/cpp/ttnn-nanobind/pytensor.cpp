@@ -40,13 +40,13 @@
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
+#include <ttnn/tensor/to_string.hpp>
 
 #include <tracy/Tracy.hpp>
 
@@ -422,8 +422,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
                 storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
                 TT_FATAL(
                     buffers.size() == 1,
-                    "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh "
-                    "composer "
+                    "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh composer "
                     "to concatenate multi-device shards.",
                     storage.buffer().shape());
                 return buffers.front();
@@ -1315,7 +1314,7 @@ void pytensor_module(nb::module_& mod) {
                     [7, 8, 9]]] dtype=bfloat16 ]
         )doc")
         .def(
-            "__repr__", [](const Tensor& self) { return self.write_to_string(); }, R"doc(
+            "__repr__", [](const Tensor& self) { return ttnn::to_string(self); }, R"doc(
             Prints the tensor as list of nested lists. Number of levels of nesting is equal to tensor rank.
 
             .. code-block:: python

@@ -12,6 +12,7 @@
 #include <nanobind/stl/variant.h>  // needed for DeviceComputerKernelConfig
 
 #include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/export_enum.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/common/queue_id.hpp"
@@ -23,7 +24,7 @@ namespace ttnn::operations::core {
 struct DeviceComputeKernelConfigPlaceholder {};
 
 void py_module_types(nb::module_& mod) {
-    nb::enum_<compute_throttle_utils::ThrottleLevel>(mod, "ThrottleLevel", R"doc(
+    export_enum<compute_throttle_utils::ThrottleLevel>(mod, "ThrottleLevel", R"doc(
         Enum for controlling compute throttling.
 
         Higher levels insert NOP instructions to reduce compute throughput:
@@ -34,13 +35,7 @@ void py_module_types(nb::module_& mod) {
         - LEVEL_5: Throttle to 33% of max performance
 
         Used to prevent di/dt (power supply current) issues on large core counts.
-    )doc")
-        .value("NO_THROTTLE", compute_throttle_utils::ThrottleLevel::NO_THROTTLE)
-        .value("LEVEL_1", compute_throttle_utils::ThrottleLevel::LEVEL_1)
-        .value("LEVEL_2", compute_throttle_utils::ThrottleLevel::LEVEL_2)
-        .value("LEVEL_3", compute_throttle_utils::ThrottleLevel::LEVEL_3)
-        .value("LEVEL_4", compute_throttle_utils::ThrottleLevel::LEVEL_4)
-        .value("LEVEL_5", compute_throttle_utils::ThrottleLevel::LEVEL_5);
+    )doc");
 
     // variant of (Grayskull|Wormhole)ComputeKernelConfig
     nb::class_<DeviceComputeKernelConfigPlaceholder>(mod, "DeviceComputeKernelConfig");
@@ -87,6 +82,7 @@ void py_module(nb::module_& mod) {
         nb::arg("packer_l1_acc") = false,
         nb::arg("dst_full_sync_en") = false,
         nb::arg("throttle_level") = nb::cast(ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE));
+
     mod.def("unsqueeze_to_4D", &ttnn::unsqueeze_to_4D, nb::arg("tensor"));
 
     mod.def(
@@ -115,12 +111,6 @@ void py_module(nb::module_& mod) {
 
             Returns:
                 ttnn.Tensor: The device tensor copy.
-
-            Example:
-                >>> device_id = 0
-                >>> device = ttnn.open_device(device_id=device_id)
-                >>> tensor = ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16))
-                >>> device_tensor = ttnn.to_device(tensor=tensor, device=device)
         )doc");
 
     mod.def(
@@ -142,13 +132,6 @@ void py_module(nb::module_& mod) {
 
             Returns:
                 ttnn.Tensor: the host tensor copy.
-
-            Example:
-                >>> device = ttnn.open_device(0)
-                >>> tensor = ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16))
-                >>> device_tensor = ttnn.to_device(tensor=tensor, device=device)
-                >>> # non-blocking mode
-                >>> host_tensor = ttnn.from_device(tensor=device_tensor, blocking=False)
         )doc");
 
     mod.def(
@@ -165,19 +148,13 @@ void py_module(nb::module_& mod) {
 
         Returns:
             `None`: deallocates the tensor.
-
-        Example:
-            >>> device_id = 0
-            >>> device = ttnn.open_device(device_id=device_id)
-            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-            >>> tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
-            >>> ttnn.deallocate(tensor=tensor, force=False)
     )doc");
 
     mod.def(
         "reallocate",
-        [](ttnn::Tensor& input_tensor, const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt)
-            -> ttnn::Tensor { return reallocate(input_tensor, memory_config); },
+        [](ttnn::Tensor& input_tensor, const std::optional<ttnn::MemoryConfig>& memory_config) -> ttnn::Tensor {
+            return reallocate(input_tensor, memory_config);
+        },
         nb::arg("tensor"),
         nb::arg("memory_config") = nb::none(),
         R"doc(
@@ -189,12 +166,6 @@ void py_module(nb::module_& mod) {
 
             Returns:
                 ttnn.Tensor: the reallocated tensor.
-
-            Example:
-                >>> device_id = 0
-                >>> device = ttnn.open_device(device_id=device_id)
-                >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-                >>> new_tensor = ttnn.reallocate(tensor, memory_config=my_memory_config)
         )doc");
 
     bind_registered_operation(
@@ -211,12 +182,6 @@ void py_module(nb::module_& mod) {
 
         Returns:
             ttnn.Tensor: the converted tensor.
-
-        Example:
-            >>> device_id = 0
-            >>> device = ttnn.open_device(device_id=device_id)
-            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-            >>> tensor = ttnn.to_memory_config(tensor, memory_config)
         )doc",
         ttnn::nanobind_arguments_t{
             nb::arg("tensor"),
@@ -299,9 +264,7 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "copy_host_to_device_tensor",
-        [](const ttnn::Tensor& host_tensor,
-           ttnn::Tensor& device_tensor,
-           const std::optional<QueueId>& cq_id = std::nullopt) {
+        [](const ttnn::Tensor& host_tensor, ttnn::Tensor& device_tensor, const std::optional<QueueId>& cq_id) {
             tt::tt_metal::write_tensor(host_tensor, device_tensor, /*blocking=*/false, cq_id);
         },
         nb::arg("host_tensor"),
@@ -340,27 +303,21 @@ void py_module(nb::module_& mod) {
 
         Returns:
             ttnn.Tensor: the tensor with the requested layout.
-
-        Example:
-            >>> device_id = 0
-            >>> device = ttnn.open_device(device_id=device_id)
-            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-            >>> tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
-            >>> print(tensor[0,0,:3])
-            Tensor([1.42188, -1.25, -0.398438], dtype=bfloat16)
         )doc",
         ttnn::nanobind_overload_t{
             [](const std::decay_t<decltype(ttnn::to_layout)> self,
                const ttnn::Tensor& tensor,
                const ttnn::Layout layout,
                const std::optional<ttnn::DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(tensor, layout, dtype, memory_config);
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
+                return self(tensor, layout, dtype, memory_config, sub_core_grids);
             },
             nb::arg("tensor"),
             nb::arg("layout"),
             nb::arg("dtype") = nb::none(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()});
 
     mod.def(
         "num_cores_to_corerangeset",
@@ -369,12 +326,78 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "num_cores_to_corerangeset_in_subcoregrids",
-        &tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids,
-        nb::arg("start_core"),
-        nb::arg("target_num_cores"),
-        nb::arg("sub_core_grids"),
-        nb::arg("row_wise") = false,
+        nb::overload_cast<const CoreCoord, const uint32_t, const CoreRangeSet&, const bool>(
+            &tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids),
         R"doc(Create a CoreRangeSet containing the specified number of cores starting from start_core in given subcoregrids)doc");
+
+    mod.def(
+        "split_work_to_cores",
+        nb::overload_cast<const CoreCoord, const uint32_t, const bool>(&tt::tt_metal::split_work_to_cores),
+        nb::arg("grid_size"),
+        nb::arg("units_to_divide"),
+        nb::arg("row_wise") = false,
+        R"doc(
+        Split work units across cores in a grid.
+
+        This function divides a specified number of work units across cores in a grid.
+        It returns information about how the work is distributed, including core ranges
+        for different groups if work cannot be evenly divided.
+
+        Args:
+            grid_size (ttnn.CoreCoord): The size of the core grid (x, y dimensions).
+            units_to_divide (int): The total number of work units to distribute.
+            row_wise (bool, optional): Whether to distribute work by iterating row-wise. Defaults to False.
+
+        Returns:
+            tuple: A tuple containing:
+                - num_cores (int): Number of cores being used
+                - all_cores (CoreRangeSet): All cores involved
+                - core_group_1 (CoreRangeSet): Cores doing more work
+                - core_group_2 (CoreRangeSet): Cores doing less work (empty if evenly divisible)
+                - units_per_core_group_1 (int): Work units per core in group 1
+                - units_per_core_group_2 (int): Work units per core in group 2
+
+        Example:
+        >>> # Split 100 tiles across an 8x8 core grid
+        >>> num_cores, all_cores, core_group_1, core_group_2, units_1, units_2 = \\
+        ...     ttnn.split_work_to_cores(ttnn.CoreCoord(8, 8), 100)
+        >>> print(f"Using {num_cores} cores, {units_1} units per core in group 1, {units_2} in group 2")
+        )doc");
+
+    mod.def(
+        "split_work_to_cores",
+        nb::overload_cast<const CoreRangeSet&, const uint32_t, const bool>(&tt::tt_metal::split_work_to_cores),
+        nb::arg("core_grid"),
+        nb::arg("units_to_divide"),
+        nb::arg("row_wise") = false,
+        R"doc(
+        Split work units across cores in a CoreRangeSet.
+
+        This function divides a specified number of work units across cores in a CoreRangeSet.
+        It returns information about how the work is distributed, including core ranges
+        for different groups if work cannot be evenly divided.
+
+        Args:
+            core_grid (ttnn.CoreRangeSet): The set of core ranges to distribute work across.
+            units_to_divide (int): The total number of work units to distribute.
+            row_wise (bool, optional): Whether to distribute work by iterating row-wise. Defaults to False.
+
+        Returns:
+            tuple: A tuple containing:
+                - num_cores (int): Number of cores being used
+                - all_cores (CoreRangeSet): All cores involved
+                - core_group_1 (CoreRangeSet): Cores doing more work
+                - core_group_2 (CoreRangeSet): Cores doing less work (empty if evenly divisible)
+                - units_per_core_group_1 (int): Work units per core in group 1
+                - units_per_core_group_2 (int): Work units per core in group 2
+
+        Example:
+        >>> # Split 100 tiles across an 8x8 core grid
+        >>> core_rangeset = ttnn.CoreRangeSet(ttnn.CoreRange(ttnn.CoreCoord(0,0), ttnn.CoreCoord(7,7)))
+        >>> num_cores, all_cores, core_group_1, core_group_2, units_1, units_2 = \\
+        ...     ttnn.split_work_to_cores(core_rangeset, 100)
+        >>> print(f"Using {num_cores} cores, {units_1} units per core in group 1, {units_2} in group 2")
+        )doc");
 }
 
 }  // namespace ttnn::operations::core

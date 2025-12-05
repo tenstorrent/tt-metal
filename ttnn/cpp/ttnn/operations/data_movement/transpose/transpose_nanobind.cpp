@@ -17,7 +17,7 @@
 namespace ttnn::operations::data_movement::detail {
 
 void bind_transpose(nb::module_& mod) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Returns a tensor that is transposed along dims dim1 and dim2
 

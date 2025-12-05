@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/string.h>
 
 #include "ttnn-nanobind/decorators.hpp"
 #include "rand.hpp"
@@ -39,10 +40,6 @@ void bind_rand_operation(nb::module_& mod) {
 
         Returns:
             ttnn.Tensor: A tensor with specified shape, dtype, and layout containing random values.
-
-        Example:
-            >>> input_tensor_a = ttnn.rand([N,N], dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG )
-            >>> input_tensor_b = ttnn.rand((N, N), device=device)
         )doc";
 
     using OperationType = decltype(ttnn::rand);
@@ -63,9 +60,9 @@ void bind_rand_operation(nb::module_& mod) {
             nb::arg("shape"),
             nb::arg("device"),
             nb::kw_only(),
-            nb::arg("dtype") = DataType::BFLOAT16,
-            nb::arg("layout") = Layout::TILE,
-            nb::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG,
+            nb::arg("dtype") = nb::cast(DataType::BFLOAT16),
+            nb::arg("layout") = nb::cast(Layout::TILE),
+            nb::arg("memory_config") = nb::cast(ttnn::DRAM_MEMORY_CONFIG),
             nb::arg("low") = 0.0f,
             nb::arg("high") = 1.0f,
             nb::arg("seed") = 0});

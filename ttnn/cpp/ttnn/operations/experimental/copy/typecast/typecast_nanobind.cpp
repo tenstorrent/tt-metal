@@ -16,7 +16,7 @@
 namespace ttnn::operations::experimental::copy::detail {
 
 void bind_typecast(nb::module_& mod) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
         Returns a new tensor which is a typecast of input tensor with new datatype``{0}``.
 
         Input tensors must be on device, in ROW MAJOR or TILE layout, and have matching data type.

@@ -23,11 +23,14 @@ void bind_convert_to_hwc(nb::module_& mod) {
     The input tensor is expected to be in row-major layout and width-sharded in L1 or DRAM.
     The output is a row-major height-sharded tensor.
 
+    Input tensor shape: [1, B, C, HW] where B is the batch size.
+    Output tensor shape: [1, 1, B * HW, C] - batches are flattened into the spatial dimension.
+
     When C is not a multiple of the device alignment requirement, the output shard width is automatically padded up
     to the next multiple of the alignment requirement to satisfy alignment constraints.
 
     Args:
-        input (ttnn.Tensor): Input tensor in CHW format, width-sharded in L1 or DRAM.
+        input (ttnn.Tensor): Input tensor in CHW format with shape [1, B, C, HW], width-sharded in L1 or DRAM.
         memory_config (Optional[ttnn.MemoryConfig]): Output memory configuration.
                                                      Required only for DRAM inputs. If omitted for L1 inputs, the output memory_config is automatically inferred.
                                                      The output shard width will be rounded up to the next multiple of the alignment requirement for proper memory alignment.

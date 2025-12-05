@@ -6,6 +6,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 
 #include "ttnn-nanobind/decorators.hpp"
 #include "grid_sample.hpp"
@@ -16,7 +17,7 @@ namespace ttnn::operations::grid_sample {
 namespace {
 
 void bind_grid_sample_op(nb::module_& mod) {
-    const auto doc = R"doc(
+    const auto* const doc = R"doc(
         Performs grid sampling on the input tensor using the provided sampling grid.
 
         Grid sample uses bilinear interpolation to sample input values at arbitrary
@@ -44,8 +45,9 @@ void bind_grid_sample_op(nb::module_& mod) {
                                  - Generated using ttnn.prepare_grid_sample_grid() for K=1, then ttnn.reshape() for K>1, both being done on host side
 
         Keyword Args:
-            mode (str): Interpolation mode. Currently only "bilinear" is supported.
+            mode (str): Interpolation mode.
             padding_mode (str): How to handle out-of-bounds coordinates. Currently only "zeros" is supported.
+            align_corners (bool): Whether to align corners when mapping normalized coordinates to pixel indices.
             use_precomputed_grid (bool): Whether to use precomputed grid coordinates.
                                    When False (default): grid should be normalized coordinates in [-1, 1]
                                    When True: grid should be preprocessed using ttnn.prepare_grid_sample_grid()
@@ -117,8 +119,9 @@ void bind_grid_sample_op(nb::module_& mod) {
             nb::arg("input_tensor"),
             nb::arg("grid"),
             nb::kw_only(),
-            nb::arg("mode") = "bilinear",
-            nb::arg("padding_mode") = "zeros",
+            nb::arg("mode") = nb::str("bilinear"),
+            nb::arg("padding_mode") = nb::str("zeros"),
+            nb::arg("align_corners") = false,
             nb::arg("use_precomputed_grid") = false,
             nb::arg("batch_output_channels") = false,
             nb::arg("memory_config") = nb::none()});
@@ -132,7 +135,9 @@ void bind_prepare_grid_sample_grid(nb::module_& mod) {
         nb::arg("grid"),
         nb::arg("input_shape"),
         nb::kw_only(),
-        nb::arg("padding_mode") = "zeros",
+        nb::arg("mode") = nb::str("bilinear"),
+        nb::arg("padding_mode") = nb::str("zeros"),
+        nb::arg("align_corners") = false,
         nb::arg("output_dtype") = nb::none(),
         R"doc(
         Precomputes grid sample data for optimized kernel execution.
@@ -148,7 +153,9 @@ void bind_prepare_grid_sample_grid(nb::module_& mod) {
             input_shape (List[int]): Input tensor dimensions [N, H_in, W_in, C] in NHWC format
 
         Keyword Args:
+            mode (str): Nearest or bilinear operation. Currently only "bilinear" is supported.
             padding_mode (str): How to handle out-of-bounds coordinates. Currently only "zeros" is supported.
+            align_corners (bool): Whether to align corners when sampling (default: false)
             output_dtype (ttnn.DataType, optional): Data type for the output tensor. Default: bfloat16
 
         Returns:
@@ -168,7 +175,7 @@ void bind_prepare_grid_sample_grid(nb::module_& mod) {
             >>>
             >>> # Precompute grid for optimized sampling
             >>> precomputed_grid = ttnn.prepare_grid_sample_grid(
-            ...     grid, input_shape, padding_mode="zeros", output_dtype=ttnn.bfloat16
+            ...     grid, input_shape, mode="bilinear", padding_mode="zeros", align_corners=False, output_dtype=ttnn.bfloat16
             ... )
             >>> print(precomputed_grid.shape)  # [1, 8, 8, 6]
             >>>

@@ -28,7 +28,8 @@
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/device.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
+// #include "ttnn/operations/experimental/auto_format/auto_format.hpp" // TODO_NANOBIND
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
@@ -52,6 +53,7 @@ void ttnn_device(nb::module_& mod) {
         nb::arg("device_id"),
         nb::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         nb::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
+        nb::arg("num_command_queues") = 1,
         nb::arg("dispatch_core_config") = tt::tt_metal::DispatchCoreConfig{},
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE,
         nb::rv_policy::reference,  // cleanup has to happen in c++ land
@@ -62,8 +64,9 @@ void ttnn_device(nb::module_& mod) {
                 device_id (int): The device ID to open.
                 l1_small_size (int, optional): The size of the L1 small buffer. Defaults to `ttnn.device.DEFAULT_L1_SMALL_SIZE`.
                 trace_region_size (int, optional): The size of the trace region. Defaults to `ttnn.device.DEFAULT_TRACE_REGION_SIZE`.
+                num_command_queues (int, optional): The number of command queues to open. Defaults to 1.
+                dispatch_core_config (ttnn.device.DispatchCoreConfig, optional): The dispatch core config to use. Defaults to a hardware-specific value.
                 worker_l1_size (int, optional): The size of the user-allocatable L1 buffer. Defaults to a hardware-specific value.
-                dispatch_core_type (ttnn.device.DispatchCoreType, optional): The type of dispatch core to use. Defaults to `ttnn.device.DispatchCoreType.WORKER`.
 
             Returns:
                 ttnn.Device: The device with the given device_id.
@@ -277,43 +280,42 @@ void device_module(nb::module_& m_device) {
             >>> ttnn.device.SetRootDir("/path/to/tt_metal_home")
     )doc");
 
-    m_device.def(  // afuller
+    // m_device.def(  // afuller
+    //     "SetDefaultDevice",
+    //     [](std::optional<MeshDevice*> device) {
+    //         if (device.has_value()) {
+    //             ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(device.value());
+    //         } else {
+    //             ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(nullptr);
+    //         }
+    //     },
+    // m_device.def(  // afuller
+    //     "ClearDefaultDevice",
+    //     []() { ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(nullptr); },
+    //     R"doc(
+    //         Clears the default device (sets it to None).
+
+    m_device.def(
         "SetDefaultDevice",
-        [](std::optional<MeshDevice*> device) {
-            if (device.has_value()) {
-                ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(device.value());
-            } else {
-                ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(nullptr);
-            }
-        },
+        [](MeshDevice* device) { ttnn::SetDefaultDevice(device); },
         R"doc(
-                Set the default device to given device.
+            Sets the default device to use for operations when inputs are not on the device.
 
-                Args:
-                    device (ttnn.Device): the device to set as default.
+            Args:
+                device (ttnn.Device): The TT device to use.
 
-                Example:
-                    >>> device_id = 0
-                    >>> device = ttnn.open_device(device_id)
-                    >>> ttnn.SetDefaultDevice(device)
-            )doc");
-
-    m_device.def(  // afuller
-        "ClearDefaultDevice",
-        []() { ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(nullptr); },
-        R"doc(
-            Clears the default device (sets it to None).
+            Note:
+                This functionality is planned for deprecation in the future.
 
             Example:
-                >>> ttnn.ClearDefaultDevice()
-         )doc");
+                >>> device_id = 0
+                >>> device = ttnn.open_device(device_id = device_id)
+                >>> ttnn.SetDefaultDevice(device)
+        )doc");
 
     m_device.def(
         "GetDefaultDevice",
-        []() {
-            return dynamic_cast<MeshDevice*>(
-                ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice());
-        },
+        []() { return ttnn::GetDefaultDevice(); },
         R"doc(
             Gets the default device to use for ops when inputs aren't on device.
 
@@ -328,85 +330,9 @@ void device_module(nb::module_& m_device) {
         )doc");
 
     m_device.def(
-        "format_input_tensor",
-        [](const Tensor& input,
-           MeshDevice* device,
-           const ttnn::Shape& padded_shape,
-           float pad_value,
-           Layout target_layout,
-           std::optional<MemoryConfig> target_mem_config) {
-            return ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
-                input, device, padded_shape, pad_value, target_layout, std::move(target_mem_config));
-        },
-        nb::arg("input").noconvert(),
-        nb::arg("device").noconvert(),
-        nb::arg("padded_shape"),
-        nb::arg("pad_value"),
-        nb::arg("target_layout").noconvert(),
-        nb::arg("target_mem_config").noconvert() = nb::none(),
-        R"doc(
-        Formats tensor to target layout and pads to padded shape.
-
-        Args:
-            input (ttnn.Tensor): Input tensor to format.
-            device (ttnn.device.Device): Device where the tensor will be moved.
-            padded_shape (ttnn.Shape): Desired shape of the tensor.
-            pad_value (float): Value to pad with.
-            target_layout (ttnn.Layout): Desired tensor layout.
-            target_mem_config (ttnn.MemoryConfig, optional): Desired memory config. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: Formatted tensor.
-
-        Note:
-            This functionality is planned for deprecation in the future.
-
-        Example:
-            >>> input_tensor = ttnn.ones([1, 2, 2, 2], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-            >>> padded_tensor = ttnn.format_input_tensor(input_tensor, device=device, padded_shape=[1, 2, 4, 4], pad_value=0.0, target_layout=ttnn.TILE_LAYOUT, output_mem_config)
-        )doc");
-
-    m_device.def(
-        "format_output_tensor",
-        [](const Tensor& output,
-           const ttsl::SmallVector<uint32_t>& shape,
-           MeshDevice* device,
-           Layout target_layout,
-           std::optional<MemoryConfig> target_mem_config) {
-            return operations::experimental::auto_format::AutoFormat::format_output_tensor(
-                output, ttnn::Shape(shape), device, target_layout, std::move(target_mem_config));
-        },
-        nb::arg("output").noconvert(),
-        nb::arg("shape"),
-        nb::arg("device").noconvert(),
-        nb::arg("target_layout").noconvert(),
-        nb::arg("target_mem_config").noconvert() = nb::none(),
-        R"doc(
-        Formats tensor to target layout and unpads to shape.
-
-        Args:
-            output (ttnn.Tensor): Output tensor to format.
-            shape (ttnn.Shape): Desired shape of the tensor.
-            device (ttnn.device.Device): Device where the tensor will be moved.
-            target_layout (ttnn.Layout): Desired tensor layout.
-            target_mem_config (ttnn.MemoryConfig, optional): Desired memory config. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: Formatted tensor.
-
-        Note:
-            This functionality is planned for deprecation in the future.
-
-        Example:
-            >>> # Assuming we have a padded tensor of shape [1, 2, 4, 4] with padding of [1, 1, 1, 1] of layout=ttnn.TILE_LAYOUT
-            >>> unpadded_tensor = ttnn.format_output_tensor(output_tensor, shape=[1, 2, 2, 2], device=device, target_layout=ttnn.ROW_MAJOR_LAYOUT, output_mem_config)
-        )doc");
-
-    m_device.def(
         "pad_to_tile_shape",
         [](const std::array<uint32_t, 4>& unpadded_shape) -> std::vector<uint32_t> {
-            auto result =
-                ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(ttnn::Shape(unpadded_shape));
+            auto result = ttnn::operations::data_movement::pad_to_tile_shape(ttnn::Shape(unpadded_shape));
             return std::vector<uint32_t>(result.cbegin(), result.cend());
         },
         nb::arg("unpadded_shape"),

@@ -17,7 +17,7 @@
 namespace ttnn::operations::data_movement::detail {
 
 void bind_tosa_scatter(nb::module_& mod) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Scatters the source tensor's values along a given dimension according
             to the index tensor.
