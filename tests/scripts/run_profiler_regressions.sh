@@ -69,6 +69,10 @@ run_profiling_test() {
     TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_perf_op_report.py --noconftest -k "not TestOpSupportCount"
 
     remove_default_log_locations
+
+    # Host-device correlation: verify 1:1 mapping between host TracyMessages
+    # and device-side real-time profiler records (requires Tracy but NOT device profiler)
+    pytest tests/ttnn/tracy/test_host_device_correlation.py --timeout 600
 }
 
 main() {

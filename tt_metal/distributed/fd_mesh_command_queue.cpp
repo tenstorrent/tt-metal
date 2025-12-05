@@ -261,6 +261,7 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
 }
 
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
+    ZoneScopedN("EnqueueProgram");
     auto lock = lock_api_function_();
     in_use_ = true;
     uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
@@ -419,6 +420,15 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                 chip_ids_in_workload,
                 program.get_runtime_id());
         }
+
+        // Annotate host-side Tracy zone with encoded program IDs so the host
+        // EnqueueProgram zone can be matched 1:1 with device-side program zones
+        // reported by the real-time profiler (which uses the same encoded ID as
+        // runtime_host_id).
+        if (!tt::tt_metal::getDeviceProfilerState()) {
+            std::string msg = fmt::format("EnqueueProgram op_id={}", program.get_runtime_id());
+            TracyMessage(msg.c_str(), msg.size());
+        }
     }
     // Send go signals to devices not running a program to ensure consistent global state
     if (not sysmem_manager.get_bypass_mode()) {
@@ -464,7 +474,8 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
     const void* src,
     uint32_t size_bytes,
     bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    bool wait_on_workers) {
     ZoneScoped;
 
     auto lock = lock_api_function_();
@@ -488,7 +499,8 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
         size_bytes,
         id_,
         expected_num_workers_completed_,
-        sub_device_ids);
+        sub_device_ids,
+        wait_on_workers);
 
     if (blocking) {
         this->finish_nolock(sub_device_ids);
@@ -571,8 +583,14 @@ void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_devi
 }
 
 void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScopedN("FDMeshCommandQueue::finish");
     auto lock = lock_api_function_();
     this->finish_nolock(sub_device_ids);
+
+    {
+        ZoneScopedN("RealtimeProfilerSyncCheck");
+        mesh_device_->impl().trigger_realtime_profiler_sync_check();
+    }
 
     // Barrier across all active hosts of the mesh
     active_distributed_context_->barrier();

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstring>
 #include <chrono>
 #include <cstdlib>
 #include <optional>
@@ -181,6 +182,16 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
     }
     this->channel_offset = DispatchSettings::MAX_HUGEPAGE_SIZE * get_umd_channel(channel) +
                            (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
+
+    static constexpr uint32_t AUX_PAGES_PER_CQ = 2;
+    uint32_t per_cq_reduction = AUX_PAGES_PER_CQ * DispatchSettings::TRANSFER_PAGE_SIZE;
+    this->cq_size -= per_cq_reduction;
+
+    uint32_t total_cq_space = static_cast<uint32_t>(num_hw_cqs) * this->cq_size;
+    this->free_region_start_ = this->channel_offset + total_cq_space;
+    this->free_region_size_ = static_cast<uint32_t>(num_hw_cqs) * per_cq_reduction;
+    this->free_region_host_ptr_ = this->cq_sysmem_start + total_cq_space;
+    this->free_region_bump_ = 0;
 
     this->init_dispatch_core_interfaces(num_hw_cqs, channel);
 }
@@ -820,6 +831,29 @@ uint32_t SystemMemoryManager::get_dram_region_base_addr() const {
 uint32_t SystemMemoryManager::get_dram_region_bank_id() const {
     TT_FATAL(this->is_dram_backed(), "CQs are not DRAM backed");
     return 0;
+}
+
+std::pair<void*, uint32_t> SystemMemoryManager::allocate_region(uint32_t size) {
+    if (free_region_host_ptr_ == nullptr || free_region_size_ == 0) {
+        return {nullptr, 0};
+    }
+
+    static constexpr uint32_t kMinAlignment = 64;
+    uint32_t aligned_size = tt::align(size, kMinAlignment);
+    TT_FATAL(
+        free_region_bump_ + aligned_size <= free_region_size_,
+        "Hugepage auxiliary region exhausted: requested {} bytes ({} aligned), {} of {} used",
+        size,
+        aligned_size,
+        free_region_bump_,
+        free_region_size_);
+
+    void* host_ptr = free_region_host_ptr_ + free_region_bump_;
+    uint32_t device_addr = free_region_start_ + free_region_bump_;
+    free_region_bump_ += aligned_size;
+
+    std::memset(host_ptr, 0, aligned_size);
+    return {host_ptr, device_addr};
 }
 
 }  // namespace tt::tt_metal

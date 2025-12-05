@@ -61,133 +61,38 @@ class PCIeCoreWriter;
 class D2HSocket {
 public:
     /**
-     * @brief Constructs a D2HSocket for streaming data from a device core to host.
-     *
-     * Allocates pinned host memory for the data FIFO and bytes_sent signaling.
-     * Creates a configuration buffer on the device that the kernel uses to access
-     * socket metadata and downstream (host) buffer addresses.
-     *
-     * @param mesh_device The mesh device containing the sender core.
-     * @param sender_core The source core coordinate (device + core) that sends data.
-     * @param fifo_size Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
-     *
-     * @throws TT_FATAL if pinned memory allocation fails or addresses are invalid.
+     * @param l1_data_buffer_size If non-zero, allocates an L1 staging buffer on the sender core
+     *        and writes its address into the socket config so the device kernel can use it.
+     *        The address is retrievable via get_l1_data_buffer_address(). Default: 0 (disabled).
      */
-    D2HSocket(const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoreCoord& sender_core, uint32_t fifo_size);
+    D2HSocket(
+        const std::shared_ptr<MeshDevice>& mesh_device,
+        const MeshCoreCoord& sender_core,
+        uint32_t fifo_size,
+        uint32_t l1_data_buffer_size = 0);
 
-    /**
-     * @brief Connects to an existing D2HSocket from another process.
-     *
-     * Waits for the flatbuffer descriptor exported by the owner, opens the named
-     * shared memory, and sets up PCIe write access to the device core via
-     * PCIeCoreWriter (bypasses MetalContext). The returned socket is fully
-     * functional for read() and barrier() operations.
-     *
-     * @param socket_id The identifier used when the owner called export_descriptor().
-     * @param timeout_ms Max time to wait for the descriptor file (default 10s).
-     * @return A connected D2HSocket ready for data transfer.
-     */
     static std::unique_ptr<D2HSocket> connect(
         const std::string& socket_id, std::optional<uint32_t> timeout_ms = std::nullopt);
 
-    /**
-     * @brief Exports a descriptor file for cross-process socket attachment.
-     *
-     * Writes a flatbuffer binary to /dev/shm/ containing all metadata needed for
-     * a remote process to connect: shared memory name, buffer layout, device
-     * addresses, pre-resolved core coordinates, and PCIe alignment.
-     *
-     * @param socket_id A user-provided identifier used in the descriptor filename.
-     * @return The full path to the written descriptor file.
-     */
     std::string export_descriptor(const std::string& socket_id);
-
-    /**
-     * @brief Destroys the D2HSocket.
-     *
-     * Releases pinned memory mappings before freeing the underlying host buffers.
-     * This ensures the DMA mappings are properly cleaned up to avoid "File exists"
-     * errors when re-pinning memory at the same virtual address.
-     * Owner: waits for device acknowledgement, unpins memory, unlinks shared memory,
-     * removes descriptor file.
-     * Connector: unmaps shared memory via NamedShm destructor.
-     */
     ~D2HSocket() noexcept;
 
-    /**
-     * @brief Returns the currently configured page size.
-     *
-     * @return The page size in bytes, or 0 if not yet set.
-     */
     uint32_t get_page_size() const { return page_size_; }
 
-    /**
-     * @brief Returns the L1 address of the socket configuration buffer on the device.
-     *
-     * This address should be passed to the device kernel (typically as a compile-time
-     * argument) so it can call `create_sender_socket_interface()` to access socket metadata.
-     *
-     * @return The L1 address of the configuration buffer.
-     */
     uint32_t get_config_buffer_address() const { return config_buffer_address_; }
 
-    /**
-     * @brief Sets the page size for subsequent read operations.
-     *
-     * The page size determines the granularity of data transfers. Must be PCIe-aligned
-     * and less than or equal to the FIFO size. The read pointer is aligned to the new
-     * page size boundary.
-     *
-     * If alignment causes the read pointer to wrap, this function waits for the device
-     * to send enough data to cover the alignment adjustment before returning.
-     *
-     * @param page_size Page size in bytes. Must be PCIe-aligned.
-     *
-     * @throws TT_FATAL if page_size is not PCIe-aligned or exceeds FIFO size.
-     */
+    uint32_t get_l1_data_buffer_address() const { return l1_data_buffer_address_; }
+    uint32_t get_l1_data_buffer_size() const { return l1_data_buffer_size_; }
+
     void set_page_size(uint32_t page_size);
 
-    /**
-     * @brief Non-blocking check for available data.
-     *
-     * Returns true if at least one page of data is available in the FIFO
-     * without blocking. Useful for poll-based readers that need to check
-     * a shutdown flag between iterations.
-     *
-     * @return true if at least one page can be read immediately.
-     *
-     * @throws TT_FATAL if page_size has not been set.
-     */
     bool has_data();
 
-    /**
-     * @brief Reads data pages from the socket FIFO.
-     *
-     * Blocks until the requested number of pages are available in the FIFO.
-     * Copies data from the pinned host buffer to the provided destination buffer.
-     * Optionally notifies the device that buffer space has been freed.
-     *
-     * @param data Pointer to the destination buffer. Must have space for
-     *             `num_pages * page_size` bytes.
-     * @param num_pages Number of pages to read.
-     * @param notify_sender If true (default), updates `bytes_acked` on the device
-     *                      to signal that buffer space is available. Set to false
-     *                      if batching multiple reads before acknowledging.
-     *
-     * @throws TT_FATAL if page_size has not been set or num_pages exceeds FIFO capacity.
-     */
     void read(void* data, uint32_t num_pages, bool notify_sender = true);
 
-    /**
-     * @brief Blocks until all sent data has been acknowledged.
-     *
-     * Waits until `bytes_acked` equals `bytes_sent`, indicating the host has
-     * consumed all data sent by the device.
-     *
-     * @param timeout_ms Optional timeout in milliseconds. If specified, the function will throw an exception if the
-     * barrier is not met within the timeout.
-     */
     void barrier(std::optional<uint32_t> timeout_ms = std::nullopt);
+
+    uint32_t pages_available();
 
     std::vector<MeshCoreCoord> get_active_cores() const;
 
@@ -210,7 +115,9 @@ private:
         const MeshCoordinateRangeSet& device_range,
         uint32_t pcie_alignment,
         const std::string& shm_name);
+    PinnedBufferInfo init_host_buffer_hugepage(const std::shared_ptr<MeshDevice>& mesh_device);
     void init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_device);
+    void init_l1_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t requested_size);
     void write_socket_metadata(
         const std::shared_ptr<MeshDevice>& mesh_device,
         const PinnedBufferInfo& data_info,
@@ -223,6 +130,7 @@ private:
     void notify_sender();
 
     std::shared_ptr<MeshBuffer> config_buffer_ = nullptr;
+    std::shared_ptr<MeshBuffer> l1_data_buffer_ = nullptr;
     MeshCoreCoord sender_core_;
     uint32_t fifo_size_ = 0;
     uint32_t page_size_ = 0;
@@ -233,6 +141,8 @@ private:
     uint32_t config_buffer_address_ = 0;
     uint32_t pcie_alignment_ = 0;
     uint32_t bytes_acked_device_offset_ = 0;
+    uint32_t l1_data_buffer_address_ = 0;
+    uint32_t l1_data_buffer_size_ = 0;
     tt::umd::TlbWindow* sender_core_tlb_ = nullptr;
     std::shared_ptr<tt::tt_metal::experimental::PinnedMemory> pinned_memory_ = nullptr;
     std::shared_ptr<uint32_t[]> host_buffer_ = nullptr;
@@ -244,6 +154,10 @@ private:
     bool is_owner_ = true;
     std::string descriptor_path_;
     bool exported_ = false;
+
+    bool using_hugepage_ = false;
+    uint32_t* hugepage_data_host_ptr_ = nullptr;
+    volatile uint32_t* hugepage_bytes_sent_host_ptr_ = nullptr;
 };
 
 }  // namespace tt::tt_metal::distributed
