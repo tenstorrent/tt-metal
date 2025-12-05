@@ -24,7 +24,7 @@ inline void llk_math_eltwise_binary_sfpu_rsub_int(
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
     _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_rsub_int<APPROXIMATE, INSTRUCTION_MODE, ITERATIONS>,
+        ckernel::sfpu::calculate_rsub_int<(APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise), INSTRUCTION_MODE, ITERATIONS>,
         dst_index0,
         dst_index1,
         odst,

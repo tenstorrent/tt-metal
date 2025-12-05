@@ -84,7 +84,7 @@ inline void calculate_erfinv() {
         v_elseif(abs_v > 1.0f) {  // Nan not supported
             result = std::numeric_limits<float>::quiet_NaN();
         }
-        v_else { result = calculate_erfinv_body<ApproximationMode::Precise>(abs_v); }
+        v_else { result = calculate_erfinv_body<ApproximationMode::Fast>(abs_v); }
         v_endif;
 
         result = sfpi::setsgn(result, v);  // restore sign
