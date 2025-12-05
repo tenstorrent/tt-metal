@@ -396,9 +396,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     // For 2D routing (Mesh/Torus), VC1 channels (sender channels 4-6, receiver channel 1) are not yet implemented
     // so we exclude them from allocation
     if ((topology == Topology::Mesh || topology == Topology::Torus) && is_2D_routing) {
-        this->num_used_sender_channels -= builder_config::get_vc1_downstream_edm_count(is_2D_routing);
+        this->num_used_sender_channels -= builder_config::get_vc1_downstream_edm_count(is_2D_routing) + 1;
         this->num_used_receiver_channels = 1;  // Only VC0 receiver implemented
-        this->num_fwd_paths -= builder_config::get_vc1_downstream_edm_count(is_2D_routing);
+        this->num_fwd_paths -= builder_config::get_vc1_downstream_edm_count(is_2D_routing) + 1;
     }
 
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
@@ -938,6 +938,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         config.sender_channels_worker_conn_info_base_address[4],
         config.sender_channels_worker_conn_info_base_address[5],
         config.sender_channels_worker_conn_info_base_address[6],
+        config.sender_channels_worker_conn_info_base_address[7],
 
         this->termination_signal_ptr,
         this->edm_local_sync_ptr,
@@ -954,6 +955,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         config.risc_configs[risc_id].is_sender_channel_serviced(4),
         config.risc_configs[risc_id].is_sender_channel_serviced(5),
         config.risc_configs[risc_id].is_sender_channel_serviced(6),
+        config.risc_configs[risc_id].is_sender_channel_serviced(7),
         config.risc_configs[risc_id].is_receiver_channel_serviced(0),
         config.risc_configs[risc_id].is_receiver_channel_serviced(1),
         config.risc_configs[risc_id].enable_handshake(),
@@ -1101,11 +1103,19 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
         this->sender_channels_connection_semaphore_id[1],
         this->sender_channels_connection_semaphore_id[2],
         this->sender_channels_connection_semaphore_id[3],
+        this->sender_channels_connection_semaphore_id[4],
+        this->sender_channels_connection_semaphore_id[5],
+        this->sender_channels_connection_semaphore_id[6],
+        this->sender_channels_connection_semaphore_id[7],
 
         this->downstream_vcs_sender_channel_buffer_index_semaphore_id[0],
         this->downstream_vcs_sender_channel_buffer_index_semaphore_id[1],
         this->downstream_vcs_sender_channel_buffer_index_semaphore_id[2],
         this->downstream_vcs_sender_channel_buffer_index_semaphore_id[3],
+        this->downstream_vcs_sender_channel_buffer_index_semaphore_id[4],
+        this->downstream_vcs_sender_channel_buffer_index_semaphore_id[5],
+        this->downstream_vcs_sender_channel_buffer_index_semaphore_id[6],
+        this->downstream_vcs_sender_channel_buffer_index_semaphore_id[7],
     };
 
     receiver_channel_to_downstream_adapter->pack_inbound_channel_rt_args(0, rt_args);

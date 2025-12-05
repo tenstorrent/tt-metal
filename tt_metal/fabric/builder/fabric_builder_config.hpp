@@ -47,7 +47,7 @@ static constexpr std::size_t num_sender_channels_1d_linear = 2;
 static constexpr std::size_t num_sender_channels_2d_mesh = 4;
 
 static constexpr std::size_t num_sender_channels_1d = 2;
-static constexpr std::size_t num_sender_channels_2d = 7;
+static constexpr std::size_t num_sender_channels_2d = 8;
 static constexpr std::size_t num_max_sender_channels = std::max(num_sender_channels_1d, num_sender_channels_2d);
 static constexpr std::size_t num_receiver_channels_1d = 1;
 static constexpr std::size_t num_receiver_channels_2d = 2;

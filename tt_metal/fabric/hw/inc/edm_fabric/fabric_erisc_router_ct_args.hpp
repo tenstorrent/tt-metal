@@ -80,7 +80,7 @@ constexpr size_t MAX_NUM_SENDER_CHANNELS = get_compile_time_arg_val(MAX_NUM_SEND
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS_IDX = MAX_NUM_SENDER_CHANNELS_IDX + 1;
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS = get_compile_time_arg_val(MAX_NUM_RECEIVER_CHANNELS_IDX);
 constexpr size_t MAX_NUM_SENDER_CHANNELS_VC0 = 4;  // Channels 0-3
-constexpr size_t MAX_NUM_SENDER_CHANNELS_VC1 = 3;  // Channels 4-6 (2D only)
+constexpr size_t MAX_NUM_SENDER_CHANNELS_VC1 = 4;  // Channels 4-7 (2D only)
 
 // Downstream tensix connections argument (after stream IDs, marker, and max channel counts)
 constexpr size_t NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS_IDX = MAX_NUM_RECEIVER_CHANNELS_IDX + 1;
@@ -262,6 +262,7 @@ constexpr size_t local_sender_channel_3_connection_info_addr = get_compile_time_
 constexpr size_t local_sender_channel_4_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 4);
 constexpr size_t local_sender_channel_5_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 5);
 constexpr size_t local_sender_channel_6_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 6);
+constexpr size_t local_sender_channel_7_connection_info_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_1 + 7);
 
 // TODO: CONVERT TO SEMAPHORE
 constexpr size_t MAIN_CT_ARGS_IDX_2 = MAIN_CT_ARGS_IDX_1 + MAX_NUM_SENDER_CHANNELS;
@@ -543,6 +544,7 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_acked_
             // VC1
             0,  // Padding upto MAX_NUM_SENDER_CHANNELS. VC1 does not use first level acks.
             0,
+            0,
             0});
 
 // data section
@@ -555,7 +557,8 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_comple
             to_sender_3_pkts_completed_id,
             to_sender_4_pkts_completed_id,
             to_sender_5_pkts_completed_id,
-            to_sender_6_pkts_completed_id});
+            to_sender_6_pkts_completed_id,
+            to_sender_7_pkts_completed_id});
 
 // Miscellaneous configuration
 
