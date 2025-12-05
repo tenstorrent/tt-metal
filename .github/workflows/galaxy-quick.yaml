@@ -10,6 +10,10 @@ on:
           - wormhole_b0
           - blackhole
         default: wormhole_b0
+      extra-tag:
+        required: true
+        type: string
+        default: "in-service"
   schedule:
     - cron: "0 */6 * * *" # Runs every 6 hours
   push:
@@ -39,3 +43,4 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       blackhole: ${{ github.event.inputs.arch == 'blackhole' }}
       scheduled: ${{ github.event_name == 'schedule' }}
+      extra-tag: ${{ inputs.extra-tag }}
