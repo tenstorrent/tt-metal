@@ -121,6 +121,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
     bool mirror_kernel) {
     TT_ASSERT(
         weights_format == "IOHW",
@@ -148,7 +149,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
         output_dtype,
         conv_config_,
         compute_config_,
-        std::nullopt);
+        dram_slice_config_);
 }
 
 ttnn::Tensor prepare_conv_transpose2d_bias(
@@ -169,7 +170,8 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
     DataType input_dtype,
     const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_) {
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
     return prepare_conv_bias(
         bias_tensor,
         input_memory_config,
@@ -188,7 +190,8 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
         input_dtype,
         output_dtype,
         conv_config_,
-        compute_config_);
+        compute_config_,
+        dram_slice_config_);
 }
 
 }  // namespace conv_transpose2d
