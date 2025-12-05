@@ -35,7 +35,7 @@ ALWI void recip_tile_init() {
  * | vector_mode | Specifies the vector mode for computation (e.g., Row, Column). (default: VectorMode::RC) | int      | Subject to specific hardware/kernel limits          | False    |
  */
 // clang-format on
-template <bool legacy_compat = false>
+template <bool legacy_compat = true>
 ALWI void recip_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC) {
     MATH((llk_math_eltwise_unary_sfpu_reciprocal<APPROX, DST_ACCUM_MODE, legacy_compat>(idst, vector_mode)));
 }
