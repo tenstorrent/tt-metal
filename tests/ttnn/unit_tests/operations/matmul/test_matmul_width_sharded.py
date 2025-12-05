@@ -9,8 +9,14 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
-@pytest.mark.parametrize("num_iterations", [10])
+# in0_block_w=8,  # K/(num_cores*32*4) = 4096/(8*32*4) = 4, but docs show 2
+# per_core_M=1,
+# per_core_N=7,
+@pytest.mark.parametrize("num_iterations", [3])
 @pytest.mark.parametrize("packer_l1_acc", [False, True])
+@pytest.mark.parametrize("in0_block_w", [1, 2, 4, 8, 16, 32])
+@pytest.mark.parametrize("per_core_M", [1, 2, 4, 8, 16, 32])
+@pytest.mark.parametrize("per_core_N", [1, 2, 4, 8, 16, 32])
 @pytest.mark.parametrize(
     "m, k, n",
     [
@@ -45,6 +51,9 @@ def test_matmul_width_sharded_dram(
     math_fidelity,
     num_iterations,
     packer_l1_acc,
+    in0_block_w,
+    per_core_M,
+    per_core_N,
 ):
     """Test matmul with WIDTH_SHARDED layout matching LI_FF1 configuration"""
 
@@ -69,9 +78,9 @@ def test_matmul_width_sharded_dram(
     # Actually in0_block_w is the inner dimension block size per core = K_tiles_per_core
     # For DRAM sharded, in0_block_w should be divided by 4 (bfloat8 factor)
     pc = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-        in0_block_w=8,  # K/(num_cores*32*4) = 4096/(8*32*4) = 4, but docs show 2
-        per_core_M=1,
-        per_core_N=7,
+        in0_block_w=in0_block_w,  # K/(num_cores*32*4) = 4096/(8*32*4) = 4, but docs show 2
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
         fused_activation=None,
     )
 
