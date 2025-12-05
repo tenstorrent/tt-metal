@@ -12,7 +12,7 @@ enum class ApiVariant : uint32_t {
     Basic = 0,
     WithState = 1,
     SetState = 2,
-    RouteBasic = 3,
-    RouteWithState = 4,
-    RouteSetState = 5
+    ConnMgrBasic = 3,
+    ConnMgrWithState = 4,
+    ConnMgrSetState = 5
 };

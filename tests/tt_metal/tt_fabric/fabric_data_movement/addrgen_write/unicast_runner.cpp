@@ -147,25 +147,25 @@ void run_unicast_write_test(HelpersFixture* fixture, const AddrgenTestParams& p)
     Dist::MeshCoordinate src_coord = coord_of_phys(src_phys);
     Dist::MeshCoordinate dst_coord = coord_of_phys(dst_phys);
 
-    // Check if this is a route variant (needed for second destination setup)
-    const bool is_route_variant_early =
-        (p.api_variant == AddrgenApiVariant::UnicastWriteRoute ||
-         p.api_variant == AddrgenApiVariant::UnicastWriteWithStateRoute ||
-         p.api_variant == AddrgenApiVariant::UnicastWriteSetStateRoute ||
-         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteRoute ||
-         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteWithStateRoute ||
-         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteSetStateRoute ||
-         p.api_variant == AddrgenApiVariant::ScatterWriteRoute ||
-         p.api_variant == AddrgenApiVariant::ScatterWriteWithStateRoute ||
-         p.api_variant == AddrgenApiVariant::ScatterWriteSetStateRoute);
+    // Check if this is a connection manager variant (needed for second destination setup)
+    const bool is_conn_mgr_variant_early =
+        (p.api_variant == AddrgenApiVariant::UnicastWriteConnMgr ||
+         p.api_variant == AddrgenApiVariant::UnicastWriteWithStateConnMgr ||
+         p.api_variant == AddrgenApiVariant::UnicastWriteSetStateConnMgr ||
+         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteConnMgr ||
+         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteWithStateConnMgr ||
+         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteSetStateConnMgr ||
+         p.api_variant == AddrgenApiVariant::ScatterWriteConnMgr ||
+         p.api_variant == AddrgenApiVariant::ScatterWriteWithStateConnMgr ||
+         p.api_variant == AddrgenApiVariant::ScatterWriteSetStateConnMgr);
 
-    // For route variants: set up second destination chip
+    // For connection manager variants: set up second destination chip
     tt::tt_fabric::FabricNodeId dst2{tt::tt_fabric::MeshId{p.mesh_id}, p.dst2_chip};
     ChipId dst2_phys = 0;
     tt::tt_metal::IDevice* dst2_dev = nullptr;
     Dist::MeshCoordinate dst2_coord{0, 0};
     tt::tt_metal::CoreCoord rx2_xy = rx_xy;
-    if (is_route_variant_early) {
+    if (is_conn_mgr_variant_early) {
         dst2_phys = cp.get_physical_chip_id_from_fabric_node_id(dst2);
         dst2_dev = tt::tt_metal::detail::GetActiveDevice(dst2_phys);
         if (dst2_dev) {
@@ -192,8 +192,8 @@ void run_unicast_write_test(HelpersFixture* fixture, const AddrgenTestParams& p)
     // Initialize shards on specific src/dst devices (pass CQ, use vectors)
     Dist::WriteShard(mcq, src_buf, tx, src_coord, /*blocking=*/true);
     Dist::WriteShard(mcq, dst_buf, zeros, dst_coord, /*blocking=*/true);
-    // For route variants: initialize second destination buffer
-    if (is_route_variant_early && dst2_dev) {
+    // For connection manager variants: initialize second destination buffer
+    if (is_conn_mgr_variant_early && dst2_dev) {
         Dist::WriteShard(mcq, dst_buf, zeros, dst2_coord, /*blocking=*/true);
     }
 
@@ -246,9 +246,9 @@ Notes:
         (p.api_variant == AddrgenApiVariant::FusedAtomicIncWrite ||
          p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteWithState ||
          p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteSetState ||
-         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteRoute ||
-         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteWithStateRoute ||
-         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteSetStateRoute);
+         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteConnMgr ||
+         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteWithStateConnMgr ||
+         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteSetStateConnMgr);
 
     const std::string KDIR = "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/";
 
@@ -267,23 +267,23 @@ Notes:
             case AddrgenApiVariant::ScatterWrite: return {OperationType::Scatter, ApiVariant::Basic};
             case AddrgenApiVariant::ScatterWriteWithState: return {OperationType::Scatter, ApiVariant::WithState};
             case AddrgenApiVariant::ScatterWriteSetState: return {OperationType::Scatter, ApiVariant::SetState};
-            // Route variants
-            case AddrgenApiVariant::UnicastWriteRoute: return {OperationType::BasicWrite, ApiVariant::RouteBasic};
-            case AddrgenApiVariant::UnicastWriteWithStateRoute:
-                return {OperationType::BasicWrite, ApiVariant::RouteWithState};
-            case AddrgenApiVariant::UnicastWriteSetStateRoute:
-                return {OperationType::BasicWrite, ApiVariant::RouteSetState};
-            case AddrgenApiVariant::FusedAtomicIncWriteRoute:
-                return {OperationType::FusedAtomicInc, ApiVariant::RouteBasic};
-            case AddrgenApiVariant::FusedAtomicIncWriteWithStateRoute:
-                return {OperationType::FusedAtomicInc, ApiVariant::RouteWithState};
-            case AddrgenApiVariant::FusedAtomicIncWriteSetStateRoute:
-                return {OperationType::FusedAtomicInc, ApiVariant::RouteSetState};
-            case AddrgenApiVariant::ScatterWriteRoute: return {OperationType::Scatter, ApiVariant::RouteBasic};
-            case AddrgenApiVariant::ScatterWriteWithStateRoute:
-                return {OperationType::Scatter, ApiVariant::RouteWithState};
-            case AddrgenApiVariant::ScatterWriteSetStateRoute:
-                return {OperationType::Scatter, ApiVariant::RouteSetState};
+            // Connection manager variants
+            case AddrgenApiVariant::UnicastWriteConnMgr: return {OperationType::BasicWrite, ApiVariant::ConnMgrBasic};
+            case AddrgenApiVariant::UnicastWriteWithStateConnMgr:
+                return {OperationType::BasicWrite, ApiVariant::ConnMgrWithState};
+            case AddrgenApiVariant::UnicastWriteSetStateConnMgr:
+                return {OperationType::BasicWrite, ApiVariant::ConnMgrSetState};
+            case AddrgenApiVariant::FusedAtomicIncWriteConnMgr:
+                return {OperationType::FusedAtomicInc, ApiVariant::ConnMgrBasic};
+            case AddrgenApiVariant::FusedAtomicIncWriteWithStateConnMgr:
+                return {OperationType::FusedAtomicInc, ApiVariant::ConnMgrWithState};
+            case AddrgenApiVariant::FusedAtomicIncWriteSetStateConnMgr:
+                return {OperationType::FusedAtomicInc, ApiVariant::ConnMgrSetState};
+            case AddrgenApiVariant::ScatterWriteConnMgr: return {OperationType::Scatter, ApiVariant::ConnMgrBasic};
+            case AddrgenApiVariant::ScatterWriteWithStateConnMgr:
+                return {OperationType::Scatter, ApiVariant::ConnMgrWithState};
+            case AddrgenApiVariant::ScatterWriteSetStateConnMgr:
+                return {OperationType::Scatter, ApiVariant::ConnMgrSetState};
             default: TT_FATAL(false, "Unknown API variant"); return {OperationType::BasicWrite, ApiVariant::Basic};
         }
     };
@@ -319,9 +319,9 @@ Notes:
     const uint32_t sem_wait_value = is_fused_atomic_inc ? NUM_PAGES : 1u;
     tt::tt_metal::SetRuntimeArgs(receiver_prog, rx_wait_k, receiver_core, {gsem->address(), sem_wait_value});
 
-    // For route variants: set up second receiver program
+    // For connection manager variants: set up second receiver program
     tt::tt_metal::Program receiver_prog2 = tt::tt_metal::CreateProgram();
-    if (is_route_variant_early && dst2_dev) {
+    if (is_conn_mgr_variant_early && dst2_dev) {
         auto rx_wait_k2 = tt::tt_metal::CreateKernel(
             receiver_prog2,
             KDIR + receiver_kernel_name,
@@ -362,7 +362,7 @@ Notes:
             .defines = defines});
     tt::tt_metal::SetRuntimeArgs(sender_prog, reader_k, p.sender_core, {(uint32_t)src_buf->address()});
 
-    // Writer kernel (CB->Fabric->dst + final sem INC) - select kernel based on route variant
+    // Writer kernel (CB->Fabric->dst + final sem INC) - select kernel based on connection manager variant
     std::vector<uint32_t> writer_cta;
     tt::tt_metal::TensorAccessorArgs(*dst_buf).append_to(writer_cta);
     writer_cta.push_back(static_cast<uint32_t>(operation_type));  // OPERATION_TYPE
@@ -372,14 +372,14 @@ Notes:
     writer_cta.push_back(dst_aligned_page_size);  // Aligned page size (dest buffer addressing)
     writer_cta.push_back(src_aligned_page_size);  // Source aligned page size (CB stride for scatter)
 
-    // Check if this is a route variant to select the appropriate kernel
-    const bool is_route_variant =
-        (api_variant == ApiVariant::RouteBasic || api_variant == ApiVariant::RouteWithState ||
-         api_variant == ApiVariant::RouteSetState);
+    // Check if this is a connection manager variant to select the appropriate kernel
+    const bool is_conn_mgr_variant =
+        (api_variant == ApiVariant::ConnMgrBasic || api_variant == ApiVariant::ConnMgrWithState ||
+         api_variant == ApiVariant::ConnMgrSetState);
 
-    // Select kernel based on route variant
+    // Select kernel based on connection manager variant
     const std::string writer_kernel_name =
-        is_route_variant ? "unicast_tx_writer_addrgen_route.cpp" : "unicast_tx_writer_addrgen.cpp";
+        is_conn_mgr_variant ? "unicast_tx_writer_addrgen_conn_mgr.cpp" : "unicast_tx_writer_addrgen.cpp";
 
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,
@@ -400,8 +400,8 @@ Notes:
         (uint32_t)gsem->address()      // 5: receiver L1 semaphore addr
     };
 
-    if (is_route_variant) {
-        // Route variant: use routing plane connection manager
+    if (is_conn_mgr_variant) {
+        // Connection manager variant: use routing plane connection manager
         // Add num_connections (2 for dual destination test, fallback to 1 if dst2_dev is null)
         uint32_t num_connections = (dst2_dev != nullptr) ? 2u : 1u;
         writer_rt.push_back(num_connections);
@@ -440,8 +440,8 @@ Notes:
     Dist::MeshWorkload receiver_workload;
     Dist::MeshWorkload sender_workload;
     receiver_workload.add_program(Dist::MeshCoordinateRange(dst_coord), std::move(receiver_prog));
-    // For route variants: add second receiver to workload
-    if (is_route_variant_early && dst2_dev) {
+    // For connection manager variants: add second receiver to workload
+    if (is_conn_mgr_variant_early && dst2_dev) {
         receiver_workload.add_program(Dist::MeshCoordinateRange(dst2_coord), std::move(receiver_prog2));
     }
     sender_workload.add_program(Dist::MeshCoordinateRange(src_coord), std::move(sender_prog));
@@ -455,8 +455,8 @@ Notes:
     Dist::ReadShard(mcq, rx, dst_buf, dst_coord, /*blocking=*/true);
     verify_payload_words(rx, tx);
 
-    // For route variants: verify second destination
-    if (is_route_variant_early && dst2_dev) {
+    // For connection manager variants: verify second destination
+    if (is_conn_mgr_variant_early && dst2_dev) {
         std::vector<uint32_t> rx2(n_words, 0u);
         Dist::ReadShard(mcq, rx2, dst_buf, dst2_coord, /*blocking=*/true);
         verify_payload_words(rx2, tx);

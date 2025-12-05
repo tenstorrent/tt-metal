@@ -50,18 +50,18 @@ TEST_P(AddrgenComprehensiveTest, Write) {
          api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWrite ||
          api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteWithState ||
          api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteSetState ||
-         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteRoute ||
-         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteWithStateRoute ||
-         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteSetStateRoute ||
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteConnMgr ||
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteWithStateConnMgr ||
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteSetStateConnMgr ||
          api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWrite ||
          api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteWithState ||
          api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteSetState ||
-         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteRoute ||
-         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteWithStateRoute ||
-         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteSetStateRoute ||
-         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteRoute ||
-         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteWithStateRoute ||
-         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteSetStateRoute);
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteConnMgr ||
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteWithStateConnMgr ||
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteSetStateConnMgr ||
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteConnMgr ||
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteWithStateConnMgr ||
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteSetStateConnMgr);
 
     // Calculate tensor_bytes based on page_size (8 pages total)
     uint32_t num_pages = 8;
@@ -107,47 +107,51 @@ static std::string GetVariantName(tt::tt_fabric::test::AddrgenApiVariant variant
             return "MulticastScatterWriteWithState";
         case tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteSetState:
             return "MulticastScatterWriteSetState";
-        case tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteRoute: return "MulticastScatterWriteRoute";
-        case tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteWithStateRoute:
-            return "MulticastScatterWriteWithStateRoute";
-        case tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteSetStateRoute:
-            return "MulticastScatterWriteSetStateRoute";
+        case tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteConnMgr:
+            return "MulticastScatterWriteConnMgr";
+        case tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteWithStateConnMgr:
+            return "MulticastScatterWriteWithStateConnMgr";
+        case tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteSetStateConnMgr:
+            return "MulticastScatterWriteSetStateConnMgr";
         case tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWrite:
             return "MulticastFusedAtomicIncWrite";
         case tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteWithState:
             return "MulticastFusedAtomicIncWriteWithState";
         case tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteSetState:
             return "MulticastFusedAtomicIncWriteSetState";
-        case tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteRoute:
-            return "MulticastFusedAtomicIncWriteRoute";
-        case tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteWithStateRoute:
-            return "MulticastFusedAtomicIncWriteWithStateRoute";
-        case tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteSetStateRoute:
-            return "MulticastFusedAtomicIncWriteSetStateRoute";
-        case tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteRoute: return "MulticastWriteRoute";
-        case tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteWithStateRoute:
-            return "MulticastWriteWithStateRoute";
-        case tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteSetStateRoute: return "MulticastWriteSetStateRoute";
+        case tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteConnMgr:
+            return "MulticastFusedAtomicIncWriteConnMgr";
+        case tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteWithStateConnMgr:
+            return "MulticastFusedAtomicIncWriteWithStateConnMgr";
+        case tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteSetStateConnMgr:
+            return "MulticastFusedAtomicIncWriteSetStateConnMgr";
+        case tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteConnMgr: return "MulticastWriteConnMgr";
+        case tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteWithStateConnMgr:
+            return "MulticastWriteWithStateConnMgr";
+        case tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteSetStateConnMgr:
+            return "MulticastWriteSetStateConnMgr";
         case tt::tt_fabric::test::AddrgenApiVariant::ScatterWrite: return "ScatterWrite";
         case tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteWithState: return "ScatterWriteWithState";
         case tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteSetState: return "ScatterWriteSetState";
-        case tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteRoute: return "UnicastWriteRoute";
-        case tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteWithStateRoute: return "UnicastWriteWithStateRoute";
-        case tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteSetStateRoute: return "UnicastWriteSetStateRoute";
-        case tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteRoute: return "FusedAtomicIncWriteRoute";
-        case tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteWithStateRoute:
-            return "FusedAtomicIncWriteWithStateRoute";
-        case tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteSetStateRoute:
-            return "FusedAtomicIncWriteSetStateRoute";
-        case tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteRoute: return "ScatterWriteRoute";
-        case tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteWithStateRoute: return "ScatterWriteWithStateRoute";
-        case tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteSetStateRoute: return "ScatterWriteSetStateRoute";
+        case tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteConnMgr: return "UnicastWriteConnMgr";
+        case tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteWithStateConnMgr:
+            return "UnicastWriteWithStateConnMgr";
+        case tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteSetStateConnMgr: return "UnicastWriteSetStateConnMgr";
+        case tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteConnMgr: return "FusedAtomicIncWriteConnMgr";
+        case tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteWithStateConnMgr:
+            return "FusedAtomicIncWriteWithStateConnMgr";
+        case tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteSetStateConnMgr:
+            return "FusedAtomicIncWriteSetStateConnMgr";
+        case tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteConnMgr: return "ScatterWriteConnMgr";
+        case tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteWithStateConnMgr:
+            return "ScatterWriteWithStateConnMgr";
+        case tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteSetStateConnMgr: return "ScatterWriteSetStateConnMgr";
         default: return "UnknownVariant";
     }
 }
 
-// Instantiate comprehensive test suite with all 27 variants (18 basic + 9 route) × 6 page sizes × 2 destinations = 324
-// test cases
+// Instantiate comprehensive test suite with all 27 variants (18 basic + 9 conn_mgr) × 6 page sizes × 2 destinations =
+// 324 test cases
 INSTANTIATE_TEST_SUITE_P(
     AllVariantsAndSizes,
     AddrgenComprehensiveTest,
@@ -165,30 +169,30 @@ INSTANTIATE_TEST_SUITE_P(
             tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWrite,
             tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteWithState,
             tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteSetState,
-            tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteRoute,
-            tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteWithStateRoute,
-            tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteSetStateRoute,
+            tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteConnMgr,
+            tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteWithStateConnMgr,
+            tt::tt_fabric::test::AddrgenApiVariant::MulticastScatterWriteSetStateConnMgr,
             tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWrite,
             tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteWithState,
             tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteSetState,
-            tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteRoute,
-            tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteWithStateRoute,
-            tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteSetStateRoute,
-            tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteRoute,
-            tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteWithStateRoute,
-            tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteSetStateRoute,
+            tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteConnMgr,
+            tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteWithStateConnMgr,
+            tt::tt_fabric::test::AddrgenApiVariant::MulticastFusedAtomicIncWriteSetStateConnMgr,
+            tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteConnMgr,
+            tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteWithStateConnMgr,
+            tt::tt_fabric::test::AddrgenApiVariant::MulticastWriteSetStateConnMgr,
             tt::tt_fabric::test::AddrgenApiVariant::ScatterWrite,
             tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteWithState,
             tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteSetState,
-            tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteRoute,
-            tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteWithStateRoute,
-            tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteSetStateRoute,
-            tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteRoute,
-            tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteWithStateRoute,
-            tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteSetStateRoute,
-            tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteRoute,
-            tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteWithStateRoute,
-            tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteSetStateRoute),
+            tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteConnMgr,
+            tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteWithStateConnMgr,
+            tt::tt_fabric::test::AddrgenApiVariant::UnicastWriteSetStateConnMgr,
+            tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteConnMgr,
+            tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteWithStateConnMgr,
+            tt::tt_fabric::test::AddrgenApiVariant::FusedAtomicIncWriteSetStateConnMgr,
+            tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteConnMgr,
+            tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteWithStateConnMgr,
+            tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteSetStateConnMgr),
         ::testing::Values(100, 112, 2048, 10000, 10100, 99999),  // Page sizes: Aligned and unaligned
         ::testing::Bool()                                        // Destination: false=L1, true=DRAM
         ),

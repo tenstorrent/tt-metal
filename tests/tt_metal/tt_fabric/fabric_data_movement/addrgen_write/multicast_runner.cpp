@@ -193,22 +193,23 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
                 return {OperationType::Scatter, ApiVariant::WithState};
             case AddrgenApiVariant::MulticastScatterWriteSetState:
                 return {OperationType::Scatter, ApiVariant::SetState};
-            case AddrgenApiVariant::MulticastWriteRoute: return {OperationType::BasicWrite, ApiVariant::RouteBasic};
-            case AddrgenApiVariant::MulticastWriteWithStateRoute:
-                return {OperationType::BasicWrite, ApiVariant::RouteWithState};
-            case AddrgenApiVariant::MulticastWriteSetStateRoute:
-                return {OperationType::BasicWrite, ApiVariant::RouteSetState};
-            case AddrgenApiVariant::MulticastScatterWriteRoute: return {OperationType::Scatter, ApiVariant::RouteBasic};
-            case AddrgenApiVariant::MulticastScatterWriteWithStateRoute:
-                return {OperationType::Scatter, ApiVariant::RouteWithState};
-            case AddrgenApiVariant::MulticastScatterWriteSetStateRoute:
-                return {OperationType::Scatter, ApiVariant::RouteSetState};
-            case AddrgenApiVariant::MulticastFusedAtomicIncWriteRoute:
-                return {OperationType::FusedAtomicInc, ApiVariant::RouteBasic};
-            case AddrgenApiVariant::MulticastFusedAtomicIncWriteWithStateRoute:
-                return {OperationType::FusedAtomicInc, ApiVariant::RouteWithState};
-            case AddrgenApiVariant::MulticastFusedAtomicIncWriteSetStateRoute:
-                return {OperationType::FusedAtomicInc, ApiVariant::RouteSetState};
+            case AddrgenApiVariant::MulticastWriteConnMgr: return {OperationType::BasicWrite, ApiVariant::ConnMgrBasic};
+            case AddrgenApiVariant::MulticastWriteWithStateConnMgr:
+                return {OperationType::BasicWrite, ApiVariant::ConnMgrWithState};
+            case AddrgenApiVariant::MulticastWriteSetStateConnMgr:
+                return {OperationType::BasicWrite, ApiVariant::ConnMgrSetState};
+            case AddrgenApiVariant::MulticastScatterWriteConnMgr:
+                return {OperationType::Scatter, ApiVariant::ConnMgrBasic};
+            case AddrgenApiVariant::MulticastScatterWriteWithStateConnMgr:
+                return {OperationType::Scatter, ApiVariant::ConnMgrWithState};
+            case AddrgenApiVariant::MulticastScatterWriteSetStateConnMgr:
+                return {OperationType::Scatter, ApiVariant::ConnMgrSetState};
+            case AddrgenApiVariant::MulticastFusedAtomicIncWriteConnMgr:
+                return {OperationType::FusedAtomicInc, ApiVariant::ConnMgrBasic};
+            case AddrgenApiVariant::MulticastFusedAtomicIncWriteWithStateConnMgr:
+                return {OperationType::FusedAtomicInc, ApiVariant::ConnMgrWithState};
+            case AddrgenApiVariant::MulticastFusedAtomicIncWriteSetStateConnMgr:
+                return {OperationType::FusedAtomicInc, ApiVariant::ConnMgrSetState};
             default: TT_FATAL(false, "Unknown API variant"); return {OperationType::BasicWrite, ApiVariant::Basic};
         }
     };
@@ -216,9 +217,9 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     auto [operation_type, api_variant] = get_operation_and_api_variant(p.api_variant);
 
     const bool is_fused_atomic_inc = (operation_type == OperationType::FusedAtomicInc);
-    const bool is_route_variant =
-        (api_variant == ApiVariant::RouteBasic || api_variant == ApiVariant::RouteWithState ||
-         api_variant == ApiVariant::RouteSetState);
+    const bool is_conn_mgr_variant =
+        (api_variant == ApiVariant::ConnMgrBasic || api_variant == ApiVariant::ConnMgrWithState ||
+         api_variant == ApiVariant::ConnMgrSetState);
 
     // Move NUM_PAGES calculation before receiver setup
     const uint32_t NUM_PAGES = (p.tensor_bytes + p.page_size - 1) / p.page_size;
@@ -287,14 +288,15 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
             .defines = defines});
     tt::tt_metal::SetRuntimeArgs(sender_prog, reader_k, p.sender_core, {(uint32_t)src_buf->address()});
 
-    // Writer kernel (CB->Fabric->dst + final sem INC) - select kernel based on route variant and operation type
+    // Writer kernel (CB->Fabric->dst + final sem INC) - select kernel based on connection manager variant and operation
+    // type
     std::vector<uint32_t> writer_cta;
     tt::tt_metal::TensorAccessorArgs(*dst_buf).append_to(writer_cta);
 
-    // Select kernel based on route variant and operation type
+    // Select kernel based on connection manager variant and operation type
     std::string writer_kernel_name;
-    if (is_route_variant) {
-        // Route variants: split kernels by operation type (OPERATION_TYPE removed from CT args)
+    if (is_conn_mgr_variant) {
+        // Connection manager variants: split kernels by operation type (OPERATION_TYPE removed from CT args)
         writer_cta.push_back(static_cast<uint32_t>(api_variant));  // API_VARIANT
         writer_cta.push_back(NUM_PAGES);                           // TOTAL_PAGES
         writer_cta.push_back(p.page_size);                         // Raw page size (actual data size to transfer)
@@ -302,16 +304,16 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
         writer_cta.push_back(src_aligned_page_size);               // Source aligned page size (CB stride for scatter)
 
         if (operation_type == OperationType::BasicWrite) {
-            writer_kernel_name = "multicast_tx_writer_addrgen_route_basic.cpp";
+            writer_kernel_name = "multicast_tx_writer_addrgen_conn_mgr_basic.cpp";
         } else if (operation_type == OperationType::Scatter) {
-            writer_kernel_name = "multicast_tx_writer_addrgen_route_scatter.cpp";
+            writer_kernel_name = "multicast_tx_writer_addrgen_conn_mgr_scatter.cpp";
         } else if (operation_type == OperationType::FusedAtomicInc) {
-            writer_kernel_name = "multicast_tx_writer_addrgen_route_fused.cpp";
+            writer_kernel_name = "multicast_tx_writer_addrgen_conn_mgr_fused.cpp";
         } else {
-            TT_FATAL(false, "Unknown operation type for route variant");
+            TT_FATAL(false, "Unknown operation type for connection manager variant");
         }
     } else {
-        // Non-route variants: unified kernel (still needs OPERATION_TYPE)
+        // Non-connection manager variants: unified kernel (still needs OPERATION_TYPE)
         writer_cta.push_back(static_cast<uint32_t>(operation_type));  // OPERATION_TYPE
         writer_cta.push_back(static_cast<uint32_t>(api_variant));     // API_VARIANT
         writer_cta.push_back(NUM_PAGES);                              // TOTAL_PAGES
@@ -386,16 +388,16 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
         rep_s[0] = max_r;
     }
 
-    // Direction bitmask (same for both route and non-route variants)
+    // Direction bitmask (same for both connection manager and non-connection manager variants)
     const uint32_t dir_mask = (w_hops ? 1u : 0u) | (e_hops ? 2u : 0u) | (n_hops ? 4u : 0u) | (s_hops ? 8u : 0u);
     writer_rt.push_back(dir_mask);
 
-    if (is_route_variant) {
-        // Route variant: use routing plane connection manager for each direction
-        // Same structure as non-route but using route-based APIs
+    if (is_conn_mgr_variant) {
+        // Connection manager variant: use routing plane connection manager for each direction
+        // Same structure as non-connection manager but using connection manager-based APIs
 
         // Build destination nodes and connection managers for each active direction
-        // W, E, N, S order (matching non-route variant)
+        // W, E, N, S order (matching non-connection manager variant)
         if (w_hops) {
             std::vector<tt::tt_fabric::FabricNodeId> dst_nodes_w = {coord_to_fabric_id(rep_w)};
             tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
@@ -449,13 +451,13 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
                 CoreType::WORKER);
         }
 
-        // Append hops (same as non-route)
+        // Append hops (same as non-connection manager)
         writer_rt.push_back((uint32_t)e_hops);
         writer_rt.push_back((uint32_t)w_hops);
         writer_rt.push_back((uint32_t)n_hops);
         writer_rt.push_back((uint32_t)s_hops);
     } else {
-        // Non-route variant: per-direction fabric connections
+        // Non-connection manager variant: per-direction fabric connections
         auto pick_link = [&](Dist::MeshCoordinate mc, uint32_t& out_link_idx) {
             auto dst_fn = coord_to_fabric_id(std::move(mc));
             auto links = tt::tt_fabric::get_forwarding_link_indices(src_fn, dst_fn);

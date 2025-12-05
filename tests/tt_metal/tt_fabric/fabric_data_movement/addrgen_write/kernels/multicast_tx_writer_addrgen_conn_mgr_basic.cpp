@@ -20,9 +20,9 @@ using namespace tt::tt_fabric;
 using namespace tt::tt_fabric::mesh::experimental;
 using namespace tt::tt_fabric::common::experimental;
 
-// Helper function to handle route variant directional fanout logic for BasicWrite
+// Helper function to handle connection manager variant directional fanout logic for BasicWrite
 template <ApiVariant api_variant, typename DstAccT>
-FORCE_INLINE void send_route_directional_fanout_basic(
+FORCE_INLINE void send_conn_mgr_directional_fanout_basic(
     uint16_t hops,
     tt::tt_fabric::RoutingPlaneConnectionManager& cm,
     uint8_t route_id,
@@ -34,16 +34,16 @@ FORCE_INLINE void send_route_directional_fanout_basic(
         return;
     }
 
-    if constexpr (api_variant == ApiVariant::RouteBasic) {
+    if constexpr (api_variant == ApiVariant::ConnMgrBasic) {
         fabric_multicast_noc_unicast_write(cm, route_id, ranges, src_l1_addr, dst_acc, i, 0);
     } else {
         fabric_multicast_noc_unicast_write_with_state(cm, route_id, src_l1_addr, dst_acc, i, 0);
     }
 }
 
-// Helper function for RouteSetState pre-loop setup for BasicWrite
+// Helper function for ConnMgrSetState pre-loop setup for BasicWrite
 template <typename DstAccT>
-FORCE_INLINE void setup_route_set_state_for_direction_basic(
+FORCE_INLINE void setup_conn_mgr_set_state_for_direction_basic(
     bool has_hops,
     tt::tt_fabric::RoutingPlaneConnectionManager& cm,
     uint8_t route_id,
@@ -55,8 +55,8 @@ FORCE_INLINE void setup_route_set_state_for_direction_basic(
     fabric_multicast_noc_unicast_write_set_state(cm, route_id, ranges, dst_acc, 0, 0);
 }
 
-// Helper function for RouteWithState pre-loop setup for BasicWrite
-FORCE_INLINE void setup_route_with_state_for_direction_basic(
+// Helper function for ConnMgrWithState pre-loop setup for BasicWrite
+FORCE_INLINE void setup_conn_mgr_with_state_for_direction_basic(
     bool has_hops, tt::tt_fabric::RoutingPlaneConnectionManager& cm, uint8_t route_id, const MeshMcastRange& ranges) {
     if (!has_hops) {
         return;
@@ -72,12 +72,12 @@ FORCE_INLINE void setup_route_with_state_for_direction_basic(
 }
 
 //
-// Multicast writer (fabric sender) kernel for route variants - BasicWrite only.
+// Multicast writer (fabric sender) kernel for connection manager variants - BasicWrite only.
 // Sends pages from CB c_0 to multiple destination devices using RoutingPlaneConnectionManager.
-//   - API_VARIANT: RouteBasic, RouteWithState, or RouteSetState
+//   - API_VARIANT: ConnMgrBasic, ConnMgrWithState, or ConnMgrSetState
 //
 // CT args:
-//   0: API_VARIANT (ApiVariant enum: RouteBasic, RouteWithState, RouteSetState)
+//   0: API_VARIANT (ApiVariant enum: ConnMgrBasic, ConnMgrWithState, ConnMgrSetState)
 //   1: TOTAL_PAGES
 //   2: PAGE_SIZE (actual data size to transfer)
 //   3: ALIGNED_PAGE_SIZE (destination buffer spacing for address calculation)
@@ -154,9 +154,9 @@ void kernel_main() {
     // Use ALIGNED_PAGE_SIZE (dst) for address calculation
     const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/ALIGNED_PAGE_SIZE);
 
-    // Pre-loop setup for RouteWithState and RouteSetState variants
-    if constexpr (api_variant == ApiVariant::RouteWithState) {
-        // Route variant WithState: set route and noc_send_type for each direction's headers
+    // Pre-loop setup for ConnMgrWithState and ConnMgrSetState variants
+    if constexpr (api_variant == ApiVariant::ConnMgrWithState) {
+        // Connection manager variant WithState: set route and noc_send_type for each direction's headers
         for (uint32_t dir = 0; dir < NUM_DIRECTIONS; ++dir) {
             MeshMcastRange range_init;
             if (dir == DIR_W) {
@@ -176,11 +176,11 @@ void kernel_main() {
                     0,
                     static_cast<uint8_t>(hops[DIR_S])};
             }
-            setup_route_with_state_for_direction_basic(has_dir[dir], cm[dir], route_id[dir], range_init);
+            setup_conn_mgr_with_state_for_direction_basic(has_dir[dir], cm[dir], route_id[dir], range_init);
         }
         noc_async_writes_flushed();
-    } else if constexpr (api_variant == ApiVariant::RouteSetState) {
-        // Route variant SetState: use set_state addrgen route variant for each direction
+    } else if constexpr (api_variant == ApiVariant::ConnMgrSetState) {
+        // Connection manager variant SetState: use set_state addrgen connection manager variant for each direction
         for (uint32_t dir = 0; dir < NUM_DIRECTIONS; ++dir) {
             MeshMcastRange range_init;
             if (dir == DIR_W) {
@@ -200,7 +200,7 @@ void kernel_main() {
                     0,
                     static_cast<uint8_t>(hops[DIR_S])};
             }
-            setup_route_set_state_for_direction_basic(has_dir[dir], cm[dir], route_id[dir], &range_init, dst_acc);
+            setup_conn_mgr_set_state_for_direction_basic(has_dir[dir], cm[dir], route_id[dir], &range_init, dst_acc);
         }
     }
 
@@ -234,9 +234,9 @@ void kernel_main() {
         cb_wait_front(CB_ID, cb_wait_count);
         const uint32_t src_l1_addr = get_read_ptr(CB_ID);
 
-        // Directional fanout using route-based APIs
+        // Directional fanout using connection manager-based APIs
         for (uint32_t dir = 0; dir < NUM_DIRECTIONS; ++dir) {
-            send_route_directional_fanout_basic<api_variant>(
+            send_conn_mgr_directional_fanout_basic<api_variant>(
                 hops[dir], cm[dir], route_id[dir], &ranges[dir], src_l1_addr, dst_acc, i);
         }
 
@@ -249,7 +249,7 @@ void kernel_main() {
     ASSERT(sem_l1_addr != 0);
     const uint64_t sem_noc_final = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, /*NOC_INDEX=*/0);
 
-    // Send completion per active branch using route-based atomic inc
+    // Send completion per active branch using connection manager-based atomic inc
     for (uint32_t dir = 0; dir < NUM_DIRECTIONS; ++dir) {
         if (hops[dir] > 0) {
             fabric_multicast_noc_unicast_atomic_inc(

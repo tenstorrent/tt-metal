@@ -137,7 +137,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
 
 // clang-format off
 /**
- * Unicast write (stateful, route variant): updates only fields selected by UpdateMask for all headers in the route.
+ * Unicast write (stateful, connection manager variant): updates only fields selected by UpdateMask for all headers in the route.
  *
  * Return value: None
  *
@@ -301,7 +301,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_with_state(
 
 // clang-format off
 /**
- * Unicast atomic increment (stateful, route variant): updates only fields selected by UpdateMask for all headers.
+ * Unicast atomic increment (stateful, connection manager variant): updates only fields selected by UpdateMask for all headers.
  *
  * Return value: None
  *
@@ -487,7 +487,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
 
 // clang-format off
 /**
- * Unicast scatter write (stateful, route variant): updates only fields selected by UpdateMask for all headers.
+ * Unicast scatter write (stateful, connection manager variant): updates only fields selected by UpdateMask for all headers.
  *
  * Return value: None
  *
@@ -653,7 +653,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_with_state(
 
 // clang-format off
 /**
- * Unicast inline write (stateful, route variant): updates only fields selected by UpdateMask for all headers.
+ * Unicast inline write (stateful, connection manager variant): updates only fields selected by UpdateMask for all headers.
  *
  * Return value: None
  *
@@ -835,7 +835,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
 
 // clang-format off
 /**
- * Fused unicast write + atomic increment (stateful, route variant): updates only masked fields for all headers.
+ * Fused unicast write + atomic increment (stateful, connection manager variant): updates only masked fields for all headers.
  *
  * Return value: None
  *
@@ -959,7 +959,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
 
 // clang-format off
 /**
- * Multicast unicast write (route variant): issues writes for all headers in the route using multicast routing metadata.
+ * Multicast unicast write (connection manager variant): issues writes for all headers in the route using multicast routing metadata.
  *
  * Return value: None
  *
@@ -1029,7 +1029,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
 
 // clang-format off
 /**
- * Multicast unicast write (stateful, route variant): updates only fields selected by UpdateMask for all headers.
+ * Multicast unicast write (stateful, connection manager variant): updates only fields selected by UpdateMask for all headers.
  *
  * Return value: None
  *
@@ -1148,7 +1148,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc(
 
 // clang-format off
 /**
- * Multicast unicast atomic increment (route variant): issues atomic inc for all headers using multicast metadata.
+ * Multicast unicast atomic increment (connection manager variant): issues atomic inc for all headers using multicast metadata.
  *
  * Return value: None
  *
@@ -1206,7 +1206,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_with_state(
 
 // clang-format off
 /**
- * Multicast unicast atomic inc (stateful, route variant): updates only masked fields for all headers.
+ * Multicast unicast atomic inc (stateful, connection manager variant): updates only masked fields for all headers.
  *
  * Return value: None
  *
@@ -1329,7 +1329,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
 
 // clang-format off
 /**
- * Multicast unicast scatter write (route variant): issues writes for all headers using multicast metadata.
+ * Multicast unicast scatter write (connection manager variant): issues writes for all headers using multicast metadata.
  *
  * Return value: None
  *
@@ -1400,7 +1400,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
 
 // clang-format off
 /**
- * Multicast unicast scatter write (stateful, route variant): updates only masked fields for all headers.
+ * Multicast unicast scatter write (stateful, connection manager variant): updates only masked fields for all headers.
  *
  * Return value: None
  *
@@ -1521,7 +1521,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write(
 
 // clang-format off
 /**
- * Multicast unicast inline write (route variant): issues inline writes for all headers using multicast metadata.
+ * Multicast unicast inline write (connection manager variant): issues inline writes for all headers using multicast metadata.
  *
  * Return value: None
  *
@@ -1579,7 +1579,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_with_state(
 
 // clang-format off
 /**
- * Multicast unicast inline write (stateful, route variant): updates only masked fields for all headers.
+ * Multicast unicast inline write (stateful, connection manager variant): updates only masked fields for all headers.
  *
  * Return value: None
  *
@@ -1700,7 +1700,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
 
 // clang-format off
 /**
- * Multicast fused unicast write + atomic increment (route variant): issues fused ops for all headers.
+ * Multicast fused unicast write + atomic increment (connection manager variant): issues fused ops for all headers.
  *
  * Return value: None
  *
@@ -1771,7 +1771,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
 
 // clang-format off
 /**
- * Multicast fused unicast write + atomic increment (stateful, route variant): updates only masked fields for all headers.
+ * Multicast fused unicast write + atomic increment (stateful, connection manager variant): updates only masked fields for all headers.
  *
  * Return value: None
  *
@@ -1940,7 +1940,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
 
 // clang-format off
 /**
- * Unicast write (addrgen overload, route variant): sends payload to destination computed from address generator for all headers in the route.
+ * Unicast write (addrgen overload, connection manager variant): sends payload to destination computed from address generator for all headers in the route.
  *
  * Return value: None
  *
@@ -2075,7 +2075,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
 
 // clang-format off
 /**
- * Unicast write (stateful, addrgen overload, route variant): updates only fields selected by UpdateMask for all headers in the route, with destination computed from address generator.
+ * Unicast write (stateful, addrgen overload, connection manager variant): updates only fields selected by UpdateMask for all headers in the route, with destination computed from address generator.
  *
  * Return value: None
  *
@@ -2174,7 +2174,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
 
 // clang-format off
 /**
- * Unicast write (set-state, addrgen overload, route variant): pre-configures headers for repeated use across the route, with destination computed from address generator.
+ * Unicast write (set-state, addrgen overload, connection manager variant): pre-configures headers for repeated use across the route, with destination computed from address generator.
  *
  * Return value: None
  *
@@ -2286,7 +2286,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
 
 // clang-format off
 /**
- * Fused unicast write with atomic increment (addrgen overload, route variant): sends payload and increments semaphore for all headers in the route, with destination computed from address generator.
+ * Fused unicast write with atomic increment (addrgen overload, connection manager variant): sends payload and increments semaphore for all headers in the route, with destination computed from address generator.
  *
  * Return value: None
  *
@@ -2448,7 +2448,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
 
 // clang-format off
 /**
- * Fused unicast write with atomic increment (stateful, addrgen overload, route variant): updates only fields selected by UpdateMask for all headers in the route, with destination computed from address generator.
+ * Fused unicast write with atomic increment (stateful, addrgen overload, connection manager variant): updates only fields selected by UpdateMask for all headers in the route, with destination computed from address generator.
  *
  * Return value: None
  *
@@ -2591,7 +2591,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
 
 // clang-format off
 /**
- * Fused unicast write with atomic increment (set-state, addrgen overload, route variant): pre-configures headers for repeated use across the route, with destination computed from address generator.
+ * Fused unicast write with atomic increment (set-state, addrgen overload, connection manager variant): pre-configures headers for repeated use across the route, with destination computed from address generator.
  *
  * Return value: None
  *
@@ -2695,7 +2695,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
 
 // clang-format off
 /**
- * Unicast scatter write (addrgen overload, route variant): sends two pages to destinations computed from address generator for all headers in the route.
+ * Unicast scatter write (addrgen overload, connection manager variant): sends two pages to destinations computed from address generator for all headers in the route.
  *
  * Return value: None
  *
@@ -2742,7 +2742,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
             tt::tt_fabric::NocUnicastScatterCommandHeader{
                 {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)});
     } else {
-        // Large pages: fall back to separate unicast writes (route variant)
+        // Large pages: fall back to separate unicast writes (connection manager variant)
         fabric_unicast_noc_unicast_write(connection_manager, route_id, src_addr, addrgen, page_id0, offset0);
 
         fabric_unicast_noc_unicast_write(
@@ -2821,7 +2821,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
 
 // clang-format off
 /**
- * Unicast scatter write (stateful, addrgen overload, route variant): updates only fields selected by UpdateMask for all headers in the route, with destinations computed from address generator for two pages.
+ * Unicast scatter write (stateful, addrgen overload, connection manager variant): updates only fields selected by UpdateMask for all headers in the route, with destinations computed from address generator for two pages.
  *
  * Return value: None
  *
@@ -2872,7 +2872,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
                 {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
             page_size * 2);
     } else {
-        // Large pages: fall back to separate unicast writes (route variant)
+        // Large pages: fall back to separate unicast writes (connection manager variant)
         // Set noc_send_type to unicast write for fallback
         PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
             packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
@@ -2940,7 +2940,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
 
 // clang-format off
 /**
- * Unicast scatter write (set-state, addrgen overload, route variant): pre-configures all headers in the route for repeated use with destinations computed from address generator for two pages.
+ * Unicast scatter write (set-state, addrgen overload, connection manager variant): pre-configures all headers in the route for repeated use with destinations computed from address generator for two pages.
  *
  * Return value: None
  *
@@ -3066,7 +3066,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
 
 // clang-format off
 /**
- * Multicast unicast write (addrgen overload, route variant): sends payload to destinations computed from address generator for all headers in the route.
+ * Multicast unicast write (addrgen overload, connection manager variant): sends payload to destinations computed from address generator for all headers in the route.
  *
  * Return value: None
  *
@@ -3109,7 +3109,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
         // Ensure hardware has finished reading headers before modifying them for next packet
         noc_async_writes_flushed();
 
-        // Call basic route variant
+        // Call basic connection manager variant
         fabric_multicast_noc_unicast_write(
             connection_manager,
             route_id,
@@ -3129,7 +3129,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
     // Ensure hardware has finished reading headers before modifying them
     noc_async_writes_flushed();
 
-    // Call basic route variant (no barrier needed after last packet)
+    // Call basic connection manager variant (no barrier needed after last packet)
     fabric_multicast_noc_unicast_write(
         connection_manager,
         route_id,
@@ -3212,7 +3212,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
 
 // clang-format off
 /**
- * Multicast unicast write (stateful, addrgen overload, route variant): updates masked fields for all headers in route, computes NOC address from addrgen.
+ * Multicast unicast write (stateful, addrgen overload, connection manager variant): updates masked fields for all headers in route, computes NOC address from addrgen.
  *
  * Return value: None
  *
@@ -3322,7 +3322,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
 
 // clang-format off
 /**
- * Multicast unicast write (set-state, addrgen overload, route variant): pre-configures headers for all connections in route, computes NOC address from addrgen.
+ * Multicast unicast write (set-state, addrgen overload, connection manager variant): pre-configures headers for all connections in route, computes NOC address from addrgen.
  *
  * Return value: None
  *
@@ -3436,7 +3436,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
 
 // clang-format off
 /**
- * Multicast scatter write (addrgen overload, route variant): sends two pages to destinations computed from address generator for all headers in the route.
+ * Multicast scatter write (addrgen overload, connection manager variant): sends two pages to destinations computed from address generator for all headers in the route.
  *
  * Return value: None
  *
@@ -3469,7 +3469,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
     auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
 
     if (page_size * 2 <= FABRIC_MAX_PACKET_SIZE) {
-        // Small pages: use single scatter operation with route variant
+        // Small pages: use single scatter operation with connection manager variant
         fabric_multicast_noc_scatter_write(
             connection_manager,
             route_id,
@@ -3479,7 +3479,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
             tt::tt_fabric::NocUnicastScatterCommandHeader{
                 {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)});
     } else {
-        // Large pages: fall back to separate multicast unicast writes using addrgen route variant
+        // Large pages: fall back to separate multicast unicast writes using addrgen connection manager variant
         fabric_multicast_noc_unicast_write(connection_manager, route_id, ranges, src_addr, addrgen, page_id0, offset0);
 
         // Ensure first call completes before starting second
@@ -3572,7 +3572,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
 
 // clang-format off
 /**
- * Multicast scatter write (stateful, addrgen overload, route variant): updates masked fields for all headers in route, computes NOC addresses from addrgen for two pages.
+ * Multicast scatter write (stateful, addrgen overload, connection manager variant): updates masked fields for all headers in route, computes NOC addresses from addrgen for two pages.
  *
  * Return value: None
  *
@@ -3609,7 +3609,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
     auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
 
     if (page_size * 2 <= FABRIC_MAX_PACKET_SIZE) {
-        // Small pages: use scatter operation with route variant
+        // Small pages: use scatter operation with connection manager variant
         fabric_multicast_noc_scatter_write_with_state<UpdateMask>(
             connection_manager,
             route_id,
@@ -3618,7 +3618,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
                 {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
             page_size * 2);
     } else {
-        // Large pages: fall back to separate multicast unicast writes using addrgen route variant
+        // Large pages: fall back to separate multicast unicast writes using addrgen connection manager variant
         // Fix header state: kernel initialized noc_send_type as SCATTER_WRITE, but we need UNICAST_WRITE
         PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
             packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
@@ -3690,7 +3690,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
 
 // clang-format off
 /**
- * Multicast scatter write (set-state, addrgen overload, route variant): pre-configures headers for all connections in route, computes NOC addresses from addrgen for two pages.
+ * Multicast scatter write (set-state, addrgen overload, connection manager variant): pre-configures headers for all connections in route, computes NOC addresses from addrgen for two pages.
  *
  * Return value: None
  *
@@ -3822,7 +3822,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
 
 // clang-format off
 /**
- * Multicast fused unicast write + atomic increment (addrgen overload, route variant): sends payload to destinations computed from address generator for all headers in the route.
+ * Multicast fused unicast write + atomic increment (addrgen overload, connection manager variant): sends payload to destinations computed from address generator for all headers in the route.
  *
  * Return value: None
  *
@@ -3864,7 +3864,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
         // Ensure hardware has finished reading headers before modifying them for next packet
         noc_async_writes_flushed();
 
-        // Call multicast unicast write route variant for intermediate packets
+        // Call multicast unicast write connection manager variant for intermediate packets
         fabric_multicast_noc_unicast_write(
             connection_manager,
             route_id,
@@ -3979,7 +3979,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
 
 // clang-format off
 /**
- * Multicast fused unicast write + atomic increment (stateful, addrgen overload, route variant): updates masked fields for all headers in route, computes NOC address from addrgen.
+ * Multicast fused unicast write + atomic increment (stateful, addrgen overload, connection manager variant): updates masked fields for all headers in route, computes NOC address from addrgen.
  *
  * Return value: None
  *
@@ -4032,7 +4032,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
             packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
         });
 
-        // Call multicast unicast write _with_state route variant for intermediate packets
+        // Call multicast unicast write _with_state connection manager variant for intermediate packets
         fabric_multicast_noc_unicast_write_with_state<
             UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
             connection_manager,
@@ -4057,7 +4057,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
         packet_header->noc_send_type = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
     });
 
-    // Call basic fused atomic inc _with_state route variant for final packet
+    // Call basic fused atomic inc _with_state connection manager variant for final packet
     fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state<UpdateMask>(
         connection_manager,
         route_id,
@@ -4119,7 +4119,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
 
 // clang-format off
 /**
- * Multicast fused unicast write + atomic increment (set-state, addrgen overload, route variant): pre-configures headers for all connections in route, computes NOC address from addrgen.
+ * Multicast fused unicast write + atomic increment (set-state, addrgen overload, connection manager variant): pre-configures headers for all connections in route, computes NOC address from addrgen.
  *
  * Return value: None
  *
