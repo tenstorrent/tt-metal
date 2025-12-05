@@ -62,7 +62,7 @@ private:
     mutable std::mutex lock_;
     std::vector<std::unique_ptr<tt_metal::IDevice>> devices_;
 
-    bool skip_remote_devices{};
+    bool skip_remote_devices_{};
 
     // Determine which CPU cores the worker threads need to be placed on for each device
     std::unordered_map<uint32_t, uint32_t> worker_thread_to_cpu_core_map_;
