@@ -15,6 +15,10 @@ on:
       build-artifact-name:
         required: true
         type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+        description: "Name of the wheel artifact"
       timeout:
         required: false
         type: number
@@ -38,6 +42,7 @@ jobs:
       matrix:
         test-group: [
           {name: tt-train, cmd: ctest -E NIGHTLY --no-tests=error --output-on-failure  --output-junit generated/test_reports/ctest_report.xml},
+          {name: tt-train-python, cmd: pytest -xv tests/python/test_autograd.py --junitxml=generated/test_reports/pytest_report.xml},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     # tt-train in N300 is timing out on CIv2-viommu: https://github.com/tenstorrent/tt-metal/issues/29443
@@ -74,16 +79,38 @@ jobs:
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
           auto-triage: ${{ !inputs.enable-watcher }}
+
+      - name: Install pytest
+        if: ${{ matrix.test-group.name == 'tt-train-python' }}
+        run: |
+          pip install pytest
+
+      - name: Install tt-train
+        if: ${{ matrix.test-group.name == 'tt-train-python' }}
+        run: |
+          pip install /work/tt-train/
 
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          cd /work/build/tt-train
-          mkdir -p generated/test_reports
-          ldd tests/ttml_tests || true
-          ${{ matrix.test-group.cmd }}
+          if [[ "${{ matrix.test-group.name }}" == "tt-train" ]]; then
+            # C++ tests
+            cd /work/build/tt-train
+            mkdir -p generated/test_reports
+            ldd tests/ttml_tests || true
+            ${{ matrix.test-group.cmd }}
+          elif [[ "${{ matrix.test-group.name }}" == "tt-train-python" ]]; then
+            # Python tests
+            cd /work/tt-train
+            mkdir -p generated/test_reports
+            ${{ matrix.test-group.cmd }}
+          else
+            echo "ERROR: Unknown test group: ${{ matrix.test-group.name }}"
+            exit 1
+          fi
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
@@ -95,7 +122,7 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: /work/build/tt-train/generated/test_reports/
+          path: ${{ matrix.test-group.name == 'tt-train' && '/work/build/tt-train/generated/test_reports/' || '/work/tt-train/generated/test_reports/' }}
           prefix: "test_reports_"
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main

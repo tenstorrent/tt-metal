@@ -219,6 +219,77 @@ jobs:
           cd /work/tt-train/.build
           cmake --build .
 
+  build-tt-train-pip:
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    needs: [ build, find-changed-files ]
+    runs-on: tt-ubuntu-2204-large-stable
+    container:
+      image: harbor.ci.tenstorrent.net/${{ needs.build.outputs.ci-build-docker-image || 'docker-image-unresolved!' }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: Download packages artifact
+        uses: actions/download-artifact@v5
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build.outputs.packages-artifact-name || 'packages artifact unresolved!' }}
+          path: /work/pkgs/
+
+      - name: Download wheel artifact
+        uses: actions/download-artifact@v5
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build.outputs.wheel-artifact-name || 'wheel artifact unresolved!' }}
+          path: /work/wheelhouse/
+
+      - name: Install packages
+        run: |
+          set -euo pipefail
+
+          apt update
+          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-nn_*.deb ./pkgs/tt-nn-dev_*.deb
+
+      - name: ⬇️ Checkout tt-train
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
+          fetch-depth: 500
+          fetch-tags: true # Need tags for `git describe`
+          path: docker-job
+          sparse-checkout: |
+            tt-train
+
+      - name: Submodules
+        run: |
+          set -euo pipefail
+          git submodule update --init --recursive tt-train
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install tt-metal wheel
+        run: |
+          set -euo pipefail
+          pip install --upgrade pip setuptools wheel
+          pip install /work/wheelhouse/*.whl
+
+      - name: Install tt-train via pip
+        run: |
+          set -euo pipefail
+          pip install /work/tt-train/
+
+      - name: Verify installation
+        run: |
+          set -euo pipefail
+          python -c "import ttnn; print('ttnn imported successfully')"
+          python -c "import ttml; print('ttml imported successfully')"
+
   build-docs:
     if: ${{ needs.find-changed-files.outputs.any-code-changed == 'true' ||
             needs.find-changed-files.outputs.docs-changed == 'true'
@@ -411,13 +482,13 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [asan-build, metalium-smoke-tests, ttnn-smoke-tests, build, build-tt-train, metalium-examples, ttsim-integration-tests, clang-tidy-light, model-charts-sync, build-docs]
+    needs: [asan-build, metalium-smoke-tests, ttnn-smoke-tests, build, build-tt-train, build-tt-train-pip, metalium-examples, ttsim-integration-tests, clang-tidy-light, model-charts-sync, build-docs]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "asan-build, build, build-tt-train"
-          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples, ttsim-integration-tests, model-charts-sync, build-docs"
+          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, build-tt-train-pip, metalium-examples, ttsim-integration-tests, model-charts-sync, build-docs"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
