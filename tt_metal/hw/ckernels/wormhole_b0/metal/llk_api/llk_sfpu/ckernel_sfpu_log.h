@@ -90,20 +90,16 @@ sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat val, const uint log
 
     // Check for NaN: exponent = 128 (255 - 127, meaning original exp = 255) and mantissa != 0
     // Note: exexp returns debiased, so exp == 128 means original exp = 255
-    v_if(exp == 128 && man_bits != 0) {
-        // NaN: exponent = 255 and mantissa != 0
-        result = std::numeric_limits<float>::quiet_NaN();
-    }
-    v_elseif(val < sfpi::vConst0) {
-        // Negative input -> NaN
+    v_if((exp == 128 && man_bits != 0) || val < sfpi::vConst0) {  // If NaN or negative input
         result = std::numeric_limits<float>::quiet_NaN();
     }
     v_elseif(val == sfpi::vConst0) {
         // Zero input -> -inf
         result = -std::numeric_limits<float>::infinity();
     }
-    v_elseif(exp == 128 && man_bits == 0) {
-        // Infinity: exponent = 255 and mantissa = 0
+    v_elseif(exp == 128) {
+        // NaN case already taken care of.
+        // This means that input is infinity (and no need to verify mantissa)
         result = std::numeric_limits<float>::infinity();
     }
     v_else {
@@ -115,7 +111,7 @@ sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat val, const uint log
         // Step 2: Range reduction
         // If m >= sqrt(2), divide by 2 and increment exponent
         // This ensures m is in [sqrt(2)/2, sqrt(2)] ≈ [0.707, 1.414]
-        constexpr float SQRT2 = 1.4142135623730951f;  // sqrt(2)
+        constexpr float SQRT2 = 1.4142135381698608f;  // sqrt(2)
         v_if(m >= SQRT2) {
             // m = m * 0.5f;  // Divide by 2
             m = m * 0.5f;
@@ -172,7 +168,7 @@ sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat val, const uint log
         sfpi::vFloat expf = sfpi::int32_to_float(exp, 0);
 
         // Step 5: Combine: ln(x) = exp×ln(2) + ln(m)
-        constexpr float LN2 = 0.6931471805599453f;  // log(2)
+        constexpr float LN2 = 0.69314718246459961f;  // log(2)
         result = expf * LN2 + ln_m;                 // log(x) = log2(x) / log(2)
 
         if constexpr (HAS_BASE_SCALING) {
@@ -208,7 +204,7 @@ inline void calculate_log(uint log_base_scale_factor) {
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
 inline void log_init() {
     if constexpr (!is_fp32_dest_acc_en) {
-        sfpi::vConstFloatPrgm0 = 0.693147182464599609375;  // ln(2)
+        sfpi::vConstFloatPrgm0 = 0.69314718246459961f;  // ln(2)
         sfpi::vConstFloatPrgm1 = -2.0069785118103027;
         sfpi::vConstFloatPrgm2 = 3.767500400543213;
     } else {

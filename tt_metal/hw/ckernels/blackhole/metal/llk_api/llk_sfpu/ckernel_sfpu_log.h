@@ -88,22 +88,16 @@ sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat val, const uint log
     sfpi::vInt exp = sfpi::exexp(val);        // Get debiased exponent
     sfpi::vInt man_bits = sfpi::exman9(val);  // Get mantissa bits
 
-    // Check for NaN: exponent = 128 (255 - 127, meaning original exp = 255) and mantissa != 0
-    // Note: exexp returns debiased, so exp == 128 means original exp = 255
-    v_if(exp == 128 && man_bits != 0) {
-        // NaN: exponent = 255 and mantissa != 0
-        result = std::numeric_limits<float>::quiet_NaN();
-    }
-    v_elseif(val < sfpi::vConst0) {
-        // Negative input -> NaN
+    v_if((exp == 128 && man_bits != 0) || val < sfpi::vConst0) {  // If NaN or negative input
         result = std::numeric_limits<float>::quiet_NaN();
     }
     v_elseif(val == sfpi::vConst0) {
         // Zero input -> -inf
         result = -std::numeric_limits<float>::infinity();
     }
-    v_elseif(exp == 128 && man_bits == 0) {
-        // Infinity: exponent = 255 and mantissa = 0
+    v_elseif(exp == 128) {
+        // NaN case already taken care of.
+        // This means that input is infinity (and no need to verify mantissa)
         result = std::numeric_limits<float>::infinity();
     }
     v_else {
@@ -212,8 +206,8 @@ inline void log_init() {
         // _init_sfpu_reciprocal_ sets vConstFloatPrgm0 to 2.0f
         _init_sfpu_reciprocal_</*approximation_mode*/ false>();
         // But we can use 2 other programmable constants:
-        sfpi::vConstFloatPrgm1 = 1.4142135623730951f;  // sqrt(2)
-        sfpi::vConstFloatPrgm2 = 0.6931471805599453f;  // log(2)
+        sfpi::vConstFloatPrgm1 = 1.4142135381698608f;   // sqrt(2)
+        sfpi::vConstFloatPrgm2 = 0.69314718246459961f;  // log(2)
     }
 }
 
