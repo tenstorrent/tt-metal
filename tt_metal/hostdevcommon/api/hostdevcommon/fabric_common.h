@@ -215,17 +215,19 @@ struct tensix_fabric_connections_l1_info_t {
     fabric_aligned_connection_info_t read_write[MAX_FABRIC_ENDPOINTS];
 };
 
-enum router_state : uint32_t {
-    ROUTER_STATE_INITIALIZED = 0,
-    ROUTER_STATE_ACTIVE = 1,
-    ROUTER_STATE_PAUSED = 2,
-    ROUTER_STATE_DRAINING = 3,
+// TODO: move to *_msgs.h definition
+enum RouterStateCommon : std::uint32_t {
+    INITIALIZED = 0,
+    ACTIVE = 1,
+    PAUSE = 2,
+    PAUSED = 3,
+    DRAINING = 4,
+    TERMINATE = 5,
+    TERMINATED = 6,
 };
 
 struct routing_l1_info_t {
-    // TODO: https://github.com/tenstorrent/tt-metal/issues/28534
-    //       these fabric node ids should be another struct as really commonly used data
-    router_state state;
+    RouterStateCommon state;
     uint16_t my_mesh_id = 0;    // Current mesh ID
     uint16_t my_device_id = 0;  // Current chip ID
     // NOTE: Compressed version has additional overhead (2x slower) to read values,
