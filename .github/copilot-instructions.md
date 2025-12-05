@@ -1,13 +1,19 @@
-# Tenstorrent TT-Metal / TT-Metalium – Copilot Repo Instructions
+# Tenstorrent TT-Metal / TT-Metalium – Copilot Instructions
 
-When performing a code review in this repository:
+## Core Components
+- tt_metal/** -  core runtime, device APIs, allocators, low-level kernels
+- ttnn/** - higher-level op layer and Python/C++ integration
+- tools/** - executable tools used to help with scaleout and debugging
+- tt-train/** - training library built on top of ttnn
 
-## Priorities
-- Focus first on **correctness**, **ABI/API stability**, **performance regressions**, and **architecture-agnostic design** (no new architecture-specific `#ifdef`s; prefer HAL queries and runtime capability checks).
-- Prefer **compile-time safety** and **clarity** over cleverness. Avoid macros when templates or constexpr utilities suffice.
-- Limit addition of new dependencies if similar ones already exist.
+## Code Review Priorities
+- Focus first on **correctness**, **ABI/API stability**, and **performance regressions**
+- Prefer **compile-time safety** **clarity** and **simplicity** over cleverness.
+- Avoid macros when templates or constexpr utilities suffice.
+- Advise against addition of new dependencies if similar ones already exist.
 - Review code for correctness, readability, security, memory safety, and best practices.
-- Flag anytime someone uses templates excessively. Strongly discourage usage of enable_if, SFINAE, and recursive template instantiations unless absolutely necessary.
+- Flag anytime someone uses templates excessively or unnecessarily.
+- Strongly discourage usage of enable_if, SFINAE, and recursive template instantiations unless absolutely necessary.
 
 ## Must-run mental model
 - Assume a **large C++20 codebase** with heavy headers; keep compile times in mind (avoid unnecessary includes; prefer forward declarations and PIMPL where appropriate).
@@ -19,7 +25,7 @@ When performing a code review in this repository:
   - Configure: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release`
   - Build: `cmake --build build -j`
   - Tests: `ctest --test-dir build --output-on-failure`
-  - Lint: `clang-tidy` using the repo `.clang-tidy` (don’t propose rules outside our profile unless gated behind the “extra checks” pipeline).
+  - Lint: `clang-tidy` using the repo `.clang-tidy`
 - If suggesting refactors, include a quick **compile-time impact note** (header churn, template instantiation).
 
 ## Reviews should:
