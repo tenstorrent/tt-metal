@@ -605,13 +605,11 @@ void FDMeshCommandQueue::read_shard_from_device(
 
         buffer_dispatch::copy_interleaved_buffer_to_completion_queue(
             dispatch_params, *shard_view, sub_device_ids, this->dispatch_core_type(), dst, pinned_memory);
-        if (dispatch_params.pages_per_txn > 0) {
-            if (dispatch_params.requires_completion_read) {
-                num_txns_per_device[device]++;
-                auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
-                read_descriptor_queue.push(
-                    buffer_dispatch::generate_interleaved_buffer_read_descriptor(dst, dispatch_params, *shard_view));
-            }
+        if ((dispatch_params.pages_per_txn > 0) && (dispatch_params.requires_completion_read)) {
+            num_txns_per_device[device]++;
+            auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
+            read_descriptor_queue.push(
+                buffer_dispatch::generate_interleaved_buffer_read_descriptor(dst, dispatch_params, *shard_view));
         }
     }
 }
