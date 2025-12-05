@@ -108,9 +108,6 @@ jobs:
       - name: Run demo regression tests
         timeout-minutes: 70
         run: |
-          if [[ "${{ matrix.test-group.name }}" == *"llama"* ]]; then
-            pip install -r /work/models/tt_transformers/requirements.txt
-          fi
           ${{ matrix.test-group.cmd }}
       - name: Print tt-smi data on failure
         if: ${{ failure() }}
@@ -226,9 +223,6 @@ jobs:
       - name: Run demo regression tests
         timeout-minutes: 70
         run: |
-          if [[ "${{ matrix.test-group.name }}" == *"llama"* ]]; then
-            pip install -r /work/models/tt_transformers/requirements.txt
-          fi
           ${{ matrix.test-group.cmd }}
 
       - name: Save environment data
