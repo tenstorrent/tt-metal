@@ -1089,6 +1089,7 @@ void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_
     auto addr_gen = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), base_addr, page_size);
     // set transaction ID to 1 for all read
     noc_async_read_set_trid(1);
+    ASSERT(page_size <= NOC_MAX_BURST_SIZE);
 
     // initial read
     if (exec_buf_state.prefetch_length == 0) {
@@ -1098,13 +1099,18 @@ void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_
         pages -= initial_pages_at_once;
 
         while (initial_pages_at_once != 0) {
-            invalidate_l1_cache();
-            uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
-            noc_async_read_one_packet_set_state(noc_addr, page_size);
-            noc_async_read_one_packet_with_state_with_trid<false, true>(noc_addr, 0, read_ptr, 1);
-            read_ptr += page_size;
-            page_id++;
-            initial_pages_at_once--;
+            uint32_t pages_to_read = ncrisc_noc_available_read_transactions(noc_index, 1);
+            if (pages_to_read > initial_pages_at_once) {
+                pages_to_read = initial_pages_at_once;
+            }
+            initial_pages_at_once -= pages_to_read;
+            while (pages_to_read != 0) {
+                uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
+                noc_async_read<NOC_MAX_BURST_SIZE>(noc_addr, read_ptr, page_size);
+                read_ptr += page_size;
+                page_id++;
+                pages_to_read--;
+            }
         }
         noc_async_read_barrier_with_trid(1);
         // update length always after barrier to make sure data in cmddat_q
@@ -1136,13 +1142,18 @@ void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_
         pages -= prefetch_pages_at_once;
 
         while (prefetch_pages_at_once != 0) {
-            invalidate_l1_cache();
-            uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
-            noc_async_read_one_packet_set_state(noc_addr, page_size);
-            noc_async_read_one_packet_with_state_with_trid<false, true>(noc_addr, 0, read_ptr, 1);
-            read_ptr += page_size;
-            page_id++;
-            prefetch_pages_at_once--;
+            uint32_t pages_to_read = ncrisc_noc_available_read_transactions(noc_index, 1);
+            if (pages_to_read > prefetch_pages_at_once) {
+                pages_to_read = prefetch_pages_at_once;
+            }
+            prefetch_pages_at_once -= pages_to_read;
+            while (pages_to_read != 0) {
+                uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
+                noc_async_read<NOC_MAX_BURST_SIZE>(noc_addr, read_ptr, page_size);
+                read_ptr += page_size;
+                page_id++;
+                pages_to_read--;
+            }
         }
         // update length always after barrier to make sure data in cmddat_q
         exec_buf_state.page_id = page_id;
