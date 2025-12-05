@@ -90,6 +90,17 @@ private:
      */
     std::vector<RouterConnectionPair> get_router_connection_pairs() const;
 
+    /**
+     * Compile kernels for directions that have no router/eth channel.
+     *
+     * In UDM mode, edge devices (e.g., corner of a mesh) don't have neighbors
+     * in all 4 directions, but still need mux cores for inter-mux forwarding.
+     * These kernels are not associated with any router.
+     *
+     * No-op for non-UDM modes or devices with neighbors in all directions.
+     */
+    void compile_kernels_for_missing_directions();
+
     tt::tt_metal::IDevice* device_;
     tt::tt_metal::Program& program_;
     FabricContext& fabric_context_;

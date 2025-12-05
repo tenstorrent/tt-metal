@@ -66,7 +66,6 @@ target_sources(
         serialization/physical_system_descriptor_serialization.cpp
         serialization/intermesh_connections_serialization.cpp
         serialization/port_descriptor_serialization.cpp
-        erisc_datamover_builder_helper.cpp
         ccl/ccl_common.cpp
         physical_system_descriptor.cpp
         topology_mapper.cpp

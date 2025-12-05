@@ -82,14 +82,20 @@ void StaticSizedChannelConnectionWriterAdapter::add_local_tensix_connection(
     this->relay_connection_info.is_connected = true;
 }
 
-void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(uint32_t vc_idx, std::vector<uint32_t>& args_out) const {
-    TT_FATAL(vc_idx == 0, "VC1 is not supported for static-sized channel connection writer adapter");
+void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
+    uint32_t vc_idx, std::vector<uint32_t>& args_out) const {
     if (is_2D_routing) {
-        // For VC0 in 2D: pack connection mask and data for 3 downstream EDMs
-        args_out.push_back(this->downstream_edms_connected);  // 3-bit mask
+        // For 2D: Temporary, until support for VC1 is added
+        TT_FATAL(vc_idx == 0, "VC1 is not supported for 2D routing");
+        // Get the appropriate downstream EDM count based on VC index
+        uint32_t num_downstream_edms = (vc_idx == 0) ? builder_config::get_vc0_downstream_edm_count(is_2D_routing)
+                                                     : builder_config::get_vc1_downstream_edm_count(is_2D_routing);
 
-        // Pack 3 buffer base addresses (one per compact index 0-2)
-        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc0; compact_idx++) {
+        // Pack connection mask (3-bit mask for 3 downstream EDMs)
+        args_out.push_back(this->downstream_edms_connected);
+
+        // Pack buffer base addresses (one per compact index)
+        for (size_t compact_idx = 0; compact_idx < num_downstream_edms; compact_idx++) {
             uint32_t buffer_addr = this->downstream_edm_buffer_base_addresses[vc_idx][compact_idx].value_or(0);
             args_out.push_back(buffer_addr);
         }
@@ -98,22 +104,23 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(uin
         args_out.push_back(this->pack_downstream_noc_x_rt_arg(vc_idx));
         args_out.push_back(this->pack_downstream_noc_y_rt_arg(vc_idx));
 
-        // Pack 3 worker registration addresses (connection handshake addresses)
-        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc0; compact_idx++) {
+        // Pack worker registration addresses (connection handshake addresses)
+        for (size_t compact_idx = 0; compact_idx < num_downstream_edms; compact_idx++) {
             args_out.push_back(this->downstream_edm_worker_registration_addresses[vc_idx][compact_idx].value_or(0));
         }
 
-        // Pack 3 worker location info addresses
-        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc0; compact_idx++) {
+        // Pack worker location info addresses
+        for (size_t compact_idx = 0; compact_idx < num_downstream_edms; compact_idx++) {
             args_out.push_back(this->downstream_edm_worker_location_info_addresses[vc_idx][compact_idx].value_or(0));
         }
 
-        // Pack 3 buffer index semaphore addresses
-        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc0; compact_idx++) {
+        // Pack buffer index semaphore addresses
+        for (size_t compact_idx = 0; compact_idx < num_downstream_edms; compact_idx++) {
             args_out.push_back(this->downstream_edm_buffer_index_semaphore_addresses[vc_idx][compact_idx].value_or(0));
         }
     } else {
-        // For 1D: single downstream connection (backward compatible)
+        // For 1D: single downstream connection (only VC0 supported)
+        TT_FATAL(vc_idx == 0, "VC1 is not supported for 1D routing");
         bool has_connection = this->downstream_edms_connected != 0;
 
         uint32_t buffer_addr = this->downstream_edm_buffer_base_addresses[vc_idx][0].value_or(0);

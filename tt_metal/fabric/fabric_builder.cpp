@@ -185,8 +185,41 @@ void FabricBuilder::connect_routers() {
 }
 
 void FabricBuilder::compile_ancillary_kernels() {
+    // Router-associated ancillary kernels
     for (auto& [eth_chan, router_builder] : routers_) {
         router_builder->compile_ancillary_kernels(program_);
+    }
+
+    // Device-level kernels for missing directions (e.g., UDM mode)
+    compile_kernels_for_missing_directions();
+}
+
+void FabricBuilder::compile_kernels_for_missing_directions() {
+    // Only applicable in UDM mode
+    auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    if (fabric_tensix_config != FabricTensixConfig::UDM) {
+        return;
+    }
+
+    const auto& tensix_config = builder_context_.get_tensix_config();
+    if (!tensix_config.has_missing_directions(device_->id())) {
+        return;
+    }
+
+    const auto& missing_directions = tensix_config.get_missing_directions(device_->id());
+
+    for (const auto& [routing_plane_id, missing_dir] : missing_directions) {
+        log_warning(
+            tt::LogMetal,
+            "Building missing direction tensix builder for fabric_node {}, routing_plane {}, direction {}",
+            local_node_,
+            routing_plane_id,
+            static_cast<uint32_t>(missing_dir));
+
+        // Build and compile tensix builder for this missing (routing_plane_id, direction) pair
+        auto tensix_builder = FabricTensixDatamoverBuilder::build_for_missing_direction(
+            device_, program_, local_node_, routing_plane_id, missing_dir);
+        tensix_builder.create_and_compile(program_);
     }
 }
 
