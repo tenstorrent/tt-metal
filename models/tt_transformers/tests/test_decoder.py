@@ -11,6 +11,7 @@ import ttnn
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.common import PagedAttentionConfig, precompute_freqs
 from models.tt_transformers.tt.decoder import TransformerBlock
+from models.tt_transformers.tt.generator import create_submeshes
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.rope import RotarySetup
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
@@ -59,6 +60,8 @@ def test_decoder_inference(
     reset_seeds,
     ensure_gc,
 ):
+    mesh_device = create_submeshes(mesh_device, 4)[0]
+
     dtype = ttnn.bfloat8_b
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
