@@ -33,8 +33,8 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
 
     if (tensor_args.optional_output_tensors.has_value()) {
         auto output_tensors = tensor_args.optional_output_tensors.value();
-        const auto& sparse_token_tensor = output_tensors[0];
-        const auto& metadata_tensor = output_tensors[1];
+        const auto& sparse_token_tensor = output_tensors.at(0);
+        const auto& metadata_tensor = output_tensors.at(1);
         TT_FATAL(
             sparse_token_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
             "Output tensor must be in row major layout");
@@ -52,6 +52,16 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
             "Optional metadata tensor spec {} does not match computed output spec {}",
             metadata_tensor.tensor_spec(),
             metadata_spec);
+
+        if (untilize_intermediate_spec.has_value()) {
+            TT_FATAL(output_tensors.size() == 3, "Intermediate Optional output tensor required for tile layout");
+            const auto& intermediate_tensor = output_tensors.at(2);
+            TT_FATAL(
+                untilize_intermediate_spec.value() == intermediate_tensor.tensor_spec(),
+                "Optional intermediate RM tensor spec {} does not match computed output spec {}",
+                sparse_token_tensor.tensor_spec(),
+                output_spec);
+        }
     }
     TT_FATAL(operation_attributes.num_links > 0, "Number of links must be greater than 0");
 
@@ -60,15 +70,7 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_shape.rank() == 4 && (input_shape.rank() == indices_shape.rank()),
         "Input and indices tensor must have the same number of dimensions");
-    // for (uint32_t i = 0; i < indices_shape.rank() - 1; i++) {
-    //         TT_FATAL(
-    //             input_shape[i] == indices_shape[i],
-    //             "Input and indices tensor must have the same shape for all dimensions except the last. Mismatch at "
-    //             "dimension {} with shape {} and {}",
-    //             i,
-    //             input_shape[i],
-    //             indices_shape[i]);
-    //    }
+
     TT_FATAL(
         operation_attributes.output_concat_dim == 1 || operation_attributes.output_concat_dim == 2,
         "Output concat dimension must be 1 or 2, got {}. Output concat dimension is used to determine the dimension to "
@@ -86,7 +88,7 @@ AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOpera
     auto indices_shape = tensor_args.expert_indices_tensor.tensor_spec().logical_shape();
     auto mapping_shape = tensor_args.expert_mapping_tensor.tensor_spec().logical_shape();
 
-    auto* mesh_device = input_tensor.device();
+    auto mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
     uint32_t output_concat_dim = operation_attributes.output_concat_dim;
 

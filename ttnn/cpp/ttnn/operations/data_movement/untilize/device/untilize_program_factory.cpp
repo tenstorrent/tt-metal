@@ -121,6 +121,18 @@ FuseableUntilizeCallback untilize_row_wise_fuseable(
     const uint32_t output_tile_size_bytes = tt::tile_size(output_cb_data_format);
 
     const auto& padded_shape = input_tensor.padded_shape();
+    const auto& logical_shape = input_tensor.logical_shape();
+
+    Buffer* input_buffer = input_tensor.buffer();
+    Buffer* output_buffer = output_tensor.buffer();
+
+    const auto logical_num_sticks =
+        std::accumulate(logical_shape.cbegin(), logical_shape.cend() - 1, 1u, std::multiplies<uint32_t>());
+    TT_FATAL(
+        (logical_num_sticks <= output_buffer->num_pages()),
+        "Output tensor should have at least {} pages, got {}",
+        logical_num_sticks,
+        output_buffer->num_pages());
 
     const uint32_t ntiles_per_row = padded_shape[-1] / TILE_WIDTH;
     const uint32_t ntiles_per_block = std::min(max_tiles_per_block, ntiles_per_row);
@@ -129,17 +141,25 @@ FuseableUntilizeCallback untilize_row_wise_fuseable(
     const auto upper_dim =
         std::accumulate(padded_shape.cbegin(), padded_shape.cend() - 2, 1u, std::multiplies<uint32_t>());
     const auto total_column_tiles = ntiles_per_column*upper_dim;
-    const uint32_t ncores = std::min(sub_core_grids.num_cores(), total_column_tiles);
+    // const uint32_t ncores = std::min(sub_core_grids.num_cores(), total_column_tiles);
 
-    const uint32_t num_col_tiles_per_core = tt::div_up(total_column_tiles, ncores);
+    // const uint32_t num_col_tiles_per_core = tt::div_up(total_column_tiles, ncores);
 
-    const auto cores = corerange_to_cores(sub_core_grids, ncores, true);
-    std::variant<CoreCoord, CoreRange, CoreRangeSet> all_cores;
-    if (ncores == 1) {
-        all_cores = cores.at(0);
-    } else {
-        all_cores = num_cores_to_corerangeset_in_subcoregrids(cores[0], ncores, sub_core_grids, true);
-    }
+    const auto
+        [ncores,
+         all_cores,
+         core_group_1,
+         core_group_2,
+         num_col_tiles_per_core_group_1,
+         num_col_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(sub_core_grids, total_column_tiles);
+
+    // const auto cores = corerange_to_cores(sub_core_grids, ncores, true);
+    //     std::variant<CoreCoord, CoreRange, CoreRangeSet> all_cores;
+    //     if (ncores == 1) {
+    //         all_cores = cores.at(0);
+    //     } else {
+    //         all_cores = num_cores_to_corerangeset_in_subcoregrids(cores[0], ncores, sub_core_grids, true);
+    //     }
 
     const uint32_t num_pages_cb = ntiles_per_block * 2;
     auto [src0_cb_index, cb_src0] = create_cb(
@@ -154,8 +174,6 @@ FuseableUntilizeCallback untilize_row_wise_fuseable(
         output_cb_data_format,
         nullptr);
 
-    Buffer* input_buffer = input_tensor.buffer();
-    Buffer* output_buffer = output_tensor.buffer();
     std::vector<uint32_t> reader_ct_args;
     TensorAccessorArgs(*input_buffer).append_to(reader_ct_args);
 
@@ -216,14 +234,21 @@ FuseableUntilizeCallback untilize_row_wise_fuseable(
 
     std::vector<CoreCoord> cores_with_rtargs;
 
-    constexpr uint32_t num_rt_args_reader = 3, num_rt_args_writer = 7;
-    uint32_t column_tile_start_id = 0;
-    for (uint32_t i = 0; i < cores.size(); i++) {
-        const CoreCoord& core = cores[i];
-
+    constexpr uint32_t num_rt_args_reader = 3, num_rt_args_writer = 8;
+    uint32_t column_tile_start_id = 0, num_col_tiles_this_core;
+    for (const auto& core : corerange_to_cores(all_cores, std::nullopt)) {
         // reader runtime args
-        const auto num_col_tiles_this_core =
-            std::min(num_col_tiles_per_core, total_column_tiles - column_tile_start_id);
+        // const auto num_col_tiles_this_core =
+        // std::min(num_col_tiles_per_core, total_column_tiles - column_tile_start_id);
+
+        if (core_group_1.contains(core)) {
+            num_col_tiles_this_core = num_col_tiles_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            num_col_tiles_this_core = num_col_tiles_per_core_group_2;
+        } else {
+            TT_THROW("can't be here :( ");
+        }
+
         const auto ntiles_total_per_core = num_col_tiles_this_core * ntiles_per_row;
         const auto nblocks_per_core = ntiles_total_per_core / ntiles_per_block;
         const auto tile_start_id = column_tile_start_id * ntiles_per_row;
@@ -241,9 +266,9 @@ FuseableUntilizeCallback untilize_row_wise_fuseable(
             ntiles_per_row,                             // ntiles_per_core
             TILE_WIDTH * output_tensor.element_size(),  // tile_width_size
             start_stick_id,                             // start stick id
-            0u,  // offset_within_stick each core starts from the beginning of the row
-            (semaphore.has_value()) ? semaphore->address():0
-        };
+            0u,                  // offset_within_stick each core starts from the beginning of the row
+            logical_num_sticks,  // logical_num_sticks
+            (semaphore.has_value()) ? semaphore->address() : 0};
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
@@ -273,7 +298,7 @@ FuseableUntilizeCallback untilize_row_wise_fuseable(
             writer_runtime_args[0] = dst_buffer->address();
 
             if (sync_semaphore.has_value()) {
-                writer_runtime_args[6] = sync_semaphore->address();
+                writer_runtime_args[7] = sync_semaphore->address();
             }
         }
     };

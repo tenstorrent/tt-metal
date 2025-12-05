@@ -88,7 +88,8 @@ struct AllToAllDispatchDeviceOperation {
             tensor_return_value_t& tensor_return_value,
             const ttnn::MeshCoordinateRangeSet& tensor_coords,
             const GlobalSemaphore& init_semaphore,
-            const GlobalSemaphore& cross_device_semaphore);
+            const GlobalSemaphore& cross_device_semaphore,
+            const std::optional<GlobalSemaphore>& untilize_sync_semaphore);
 
         static void override_runtime_arguments(
             cached_mesh_workload_t& cached_program,
