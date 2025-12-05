@@ -614,7 +614,7 @@ RingDistributedSdpaMeshWorkloadFactory::create_mesh_workload(
                 .compute_kernel_config = operation_attributes.compute_kernel_config};
             auto cached_program =
                 RingDistributedSdpaProgramFactory::create(curr_operation_attributes, tensor_args, tensor_return_value);
-            shared_variables[single_coord_range] = std::move(cached_program.shared_variables);
+            shared_variables[single_coord_range] = cached_program.shared_variables;
             mesh_workload.add_program(single_coord_range, std::move(cached_program.program));
         }
     }
