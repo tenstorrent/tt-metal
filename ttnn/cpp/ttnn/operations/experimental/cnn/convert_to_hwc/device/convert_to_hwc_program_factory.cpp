@@ -12,6 +12,8 @@
 
 #include "gather.hpp"
 
+#include <algorithm>
+
 namespace ttnn::operations::experimental::cnn::detail {
 
 using namespace tt::constants;
@@ -93,6 +95,20 @@ inline std::vector<uint32_t> make_compute_compile_args(
         num_blocks};
 }
 
+// Select an appropriate block size that evenly divides gather_l1_output_shard_width
+// Tries to find a block size >= 1024 that is a multiple of 32 and divides evenly
+inline uint32_t select_block_size(uint32_t gather_l1_output_shard_width) {
+    const uint32_t min_block_size_width = 1024;
+    uint32_t block_size_width = gather_l1_output_shard_width;
+    for (uint32_t candidate = min_block_size_width; candidate <= gather_l1_output_shard_width; candidate += 32) {
+        if (gather_l1_output_shard_width % candidate == 0) {
+            block_size_width = candidate;
+            break;
+        }
+    }
+    return block_size_width;
+}
+
 // Generate gather transfers, group them into output column blocks, and coalesce contiguous copies.
 GroupingResult group_and_coalesce_transfers(
     const ConvertToHwcConfig& config,
@@ -123,6 +139,22 @@ GroupingResult group_and_coalesce_transfers(
     auto blocked_gather_transfers = blocked_result.blocked_transfers;
     auto per_core_blocked_gather_transfers =
         convert_to_hwc::detail::split_by_destination_core(blocked_gather_transfers, config.output_cores.size());
+
+    // Verify all cores have the same number of blocks
+    // This is critical because the compute kernel expects total_num_blocks blocks from each core
+    const uint32_t expected_blocks_per_core = blocked_result.num_logical_blocks;
+    for (size_t core_idx = 0; core_idx < per_core_blocked_gather_transfers.size(); core_idx++) {
+        uint32_t core_blocks = static_cast<uint32_t>(per_core_blocked_gather_transfers[core_idx].size());
+        TT_FATAL(
+            core_blocks == expected_blocks_per_core,
+            "Core {} has {} blocks but expected {} blocks per core. "
+            "All cores must have the same number of blocks for the compute kernel to work correctly.",
+            core_idx,
+            core_blocks,
+            expected_blocks_per_core);
+    }
+
+    // Coalesce contiguous transfers for each core
     for (auto& core_transfers : per_core_blocked_gather_transfers) {
         core_transfers = convert_to_hwc::detail::coalesce_contiguous_transfers(core_transfers);
     }
@@ -411,17 +443,9 @@ ConvertToHWCProgramFactory::cached_program_t ConvertToHWCProgramFactory::create(
         config.hw_total, config.batch_size, config.l1_input_shard_width, static_cast<uint32_t>(in_cores.size()));
 
     // Use smaller block size to reduce L1 consumption
-    // Try to use 32 if it divides evenly, otherwise use 64, or fall back to full width
+    // Find a block size that evenly divides gather_l1_output_shard_width
     // This reduces the CB_IN_BATCH buffer size significantly
-    uint32_t block_size_width = 32;
-    if (config.gather_l1_output_shard_width % 32 != 0) {
-        block_size_width = 64;
-        // Ensure 64 also divides evenly, otherwise fall back to full width
-        if (config.gather_l1_output_shard_width % 64 != 0) {
-            block_size_width = config.gather_l1_output_shard_width;
-        }
-    }
-    const auto block_width = block_size_width;
+    const auto block_width = detail::select_block_size(config.gather_l1_output_shard_width);
 
     // Setup circular buffers on the output cores (where the kernels execute)
     auto cb_handles = detail::setup_circular_buffers(program, config.output_core_grid, config, a, output, block_width);

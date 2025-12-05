@@ -8,6 +8,7 @@
 
 #include "gather.hpp"
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 #include <algorithm>
 #include <cstring>
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
@@ -301,19 +302,28 @@ BlockedTransfersWithCount group_transfers_by_output_column_blocks(
             return a.dst_block_idx < b.dst_block_idx;
         });
 
-    // Count unique column block indices to determine actual number of logical blocks
+    // Calculate number of logical blocks per core
+    // Each core processes blocks 0 through (output_shard_width / block_size - 1)
+    // Since all cores have the same padded output_shard_width, they all have the same number of blocks
+    const uint32_t num_logical_blocks_per_core = tt::div_up(output_shard_width, block_size);
+
+    // Count unique column block indices for validation/debugging
     std::set<uint32_t> unique_block_indices;
     for (const auto& group : blocked_groups) {
         unique_block_indices.insert(group.dst_block_idx);
     }
 
-    log_debug(
-        tt::LogType::LogOp,
-        "group_transfers_by_output_column_blocks: {} transfer groups, {} logical blocks",
-        blocked_groups.size(),
-        unique_block_indices.size());
+    // Validate that unique block indices match expected per-core count
+    if (unique_block_indices.size() != num_logical_blocks_per_core) {
+        TT_FATAL(
+            false,
+            "Mismatch: expected {} blocks per core, but found {} unique block indices across all cores. "
+            "This may indicate uneven block distribution.",
+            num_logical_blocks_per_core,
+            unique_block_indices.size());
+    }
 
-    return {std::move(blocked_groups), static_cast<uint32_t>(unique_block_indices.size())};
+    return {std::move(blocked_groups), num_logical_blocks_per_core};
 }
 
 std::vector<BlockedTransferGroup> coalesce_contiguous_transfers(
