@@ -54,7 +54,7 @@ void ttnn_device(nb::module_& mod) {
         nb::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         nb::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
         nb::arg("num_command_queues") = 1,
-        nb::arg("dispatch_core_config") = tt::tt_metal::DispatchCoreConfig{},
+        nb::arg("dispatch_core_config") = nb::cast(tt::tt_metal::DispatchCoreConfig{}),
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE,
         nb::rv_policy::reference,  // cleanup has to happen in c++ land
         R"doc(
@@ -280,24 +280,9 @@ void device_module(nb::module_& m_device) {
             >>> ttnn.device.SetRootDir("/path/to/tt_metal_home")
     )doc");
 
-    // m_device.def(  // afuller
-    //     "SetDefaultDevice",
-    //     [](std::optional<MeshDevice*> device) {
-    //         if (device.has_value()) {
-    //             ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(device.value());
-    //         } else {
-    //             ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(nullptr);
-    //         }
-    //     },
-    // m_device.def(  // afuller
-    //     "ClearDefaultDevice",
-    //     []() { ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(nullptr); },
-    //     R"doc(
-    //         Clears the default device (sets it to None).
-
-    m_device.def(
+    m_device.def(  // afuller
         "SetDefaultDevice",
-        [](MeshDevice* device) { ttnn::SetDefaultDevice(device); },
+        [](std::optional<MeshDevice*> device) { ttnn::SetDefaultDevice(device.value_or(nullptr)); },
         R"doc(
             Sets the default device to use for operations when inputs are not on the device.
 
@@ -312,6 +297,11 @@ void device_module(nb::module_& m_device) {
                 >>> device = ttnn.open_device(device_id = device_id)
                 >>> ttnn.SetDefaultDevice(device)
         )doc");
+
+    m_device.def(  // afuller
+        "ClearDefaultDevice",
+        []() { ttnn::SetDefaultDevice(nullptr); },
+        R"doc(Clears the default device (sets it to None).)doc");
 
     m_device.def(
         "GetDefaultDevice",
