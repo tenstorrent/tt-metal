@@ -31,10 +31,11 @@ struct operation_attributes_t {
     uint32_t ring_size{};
     tt::tt_metal::MemoryConfig output_memory_config;
     ttnn::ccl::Topology topology{};
-    tt::tt_metal::GlobalSemaphore semaphore;
+    tt::tt_metal::GlobalSemaphore semaphore;  // Not default constructible
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     std::optional<uint32_t> cluster_axis;
 
+    // Constructor required because GlobalSemaphore is not default constructible
     operation_attributes_t(
         operations::matmul::Matmul matmul_struct,
         std::vector<IDevice*> devices,
