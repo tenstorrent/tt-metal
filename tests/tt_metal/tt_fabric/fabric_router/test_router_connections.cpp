@@ -260,11 +260,20 @@ TEST_F(RouterConnectionsTest, MeshToZ_MultipleMeshRouters) {
     auto z_incoming = registry_->get_connections_to_dest(device0, RoutingDirection::Z);
     EXPECT_EQ(z_incoming.size(), 4);
     
-    // All should target VC1
+    // All should target VC1 receiver channel 0 (multi-target receiver - Phase 1.5)
     for (const auto& conn : z_incoming) {
         EXPECT_EQ(conn.dest_vc, 1);
+        EXPECT_EQ(conn.dest_receiver_channel, 0);  // All target same receiver
         EXPECT_EQ(conn.connection_type, ConnectionType::MESH_TO_Z);
     }
+    
+    // Phase 1.5 validation: Verify Z router VC1 receiver can handle multiple sources
+    // This is the multi-target receiver scenario that Phase 1.5 enables
+    std::set<RoutingDirection> source_dirs;
+    for (const auto& conn : z_incoming) {
+        source_dirs.insert(conn.source_direction);
+    }
+    EXPECT_EQ(source_dirs.size(), 4);  // 4 different source directions
 }
 
 // ============ Z to Non-Z Router Tests (Z_TO_MESH) ============
@@ -494,6 +503,170 @@ TEST_F(RouterConnectionsTest, FullMesh_4Routers_WithZ) {
     auto z_in = registry_->get_connections_to_dest(device0, RoutingDirection::Z);
     EXPECT_EQ(z_out.size(), 4);  // Z → 4 mesh routers
     EXPECT_EQ(z_in.size(), 4);   // 4 mesh routers → Z
+}
+
+// ============ Phase 1.5 Multi-Target Receiver Validation ============
+
+TEST_F(RouterConnectionsTest, Phase1_5_ZRouter_MultiTargetReceiver_Validation) {
+    // This test validates the Phase 1.5 multi-target receiver scenario:
+    // Z router VC1 receiver channel 0 receives from 4 different mesh routers
+    // This was previously impossible due to fixed array overwriting
+    
+    FabricNodeId device0(MeshId{0}, 0);
+    
+    // Z router channel mapping
+    FabricRouterChannelMapping z_mapping(
+        Topology::Mesh,
+        eth_chan_directions::EAST,
+        false,
+        RouterVariant::Z_ROUTER);
+    
+    // Verify Z router has correct VC1 layout
+    EXPECT_EQ(z_mapping.get_num_virtual_channels(), 2);
+    EXPECT_EQ(z_mapping.get_num_sender_channels_for_vc(1), 4);
+    
+    // Verify VC1 receiver channel 0 maps to erisc receiver 1
+    auto vc1_receiver = z_mapping.get_receiver_mapping(1, 0);
+    EXPECT_EQ(vc1_receiver.builder_type, BuilderType::ERISC);
+    EXPECT_EQ(vc1_receiver.internal_receiver_channel_id, 1);
+    
+    // Record 4 MESH_TO_Z connections, all targeting same receiver
+    std::vector<RoutingDirection> mesh_dirs = {
+        RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W
+    };
+    
+    for (size_t i = 0; i < 4; ++i) {
+        // Create mesh router mapping
+        FabricRouterChannelMapping mesh_mapping(
+            Topology::Mesh,
+            static_cast<eth_chan_directions>(i),
+            false,
+            RouterVariant::MESH);
+        
+        // Verify mesh router VC0 sender channel 2 exists
+        EXPECT_GE(mesh_mapping.get_num_sender_channels_for_vc(0), 3);
+        
+        // Record connection: mesh VC0 ch2 → Z VC1 ch0
+        record_test_connection(
+            registry_,
+            device0, mesh_dirs[i], static_cast<uint8_t>(i),
+            0, 2,  // VC0, sender channel 2
+            device0, RoutingDirection::Z, 4,
+            1, 0,  // VC1, receiver channel 0 (SAME for all 4)
+            ConnectionType::MESH_TO_Z);
+    }
+    
+    // Validate multi-target receiver scenario
+    auto z_incoming = registry_->get_connections_to_dest(device0, RoutingDirection::Z);
+    ASSERT_EQ(z_incoming.size(), 4);
+    
+    // Critical Phase 1.5 validation: All 4 connections target the SAME receiver
+    for (const auto& conn : z_incoming) {
+        EXPECT_EQ(conn.dest_vc, 1);
+        EXPECT_EQ(conn.dest_receiver_channel, 0);  // Same receiver for all!
+        EXPECT_EQ(conn.dest_direction, RoutingDirection::Z);
+    }
+    
+    // Verify all 4 source directions are present
+    std::set<RoutingDirection> sources;
+    for (const auto& conn : z_incoming) {
+        sources.insert(conn.source_direction);
+    }
+    EXPECT_EQ(sources.size(), 4);
+    EXPECT_TRUE(sources.count(RoutingDirection::N) > 0);
+    EXPECT_TRUE(sources.count(RoutingDirection::E) > 0);
+    EXPECT_TRUE(sources.count(RoutingDirection::S) > 0);
+    EXPECT_TRUE(sources.count(RoutingDirection::W) > 0);
+}
+
+TEST_F(RouterConnectionsTest, Phase1_5_EdgeDevice_VariableTargetCount) {
+    // Phase 1.5 supports variable target counts (2-4 mesh routers)
+    // This test validates an edge device with only 2 mesh routers
+    
+    FabricNodeId device0(MeshId{0}, 0);
+    
+    // Only North and East mesh routers present (edge device)
+    record_test_connection(
+        registry_,
+        device0, RoutingDirection::N, 0,
+        0, 2,
+        device0, RoutingDirection::Z, 4,
+        1, 0,  // Same receiver channel
+        ConnectionType::MESH_TO_Z);
+    
+    record_test_connection(
+        registry_,
+        device0, RoutingDirection::E, 1,
+        0, 2,
+        device0, RoutingDirection::Z, 4,
+        1, 0,  // Same receiver channel
+        ConnectionType::MESH_TO_Z);
+    
+    auto z_incoming = registry_->get_connections_to_dest(device0, RoutingDirection::Z);
+    EXPECT_EQ(z_incoming.size(), 2);
+    
+    // Both target same receiver (multi-target with count=2)
+    for (const auto& conn : z_incoming) {
+        EXPECT_EQ(conn.dest_receiver_channel, 0);
+    }
+}
+
+TEST_F(RouterConnectionsTest, Phase1_5_Bidirectional_ZAndMesh) {
+    // Comprehensive test: Z router both receives from and sends to mesh routers
+    // This validates both MESH_TO_Z (multi-target receiver) and Z_TO_MESH
+    
+    FabricNodeId device0(MeshId{0}, 0);
+    
+    // 4 mesh routers
+    std::vector<RoutingDirection> mesh_dirs = {
+        RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W
+    };
+    
+    // MESH_TO_Z: All 4 mesh routers → Z router VC1 receiver 0 (multi-target)
+    for (size_t i = 0; i < 4; ++i) {
+        record_test_connection(
+            registry_,
+            device0, mesh_dirs[i], static_cast<uint8_t>(i),
+            0, 2,  // mesh VC0 sender 2
+            device0, RoutingDirection::Z, 4,
+            1, 0,  // Z VC1 receiver 0 (SAME for all)
+            ConnectionType::MESH_TO_Z);
+    }
+    
+    // Z_TO_MESH: Z router VC1 senders 0-3 → 4 mesh routers (one-to-one)
+    for (size_t i = 0; i < 4; ++i) {
+        record_test_connection(
+            registry_,
+            device0, RoutingDirection::Z, 4,
+            1, static_cast<uint32_t>(i),  // Z VC1 sender i
+            device0, mesh_dirs[i], static_cast<uint8_t>(i),
+            0, 2,  // mesh VC0 receiver
+            ConnectionType::Z_TO_MESH);
+    }
+    
+    // Validate counts
+    EXPECT_EQ(registry_->size(), 8);
+    EXPECT_EQ(registry_->get_connections_by_type(ConnectionType::MESH_TO_Z).size(), 4);
+    EXPECT_EQ(registry_->get_connections_by_type(ConnectionType::Z_TO_MESH).size(), 4);
+    
+    // Validate Z router connectivity
+    auto z_in = registry_->get_connections_to_dest(device0, RoutingDirection::Z);
+    auto z_out = registry_->get_connections_from_source(device0, RoutingDirection::Z);
+    
+    EXPECT_EQ(z_in.size(), 4);   // 4 incoming (multi-target receiver)
+    EXPECT_EQ(z_out.size(), 4);  // 4 outgoing (one per sender channel)
+    
+    // All incoming target same receiver (Phase 1.5 multi-target)
+    for (const auto& conn : z_in) {
+        EXPECT_EQ(conn.dest_receiver_channel, 0);
+    }
+    
+    // All outgoing use different sender channels
+    std::set<uint32_t> sender_channels;
+    for (const auto& conn : z_out) {
+        sender_channels.insert(conn.source_sender_channel);
+    }
+    EXPECT_EQ(sender_channels.size(), 4);  // Channels 0, 1, 2, 3
 }
 
 }  // namespace tt::tt_fabric

@@ -493,5 +493,111 @@ TEST_F(ConnectionRegistryTest, ComplexScenario_MixedConnections) {
     EXPECT_EQ(z_incoming.size(), 4);
 }
 
+// ============ Phase 1.5 Enhancements ============
+
+TEST_F(ConnectionRegistryTest, Phase1_5_MultiTargetReceiver_SameDestination) {
+    // Phase 1.5 enables multiple sources connecting to the same destination receiver
+    // This test validates that the registry correctly tracks this scenario
+    
+    FabricNodeId device0(MeshId{0}, 0);
+    RoutingDirection z_dir = RoutingDirection::Z;
+    uint8_t z_eth_chan = 4;
+    uint32_t z_vc = 1;
+    uint32_t z_receiver_ch = 0;  // SAME receiver for all connections
+    
+    // 4 mesh routers all connect to the same Z router receiver
+    std::vector<RoutingDirection> mesh_dirs = {
+        RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W
+    };
+    
+    for (size_t i = 0; i < 4; ++i) {
+        RouterConnectionRecord record{
+            .source_node = device0,
+            .source_direction = mesh_dirs[i],
+            .source_eth_chan = static_cast<uint8_t>(i),
+            .source_vc = 0,
+            .source_sender_channel = 2,
+            .dest_node = device0,
+            .dest_direction = z_dir,
+            .dest_eth_chan = z_eth_chan,
+            .dest_vc = z_vc,
+            .dest_receiver_channel = z_receiver_ch,  // SAME for all!
+            .connection_type = ConnectionType::MESH_TO_Z
+        };
+        registry_->record_connection(record);
+    }
+    
+    EXPECT_EQ(registry_->size(), 4);
+    
+    // Query by destination
+    auto to_z = registry_->get_connections_to_dest(device0, z_dir);
+    ASSERT_EQ(to_z.size(), 4);
+    
+    // Verify all target the same receiver channel (multi-target)
+    for (const auto& conn : to_z) {
+        EXPECT_EQ(conn.dest_receiver_channel, z_receiver_ch);
+        EXPECT_EQ(conn.dest_vc, z_vc);
+    }
+    
+    // Verify all have different source directions
+    std::set<RoutingDirection> sources;
+    for (const auto& conn : to_z) {
+        sources.insert(conn.source_direction);
+    }
+    EXPECT_EQ(sources.size(), 4);
+}
+
+TEST_F(ConnectionRegistryTest, Phase1_5_QueryMultiTargetByType) {
+    // Validate querying multi-target connections by type
+    
+    FabricNodeId device0(MeshId{0}, 0);
+    
+    // Add 3 MESH_TO_Z connections (multi-target scenario)
+    for (int i = 0; i < 3; ++i) {
+        RouterConnectionRecord record{
+            .source_node = device0,
+            .source_direction = static_cast<RoutingDirection>(i),
+            .source_eth_chan = static_cast<uint8_t>(i),
+            .source_vc = 0,
+            .source_sender_channel = 2,
+            .dest_node = device0,
+            .dest_direction = RoutingDirection::Z,
+            .dest_eth_chan = 4,
+            .dest_vc = 1,
+            .dest_receiver_channel = 0,  // Same receiver
+            .connection_type = ConnectionType::MESH_TO_Z
+        };
+        registry_->record_connection(record);
+    }
+    
+    // Add 1 INTRA_MESH connection (single target)
+    RouterConnectionRecord intra_mesh{
+        .source_node = device0,
+        .source_direction = RoutingDirection::N,
+        .source_eth_chan = 0,
+        .source_vc = 0,
+        .source_sender_channel = 1,
+        .dest_node = FabricNodeId(MeshId{0}, 1),
+        .dest_direction = RoutingDirection::S,
+        .dest_eth_chan = 0,
+        .dest_vc = 0,
+        .dest_receiver_channel = 1,
+        .connection_type = ConnectionType::INTRA_MESH
+    };
+    registry_->record_connection(intra_mesh);
+    
+    // Query by type
+    auto mesh_to_z = registry_->get_connections_by_type(ConnectionType::MESH_TO_Z);
+    auto intra = registry_->get_connections_by_type(ConnectionType::INTRA_MESH);
+    
+    EXPECT_EQ(mesh_to_z.size(), 3);
+    EXPECT_EQ(intra.size(), 1);
+    
+    // Verify MESH_TO_Z connections all target same receiver
+    for (const auto& conn : mesh_to_z) {
+        EXPECT_EQ(conn.dest_receiver_channel, 0);
+    }
+}
+
 }  // namespace tt::tt_fabric
 

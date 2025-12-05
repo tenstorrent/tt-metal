@@ -36,6 +36,17 @@ struct SenderWorkerAdapterSpec {
     eth_chan_directions edm_direction = eth_chan_directions::EAST;
 };
 
+/**
+ * DownstreamConnection - Represents a single downstream connection
+ * 
+ * Used to support multi-target receivers (e.g., Z router VC1 → multiple mesh routers)
+ */
+struct DownstreamConnection {
+    SenderWorkerAdapterSpec spec;
+    eth_chan_directions direction;
+    CoreCoord noc_xy;
+};
+
 /*
  * Base class for channel connection writer adapters.
  * These adapters are used during the fabric build phase and hold information about the connection between
@@ -126,12 +137,20 @@ private:
         const std::function<uint32_t(CoreCoord)>& get_noc_ord) const;
 
     void emit_ct_args(std::vector<uint32_t>& ct_args_out, size_t num_fwd_paths) const override;
+    
+    // Phase 1.5: Helper to check if VC needs multi-target packing
+    bool needs_multi_target_packing(uint32_t vc_idx) const;
 
     std::unordered_set<uint32_t> downstream_edms_connected_by_vc_set;
 
     // holds which downstream cores a given receiver/inbound channel VC can feed into
     std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_max_receiver_channels>
         downstream_edms_connected_by_vc = {};
+    
+    // NEW: Generic per-VC connection list for multi-target support (Phase 1.5)
+    // Maps VC index → list of downstream connections
+    // Used for Z router VC1 which can connect to 2-4 mesh routers
+    std::map<uint32_t, std::vector<DownstreamConnection>> vc_to_downstreams_;
 
     // holds the number of buffer slots per downstream sender channel
     std::array<std::optional<size_t>, builder_config::num_max_sender_channels> sender_channels_num_buffers = {};

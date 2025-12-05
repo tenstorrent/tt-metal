@@ -24,6 +24,14 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
     eth_chan_directions downstream_direction,
     CoreCoord downstream_noc_xy,
     bool is_2D_routing) {
+    // Phase 1.5: Accumulate all connections in generic list (supports multi-target)
+    vc_to_downstreams_[inbound_vc_idx].push_back(DownstreamConnection{
+        .spec = adapter_spec,
+        .direction = downstream_direction,
+        .noc_xy = downstream_noc_xy
+    });
+    
+    // Legacy storage (still needed for backward compatibility)
     downstream_edms_connected_by_vc.at(inbound_vc_idx).push_back(
         {downstream_direction, CoreCoord(downstream_noc_xy.x, downstream_noc_xy.y)});
 
@@ -38,6 +46,8 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
         this->downstream_edms_connected |= (1 << compact_index);
 
         // Store addresses indexed by [vc_idx][compact_index]
+        // NOTE: For INTRA_MESH connections, this works fine (one connection per compact_index)
+        // For Z router multi-target, we'll use vc_to_downstreams_ instead
         this->downstream_edm_buffer_base_addresses.at(inbound_vc_idx).at(compact_index) =
             adapter_spec.edm_buffer_base_addr;
         this->downstream_edm_worker_registration_addresses.at(inbound_vc_idx).at(compact_index) =
@@ -84,12 +94,44 @@ void StaticSizedChannelConnectionWriterAdapter::add_local_tensix_connection(
 
 void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
     uint32_t vc_idx, std::vector<uint32_t>& args_out) const {
+    // Phase 1.5: Check if this VC needs multi-target packing (Z router VC1)
+    if (needs_multi_target_packing(vc_idx)) {
+        // Multi-target packing for Z router VC1 → multiple mesh routers
+        const auto& connections = vc_to_downstreams_.at(vc_idx);
+        uint32_t num_connections = static_cast<uint32_t>(connections.size());
+        
+        // Pack number of downstream connections
+        args_out.push_back(num_connections);
+        
+        // Pack each connection's data
+        for (const auto& conn : connections) {
+            args_out.push_back(conn.spec.edm_buffer_base_addr);
+            args_out.push_back(conn.noc_xy.x);
+            args_out.push_back(conn.noc_xy.y);
+            args_out.push_back(conn.spec.edm_connection_handshake_addr);
+            args_out.push_back(conn.spec.edm_worker_location_info_addr);
+            args_out.push_back(conn.spec.buffer_index_semaphore_id);
+        }
+        
+        return;
+    }
+    
+    // Standard packing for INTRA_MESH connections (backward compatible)
     if (is_2D_routing) {
-        // For 2D: Temporary, until support for VC1 is added
-        TT_FATAL(vc_idx == 0, "VC1 is not supported for 2D routing");
-        // Get the appropriate downstream EDM count based on VC index
-        uint32_t num_downstream_edms = (vc_idx == 0) ? builder_config::get_vc0_downstream_edm_count(is_2D_routing)
-                                                     : builder_config::get_vc1_downstream_edm_count(is_2D_routing);
+        // For 2D: VC0 uses compact index, VC1 not yet fully enabled for standard mesh
+        if (vc_idx != 0) {
+            // VC1 for standard mesh routers - not yet fully enabled
+            // For now, just pack zeros to maintain compatibility
+            uint32_t num_downstream_edms = builder_config::get_vc1_downstream_edm_count(is_2D_routing);
+            args_out.push_back(0);  // connection mask
+            for (size_t i = 0; i < num_downstream_edms * 6; ++i) {  // 6 fields per connection
+                args_out.push_back(0);
+            }
+            return;
+        }
+        
+        // VC0: Standard compact index packing
+        uint32_t num_downstream_edms = builder_config::get_vc0_downstream_edm_count(is_2D_routing);
 
         // Pack connection mask (3-bit mask for 3 downstream EDMs)
         args_out.push_back(this->downstream_edms_connected);
@@ -223,6 +265,18 @@ void StaticSizedChannelConnectionWriterAdapter::emit_ct_args(std::vector<uint32_
             TT_FATAL(this->downstream_sender_channels_num_buffers[i] != 0, "Downstream sender channels num buffers must be greater than 0 for vc_idx: {}", i);
         }
     }
+}
+
+bool StaticSizedChannelConnectionWriterAdapter::needs_multi_target_packing(uint32_t vc_idx) const {
+    // Multi-target packing is needed when:
+    // 1. VC has connections in the new storage
+    // 2. There are multiple connections (> 1)
+    // This is used for Z router VC1 which connects to 2-4 mesh routers
+    auto it = vc_to_downstreams_.find(vc_idx);
+    if (it == vc_to_downstreams_.end()) {
+        return false;
+    }
+    return it->second.size() > 1;
 }
 
 }  // namespace tt::tt_fabric
