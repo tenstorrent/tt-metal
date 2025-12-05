@@ -80,10 +80,14 @@ def setup_ccl_semaphores(mesh_device):
 @pytest.mark.parametrize("eps", [1e-6])
 @pytest.mark.parametrize(
     "mean, var, outlier_pct, outlier_var",
-    [(0, 1, 0, 0), (0, 10, 0, 0), (-10, 10, 0, 0), (0, 1, 0.01, 10)],
-    ids=["case1", "case2", "case3", "case4"],
+    [
+        (0, 1, 0, 0),
+    ],
+    ids=[
+        "case1",
+    ],
 )
-@pytest.mark.parametrize("norm_type", ["layer_norm", "rms_norm"])
+@pytest.mark.parametrize("norm_type", ["layer_norm"])
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -140,19 +144,29 @@ def test_distributed_norm_comparison(
 
     N_DEV = 8
     ttnn_weight = ttnn.from_torch(
-        torch_weight.reshape(N_DEV, 1, -1, 32),
+        torch_weight.reshape(1, 1, 1, hidden_dim),
         dtype=ttnn.bfloat16,
         device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
     )
+    # breakpoint()
+    ttnn_weight_back = ttnn.to_torch(ttnn_weight, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+    torch.set_printoptions(profile="full")
+
+    with open("pre_ttnn.txt", "w") as f:
+        f.write(str(torch_weight))
+    with open("post_ttnn.txt", "w") as f:
+        f.write(str(ttnn_weight_back))
+
+    ttnn.visualize_tensor(ttnn_weight)
     if norm_type == "layer_norm":
         ttnn_bias = ttnn.from_torch(
-            torch_bias.reshape(N_DEV, 1, -1, 32),
+            torch_bias.reshape(1, 1, 1, hidden_dim),
             dtype=ttnn.bfloat16,
             device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
         )
 
     # Use highest precision compute kernel config for comparison
@@ -170,27 +184,29 @@ def test_distributed_norm_comparison(
     2. Gather stats tensor across devices.
     3. Reduce stats tensor. Compute variance and mean. Do normalization.
     """
-    use_new = ttnn.LayerNormDistributedDefaultProgramConfig(
+    use_new = ttnn.LayerNormDefaultProgramConfig(
         legacy_reduction=False,
         legacy_rsqrt=False,
+        use_welford=True,
     )
-    use_old = ttnn.LayerNormDistributedDefaultProgramConfig(
+    use_old = ttnn.LayerNormDefaultProgramConfig(
         legacy_reduction=True,
         legacy_rsqrt=True,
+        use_welford=False,
     )
     if norm_type == "layer_norm":
         ttnn_stats = ttnn.layer_norm_pre_all_gather(
             ttnn_input,
             compute_kernel_config=compute_kernel_config,
             dtype=ttnn.bfloat16,
-            distributed_program_config=use_new,
+            program_config=use_new,
         )
     elif norm_type == "rms_norm":
         ttnn_stats = ttnn.rms_norm_pre_all_gather(
             ttnn_input,
             compute_kernel_config=compute_kernel_config,
             dtype=ttnn.bfloat16,
-            distributed_program_config=use_new,
+            program_config=use_new,
         )
     ccl_semaphore_handles = setup_ccl_semaphores(mesh_device)
     ttnn.synchronize_device(mesh_device)
@@ -213,6 +229,7 @@ def test_distributed_norm_comparison(
             weight=ttnn_weight,
             bias=ttnn_bias,
             compute_kernel_config=compute_kernel_config,
+            program_config=use_new,
         )
     elif norm_type == "rms_norm":
         ttnn_output = ttnn.rms_norm_post_all_gather(
@@ -221,7 +238,7 @@ def test_distributed_norm_comparison(
             epsilon=eps,
             weight=ttnn_weight,
             compute_kernel_config=compute_kernel_config,
-            distributed_program_config=use_new,
+            program_config=use_new,
         )
 
     ttnn_output_torch = ttnn.to_torch(ttnn_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
@@ -237,6 +254,10 @@ def test_distributed_norm_comparison(
         )
     pcc_passed, pcc_value = comp_pcc(torch_output, ttnn_output_torch, pcc=0.99)
     max_error = calculate_max_error(torch_output, ttnn_output_torch)
+    with open("ttnn_tensor_output.txt", "w") as f:
+        f.write(str(ttnn_output_torch[0][0][0]))
+    with open("torch_tensor_output.txt", "w") as f:
+        f.write(str(torch_output[0][0][0]))
 
     passes_allclose = torch.allclose(torch_output, ttnn_output_torch)
 

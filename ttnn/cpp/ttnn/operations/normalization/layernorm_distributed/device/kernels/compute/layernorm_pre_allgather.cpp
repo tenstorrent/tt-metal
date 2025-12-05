@@ -63,7 +63,6 @@ void MAIN {
             REL();
             cb_push_back(cb_x2, blk);
         }
-
         /*
          * sum(x**2)
          */
