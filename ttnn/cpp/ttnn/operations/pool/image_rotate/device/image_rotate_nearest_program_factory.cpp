@@ -22,10 +22,6 @@ using namespace tt::tt_metal;
 
 // Constants for nearest interpolation (much simpler than bilinear)
 constexpr uint32_t NEAREST_BUFFERING_FACTOR = 2;
-
-// Helper function to decide whether to use split reader for nearest mode
-static bool should_use_split_reader_nearest(const Tensor& input_tensor, const Tensor& output_tensor) { return true; }
-
 // Helper to convert float to bfloat16 representation (nearest-specific)
 static uint16_t nearest_float_to_bfloat16(float value) {
     return static_cast<uint16_t>(std::bit_cast<uint32_t>(value) >> 16);
@@ -75,9 +71,6 @@ ImageRotateDeviceOperation::NearestProgramFactory::create(
     // Fill value as bfloat16
     const uint16_t fill_value_bf16 = nearest_float_to_bfloat16(operation_attributes.fill);
 
-    // Decide whether to use split reader
-    const bool enable_split_reader = should_use_split_reader_nearest(input_tensor, output_tensor);
-
     // Work distribution - Total work units = N * H * W (one output pixel per work unit)
     const uint32_t total_output_sticks = input_batch * input_height * input_width;
 
@@ -96,82 +89,54 @@ ImageRotateDeviceOperation::NearestProgramFactory::create(
     const uint32_t input_stick_nbytes = input_channels * element_size;
     const uint32_t output_stick_nbytes = input_channels * element_size;
 
-    // CB indices - Much simpler for nearest mode
-    uint32_t cb_idx = tt::CBIndex::c_0;
-
-    // CB_0: Output CB for computed output sticks (RISCV_0 reader)
+    // CB_0: Output CB for communication between reader and writer
     const uint32_t output_cb_page_size = output_stick_nbytes;
     const auto [output_cb_index, output_cb_handle] = tt::tt_metal::create_cb(
-        cb_idx++, program, all_cores, output_cb_page_size, NEAREST_BUFFERING_FACTOR, output_cb_data_format);
+        tt::CBIndex::c_0, program, all_cores, output_cb_page_size, NEAREST_BUFFERING_FACTOR, output_cb_data_format);
 
-    // CB_1: Output CB for split reader mode (RISCV_1 reader) - only created if split reader enabled
-    uint32_t output_cb_index_1 = 0;
-    if (enable_split_reader) {
-        const auto [cb_idx_1, cb_handle_1] = tt::tt_metal::create_cb(
-            cb_idx++, program, all_cores, output_cb_page_size, NEAREST_BUFFERING_FACTOR, output_cb_data_format);
-        output_cb_index_1 = cb_idx_1;
-    }
-
-    // Reader/Writer compile-time arguments for nearest mode (RISCV_0 gets CB_0)
-    std::vector<uint32_t> reader_writer_compile_time_args = {
-        output_cb_index,                // ct_arg[0]: output_cb_index (CB_0 for RISCV_0)
-        input_stick_nbytes,             // ct_arg[1]: input_stick_nbytes
-        output_stick_nbytes,            // ct_arg[2]: output_stick_nbytes
-        input_batch,                    // ct_arg[3]: input_batch
-        input_height,                   // ct_arg[4]: input_height
-        input_width,                    // ct_arg[5]: input_width
-        input_channels,                 // ct_arg[6]: input_channels
-        enable_split_reader ? 1U : 0U,  // ct_arg[7]: enable_split_reader
-        0U,                             // ct_arg[8]: reader_id
+    // Reader compile-time arguments (RISCV_0)
+    std::vector<uint32_t> reader_compile_time_args = {
+        output_cb_index,     // ct_arg[0]: output_cb_index
+        input_stick_nbytes,  // ct_arg[1]: input_stick_nbytes
+        input_batch,         // ct_arg[2]: input_batch
+        input_height,        // ct_arg[3]: input_height
+        input_width,         // ct_arg[4]: input_width
+        input_channels,      // ct_arg[5]: input_channels
     };
 
     // Append tensor accessor args for input tensor
-    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_writer_compile_time_args);
-    // Append tensor accessor args for output tensor
-    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(reader_writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
 
-    // Create reader+writer kernel (combined for nearest mode)
+    // Writer compile-time arguments (RISCV_1)
+    std::vector<uint32_t> writer_compile_time_args = {
+        output_cb_index,      // ct_arg[0]: output_cb_index
+        output_stick_nbytes,  // ct_arg[1]: output_stick_nbytes
+    };
+
+    // Append tensor accessor args for output tensor
+    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
+
+    // Create reader kernel (RISCV_0)
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/pool/image_rotate/device/kernels/dataflow/"
-        "reader_writer_image_rotate_nearest_interleaved.cpp",
+        "reader_image_rotate_nearest_interleaved.cpp",
         all_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = reader_writer_compile_time_args});
+            .compile_args = reader_compile_time_args});
 
-    // Create second reader+writer kernel for split reader mode
-    tt::tt_metal::KernelHandle reader1_kernel_id = 0;
-    if (enable_split_reader) {
-        // RISCV_1 gets CB_1
-        std::vector<uint32_t> reader1_compile_time_args = {
-            output_cb_index_1,              // ct_arg[0]: output_cb_index (CB_1 for RISCV_1)
-            input_stick_nbytes,             // ct_arg[1]: input_stick_nbytes
-            output_stick_nbytes,            // ct_arg[2]: output_stick_nbytes
-            input_batch,                    // ct_arg[3]: input_batch
-            input_height,                   // ct_arg[4]: input_height
-            input_width,                    // ct_arg[5]: input_width
-            input_channels,                 // ct_arg[6]: input_channels
-            enable_split_reader ? 1U : 0U,  // ct_arg[7]: enable_split_reader
-            1U,                             // ct_arg[8]: reader_id = 1
-        };
-
-        // Append tensor accessor args for input tensor
-        tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader1_compile_time_args);
-        // Append tensor accessor args for output tensor
-        tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(reader1_compile_time_args);
-
-        reader1_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/pool/image_rotate/device/kernels/dataflow/"
-            "reader_writer_image_rotate_nearest_interleaved.cpp",
-            all_cores,
-            tt::tt_metal::DataMovementConfig{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = tt::tt_metal::NOC::RISCV_1_default,
-                .compile_args = reader1_compile_time_args});
-    }
+    // Create writer kernel (RISCV_1)
+    tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/pool/image_rotate/device/kernels/dataflow/"
+        "writer_image_rotate_nearest_interleaved.cpp",
+        all_cores,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt::tt_metal::NOC::RISCV_1_default,
+            .compile_args = writer_compile_time_args});
 
     // Set runtime arguments for each core
     uint32_t sticks_processed = 0;
@@ -180,24 +145,27 @@ ImageRotateDeviceOperation::NearestProgramFactory::create(
         const uint32_t num_sticks =
             core_group_1.contains(core) ? num_sticks_per_core_group_1 : num_sticks_per_core_group_2;
 
-        // Reader+Writer runtime args (combined kernel)
+        // Reader runtime args
         std::vector<uint32_t> reader_runtime_args = {
             input_tensor.buffer()->address(),       // rt_arg[0]: input_buffer_address
-            output_tensor.buffer()->address(),      // rt_arg[1]: output_buffer_address
-            num_sticks,                             // rt_arg[2]: num_sticks
-            sticks_processed,                       // rt_arg[3]: start_stick_id
-            std::bit_cast<uint32_t>(cos_angle),     // rt_arg[4]: cos_angle (as uint32 bits)
-            std::bit_cast<uint32_t>(sin_angle),     // rt_arg[5]: sin_angle (as uint32 bits)
-            std::bit_cast<uint32_t>(center_x),      // rt_arg[6]: center_x (as uint32 bits)
-            std::bit_cast<uint32_t>(center_y),      // rt_arg[7]: center_y (as uint32 bits)
-            static_cast<uint32_t>(fill_value_bf16)  // rt_arg[8]: fill_value (bfloat16)
+            num_sticks,                             // rt_arg[1]: num_sticks
+            sticks_processed,                       // rt_arg[2]: start_stick_id
+            std::bit_cast<uint32_t>(cos_angle),     // rt_arg[3]: cos_angle (as uint32 bits)
+            std::bit_cast<uint32_t>(sin_angle),     // rt_arg[4]: sin_angle (as uint32 bits)
+            std::bit_cast<uint32_t>(center_x),      // rt_arg[5]: center_x (as uint32 bits)
+            std::bit_cast<uint32_t>(center_y),      // rt_arg[6]: center_y (as uint32 bits)
+            static_cast<uint32_t>(fill_value_bf16)  // rt_arg[7]: fill_value (bfloat16)
+        };
+
+        // Writer runtime args
+        std::vector<uint32_t> writer_runtime_args = {
+            output_tensor.buffer()->address(),  // rt_arg[0]: output_buffer_address
+            num_sticks,                         // rt_arg[1]: num_sticks
+            sticks_processed,                   // rt_arg[2]: start_stick_id
         };
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-
-        if (enable_split_reader) {
-            tt::tt_metal::SetRuntimeArgs(program, reader1_kernel_id, core, reader_runtime_args);
-        }
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
 
         sticks_processed += num_sticks;
     }
@@ -205,11 +173,10 @@ ImageRotateDeviceOperation::NearestProgramFactory::create(
     return {
         std::move(program),
         {.reader_kernel_id = reader_kernel_id,
-         .writer_kernel_id = reader_kernel_id,    // Same kernel handles both read and write
-         .reader1_kernel_id = reader1_kernel_id,  // Second reader for split mode
+         .writer_kernel_id = writer_kernel_id,
          .num_cores = num_cores,
          .num_cores_y = num_cores_y,
-         .enable_split_reader = enable_split_reader}};
+         .enable_split_reader = false}};
 }
 
 void ImageRotateDeviceOperation::NearestProgramFactory::override_runtime_arguments(
@@ -219,10 +186,9 @@ void ImageRotateDeviceOperation::NearestProgramFactory::override_runtime_argumen
     tensor_return_value_t& output) {
     auto& program = cached_program.program;
     auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    auto& reader1_kernel_id = cached_program.shared_variables.reader1_kernel_id;
+    auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
     auto& num_cores = cached_program.shared_variables.num_cores;
     auto& num_cores_y = cached_program.shared_variables.num_cores_y;
-    auto& enable_split_reader = cached_program.shared_variables.enable_split_reader;
 
     auto src_buffer = tensor_args.input.buffer();
     auto dst_buffer = output.buffer();
@@ -254,28 +220,25 @@ void ImageRotateDeviceOperation::NearestProgramFactory::override_runtime_argumen
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
+        // Update reader kernel runtime arguments
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
-            runtime_args[1] = dst_buffer->address();
-            // Update rotation parameters (rt_args 4-8)
-            runtime_args[4] = std::bit_cast<uint32_t>(cos_angle);
-            runtime_args[5] = std::bit_cast<uint32_t>(sin_angle);
-            runtime_args[6] = std::bit_cast<uint32_t>(center_x);
-            runtime_args[7] = std::bit_cast<uint32_t>(center_y);
-            runtime_args[8] = static_cast<uint32_t>(fill_value_bf16);
+            runtime_args[0] = src_buffer->address();  // input_buffer_address
+            // runtime_args[1] = num_sticks (unchanged)
+            // runtime_args[2] = start_stick_id (unchanged)
+            runtime_args[3] = std::bit_cast<uint32_t>(cos_angle);      // cos_angle
+            runtime_args[4] = std::bit_cast<uint32_t>(sin_angle);      // sin_angle
+            runtime_args[5] = std::bit_cast<uint32_t>(center_x);       // center_x
+            runtime_args[6] = std::bit_cast<uint32_t>(center_y);       // center_y
+            runtime_args[7] = static_cast<uint32_t>(fill_value_bf16);  // fill_value
         }
 
-        if (enable_split_reader) {
-            auto& runtime_args1 = GetRuntimeArgs(program, reader1_kernel_id, core);
-            runtime_args1[0] = src_buffer->address();
-            runtime_args1[1] = dst_buffer->address();
-            // Update rotation parameters (rt_args 4-8)
-            runtime_args1[4] = std::bit_cast<uint32_t>(cos_angle);
-            runtime_args1[5] = std::bit_cast<uint32_t>(sin_angle);
-            runtime_args1[6] = std::bit_cast<uint32_t>(center_x);
-            runtime_args1[7] = std::bit_cast<uint32_t>(center_y);
-            runtime_args1[8] = static_cast<uint32_t>(fill_value_bf16);
+        // Update writer kernel runtime arguments
+        {
+            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            runtime_args[0] = dst_buffer->address();  // output_buffer_address
+            // runtime_args[1] = num_sticks (unchanged)
+            // runtime_args[2] = start_stick_id (unchanged)
         }
     }
 }
