@@ -215,8 +215,7 @@ void EthernetKernel::process_defines(
     const std::function<void(const std::string& define, const std::string& value)> callback) const {
     Kernel::process_defines(callback);
     callback("NOC_INDEX", std::to_string(this->config_.noc));
-    // pass default noc mode as eth does not need it, just for compile to pass
-    callback("NOC_MODE", std::to_string(NOC_MODE::DM_DEDICATED_NOC));
+    callback("NOC_MODE", std::to_string(this->config_.noc_mode));
 }
 
 std::string_view DataMovementKernel::get_compiler_opt_level() const {
@@ -326,10 +325,12 @@ std::string DataMovementKernel::config_hash() const {
 
 // Add "eth_" to the hash to differentiate between erisc and brisc.
 std::string EthernetKernel::config_hash() const {
-    return fmt::format("eth_{}_{}_{}",
+    return fmt::format(
+        "eth_{}_{}_{}_{}",
+        enchantum::to_string(this->config_.processor),
         enchantum::to_string(this->config_.noc),
-        this->config_.eth_mode,
-        this->config_.processor);
+        enchantum::to_string(this->config_.noc_mode),
+        enchantum::to_string(this->config_.eth_mode));
 }
 
 std::string ComputeKernel::config_hash() const {
@@ -432,9 +433,10 @@ void Kernel::set_runtime_args(const CoreCoord& logical_core, stl::Span<const uin
     //                  Should this check only be enabled in debug mode?
     TT_ASSERT(
         this->is_on_logical_core(logical_core),
-        "Cannot set runtime args for core {} since kernel {} is not placed on it!",
+        "Cannot set runtime args for core {} since kernel {} is not placed on it. core range set: {}!",
         logical_core.str(),
-        this->name());
+        this->name(),
+        core_range_set_.str());
 
     // Keep state for validation, to be able to check from both set_runtime_args() and set_common_runtime_args() APIs.
 

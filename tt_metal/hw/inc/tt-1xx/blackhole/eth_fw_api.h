@@ -13,6 +13,7 @@
 #define MEM_SYSENG_ETH_MSG_TYPE_MASK 0x0000FFFF
 #define MEM_SYSENG_ETH_MSG_LINK_STATUS_CHECK 0x0001
 #define MEM_SYSENG_ETH_MSG_RELEASE_CORE 0x0002
+#define MEM_SYSENG_ETH_MSG_DYNAMIC_NOC_INIT 0x000F
 #define MEM_SYSENG_ETH_MAILBOX_ADDR 0x7D000
 #define MEM_SYSENG_ETH_MAILBOX_NUM_ARGS 3
 #define MEM_SYSENG_ETH_HEARTBEAT 0x7CC70
@@ -174,7 +175,7 @@ struct eth_api_table_t {
     uint32_t* send_eth_msg_ptr;           // Pointer to the send eth msg function
     uint32_t* service_eth_msg_ptr;        // Pointer to the service eth msg function
     uint32_t* eth_link_status_check_ptr;  // Pointer to the eth link status check function
-    uint32_t* eth_flush_icache_ptr;       // Pointer to the eth flush icache function
+    uint32_t* eth_dynamic_noc_init_ptr;   // Pointer to the dynamic noc init function
     uint32_t spare[16 - 4];
 };
 
@@ -288,6 +289,35 @@ FORCE_INLINE bool is_link_up() {
         eth_wait_cycles(2 << 30);
     }
     return link_status->rx_link_up == 1;
+#endif
+}
+
+FORCE_INLINE void base_fw_dynamic_noc_local_state_init() {
+    // Reinitialize the dynamic NOC counters in base firmware
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 1)
+    constexpr uint32_t risc1_mailbox_addr = MEM_SYSENG_ETH_MAILBOX_ADDR + (MAILBOX_RISC1 * sizeof(eth_mailbox_t));
+
+    volatile tt_l1_ptr uint32_t* risc1_mailbox_msg_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(risc1_mailbox_addr + offsetof(eth_mailbox_t, msg));
+    uint32_t risc1_mailbox_val = *risc1_mailbox_msg_ptr;
+
+    // Make sure mailbox is free to accept a new message
+    do {
+        invalidate_l1_cache();
+        risc1_mailbox_val = *risc1_mailbox_msg_ptr;
+    } while (((risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK) != MEM_SYSENG_ETH_MSG_DONE) &&
+             risc1_mailbox_val != 0);
+
+    *risc1_mailbox_msg_ptr = MEM_SYSENG_ETH_MSG_CALL | MEM_SYSENG_ETH_MSG_DYNAMIC_NOC_INIT;
+
+    do {
+        invalidate_l1_cache();
+        risc1_mailbox_val = *risc1_mailbox_msg_ptr;
+    } while ((risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK) == MEM_SYSENG_ETH_MSG_CALL);
+#else
+    // Directly call the function on ERISC0. No need to switch to base firmware.
+    reinterpret_cast<void (*)()>(
+        (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_dynamic_noc_init_ptr))();
 #endif
 }
 

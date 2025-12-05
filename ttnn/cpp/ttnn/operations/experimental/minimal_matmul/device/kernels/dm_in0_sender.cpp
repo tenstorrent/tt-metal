@@ -27,12 +27,14 @@ void kernel_main() {
     uint32_t in0_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
     constexpr uint32_t is_output_writer = get_compile_time_arg_val(17);
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
+    constexpr uint32_t in3_tile_size = get_compile_time_arg_val(19);
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
     const uint32_t in0_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t in2_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in3_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_sink_core = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_dest_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_dest_noc_y = get_arg_val<uint32_t>(argidx++);
@@ -45,7 +47,7 @@ void kernel_main() {
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
-    constexpr auto in0_args = TensorAccessorArgs<19>();
+    constexpr auto in0_args = TensorAccessorArgs<20>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr, in0_tile_size);
     constexpr auto out_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
     const auto out_reader = TensorAccessor(out_args, out_addr, out_tile_size);
@@ -87,6 +89,15 @@ void kernel_main() {
             device_k_block_start_ids,
             forward_k_block_schedule);
     }
+
+#ifdef READ_FROM_LOCAL_INPUT
+#ifdef FUSE_BIAS
+    constexpr auto in3_args = TensorAccessorArgs<in2_args.next_compile_time_args_offset()>();
+#else
+    constexpr auto in3_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+#endif
+    const auto in3_reader = TensorAccessor(in3_args, in3_addr, in3_tile_size);
+#endif
 #endif
 
     volatile tt_l1_ptr uint32_t* in0_valid_semaphore_addr_ptr =
@@ -178,6 +189,12 @@ void kernel_main() {
                         in0_shape,
                         in0_start_address,
                         in0_tile_size,
+#ifdef READ_FROM_LOCAL_INPUT
+                        in3_reader,
+                        fused_op_receiver.local_k_start,
+                        fused_op_receiver.local_k_end,
+                        fused_op_receiver.input_tensor_Wt,
+#endif
                         m_tile,
                         m_tile_end,
                         k_block * K_block_tiles,
