@@ -18,4 +18,5 @@ Summarize the changes made and its impact.
 - [ ] [Galaxy demo tests, for Llama](https://github.com/tenstorrent/tt-metal/actions/workflows/galaxy-demo-tests.yaml) CI passes, if applicable, because of current Llama work
 - [ ] (For runtime and ops writers) [T3000 unit tests](https://github.com/tenstorrent/tt-metal/actions/workflows/t3000-unit-tests.yaml) CI passes (if applicable, since this is run on push to main)
 - [ ] (For models and ops writers) [T3000 demo tests](https://github.com/tenstorrent/tt-metal/actions/workflows/t3000-demo-tests.yaml) CI passes (if applicable, since this is required for release)
+- [ ] [cpp-unit-tests](https://github.com/tenstorrent/tt-metal/actions/workflows/tt-metal-l2-nightly.yaml) job passes
 - [ ] New/Existing tests provide coverage for changes
