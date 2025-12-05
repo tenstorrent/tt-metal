@@ -1,0 +1,12 @@
+Test,Metric,Unit,GCC Mean ± StdDev,GCC CV%,LLVM Mean ± StdDev,LLVM CV%,Difference,% Change,Samples,Notes
+COMPILE TIME (Lower is Better),,,,,,,,,,
+all_processors_1_core_1_rta,Compile Time,ms,0.1226 ± 0.0036,2.96,0.1324 ± 0.0075,5.64,0.0098,7.97,5/5,"Equivalent performance (5 runs, within noise)"
+brisc_only_trace,Compile Time,ms,0.0933 ± 0.0098,10.54,0.1067 ± 0.0241,22.59,0.0134,14.37,5/5,"Equivalent performance (5 runs, within noise)"
+ncrisc_only_trace,Compile Time,ms,0.0920 ± 0.0130,14.17,0.0958 ± 0.0029,3.05,0.0039,4.2,5/5,"Equivalent performance (5 runs, within noise)"
+trisc_only_trace,Compile Time,ms,0.0877 ± 0.0021,2.41,0.1058 ± 0.0138,13.09,0.0182,20.71,5/5,"LLVM 20.7% slower (5 runs, significant)"
+,,,,,,,,,,
+RUNTIME PERFORMANCE (Lower is Better),,,,,,,,,,
+all_processors_1_core_1_rta,Runtime (Dispatch),ms,25.1603 ± 0.0051,0.02,25.1646 ± 0.0273,0.11,0.0043,0.02,5/5,"Equivalent performance (5 runs, within noise)"
+brisc_only_trace,Runtime (Dispatch),ms,20.6626 ± 0.0104,0.05,20.6625 ± 0.0088,0.04,-0.0001,-0.0,5/5,"Equivalent performance (5 runs, within noise)"
+ncrisc_only_trace,Runtime (Dispatch),ms,18.6273 ± 0.0330,0.18,18.6184 ± 0.0176,0.09,-0.0088,-0.05,5/5,"Equivalent performance (5 runs, within noise)"
+trisc_only_trace,Runtime (Dispatch),ms,20.1797 ± 0.0142,0.07,20.1853 ± 0.0120,0.06,0.0056,0.03,5/5,"Equivalent performance (5 runs, within noise)"

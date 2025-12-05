@@ -713,8 +713,14 @@ static int pgm_dispatch(T& state, TestInfo info) {
         ProgramExecutor executor([]() {}, []() {}, 0);  // Initialize with placeholder
         std::vector<MeshWorkload> mesh_workloads;
         if (info.load_prefetcher) {
+            // Measure kernel compilation time
+            auto compile_start = std::chrono::high_resolution_clock::now();
             auto [programs, extra_counters] = create_load_prefetcher_programs(info, mesh_device, dispatch_core_type);
             executor = create_load_prefetcher_executor(info, mesh_workloads, programs, mesh_cq);
+            auto compile_end = std::chrono::high_resolution_clock::now();
+            auto compile_time_ns =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(compile_end - compile_start).count();
+            log_info(LogTest, "Kernel compilation time: {} ns ({:.3f} ms)", compile_time_ns, compile_time_ns / 1e6);
             // Store extra counters for later use
             if constexpr (std::is_same_v<T, benchmark::State>) {
                 if (dump_test_info) {
@@ -724,8 +730,14 @@ static int pgm_dispatch(T& state, TestInfo info) {
                 }
             }
         } else {
+            // Measure kernel compilation time
+            auto compile_start = std::chrono::high_resolution_clock::now();
             auto programs = create_standard_programs(info, mesh_device, dispatch_core_type);
             executor = create_standard_executor(info, mesh_workloads, programs, mesh_cq);
+            auto compile_end = std::chrono::high_resolution_clock::now();
+            auto compile_time_ns =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(compile_end - compile_start).count();
+            log_info(LogTest, "Kernel compilation time: {} ns ({:.3f} ms)", compile_time_ns, compile_time_ns / 1e6);
         }
 
         // Set benchmark counters before timing (all values are known at this point)
