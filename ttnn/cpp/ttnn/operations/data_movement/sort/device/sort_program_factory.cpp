@@ -593,7 +593,7 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
         value_tensor_peer_cb_index,
         index_tensor_peer_cb_index,
         packer_unpacker_sync_cb_index,
-    };
+        static_cast<uint32_t>(attributes.stable)};
     const std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_cross_core_data_exchange.cpp";
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(

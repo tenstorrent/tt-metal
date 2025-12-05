@@ -199,6 +199,7 @@ std::tuple<TopKDeviceOperation::operation_attributes_t, TopKDeviceOperation::ten
     int8_t dim,
     bool largest,
     bool sorted,
+    bool stable,
     const tt::tt_metal::MemoryConfig& memory_config,
     const tt::tt_metal::CoreRangeSet& sub_core_grids,
     const std::optional<Tensor>& indices_tensor,
@@ -209,6 +210,7 @@ std::tuple<TopKDeviceOperation::operation_attributes_t, TopKDeviceOperation::ten
             .dim = dim,
             .largest = largest,
             .sorted = sorted,
+            .stable = stable,
             .output_memory_config = memory_config,
             .sub_core_grids = sub_core_grids},
         tensor_args_t{

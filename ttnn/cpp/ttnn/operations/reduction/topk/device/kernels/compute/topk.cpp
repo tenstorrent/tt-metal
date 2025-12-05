@@ -71,6 +71,7 @@ void MAIN {
     constexpr uint32_t Wt = get_compile_time_arg_val(9);
     constexpr uint32_t output_tiles = get_compile_time_arg_val(10);
     constexpr uint32_t largest = get_compile_time_arg_val(11);
+    constexpr bool stable = get_compile_time_arg_val(12) == 1;
 
     ckernel::topk_tile_init();
     transpose_wh_init(input_val_cb_index, output_val_cb_index);
