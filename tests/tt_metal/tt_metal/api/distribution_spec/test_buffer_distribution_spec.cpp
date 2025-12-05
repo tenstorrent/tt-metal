@@ -38,7 +38,7 @@ protected:
             tt::tt_metal::distributed::MeshDeviceConfig(system_mesh_shape, std::nullopt),
             DEFAULT_L1_SMALL_SIZE,
             DEFAULT_TRACE_REGION_SIZE,
-            /*num_cqs=*/1,
+            /*num_command_queues=*/1,
             core_type,
             {},
             DEFAULT_WORKER_L1_SIZE);
