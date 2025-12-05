@@ -31,8 +31,6 @@
 namespace tt::tt_metal {
 namespace {
 
-using ::testing::Eq;
-using ::testing::Pointwise;
 using ::tt::tt_metal::is_device_tensor;
 
 using MultiProducerCommandQueueTest = ttnn::MultiCommandQueueSingleDeviceFixture;
@@ -158,8 +156,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
             const Tensor readback_tensor = device_tensor.cpu(/*blocking=*/true, read_cq);
             EXPECT_FALSE(is_device_tensor(readback_tensor));
             std::iota(expected_readback_data.begin(), expected_readback_data.end(), j);
-            EXPECT_THAT(readback_tensor.to_vector<uint32_t>(), Pointwise(Eq(), expected_readback_data))
-                << "At iteration " << j;
+            EXPECT_EQ(readback_tensor.to_vector<uint32_t>(), expected_readback_data) << "At iteration " << j;
 
             {
                 std::unique_lock<std::mutex> lock(event_mutex);
