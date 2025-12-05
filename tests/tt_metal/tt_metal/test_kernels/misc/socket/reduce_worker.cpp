@@ -47,8 +47,8 @@ void kernel_main() {
     noc_semaphore_wait(config0_sem_addr, 1);
     noc_semaphore_wait(config1_sem_addr, 1);
     // Create Socket Interfaces from configs supplied by receivers
-    SocketReceiverInterface receiver_socket0 = create_receiver_socket_interface(socket_config_addr0);
-    SocketReceiverInterface receiver_socket1 = create_receiver_socket_interface(socket_config_addr1);
+    SocketReceiverInterface receiver_socket0 = create_receiver_socket_interface_2(socket_config_addr0);
+    SocketReceiverInterface receiver_socket1 = create_receiver_socket_interface_2(socket_config_addr1);
 
     set_receiver_socket_page_size(receiver_socket0, page_size);
     set_receiver_socket_page_size(receiver_socket1, page_size);

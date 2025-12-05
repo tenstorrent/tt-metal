@@ -11,6 +11,8 @@
 #include "internal/risc_attribs.h"
 #include "hostdev/socket.h"
 #include "api/alignment.h"
+#include "utils/utils.h"
+#include "debug/dprint.h"
 
 #ifndef COMPILE_FOR_TRISC
 #include <type_traits>
@@ -30,7 +32,7 @@ void fabric_set_unicast_route(volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_head
         if constexpr (std::is_same_v<SocketT, sender_downstream_encoding>) {
             fabric_set_unicast_route(fabric_header_addr, socket.downstream_chip_id, socket.downstream_mesh_id);
         } else if constexpr (std::is_same_v<SocketT, SocketReceiverInterface>) {
-            fabric_set_unicast_route(fabric_header_addr, socket.upstream_chip_id, socket.upstream_mesh_id);
+            fabric_set_unicast_route(fabric_header_addr, socket.c2c.upstream_chip_id, socket.c2c.upstream_mesh_id);
         } else {
             static_assert(always_false<SocketT>, "Unsupported socket type passed to set_fabric_unicast_route");
         }
@@ -38,7 +40,7 @@ void fabric_set_unicast_route(volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_head
         if constexpr (std::is_same_v<SocketT, sender_downstream_encoding>) {
             fabric_set_unicast_route<false>((LowLatencyPacketHeader*)fabric_header_addr, socket.downstream_chip_id);
         } else if constexpr (std::is_same_v<SocketT, SocketReceiverInterface>) {
-            fabric_set_unicast_route<false>((LowLatencyPacketHeader*)fabric_header_addr, socket.upstream_chip_id);
+            fabric_set_unicast_route<false>((LowLatencyPacketHeader*)fabric_header_addr, socket.c2c.upstream_chip_id);
         } else {
             static_assert(always_false<SocketT>, "Unsupported socket type passed to fabric_set_unicast_route");
         }
@@ -118,6 +120,8 @@ void socket_reserve_pages(const SocketSenderInterface& socket, uint32_t num_page
 void socket_push_pages(SocketSenderInterface& socket, uint32_t num_pages) {
     uint32_t num_bytes = num_pages * socket.page_size;
     ASSERT(num_bytes <= socket.downstream_fifo_curr_size);
+    volatile tt_l1_ptr sender_socket_md* socket_config =
+        reinterpret_cast<volatile tt_l1_ptr sender_socket_md*>(socket.config_addr);
     if (socket.write_ptr + num_bytes >= socket.downstream_fifo_curr_size + socket.downstream_fifo_addr) {
         socket.write_ptr = socket.write_ptr + num_bytes - socket.downstream_fifo_curr_size;
         socket.bytes_sent += num_bytes + socket.downstream_fifo_total_size - socket.downstream_fifo_curr_size;
@@ -125,6 +129,7 @@ void socket_push_pages(SocketSenderInterface& socket, uint32_t num_pages) {
         socket.write_ptr += num_bytes;
         socket.bytes_sent += num_bytes;
     }
+    socket_config->bytes_sent = socket.bytes_sent;
 }
 
 #ifndef COMPILE_FOR_TRISC
@@ -132,10 +137,27 @@ void socket_notify_receiver(const SocketSenderInterface& socket) {
     // TODO: Store noc encoding in struct?
     for (uint32_t i = 0; i < socket.num_downstreams; i++) {
         sender_downstream_encoding downstream_enc = get_downstream_encoding(socket, i);
+        DPRINT << "Notifying receiver " << downstream_enc.downstream_noc_x << ", " << downstream_enc.downstream_noc_y
+               << " " << socket.downstream_bytes_sent_addr << ENDL();
         auto downstream_bytes_sent_noc_addr = get_noc_addr(
             downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, socket.downstream_bytes_sent_addr);
         noc_inline_dw_write(downstream_bytes_sent_noc_addr, socket.bytes_sent);
     }
+}
+
+void pcie_socket_notify_receiver(const SocketSenderInterface& socket) {
+    uint32_t local_bytes_sent_addr = socket.config_addr;
+    tt_l1_ptr uint32_t* socket_config_words = reinterpret_cast<tt_l1_ptr uint32_t*>(socket.config_addr);
+    // 8 word of MD + 4 Words of Ack
+    uint32_t pcie_xy_enc = socket_config_words[12];
+    uint32_t bytes_sent_addr_hi = socket_config_words[14];
+    uint32_t bytes_sent_addr_lo = socket_config_words[3];
+
+    uint64_t bytes_sent_pcie_addr =
+        (static_cast<uint64_t>(bytes_sent_addr_hi) << 32) | (static_cast<uint64_t>(bytes_sent_addr_lo));
+    noc_write_init_state<0>(NOC_0, NOC_UNICAST_WRITE_VC);
+    noc_wwrite_with_state<DM_DEDICATED_NOC, 0, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
+        NOC_0, local_bytes_sent_addr, pcie_xy_enc, bytes_sent_pcie_addr, 4, 1);
 }
 
 void fabric_socket_notify_receiver(
@@ -176,7 +198,7 @@ void update_socket_config(const SocketSenderInterface& socket) {
     socket_config->write_ptr = socket.write_ptr;
 }
 
-SocketReceiverInterface create_receiver_socket_interface(uint32_t config_addr) {
+SocketReceiverInterface create_receiver_socket_interface_2(uint32_t config_addr) {
     SocketReceiverInterface socket;
 #if !(defined TRISC_PACK || defined TRISC_MATH)
     tt_l1_ptr receiver_socket_md* socket_config = reinterpret_cast<tt_l1_ptr receiver_socket_md*>(config_addr);
@@ -186,11 +208,20 @@ SocketReceiverInterface create_receiver_socket_interface(uint32_t config_addr) {
     socket.bytes_sent_addr = config_addr + offsetof(receiver_socket_md, bytes_sent);
     socket.fifo_addr = socket_config->fifo_addr;
     socket.fifo_total_size = socket_config->fifo_total_size;
-    socket.upstream_mesh_id = socket_config->upstream_mesh_id;
-    socket.upstream_chip_id = socket_config->upstream_chip_id;
-    socket.upstream_noc_x = socket_config->upstream_noc_x;
-    socket.upstream_noc_y = socket_config->upstream_noc_y;
-    socket.upstream_bytes_acked_addr = socket_config->upstream_bytes_acked_addr;
+    socket.is_h2d = socket_config->is_h2d;
+    if (socket.is_h2d) {
+        socket.h2d.bytes_acked_addr_lo = socket_config->h2d.bytes_acked_addr_lo;
+        socket.h2d.bytes_acked_addr_hi = socket_config->h2d.bytes_acked_addr_hi;
+        socket.h2d.data_addr_lo = socket_config->h2d.data_addr_lo;
+        socket.h2d.data_addr_hi = socket_config->h2d.data_addr_hi;
+        socket.h2d.pcie_xy_enc = socket_config->h2d.pcie_xy_enc;
+    } else {
+        socket.c2c.upstream_mesh_id = socket_config->c2c.upstream_mesh_id;
+        socket.c2c.upstream_chip_id = socket_config->c2c.upstream_chip_id;
+        socket.c2c.upstream_noc_y = socket_config->c2c.upstream_noc_y;
+        socket.c2c.upstream_noc_x = socket_config->c2c.upstream_noc_x;
+        socket.c2c.upstream_bytes_acked_addr = socket_config->c2c.upstream_bytes_acked_addr;
+    }
 #endif
     return socket;
 }
@@ -225,6 +256,7 @@ void set_receiver_socket_page_size(SocketReceiverInterface& socket, uint32_t pag
 void socket_wait_for_pages(const SocketReceiverInterface& socket, uint32_t num_pages) {
 #if !(defined TRISC_PACK || defined TRISC_MATH)
     uint32_t num_bytes = num_pages * socket.page_size;
+    ASSERT(num_bytes <= socket.fifo_curr_size);
     if (socket.read_ptr + num_bytes >= socket.fifo_curr_size + socket.fifo_addr) {
         num_bytes += socket.fifo_total_size - socket.fifo_curr_size;
     }
@@ -269,19 +301,13 @@ void assign_local_cb_to_socket(const SocketReceiverInterface& socket, uint32_t c
 }
 
 #ifndef COMPILE_FOR_TRISC
-void socket_notify_sender(const SocketReceiverInterface& socket) {
-    // TODO: Store noc encoding in struct?
-    auto upstream_bytes_acked_noc_addr =
-        get_noc_addr(socket.upstream_noc_x, socket.upstream_noc_y, socket.upstream_bytes_acked_addr);
-    noc_inline_dw_write(upstream_bytes_acked_noc_addr, socket.bytes_acked);
-}
 
 void fabric_socket_notify_sender(
     const SocketReceiverInterface& socket,
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_header_addr) {
     auto upstream_bytes_acked_noc_addr =
-        get_noc_addr(socket.upstream_noc_x, socket.upstream_noc_y, socket.upstream_bytes_acked_addr);
+        get_noc_addr(socket.c2c.upstream_noc_x, socket.c2c.upstream_noc_y, socket.c2c.upstream_bytes_acked_addr);
     fabric_set_unicast_route(fabric_header_addr, socket);
     fabric_header_addr->to_noc_unicast_inline_write(
         NocUnicastInlineWriteCommandHeader{upstream_bytes_acked_noc_addr, socket.bytes_acked});
@@ -289,6 +315,25 @@ void fabric_socket_notify_sender(
     fabric_connection.send_payload_flush_blocking_from_address(
         (uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
 }
+
+void socket_notify_sender(const SocketReceiverInterface& socket) {
+    if (socket.is_h2d) {
+        volatile tt_l1_ptr receiver_socket_md* socket_config =
+            reinterpret_cast<volatile tt_l1_ptr receiver_socket_md*>(socket.config_addr);
+        socket_config->bytes_acked = socket.bytes_acked;
+        uint32_t local_bytes_acked_addr = socket.config_addr + offsetof(receiver_socket_md, bytes_acked);
+        uint64_t pcie_addr = (static_cast<uint64_t>(socket.h2d.bytes_acked_addr_hi) << 32) |
+                             static_cast<uint64_t>(socket.h2d.bytes_acked_addr_lo);
+        noc_write_init_state<0>(NOC_0, NOC_UNICAST_WRITE_VC);
+        noc_wwrite_with_state<DM_DEDICATED_NOC, 0, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
+            NOC_0, local_bytes_acked_addr, socket.h2d.pcie_xy_enc, pcie_addr, 4, 1);
+    } else {
+        auto upstream_bytes_acked_noc_addr =
+            get_noc_addr(socket.c2c.upstream_noc_x, socket.c2c.upstream_noc_y, socket.c2c.upstream_bytes_acked_addr);
+        noc_inline_dw_write(upstream_bytes_acked_noc_addr, socket.bytes_acked);
+    }
+}
+
 #endif
 
 void update_socket_config(const SocketReceiverInterface& socket) {
