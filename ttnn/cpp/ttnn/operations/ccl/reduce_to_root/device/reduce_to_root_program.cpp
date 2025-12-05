@@ -14,9 +14,6 @@
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-// TODO ASSUMING ROOT ID ALWAYS DEVICE 1
-// CHANGE HARDCODED VALUES IF DEVICE 2 IS ROOT INSTEAD
-
 namespace ttnn::operations::ccl {
 
 inline bool mux_connection_valid(uint32_t dir, bool is_leftmost, bool is_sender_device) {
@@ -183,7 +180,20 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     auto semaphore_round1 = semaphores[0];
     auto semaphore_round2 = semaphores[1];
 
-    const uint32_t num_shard_cores = 8;  // 8 for 2 links and get the value from the tensor
+    // Extract shard grid from input tensor
+    TT_FATAL(input_tensor_l.is_sharded(), "Input tensor must be sharded");
+    const auto& shard_spec = input_tensor_l.shard_spec().value();
+    const auto& shard_grid = shard_spec.grid;
+
+    // Get all cores from the shard grid
+    std::vector<CoreCoord> all_coord_cores;
+    for (const auto& core_range : shard_grid.ranges()) {
+        auto cores = corerange_to_cores(core_range, std::nullopt);
+        all_coord_cores.insert(all_coord_cores.end(), cores.begin(), cores.end());
+    }
+    const CoreRangeSet all_cores = shard_grid;
+    const uint32_t num_shard_cores = all_coord_cores.size();
+
     uint32_t input_l_total_num_pages = data_movement::get_num_pages(input_tensor_l);
     const uint32_t input_l_num_pages = input_l_total_num_pages / num_shard_cores;
     const uint32_t input_num_tiles = input_l_num_pages;
@@ -199,17 +209,6 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     // HERE TODO TO DO MAKE SURE THIS IS CORRECT FOR BLACKHOLE CHANGE IT TO 8192
     uint32_t packet_size_bytes = 2048;
-
-    const auto all_coord_cores = {
-        CoreCoord(0, 0),
-        CoreCoord(0, 1),
-        CoreCoord(0, 2),
-        CoreCoord(0, 3),
-        CoreCoord(1, 0),
-        CoreCoord(1, 1),
-        CoreCoord(1, 2),
-        CoreCoord(1, 3)};
-    const CoreRangeSet all_cores = CoreRangeSet(all_coord_cores);
 
     // program!
     tt::tt_metal::Program program{};
@@ -487,7 +486,6 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     std::vector<CoreCoord> mux_cores = {
         CoreCoord(2, 0), CoreCoord(2, 1), CoreCoord(2, 2), CoreCoord(2, 3)};  // to be modified based on device type
-    // TODO here change above to 4 cores for 2 links
     if (is_sender_device) {
         mux_cores = {CoreCoord(2, 0), CoreCoord(2, 2)};
     }
@@ -640,7 +638,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
         uint32_t loop_size = is_root_device ? 2 : 1;
 
         auto compute_kernel_configuration = ttnn::init_device_compute_kernel_config(
-            input_tensor_l.device()->arch(), std::nullopt, MathFidelity::HiFi2, true, false, false);
+            input_tensor_l.device()->arch(), std::nullopt, MathFidelity::HiFi4, true, false, false);
 
         auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
             get_compute_kernel_config_args(input_tensor_l.device()->arch(), compute_kernel_configuration);
@@ -663,20 +661,32 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     }
     // set runtime args
 
+    // Split cores into links - divide all cores evenly between links
     constexpr auto num_links = 2;
     std::vector<CoreCoord> cores;
     std::vector<CoreRangeSet> cores_per_link;
-    std::vector<CoreCoord> cores_link_1 = {CoreCoord(0, 0), CoreCoord(0, 1), CoreCoord(0, 2), CoreCoord(0, 3)};
-    std::vector<CoreCoord> cores_link_2 = {CoreCoord(1, 0), CoreCoord(1, 1), CoreCoord(1, 2), CoreCoord(1, 3)};
+
+    // Split cores evenly: first half to link 1, second half to link 2
+    const uint32_t cores_per_link_count = num_shard_cores / num_links;
+    TT_FATAL(
+        num_shard_cores % num_links == 0,
+        "Number of shard cores ({}) must be evenly divisible by number of links ({})",
+        num_shard_cores,
+        num_links);
+
+    std::vector<CoreCoord> cores_link_1(all_coord_cores.begin(), all_coord_cores.begin() + cores_per_link_count);
+    std::vector<CoreCoord> cores_link_2(all_coord_cores.begin() + cores_per_link_count, all_coord_cores.end());
+
     cores_per_link.push_back(CoreRangeSet(cores_link_1));
     cores_per_link.push_back(CoreRangeSet(cores_link_2));
-    CoreCoord termination_master = CoreCoord(0, 0);
+
+    // Set termination master to the first core of each link
+    std::vector<CoreCoord> termination_masters = {cores_link_1[0], cores_link_2[0]};
+    CoreCoord termination_master = termination_masters[0];
 
     for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
         uint32_t start_ix = link_idx == 0 ? 0 : 2;
-        if (link_idx == 1) {
-            termination_master = CoreCoord(1, 0);
-        }
+        termination_master = termination_masters[link_idx];
         for (uint32_t dir = 0; dir < 2; dir++) {
             CoreCoord mux_logical_core = dir == 0 ? CoreCoord(2, start_ix) : CoreCoord(2, start_ix + 1);
             if (is_sender_device) {
