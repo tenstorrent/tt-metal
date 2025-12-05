@@ -1859,6 +1859,8 @@ TEST_F(NightlyFabric2DFixture, TestLineMcastN3HopsE3HopsW4Hops) {
 }
 
 TEST_F(Fabric1DFixture, TestSetUnicastRoute) {
+    SKIP_FOR_WATCHER();
+
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
         GTEST_SKIP() << "Test applicable only on T3K";
     }
