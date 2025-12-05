@@ -599,19 +599,6 @@ function computeStatusChanges(filteredGrouped, filteredPreviousGrouped, context)
     }
   }
 
-  // MOCK INJECTION
-  const mockName = 'galaxy-quick';
-  if (!regressedDetails.some(r => r.name === mockName)) {
-    regressedDetails.push({
-      name: mockName,
-      workflow_path: '.github/workflows/galaxy-quick.yaml',
-      run_id: 123456,
-      run_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions`,
-      created_at: new Date().toISOString(),
-      failing_jobs: ['quick-bh-glx-health'] // Pre-populated for trigger logic
-    });
-  }
-
   return { changes, regressedDetails, stayedFailingDetails };
 }
 
