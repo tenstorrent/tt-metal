@@ -896,6 +896,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     TT_FATAL(receiver_channel_num_buffers > 0, "Receiver channel num buffers must be greater than 0");
 
     const auto& stream_ids = StreamRegAssignments::get_all_stream_ids();
+    static constexpr bool enable_risc_cpu_data_cache = false;
     auto ct_args = std::vector<uint32_t>(stream_ids.begin(), stream_ids.end());
     ct_args.push_back(0xFFEE0001);
 
@@ -924,7 +925,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         this->handshake_address,
         this->channel_buffer_size,
         this->has_tensix_extension,
-        this->enable_first_level_ack};
+        this->enable_first_level_ack,
+        enable_risc_cpu_data_cache};
 
     const std::vector<uint32_t> main_args_part2 = {
         config.sender_channels_worker_conn_info_base_address[0],

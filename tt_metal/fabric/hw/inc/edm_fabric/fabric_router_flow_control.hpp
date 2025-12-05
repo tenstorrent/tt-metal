@@ -8,6 +8,7 @@
 
 #include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 
 struct ReceiverChannelCounterBasedResponseCreditSender {
     ReceiverChannelCounterBasedResponseCreditSender() = default;
@@ -125,15 +126,17 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
         acks_received_and_processed(0),
         completions_received_and_processed(0) {}
 
+    template <bool ENABLE_RISC_CPU_DATA_CACHE=true>
     FORCE_INLINE uint32_t get_num_unprocessed_acks_from_receiver() {
-        invalidate_l1_cache();
+        router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
         return *acks_received_counter_ptr - acks_received_and_processed;
     }
 
     FORCE_INLINE void increment_num_processed_acks(size_t num_acks) { acks_received_and_processed += num_acks; }
 
+    template <bool ENABLE_RISC_CPU_DATA_CACHE=true>
     FORCE_INLINE uint32_t get_num_unprocessed_completions_from_receiver() {
-        invalidate_l1_cache();
+        router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
         return *completions_received_counter_ptr - completions_received_and_processed;
     }
 
