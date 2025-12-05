@@ -52,6 +52,8 @@ void MAIN {
         reconfig_data_format(cb_inp, cb_inp);
         pack_reconfig_data_format(cb_x2);
         mul_tiles_init(cb_inp, cb_inp);
+        DPRINT << "mul_tile_step" << ENDL();
+        DPRINT << "start" << ENDL();
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_inp, wt + blk);  // cumulative wait
             cb_reserve_back(cb_x2, blk);
@@ -63,9 +65,13 @@ void MAIN {
             REL();
             cb_push_back(cb_x2, blk);
         }
+        DPRINT << "end" << ENDL();
         /*
          * sum(x**2)
          */
+
+        DPRINT << "reduce_tile_step" << ENDL();
+        DPRINT << "start" << ENDL();
         reconfig_data_format(cb_x2, cb_reduce);
         pack_reconfig_data_format(cb_out);
         reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_reduce, cb_out);
@@ -85,6 +91,9 @@ void MAIN {
         /*
          * sum(x)
          */
+        DPRINT << "end" << ENDL();
+        DPRINT << "reduce_2_tile_step" << ENDL();
+        DPRINT << "start" << ENDL();
         reconfig_data_format(cb_inp, cb_reduce);
         pack_reconfig_data_format(cb_out);
         reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_inp, cb_reduce, cb_out);
@@ -93,6 +102,8 @@ void MAIN {
         for (uint32_t wtr = 0; wtr < Wt; wtr++) {
             reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_inp, cb_reduce, wtr, 0, dst0);
         }
+
+        DPRINT << "end" << ENDL();
         pack_tile(dst0, cb_out, 1);
         REL();
         cb_push_back(cb_out, onetile);

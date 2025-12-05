@@ -105,8 +105,8 @@ void unroll_llk() {
 template <typename cur_llk_type>
 void print_input_CBs(uint32_t j, uint32_t wt) {
     constexpr auto cur_llk = cur_llk_type::node;
-    UNPACK(DPRINT << "=============CB_A==============" << ENDL());
-    UNPACK(tt::compute::common::print_full_tile(cur_llk.CB_A, j, true));
+    // UNPACK(DPRINT << "=============CB_A==============" << ENDL());
+    // UNPACK(tt::compute::common::print_full_tile(cur_llk.CB_A, j, true));
     UNPACK(DPRINT << "=============CB_B==============" << ENDL());
     UNPACK(tt::compute::common::print_full_tile(cur_llk.CB_B, cb_b_index_policy<cur_llk_type>(j, wt), true));
 }
@@ -128,7 +128,7 @@ void unroll_inner_loop(uint32_t register_loops) {
         cur_llk.llk(cur_llk.CB_A, cur_llk.CB_B, j, cb_b_index_policy<cur_llk_type>(j, wt), j);
         if constexpr (cur_llk.debug_mode == 1) {
             MATH(DPRINT << "=============DEST_OUT==============" << ENDL());
-            dprint_tensix_dest_reg(j);
+            // dprint_tensix_dest_reg(j);
         }
     }
     cb_pop_front(cur_llk.CB_A, num_dst_regs);
