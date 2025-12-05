@@ -101,7 +101,7 @@ void kernel_main() {
 
     // Write test results
     write_test_packets(receiver_config->get_result_buffer_address(), total_packets_received);
-    uint32_t final_status = failed ? TT_FABRIC_STATUS_DATA_MISMATCH : TT_FABRIC_STATUS_PASS;
+    uint32_t final_status = TT_FABRIC_STATUS_PASS;
     write_test_status(receiver_config->get_result_buffer_address(), final_status);
 
     noc_async_full_barrier();

@@ -75,7 +75,9 @@ void kernel_main() {
             if (!traffic_config->has_packets_to_send()) {
                 continue;
             }
-
+            for (volatile int j = 0; j < 10; j++) {
+                asm("nop");
+            }
             // Send one packet (credit management is automatic, inside send_one_packet)
             bool sent = traffic_config->template send_one_packet<BENCHMARK_MODE>();
 
