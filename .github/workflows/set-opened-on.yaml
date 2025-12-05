@@ -42,6 +42,41 @@ jobs:
         run: |
           set -e
 
+          # Helper function to check if response contains rate limit error
+          # Returns 0 if rate limit error found, 1 otherwise
+          check_rate_limit_error() {
+            local RESPONSE="$1"
+            local CONTEXT="$2"
+
+            if echo "$RESPONSE" | grep -q "API rate limit"; then
+              echo "Error while $CONTEXT: GitHub API rate limit exceeded for DATE_AUTOMATION token" >&2
+
+              # Extract rate limit details from headers if available (use f2- to handle multiple colons)
+              RESET_TIME=$(echo "$RESPONSE" | grep -i "x-ratelimit-reset:" | head -1 | cut -d: -f2- | tr -d ' \r')
+              REMAINING=$(echo "$RESPONSE" | grep -i "x-ratelimit-remaining:" | head -1 | cut -d: -f2- | tr -d ' \r')
+              RESOURCE=$(echo "$RESPONSE" | grep -i "x-ratelimit-resource:" | head -1 | cut -d: -f2- | tr -d ' \r')
+
+              # Print each available rate limit detail individually
+              if [ -n "$RESOURCE" ]; then
+                echo "Rate limit resource: $RESOURCE" >&2
+              fi
+              if [ -n "$REMAINING" ]; then
+                echo "Remaining: $REMAINING" >&2
+              fi
+              if [ -n "$RESET_TIME" ]; then
+                # GitHub Actions uses Ubuntu runners, so GNU date format is safe
+                RESET_DATE=$(date -u -d "@$RESET_TIME" 2>/dev/null || echo "unknown")
+                echo "Resets at: $RESET_DATE" >&2
+              fi
+
+              echo "" >&2
+              echo "Full response:" >&2
+              echo "$RESPONSE" >&2
+              return 0
+            fi
+            return 1
+          }
+
           # Add issue to project (idempotent - will return existing item if already added)
           ADD_RESP=$(gh api graphql -f query='
           mutation($projectId:ID!, $contentId:ID!){
@@ -50,30 +85,33 @@ jobs:
             }
           }' \
           -F projectId="$PROJECT_ID" \
-          -F contentId='${{ github.event.issue.node_id }}' 2>&1) || {
-            if echo "$ADD_RESP" | grep -q "API rate limit"; then
-              echo "Error: GitHub API rate limit exceeded for DATE_AUTOMATION token" >&2
-              echo "Workflow will retry when rate limit resets" >&2
+          -F contentId='${{ github.event.issue.node_id }}' --include 2>&1) || {
+            if check_rate_limit_error "$ADD_RESP" "adding issue to project"; then
               exit 1
             fi
             echo "Error: Failed to add issue to project" >&2
+            echo "Full response:" >&2
             echo "$ADD_RESP" >&2
             exit 1
           }
 
-          if echo "$ADD_RESP" | jq -e '.errors' > /dev/null 2>&1; then
+          # Separate JSON body from headers for jq parsing
+          # Extract everything after the first line starting with { or [
+          ADD_BODY=$(echo "$ADD_RESP" | sed -n '/^[{[]/,$p')
+
+          if echo "$ADD_BODY" | jq -e '.errors' > /dev/null 2>&1; then
             echo "Error: Failed to add issue to project:" >&2
-            echo "$ADD_RESP" | jq '.errors' >&2
+            echo "$ADD_BODY" | jq '.errors' >&2
 
             # Check for scope/permission issues
-            if echo "$ADD_RESP" | jq -e '.errors[] | select(.type == "INSUFFICIENT_SCOPES" or (.message // "" | contains("permission")))' > /dev/null 2>&1; then
+            if echo "$ADD_BODY" | jq -e '.errors[] | select(.type == "INSUFFICIENT_SCOPES" or (.message // "" | contains("permission")))' > /dev/null 2>&1; then
               echo "" >&2
               echo "Token may lack 'project' or 'write:project' scope" >&2
             fi
             exit 1
           fi
 
-          ITEM_ID=$(echo "$ADD_RESP" | jq -r '.data.addProjectV2ItemById.item.id // empty')
+          ITEM_ID=$(echo "$ADD_BODY" | jq -r '.data.addProjectV2ItemById.item.id // empty')
           if [ -z "$ITEM_ID" ]; then
             echo "Error: Could not get project item ID" >&2
             exit 1
@@ -94,29 +132,33 @@ jobs:
           -F projectId="$PROJECT_ID" \
           -F itemId="$ITEM_ID" \
           -F fieldId="$FIELD_ID" \
-          -F date='${{ steps.setup.outputs.opened_date }}' 2>&1) || {
-            if echo "$UPDATE_RESP" | grep -q "API rate limit"; then
-              echo "Error: GitHub API rate limit exceeded" >&2
+          -F date='${{ steps.setup.outputs.opened_date }}' --include 2>&1) || {
+            if check_rate_limit_error "$UPDATE_RESP" "setting field value"; then
               exit 1
             fi
             echo "Error: Failed to set field value" >&2
+            echo "Full response:" >&2
             echo "$UPDATE_RESP" >&2
             exit 1
           }
 
-          if echo "$UPDATE_RESP" | jq -e '.errors' > /dev/null 2>&1; then
+          # Separate JSON body from headers for jq parsing
+          # Extract everything after the first line starting with { or [
+          UPDATE_BODY=$(echo "$UPDATE_RESP" | sed -n '/^[{[]/,$p')
+
+          if echo "$UPDATE_BODY" | jq -e '.errors' > /dev/null 2>&1; then
             echo "Error: Failed to set field value:" >&2
-            echo "$UPDATE_RESP" | jq '.errors' >&2
+            echo "$UPDATE_BODY" | jq '.errors' >&2
 
             # Check for scope/permission issues
-            if echo "$UPDATE_RESP" | jq -e '.errors[] | select(.type == "INSUFFICIENT_SCOPES" or (.message // "" | contains("permission")))' > /dev/null 2>&1; then
+            if echo "$UPDATE_BODY" | jq -e '.errors[] | select(.type == "INSUFFICIENT_SCOPES" or (.message // "" | contains("permission")))' > /dev/null 2>&1; then
               echo "" >&2
               echo "Token may lack 'project' or 'write:project' scope" >&2
             fi
             exit 1
           fi
 
-          if ! echo "$UPDATE_RESP" | jq -e '.data.updateProjectV2ItemFieldValue.projectV2Item.id' > /dev/null 2>&1; then
+          if ! echo "$UPDATE_BODY" | jq -e '.data.updateProjectV2ItemFieldValue.projectV2Item.id' > /dev/null 2>&1; then
             echo "Error: Field update returned unexpected response" >&2
             exit 1
           fi
