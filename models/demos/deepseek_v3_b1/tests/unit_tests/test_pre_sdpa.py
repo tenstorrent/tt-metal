@@ -41,16 +41,20 @@ def test_pre_sdpa(device, epsilon, use_fp32):
 
     tile = ttnn.Tile([1, 32])
 
-    # RMSNorm2 parameters (1536 elements = 3 tiles of 16x32)
+    # RMSNorm2 parameters (1536 elements padded to 2 full 32x32 tiles = 2048)
     rmsnorm2_width = 1536
+    rmsnorm2_padded_width = 2048  # 2 full 32x32 tiles
 
     # Create input and gamma PyTorch tensors
     torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_gamma = torch.randn(shape, dtype=torch.bfloat16)
     torch_matmul_weights = torch.randn(matmul_weights_shape, dtype=torch.bfloat16)
-    # RMSNorm2 gamma: 1536 elements (no padding needed with 16x32 tiles)
+    # RMSNorm2 gamma: 1536 elements padded with zeros to 2048
     torch_rmsnorm2_gamma = torch.randn((1, rmsnorm2_width), dtype=torch.bfloat16)
+    torch_rmsnorm2_gamma_padded = torch.nn.functional.pad(
+        torch_rmsnorm2_gamma, (0, rmsnorm2_padded_width - rmsnorm2_width), value=0.0
+    )
 
     # Shard spec: single core for input, gamma (on mcast/gather core)
     shard_shape = shape
@@ -124,17 +128,17 @@ def test_pre_sdpa(device, epsilon, use_fp32):
         memory_config=matmul2_mem_config,
     )
 
-    # Create RMSNorm2 gamma tensor sharded on same core (3 tiles of 16x32)
+    # Create RMSNorm2 gamma tensor sharded on same core (2 full 32x32 tiles)
     rmsnorm2_gamma_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(mcast_core, mcast_core)}),
-        (1, rmsnorm2_width),
+        (1, rmsnorm2_padded_width),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     rmsnorm2_gamma_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, rmsnorm2_gamma_shard_spec
     )
     ttnn_rmsnorm2_gamma = ttnn.from_torch(
-        torch_rmsnorm2_gamma,
+        torch_rmsnorm2_gamma_padded,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,

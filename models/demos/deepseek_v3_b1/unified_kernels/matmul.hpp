@@ -12,7 +12,7 @@
 #elif defined(COMPILE_FOR_TRISC)
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/matmul.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
+#include "models/demos/deepseek_v3_b1/kernel_includes/tt_metal/include/compute_kernel_api/craqmm.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #endif
 
@@ -107,13 +107,13 @@ struct Matmul {
             cb_reserve_back(args.out, out_w);
 
             if constexpr (out_w == 1) {
-                // Use optimized custom_mm API for single output tile with K-dimension reduction
-                custom_mm_block_init(args.in0, args.in1, args.out, transpose, args.k_num_tiles);
+                // Use optimized craqmm API for single output tile with K-dimension reduction
+                craqmm_block_init(args.in0, args.in1, args.out, transpose, args.k_num_tiles);
 
                 tile_regs_acquire();
 
                 // Single call handles all K tiles internally via MOP replay
-                custom_mm_block(args.in0, args.in1, 0, 0, 0, transpose, args.k_num_tiles);
+                craqmm_block(args.in0, args.in1, 0, 0, 0, transpose, args.k_num_tiles);
 
                 tile_regs_commit();
 

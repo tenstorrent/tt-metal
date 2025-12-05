@@ -10,9 +10,9 @@
 // - NCRISC: Mcast receiver (on receiver cores), no-op (on sender core if not part of receiver grid)
 // - TRISC: No-op (dataflow-only operation)
 
-#include "../../../unified_kernels/kernel_op_api.hpp"
-#include "../../../unified_kernels/kernel_utils.hpp"
-#include "../../../unified_kernels/mcast.hpp"
+#include "models/demos/deepseek_v3_b1/unified_kernels/kernel_op_api.hpp"
+#include "models/demos/deepseek_v3_b1/unified_kernels/kernel_utils.hpp"
+#include "models/demos/deepseek_v3_b1/unified_kernels/mcast.hpp"
 
 // Compile-time role flags for dead code elimination via if constexpr
 struct Core {

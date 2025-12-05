@@ -112,6 +112,11 @@ class MatmulSingleCore:
             ("matmul_out_w", out_w),
         ]
 
+        # Named compile-time args for BRISC
+        brisc_named_compile_time_args = [
+            ("matmul_out", out_cb),
+        ]
+
         # Named compile-time args for TRISC
         trisc_named_compile_time_args = [
             ("matmul_in0", in0_cb),
@@ -126,7 +131,7 @@ class MatmulSingleCore:
             kernel_source="models/demos/deepseek_v3_b1/micro_ops/matmul/kernels/matmul_kernel.cpp",
             core_ranges=all_cores,
             ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
-            brisc_named_compile_time_args=[],
+            brisc_named_compile_time_args=brisc_named_compile_time_args,
             trisc_named_compile_time_args=trisc_named_compile_time_args,
             trisc_compute_config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.LoFi,
