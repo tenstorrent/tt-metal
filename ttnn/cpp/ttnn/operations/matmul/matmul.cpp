@@ -5,12 +5,14 @@
 #include "matmul.hpp"
 
 #include <variant>
-#include "ttnn/operations/core/core.hpp"
+
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/creation.hpp"
+
+#include "ttnn/operations/matmul/device/tmp/matmul_device_operation.hpp"
 
 namespace ttnn {
 
@@ -196,12 +198,33 @@ ttnn::Tensor bound_matmul(
         input_tensor_a_adjusted,
         input_tensor_b_adjusted);
 
-    auto output_tensor = matmul(
+    // TODO: create parameters struct
+    auto matmul_params =
+        create_matmul_struct(input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {optional_output_tensor});
+    auto output_tensor = ttnn::prim::matmul(
         input_tensor_a_adjusted,
         input_tensor_b_adjusted,
         post_process_bias ? std::nullopt : bias,
-        parameters,
-        optional_output_tensor);
+        optional_output_tensor,
+        matmul_params.program_config,
+        matmul_params.bcast_batch,
+        matmul_params.output_mem_config,
+        matmul_params.output_dtype,
+        matmul_params.compute_kernel_config,
+        matmul_params.user_core_coord,
+        matmul_params.user_fused_activation,
+        matmul_params.transpose_a,
+        matmul_params.transpose_b,
+        matmul_params.output_tile,
+        matmul_params.global_cb,
+        matmul_params.sub_device_id);
+
+    // auto output_tensor = matmul(
+    //     input_tensor_a_adjusted,
+    //     input_tensor_b_adjusted,
+    //     post_process_bias ? std::nullopt : bias,
+    //     parameters,
+    //     optional_output_tensor);
 
     if (input_tensor_b.logical_shape().rank() == 1) [[unlikely]] {
         output_tensor = ttnn::reshape(
@@ -253,6 +276,7 @@ Tensor MatmulOperation::invoke(
                 std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value())
             ? std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value()).untilize_out
             : false;
+
     return bound_matmul(
         input_tensor_a,
         input_tensor_b,

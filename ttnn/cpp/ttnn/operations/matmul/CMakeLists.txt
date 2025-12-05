@@ -31,6 +31,19 @@ target_sources(
         device/matmul_op_multi_core_reuse_optimized_program_factory.cpp
         device/matmul_op_multi_core_reuse_program_factory.cpp
         matmul.cpp
+        #
+        device/tmp/config/matmul_program_config.cpp
+        device/tmp/matmul_device_operation.cpp
+        device/tmp/utilities/matmul_utilities.cpp
+        #factories
+        device/tmp/factory/matmul_multicore_program_factory.cpp
+        device/tmp/factory/matmul_multicore_reuse_program_factory.cpp
+        device/tmp/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp
+        device/tmp/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp
+        device/tmp/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.cpp
+        device/tmp/factory/matmul_multicore_reuse_optimized_program_factory.cpp
+        #
+
 )
 
 target_include_directories(ttnn_op_matmul PRIVATE ${FixmeOpIncDirs})

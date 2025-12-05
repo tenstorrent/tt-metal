@@ -1943,10 +1943,10 @@ void Matmul::validate(
                             program_config.in0_block_w);
                         if (!program_config.gather_in0) {  // Padding allowed for gather_in0
                             TT_FATAL(
-                            (shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
-                            "Error: shard_shape[1] ({}) / in0_tile_shape[1] ({}) must be divisible by in0_block_w.",
-                            shard_shape[1],
-                            in0_tile_shape[1]);
+                                (shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
+                                "Error: shard_shape[1] ({}) / in0_tile_shape[1] ({}) must be divisible by in0_block_w.",
+                                shard_shape[1],
+                                in0_tile_shape[1]);
                         }
                     }
                     if (this->output_mem_config.is_sharded()) {
