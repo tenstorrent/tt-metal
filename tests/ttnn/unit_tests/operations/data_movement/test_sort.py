@@ -25,6 +25,11 @@ TILE_WIDTH = 32
         ([11, 29, 14, 1], -1, True),
         ([1, 1, 512, 64], -1, False),
         ([1, 1, 2112, 64], -1, False),
+        ([1, 64, 64], 0, False),
+        ([1, 64, 64], 1, True),
+        ([1, 64, 64], 2, False),
+        ([1, 64], 0, False),
+        ([1, 64], 1, True),
     ],
 )
 @pytest.mark.parametrize("stable", [True, False])
