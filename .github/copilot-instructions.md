@@ -22,10 +22,8 @@
 
 ## Build & test expectations
 - For PRs touching C++/kernels/runtime, recommend:
-  - Configure: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release`
-  - Build: `cmake --build build -j`
-  - Tests: `ctest --test-dir build --output-on-failure`
-  - Lint: `clang-tidy` using the repo `.clang-tidy`
+  - Build: `./build_metal.sh --build-all`
+  - Lint: `cmake --preset clang-tidy; cmake --build --preset clang-tidy`
 - If suggesting refactors, include a quick **compile-time impact note** (header churn, template instantiation).
 
 ## Reviews should:
