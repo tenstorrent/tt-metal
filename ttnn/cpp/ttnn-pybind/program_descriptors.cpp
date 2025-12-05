@@ -381,7 +381,7 @@ void py_module_types(py::module& module) {
         Default constructor for SemaphoreDescriptor.
     )pbdoc")
         .def(
-            py::init<uint8_t, tt::CoreType, CoreRangeSet, uint32_t>(),
+            py::init<uint32_t, tt::CoreType, CoreRangeSet, uint32_t>(),
             py::arg("id"),
             py::arg("core_type") = tt::CoreType::WORKER,
             py::arg("core_ranges"),
