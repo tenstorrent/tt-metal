@@ -320,8 +320,6 @@ void normalize_scores(
     cb_wait_front(epsilon_cb_index, 1);
     cb_wait_front(unnormalized_scores_cb_index, 1);
     cb_wait_front(reduce_scalar_cb_index, 1);
-    // UNPACK(print_tile(unnormalized_scores_cb_index, 0, true, 0, 1, 0, 8));
-    // UNPACK(print_tile(reduce_scalar_cb_index, 0, true, 0, 1, 0, 8));
 
     // 1. Sum row (experts) to get row vector of sums [1, 32]
     tile_regs_acquire();
@@ -368,7 +366,6 @@ void normalize_scores(
 
     tile_regs_wait();
     pack_tile(0, normalized_scores_cb_index);
-    PACK(print_tile(normalized_scores_cb_index, 0, true, 0, 1, 0, 8));
     cb_push_back(normalized_scores_cb_index, 1);
     tile_regs_release();
 

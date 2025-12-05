@@ -164,8 +164,6 @@ FORCE_INLINE void generate_reduce_scalar(
         }
     }
     noc_async_read_barrier();
-
-    print_tile(reduce_scalar_cb_index, 0, true, 0, 1, 0, 32);
     cb_push_back(reduce_scalar_cb_index, 1);
 }
 
@@ -225,16 +223,6 @@ FORCE_INLINE void generate_summed_experts_tiles(
             }
         }
         noc_async_read_barrier();
-        // if (width_tile % 2 == 1) {
-        //     DPRINT << ENDL() << "++++++" << ENDL();
-        //     uint32_t start_row = width_tile % 2 == 0 ? 0 : 32 - summed_experts_per_group;
-        //     uint32_t end_row = width_tile % 2 == 0 ? summed_experts_per_group : 32;
-        //     print_tile(topk_input_cb_index, 0, true, start_row, end_row);
-        //     for (uint32_t i = 0; i < summed_experts_per_group; i++) {
-        //         print_tile(summed_experts_cb_index, i, true, width_tile, width_tile+1);
-        //     }
-        //     DPRINT << "++++++" << ENDL();
-        // }
         cb_pop_front(topk_input_cb_index, 1);
     }
     cb_push_back(summed_experts_cb_index, summed_experts_per_group);
@@ -257,13 +245,6 @@ FORCE_INLINE void generate_winning_group_tiles(
     cb_wait_front(scores_cb_index, width_tiles);
     cb_wait_front(topk_index_creation_cb_index, width_tiles);
     cb_wait_front(sorted_group_indices_cb_index, num_group_tiles);
-    // DPRINT << "Sorted group indices cb 0" << ENDL();
-    // print_tile(sorted_group_indices_cb_index, 0, true, 0, topk_groups, 0, 1);
-
-    // uint32_t tile_idx = 5;
-    // DPRINT << "Topk index creation cb " << tile_idx << ENDL();
-    // print_tile(topk_index_creation_cb_index, tile_idx, true, 0, 1);
-    // print_tile(scores_cb_index, tile_idx, true, 0, 1);
 
     cb_reserve_back(winning_group_scores_cb_index, topk_groups);
     cb_reserve_back(winning_group_indices_cb_index, topk_groups);
@@ -363,11 +344,6 @@ FORCE_INLINE void generate_winning_group_tiles(
     }
 
     noc_async_read_barrier();
-    // DPRINT << ENDL() << ENDL();
-    // for (uint32_t i = 0; i < topk_groups; i++) {
-    //     DPRINT << "Winning group scores cb " << i << ENDL();
-    //     print_tile(winning_group_scores_cb_index, i, true, 0, 1);
-    // }
     cb_push_back(winning_group_scores_cb_index, topk_groups);
     cb_push_back(winning_group_indices_cb_index, topk_groups);
 
