@@ -1118,14 +1118,13 @@ void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_
         exec_buf_state.pages = pages;
         exec_buf_state.length += initial_read_length;
         exec_buf_state.read_ptr = read_ptr;
-    } else if (exec_buf_state.length == 0) {
+    } else {
+        ASSERT(exec_buf_state.length == 0);
         // add barrier to wait for prefetch noc read to complete
         noc_async_read_barrier_with_trid(1);
         // update always after barrier to make sure data in cmddat_q
         exec_buf_state.length += exec_buf_state.prefetch_length;
         exec_buf_state.prefetch_length = 0;
-    } else {
-        ASSERT(exec_buf_state.length == 0);
     }
 
     // prefetch only when there are still pages to prefetch
