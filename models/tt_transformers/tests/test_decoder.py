@@ -60,7 +60,8 @@ def test_decoder_inference(
     reset_seeds,
     ensure_gc,
 ):
-    mesh_device = create_submeshes(mesh_device, 4)[0]
+    if os.environ.get("MESH_DEVICE") == "TG":
+        mesh_device = create_submeshes(mesh_device, 4)[0]
 
     dtype = ttnn.bfloat8_b
 
