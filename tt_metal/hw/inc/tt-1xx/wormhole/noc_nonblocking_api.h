@@ -206,6 +206,11 @@ inline __attribute__((always_inline)) bool ncrisc_noc_read_with_transaction_id_f
     return (NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(transcation_id)) == 0);
 }
 
+inline __attribute__((always_inline)) uint32_t ncrisc_noc_available_read_transactions(uint32_t noc, uint32_t trid) {
+    return NOC_MAX_TRANSACTION_ID_COUNT - NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(trid));
+}
+    // For pinned memory NOC addressing (host-only)
+
 template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false, bool update_counter = true>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     uint32_t noc,
