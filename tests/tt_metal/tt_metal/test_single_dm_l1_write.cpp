@@ -7,6 +7,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 #ifndef OVERRIDE_KERNEL_PREFIX
@@ -56,10 +57,9 @@ TEST_F(MeshDeviceSingleCardFixture, SingleDmL1Write) {
 
     // Configure and create Data Movement kernel
     // Quasar currently supports only one Data Movement core.
-    KernelHandle data_movement_kernel_0 = CreateKernel(
+    KernelHandle data_movement_kernel_0 = experimental::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
-        core,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
