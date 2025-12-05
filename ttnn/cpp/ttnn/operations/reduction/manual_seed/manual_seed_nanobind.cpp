@@ -15,6 +15,7 @@
 
 #include "manual_seed.hpp"
 #include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/nanobind_helpers.hpp"
 
 namespace ttnn::operations::reduction::detail {
 
@@ -64,10 +65,10 @@ void bind_manual_seed_operation(nb::module_& mod) {
         ttnn::nanobind_overload_t{
             [](const OperationType& self,
                const std::variant<uint32_t, ttnn::Tensor>& seeds,
-               const std::optional<std::reference_wrapper<MeshDevice>> device,
+               const std::optional<MeshDevice*> device,
                const std::optional<std::variant<uint32_t, ttnn::Tensor>>& user_ids,
                const std::optional<CoreRangeSet>& sub_core_grids) -> Tensor {
-                return self(seeds, device, user_ids, sub_core_grids);
+                return self(seeds, nbh::rewrap_optional(device), user_ids, sub_core_grids);
             },
             nb::arg("seeds") = 0,
             nb::kw_only(),

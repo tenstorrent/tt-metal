@@ -17,19 +17,13 @@
 
 #include "ttnn-nanobind/bfloat16_type_caster.hpp"  // NOLINT - for nanobind bfloat16 binding support.
 #include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/nanobind_helpers.hpp"
 #include "ttnn-nanobind/types.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::creation {
 namespace {
-
-constexpr std::optional<std::reference_wrapper<MeshDevice>> rewrap_device(std::optional<MeshDevice*> device) noexcept {
-    if (device.has_value() && device.value() != nullptr) {
-        return std::make_optional(std::ref(*device.value()));
-    }
-    return std::nullopt;
-}
 
 template <typename creation_operation_t, typename fill_value_t>
 auto create_nanobind_full_overload() {
@@ -47,7 +41,7 @@ auto create_nanobind_full_overload() {
                 fill_value,
                 dtype,
                 layout,
-                rewrap_device(device),
+                nbh::rewrap_optional(device),
                 memory_config,
                 optional_output_tensor);
         },
@@ -73,7 +67,7 @@ auto create_nanobind_full_like_overload() {
            const std::optional<MemoryConfig>& memory_config,
            std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
             return self(
-                tensor, fill_value, dtype, layout, rewrap_device(device), memory_config, optional_output_tensor);
+                tensor, fill_value, dtype, layout, nbh::rewrap_optional(device), memory_config, optional_output_tensor);
         },
         nb::keep_alive<0, 6>(),  // test
         nb::arg("tensor"),
@@ -220,7 +214,7 @@ void bind_full_operation_with_hard_coded_value(
                const std::optional<Layout>& layout,
                const std::optional<MeshDevice*> device,
                const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(ttnn::Shape{shape}, dtype, layout, rewrap_device(device), memory_config);
+                return self(ttnn::Shape{shape}, dtype, layout, nbh::rewrap_optional(device), memory_config);
             },
             nb::keep_alive<0, 5>(),  // test
             nb::arg("shape"),
@@ -298,7 +292,7 @@ void bind_full_like_operation_with_hard_coded_value(
                const std::optional<MeshDevice*> device,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<ttnn::Tensor>& optional_output_tensor) -> ttnn::Tensor {
-                return self(tensor, dtype, layout, rewrap_device(device), memory_config, optional_output_tensor);
+                return self(tensor, dtype, layout, nbh::rewrap_optional(device), memory_config, optional_output_tensor);
             },
             nb::keep_alive<0, 5>(),  // test
             nb::arg("tensor"),
@@ -342,7 +336,7 @@ void bind_arange_operation(nb::module_& mod, const creation_operation_t& operati
                const std::optional<MeshDevice*> device,
                const MemoryConfig& memory_config,
                const Layout layout) -> ttnn::Tensor {  // afuller
-                return self(start, end, step, dtype, rewrap_device(device), memory_config, layout);
+                return self(start, end, step, dtype, nbh::rewrap_optional(device), memory_config, layout);
             },
             nb::keep_alive<0, 6>(),  // test
             nb::arg("start"),
@@ -360,7 +354,7 @@ void bind_arange_operation(nb::module_& mod, const creation_operation_t& operati
                const std::optional<MeshDevice*> device,
                const MemoryConfig& memory_config,
                const Layout layout) -> ttnn::Tensor {  // afuller
-                return self(end, dtype, rewrap_device(device), memory_config, layout);
+                return self(end, dtype, nbh::rewrap_optional(device), memory_config, layout);
             },
             nb::keep_alive<0, 4>(),  // test
             nb::arg("end"),
@@ -467,7 +461,7 @@ void bind_empty_like_operation(nb::module_& mod, const creation_operation_t& ope
                const std::optional<Layout>& layout,
                const std::optional<MeshDevice*> device,
                const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(reference, dtype, layout, rewrap_device(device), memory_config);
+                return self(reference, dtype, layout, nbh::rewrap_optional(device), memory_config);
             },
             nb::keep_alive<0, 5>(),  // test
             nb::arg("tensor"),
