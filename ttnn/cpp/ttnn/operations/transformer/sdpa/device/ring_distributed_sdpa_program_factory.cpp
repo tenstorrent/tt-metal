@@ -540,7 +540,8 @@ RingDistributedSdpaMeshWorkloadFactory::create_mesh_workload(
                 auto* mesh_device = input_tensor_q.device();
                 IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coord) : input_tensor_q.device();
 
-                // Get all devices in the ring (assuming linear layout along one axis)
+                // Ensure mesh_device is not null before dereferencing
+                TT_FATAL(mesh_device != nullptr, "Mesh device must not be null when inferring ring_id");
                 const auto& mesh_view = mesh_device->get_view();
                 std::vector<IDevice*> devices_to_use;
                 // For simplicity, assume ring is along the first axis (adjust as needed)
