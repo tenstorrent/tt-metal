@@ -51,6 +51,7 @@ target_sources(
         fabric.cpp
         fabric_init.cpp
         fabric_host_utils.cpp
+        fabric_switch_manager.cpp
         fabric_telemetry_reader.cpp
         fabric_context.cpp
         fabric_mux_config.cpp
