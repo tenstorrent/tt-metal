@@ -1,0 +1,133 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Auto-generated traffic tests  # Topology: 5 meshes, 160 devices, WORMHOLE_B0  # Profile: stress
+
+Tests:
+  - name: 5GalaxyExabox_SimpleUnicast
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 1000
+    senders:
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [0, [0, 1]]
+  - name: 5GalaxyExabox_InterMeshUnicast
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 2048
+      num_packets: 1000
+    senders:
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [1, [0, 0]]
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [2, [0, 0]]
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [3, [0, 0]]
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [4, [0, 0]]
+      - device: [1, [0, 0]]
+        patterns:
+          - destination:
+              device: [2, [0, 0]]
+      - device: [1, [0, 0]]
+        patterns:
+          - destination:
+              device: [3, [0, 0]]
+      - device: [1, [0, 0]]
+        patterns:
+          - destination:
+              device: [4, [0, 0]]
+      - device: [2, [0, 0]]
+        patterns:
+          - destination:
+              device: [3, [0, 0]]
+      - device: [2, [0, 0]]
+        patterns:
+          - destination:
+              device: [4, [0, 0]]
+      - device: [3, [0, 0]]
+        patterns:
+          - destination:
+              device: [4, [0, 0]]
+  - name: 5GalaxyExabox_AllToAll
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      size: [1024, 2048, 4096]
+    defaults:
+      ftype: unicast
+      num_packets: 1000
+    patterns:
+      - type: all_to_all
+  - name: 5GalaxyExabox_RandomPairing
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 2048
+      num_packets: 1000
+    patterns:
+      - type: full_device_random_pairing
+        iterations: 5
+  - name: 5GalaxyExabox_AllToOne
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [1024, 2048, 4096]
+    defaults:
+      ftype: unicast
+      num_packets: 1000
+    patterns:
+      - type: all_to_one
+  - name: 5GalaxyExabox_FlowControl
+    enable_flow_control: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      size: [1024, 2048, 4096]
+    defaults:
+      ftype: unicast
+      num_packets: 5000
+    patterns:
+      - type: all_to_all
+  - name: 5GalaxyExabox_SequentialAllToAll
+    enable_flow_control: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      size: [1024, 2048]
+    defaults:
+      ftype: unicast
+      num_packets: 1000
+    patterns:
+      - type: sequential_all_to_all
