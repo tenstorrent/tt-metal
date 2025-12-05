@@ -1090,6 +1090,8 @@ void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_
     // set transaction ID to 1 for all read
     noc_async_read_set_trid(1);
     ASSERT(page_size <= NOC_MAX_BURST_SIZE);
+    // Initialize the read size for all later commands.
+    noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndL, CQ_NOC_send, CQ_NOC_WAIT>(0, 0, 0, page_size);
 
     // initial read
     if (exec_buf_state.prefetch_length == 0) {
@@ -1106,7 +1108,7 @@ void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_
             initial_pages_at_once -= pages_to_read;
             while (pages_to_read != 0) {
                 uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
-                noc_async_read<NOC_MAX_BURST_SIZE>(noc_addr, read_ptr, page_size);
+                noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SNDl, CQ_NOC_SEND, CQ_NOC_WAIT>(noc_index, noc_addr, read_ptr, 0);
                 read_ptr += page_size;
                 page_id++;
                 pages_to_read--;
@@ -1148,7 +1150,7 @@ void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_
             prefetch_pages_at_once -= pages_to_read;
             while (pages_to_read != 0) {
                 uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
-                noc_async_read<NOC_MAX_BURST_SIZE>(noc_addr, read_ptr, page_size);
+                noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SNDl, CQ_NOC_SEND, CQ_NOC_WAIT>(noc_index, noc_addr, read_ptr, 0);
                 read_ptr += page_size;
                 page_id++;
                 pages_to_read--;
