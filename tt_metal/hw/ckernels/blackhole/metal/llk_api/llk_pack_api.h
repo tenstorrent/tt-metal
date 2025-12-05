@@ -230,6 +230,7 @@ inline void llk_pack_untilize_init(
 }
 
 inline void llk_pack_untilize_uninit(std::uint32_t output) {
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
     const std::uint32_t output_id = get_output_id(output);
 
     uint x_stride = (uint)(pack_src_format[output_id] & 0x3) == (uint)DataFormat::Float32   ? 4
