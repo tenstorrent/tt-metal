@@ -1,0 +1,94 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI LLC.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <cstdint>
+#include "compute_kernel_api/common.h"
+#include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+#include "compute_kernel_api/eltwise_unary/trigonometry.h"
+#include "compute_kernel_api/mul_int32_sfpu.h"
+#include "compute_kernel_api/mul_int_sfpu.h"
+#include "compute_kernel_api/eltwise_unary/rpow.h"
+
+#ifdef TRISC_MATH
+
+#include "ckernel.h"
+#include "ckernel_sfpu_conversions.h"
+#include "sfpi.h"
+
+
+{{ SFPU_KERNEL_IMPL }}
+
+template <bool is_fp32_dest_acc_en = false>
+void sfpu_kernel_generic() {
+    constexpr unsigned VECTORS_PER_FACE = 8;
+    for (unsigned i = 0; i < VECTORS_PER_FACE; i++) {
+        sfpi::vFloat in = dst_reg[0];
+        sfpi::vFloat result = {{ SFPU_KERNEL_NAME }}(in);
+
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
+    }
+}
+
+
+
+#endif // TRISC_MATH
+
+inline void sfpu_kernel(int dst_reg_index) {
+#ifdef TRISC_MATH
+    _llk_math_eltwise_unary_sfpu_params_<false>(
+        sfpu_kernel_generic<DST_ACCUM_MODE>,
+        dst_reg_index,
+        VectorMode::RC // Apply on all 4 faces of the tile
+    );
+#endif // TRISC_MATH
+}
+
+
+
+inline void sfpu_kernel_init() {
+#ifdef TRISC_MATH
+    llk_math_eltwise_unary_sfpu_init<SfpuType::exponential, false>(
+        {{ SFPU_KERNEL_NAME }}_init);
+#endif // TRISC_MATH
+}
+
+
+
+namespace NAMESPACE {
+void MAIN {
+    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
+    uint32_t per_core_block_dim = get_compile_time_arg_val(1);
+
+    init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_1);
+    for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
+        cb_reserve_back(tt::CBIndex::c_1, per_core_block_dim);
+        for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
+            tile_regs_acquire();
+
+            // Pop tile after tile, copy to DST and pack
+            cb_wait_front(tt::CBIndex::c_0, 1);
+
+            copy_tile(tt::CBIndex::c_0, 0, 0);
+
+            constexpr int dst_reg_index = 0;
+            sfpu_kernel_init();
+            sfpu_kernel(dst_reg_index);
+
+            tile_regs_commit();
+
+            tile_regs_wait();
+
+            pack_tile(0, tt::CBIndex::c_1);
+
+            cb_pop_front(tt::CBIndex::c_0, 1);
+
+            tile_regs_release();
+        }
+        cb_push_back(tt::CBIndex::c_1, per_core_block_dim);
+    }
+}
+}  // namespace NAMESPACE
