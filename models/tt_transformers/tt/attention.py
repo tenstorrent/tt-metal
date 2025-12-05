@@ -9,7 +9,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
+from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 
@@ -590,15 +590,14 @@ class Attention(LightweightModule):
             return dense_out_sharded
 
         else:
-            attn_output = tt_all_gather(
+            attn_output = self.tt_ccl.all_gather(
                 attn_output_cat,
-                self.mesh_device,
-                self.tt_ccl,
                 dim=2,
                 cluster_axis=1,
                 num_links=2,
                 memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1]),
                 sharded=True,
+                buffer_key="ATTN_OUT",  # forward_decode is always decode mode
                 # dtype=self.ccl_dtype,  # Running bf16 until we have SDPA output bfp8 df; otherwise we have two sharded to interleaved/interleaved to sharded conversions
             )
             if self.TG:
