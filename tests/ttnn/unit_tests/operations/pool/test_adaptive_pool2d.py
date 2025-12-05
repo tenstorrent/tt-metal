@@ -71,3 +71,55 @@ def test_adaptive_pool2d(
         dtype=dtype,
         pool_type=pool_type,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape, num_slices",
+    [
+        ((1, 64, 256, 256), 16),
+        ((1, 224, 128, 128), 8),
+        ((2, 128, 384, 384), 16),
+        ((1, 16, 1024, 1024), 8),
+        ((1, 8, 384, 384), 8),
+    ],
+)
+@pytest.mark.parametrize(
+    "output_size",
+    (
+        (64, 64),
+        (128, 128),
+    ),
+)
+@pytest.mark.parametrize(
+    "dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "pool_type",
+    ["max", "avg"],
+)
+def test_adaptive_dram_pool2d(
+    device,
+    tensor_map,
+    input_shape,
+    num_slices,
+    output_size,
+    dtype,
+    pool_type,
+):
+    if list(input_shape) + list(output_size) in failing_parameters:
+        pytest.skip(
+            f"Skipping failing cases due to non correctable patterns in kernels or strides: {input_shape} -> {output_size}"
+        )
+    dram_slice_config = ttnn.Op2dSliceConfig(num_slices=num_slices, slice_type=ttnn.Op2dDRAMSliceHeight)
+
+    run_adaptive_pool2d(
+        device=device,
+        tensor_map=tensor_map,
+        input_shape=input_shape,
+        output_size=output_size,
+        dtype=dtype,
+        pool_type=pool_type,
+        dram_slice_config=dram_slice_config,
+    )

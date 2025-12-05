@@ -77,6 +77,7 @@ void bind_adaptive_avg_pool2d_operation(py::module& module) {
                uint32_t channels,
                std::array<uint32_t, 2> output_size,
                const std::optional<const MemoryConfig>& memory_config,
+               const std::optional<const op_slicing::Op2dSliceConfig>& dram_slice_config,
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
                const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
                bool deallocate_input,
@@ -89,6 +90,7 @@ void bind_adaptive_avg_pool2d_operation(py::module& module) {
                     channels,
                     output_size,
                     memory_config,
+                    dram_slice_config,
                     applied_shard_scheme,
                     compute_kernel_config,
                     deallocate_input,
@@ -102,6 +104,7 @@ void bind_adaptive_avg_pool2d_operation(py::module& module) {
             py::arg("output_size"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
+            py::arg("dram_slice_config") = std::nullopt,
             py::arg("applied_shard_scheme") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("deallocate_input") = false,
@@ -166,6 +169,7 @@ void bind_adaptive_max_pool2d_operation(py::module& module) {
                uint32_t channels,
                std::array<uint32_t, 2> output_size,
                const std::optional<const MemoryConfig>& memory_config,
+               const std::optional<const op_slicing::Op2dSliceConfig>& dram_slice_config,
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
                bool deallocate_input,
                bool reallocate_output) -> ttnn::Tensor {
@@ -177,6 +181,7 @@ void bind_adaptive_max_pool2d_operation(py::module& module) {
                     channels,
                     output_size,
                     memory_config,
+                    dram_slice_config,
                     applied_shard_scheme,
                     deallocate_input,
                     reallocate_output);
@@ -189,6 +194,7 @@ void bind_adaptive_max_pool2d_operation(py::module& module) {
             py::arg("output_size"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
+            py::arg("dram_slice_config") = std::nullopt,
             py::arg("applied_shard_scheme") = std::nullopt,
             py::arg("deallocate_input") = false,
             py::arg("reallocate_output") = true});
