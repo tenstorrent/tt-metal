@@ -35,4 +35,6 @@
 - Watch for UB (aliasing, lifetime, overflow), data races, and unsafe casts.
 - For kernel/firmware work, confirm **bounds checks** and **synchronization** (mailboxes, queues) are preserved.
 
+## Document only changes
+- Changes that involves documentations only (e.g. typo fixes, new tech reports) should have the PR title prefixed with [skip ci] to avoid running unnecessary checks.
 Respond tersely, with code blocks for actionable diffs.
