@@ -119,10 +119,7 @@ class TTSampling(LightweightModule):
         self._create_indices_tensors()
         # Log-probs tensor to store the log-probs for the batch
         self.tt_log_probs = None
-        self.log_probs_calculator = LogProbsCalculator(self.padded_vocab_size, self.mesh_device)
-
-    def set_log_probs_mode(self, enable_log_probs: bool = False):
-        self.log_probs_calculator.enable_log_probs = enable_log_probs
+        self.log_probs_calculator = LogProbsCalculator(self.mesh_device)
 
     def _create_indices_tensors(self):
         """Create the indices tensors needed for distributed top-k operations."""
@@ -356,14 +353,9 @@ class TTSampling(LightweightModule):
         ttnn.deallocate(topk_values_gathered_bf16_interleaved)
         ttnn.deallocate(topk_global_indices_interleaved_untilised)
 
-        if self.log_probs_calculator.enable_log_probs:
-            self.log_probs_calculator.compute_global_stats(x)
-            relevant_logits = self.log_probs_calculator.prepare_relevant_logits(tt_out_tok)
-            self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(relevant_logits)
-        else:
-            # Return dummy log-probs tensor with same shape as regular log-probs would be
-            # to satisfy the return type and for later post-processing
-            self.tt_log_probs = self.log_probs_calculator.output_tensor
+        # Return dummy log-probs tensor with same shape as regular log-probs would be
+        # to satisfy the return type and for later post-processing
+        self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(x, tt_out_tok)
 
         return tt_out_tok, self.tt_log_probs
 

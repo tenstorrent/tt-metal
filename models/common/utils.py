@@ -55,13 +55,11 @@ class LogProbsCalculator:
 
     Args:
         mesh_device: MeshDevice to use for all-gather operations
-        vocab_size: Vocabulary size
     """
 
-    def __init__(self, vocab_size: int, mesh_device: ttnn.MeshDevice):
+    def __init__(self, mesh_device: ttnn.MeshDevice):
         self.global_max = None
         self.global_exp_sum = None
-        self.vocab_size = vocab_size
         self.mesh_device = mesh_device
         self.enable_log_probs = False  # default to False
 
@@ -114,7 +112,7 @@ class LogProbsCalculator:
 
         self.enable_log_probs = enable_log_probs_result
 
-    def compute_global_stats(
+    def _compute_global_stats(
         self,
         logits_tensor: ttnn.Tensor,
     ):
@@ -126,20 +124,8 @@ class LogProbsCalculator:
         Args:
             logits_tensor (ttnn.Tensor): Logits as model output (1, 1, batch_size, vocab_size_per_device)
         """
-        if not self.enable_log_probs:
-            return
-
-        if self.mesh_device.get_num_devices() != 8:
-            self.global_max = None
-            self.global_exp_sum = None
-            return
-        # Calculating log-probs requires bfloat16 precision for near-stable sum-exp calculation
-        if logits_tensor.dtype == ttnn.bfloat8_b:
-            self.logits_tensor = ttnn.typecast(logits_tensor, ttnn.bfloat16)
-        else:
-            self.logits_tensor = logits_tensor
         # Calculate local max
-        local_max_tensor = ttnn.max(self.logits_tensor, dim=-1, keepdim=True)
+        local_max_tensor = ttnn.max(logits_tensor, dim=-1, keepdim=True)
 
         # All-gather local max to get global max
         gathered_max_tensors = ttnn.all_gather(
@@ -153,7 +139,7 @@ class LogProbsCalculator:
         self.global_max = ttnn.max(gathered_max_tensors, dim=-1, keepdim=True)
 
         # Calculate stable local sum-exp using subtract of global-max from each local logit
-        subtracted_tensor = ttnn.subtract(self.logits_tensor, self.global_max)
+        subtracted_tensor = ttnn.subtract(logits_tensor, self.global_max)
         sum_exp_tensor = ttnn.sum(ttnn.exp(subtracted_tensor), dim=-1, keepdim=True)
 
         # All-gather stable local sum-exp to get global sum-exp
@@ -171,21 +157,11 @@ class LogProbsCalculator:
         self.global_max = ttnn.reshape(self.global_max, (1, 1, 1, 32))
         self.global_exp_sum = ttnn.reshape(self.global_exp_sum, (1, 1, 1, 32))
 
-    def prepare_relevant_logits(self, global_idx_tensor: ttnn.Tensor):
+    def _prepare_relevant_logits(self, logits_tensor: ttnn.Tensor, global_idx_tensor: ttnn.Tensor):
         """
         Prepare global idx tensor with correct values on all devices.
         """
-        if not self.enable_log_probs:
-            return logits_tensor
-
-        if self.mesh_device.get_num_devices() != 8:
-            # TODO: Implement method for Llama 3.70b Galaxy with sub_core_grid support for all the ops
-            return None
-
-        if not self.enable_log_probs:
-            return logits_tensor
-
-        size_per_device = self.logits_tensor.shape[-1]
+        size_per_device = logits_tensor.shape[-1]
 
         # convert global_idx_tensor to ttnn.TILE_LAYOUT
         global_idx_tilized_tensor = ttnn.to_layout(global_idx_tensor, ttnn.TILE_LAYOUT)
@@ -207,7 +183,7 @@ class LogProbsCalculator:
         remainder_tensor = ttnn.reshape(ttnn.typecast(remainder_tensor, ttnn.uint32), (1, 1, 32, 1))
 
         # Get logits for each user on each chip based on local index
-        selected_logits_tensor = ttnn.gather(self.logits_tensor, dim=3, index=remainder_tensor)
+        selected_logits_tensor = ttnn.gather(logits_tensor, dim=3, index=remainder_tensor)
 
         selected_logits_tensor = ttnn.reshape(selected_logits_tensor, (1, 1, 1, 32))
         # Compare mask to chip_ids tensor and select correct positions for each user on all chips inplace
@@ -230,26 +206,41 @@ class LogProbsCalculator:
 
         return selected_logits_tensor
 
-    def calculate_log_probs(self, logits_tensor: ttnn.Tensor):
+    def _calculate_log_probs(self, sampled_logits_tensor: ttnn.Tensor):
         """
-        Calculate log-probs for a given logits tensor.
+        Calculate log-probs for a given logits tensor with formula:
+        log-prob(x) = logits(x) - global_max - log(global_exp_sum)
+        """
+        out = ttnn.subtract(sampled_logits_tensor, self.global_max)
+        out = ttnn.subtract(out, ttnn.log(self.global_exp_sum))
+
+        return out
+
+    def calculate_log_probs(
+        self,
+        logits_tensor: ttnn.Tensor,
+        indices_tensor: ttnn.Tensor,
+    ):
+        """
+        Calculate log-probs for a given logits tensor and indices tensor.
         """
         if not self.enable_log_probs:
             return self.output_tensor
 
         if self.mesh_device.get_num_devices() != 8:
-            # TODO: Currently not implemented for 32 devices due sub_core_grid not supported for all the ops
             return self.output_tensor
 
-        if not self.enable_log_probs:
-            return self.output_tensor
+        # Calculating log-probs requires bfloat16 precision for near-stable sum-exp calculation
+        if logits_tensor.dtype == ttnn.bfloat8_b:
+            logits_tensor = ttnn.typecast(logits_tensor, ttnn.bfloat16)
 
-        if self.global_max is None or self.global_exp_sum is None:
-            raise ValueError("Global max or global exp sum is not calculated yet. Call compute_global_stats first.")
+        # Compute global max and global sum(exp(logits - global_max)) for each chip
+        self._compute_global_stats(logits_tensor)
 
-        # Calculate log-probs with formula:
-        # logits_tensor - self.global_max - ttnn.log(self.global_exp_sum)
-        out = ttnn.subtract(logits_tensor, self.global_max)
-        out = ttnn.subtract(out, ttnn.log(self.global_exp_sum))
+        # Prepare relevant logits for each user on each chip
+        relevant_logits = self._prepare_relevant_logits(logits_tensor, indices_tensor)
 
-        return out
+        # Calculate log-probs for each user on each chip
+        log_probs = self._calculate_log_probs(relevant_logits)
+
+        return log_probs
