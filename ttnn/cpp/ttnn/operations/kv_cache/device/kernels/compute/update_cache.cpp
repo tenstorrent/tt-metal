@@ -35,7 +35,7 @@ void MAIN {
         if constexpr (Wt > 8) {
             untilize_block(in_cb, Wt, untilized_in_cb);
         } else {
-            pack_untilize_block<Wt>(in_cb, 1, untilized_in_cb);
+            pack_untilize_block<Wt>(in_cb, Wt, untilized_in_cb);
         }
         cb_push_back(untilized_in_cb, Wt);
         cb_pop_front(in_cb, Wt);
