@@ -1523,6 +1523,11 @@ void UpdateDynamicCircularBufferAddress(
     circular_buffer->set_global_circular_buffer(global_circular_buffer);
 }
 
+KernelHandle CreateKernel(Program& program, const std::string& file_name, const DataMovementConfig& config) {
+    return CreateDataMovementKernel(
+        program, KernelSource(file_name, KernelSource::FILE_PATH), CoreRangeSet({{0, 0}, {0, 0}}), config);
+}
+
 }  // namespace experimental
 
 }  // namespace tt::tt_metal
