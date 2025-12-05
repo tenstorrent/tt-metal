@@ -60,7 +60,6 @@ struct operation_attributes_t {
     auto attributes() const {
         using tt::stl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
-        attrs.emplace_back("matmul_struct", matmul_struct);
         attrs.emplace_back("devices", devices);
         attrs.emplace_back("dim", dim);
         attrs.emplace_back("num_links", num_links);
