@@ -337,16 +337,17 @@ def run_demo_whisper_for_conditional_generation_inference(
 
             # Extract final metrics from last result
             if last_result is not None:
-                ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput = last_result
+                ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput, is_final = last_result
                 print()  # New line after streaming
             else:
                 # Fallback if no results
-                ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput = (
+                ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput, is_final = (
                     [""] * current_batch_size,
                     None,
                     None,
                     0.0,
                     0.0,
+                    False,
                 )
         else:
             # Non-streaming mode
@@ -411,11 +412,12 @@ def run_demo_whisper_for_conditional_generation_dataset(
                 last_result = result
             # Extract final result
             if last_result is not None:
-                ttnn_output, avg_logprob, no_speech_prob = last_result
+                ttnn_output, avg_logprob, no_speech_prob, is_final = last_result
             else:
                 ttnn_output = [""] * current_batch_size
                 avg_logprob = None
                 no_speech_prob = None
+                is_final = False
         else:
             # Non-streaming mode
             ttnn_output, avg_logprob, no_speech_prob = model_pipeline(
@@ -552,11 +554,12 @@ def run_demo_whisper_for_translation_dataset(
                 last_result = result
             # Extract final result
             if last_result is not None:
-                ttnn_output, avg_logprob, no_speech_prob = last_result
+                ttnn_output, avg_logprob, no_speech_prob, is_final = last_result
             else:
                 ttnn_output = [""] * current_batch_size
                 avg_logprob = None
                 no_speech_prob = None
+                is_final = False
         else:
             # Non-streaming mode
             ttnn_output, avg_logprob, no_speech_prob = model_pipeline(
@@ -700,7 +703,7 @@ def test_demo_for_audio_classification_dataset(
 )
 @pytest.mark.parametrize(
     "stream",
-    [False],
+    [True, False],
 )
 @pytest.mark.parametrize(
     "prompt",
@@ -816,7 +819,7 @@ def test_demo_for_conditional_generation(
 )
 @pytest.mark.parametrize(
     "stream",
-    [False],
+    [True, False],
 )
 @pytest.mark.parametrize(
     "prompt",
@@ -972,7 +975,6 @@ def test_demo_for_translation_dataset(
         return_timestamps=return_timestamps,
         language=source_language,
         task="translate",
-        prompt=prompt,
     )
     return run_demo_whisper_for_translation_dataset(
         mesh_device,

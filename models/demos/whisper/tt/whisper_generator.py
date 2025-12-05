@@ -577,10 +577,11 @@ def _generate_with_temperature(
 
                 # For streaming, we yield the current transcription without timestamps
                 # Timestamps will be processed at the end if return_timestamps=True
+                # is_final=False indicates this is an intermediate token, not the final result
                 if return_perf_metrics:
-                    yield ttnn_transcription, current_avg_logprob, current_no_speech_probs, ttft, avg_decode_throughput
+                    yield ttnn_transcription, current_avg_logprob, current_no_speech_probs, ttft, avg_decode_throughput, False
                 else:
-                    yield ttnn_transcription, current_avg_logprob, current_no_speech_probs
+                    yield ttnn_transcription, current_avg_logprob, current_no_speech_probs, False
             else:
                 # Non-streaming mode: collect results
                 for idx in range(input_features.shape[0]):
@@ -620,10 +621,17 @@ def _generate_with_temperature(
                 segments_with_timestamps.append([])
 
         # Yield final result with timestamps (works for both streaming and non-streaming)
+        # For streaming mode, include is_final=True to mark this as the final result
         if return_perf_metrics:
-            yield segments_with_timestamps, avg_logprob, no_speech_probs, ttft, avg_decode_throughput
+            if streaming:
+                yield segments_with_timestamps, avg_logprob, no_speech_probs, ttft, avg_decode_throughput, True
+            else:
+                yield segments_with_timestamps, avg_logprob, no_speech_probs, ttft, avg_decode_throughput
         else:
-            yield segments_with_timestamps, avg_logprob, no_speech_probs
+            if streaming:
+                yield segments_with_timestamps, avg_logprob, no_speech_probs, True
+            else:
+                yield segments_with_timestamps, avg_logprob, no_speech_probs
     else:
         if streaming:
             # For streaming without timestamps, yield final accumulated result
@@ -638,10 +646,11 @@ def _generate_with_temperature(
                 )[0]
                 final_output.append(decoded_text.strip())
 
+            # is_final=True indicates this is the final batch-decoded result
             if return_perf_metrics:
-                yield final_output, avg_logprob, no_speech_probs, ttft, avg_decode_throughput
+                yield final_output, avg_logprob, no_speech_probs, ttft, avg_decode_throughput, True
             else:
-                yield final_output, avg_logprob, no_speech_probs
+                yield final_output, avg_logprob, no_speech_probs, True
         else:
             # Join the collected tokens into final text and strip leading/trailing whitespace
             output = ["".join(tokens).strip() for tokens in output]
