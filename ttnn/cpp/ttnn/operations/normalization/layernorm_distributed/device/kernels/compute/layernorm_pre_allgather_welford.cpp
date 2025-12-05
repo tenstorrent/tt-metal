@@ -22,7 +22,6 @@
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "compute_kernel_api/compute_kernel_hw_startup.h"
 #include "compute_kernel_api/transpose_wh_dest.h"
-#include "debug/dprint_pages.h"
 
 namespace NAMESPACE {
 template <typename To, typename From>
@@ -67,8 +66,9 @@ void MAIN {
 
         tile_regs_acquire();
         uint32_t start_N = 0;
-        transpose_wh_init_short(cb_inp);
+        transpose_wh_init(cb_inp, cb_x2);
         welford_init();
+
         for (uint32_t wt = 0; wt < (Wt - 1); wt++) {
             cb_wait_front(cb_inp, 1);  // cumulative wait
             transpose_wh_tile(cb_inp, 0, dst0);
@@ -101,12 +101,13 @@ void MAIN {
         cb_wait_front(cb_x2, 2);  // cumulative wait
         transpose_wh_tile(cb_x2, 0, dst0);
         transpose_wh_tile(cb_x2, 1, dst1);
+        cb_pop_front(cb_x2, 2);
+
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(dst0, cb_out);
         pack_tile(dst1, cb_out);
         cb_push_back(cb_out, 2);
-        cb_wait_front(cb_out, 2);
         tile_regs_release();
     }
 }

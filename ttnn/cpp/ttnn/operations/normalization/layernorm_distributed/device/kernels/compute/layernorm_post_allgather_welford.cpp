@@ -23,10 +23,7 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
-#include "debug/dprint_pages.h"
-#include "dprint_tensix.h"
 // read dest reg
-#include "debug/dprint.h"
 #include "chain_llk.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
