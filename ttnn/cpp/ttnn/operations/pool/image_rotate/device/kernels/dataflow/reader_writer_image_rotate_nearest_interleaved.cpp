@@ -5,7 +5,6 @@
 #include <cmath>
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 // Include for tensor accessor and common utilities
 #include "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_reader_common.hpp"
 
@@ -59,10 +58,6 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     const auto output_tensor_accessor = TensorAccessor(dst_args, output_addr, output_stick_nbytes);
 
-    DPRINT << "NEAREST: Starting kernel with " << num_sticks << " sticks, start_id=" << start_stick_id << ENDL();
-    DPRINT << "NEAREST: cos=" << cos_angle << " sin=" << sin_angle << " center=(" << center_x << "," << center_y << ")"
-           << ENDL();
-
     // Initialize CB
     cb_reserve_back(output_cb_index, 1);
     uint32_t l1_write_addr = get_write_ptr(output_cb_index);
@@ -77,10 +72,6 @@ void kernel_main() {
         const uint32_t y_out = spatial_idx / input_width;
         const uint32_t x_out = spatial_idx % input_width;
 
-        if (local_stick_idx < 5) {
-            DPRINT << "NEAREST: Processing pixel (" << x_out << "," << y_out << ") batch=" << batch_idx << ENDL();
-        }
-
         // Compute source coordinates using inverse rotation
         // Translate to center-relative coordinates
         const float x_centered = static_cast<float>(x_out) - center_x;
@@ -94,11 +85,6 @@ void kernel_main() {
         const int32_t nearest_x = static_cast<int32_t>(round(x_in));
         const int32_t nearest_y = static_cast<int32_t>(round(y_in));
 
-        if (local_stick_idx < 5) {
-            DPRINT << "NEAREST: Source coords (" << x_in << "," << y_in << ") -> Mapped to (" << nearest_x << ","
-                   << nearest_y << ")" << ENDL();
-        }
-
         // Check if the nearest pixel is in bounds
         const bool x_valid = is_coordinate_valid(nearest_x, input_width);
         const bool y_valid = is_coordinate_valid(nearest_y, input_height);
@@ -108,14 +94,9 @@ void kernel_main() {
             const uint32_t input_stick_index =
                 batch_idx * (input_height * input_width) + nearest_y * input_width + nearest_x;
             const uint64_t input_noc_addr = input_tensor_accessor.get_noc_addr(input_stick_index);
-
-            // DPRINT << "NEAREST: Reading from stick " << input_stick_index << ENDL();
             noc_async_read(input_noc_addr, l1_write_addr, input_stick_nbytes);
             noc_async_read_barrier();
         } else {
-            // Out of bounds - fill with fill value
-            // DPRINT << "NEAREST: Out of bounds, filling with " << fill_value_bf16 << ENDL();
-
             // Fill the entire stick with the fill value
             volatile tt_l1_ptr uint16_t* output_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);
             for (uint32_t i = 0; i < input_channels; i++) {
@@ -134,9 +115,5 @@ void kernel_main() {
         noc_async_write(l1_read_addr, output_noc_addr, output_stick_nbytes);
         noc_async_write_barrier();
         cb_pop_front(output_cb_index, 1);
-
-        // DPRINT << "NEAREST: Wrote output stick " << output_stick_index << ENDL();
     }
-
-    // DPRINT << "NEAREST: Kernel completed" << ENDL();
 }
