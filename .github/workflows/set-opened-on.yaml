@@ -46,15 +46,15 @@ jobs:
           handle_rate_limit_error() {
             local RESPONSE="$1"
             local CONTEXT="$2"
-            
+
             if echo "$RESPONSE" | grep -q "API rate limit"; then
               echo "Error: GitHub API rate limit exceeded for DATE_AUTOMATION token" >&2
-              
+
               # Extract rate limit details from headers if available (use f2- to handle multiple colons)
               RESET_TIME=$(echo "$RESPONSE" | grep -i "x-ratelimit-reset:" | head -1 | cut -d: -f2- | tr -d ' \r')
               REMAINING=$(echo "$RESPONSE" | grep -i "x-ratelimit-remaining:" | head -1 | cut -d: -f2- | tr -d ' \r')
               RESOURCE=$(echo "$RESPONSE" | grep -i "x-ratelimit-resource:" | head -1 | cut -d: -f2- | tr -d ' \r')
-              
+
               if [ -n "$RESET_TIME" ]; then
                 # GitHub Actions uses Ubuntu runners, so GNU date format is safe
                 RESET_DATE=$(date -u -d "@$RESET_TIME" 2>/dev/null || echo "unknown")
@@ -62,7 +62,7 @@ jobs:
                 echo "Remaining: $REMAINING" >&2
                 echo "Resets at: $RESET_DATE" >&2
               fi
-              
+
               echo "" >&2
               echo "Full response:" >&2
               echo "$RESPONSE" >&2
