@@ -257,9 +257,9 @@ private:
     std::optional<PhysicalLinkInfo> link_info_;
 };
 
-class FabricTxElapsedCyclesMetric : public UIntMetric {
+class FabricSupportedStatsMetric : public UIntMetric {
 public:
-    FabricTxElapsedCyclesMetric(
+    FabricSupportedStatsMetric(
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
@@ -280,9 +280,9 @@ private:
     std::optional<PhysicalLinkInfo> link_info_;
 };
 
-class FabricRxElapsedCyclesMetric : public UIntMetric {
+class FabricTxBandwidthMetric : public DoubleMetric {
 public:
-    FabricRxElapsedCyclesMetric(
+    FabricTxBandwidthMetric(
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
@@ -301,11 +301,15 @@ private:
     uint32_t channel_;
     std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
+
+    uint64_t prev_words_ = 0;
+    uint64_t prev_cycles_ = 0;
+    bool first_update_ = true;
 };
 
-class FabricTxActiveCyclesMetric : public UIntMetric {
+class FabricRxBandwidthMetric : public DoubleMetric {
 public:
-    FabricTxActiveCyclesMetric(
+    FabricRxBandwidthMetric(
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
@@ -324,11 +328,15 @@ private:
     uint32_t channel_;
     std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
+
+    uint64_t prev_words_ = 0;
+    uint64_t prev_cycles_ = 0;
+    bool first_update_ = true;
 };
 
-class FabricRxActiveCyclesMetric : public UIntMetric {
+class FabricTxPeakBandwidthMetric : public DoubleMetric {
 public:
-    FabricRxActiveCyclesMetric(
+    FabricTxPeakBandwidthMetric(
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
@@ -347,6 +355,37 @@ private:
     uint32_t channel_;
     std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
     std::optional<PhysicalLinkInfo> link_info_;
+
+    uint64_t prev_words_ = 0;
+    uint64_t prev_cycles_ = 0;
+    bool first_update_ = true;
+};
+
+class FabricRxPeakBandwidthMetric : public DoubleMetric {
+public:
+    FabricRxPeakBandwidthMetric(
+        tt::tt_metal::TrayID tray_id,
+        tt::tt_metal::ASICLocation asic_location,
+        uint32_t channel,
+        std::shared_ptr<FabricTelemetryReader> telemetry_reader,
+        const std::unique_ptr<TopologyHelper>& topology_helper = nullptr);
+
+    const std::vector<std::string> telemetry_path() const override;
+    void update(
+        const std::unique_ptr<tt::umd::Cluster>& cluster,
+        std::chrono::steady_clock::time_point start_of_update_cycle) override;
+    std::unordered_map<std::string, std::string> labels() const override;
+
+private:
+    tt::tt_metal::TrayID tray_id_;
+    tt::tt_metal::ASICLocation asic_location_;
+    uint32_t channel_;
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
+    std::optional<PhysicalLinkInfo> link_info_;
+
+    uint64_t prev_words_ = 0;
+    uint64_t prev_cycles_ = 0;
+    bool first_update_ = true;
 };
 
 class FabricTxHeartbeatMetric : public UIntMetric {
