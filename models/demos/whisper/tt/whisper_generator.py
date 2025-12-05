@@ -65,6 +65,7 @@ def generate(
     output_mesh_composer,
     weights_mesh_mapper,
     kv_cache=None,
+    cross_attn_cache=None,
     generation_params: Optional[GenerationParams] = None,
     stream_generation=False,
     return_perf_metrics=False,
@@ -80,6 +81,16 @@ def generate(
     return_timestamps = generation_params.return_timestamps
     language = generation_params.language
     task = generation_params.task
+
+    # Reset cross-attention cache for new generation
+    # Explicitly deallocate tensors from previous generation to free DRAM
+    if cross_attn_cache is not None:
+        for layer_cache in cross_attn_cache:
+            if layer_cache[0] is not None:
+                ttnn.deallocate(layer_cache[0])
+                ttnn.deallocate(layer_cache[1])
+            layer_cache[0] = None
+            layer_cache[1] = None
 
     # Process input features
     all_input_features = []
@@ -147,6 +158,7 @@ def generate(
             input_mesh_mapper=input_mesh_mapper,
             output_mesh_composer=output_mesh_composer,
             kv_cache=kv_cache,
+            cross_attn_cache=cross_attn_cache,
             unpadded_batch_size=unpadded_batch_size,
             return_perf_metrics=return_perf_metrics,
             return_timestamps=return_timestamps,
@@ -180,6 +192,7 @@ def generate(
                 input_mesh_mapper=input_mesh_mapper,
                 output_mesh_composer=output_mesh_composer,
                 kv_cache=kv_cache,
+                cross_attn_cache=cross_attn_cache,
                 unpadded_batch_size=unpadded_batch_size,
                 return_perf_metrics=return_perf_metrics,
                 return_timestamps=return_timestamps,
@@ -300,6 +313,7 @@ def _generate_with_temperature(
     input_mesh_mapper,
     output_mesh_composer,
     kv_cache,
+    cross_attn_cache,
     unpadded_batch_size,
     return_perf_metrics=False,
     return_timestamps=False,
@@ -391,6 +405,7 @@ def _generate_with_temperature(
             encoder_hidden_states=encoder_hidden_states,
             kv_cache=kv_cache,
             current_decode_pos=current_decode_pos,
+            cross_attn_cache=cross_attn_cache,
             parameters=parameters.decoder,
         )
 
