@@ -488,8 +488,8 @@ std::vector<T> convert_layout(
     const bool transpose_within_face,
     const bool transpose_of_faces) {
     TT_ASSERT(shape.size() >= 2, "Shape size {} must be at least rank 2!", shape.size());
-    size_t H = shape[shape.size() - 2];
-    size_t W = shape[shape.size() - 1];
+    uint32_t H = shape[shape.size() - 2];
+    uint32_t W = shape[shape.size() - 1];
     for (size_t i = 0; i < shape.size() - 2; i++) {
         H *= shape[i];
     }
