@@ -2,12 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import base64
+import io
 import os
+import tempfile
 from os import listdir
 from os.path import isfile, join
 from typing import Optional
 
 import jiwer
+import numpy as np
 import pytest
 import torch
 from datasets import load_dataset
@@ -44,6 +48,134 @@ available_devices = len(ttnn.get_device_ids()) if ttnn.get_device_ids() else 1
 def load_input_paths(folder_path):
     files = [os.path.join(folder_path, f) for f in listdir(folder_path) if isfile(join(folder_path, f))]
     return files
+
+
+def decode_base64_audio(base64_string, temp_dir=None):
+    """
+    Decode a base64-encoded audio file and return (sampling_rate, audio_array).
+    Supports WAV, MP3, and other common audio formats.
+
+    Args:
+        base64_string: Base64-encoded audio data as a string
+        temp_dir: Optional temporary directory to save the decoded file
+
+    Returns:
+        tuple: (sampling_rate, audio_array) compatible with wavfile.read output
+    """
+    # Decode base64 to bytes
+    audio_bytes = base64.b64decode(base64_string)
+
+    # Create a BytesIO object to read the audio data
+    audio_io = io.BytesIO(audio_bytes)
+
+    # Try to detect format by reading first few bytes
+    audio_io.seek(0)
+    header = audio_io.read(4)
+    audio_io.seek(0)
+
+    # Check if it's a WAV file (RIFF header)
+    if header.startswith(b"RIFF") or header.startswith(b"RIFX") or header.startswith(b"RF64"):
+        # Use wavfile for WAV files
+        sampling_rate, audio_array = wavfile.read(audio_io)
+        return sampling_rate, audio_array
+    else:
+        # For other formats (MP3, etc.), write to temp file and use a library that supports multiple formats
+        # Try librosa first (commonly available with transformers)
+        try:
+            import librosa
+
+            # Write to temporary file (librosa works better with file paths)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".tmp") as tmp_file:
+                tmp_file.write(audio_bytes)
+                tmp_path = tmp_file.name
+
+            try:
+                audio_array, sampling_rate = librosa.load(tmp_path, sr=None)
+                # Convert to int16 if needed (librosa returns float32 normalized to [-1, 1])
+                if audio_array.dtype == np.float32 or audio_array.dtype == np.float64:
+                    # Scale to int16 range [-32768, 32767]
+                    audio_array = (audio_array * 32767).astype(np.int16)
+                return int(sampling_rate), audio_array
+            finally:
+                # Clean up temp file
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+        except ImportError:
+            # Fall back to soundfile
+            try:
+                import soundfile as sf
+
+                # Write to temporary file
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".tmp") as tmp_file:
+                    tmp_file.write(audio_bytes)
+                    tmp_path = tmp_file.name
+
+                try:
+                    audio_array, sampling_rate = sf.read(tmp_path)
+                    return int(sampling_rate), audio_array
+                finally:
+                    # Clean up temp file
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+            except ImportError:
+                # Last resort: try pydub
+                try:
+                    from pydub import AudioSegment  # type: ignore
+
+                    # Write to temporary file
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".tmp") as tmp_file:
+                        tmp_file.write(audio_bytes)
+                        tmp_path = tmp_file.name
+
+                    try:
+                        # Load with pydub
+                        audio = AudioSegment.from_file(tmp_path)
+                        sampling_rate = audio.frame_rate
+                        # Convert to numpy array
+                        audio_array = np.array(audio.get_array_of_samples())
+                        # Handle stereo to mono conversion if needed
+                        if audio.channels > 1:
+                            audio_array = audio_array.reshape(-1, audio.channels).mean(axis=1)
+
+                        return sampling_rate, audio_array.astype(np.int16)
+                    finally:
+                        # Clean up temp file
+                        if os.path.exists(tmp_path):
+                            os.unlink(tmp_path)
+                except ImportError:
+                    raise ValueError(
+                        "Audio format not supported. The file appears to be MP3 or another format. "
+                        "Please install one of: librosa, soundfile, or pydub. "
+                        f"Detected header: {header[:10]!r}"
+                    )
+
+
+def create_temp_audio_file_from_base64(base64_string, temp_dir=None):
+    """
+    Create a temporary WAV file from base64-encoded audio data.
+
+    Args:
+        base64_string: Base64-encoded audio data as a string
+        temp_dir: Optional temporary directory to save the file
+
+    Returns:
+        str: Path to the temporary audio file
+    """
+    # Decode base64 to bytes
+    audio_bytes = base64.b64decode(base64_string)
+
+    # Create a temporary file
+    if temp_dir:
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_file = tempfile.NamedTemporaryFile(dir=temp_dir, suffix=".wav", delete=False)
+    else:
+        temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+
+    # Write the audio bytes to the temporary file
+    temp_file.write(audio_bytes)
+    temp_file.close()
+
+    return temp_file.name
 
 
 def pad_input_32(tensor, value):
@@ -362,6 +494,104 @@ def run_demo_whisper_for_conditional_generation_inference(
         logger.info(f"Model Output (Inputs {batch_start}--{batch_end}) Sample: {ttnn_output}")
     avg_ttft = total_ttft / (num_inputs - num_warmup_runs)
     avg_decode_throughput = total_decode_throughput / (num_inputs - num_warmup_runs)
+    return avg_ttft, avg_decode_throughput
+
+
+def run_demo_whisper_for_conditional_generation_inference_from_base64(
+    base64_audio_string,
+    mesh_device,
+    num_inputs,
+    model_repo,
+    generation_params: Optional[GenerationParams] = None,
+    batch_size_per_device=1,
+    stream=False,
+    sampling_rate: Optional[int] = None,
+):
+    """
+    Run Whisper conditional generation inference with a base64-encoded audio file.
+
+    Args:
+        base64_audio_string: Base64-encoded audio data as a string
+        mesh_device: The mesh device to run inference on
+        num_inputs: Number of inputs to process
+        model_repo: HuggingFace model repository ID
+        generation_params: Optional generation parameters
+        batch_size_per_device: Batch size per device
+        stream: Whether to use streaming mode
+        sampling_rate: Optional sampling rate (if not provided, will be read from audio file)
+
+    Returns:
+        tuple: (avg_ttft, avg_decode_throughput)
+    """
+    torch.manual_seed(0)
+    # instantiate model inference pipeline
+    model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(
+        mesh_device,
+        model_repo,
+        generation_params,
+    )
+
+    # Decode base64 audio
+    if sampling_rate is None:
+        samplerate, data = decode_base64_audio(base64_audio_string)
+    else:
+        # If sampling rate is provided, decode and use it
+        _, data = decode_base64_audio(base64_audio_string)
+        samplerate = sampling_rate
+
+    batch_size = batch_size_per_device * mesh_device.get_num_devices()
+    total_inputs = num_inputs * batch_size
+
+    # Create batch with the same audio repeated
+    current_batch = [(samplerate, data) for _ in range(total_inputs)]
+
+    total_ttft = 0
+    total_decode_throughput = 0
+    num_warmup_runs = 1
+
+    for i in tqdm(range(0, total_inputs, batch_size), desc="Running Inference"):
+        current_batch_size = min(batch_size, total_inputs - i)
+        batch_data = current_batch[i : i + current_batch_size]
+        logger.info(f"Processing batch {i // batch_size + 1} with {current_batch_size} samples")
+
+        # perform model inference
+        if stream:
+            # Handle streaming mode - iterate over generator
+            logger.info(f"Streaming mode enabled for conditional generation inference")
+            last_result = None
+            for result in model_pipeline(batch_data, stream=True, return_perf_metrics=True):
+                last_result = result
+
+            # Extract final metrics from last result
+            if last_result is not None:
+                ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput = last_result
+                print()  # New line after streaming
+            else:
+                # Fallback if no results
+                ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput = (
+                    [""] * current_batch_size,
+                    None,
+                    None,
+                    0.0,
+                    0.0,
+                )
+        else:
+            # Non-streaming mode
+            ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput = model_pipeline(
+                batch_data, stream=False, return_perf_metrics=True
+            )
+
+        if i >= num_warmup_runs:  # Exclude first compile run
+            total_ttft += ttft
+            total_decode_throughput += avg_decode_throughput
+        batch_start = i + 1
+        batch_end = i + current_batch_size
+        logger.info(f"Model Output (Inputs {batch_start}--{batch_end}) Sample: {ttnn_output}")
+
+    avg_ttft = total_ttft / (num_inputs - num_warmup_runs) if (num_inputs - num_warmup_runs) > 0 else 0.0
+    avg_decode_throughput = (
+        total_decode_throughput / (num_inputs - num_warmup_runs) if (num_inputs - num_warmup_runs) > 0 else 0.0
+    )
     return avg_ttft, avg_decode_throughput
 
 
@@ -760,6 +990,88 @@ def test_demo_for_conditional_generation(
         verify_perf(
             measurements, expected_perf_metrics, high_tol_percentage=1.20, expected_measurements=expected_measurements
         )
+
+
+@pytest.mark.parametrize(
+    "num_inputs,batch_size_per_device",
+    [(2, 1)],
+)
+@pytest.mark.parametrize(
+    "model_repo",
+    ("openai/whisper-large-v3",),
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [available_devices]
+    if os.getenv("CI") != "true"
+    else ([1, available_devices] if available_devices != 1 else [available_devices]),
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "language",
+    ("English",),
+)
+@pytest.mark.parametrize(
+    "task",
+    ("transcribe",),
+)
+@pytest.mark.parametrize(
+    "temperatures,compression_ratio_threshold,logprob_threshold,no_speech_threshold,return_timestamps",
+    [
+        (0.0, None, None, None, False),
+    ],
+)
+@pytest.mark.parametrize(
+    "stream",
+    [False],
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
+def test_demo_for_conditional_generation_base64(
+    mesh_device,
+    num_inputs,
+    model_repo,
+    language,
+    task,
+    is_ci_env,
+    temperatures,
+    compression_ratio_threshold,
+    logprob_threshold,
+    no_speech_threshold,
+    return_timestamps,
+    batch_size_per_device,
+    stream,
+    request,
+):
+    """
+    Test conditional generation with base64-encoded audio file.
+    Set the BASE64_AUDIO environment variable with your base64-encoded audio data.
+
+    Example usage:
+        BASE64_AUDIO="<your_base64_string>" pytest models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation_base64
+    """
+    base64_audio = os.getenv("BASE64_AUDIO")
+    if not base64_audio:
+        pytest.skip("BASE64_AUDIO environment variable not set. Set it with your base64-encoded audio data.")
+
+    generation_params = GenerationParams(
+        temperatures=temperatures,
+        compression_ratio_threshold=compression_ratio_threshold,
+        logprob_threshold=logprob_threshold,
+        no_speech_threshold=no_speech_threshold,
+        return_timestamps=return_timestamps,
+        language=language,
+        task=task,
+    )
+    ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference_from_base64(
+        base64_audio,
+        mesh_device,
+        num_inputs,
+        model_repo,
+        generation_params,
+        batch_size_per_device,
+        stream=stream,
+    )
+    logger.info(f"Test completed. TTFT: {ttft}, Decode Throughput: {decode_throughput}")
 
 
 @pytest.mark.parametrize(

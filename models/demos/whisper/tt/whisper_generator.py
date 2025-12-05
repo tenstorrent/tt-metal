@@ -84,6 +84,7 @@ def generate(
     # Process input features
     all_input_features = []
     start_encode = time.time()
+    step_start = time.time()
     for sampling_rate, audio_array in current_batch:
         inputs = feature_extractor(
             audio_array,
@@ -94,6 +95,9 @@ def generate(
 
     input_features = torch.cat(all_input_features, dim=0)  # [B, x, y]
     del all_input_features
+    feature_extraction_time = time.time() - step_start
+    logger.info(f"Step: Feature extraction - {(feature_extraction_time)*1000:.3f}ms")
+
     unpadded_batch_size = input_features.shape[0]
     assert (
         unpadded_batch_size == 1 * mesh_device.get_num_devices()
@@ -103,6 +107,7 @@ def generate(
     audio_durations = _calculate_audio_duration(current_batch) if return_timestamps else None
 
     # Compute embeddings
+    step_start = time.time()
     input_embeds = ttnn_optimized_functional_whisper.preprocess_encoder_inputs(
         config=config,
         input_features=input_features,
@@ -111,14 +116,19 @@ def generate(
         weights_mesh_mapper=weights_mesh_mapper,
         input_mesh_mapper=input_mesh_mapper,
     )
+    preprocess_encoder_time = time.time() - step_start
+    logger.info(f"Step: Preprocess encoder inputs - {(preprocess_encoder_time)*1000:.3f}ms")
 
     # Run encoder
+    step_start = time.time()
     encoder_hidden_states = ttnn_optimized_functional_whisper.encoder(
         config=config,
         inputs_embeds=input_embeds,
         parameters=parameters.encoder,
     )
     ttnn.synchronize_device(mesh_device)
+    encoder_time = time.time() - step_start
+    logger.info(f"Step: Encoder forward pass - {(encoder_time)*1000:.3f}ms")
     logger.info(f"Time to encoder states: {(time.time() - start_encode)*1000:.3f}ms")
 
     # Handle both single temperature and temperature list/tuple
@@ -369,10 +379,18 @@ def _generate_with_temperature(
     ttft = 0.0
     avg_decode_throughput = 0.0
 
+    # Track cumulative times for decoder steps
+    total_preprocess_decoder_time = 0.0
+    total_decoder_time = 0.0
+    total_linear_projection_time = 0.0
+    total_token_sampling_time = 0.0
+    num_iterations = 0
+
     # Generation loop
     for i in tqdm(range(MAX_GEN_LEN), desc=f"Decode inference iterations (temp={temperature})"):
         start_iter = time.time()
 
+        step_start = time.time()
         decoder_hidden_states, decoder_attention_mask = ttnn_optimized_functional_whisper.preprocess_decoder_inputs(
             config=config,
             input_ids=input_ids,
@@ -383,7 +401,12 @@ def _generate_with_temperature(
             create_attention_mask=(not kv_cache),
             input_mesh_mapper=input_mesh_mapper,
         )
+        preprocess_decoder_time = time.time() - step_start
+        total_preprocess_decoder_time += preprocess_decoder_time
+        if i == 0:
+            logger.info(f"Step: Preprocess decoder inputs (iter {i}) - {(preprocess_decoder_time)*1000:.3f}ms")
 
+        step_start = time.time()
         decoder_output = ttnn_optimized_functional_whisper.decoder(
             config,
             decoder_hidden_states,
@@ -393,6 +416,10 @@ def _generate_with_temperature(
             current_decode_pos=current_decode_pos,
             parameters=parameters.decoder,
         )
+        decoder_time = time.time() - step_start
+        total_decoder_time += decoder_time
+        if i == 0:
+            logger.info(f"Step: Decoder forward pass (iter {i}) - {(decoder_time)*1000:.3f}ms")
 
         if not kv_cache:
             # Note: if not using a kv cache, the entire sequence is recomputed at each step
@@ -403,16 +430,30 @@ def _generate_with_temperature(
         else:
             output_idx = 0
 
+        step_start = time.time()
         decoder_output = decoder_output @ ttnn_linear_weight
         logits_to_torch = ttnn.to_torch(decoder_output, mesh_composer=output_mesh_composer)
         next_token_logits = logits_to_torch[:, output_idx, :]
         next_tokens_scores = logits_processor(input_features, next_token_logits)
+        linear_projection_time = time.time() - step_start
+        total_linear_projection_time += linear_projection_time
+        if i == 0:
+            logger.info(
+                f"Step: Linear projection and logits processing (iter {i}) - {(linear_projection_time)*1000:.3f}ms"
+            )
 
         # Force tokens at specific positions based on forced_tokens_dict
+        step_start = time.time()
         if i in forced_tokens_dict:
             next_tokens = torch.tensor([forced_tokens_dict[i]]).repeat(input_features.shape[0])
         else:
             next_tokens = _sample_token(next_tokens_scores, temperature)
+        token_sampling_time = time.time() - step_start
+        total_token_sampling_time += token_sampling_time
+        if i == 0:
+            logger.info(f"Step: Token sampling (iter {i}) - {(token_sampling_time)*1000:.3f}ms")
+
+        num_iterations += 1
 
         # Track log probabilities
         with torch.no_grad():
@@ -490,6 +531,15 @@ def _generate_with_temperature(
     logger.info(f"Average decode throughput (per user): {avg_decode_throughput:.3f} t/s/u")
     logger.info(f"Average decode throughput (total batch): {(avg_decode_throughput * unpadded_batch_size):.3f} t/s")
 
+    # Log average decoder step timings
+    if num_iterations > 0:
+        logger.info(f"Step timing summary - Decoder steps (averaged over {num_iterations} iterations):")
+        logger.info(f"  Average preprocess decoder inputs: {(total_preprocess_decoder_time/num_iterations)*1000:.3f}ms")
+        logger.info(f"  Average decoder forward pass: {(total_decoder_time/num_iterations)*1000:.3f}ms")
+        logger.info(f"  Average linear projection: {(total_linear_projection_time/num_iterations)*1000:.3f}ms")
+        logger.info(f"  Average token sampling: {(total_token_sampling_time/num_iterations)*1000:.3f}ms")
+    logger.info(f"Step timing summary - Total generation time: {total_generate_time:.3f}s")
+
     # Calculate average log probability for each batch item
     if log_probs:
         avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
@@ -503,6 +553,7 @@ def _generate_with_temperature(
     # Process timestamps if requested
     if return_timestamps and full_token_sequences:
         # Extract timestamps for each batch item
+        step_start = time.time()
         segments_with_timestamps = []
         for batch_idx in range(unpadded_batch_size):
             if full_token_sequences[batch_idx]:
@@ -512,6 +563,8 @@ def _generate_with_temperature(
                 segments_with_timestamps.append(segments)
             else:
                 segments_with_timestamps.append([])
+        timestamp_extraction_time = time.time() - step_start
+        logger.info(f"Step: Timestamp extraction - {(timestamp_extraction_time)*1000:.3f}ms")
 
         # Yield final result with timestamps (works for both streaming and non-streaming)
         if return_perf_metrics:
