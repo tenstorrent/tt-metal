@@ -5,7 +5,6 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.attention import Attention as DefaultAttention
-from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
 from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
@@ -277,10 +276,8 @@ class TransformerBlock(LightweightModule):
         if self.post_ff_norm is not None:
             hidden_states = self.post_ff_norm(hidden_states, mode)  # Gathered
             if self.num_devices > 1:
-                hidden_states = tt_all_reduce(
+                hidden_states = self.tt_ccl.all_reduce(
                     hidden_states,
-                    self.mesh_device,
-                    tt_ccl=self.tt_ccl,
                     cluster_axis=0,
                     dim=3,
                     num_reduce_scatter_links=self.args.num_reduce_scatter_links,
@@ -288,6 +285,7 @@ class TransformerBlock(LightweightModule):
                     topology=ttnn.Topology.Ring,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=self.args.ccl_dtype,
+                    buffer_key="POST_FF_NORM" if mode == "decode" else None,
                 )
 
                 hidden_states = ttnn.div(hidden_states, self.num_devices)
