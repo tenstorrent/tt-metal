@@ -193,6 +193,23 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
                 return {OperationType::Scatter, ApiVariant::WithState};
             case AddrgenApiVariant::MulticastScatterWriteSetState:
                 return {OperationType::Scatter, ApiVariant::SetState};
+            case AddrgenApiVariant::MulticastWriteConnMgr: return {OperationType::BasicWrite, ApiVariant::ConnMgrBasic};
+            case AddrgenApiVariant::MulticastWriteWithStateConnMgr:
+                return {OperationType::BasicWrite, ApiVariant::ConnMgrWithState};
+            case AddrgenApiVariant::MulticastWriteSetStateConnMgr:
+                return {OperationType::BasicWrite, ApiVariant::ConnMgrSetState};
+            case AddrgenApiVariant::MulticastScatterWriteConnMgr:
+                return {OperationType::Scatter, ApiVariant::ConnMgrBasic};
+            case AddrgenApiVariant::MulticastScatterWriteWithStateConnMgr:
+                return {OperationType::Scatter, ApiVariant::ConnMgrWithState};
+            case AddrgenApiVariant::MulticastScatterWriteSetStateConnMgr:
+                return {OperationType::Scatter, ApiVariant::ConnMgrSetState};
+            case AddrgenApiVariant::MulticastFusedAtomicIncWriteConnMgr:
+                return {OperationType::FusedAtomicInc, ApiVariant::ConnMgrBasic};
+            case AddrgenApiVariant::MulticastFusedAtomicIncWriteWithStateConnMgr:
+                return {OperationType::FusedAtomicInc, ApiVariant::ConnMgrWithState};
+            case AddrgenApiVariant::MulticastFusedAtomicIncWriteSetStateConnMgr:
+                return {OperationType::FusedAtomicInc, ApiVariant::ConnMgrSetState};
             default: TT_FATAL(false, "Unknown API variant"); return {OperationType::BasicWrite, ApiVariant::Basic};
         }
     };
@@ -200,6 +217,9 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     auto [operation_type, api_variant] = get_operation_and_api_variant(p.api_variant);
 
     const bool is_fused_atomic_inc = (operation_type == OperationType::FusedAtomicInc);
+    const bool is_conn_mgr_variant =
+        (api_variant == ApiVariant::ConnMgrBasic || api_variant == ApiVariant::ConnMgrWithState ||
+         api_variant == ApiVariant::ConnMgrSetState);
 
     // Move NUM_PAGES calculation before receiver setup
     const uint32_t NUM_PAGES = (p.tensor_bytes + p.page_size - 1) / p.page_size;
@@ -268,19 +288,45 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
             .defines = defines});
     tt::tt_metal::SetRuntimeArgs(sender_prog, reader_k, p.sender_core, {(uint32_t)src_buf->address()});
 
-    // Writer kernel (CB->Fabric->dst + final sem INC) - now uses unified kernel with compile-time args
+    // Writer kernel (CB->Fabric->dst + final sem INC) - select kernel based on connection manager variant and operation
+    // type
     std::vector<uint32_t> writer_cta;
     tt::tt_metal::TensorAccessorArgs(*dst_buf).append_to(writer_cta);
-    writer_cta.push_back(static_cast<uint32_t>(operation_type));  // OPERATION_TYPE
-    writer_cta.push_back(static_cast<uint32_t>(api_variant));     // API_VARIANT
-    writer_cta.push_back(NUM_PAGES);       // TOTAL_PAGES
-    writer_cta.push_back(p.page_size);     // Raw page size (actual data size to transfer)
-    writer_cta.push_back(dst_aligned_page_size);  // Aligned page size (dest buffer addressing)
-    writer_cta.push_back(src_aligned_page_size);  // Source aligned page size (CB stride for scatter)
+
+    // Select kernel based on connection manager variant and operation type
+    std::string writer_kernel_name;
+    if (is_conn_mgr_variant) {
+        // Connection manager variants: split kernels by operation type (OPERATION_TYPE removed from CT args)
+        writer_cta.push_back(static_cast<uint32_t>(api_variant));  // API_VARIANT
+        writer_cta.push_back(NUM_PAGES);                           // TOTAL_PAGES
+        writer_cta.push_back(p.page_size);                         // Raw page size (actual data size to transfer)
+        writer_cta.push_back(dst_aligned_page_size);               // Aligned page size (dest buffer addressing)
+        writer_cta.push_back(src_aligned_page_size);               // Source aligned page size (CB stride for scatter)
+
+        if (operation_type == OperationType::BasicWrite) {
+            writer_kernel_name = "multicast_tx_writer_addrgen_conn_mgr_basic.cpp";
+        } else if (operation_type == OperationType::Scatter) {
+            writer_kernel_name = "multicast_tx_writer_addrgen_conn_mgr_scatter.cpp";
+        } else if (operation_type == OperationType::FusedAtomicInc) {
+            writer_kernel_name = "multicast_tx_writer_addrgen_conn_mgr_fused.cpp";
+        } else {
+            TT_FATAL(false, "Unknown operation type for connection manager variant");
+        }
+    } else {
+        // Non-connection manager variants: unified kernel (still needs OPERATION_TYPE)
+        writer_cta.push_back(static_cast<uint32_t>(operation_type));  // OPERATION_TYPE
+        writer_cta.push_back(static_cast<uint32_t>(api_variant));     // API_VARIANT
+        writer_cta.push_back(NUM_PAGES);                              // TOTAL_PAGES
+        writer_cta.push_back(p.page_size);                            // Raw page size (actual data size to transfer)
+        writer_cta.push_back(dst_aligned_page_size);                  // Aligned page size (dest buffer addressing)
+        writer_cta.push_back(src_aligned_page_size);  // Source aligned page size (CB stride for scatter)
+
+        writer_kernel_name = "multicast_tx_writer_addrgen.cpp";
+    }
 
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,
-        std::string(KDIR) + "multicast_tx_writer_addrgen.cpp",  // Unified multicast writer kernel
+        std::string(KDIR) + writer_kernel_name,
         p.sender_core,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -324,17 +370,6 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     };
     auto src_fn = tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip};
 
-    auto pick_link = [&](Dist::MeshCoordinate mc, uint32_t& out_link_idx) {
-        auto dst_fn = coord_to_fabric_id(std::move(mc));
-        auto links = tt::tt_fabric::get_forwarding_link_indices(src_fn, dst_fn);
-        if (links.empty()) {
-            ADD_FAILURE() << "No forwarding link from src to representative";
-            return false;
-        }
-        out_link_idx = links[0];
-        return true;
-    };
-
     // Representatives at the edge of the receiver rectangle
     Dist::MeshCoordinate rep_e = src_coord;
     if (e_hops) {
@@ -353,47 +388,125 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
         rep_s[0] = max_r;
     }
 
-    uint32_t link_idx_w = 0, link_idx_e = 0, link_idx_n = 0, link_idx_s = 0;
-    if (w_hops && !pick_link(rep_w, link_idx_w)) {
-        return;
-    }
-    if (e_hops && !pick_link(rep_e, link_idx_e)) {
-        return;
-    }
-    if (n_hops && !pick_link(rep_n, link_idx_n)) {
-        return;
-    }
-    if (s_hops && !pick_link(rep_s, link_idx_s)) {
-        return;
-    }
-
-    // Direction bitmask
+    // Direction bitmask (same for both connection manager and non-connection manager variants)
     const uint32_t dir_mask = (w_hops ? 1u : 0u) | (e_hops ? 2u : 0u) | (n_hops ? 4u : 0u) | (s_hops ? 8u : 0u);
     writer_rt.push_back(dir_mask);
 
-    // Append the fabric connection blocks in fixed order: W, E, N, S
-    if (w_hops) {
-        tt::tt_fabric::append_fabric_connection_rt_args(
-            src_fn, coord_to_fabric_id(rep_w), link_idx_w, sender_prog, p.sender_core, writer_rt);
-    }
-    if (e_hops) {
-        tt::tt_fabric::append_fabric_connection_rt_args(
-            src_fn, coord_to_fabric_id(rep_e), link_idx_e, sender_prog, p.sender_core, writer_rt);
-    }
-    if (n_hops) {
-        tt::tt_fabric::append_fabric_connection_rt_args(
-            src_fn, coord_to_fabric_id(rep_n), link_idx_n, sender_prog, p.sender_core, writer_rt);
-    }
-    if (s_hops) {
-        tt::tt_fabric::append_fabric_connection_rt_args(
-            src_fn, coord_to_fabric_id(rep_s), link_idx_s, sender_prog, p.sender_core, writer_rt);
-    }
+    if (is_conn_mgr_variant) {
+        // Connection manager variant: use routing plane connection manager for each direction
+        // Same structure as non-connection manager but using connection manager-based APIs
 
-    // Append hops
-    writer_rt.push_back((uint32_t)e_hops);
-    writer_rt.push_back((uint32_t)w_hops);
-    writer_rt.push_back((uint32_t)n_hops);
-    writer_rt.push_back((uint32_t)s_hops);
+        // Build destination nodes and connection managers for each active direction
+        // W, E, N, S order (matching non-connection manager variant)
+        if (w_hops) {
+            std::vector<tt::tt_fabric::FabricNodeId> dst_nodes_w = {coord_to_fabric_id(rep_w)};
+            tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                src,
+                dst_nodes_w,
+                {},  // Empty means auto-select link
+                sender_prog,
+                writer_k,
+                p.sender_core,
+                writer_rt,
+                tt::tt_fabric::FabricApiType::Mesh,
+                CoreType::WORKER);
+        }
+        if (e_hops) {
+            std::vector<tt::tt_fabric::FabricNodeId> dst_nodes_e = {coord_to_fabric_id(rep_e)};
+            tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                src,
+                dst_nodes_e,
+                {},
+                sender_prog,
+                writer_k,
+                p.sender_core,
+                writer_rt,
+                tt::tt_fabric::FabricApiType::Mesh,
+                CoreType::WORKER);
+        }
+        if (n_hops) {
+            std::vector<tt::tt_fabric::FabricNodeId> dst_nodes_n = {coord_to_fabric_id(rep_n)};
+            tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                src,
+                dst_nodes_n,
+                {},
+                sender_prog,
+                writer_k,
+                p.sender_core,
+                writer_rt,
+                tt::tt_fabric::FabricApiType::Mesh,
+                CoreType::WORKER);
+        }
+        if (s_hops) {
+            std::vector<tt::tt_fabric::FabricNodeId> dst_nodes_s = {coord_to_fabric_id(rep_s)};
+            tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                src,
+                dst_nodes_s,
+                {},
+                sender_prog,
+                writer_k,
+                p.sender_core,
+                writer_rt,
+                tt::tt_fabric::FabricApiType::Mesh,
+                CoreType::WORKER);
+        }
+
+        // Append hops (same as non-connection manager)
+        writer_rt.push_back((uint32_t)e_hops);
+        writer_rt.push_back((uint32_t)w_hops);
+        writer_rt.push_back((uint32_t)n_hops);
+        writer_rt.push_back((uint32_t)s_hops);
+    } else {
+        // Non-connection manager variant: per-direction fabric connections
+        auto pick_link = [&](Dist::MeshCoordinate mc, uint32_t& out_link_idx) {
+            auto dst_fn = coord_to_fabric_id(std::move(mc));
+            auto links = tt::tt_fabric::get_forwarding_link_indices(src_fn, dst_fn);
+            if (links.empty()) {
+                ADD_FAILURE() << "No forwarding link from src to representative";
+                return false;
+            }
+            out_link_idx = links[0];
+            return true;
+        };
+
+        uint32_t link_idx_w = 0, link_idx_e = 0, link_idx_n = 0, link_idx_s = 0;
+        if (w_hops && !pick_link(rep_w, link_idx_w)) {
+            return;
+        }
+        if (e_hops && !pick_link(rep_e, link_idx_e)) {
+            return;
+        }
+        if (n_hops && !pick_link(rep_n, link_idx_n)) {
+            return;
+        }
+        if (s_hops && !pick_link(rep_s, link_idx_s)) {
+            return;
+        }
+
+        // Append the fabric connection blocks in fixed order: W, E, N, S
+        if (w_hops) {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                src_fn, coord_to_fabric_id(rep_w), link_idx_w, sender_prog, p.sender_core, writer_rt);
+        }
+        if (e_hops) {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                src_fn, coord_to_fabric_id(rep_e), link_idx_e, sender_prog, p.sender_core, writer_rt);
+        }
+        if (n_hops) {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                src_fn, coord_to_fabric_id(rep_n), link_idx_n, sender_prog, p.sender_core, writer_rt);
+        }
+        if (s_hops) {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                src_fn, coord_to_fabric_id(rep_s), link_idx_s, sender_prog, p.sender_core, writer_rt);
+        }
+
+        // Append hops
+        writer_rt.push_back((uint32_t)e_hops);
+        writer_rt.push_back((uint32_t)w_hops);
+        writer_rt.push_back((uint32_t)n_hops);
+        writer_rt.push_back((uint32_t)s_hops);
+    }
 
     tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
 
