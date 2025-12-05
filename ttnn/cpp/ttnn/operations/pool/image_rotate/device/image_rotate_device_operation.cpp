@@ -14,7 +14,11 @@ using namespace tt::tt_metal;
 
 ImageRotateDeviceOperation::program_factory_t ImageRotateDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return ProgramFactory{};
+    if (operation_attributes.interpolation_mode == "nearest") {
+        return NearestProgramFactory{};
+    } else {
+        return BilinearProgramFactory{};  // Default for "bilinear"
+    }
 }
 
 void ImageRotateDeviceOperation::validate_inputs(
@@ -60,6 +64,12 @@ void ImageRotateDeviceOperation::validate_inputs(
     TT_FATAL(
         !operation_attributes.expand,
         "expand=True is not supported. Only same-size rotation (expand=False) is implemented");
+
+    // Interpolation mode validation
+    TT_FATAL(
+        operation_attributes.interpolation_mode == "bilinear" || operation_attributes.interpolation_mode == "nearest",
+        "interpolation_mode must be 'bilinear' or 'nearest', got '{}'",
+        operation_attributes.interpolation_mode);
 }
 
 void ImageRotateDeviceOperation::validate_on_program_cache_miss(
@@ -97,11 +107,15 @@ ImageRotateDeviceOperation::tensor_return_value_t ImageRotateDeviceOperation::cr
 
 tt::stl::hash::hash_t ImageRotateDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // Cache based on tensor shape and memory config only
+    // Cache based on tensor shape, memory config, and interpolation mode
     // angle, center, and fill are runtime args and don't affect program structure
     // expand is validated to be false, so doesn't need to be in hash
+    // interpolation_mode affects program structure (different kernels/CBs)
     return tt::stl::hash::hash_objects_with_default_seed(
-        operation_attributes.memory_config, tensor_args.input.logical_shape(), tensor_args.input.dtype());
+        operation_attributes.memory_config,
+        operation_attributes.interpolation_mode,
+        tensor_args.input.logical_shape(),
+        tensor_args.input.dtype());
 }
 
 std::tuple<ImageRotateDeviceOperation::operation_attributes_t, ImageRotateDeviceOperation::tensor_args_t>
@@ -111,9 +125,11 @@ ImageRotateDeviceOperation::invoke(
     const std::optional<std::tuple<float, float>>& center,
     float fill,
     bool expand,
+    const std::string& interpolation_mode,
     const std::optional<MemoryConfig>& memory_config) {
     return {
-        operation_attributes_t{angle, center, fill, expand, memory_config.value_or(input.memory_config())},
+        operation_attributes_t{
+            angle, center, fill, expand, interpolation_mode, memory_config.value_or(input.memory_config())},
         tensor_args_t{input}};
 }
 

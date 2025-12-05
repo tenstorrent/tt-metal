@@ -13,8 +13,9 @@ Tensor ImageRotate::invoke(
     const std::optional<std::tuple<float, float>>& center,
     float fill,
     bool expand,
+    const std::string& interpolation_mode,
     const std::optional<MemoryConfig>& memory_config) {
-    return ttnn::prim::image_rotate(input_tensor, angle, center, fill, expand, memory_config);
+    return ttnn::prim::image_rotate(input_tensor, angle, center, fill, expand, interpolation_mode, memory_config);
 }
 
 }  // namespace ttnn::operations::image_rotate
