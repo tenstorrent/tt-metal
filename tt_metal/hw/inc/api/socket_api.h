@@ -11,6 +11,7 @@
 #include "internal/risc_attribs.h"
 #include "hostdev/socket.h"
 #include "api/alignment.h"
+#include "debug/dprint.h"
 
 #ifndef COMPILE_FOR_TRISC
 #include <type_traits>
@@ -174,6 +175,19 @@ void socket_notify_receiver(const SocketSenderInterface& socket) {
     }
 }
 
+void pcie_socket_notify_receiver(const SocketSenderInterface& socket) {
+    volatile tt_l1_ptr sender_socket_md* socket_config =
+        reinterpret_cast<volatile tt_l1_ptr sender_socket_md*>(socket.config_addr);
+    socket_config->bytes_sent = socket.bytes_sent;
+
+    uint32_t local_bytes_sent_addr = socket.config_addr;
+    uint64_t bytes_sent_pcie_addr = (static_cast<uint64_t>(socket.d2h.bytes_sent_addr_hi) << 32) |
+                                    (static_cast<uint64_t>(socket.downstream_bytes_sent_addr));
+    noc_write_init_state<0>(NOC_0, NOC_UNICAST_WRITE_VC);
+    noc_wwrite_with_state<DM_DEDICATED_NOC, 0, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
+        NOC_0, local_bytes_sent_addr, socket.d2h.pcie_xy_enc, bytes_sent_pcie_addr, 4, 1);
+}
+
 void fabric_socket_notify_receiver(
     const SocketSenderInterface& socket,
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
@@ -214,7 +228,7 @@ void update_socket_config(const SocketSenderInterface& socket) {
     socket_config->write_ptr = socket.write_ptr;
 }
 
-SocketReceiverInterface create_receiver_socket_interface(uint32_t config_addr) {
+SocketReceiverInterface create_receiver_socket_interface_2(uint32_t config_addr) {
     SocketReceiverInterface socket;
 #if !(defined TRISC_PACK || defined TRISC_MATH)
     tt_l1_ptr receiver_socket_md* socket_config = reinterpret_cast<tt_l1_ptr receiver_socket_md*>(config_addr);

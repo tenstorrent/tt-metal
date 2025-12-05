@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt_stl/span.hpp>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -15,6 +16,7 @@
 #include <ostream>
 #include <set>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -23,6 +25,8 @@
 
 #include <hostdevcommon/common_values.hpp>
 #include "context/context_types.hpp"
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
+#include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
@@ -58,6 +62,7 @@ class FabricNodeId;
 }
 namespace tt::tt_metal {
 
+class RealtimeProfilerTracyHandler;
 class SubDeviceManagerTracker;
 class ThreadPool;
 struct TraceDescriptor;
@@ -149,6 +154,53 @@ private:
     // Num Virtual Eth Cores == Max Number of Eth Cores across all opened devices (Issue #19729)
     std::size_t num_virtual_eth_cores_ = 0;
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
+
+    // Per-device real-time profiler state (one entry per device in the mesh)
+    struct RealtimeProfilerDeviceState {
+        IDevice* device = nullptr;                      // Physical device pointer
+        uint32_t chip_id = 0;                           // Physical device ID
+        MeshCoordinate mesh_coord = MeshCoordinate(0);  // Position in the mesh
+        CoreCoord realtime_profiler_core;               // Core running real-time profiler kernel
+        std::unique_ptr<D2HSocket> socket;              // D2H socket for this device
+        std::shared_ptr<MeshBuffer> ring_buffer;        // L1 ring buffer (BRISC→NCRISC handoff)
+        uint64_t first_timestamp = 0;                   // First device timestamp (for normalization)
+        int64_t sync_host_start = 0;                    // Host time when sync started
+        double sync_frequency = 0.0;                    // Device clock frequency in GHz
+        uint32_t realtime_profiler_base_addr = 0;       // Base address of realtime_profiler_msg_t in L1
+        uint32_t sync_request_addr = 0;                 // Mailbox address for sync request
+        uint32_t sync_host_ts_addr = 0;                 // Mailbox address for sync host timestamp
+        std::atomic<bool> sync_response_received{true};  // false = sync pending, true = no pending sync
+        int64_t sync_host_time_before = 0;               // Host TSC captured before sync trigger write
+
+        RealtimeProfilerDeviceState() = default;
+        RealtimeProfilerDeviceState(RealtimeProfilerDeviceState&& o) noexcept :
+            device(o.device),
+            chip_id(o.chip_id),
+            mesh_coord(o.mesh_coord),
+            realtime_profiler_core(o.realtime_profiler_core),
+            socket(std::move(o.socket)),
+            ring_buffer(std::move(o.ring_buffer)),
+            first_timestamp(o.first_timestamp),
+            sync_host_start(o.sync_host_start),
+            sync_frequency(o.sync_frequency),
+            realtime_profiler_base_addr(o.realtime_profiler_base_addr),
+            sync_request_addr(o.sync_request_addr),
+            sync_host_ts_addr(o.sync_host_ts_addr),
+            sync_response_received(o.sync_response_received.load(std::memory_order_relaxed)),
+            sync_host_time_before(o.sync_host_time_before) {}
+        RealtimeProfilerDeviceState& operator=(RealtimeProfilerDeviceState&&) = delete;
+        RealtimeProfilerDeviceState(const RealtimeProfilerDeviceState&) = delete;
+        RealtimeProfilerDeviceState& operator=(const RealtimeProfilerDeviceState&) = delete;
+    };
+    std::vector<RealtimeProfilerDeviceState> realtime_profiler_devices_;
+
+    // Background thread for scrubbing real-time profiler data from all devices
+    std::thread realtime_profiler_thread_;
+    std::atomic<bool> realtime_profiler_stop_{false};
+    std::atomic<bool> realtime_profiler_pause_requested_{false};
+    std::atomic<bool> realtime_profiler_paused_{false};
+    // Tracy handler for real-time profiler (manages per-device contexts and callback)
+    std::unique_ptr<RealtimeProfilerTracyHandler> realtime_profiler_tracy_handler_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
     // Recursively quiesce all submeshes.
@@ -279,6 +331,10 @@ public:
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false);
+    void init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device);
+    void run_realtime_profiler_sync(RealtimeProfilerDeviceState& dev_state, uint32_t num_samples);
+    void trigger_realtime_profiler_sync_check();
+    D2HSocket* get_realtime_profiler_socket() const;
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);
     void enable_program_cache() override;

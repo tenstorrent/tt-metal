@@ -51,7 +51,7 @@ void kernel_main() {
     constexpr uint32_t num_pages = data_size / page_size;
     // Open fabric connection to sender
     fabric_connection.open();
-    SocketReceiverInterface receiver_socket = create_receiver_socket_interface(socket_config_addr);
+    SocketReceiverInterface receiver_socket = create_receiver_socket_interface_2(socket_config_addr);
     set_receiver_socket_page_size(receiver_socket, page_size);
 
     volatile tt_l1_ptr uint32_t* credits_sem_ptr =

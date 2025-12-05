@@ -440,7 +440,7 @@ __attribute__((__noinline__)) DebugPrinter operator<<(DebugPrinter dp, T val) {
         .data_ptr = DebugPrintTypeAddr<T>(&val),
         .type_id = DebugPrintTypeToId<T>()};
     debug_print(dp, data);
-#endif  // ENABLE_DEBUG_PRINT && !PROFILE_KERNEL
+#endif  // DEBUG_PRINT_ENABLED && !FORCE_DPRINT_OFF
     return dp;
 }
 
