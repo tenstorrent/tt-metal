@@ -86,20 +86,18 @@ sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat val, const uint log
     sfpi::vFloat result = sfpi::vConst0;
 
     // Check for special cases
-    sfpi::vInt exp = sfpi::exexp(val);        // Get debiased exponent
-    sfpi::vInt man_bits = sfpi::exman9(val);  // Get mantissa bits
+    sfpi::vInt exp = sfpi::exexp(val);  // Get debiased exponent
 
-    v_if((exp == 128 && man_bits != 0) || val < sfpi::vConst0) {  // If NaN or negative input
-        result = std::numeric_limits<float>::quiet_NaN();
+    v_if(sfpi::reinterpret<sfpi::vInt>(val) == 0x7F800000) {
+        // If input is infinity, return infinity
+        result = std::numeric_limits<float>::infinity();
+    }
+    v_elseif(exp == 128 || val < 0.f) {                    // +inf or negative input -> NaN
+        result = std::numeric_limits<float>::quiet_NaN();  // returns nan for fp32 and inf for bf16
     }
     v_elseif(val == sfpi::vConst0) {
         // Zero input -> -inf
         result = -std::numeric_limits<float>::infinity();
-    }
-    v_elseif(exp == 128) {
-        // NaN case already taken care of.
-        // This means that input is infinity (and no need to verify mantissa)
-        result = std::numeric_limits<float>::infinity();
     }
     v_else {
         // Step 1: Extract exponent and mantissa
