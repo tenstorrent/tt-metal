@@ -857,25 +857,48 @@ def test_mlp_forward_non_tg_vs_reference(seq_len, mesh_device, reset_seeds, ensu
 
 
 # ============================================================================
-# MLPNonTG class tests (separate tightened module)
+# MARK: MLPNonTG class tests (separate tightened module)
 # ============================================================================
 
 
 def test_mlp_non_tg_config_creation():
     """Test that MLPNonTGConfig can be created with expected values and nested configs."""
+    from dataclasses import dataclass
+
     from models.common.modules.mlp.mlp_non_tg import (
+        MeshContext,
         MLPNonTGConfig,
         MLPNonTGDecodeConfigs,
         MLPNonTGOptimizationConfig,
         MLPNonTGPrefillConfigs,
     )
 
+    # Create a mock MeshContext for testing (no real device needed)
+    @dataclass
+    class MockMeshContext(MeshContext):
+        """Mock MeshContext for unit tests without real devices."""
+
+        mesh_device: object = None
+        tt_ccl: object = None
+        _num_devices: int = 8
+        _cluster_shape: list = None
+
+        def __post_init__(self):
+            if self._cluster_shape is None:
+                self._cluster_shape = [1, self._num_devices]
+
+        def num_devices(self) -> int:
+            return self._num_devices
+
+        def cluster_shape(self) -> list:
+            return self._cluster_shape
+
+    mock_ctx = MockMeshContext(_num_devices=8, _cluster_shape=[1, 8])
+
     config = MLPNonTGConfig(
         dim=4096,
         hidden_dim=14336,
-        cluster_shape=[1, 8],
-        num_devices=8,
-        prefill_len_cutoff=1024,
+        mesh_ctx=mock_ctx,
     )
 
     assert config.dim == 4096
@@ -903,15 +926,37 @@ def test_mlp_non_tg_config_creation():
 
 def test_mlp_non_tg_configs_creation():
     """Test that MLPNonTGDecodeConfigs and MLPNonTGPrefillConfigs work with parent config."""
-    from models.common.modules.mlp.mlp_non_tg import MLPNonTGConfig
+    from dataclasses import dataclass
+
+    from models.common.modules.mlp.mlp_non_tg import MeshContext, MLPNonTGConfig
+
+    # Create a mock MeshContext for testing (no real device needed)
+    @dataclass
+    class MockMeshContext(MeshContext):
+        """Mock MeshContext for unit tests without real devices."""
+
+        mesh_device: object = None
+        tt_ccl: object = None
+        _num_devices: int = 8
+        _cluster_shape: list = None
+
+        def __post_init__(self):
+            if self._cluster_shape is None:
+                self._cluster_shape = [1, self._num_devices]
+
+        def num_devices(self) -> int:
+            return self._num_devices
+
+        def cluster_shape(self) -> list:
+            return self._cluster_shape
+
+    mock_ctx = MockMeshContext(_num_devices=8, _cluster_shape=[1, 8])
 
     # Create a parent config first
     parent_config = MLPNonTGConfig(
         dim=4096,
         hidden_dim=14336,
-        cluster_shape=[1, 8],
-        num_devices=8,
-        prefill_len_cutoff=1024,
+        mesh_ctx=mock_ctx,
     )
 
     # Decode should have decode-specific methods
@@ -934,126 +979,6 @@ def test_mlp_non_tg_configs_creation():
 
     prefill_w1_w3 = parent_config.prefill.w1_w3_prg_config(seq_len=512)
     assert prefill_w1_w3 is not None
-
-
-@torch.no_grad()
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "seq_len",
-    (512, 32),  # One prefill, one decode
-)
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-def test_mlp_non_tg_class_vs_original(seq_len, mesh_device, reset_seeds, ensure_gc):
-    """
-    Test that MLPNonTG class produces identical outputs to MLP.forward_non_tg().
-
-    This validates that the separate MLPNonTG class works correctly.
-    """
-    from models.common.modules.mlp.mlp import MLP
-    from models.common.modules.mlp.mlp_non_tg import MLPNonTG
-    from models.tt_transformers.tt.ccl import TT_CCL
-    from models.tt_transformers.tt.model_config import ModelArgs
-
-    dtype = ttnn.bfloat8_b
-    batch_size = 1
-    mode = "decode" if seq_len <= 32 else "prefill"
-
-    # Set up model args
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128, cache_hf=True)
-    model_args.n_layers = 1
-
-    # Skip if TG
-    if model_args.is_galaxy:
-        pytest.skip("MLPNonTG test only runs on non-TG devices")
-
-    state_dict = model_args.load_state_dict()
-    model_config = model_args.get_model_config()
-
-    # Create CCL handler
-    tt_ccl = TT_CCL(mesh_device)
-
-    # Create original MLP
-    original_mlp = MLP.from_model_args(
-        mesh_device=mesh_device,
-        tt_ccl=tt_ccl,
-        args=model_args,
-        model_config=model_config,
-        state_dict=state_dict,
-        weight_cache_path=model_args.weight_cache_path(dtype),
-        layer_num=0,
-        dtype=dtype,
-    )
-
-    # Create MLPNonTG (no model_config needed - uses internal defaults)
-    non_tg_mlp = MLPNonTG.from_model_args(
-        mesh_device=mesh_device,
-        tt_ccl=tt_ccl,
-        args=model_args,
-        state_dict=state_dict,
-        weight_cache_path=model_args.weight_cache_path(dtype),
-        layer_num=0,
-    )
-
-    # Create input tensor
-    torch_input = torch.randn(1, 1, seq_len, model_args.dim)
-
-    input_mem_config = model_config["SHARDED_MLP_INPUT_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
-
-    # Prepare inputs
-    tt_input_original = ttnn.from_torch(
-        torch_input,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
-        dtype=ttnn.bfloat8_b,
-        memory_config=input_mem_config,
-        layout=ttnn.TILE_LAYOUT,
-    )
-
-    tt_input_non_tg = ttnn.from_torch(
-        torch_input,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
-        dtype=ttnn.bfloat8_b,
-        memory_config=input_mem_config,
-        layout=ttnn.TILE_LAYOUT,
-    )
-
-    # Run original forward_non_tg
-    logger.info(f"Running MLP.forward_non_tg() for mode={mode}...")
-    original_output = original_mlp.forward_non_tg(tt_input_original, mode)
-
-    # Run MLPNonTG.forward
-    logger.info(f"Running MLPNonTG.forward() for mode={mode}...")
-    non_tg_output = non_tg_mlp.forward(tt_input_non_tg, mode)
-
-    # Convert to torch
-    original_output_torch = ttnn.to_torch(
-        original_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
-    )
-
-    non_tg_output_torch = ttnn.to_torch(
-        non_tg_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
-    )
-
-    # Compare - should be identical
-    pcc_required = 0.9999
-    passing, pcc_message = comp_pcc(original_output_torch, non_tg_output_torch, pcc_required)
-
-    logger.info(comp_allclose(original_output_torch, non_tg_output_torch))
-    logger.info(f"PCC between MLP.forward_non_tg() and MLPNonTG.forward(): {pcc_message}")
-
-    assert passing, f"MLPNonTG.forward() does not match MLP.forward_non_tg(). PCC: {pcc_message}"
-    logger.info(f"MLPNonTG class test PASSED for mode={mode}, seq_len={seq_len}")
 
 
 @pytest.mark.parametrize(

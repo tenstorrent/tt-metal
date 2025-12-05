@@ -21,6 +21,8 @@ from loguru import logger
 import ttnn
 
 
+# todo)) clean up the code to make the interface tighter -- not so much None
+# todo)) needs unit tests to provide coverage
 @dataclass
 class LazyWeight:
     """
@@ -65,10 +67,9 @@ class LazyWeight:
     # TTNN conversion parameters (explicit, not hidden in closure)
     dtype: ttnn.DataType
 
-    # todo)) use sane defaults for mesh_mapper and device
-    # Device placement: either mesh_mapper OR device (for single-device case)
-    mesh_mapper: Optional[ttnn.TensorToMesh] = None
-    device: Optional[ttnn.Device] = None  # Used when mesh_mapper is None
+    # Device placement - device is always required, mesh_mapper is optional for multi-device
+    device: ttnn.Device = None  # Required
+    mesh_mapper: Optional[ttnn.TensorToMesh] = None  # For multi-device sharding
 
     layout: Optional[ttnn.Layout] = None  # None → TILE_LAYOUT
     memory_config: Optional[ttnn.MemoryConfig] = None  # None → DRAM_MEMORY_CONFIG
@@ -81,11 +82,10 @@ class LazyWeight:
     # Private - stores the converted tensor
     _value: Optional[ttnn.Tensor] = field(default=None, repr=False)
 
-    # todo)) we do not perform checking that are the jobs of TTNN -- avoid duplicating checking
     def __post_init__(self):
-        """Validate that either mesh_mapper or device is provided."""
-        if self.mesh_mapper is None and self.device is None:
-            raise ValueError("Either mesh_mapper or device must be provided")
+        """Validate that device is provided."""
+        if self.device is None:
+            raise ValueError("device must be provided")
 
     def get_weight(self) -> ttnn.Tensor:
         """
@@ -104,11 +104,7 @@ class LazyWeight:
         cache_path = self._get_cache_path()
         if cache_path and cache_path.exists():
             logger.info(f"Loading tensor from cache: {cache_path}")
-            # Get the device for loading (from mesh_mapper or direct device)
-            load_device = self.device
-            if self.mesh_mapper is not None and hasattr(self.mesh_mapper, "mesh_device"):
-                load_device = self.mesh_mapper.mesh_device
-            self._value = ttnn.load_tensor(str(cache_path), device=load_device)
+            self._value = ttnn.load_tensor(str(cache_path), device=self.device)
             return self._value
 
         # Resolve source (call if callable, otherwise use directly)
@@ -119,33 +115,16 @@ class LazyWeight:
         effective_layout = self.layout if self.layout is not None else ttnn.TILE_LAYOUT
         effective_memory_config = self.memory_config if self.memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
 
-        # todo)) use ttnn.as_tensor when cache needs to be created
-        # Convert with explicit parameters
-        # Use mesh_mapper if provided, otherwise use device directly
-        if self.mesh_mapper is not None:
-            self._value = ttnn.from_torch(
-                tensor,
-                dtype=self.dtype,
-                layout=effective_layout,
-                memory_config=effective_memory_config,
-                mesh_mapper=self.mesh_mapper,
-                pad_value=self.pad_value,
-            )
-        else:
-            self._value = ttnn.from_torch(
-                tensor,
-                dtype=self.dtype,
-                layout=effective_layout,
-                device=self.device,
-                memory_config=effective_memory_config,
-                pad_value=self.pad_value,
-            )
-
-        # Cache for next time
-        if cache_path:
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Caching tensor to: {cache_path}")
-            ttnn.dump_tensor(str(cache_path), self._value)
+        # Use ttnn.as_tensor - handles device placement and caching automatically
+        self._value = ttnn.as_tensor(
+            tensor,
+            dtype=self.dtype,
+            layout=effective_layout,
+            device=self.device,
+            mesh_mapper=self.mesh_mapper,
+            memory_config=effective_memory_config,
+            cache_file_name=cache_path,  # cache_path=None skips caching
+        )
 
         return self._value
 

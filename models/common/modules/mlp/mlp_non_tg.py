@@ -24,19 +24,23 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
-
-import torch
+from functools import cached_property
+from pathlib import Path
+from typing import Any, Optional
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.modules.lazy_weight import LazyWeight
+from models.common.utility_functions import is_blackhole
 
+# todo)) refactor these utility functions to a separate file that can depend on torch
 # =============================================================================
 # Utility functions
 # =============================================================================
 
 
-def pad_dim_to_size(x: torch.Tensor, dim: int, size: int) -> torch.Tensor:
+# todo)) we may also want to add a on-device pad_dim_to_size function
+def pad_dim_to_size(x: "torch.Tensor", dim: int, size: int) -> "torch.Tensor":
     """Pads the specified dimension of the input tensor with zeros."""
     if dim < 0:
         dim = x.dim() + dim
@@ -53,19 +57,53 @@ def pad_dim_to_size(x: torch.Tensor, dim: int, size: int) -> torch.Tensor:
     pad_index = 2 * (x.dim() - dim - 1)
     pad[pad_index + 1] = pad_size
 
+    import torch
+
     return torch.nn.functional.pad(x, pad, mode="constant", value=0)
 
 
-def ccl_topology_non_tg(num_devices: int):
-    """CCL topology for non-TG devices."""
-    if num_devices == 8 and ttnn.cluster.get_cluster_type() in [
-        ttnn.cluster.ClusterType.T3K,
-        ttnn.cluster.ClusterType.GALAXY,
-    ]:
-        return ttnn.Topology.Ring
-    elif num_devices > 1:
-        return ttnn.Topology.Linear
-    return None
+# =============================================================================
+# MeshContext - Hardware/runtime context
+# =============================================================================
+
+
+@dataclass
+class MeshContext:
+    """
+    Hardware/runtime context for mesh devices and CCL.
+
+    Encapsulates mesh_device and tt_ccl with derived properties and overridable methods.
+    Follows the same mixin pattern as config classes - subclass and override methods to customize.
+    """
+
+    mesh_device: ttnn.MeshDevice
+    tt_ccl: "TT_CCL"  # todo)) modeled after tt_transformers.tt.ccl.TT_CCL but we may want to make a ABC/Protocol for this!
+
+    # Overridable methods
+    def num_devices(self) -> int:
+        return self.mesh_device.get_num_devices()
+
+    def cluster_shape(self) -> list:
+        return list(self.mesh_device.shape)
+
+    def dram_grid_size(self) -> ttnn.CoreCoord:
+        """Returns DRAM grid size CoreCoord from mesh_device."""
+        return self.mesh_device.dram_grid_size()
+
+    def topology(self) -> Any:
+        """CCL topology. Override for custom behavior."""
+        if self.num_devices() == 8 and ttnn.cluster.get_cluster_type() in [
+            ttnn.cluster.ClusterType.T3K,
+            ttnn.cluster.ClusterType.GALAXY,
+        ]:
+            return ttnn.Topology.Ring
+        elif self.num_devices() > 1:
+            return ttnn.Topology.Linear
+        return None
+
+    def num_reduce_scatter_links(self) -> int:
+        """Number of reduce scatter links. Override for custom behavior."""
+        return 1
 
 
 # =============================================================================
@@ -366,44 +404,18 @@ class MLPNonTGConfig:
     """
     Top-level configuration for non-TG MLP.
 
-    Pass custom subclasses via _decode_cls, _prefill_cls, _optimization_cls to override behavior.
+    Subclass and override decode/prefill/optimization properties to customize behavior.
+    Weight sources are callables that return torch tensors (transposed, padded as needed).
     """
 
-    # Required terminal params
+    # Required params
     dim: int
     hidden_dim: int
-    # todo)){ derive these from the mesh_device? maybe mesh_device should be part of the config?
-    num_devices: int
-    cluster_shape: list  # [rows, cols] # this is just mesh_device.shape in model_config.py
-    # }todo))
+    mesh_ctx: MeshContext  # Hardware/runtime context
 
-    prefill_len_cutoff: int  # 512 (BH) or 1024 (WH)
-
-    # Optional params with sensible defaults
-    # todo)){ should be from a static lookup table based on the device name?
-    tile_size: int = 32
+    # Optional params
     max_batch_size: int = 32
-    # }todo))
-    dummy_weights: bool = False
-    # todo)) should be part of the tt_ccl -- mesh_device?
-    num_reduce_scatter_links: int = 1
-
     mlp_activation_type: Any = field(default_factory=lambda: ttnn.UnaryOpType.SILU)
-
-    # DRAM grid for weight memory configs (set in __post_init__ if None)
-    dram_grid: ttnn.CoreRangeSet = None
-    dram_cores: int = 12  # WH default
-
-    # Subclass hooks - pass custom classes to override config behavior
-    _decode_cls: type = field(default=MLPNonTGDecodeConfigs, repr=False)
-    _prefill_cls: type = field(default=MLPNonTGPrefillConfigs, repr=False)
-    _optimization_cls: type = field(default=MLPNonTGOptimizationConfig, repr=False)
-
-    # Computed fields (set in __post_init__)
-    tile_padded_batch_rows: int = field(init=False)
-    decode: MLPNonTGDecodeConfigs = field(init=False, repr=False)
-    prefill: MLPNonTGPrefillConfigs = field(init=False, repr=False)
-    optimization: MLPNonTGOptimizationConfig = field(init=False, repr=False)
 
     def __post_init__(self):
         # MLPNonTG uses 1D column-parallel sharding - 2D meshes not supported
@@ -412,18 +424,60 @@ class MLPNonTGConfig:
             f"Got cluster_shape={self.cluster_shape}. For 2D meshes, use MLPTG instead."
         )
 
-        self.tile_padded_batch_rows = self.tile_size * math.ceil(self.max_batch_size / self.tile_size)
+    # Sub-configs - override these factory methods in subclasses
+    @cached_property
+    def decode(self) -> MLPNonTGDecodeConfigs:
+        return MLPNonTGDecodeConfigs(self)
 
-        # Create default DRAM grid if not provided
-        if self.dram_grid is None:
-            self.dram_grid = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.dram_cores - 1, 0))}
-            )
+    @cached_property
+    def prefill(self) -> MLPNonTGPrefillConfigs:
+        return MLPNonTGPrefillConfigs(self)
 
-        # Instantiate sub-configs with self as parent
-        self.decode = self._decode_cls(self)
-        self.prefill = self._prefill_cls(self)
-        self.optimization = self._optimization_cls(self)
+    @cached_property
+    def optimization(self) -> MLPNonTGOptimizationConfig:
+        return MLPNonTGOptimizationConfig(self)
+
+    # Cached properties - shorthand for mesh_ctx access
+    @cached_property
+    def num_devices(self) -> int:
+        return self.mesh_ctx.num_devices()
+
+    @cached_property
+    def cluster_shape(self) -> list:
+        return self.mesh_ctx.cluster_shape()
+
+    @cached_property
+    def dram_grid_size(self) -> ttnn.CoreCoord:
+        return self.mesh_ctx.dram_grid_size()
+
+    @cached_property
+    def num_reduce_scatter_links(self) -> int:
+        return self.mesh_ctx.num_reduce_scatter_links()
+
+    # Computed properties (cached for efficiency)
+    @cached_property
+    def tile_size(self) -> int:
+        return 32
+
+    @cached_property
+    def tile_padded_batch_rows(self) -> int:
+        return self.tile_size * math.ceil(self.max_batch_size / self.tile_size)
+
+    @cached_property
+    def prefill_len_cutoff(self) -> int:
+        return 512 if is_blackhole() else 1024
+
+    @cached_property
+    def dram_grid(self) -> ttnn.CoreRangeSet:
+        dram_size = self.dram_grid_size
+        return ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(dram_size.x - 1, dram_size.y - 1),
+                )
+            }
+        )
 
     def w1_w3_mem_config(self):
         """Memory config for w1/w3 weights. 1D sharded: (dim, hidden_dim // num_devices)."""
@@ -432,7 +486,7 @@ class MLPNonTGConfig:
             n=self.hidden_dim // self.num_devices,
             dram_grid=self.dram_grid,
             tile_size=self.tile_size,
-            dram_cores=self.dram_cores,
+            dram_cores=self.dram_grid_size.x,
         )
 
     def w2_mem_config(self):
@@ -442,8 +496,37 @@ class MLPNonTGConfig:
             n=self.dim,
             dram_grid=self.dram_grid,
             tile_size=self.tile_size,
-            dram_cores=self.dram_cores,
+            dram_cores=self.dram_grid_size.x,
         )
+
+    # Lazy weight descriptors - override these in subclass to provide weights
+    @cached_property
+    def lazy_w1(self) -> LazyWeight:
+        raise NotImplementedError("Override lazy_w1 in subclass to provide w1 weight")
+
+    @cached_property
+    def lazy_w2(self) -> LazyWeight:
+        raise NotImplementedError("Override lazy_w2 in subclass to provide w2 weight")
+
+    @cached_property
+    def lazy_w3(self) -> LazyWeight:
+        raise NotImplementedError("Override lazy_w3 in subclass to provide w3 weight")
+
+    # Materialized weights (lazy-loaded on first access via LazyWeight)
+    @cached_property
+    def w1(self) -> ttnn.Tensor:
+        """w1 weight: (dim, hidden_dim) sharded on dim=-1."""
+        return self.lazy_w1.get_weight()
+
+    @cached_property
+    def w2(self) -> ttnn.Tensor:
+        """w2 weight: (hidden_dim, dim) sharded on dim=-2."""
+        return self.lazy_w2.get_weight()
+
+    @cached_property
+    def w3(self) -> ttnn.Tensor:
+        """w3 weight: (dim, hidden_dim) sharded on dim=-1."""
+        return self.lazy_w3.get_weight()
 
 
 # =============================================================================
@@ -451,7 +534,6 @@ class MLPNonTGConfig:
 # =============================================================================
 
 
-# todo)) make the weights with LazyWeight
 class MLPNonTG(LightweightModule):
     """
     MLP for non-TG devices supporting both decode and prefill modes.
@@ -461,30 +543,17 @@ class MLPNonTG(LightweightModule):
       Prefill: [reshape] → linear(w1) → linear(w3) → mul+silu → linear(w2) → all_reduce → reshape
     """
 
-    def __init__(
-        self,
-        # todo)) maybe we could group mesh_device and tt_ccl into a single object? OR implement singleton pattern in ccl.py --> then we can remove tt_ccl from the interface here and instead do a lookup of the singleton to use within the constructor!
-        mesh_device,
-        tt_ccl,
-        config: MLPNonTGConfig,
-        # todo)){ use LazyWeights and spell out query, key, and value separately?
-        state_dict,
-        weight_cache_path,
-        layer_num: int,  # this is only used for cache naming!
-        state_dict_prefix: Optional[str] = None,
-        # }todo))
-        # todo)) this could be grouped into tt_ccl?
-        ccl_topology: Callable[[int], Any] | Any = ccl_topology_non_tg,
-    ):
+    def __init__(self, config: MLPNonTGConfig):
         super().__init__()
 
-        self.mesh_device = mesh_device
-        self.tt_ccl = tt_ccl
+        # Get hardware context from config
+        mesh_ctx = config.mesh_ctx
+        self.mesh_device = mesh_ctx.mesh_device
+        self.tt_ccl = mesh_ctx.tt_ccl
         self.config = config
-        self.layer_num = layer_num
-        self.ccl_topology = ccl_topology(config.num_devices) if callable(ccl_topology) else ccl_topology
+        self.ccl_topology = mesh_ctx.topology()
 
-        # Get optimization settings by calling methods
+        # Get optimization settings
         opt = config.optimization
         self.activation_dtype = opt.activation_dtype()
         self.li_ff1_3_compute_kernel_cfg = opt.li_ff1_3_compute_kernel_cfg()
@@ -493,12 +562,12 @@ class MLPNonTG(LightweightModule):
         self.mul_dtype = self.activation_dtype or ttnn.bfloat8_b
 
         # Pre-compute all_reduce settings
-        self._is_single_device = list(mesh_device.shape) == [1, 1]
+        self._is_single_device = config.cluster_shape == [1, 1]
 
         # Activation type
         self.activation_type = config.mlp_activation_type
 
-        # Get decode configs by calling methods (computed once at init)
+        # Get decode configs (computed once at init)
         self.decode_pc_w1_w3 = config.decode.w1_w3_prg_config()
         self.decode_pc_w2 = config.decode.w2_prg_config()
         self.sharded_mlp2_input_memcfg = config.decode.sharded_mlp2_input_memcfg()
@@ -508,39 +577,10 @@ class MLPNonTG(LightweightModule):
         self._prefill_cfg = config.prefill
         self.prefill_len_cutoff = config.prefill_len_cutoff
 
-        # Weight loading
-        if state_dict_prefix is None:
-            state_dict_prefix = f"layers.{layer_num}.feed_forward"
-
-        torch_weight = lambda name: torch.transpose(state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
-        pad_hidden_dim = lambda tensor, dim_idx: pad_dim_to_size(tensor, dim=dim_idx, size=config.hidden_dim)
-
-        if config.dummy_weights:
-            cache_name = lambda _: None
-        else:
-            cache_name = lambda name: weight_cache_path / f"{state_dict_prefix}.{name}"
-
-        # Get memory configs by calling methods
-        w1_w3_mem_cfg = config.w1_w3_mem_config()
-        w2_mem_cfg = config.w2_mem_config()
-
-        def load_weight(name: str, w_dtype, shard_dim: int, mem_cfg) -> ttnn.Tensor:
-            """Load weight with 1D sharding across all devices on shard_dim."""
-            return ttnn.as_tensor(
-                pad_hidden_dim(torch_weight(name[:2]), shard_dim),
-                dtype=w_dtype,
-                device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=shard_dim),
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=mem_cfg,
-                cache_file_name=cache_name(name),
-            )
-
-        # w1/w3: (dim, hidden_dim) sharded on dim=-1 (hidden_dim) -> (dim, hidden_dim // num_devices)
-        # w2: (hidden_dim, dim) sharded on dim=-2 (hidden_dim) -> (hidden_dim // num_devices, dim)
-        self.w1 = load_weight("w1_sharded", opt.ff1_3_dtype(), shard_dim=-1, mem_cfg=w1_w3_mem_cfg)
-        self.w2 = load_weight("w2_sharded", opt.ff2_dtype(), shard_dim=-2, mem_cfg=w2_mem_cfg)
-        self.w3 = load_weight("w3_sharded", opt.ff1_3_dtype(), shard_dim=-1, mem_cfg=w1_w3_mem_cfg)
+        # Weights from config (lazy-loaded on first access)
+        self.w1 = config.w1
+        self.w2 = config.w2
+        self.w3 = config.w3
 
     @classmethod
     def from_model_args(
@@ -552,117 +592,138 @@ class MLPNonTG(LightweightModule):
         weight_cache_path,
         layer_num: int,
         state_dict_prefix: Optional[str] = None,
-        decode_cls: type = None,
-        prefill_cls: type = None,
-        optimization_cls: type = None,
     ):
-        """
-        Factory method for backward compatibility with ModelArgs.
-
-        Pass custom config subclasses to override default behavior.
-        """
+        """Factory method for backward compatibility with ModelArgs."""
         if args.is_galaxy:
             raise ValueError("MLPNonTG cannot be used for Galaxy devices.")
 
-        # Get model_config once for all subclasses
+        # Get model_config for sub-config closures
         model_config = args.get_model_config()
+        decoders_opt = model_config.get("DECODERS_OPTIMIZATIONS")
+        effective_layer_num = max(layer_num, 0)
 
-        # Create subclass that uses model_config for decode settings (captures via closure)
-        if decode_cls is None:
+        import torch
 
-            class _ArgsDecodeConfigs(MLPNonTGDecodeConfigs):
-                """Decode config using pre-computed values from model_config."""
+        from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
-                def w1_w3_prg_config(self):
-                    return model_config.get("DECODE_MLP_W1_W3_PRG_CONFIG")
+        # Create MLPNonTGConfig subclass with all overrides (captures args/model_config via closure)
+        class _ArgsMLPNonTGConfig(MLPNonTGConfig):
+            @cached_property
+            def decode(self) -> MLPNonTGDecodeConfigs:
+                class _Decode(MLPNonTGDecodeConfigs):
+                    def w1_w3_prg_config(inner_self):
+                        return model_config.get("DECODE_MLP_W1_W3_PRG_CONFIG")
 
-                def w2_prg_config(self):
-                    return model_config.get("DECODE_MLP_W2_PRG_CONFIG")
+                    def w2_prg_config(inner_self):
+                        return model_config.get("DECODE_MLP_W2_PRG_CONFIG")
 
-                def sharded_mlp2_input_memcfg(self):
-                    return model_config.get("SHARDED_MLP2_INPUT_MEMCFG")
+                    def sharded_mlp2_input_memcfg(inner_self):
+                        return model_config.get("SHARDED_MLP2_INPUT_MEMCFG")
 
-                def decode_residual_memcfg(self):
-                    return model_config.get("DECODE_RESIDUAL_MEMCFG")
+                    def decode_residual_memcfg(inner_self):
+                        return model_config.get("DECODE_RESIDUAL_MEMCFG")
 
-            decode_cls = _ArgsDecodeConfigs
+                return _Decode(self)
 
-        # Create subclass that uses model_config for prefill settings (captures via closure)
-        if prefill_cls is None:
+            @cached_property
+            def prefill(self) -> MLPNonTGPrefillConfigs:
+                class _Prefill(MLPNonTGPrefillConfigs):
+                    def w1_w3_prg_config(inner_self, seq_len: int):
+                        return model_config.get("PREFILL_MLP_W1_W3_PRG_CONFIG")(seq_len)
 
-            class _ArgsPrefillConfigs(MLPNonTGPrefillConfigs):
-                """Prefill config using pre-computed lambdas from model_config."""
+                    def w2_prg_config(inner_self, seq_len: int):
+                        return model_config.get("PREFILL_MLP_W2_PRG_CONFIG")(seq_len)
 
-                def w1_w3_prg_config(self, seq_len: int):
-                    return model_config.get("PREFILL_MLP_W1_W3_PRG_CONFIG")(seq_len)
+                return _Prefill(self)
 
-                def w2_prg_config(self, seq_len: int):
-                    return model_config.get("PREFILL_MLP_W2_PRG_CONFIG")(seq_len)
+            @cached_property
+            def optimization(self) -> MLPNonTGOptimizationConfig:
+                class _Opt(MLPNonTGOptimizationConfig):
+                    def ff1_3_dtype(inner_self):
+                        return decoders_opt.get_tensor_dtype(decoder_id=effective_layer_num, tensor=TensorGroup.FF1_FF3)
 
-            prefill_cls = _ArgsPrefillConfigs
+                    def ff2_dtype(inner_self):
+                        return decoders_opt.get_tensor_dtype(decoder_id=effective_layer_num, tensor=TensorGroup.FF2)
 
-        # Create subclass that uses args for optimization settings (captures via closure)
-        if optimization_cls is None:
-            from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
+                    def activation_dtype(inner_self):
+                        return decoders_opt.get_tensor_dtype(
+                            decoder_id=effective_layer_num, tensor=TensorGroup.ACTIVATION
+                        )
 
-            decoders_opt = model_config.get("DECODERS_OPTIMIZATIONS")
-            effective_layer_num = max(layer_num, 0)
+                    def li_ff1_3_compute_kernel_cfg(inner_self):
+                        return decoders_opt.get_math_fidelity(
+                            decoder_id=effective_layer_num, op=OpGroup.LI_FF1_FF3, configuration=args
+                        )
 
-            class _ArgsOptimizationConfig(MLPNonTGOptimizationConfig):
-                """Optimization config using DecodersPrecision from args."""
+                    def li_ff2_compute_kernel_cfg(inner_self):
+                        return decoders_opt.get_math_fidelity(
+                            decoder_id=effective_layer_num, op=OpGroup.LI_FF2, configuration=args
+                        )
 
-                def ff1_3_dtype(self):
-                    return decoders_opt.get_tensor_dtype(decoder_id=effective_layer_num, tensor=TensorGroup.FF1_FF3)
+                return _Opt(self)
 
-                def ff2_dtype(self):
-                    return decoders_opt.get_tensor_dtype(decoder_id=effective_layer_num, tensor=TensorGroup.FF2)
+        # Create MeshContext subclass with args overrides
+        class _ArgsMeshContext(MeshContext):
+            def dram_grid_size(inner_self) -> ttnn.CoreCoord:
+                return args.dram_grid_size
 
-                def activation_dtype(self):
-                    return decoders_opt.get_tensor_dtype(decoder_id=effective_layer_num, tensor=TensorGroup.ACTIVATION)
+            def topology(inner_self):
+                return args.ccl_topology()
 
-                def li_ff1_3_compute_kernel_cfg(self):
-                    return decoders_opt.get_math_fidelity(
-                        decoder_id=effective_layer_num, op=OpGroup.LI_FF1_FF3, configuration=args
-                    )
+            def num_reduce_scatter_links(inner_self) -> int:
+                return args.num_reduce_scatter_links
 
-                def li_ff2_compute_kernel_cfg(self):
-                    return decoders_opt.get_math_fidelity(
-                        decoder_id=effective_layer_num, op=OpGroup.LI_FF2, configuration=args
-                    )
-
-            optimization_cls = _ArgsOptimizationConfig
-
-        config = MLPNonTGConfig(
-            dim=args.dim,
-            hidden_dim=args.hidden_dim,
-            num_devices=args.num_devices,
-            cluster_shape=args.cluster_shape,
-            prefill_len_cutoff=args.prefill_len_cutoff,
-            tile_size=args.tile_size,
-            max_batch_size=args.max_batch_size,
-            dummy_weights=args.dummy_weights,
-            num_reduce_scatter_links=args.num_reduce_scatter_links,
-            mlp_activation_type=getattr(args, "mlp_activation_type", ttnn.UnaryOpType.SILU),
-            dram_grid=args.dram_weight_grid,
-            dram_cores=args.dram_grid_size.x,
-            _decode_cls=decode_cls,
-            _prefill_cls=prefill_cls,
-            _optimization_cls=optimization_cls,
-        )
+        mesh_ctx = _ArgsMeshContext(mesh_device=mesh_device, tt_ccl=tt_ccl)
 
         if state_dict_prefix is None:
             state_dict_prefix = args.get_state_dict_prefix("MLP", layer_num)
 
-        return cls(
-            mesh_device=mesh_device,
-            tt_ccl=tt_ccl,
-            config=config,
-            state_dict=state_dict,
-            weight_cache_path=weight_cache_path,
-            layer_num=layer_num,
-            state_dict_prefix=state_dict_prefix,
-            ccl_topology=args.ccl_topology(),
+        # Weight source factories (capture state_dict, prefix, hidden_dim via closure)
+        def make_weight_source(name: str, shard_dim: int):
+            def source():
+                tensor = torch.transpose(state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
+                return pad_dim_to_size(tensor, dim=shard_dim, size=args.hidden_dim)
+
+            return source
+
+        cache_dir = None if args.dummy_weights else Path(weight_cache_path) / state_dict_prefix
+
+        # Create LazyWeight instances (captures config, sources via closure)
+        def make_lazy_weight(name: str, shard_dim: int, dtype_fn, mem_cfg_fn) -> LazyWeight:
+            return LazyWeight(
+                source=make_weight_source(name, shard_dim),
+                dtype=dtype_fn(),
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim),
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=mem_cfg_fn(),
+                cache_dir=cache_dir,
+                weight_name=f"{name}_sharded",
+            )
+
+        # We need config to exist first to get mem_config, so override lazy_* as cached_properties
+        class _FinalConfig(_ArgsMLPNonTGConfig):
+            @cached_property
+            def lazy_w1(inner_self) -> LazyWeight:
+                return make_lazy_weight("w1", -1, inner_self.optimization.ff1_3_dtype, inner_self.w1_w3_mem_config)
+
+            @cached_property
+            def lazy_w2(inner_self) -> LazyWeight:
+                return make_lazy_weight("w2", -2, inner_self.optimization.ff2_dtype, inner_self.w2_mem_config)
+
+            @cached_property
+            def lazy_w3(inner_self) -> LazyWeight:
+                return make_lazy_weight("w3", -1, inner_self.optimization.ff1_3_dtype, inner_self.w1_w3_mem_config)
+
+        config = _FinalConfig(
+            dim=args.dim,
+            hidden_dim=args.hidden_dim,
+            mesh_ctx=mesh_ctx,
+            max_batch_size=args.max_batch_size,
+            mlp_activation_type=getattr(args, "mlp_activation_type", ttnn.UnaryOpType.SILU),
         )
+
+        return cls(config)
 
     def _all_reduce_decode(self, w2_out: ttnn.Tensor) -> ttnn.Tensor:
         """All-reduce for decode mode (sharded input)."""
