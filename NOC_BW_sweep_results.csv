@@ -1,183 +1,189 @@
 Test Configuration,Metric,Unit,GCC Result,LLVM Result,Difference,% Change,Notes
-Running -bs 128 -p 512 -m 0,Bandwidth,GB/s,9.544,9.547,0.003,0.03%,
-Running -bs 128 -p 512 -m 1,Bandwidth,GB/s,28.796,28.688,-0.108,-0.38%,
-Running -bs 128 -p 512 -m 2,Bandwidth,GB/s,36.150,36.152,0.002,0.01%,
-Running -bs 128 -p 512 -m 2 -rx 0,Bandwidth,GB/s,36.171,36.146,-0.025,-0.07%,
-Running -bs 128 -p 512 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,36.176,36.164,-0.012,-0.03%,
-Running -bs 128 -p 512 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,28.549,28.665,0.116,0.41%,
-Running -bs 128 -p 512 -m 3,Bandwidth,GB/s,19.135,19.077,-0.058,-0.30%,
-Running -bs 128 -p 512 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 128 -p 512 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 128 -p 512 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 128 -p 512 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 128 -p 512 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,21.179,21.178,-0.001,-0.00%,
-Running -bs 128 -p 512 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,2.741,2.741,0.000,0.00%,
-Running -bs 16 -p 64 -m 0,Bandwidth,GB/s,1.355,1.336,-0.019,-1.40%,
-Running -bs 16 -p 64 -m 1,Bandwidth,GB/s,4.516,4.522,0.006,0.13%,
-Running -bs 16 -p 64 -m 2,Bandwidth,GB/s,4.522,4.523,0.001,0.02%,
-Running -bs 16 -p 64 -m 2 -rx 0,Bandwidth,GB/s,4.519,4.521,0.002,0.04%,
-Running -bs 16 -p 64 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,4.509,4.521,0.012,0.27%,
-Running -bs 16 -p 64 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,3.570,3.566,-0.004,-0.11%,
-Running -bs 16 -p 64 -m 3,Bandwidth,GB/s,2.391,2.388,-0.003,-0.13%,
-Running -bs 16 -p 64 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 16 -p 64 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 16 -p 64 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 16 -p 64 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 16 -p 64 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,2.655,2.647,-0.008,-0.30%,
-Running -bs 16 -p 64 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,0.352,0.352,0.000,0.00%,
-Running -bs 256 -p 1024 -m 0,Bandwidth,GB/s,17.986,17.952,-0.034,-0.19%,
-Running -bs 256 -p 1024 -m 1,Bandwidth,GB/s,28.853,28.324,-0.529,-1.83%,
-Running -bs 256 -p 1024 -m 2,Bandwidth,GB/s,72.346,72.240,-0.106,-0.15%,
-Running -bs 256 -p 1024 -m 2 -rx 0,Bandwidth,GB/s,72.327,72.354,0.027,0.04%,
-Running -bs 256 -p 1024 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,72.335,72.334,-0.001,-0.00%,
-Running -bs 256 -p 1024 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,57.322,57.061,-0.261,-0.46%,
-Running -bs 256 -p 1024 -m 3,Bandwidth,GB/s,38.268,38.168,-0.100,-0.26%,
-Running -bs 256 -p 1024 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 1024 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 1024 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 1024 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 1024 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,38.143,38.142,-0.001,-0.00%,
-Running -bs 256 -p 1024 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,5.313,5.315,0.002,0.04%,
-Running -bs 256 -p 16384 -m 0,Bandwidth,GB/s,57.401,57.440,0.039,0.07%,
-Running -bs 256 -p 16384 -m 1,Bandwidth,GB/s,31.647,31.722,0.075,0.24%,
-Running -bs 256 -p 16384 -m 2,Bandwidth,GB/s,83.256,82.627,-0.629,-0.76%,
-Running -bs 256 -p 16384 -m 2 -rx 0,Bandwidth,GB/s,77.297,77.775,0.478,0.62%,
-Running -bs 256 -p 16384 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,83.327,82.979,-0.348,-0.42%,
-Running -bs 256 -p 16384 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,83.961,84.036,0.075,0.09%,
-Running -bs 256 -p 16384 -m 3,Bandwidth,GB/s,83.706,83.729,0.023,0.03%,
-Running -bs 256 -p 16384 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 16384 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 16384 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 16384 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 16384 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,77.966,77.544,-0.422,-0.54%,
-Running -bs 256 -p 16384 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,43.378,43.473,0.095,0.22%,
-Running -bs 256 -p 2048 -m 0,Bandwidth,GB/s,27.724,27.863,0.139,0.50%,
-Running -bs 256 -p 2048 -m 1,Bandwidth,GB/s,29.604,29.589,-0.015,-0.05%,
-Running -bs 256 -p 2048 -m 2,Bandwidth,GB/s,79.978,80.353,0.375,0.47%,
-Running -bs 256 -p 2048 -m 2 -rx 0,Bandwidth,GB/s,74.495,74.077,-0.418,-0.56%,
-Running -bs 256 -p 2048 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,80.443,80.015,-0.428,-0.53%,
-Running -bs 256 -p 2048 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,82.181,82.165,-0.016,-0.02%,
-Running -bs 256 -p 2048 -m 3,Bandwidth,GB/s,73.789,74.167,0.378,0.51%,
-Running -bs 256 -p 2048 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 2048 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 2048 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 2048 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 2048 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,52.592,52.463,-0.129,-0.25%,
-Running -bs 256 -p 2048 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,9.965,9.956,-0.009,-0.09%,
-Running -bs 256 -p 32768 -m 0,Bandwidth,GB/s,57.432,57.176,-0.256,-0.45%,
-Running -bs 256 -p 32768 -m 1,Bandwidth,GB/s,31.916,31.869,-0.047,-0.15%,
-Running -bs 256 -p 32768 -m 2,Bandwidth,GB/s,83.129,82.673,-0.456,-0.55%,
-Running -bs 256 -p 32768 -m 2 -rx 0,Bandwidth,GB/s,77.693,77.306,-0.387,-0.50%,
-Running -bs 256 -p 32768 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,83.435,83.366,-0.069,-0.08%,
-Running -bs 256 -p 32768 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,83.605,83.422,-0.183,-0.22%,
-Running -bs 256 -p 32768 -m 3,Bandwidth,GB/s,83.221,84.228,1.007,1.21%,
-Running -bs 256 -p 32768 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 32768 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 32768 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 32768 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 32768 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,77.921,77.942,0.021,0.03%,
-Running -bs 256 -p 32768 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,43.407,43.385,-0.022,-0.05%,
-Running -bs 256 -p 4096 -m 0,Bandwidth,GB/s,54.367,54.513,0.146,0.27%,
-Running -bs 256 -p 4096 -m 1,Bandwidth,GB/s,29.544,29.535,-0.009,-0.03%,
-Running -bs 256 -p 4096 -m 2,Bandwidth,GB/s,81.882,81.972,0.090,0.11%,
-Running -bs 256 -p 4096 -m 2 -rx 0,Bandwidth,GB/s,75.970,76.390,0.420,0.55%,
-Running -bs 256 -p 4096 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,81.622,81.368,-0.254,-0.31%,
-Running -bs 256 -p 4096 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,83.472,82.874,-0.598,-0.72%,
-Running -bs 256 -p 4096 -m 3,Bandwidth,GB/s,83.445,82.889,-0.556,-0.67%,
-Running -bs 256 -p 4096 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 4096 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 4096 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 4096 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 4096 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,64.367,64.592,0.225,0.35%,
-Running -bs 256 -p 4096 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,17.784,17.592,-0.192,-1.08%,
-Running -bs 256 -p 65536 -m 0,Bandwidth,GB/s,57.253,57.441,0.188,0.33%,
-Running -bs 256 -p 65536 -m 1,Bandwidth,GB/s,47.474,47.420,-0.054,-0.11%,
-Running -bs 256 -p 65536 -m 2,Bandwidth,GB/s,83.020,82.685,-0.335,-0.40%,
-Running -bs 256 -p 65536 -m 2 -rx 0,Bandwidth,GB/s,77.765,77.417,-0.348,-0.45%,
-Running -bs 256 -p 65536 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,83.211,83.622,0.411,0.49%,
-Running -bs 256 -p 65536 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,84.006,84.010,0.004,0.00%,
-Running -bs 256 -p 65536 -m 3,Bandwidth,GB/s,83.997,83.145,-0.852,-1.01%,
-Running -bs 256 -p 65536 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 65536 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 65536 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 65536 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 65536 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,77.996,77.396,-0.600,-0.77%,
-Running -bs 256 -p 65536 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,43.457,43.461,0.004,0.01%,
-Running -bs 256 -p 8192 -m 0,Bandwidth,GB/s,57.425,57.124,-0.301,-0.52%,
-Running -bs 256 -p 8192 -m 1,Bandwidth,GB/s,29.611,29.583,-0.028,-0.09%,
-Running -bs 256 -p 8192 -m 2,Bandwidth,GB/s,82.929,82.888,-0.041,-0.05%,
-Running -bs 256 -p 8192 -m 2 -rx 0,Bandwidth,GB/s,76.999,76.889,-0.110,-0.14%,
-Running -bs 256 -p 8192 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,83.080,83.196,0.116,0.14%,
-Running -bs 256 -p 8192 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,83.172,83.480,0.308,0.37%,
-Running -bs 256 -p 8192 -m 3,Bandwidth,GB/s,83.644,83.111,-0.533,-0.64%,
-Running -bs 256 -p 8192 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 8192 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 8192 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 8192 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 256 -p 8192 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,72.935,72.332,-0.603,-0.83%,
-Running -bs 256 -p 8192 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,29.406,29.340,-0.066,-0.22%,
-Running -bs 32 -p 128 -m 0,Bandwidth,GB/s,2.451,2.449,-0.002,-0.08%,
-Running -bs 32 -p 128 -m 1,Bandwidth,GB/s,9.017,9.021,0.004,0.04%,
-Running -bs 32 -p 128 -m 2,Bandwidth,GB/s,9.025,8.989,-0.036,-0.40%,
-Running -bs 32 -p 128 -m 2 -rx 0,Bandwidth,GB/s,9.038,8.991,-0.047,-0.52%,
-Running -bs 32 -p 128 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,9.038,8.997,-0.041,-0.45%,
-Running -bs 32 -p 128 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,7.166,7.163,-0.003,-0.04%,
-Running -bs 32 -p 128 -m 3,Bandwidth,GB/s,4.725,4.770,0.045,0.95%,
-Running -bs 32 -p 128 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 32 -p 128 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 32 -p 128 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 32 -p 128 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 32 -p 128 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,5.309,5.309,0.000,0.00%,
-Running -bs 32 -p 128 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,0.702,0.702,0.000,0.00%,
-Running -bs 64 -p 256 -m 0,Bandwidth,GB/s,4.863,4.891,0.028,0.58%,
-Running -bs 64 -p 256 -m 1,Bandwidth,GB/s,17.978,17.972,-0.006,-0.03%,
-Running -bs 64 -p 256 -m 2,Bandwidth,GB/s,18.085,18.010,-0.075,-0.41%,
-Running -bs 64 -p 256 -m 2 -rx 0,Bandwidth,GB/s,17.980,18.079,0.099,0.55%,
-Running -bs 64 -p 256 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,18.060,18.082,0.022,0.12%,
-Running -bs 64 -p 256 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,14.329,14.328,-0.001,-0.01%,
-Running -bs 64 -p 256 -m 3,Bandwidth,GB/s,9.540,9.568,0.028,0.29%,
-Running -bs 64 -p 256 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 64 -p 256 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 64 -p 256 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 64 -p 256 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 64 -p 256 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,10.621,10.621,0.000,0.00%,
-Running -bs 64 -p 256 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,1.393,1.393,0.000,0.00%,
-Running -bs 8 -p 16 -l -m 0,Latency,us,0.487625,0.486990,-0.000635,-0.13%,
-Running -bs 8 -p 16 -l -m 1,Latency,us,0.328832,0.328889,0.000057,0.02%,
-Running -bs 8 -p 16 -l -m 2,Latency,us,0.160793,0.160824,0.000031,0.02%,
-Running -bs 8 -p 16 -l -m 2 -rx 0,Latency,us,0.048225,0.048217,-0.000008,-0.02%,
-Running -bs 8 -p 16 -l -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Latency,us,0.243758,0.243789,0.000031,0.01%,
-Running -bs 8 -p 16 -l -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Latency,us,0.240855,0.240861,0.000006,0.00%,
-Running -bs 8 -p 16 -l -m 3,Latency,us,0.330738,0.330705,-0.000033,-0.01%,
-Running -bs 8 -p 16 -l -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 8 -p 16 -l -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 8 -p 16 -l -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 8 -p 16 -l -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 8 -p 16 -l -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Latency,us,0.175635,0.175641,0.000006,0.00%,
-Running -bs 8 -p 16 -l -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Latency,us,0.400871,0.400867,-0.000004,-0.00%,
-Running -bs 8 -p 16 -m 0,Bandwidth,GB/s,0.308,0.308,0.000,0.00%,
-Running -bs 8 -p 16 -m 1,Bandwidth,GB/s,1.132,1.130,-0.002,-0.18%,
-Running -bs 8 -p 16 -m 2,Bandwidth,GB/s,1.133,1.134,0.001,0.09%,
-Running -bs 8 -p 16 -m 2 -rx 0,Bandwidth,GB/s,1.134,1.133,-0.001,-0.09%,
-Running -bs 8 -p 16 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,1.133,1.131,-0.002,-0.18%,
-Running -bs 8 -p 16 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,0.898,0.896,-0.002,-0.22%,
-Running -bs 8 -p 16 -m 3,Bandwidth,GB/s,0.599,0.598,-0.001,-0.17%,
-Running -bs 8 -p 16 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 8 -p 16 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 8 -p 16 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 8 -p 16 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 8 -p 16 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,0.664,0.664,0.000,0.00%,
-Running -bs 8 -p 16 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,0.088,0.088,0.000,0.00%,
-Running -bs 8 -p 32 -m 0,Bandwidth,GB/s,0.615,0.607,-0.008,-1.30%,
-Running -bs 8 -p 32 -m 1,Bandwidth,GB/s,2.247,2.261,0.014,0.62%,
-Running -bs 8 -p 32 -m 2,Bandwidth,GB/s,2.258,2.260,0.002,0.09%,
-Running -bs 8 -p 32 -m 2 -rx 0,Bandwidth,GB/s,2.254,2.260,0.006,0.27%,
-Running -bs 8 -p 32 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,2.261,2.260,-0.001,-0.04%,
-Running -bs 8 -p 32 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,1.789,1.791,0.002,0.11%,
-Running -bs 8 -p 32 -m 3,Bandwidth,GB/s,1.192,1.196,0.004,0.34%,
-Running -bs 8 -p 32 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 8 -p 32 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 8 -p 32 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 8 -p 32 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,N/A,N/A,GCC failed; LLVM failed
-Running -bs 8 -p 32 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,1.328,1.324,-0.004,-0.30%,
-Running -bs 8 -p 32 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,0.176,0.176,0.000,0.00%,
+SUCCESSFUL TESTS (NOC Bandwidth/Latency),,,,,,,
+,,,,,,,
+Running -bs 128 -p 512 -m 0,Bandwidth,GB/s,9.544,9.547,0.003,0.03%,Equivalent (within 1%)
+Running -bs 128 -p 512 -m 1,Bandwidth,GB/s,28.796,28.688,-0.108,-0.38%,Equivalent (within 1%)
+Running -bs 128 -p 512 -m 2,Bandwidth,GB/s,36.150,36.152,0.002,0.01%,Equivalent (within 1%)
+Running -bs 128 -p 512 -m 2 -rx 0,Bandwidth,GB/s,36.171,36.146,-0.025,-0.07%,Equivalent (within 1%)
+Running -bs 128 -p 512 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,36.176,36.164,-0.012,-0.03%,Equivalent (within 1%)
+Running -bs 128 -p 512 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,28.549,28.665,0.116,0.41%,Equivalent (within 1%)
+Running -bs 128 -p 512 -m 3,Bandwidth,GB/s,19.135,19.077,-0.058,-0.30%,Equivalent (within 1%)
+Running -bs 128 -p 512 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,21.179,21.178,-0.001,-0.00%,Equivalent (within 1%)
+Running -bs 128 -p 512 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,2.741,2.741,0.0,0.00%,Equivalent (within 1%)
+Running -bs 16 -p 64 -m 0,Bandwidth,GB/s,1.355,1.336,-0.019,-1.40%,GCC 1.40% higher (better)
+Running -bs 16 -p 64 -m 1,Bandwidth,GB/s,4.516,4.522,0.006,0.13%,Equivalent (within 1%)
+Running -bs 16 -p 64 -m 2,Bandwidth,GB/s,4.522,4.523,0.001,0.02%,Equivalent (within 1%)
+Running -bs 16 -p 64 -m 2 -rx 0,Bandwidth,GB/s,4.519,4.521,0.002,0.04%,Equivalent (within 1%)
+Running -bs 16 -p 64 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,4.509,4.521,0.012,0.27%,Equivalent (within 1%)
+Running -bs 16 -p 64 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,3.570,3.566,-0.004,-0.11%,Equivalent (within 1%)
+Running -bs 16 -p 64 -m 3,Bandwidth,GB/s,2.391,2.388,-0.003,-0.13%,Equivalent (within 1%)
+Running -bs 16 -p 64 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,2.655,2.647,-0.008,-0.30%,Equivalent (within 1%)
+Running -bs 16 -p 64 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,0.352,0.352,0.0,0.00%,Equivalent (within 1%)
+Running -bs 256 -p 1024 -m 0,Bandwidth,GB/s,17.986,17.952,-0.034,-0.19%,Equivalent (within 1%)
+Running -bs 256 -p 1024 -m 1,Bandwidth,GB/s,28.853,28.324,-0.529,-1.83%,GCC 1.83% higher (better)
+Running -bs 256 -p 1024 -m 2,Bandwidth,GB/s,72.346,72.240,-0.106,-0.15%,Equivalent (within 1%)
+Running -bs 256 -p 1024 -m 2 -rx 0,Bandwidth,GB/s,72.327,72.354,0.027,0.04%,Equivalent (within 1%)
+Running -bs 256 -p 1024 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,72.335,72.334,-0.001,-0.00%,Equivalent (within 1%)
+Running -bs 256 -p 1024 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,57.322,57.061,-0.261,-0.46%,Equivalent (within 1%)
+Running -bs 256 -p 1024 -m 3,Bandwidth,GB/s,38.268,38.168,-0.1,-0.26%,Equivalent (within 1%)
+Running -bs 256 -p 1024 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,38.143,38.142,-0.001,-0.00%,Equivalent (within 1%)
+Running -bs 256 -p 1024 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,5.313,5.315,0.002,0.04%,Equivalent (within 1%)
+Running -bs 256 -p 16384 -m 0,Bandwidth,GB/s,57.401,57.440,0.039,0.07%,Equivalent (within 1%)
+Running -bs 256 -p 16384 -m 1,Bandwidth,GB/s,31.647,31.722,0.075,0.24%,Equivalent (within 1%)
+Running -bs 256 -p 16384 -m 2,Bandwidth,GB/s,83.256,82.627,-0.629,-0.76%,Equivalent (within 1%)
+Running -bs 256 -p 16384 -m 2 -rx 0,Bandwidth,GB/s,77.297,77.775,0.478,0.62%,Equivalent (within 1%)
+Running -bs 256 -p 16384 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,83.327,82.979,-0.348,-0.42%,Equivalent (within 1%)
+Running -bs 256 -p 16384 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,83.961,84.036,0.075,0.09%,Equivalent (within 1%)
+Running -bs 256 -p 16384 -m 3,Bandwidth,GB/s,83.706,83.729,0.023,0.03%,Equivalent (within 1%)
+Running -bs 256 -p 16384 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,77.966,77.544,-0.422,-0.54%,Equivalent (within 1%)
+Running -bs 256 -p 16384 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,43.378,43.473,0.095,0.22%,Equivalent (within 1%)
+Running -bs 256 -p 2048 -m 0,Bandwidth,GB/s,27.724,27.863,0.139,0.50%,Equivalent (within 1%)
+Running -bs 256 -p 2048 -m 1,Bandwidth,GB/s,29.604,29.589,-0.015,-0.05%,Equivalent (within 1%)
+Running -bs 256 -p 2048 -m 2,Bandwidth,GB/s,79.978,80.353,0.375,0.47%,Equivalent (within 1%)
+Running -bs 256 -p 2048 -m 2 -rx 0,Bandwidth,GB/s,74.495,74.077,-0.418,-0.56%,Equivalent (within 1%)
+Running -bs 256 -p 2048 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,80.443,80.015,-0.428,-0.53%,Equivalent (within 1%)
+Running -bs 256 -p 2048 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,82.181,82.165,-0.016,-0.02%,Equivalent (within 1%)
+Running -bs 256 -p 2048 -m 3,Bandwidth,GB/s,73.789,74.167,0.378,0.51%,Equivalent (within 1%)
+Running -bs 256 -p 2048 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,52.592,52.463,-0.129,-0.25%,Equivalent (within 1%)
+Running -bs 256 -p 2048 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,9.965,9.956,-0.009,-0.09%,Equivalent (within 1%)
+Running -bs 256 -p 32768 -m 0,Bandwidth,GB/s,57.432,57.176,-0.256,-0.45%,Equivalent (within 1%)
+Running -bs 256 -p 32768 -m 1,Bandwidth,GB/s,31.916,31.869,-0.047,-0.15%,Equivalent (within 1%)
+Running -bs 256 -p 32768 -m 2,Bandwidth,GB/s,83.129,82.673,-0.456,-0.55%,Equivalent (within 1%)
+Running -bs 256 -p 32768 -m 2 -rx 0,Bandwidth,GB/s,77.693,77.306,-0.387,-0.50%,Equivalent (within 1%)
+Running -bs 256 -p 32768 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,83.435,83.366,-0.069,-0.08%,Equivalent (within 1%)
+Running -bs 256 -p 32768 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,83.605,83.422,-0.183,-0.22%,Equivalent (within 1%)
+Running -bs 256 -p 32768 -m 3,Bandwidth,GB/s,83.221,84.228,1.007,1.21%,LLVM 1.21% higher (better)
+Running -bs 256 -p 32768 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,77.921,77.942,0.021,0.03%,Equivalent (within 1%)
+Running -bs 256 -p 32768 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,43.407,43.385,-0.022,-0.05%,Equivalent (within 1%)
+Running -bs 256 -p 4096 -m 0,Bandwidth,GB/s,54.367,54.513,0.146,0.27%,Equivalent (within 1%)
+Running -bs 256 -p 4096 -m 1,Bandwidth,GB/s,29.544,29.535,-0.009,-0.03%,Equivalent (within 1%)
+Running -bs 256 -p 4096 -m 2,Bandwidth,GB/s,81.882,81.972,0.09,0.11%,Equivalent (within 1%)
+Running -bs 256 -p 4096 -m 2 -rx 0,Bandwidth,GB/s,75.970,76.390,0.42,0.55%,Equivalent (within 1%)
+Running -bs 256 -p 4096 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,81.622,81.368,-0.254,-0.31%,Equivalent (within 1%)
+Running -bs 256 -p 4096 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,83.472,82.874,-0.598,-0.72%,Equivalent (within 1%)
+Running -bs 256 -p 4096 -m 3,Bandwidth,GB/s,83.445,82.889,-0.556,-0.67%,Equivalent (within 1%)
+Running -bs 256 -p 4096 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,64.367,64.592,0.225,0.35%,Equivalent (within 1%)
+Running -bs 256 -p 4096 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,17.784,17.592,-0.192,-1.08%,GCC 1.08% higher (better)
+Running -bs 256 -p 65536 -m 0,Bandwidth,GB/s,57.253,57.441,0.188,0.33%,Equivalent (within 1%)
+Running -bs 256 -p 65536 -m 1,Bandwidth,GB/s,47.474,47.420,-0.054,-0.11%,Equivalent (within 1%)
+Running -bs 256 -p 65536 -m 2,Bandwidth,GB/s,83.020,82.685,-0.335,-0.40%,Equivalent (within 1%)
+Running -bs 256 -p 65536 -m 2 -rx 0,Bandwidth,GB/s,77.765,77.417,-0.348,-0.45%,Equivalent (within 1%)
+Running -bs 256 -p 65536 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,83.211,83.622,0.411,0.49%,Equivalent (within 1%)
+Running -bs 256 -p 65536 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,84.006,84.010,0.004,0.00%,Equivalent (within 1%)
+Running -bs 256 -p 65536 -m 3,Bandwidth,GB/s,83.997,83.145,-0.852,-1.01%,GCC 1.01% higher (better)
+Running -bs 256 -p 65536 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,77.996,77.396,-0.6,-0.77%,Equivalent (within 1%)
+Running -bs 256 -p 65536 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,43.457,43.461,0.004,0.01%,Equivalent (within 1%)
+Running -bs 256 -p 8192 -m 0,Bandwidth,GB/s,57.425,57.124,-0.301,-0.52%,Equivalent (within 1%)
+Running -bs 256 -p 8192 -m 1,Bandwidth,GB/s,29.611,29.583,-0.028,-0.09%,Equivalent (within 1%)
+Running -bs 256 -p 8192 -m 2,Bandwidth,GB/s,82.929,82.888,-0.041,-0.05%,Equivalent (within 1%)
+Running -bs 256 -p 8192 -m 2 -rx 0,Bandwidth,GB/s,76.999,76.889,-0.11,-0.14%,Equivalent (within 1%)
+Running -bs 256 -p 8192 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,83.080,83.196,0.116,0.14%,Equivalent (within 1%)
+Running -bs 256 -p 8192 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,83.172,83.480,0.308,0.37%,Equivalent (within 1%)
+Running -bs 256 -p 8192 -m 3,Bandwidth,GB/s,83.644,83.111,-0.533,-0.64%,Equivalent (within 1%)
+Running -bs 256 -p 8192 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,72.935,72.332,-0.603,-0.83%,Equivalent (within 1%)
+Running -bs 256 -p 8192 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,29.406,29.340,-0.066,-0.22%,Equivalent (within 1%)
+Running -bs 32 -p 128 -m 0,Bandwidth,GB/s,2.451,2.449,-0.002,-0.08%,Equivalent (within 1%)
+Running -bs 32 -p 128 -m 1,Bandwidth,GB/s,9.017,9.021,0.004,0.04%,Equivalent (within 1%)
+Running -bs 32 -p 128 -m 2,Bandwidth,GB/s,9.025,8.989,-0.036,-0.40%,Equivalent (within 1%)
+Running -bs 32 -p 128 -m 2 -rx 0,Bandwidth,GB/s,9.038,8.991,-0.047,-0.52%,Equivalent (within 1%)
+Running -bs 32 -p 128 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,9.038,8.997,-0.041,-0.45%,Equivalent (within 1%)
+Running -bs 32 -p 128 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,7.166,7.163,-0.003,-0.04%,Equivalent (within 1%)
+Running -bs 32 -p 128 -m 3,Bandwidth,GB/s,4.725,4.770,0.045,0.95%,Equivalent (within 1%)
+Running -bs 32 -p 128 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,5.309,5.309,0.0,0.00%,Equivalent (within 1%)
+Running -bs 32 -p 128 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,0.702,0.702,0.0,0.00%,Equivalent (within 1%)
+Running -bs 64 -p 256 -m 0,Bandwidth,GB/s,4.863,4.891,0.028,0.58%,Equivalent (within 1%)
+Running -bs 64 -p 256 -m 1,Bandwidth,GB/s,17.978,17.972,-0.006,-0.03%,Equivalent (within 1%)
+Running -bs 64 -p 256 -m 2,Bandwidth,GB/s,18.085,18.010,-0.075,-0.41%,Equivalent (within 1%)
+Running -bs 64 -p 256 -m 2 -rx 0,Bandwidth,GB/s,17.980,18.079,0.099,0.55%,Equivalent (within 1%)
+Running -bs 64 -p 256 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,18.060,18.082,0.022,0.12%,Equivalent (within 1%)
+Running -bs 64 -p 256 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,14.329,14.328,-0.001,-0.01%,Equivalent (within 1%)
+Running -bs 64 -p 256 -m 3,Bandwidth,GB/s,9.540,9.568,0.028,0.29%,Equivalent (within 1%)
+Running -bs 64 -p 256 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,10.621,10.621,0.0,0.00%,Equivalent (within 1%)
+Running -bs 64 -p 256 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,1.393,1.393,0.0,0.00%,Equivalent (within 1%)
+Running -bs 8 -p 16 -l -m 0,Latency,us,0.487625,0.486990,-0.000635,-0.13%,Equivalent (within 1%)
+Running -bs 8 -p 16 -l -m 1,Latency,us,0.328832,0.328889,5.7e-05,0.02%,Equivalent (within 1%)
+Running -bs 8 -p 16 -l -m 2,Latency,us,0.160793,0.160824,3.1e-05,0.02%,Equivalent (within 1%)
+Running -bs 8 -p 16 -l -m 2 -rx 0,Latency,us,0.048225,0.048217,-8e-06,-0.02%,Equivalent (within 1%)
+Running -bs 8 -p 16 -l -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Latency,us,0.243758,0.243789,3.1e-05,0.01%,Equivalent (within 1%)
+Running -bs 8 -p 16 -l -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Latency,us,0.240855,0.240861,6e-06,0.00%,Equivalent (within 1%)
+Running -bs 8 -p 16 -l -m 3,Latency,us,0.330738,0.330705,-3.3e-05,-0.01%,Equivalent (within 1%)
+Running -bs 8 -p 16 -l -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Latency,us,0.175635,0.175641,6e-06,0.00%,Equivalent (within 1%)
+Running -bs 8 -p 16 -l -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Latency,us,0.400871,0.400867,-4e-06,-0.00%,Equivalent (within 1%)
+Running -bs 8 -p 16 -m 0,Bandwidth,GB/s,0.308,0.308,0.0,0.00%,Equivalent (within 1%)
+Running -bs 8 -p 16 -m 1,Bandwidth,GB/s,1.132,1.130,-0.002,-0.18%,Equivalent (within 1%)
+Running -bs 8 -p 16 -m 2,Bandwidth,GB/s,1.133,1.134,0.001,0.09%,Equivalent (within 1%)
+Running -bs 8 -p 16 -m 2 -rx 0,Bandwidth,GB/s,1.134,1.133,-0.001,-0.09%,Equivalent (within 1%)
+Running -bs 8 -p 16 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,1.133,1.131,-0.002,-0.18%,Equivalent (within 1%)
+Running -bs 8 -p 16 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,0.898,0.896,-0.002,-0.22%,Equivalent (within 1%)
+Running -bs 8 -p 16 -m 3,Bandwidth,GB/s,0.599,0.598,-0.001,-0.17%,Equivalent (within 1%)
+Running -bs 8 -p 16 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,0.664,0.664,0.0,0.00%,Equivalent (within 1%)
+Running -bs 8 -p 16 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,0.088,0.088,0.0,0.00%,Equivalent (within 1%)
+Running -bs 8 -p 32 -m 0,Bandwidth,GB/s,0.615,0.607,-0.008,-1.30%,GCC 1.30% higher (better)
+Running -bs 8 -p 32 -m 1,Bandwidth,GB/s,2.247,2.261,0.014,0.62%,Equivalent (within 1%)
+Running -bs 8 -p 32 -m 2,Bandwidth,GB/s,2.258,2.260,0.002,0.09%,Equivalent (within 1%)
+Running -bs 8 -p 32 -m 2 -rx 0,Bandwidth,GB/s,2.254,2.260,0.006,0.27%,Equivalent (within 1%)
+Running -bs 8 -p 32 -m 2 -rx 0 -ry 0 -sx 6 -sy 5,Bandwidth,GB/s,2.261,2.260,-0.001,-0.04%,Equivalent (within 1%)
+Running -bs 8 -p 32 -m 2 -rx 0 -ry 0 -sx 6 -sy 5 -wr,Bandwidth,GB/s,1.789,1.791,0.002,0.11%,Equivalent (within 1%)
+Running -bs 8 -p 32 -m 3,Bandwidth,GB/s,1.192,1.196,0.004,0.34%,Equivalent (within 1%)
+Running -bs 8 -p 32 -m 6 -rx 0 -ry 0 -sx 1 -sy 0 -tx 1 -ty 0,Bandwidth,GB/s,1.328,1.324,-0.004,-0.30%,Equivalent (within 1%)
+Running -bs 8 -p 32 -m 6 -rx 0 -ry 0 -sx 6 -sy 5 -tx 6 -ty 5,Bandwidth,GB/s,0.176,0.176,0.0,0.00%,Equivalent (within 1%)
+,,,,,,,
+,,,,,,,
+"FAILED TESTS (both GCC and LLVM - configuration issues, not compiler-specific)",,,,,,,
+,,,,,,,
+Running -bs 128 -p 512 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 128 -p 512 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 128 -p 512 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 128 -p 512 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 16 -p 64 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 16 -p 64 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 16 -p 64 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 16 -p 64 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 1024 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 1024 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 1024 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 1024 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 16384 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 16384 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 16384 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 16384 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 2048 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 2048 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 2048 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 2048 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 32768 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 32768 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 32768 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 32768 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 4096 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 4096 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 4096 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 4096 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 65536 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 65536 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 65536 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 65536 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 8192 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 8192 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 8192 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 256 -p 8192 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 32 -p 128 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 32 -p 128 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 32 -p 128 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 32 -p 128 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 64 -p 256 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 64 -p 256 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 64 -p 256 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 64 -p 256 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 8 -p 16 -l -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 8 -p 16 -l -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 8 -p 16 -l -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 8 -p 16 -l -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 8 -p 16 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 8 -p 16 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 8 -p 16 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 8 -p 16 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 8 -p 32 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 8 -p 32 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 8 -p 32 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Bandwidth,GB/s,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
+Running -bs 8 -p 32 -m 6 -rx 0 -ry 0 -sx 0 -sy 1 -tx 12 -ty 9 -link,Latency,us,Failed,Failed,,,"Both compilers failed (test configuration issue, not compiler-specific)"
