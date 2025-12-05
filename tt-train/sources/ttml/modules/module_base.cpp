@@ -120,9 +120,9 @@ autograd::TensorPtr ModuleBase::operator()(const autograd::TensorPtr& tensor, co
 autograd::TensorPtr ModuleBase::operator()(
     const autograd::TensorPtr& tensor, const autograd::TensorPtr& other, const bool use_cache) {
     throw std::logic_error(
-        "ModuleBase::operator()(const autograd::TensorPtr& tensor, const autograd::TensorPtr& other, bool use_cache) "
-        "is Not "
-        "implemented");
+        "ModuleBase::operator()(const autograd::TensorPtr& tensor, const autograd::TensorPtr& other, const bool "
+        "use_cache) "
+        "is Not implemented. This overload is for modules supporting kv cache for inference.");
 }
 
 }  // namespace ttml::modules
