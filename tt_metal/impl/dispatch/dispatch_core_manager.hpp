@@ -153,6 +153,17 @@ public:
 
     std::vector<CoreCoord> get_all_logical_dispatch_cores(ChipId device_id);
 
+    /// @brief Returns a tensix reserved at construction time for the real-time profiler.
+    /// The reservation is taken from the back of the dispatch core pool (which dispatch consumes
+    /// from the front), so this core is guaranteed not to be assigned to any dispatch / prefetch /
+    /// dispatch_s / fabric mux kernel. Only populated when the dispatch core type is WORKER and
+    /// the pool has a spare slot. ETH dispatch returns nullopt: the RT profiler kernel is a BRISC
+    /// worker kernel and cannot run on an ethernet core, so callers must skip RT profiler on that
+    /// device rather than substitute an ethernet coordinate.
+    /// @param device_id ID of the device
+    /// @return tt_cxy_pair logical location of the reserved tensix, or empty if no reservation exists
+    std::optional<tt_cxy_pair> get_reserved_realtime_profiler_core(ChipId device_id);
+
 private:
     /// @brief reset_dispatch_core_manager initializes vector of cores per device for dispatch kernels
     /// @param dispatch_core_config specifies the core type for dispatch kernels
@@ -194,6 +205,9 @@ private:
     std::unordered_map<ChipId, std::unordered_map<uint16_t, std::unordered_map<uint8_t, dispatch_core_placement_t>>>
         dispatch_core_assignments;
     std::unordered_map<ChipId, std::list<CoreCoord>> available_dispatch_cores_by_device;
+    // Tensix reserved at construction time for the real-time profiler kernel.
+    // Removed from available_dispatch_cores_by_device so dispatch cannot reach it.
+    std::unordered_map<ChipId, tt_cxy_pair> reserved_realtime_profiler_core_by_device_;
     DispatchCoreConfig dispatch_core_config_;
     uint8_t num_hw_cqs{};
     MetalEnvImpl& env_;

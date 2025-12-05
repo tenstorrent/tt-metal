@@ -69,6 +69,18 @@ run_profiling_test() {
     TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_perf_op_report.py --noconftest -k "not TestOpSupportCount"
 
     remove_default_log_locations
+
+    # Consolidated real-time profiler test suite: callback smoke test, short-zone
+    # regression, host/device correlation, cross-reference vs device profiler,
+    # sync-accuracy check (and TG cross-reference, which auto-skips off-Galaxy).
+    # Each test runs its device-touching work in its own subprocess workload
+    # (so the pytest parent never takes the PCIe lock) and exports
+    # TT_METAL_DEVICE_PROFILER=1 itself when needed.  Per-test timeouts come
+    # from @pytest.mark.timeout decorators on the individual tests.
+    pytest tests/ttnn/tracy/test_realtime_profiler.py
+
+    # Trace capture with real-time profiler: verify profiler works across trace replay
+    pytest tests/ttnn/tracy/test_trace_runs.py --timeout 120
 }
 
 main() {

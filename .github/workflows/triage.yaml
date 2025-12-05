@@ -82,7 +82,12 @@ jobs:
             if [[ "${{ inputs.run-hang-report-test }}" != "true" ]]; then
               IGNORE_ARGS="--ignore=./tools/tests/triage/test_hang_report.py"
             fi
-            TT_METAL_RESET_DEVICE_AFTER_HANG=1 pytest -v -s ./tools/tests/triage/ $IGNORE_ARGS
+            # TT_TRIAGE_VERBOSE_SKIPS=1 turns on per-core skip reasoning + full
+            # tracebacks inside dump_callstacks / dump_lightweight_asserts and the
+            # generic check harness in run_checks.py. This is invaluable on
+            # *-viommu runners where BRISC halts intermittently fail and today's
+            # pass/fail gives us no information about which core or why.
+            TT_METAL_RESET_DEVICE_AFTER_HANG=1 TT_TRIAGE_VERBOSE_SKIPS=1 pytest -v -s ./tools/tests/triage/ $IGNORE_ARGS
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
