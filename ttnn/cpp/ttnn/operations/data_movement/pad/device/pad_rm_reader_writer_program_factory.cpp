@@ -1,5 +1,5 @@
 
-#include "pad_rm_reader_writer_multi_core_program_factory.hpp"
+#include "pad_rm_reader_writer_program_factory.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 
@@ -7,7 +7,7 @@ using namespace tt::tt_metal;
 using namespace tt::constants;
 
 namespace ttnn::operations::data_movement::pad::program {
-PadRmReaderWriterMultiCoreProgramFactory::cached_program_t PadRmReaderWriterMultiCoreProgramFactory::create(
+PadRmReaderWriterProgramFactory::cached_program_t PadRmReaderWriterProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
@@ -137,7 +137,7 @@ PadRmReaderWriterMultiCoreProgramFactory::cached_program_t PadRmReaderWriterMult
     return cached_program_t{std::move(program), {reader_kernel_id, writer_kernel_id}};
 }
 
-void PadRmReaderWriterMultiCoreProgramFactory::override_runtime_arguments(
+void PadRmReaderWriterProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
