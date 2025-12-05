@@ -9,8 +9,10 @@ class TT_CCL:
     def __init__(
         self,
         mesh_device,
+        mode="decode",
     ):
         self.mesh_device = mesh_device
+        self.mode = mode
         self.sub_device_crs = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
@@ -48,6 +50,12 @@ class TT_CCL:
                     [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3)]
                 )
 
+        # Initialize persistent buffers for decode mode
+        self.persistent_ag_buffers = {}
+        self.persistent_rs_buffers = {}
+        if mode == "decode":
+            self._init_decode_persistent_buffers()
+
     def get_and_cycle_barrier_semaphore_handle(self, cluster_axis=None):
         semaphore_index = 2 if not cluster_axis else cluster_axis
         current_idx = self.barrier_semaphore_idx[semaphore_index]
@@ -66,6 +74,36 @@ class TT_CCL:
         self.rs_semaphores_idx[semaphore_index] = (current_idx + 1) % 2
         return self.rs_semaphore_handles[semaphore_index][current_idx]
 
+    def _init_decode_persistent_buffers(self):
+        """Initialize persistent buffers for decode mode CCL operations
+
+        Currently only implements buffer for MLP w2 all_reduce operation.
+        """
+        import torch
+
+        # For multi-device configurations, allocate persistent buffers
+        # Single device (N150) doesn't need persistent buffers
+        if list(self.mesh_device.shape) == [1, 1]:
+            return
+
+        # Only allocate buffer for MLP w2 all_reduce (mlp.py line 257)
+        # This is the only persistent buffer we're implementing for now
+        try:
+            # For T3K (1, 8) mesh, we need a buffer for the w2 output all_reduce
+            # Shape is (1, 1, 32, 4096) for batch_size=32, dim=4096
+            buffer = ttnn.from_torch(
+                torch.zeros((1, 1, 32, 4096), dtype=torch.bfloat16),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            self.persistent_ag_buffers["mlp_w2_output"] = buffer
+            print(f"[TT_CCL] Allocated persistent buffer for mlp_w2_output")
+        except Exception as e:
+            print(f"Warning: Failed to allocate persistent buffer for mlp_w2_output: {e}")
+
 
 def tt_all_reduce(
     input_tensor,
@@ -80,6 +118,7 @@ def tt_all_reduce(
     sharded=False,
     dtype=ttnn.bfloat16,
     use_composite=False,
+    buffer_key=None,
 ):
     # N150
     if list(mesh_device.shape) == [1, 1] or (cluster_axis == 1 and 1 in list(mesh_device.shape)):
@@ -99,9 +138,15 @@ def tt_all_reduce(
             input_tensor = ttnn.sharded_to_interleaved(input_tensor_sharded, ttnn.L1_MEMORY_CONFIG)
             input_tensor_sharded.deallocate(True)
 
+        # Get persistent buffer if available and in decode mode
+        persistent_buffer = None
+        if tt_ccl.mode == "decode" and buffer_key is not None:
+            persistent_buffer = tt_ccl.persistent_rs_buffers.get(buffer_key, None)
+            print("persistent buffer being used")
+
         reduced = ttnn.experimental.reduce_scatter_minimal_async(
             input_tensor,
-            persistent_output_buffers=None,
+            persistent_output_buffers=persistent_buffer,
             dim=dim,
             multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(),
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
@@ -128,9 +173,14 @@ def tt_all_reduce(
         input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
 
     if not use_composite:
+        # Get persistent buffer if available and in decode mode
+        persistent_buffer = None
+        if tt_ccl.mode == "decode" and buffer_key is not None:
+            persistent_buffer = tt_ccl.persistent_ag_buffers.get(buffer_key, None)
+
         gathered_tensor = ttnn.experimental.all_gather_async(
             input_tensor,
-            persistent_output_buffer=None,
+            persistent_output_buffer=persistent_buffer,
             dim=dim,
             multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
             num_links=num_all_gather_links,
@@ -158,9 +208,14 @@ def tt_all_reduce(
     else:
         input_mem_cfg = input_tensor.memory_config()
 
+        # Get persistent buffer for reduce_scatter if available
+        rs_persistent_buffer = None
+        if tt_ccl.mode == "decode" and buffer_key is not None:
+            rs_persistent_buffer = tt_ccl.persistent_rs_buffers.get(buffer_key, None)
+
         reduced_tensor = ttnn.experimental.reduce_scatter_minimal_async(
             input_tensor,
-            persistent_output_buffers=None,
+            persistent_output_buffers=rs_persistent_buffer,
             dim=dim,
             multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
@@ -174,9 +229,14 @@ def tt_all_reduce(
             num_buffers_per_channel=2,
         )
 
+        # Get persistent buffer for all_gather if available
+        ag_persistent_buffer = None
+        if tt_ccl.mode == "decode" and buffer_key is not None:
+            ag_persistent_buffer = tt_ccl.persistent_ag_buffers.get(buffer_key, None)
+
         reduced_tensor = ttnn.experimental.all_gather_async(
             reduced_tensor,
-            persistent_output_buffer=None,
+            persistent_output_buffer=ag_persistent_buffer,
             dim=dim,
             multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
             num_links=num_all_gather_links,
@@ -206,6 +266,7 @@ def tt_all_gather(
     sharded=False,
     topology=ttnn.Topology.Linear,
     dtype=ttnn.bfloat16,
+    buffer_key=None,
 ):
     # N150
     if list(mesh_device.shape) == (1, 1) or (cluster_axis == 1 and 1 in list(mesh_device.shape)):
@@ -221,10 +282,15 @@ def tt_all_gather(
         if sharded and memory_config is not None:
             input_tensor = ttnn.to_memory_config(input_tensor, memory_config, dtype)  # to sharded
 
+    # Get persistent buffer if available and in decode mode
+    persistent_buffer = None
+    if tt_ccl.mode == "decode" and buffer_key is not None:
+        persistent_buffer = tt_ccl.persistent_ag_buffers.get(buffer_key, None)
+
     if cluster_axis is None:
         gathered = ttnn.experimental.all_gather_async(
             input_tensor,
-            persistent_output_buffer=None,
+            persistent_output_buffer=persistent_buffer,
             dim=dim,
             multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=num_links,
@@ -238,7 +304,7 @@ def tt_all_gather(
     else:
         gathered = ttnn.experimental.all_gather_async(
             input_tensor,
-            persistent_output_buffer=None,
+            persistent_output_buffer=persistent_buffer,
             dim=dim,
             multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
             num_links=num_links,

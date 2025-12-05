@@ -129,7 +129,7 @@ def test_decoder_inference(
         )
 
     # Initialize TT model
-    tt_ccl = TT_CCL(mesh_device)
+    tt_ccl = TT_CCL(mesh_device, mode="decode")
     tt_model = TransformerBlock(
         args=model_args,
         mesh_device=mesh_device,

@@ -271,6 +271,7 @@ class MLP(LightweightModule):
             dtype=self.args.ccl_dtype,
             use_composite=True if self.dim == 8192 else False,
             topology=self.args.ccl_topology(),
+            buffer_key="mlp_w2_output" if mode == "decode" else None,
         )
 
         # Ensure dim 0 and 1 are 1
