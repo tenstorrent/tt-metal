@@ -422,12 +422,14 @@ class ModelArgs:
         "LLAMA3_2_1B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-1B-Instruct",
         "LLAMA3_2_3B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-3B-Instruct",
         "LLAMA3_1_8B_PARAMS": "models/tt_transformers/model_params/Llama-3.1-8B-Instruct",
+        "ALLAM_7B_PARAMS": "models/tt_transformers/model_params/ALLaM-7B-Instruct-preview",
         "LLAMA3_2_11B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-11B-Vision-Instruct",
         "LLAMA3_1_70B_PARAMS": "models/tt_transformers/model_params/Llama-3.1-70B-Instruct",
         "LLAMA3_2_90B_PARAMS": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
     }
 
     LOCAL_HF_PARAMS = {
+        "ALLaM-7B-Instruct-preview": "models/tt_transformers/model_params/ALLaM-7B-Instruct-preview",
         "Llama-3.1-8B-Instruct": "models/tt_transformers/model_params/Llama-3.1-8B-Instruct",
         "Llama-3.1-70B-Instruct": "models/tt_transformers/model_params/Llama-3.1-70B-Instruct",
         "Llama-3.2-1B-Instruct": "models/tt_transformers/model_params/Llama-3.2-1B-Instruct",
@@ -556,6 +558,7 @@ class ModelArgs:
                 "Phi-3-mini-128k-instruct": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
+                "ALLaM-7B": {"N150": None, "N300": 32, "T3K": 64, "TG": 128, "P150x4": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -1331,6 +1334,12 @@ class ModelArgs:
                 "T3K": [128, 256, 512, 1024, 2048, 4096, 8192],
                 "TG": [128, 256, 512, 1024, 2048, 4096, 8192],
             },
+            "ALLaM-7B": {
+                "N150": None,
+                "N300": [128, 256, 512, 1024],
+                "T3K": [128, 256, 512, 1024, 2048],
+                "TG": [128, 256, 512, 1024, 2048],
+            },
         }
 
         model_name = self.base_model_name
@@ -1357,6 +1366,8 @@ class ModelArgs:
             local_params = "LLAMA3_2_3B_PARAMS"
         elif "3.1-8B" in model_name:
             local_params = "LLAMA3_1_8B_PARAMS"
+        elif "ALLaM-7B" in model_name:
+            local_params = "ALLAM_7B_PARAMS"
         elif "3.2-11B" in model_name:
             local_params = "LLAMA3_2_11B_PARAMS"
         elif "3.1-70B" in model_name:
@@ -2252,6 +2263,7 @@ class ModelArgs:
             "Llama-3.2-3B": "meta-llama/Llama-3.2-3B-Instruct",
             "Llama-3.2-11B": "meta-llama/Llama-3.2-11B-Vision-Instruct",
             "Llama-3.2-90B": "meta-llama/Llama-3.2-90B-Vision-Instruct",
+            "ALLaM-7B": "humain-ai/ALLaM-7B-Instruct-preview",
             "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
             "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
         }

@@ -1,0 +1,1 @@
+{"dim": 4096, "n_layers": 32, "n_heads": 32, "n_kv_heads": 32, "vocab_size": 64000, "ffn_dim_multiplier": 1.0, "multiple_of": 256, "norm_eps": 1e-05, "rope_theta": 1000000.0, "use_scaled_rope": false}
