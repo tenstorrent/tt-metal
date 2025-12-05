@@ -48,8 +48,8 @@ void kernel_main() {
             continue;
         }
 
-        // Calculate source NOC address
-        uint32_t src_offset = src_local_idx * aligned_pixel_size;
+        // Calculate source NOC address (use pixel_size for ROW_MAJOR memory layout)
+        uint32_t src_offset = src_local_idx * pixel_size;
         uint64_t src_noc_addr = get_noc_addr(src_noc_x, src_noc_y, input_l1_addr + src_offset);
 
         // Calculate destination L1 address

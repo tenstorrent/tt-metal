@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fold_device_op.hpp"
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::data_movement {
 
@@ -33,14 +34,14 @@ void validate_fold(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
             "Fold: Only height-sharded input tensors are supported.");
 
-        auto shard_shape = input_tensor.shard_spec().value().shape;
+        // auto shard_shape = input_tensor.shard_spec().value().shape;
         TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR, "Fold: Expect sharded input tensor in row-major layout.");
-        TT_FATAL(
-            shard_shape[0] % (stride_h * stride_w) == 0,
-            "Fold: Shard height must be divisible by stride_h * stride_w.",
-            shard_shape[0],
-            stride_h,
-            stride_w);
+        // TT_FATAL(
+        //     shard_shape[0] % (stride_h * stride_w) == 0,
+        //     "Fold: Shard height must be divisible by stride_h * stride_w.",
+        //     shard_shape[0],
+        //     stride_h,
+        //     stride_w);
     } else if (is_dram_interleaved) {
         TT_FATAL(input_shape[1] % stride_h == 0, "Fold: Input height must be divisible by stride_h.");
         TT_FATAL(input_shape[2] % stride_w == 0, "Fold: Input width must be divisible by stride_w.");
@@ -82,10 +83,31 @@ Fold::spec_return_value_t Fold::compute_output_specs(
          input_shape[3] * op_attr.stride_h * op_attr.stride_w});
 
     if (op_attr.is_sharded) {
-        auto shard_spec = input_tensor.shard_spec().value();
-        shard_spec.shape[0] /= op_attr.stride_h * op_attr.stride_w;
-        shard_spec.shape[1] *= op_attr.stride_h * op_attr.stride_w;
-        auto mem_config = input_tensor.memory_config().with_shard_spec(shard_spec);
+        auto input_shard_spec = input_tensor.shard_spec().value();
+
+        // Calculate output dimensions
+        uint32_t total_output_height =
+            input_shape[0] * input_shape[1] * input_shape[2] / (op_attr.stride_h * op_attr.stride_w);
+        uint32_t output_width = input_shape[3] * op_attr.stride_h * op_attr.stride_w;
+
+        // Use max available cores
+        auto device = input_tensor.device();
+        auto compute_grid = device->compute_with_storage_grid_size();
+        uint32_t max_cores = compute_grid.x * compute_grid.y;
+
+        // Use as many cores as possible (up to total_output_height)
+        uint32_t output_num_cores = std::min(max_cores, total_output_height);
+
+        // Ceiling division for shard height - last core may have fewer pixels
+        uint32_t output_shard_height = (total_output_height + output_num_cores - 1) / output_num_cores;
+
+        // Create output core grid
+        CoreRangeSet output_grid = tt::tt_metal::num_cores_to_corerangeset(
+            output_num_cores, compute_grid, input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+
+        tt::tt_metal::ShardSpec output_shard_spec(
+            output_grid, {output_shard_height, output_width}, input_shard_spec.orientation);
+        auto mem_config = MemoryConfig(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, output_shard_spec);
 
         return {TensorSpec(
             output_shape,

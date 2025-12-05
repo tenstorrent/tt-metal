@@ -10,7 +10,6 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
-#include <tt-metalium/logger.hpp>
 
 using namespace tt::tt_metal;
 
@@ -24,44 +23,43 @@ struct FoldTransfer {
 };
 
 std::vector<std::vector<FoldTransfer>> generate_fold_transfers(
-    const Tensor& input, uint32_t stride_h, uint32_t stride_w) {
+    const Tensor& input, const Tensor& output, uint32_t stride_h, uint32_t stride_w) {
     auto input_shape = input.logical_shape();
+
+    // Input shard spec - for source NOC coordinates
     auto input_shard_spec = input.shard_spec();
+    uint32_t input_shard_height = input_shard_spec->shape[0];
+    uint32_t input_num_cores = input_shard_spec->grid.num_cores();
+
+    // Output shard spec - for destination core assignment
+    auto output_shard_spec = output.shard_spec();
+    uint32_t output_shard_height = output_shard_spec->shape[0];
+    uint32_t output_num_cores = output_shard_spec->grid.num_cores();
 
     uint32_t N = input_shape[0];
     uint32_t H = input_shape[1];
     uint32_t W = input_shape[2];
 
-    uint32_t input_shard_height = input_shard_spec->shape[0];
-    uint32_t num_cores = input_shard_spec->grid.num_cores();
-
     uint32_t out_H = H / stride_h;
     uint32_t out_W = W / stride_w;
 
-    uint32_t output_shard_height = input_shard_height / (stride_h * stride_w);
+    // Get NOC coordinates for INPUT cores (source of reads)
+    auto input_logical_cores = tt::tt_metal::corerange_to_cores(
+        input_shard_spec->grid, input_num_cores, input_shard_spec->orientation == ShardOrientation::ROW_MAJOR);
 
-    tt::log_debug(tt::LogOp, "Fold: generate_fold_transfers");
-    tt::log_debug(tt::LogOp, "  Input shape: N={}, H={}, W={}", N, H, W);
-    tt::log_debug(tt::LogOp, "  Stride: h={}, w={}", stride_h, stride_w);
-    tt::log_debug(tt::LogOp, "  Output: H={}, W={}", out_H, out_W);
-    tt::log_debug(
-        tt::LogOp, "  Input shard height: {}, Output shard height: {}", input_shard_height, output_shard_height);
-    tt::log_debug(tt::LogOp, "  Num cores: {}", num_cores);
-
-    auto logical_cores = tt::tt_metal::corerange_to_cores(
-        input_shard_spec->grid, num_cores, input_shard_spec->orientation == ShardOrientation::ROW_MAJOR);
-
-    std::vector<CoreCoord> noc_coords;
-    for (const auto& core : logical_cores) {
-        noc_coords.push_back(input.device()->worker_core_from_logical_core(core));
+    std::vector<CoreCoord> input_noc_coords;
+    for (const auto& core : input_logical_cores) {
+        input_noc_coords.push_back(input.device()->worker_core_from_logical_core(core));
     }
 
-    std::vector<std::vector<FoldTransfer>> per_core_transfers(num_cores);
+    // Per-core transfers sized for OUTPUT cores
+    std::vector<std::vector<FoldTransfer>> per_core_transfers(output_num_cores);
 
     uint32_t output_pixel = 0;
     for (uint32_t n = 0; n < N; n++) {
         for (uint32_t h = 0; h < out_H; h++) {
             for (uint32_t w = 0; w < out_W; w++) {
+                // Destination core based on OUTPUT shard height
                 uint32_t dst_core_idx = output_pixel / output_shard_height;
                 for (uint32_t s_h = 0; s_h < stride_h; s_h++) {
                     for (uint32_t s_w = 0; s_w < stride_w; s_w++) {
@@ -69,10 +67,11 @@ std::vector<std::vector<FoldTransfer>> generate_fold_transfers(
                         uint32_t in_w = w * stride_w + s_w;
                         uint32_t in_idx = (n * H * W) + (in_h * W) + in_w;
 
+                        // Source core based on INPUT shard height
                         uint32_t input_core_id = in_idx / input_shard_height;
                         uint32_t src_local_idx = in_idx % input_shard_height;
 
-                        auto [src_noc_x, src_noc_y] = noc_coords[input_core_id];
+                        auto [src_noc_x, src_noc_y] = input_noc_coords[input_core_id];
 
                         per_core_transfers[dst_core_idx].push_back(
                             {static_cast<uint16_t>(src_noc_x),
@@ -135,58 +134,59 @@ Fold::MultiCore::cached_program_t fold_multi_core(
     const Tensor& input, const Tensor& output, uint32_t stride_h, uint32_t stride_w) {
     Program program = CreateProgram();
 
-    auto all_cores = input.shard_spec()->grid;
-    auto shard_shape = input.shard_spec()->shape;
+    // Input tensor info
+    auto input_shard_spec = input.shard_spec();
+    auto input_shard_shape = input_shard_spec->shape;
+    auto input_cores = input_shard_spec->grid;
+
+    // Output tensor info - kernel runs on output cores
+    auto output_shard_spec = output.shard_spec();
+    auto output_shard_shape = output_shard_spec->shape;
+    auto output_cores = output_shard_spec->grid;
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
 
-    uint32_t pixel_size = shard_shape[1] * input.element_size();
-    uint32_t num_pixels = shard_shape[0];
-    uint32_t num_dst_pixels = num_pixels / (stride_h * stride_w);
-
-    // chunk consists of channel values of stride_w neighboring pixels along the W dimension
-    uint32_t chunk_size = stride_w * pixel_size;
-    uint32_t dst_pixel_size = stride_h * chunk_size;
-
-    // input CB
-    uint32_t cb_src0_index = tt::CBIndex::c_0;
+    // Input pixel info
+    uint32_t pixel_size = input_shard_shape[1] * input.element_size();
+    uint32_t input_shard_height = input_shard_shape[0];
     uint32_t aligned_pixel_size = tt::align(pixel_size, hal::get_l1_alignment());
-    auto src_cb_config = CircularBufferConfig(num_pixels * aligned_pixel_size, {{cb_src0_index, cb_data_format}})
-                             .set_page_size(cb_src0_index, aligned_pixel_size)
-                             .set_globally_allocated_address(*input.buffer());
-    auto cb_src0 = CreateCircularBuffer(program, all_cores, src_cb_config);
 
-    // output CB
+    // Output pixel info
+    uint32_t output_shard_height = output_shard_shape[0];
+
+    // Input CB - globally allocated on input buffer, created on output cores for NOC reads
+    uint32_t cb_src0_index = tt::CBIndex::c_0;
+    auto src_cb_config =
+        CircularBufferConfig(input_shard_height * aligned_pixel_size, {{cb_src0_index, cb_data_format}})
+            .set_page_size(cb_src0_index, aligned_pixel_size)
+            .set_globally_allocated_address(*input.buffer());
+    auto cb_src0 = CreateCircularBuffer(program, output_cores, src_cb_config);
+
+    // Output CB - globally allocated on output buffer, created on output cores
     uint32_t cb_dst0_index = tt::CBIndex::c_16;
-    uint32_t aligned_dst_pixel_size = tt::align(dst_pixel_size, hal::get_l1_alignment());
+    uint32_t output_pixel_size = output_shard_shape[1] * output.element_size();
+    uint32_t aligned_output_pixel_size = tt::align(output_pixel_size, hal::get_l1_alignment());
     auto dst_cb_config =
-        CircularBufferConfig(num_dst_pixels * aligned_dst_pixel_size, {{cb_dst0_index, cb_data_format}})
-            .set_page_size(cb_dst0_index, aligned_dst_pixel_size)
+        CircularBufferConfig(output_shard_height * aligned_output_pixel_size, {{cb_dst0_index, cb_data_format}})
+            .set_page_size(cb_dst0_index, aligned_output_pixel_size)
             .set_globally_allocated_address(*output.buffer());
-    auto cb_dst0 = CreateCircularBuffer(program, all_cores, dst_cb_config);
+    auto cb_dst0 = CreateCircularBuffer(program, output_cores, dst_cb_config);
 
-    auto per_core_transfers = generate_fold_transfers(input, stride_h, stride_w);
+    // Generate config tensor with input and output info
+    auto per_core_transfers = generate_fold_transfers(input, output, stride_h, stride_w);
     uint32_t num_transfers = get_max_transfers_per_core(per_core_transfers);
 
-    tt::log_debug(tt::LogOp, "Fold: fold_multi_core");
-    tt::log_debug(tt::LogOp, "  Shard shape: [{}, {}]", shard_shape[0], shard_shape[1]);
-    tt::log_debug(tt::LogOp, "  Pixel size: {}, Aligned: {}", pixel_size, aligned_pixel_size);
-    tt::log_debug(tt::LogOp, "  Num pixels: {}, Num dst pixels: {}", num_pixels, num_dst_pixels);
-    tt::log_debug(tt::LogOp, "  Num transfers per core: {}", num_transfers);
-    tt::log_debug(tt::LogOp, "  Num cores: {}", all_cores.num_cores());
+    auto config_tensor =
+        create_fold_transfers_tensor(per_core_transfers, output_cores, output_shard_spec->orientation, input);
 
-    auto config_tensor = create_fold_transfers_tensor(
-        per_core_transfers, output.shard_spec()->grid, input.shard_spec()->orientation, input);
-
+    // Config CB - on output cores
     uint32_t config_cb_index = tt::CBIndex::c_1;
     uint32_t config_page_size = num_transfers * 4 * sizeof(uint16_t);
-
-    tt::log_debug(tt::LogOp, "  Config page size: {} bytes", config_page_size);
 
     auto config_cb_config = CircularBufferConfig(config_page_size, {{config_cb_index, tt::DataFormat::UInt16}})
                                 .set_page_size(config_cb_index, config_page_size)
                                 .set_globally_allocated_address(*config_tensor.buffer());
-    CreateCircularBuffer(program, all_cores, config_cb_config);
+    CreateCircularBuffer(program, output_cores, config_cb_config);
 
     std::vector<uint32_t> compile_time_args = {
         cb_src0_index,       // 0: input CB
@@ -197,11 +197,11 @@ Fold::MultiCore::cached_program_t fold_multi_core(
         num_transfers,       // 5: number of transfers per core
     };
 
-    // Single kernel for fold with config tensor
+    // Single kernel for fold with config tensor - runs on OUTPUT cores
     tt::tt_metal::KernelHandle kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/fold_with_config.cpp",
-        all_cores,
+        output_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
