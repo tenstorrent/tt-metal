@@ -254,10 +254,8 @@ class MLP(LightweightModule):
         ttnn.deallocate(w2_in)
         # if mode == "decode" and not TG:
         #     w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.DRAM_MEMORY_CONFIG)
-        w2_out_reduced = tt_all_reduce(
+        w2_out_reduced = self.tt_ccl.all_reduce(
             w2_out,
-            self.mesh_device,
-            self.tt_ccl,
             cluster_axis=0,
             dim=0 if (TG and self.dim < 8192) else 3,
             num_reduce_scatter_links=self.args.num_reduce_scatter_links,
@@ -271,7 +269,7 @@ class MLP(LightweightModule):
             dtype=self.args.ccl_dtype,
             use_composite=True if self.dim == 8192 else False,
             topology=self.args.ccl_topology(),
-            buffer_key="mlp_w2_output" if mode == "decode" else None,
+            buffer_key="MLP_W2_OUT" if mode == "decode" else None,
         )
 
         # Ensure dim 0 and 1 are 1

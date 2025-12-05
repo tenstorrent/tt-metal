@@ -77,7 +77,12 @@ class TT_CCL:
     def _init_decode_persistent_buffers(self):
         """Initialize persistent buffers for decode mode CCL operations
 
-        Currently only implements buffer for MLP w2 all_reduce operation.
+        Allocates buffers for all CCL operations used in decode:
+        - QKV_OUT: attention QKV all_reduce
+        - ATTN_OUT: attention output all_gather
+        - MLP_W2_OUT: MLP w2 all_reduce
+        - PRE_FF_NORM: pre-feedforward norm all_reduce
+        - POST_FF_NORM: post-feedforward norm all_reduce
         """
         import torch
 
@@ -86,23 +91,94 @@ class TT_CCL:
         if list(self.mesh_device.shape) == [1, 1]:
             return
 
-        # Only allocate buffer for MLP w2 all_reduce (mlp.py line 257)
-        # This is the only persistent buffer we're implementing for now
-        try:
-            # For T3K (1, 8) mesh, we need a buffer for the w2 output all_reduce
-            # Shape is (1, 1, 32, 4096) for batch_size=32, dim=4096
-            buffer = ttnn.from_torch(
-                torch.zeros((1, 1, 32, 4096), dtype=torch.bfloat16),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-            self.persistent_ag_buffers["mlp_w2_output"] = buffer
-            print(f"[TT_CCL] Allocated persistent buffer for mlp_w2_output")
-        except Exception as e:
-            print(f"Warning: Failed to allocate persistent buffer for mlp_w2_output: {e}")
+        # Common shape for batch_size=32, dim=4096
+        common_shape = (1, 1, 32, 4096)
+
+        buffer_configs = {
+            # Attention QKV all_reduce (cluster_axis=1)
+            "QKV_OUT": (common_shape, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
+            # Attention output all_gather (cluster_axis=1)
+            "ATTN_OUT": (common_shape, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
+            # MLP w2 all_reduce (cluster_axis=0)
+            "MLP_W2_OUT": (common_shape, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
+            # Pre-feedforward norm all_reduce (cluster_axis=0)
+            "PRE_FF_NORM": (common_shape, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
+            # Post-feedforward norm all_reduce (cluster_axis=0)
+            "POST_FF_NORM": (common_shape, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
+        }
+
+        for key, (shape, dtype, mem_cfg) in buffer_configs.items():
+            try:
+                buffer = ttnn.from_torch(
+                    torch.zeros(shape, dtype=torch.bfloat16),
+                    device=self.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=dtype,
+                    memory_config=mem_cfg,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+                self.persistent_ag_buffers[key] = buffer
+                print(f"[TT_CCL] Allocated persistent buffer for {key}")
+            except Exception as e:
+                print(f"Warning: Failed to allocate persistent buffer for {key}: {e}")
+
+    def all_reduce(
+        self,
+        input_tensor,
+        cluster_axis=0,
+        dim=0,
+        num_reduce_scatter_links=1,
+        num_all_gather_links=2,
+        topology=ttnn.Topology.Linear,
+        memory_config=None,
+        sharded=False,
+        dtype=ttnn.bfloat16,
+        use_composite=False,
+        buffer_key=None,
+    ):
+        """Wrapper for tt_all_reduce that uses persistent buffers in decode mode"""
+        return tt_all_reduce(
+            input_tensor,
+            self.mesh_device,
+            self,
+            cluster_axis=cluster_axis,
+            dim=dim,
+            num_reduce_scatter_links=num_reduce_scatter_links,
+            num_all_gather_links=num_all_gather_links,
+            topology=topology,
+            memory_config=memory_config,
+            sharded=sharded,
+            dtype=dtype,
+            use_composite=use_composite,
+            buffer_key=buffer_key,
+        )
+
+    def all_gather(
+        self,
+        input_tensor,
+        cluster_axis,
+        dim,
+        num_links=2,
+        memory_config=None,
+        sharded=False,
+        topology=ttnn.Topology.Linear,
+        dtype=ttnn.bfloat16,
+        buffer_key=None,
+    ):
+        """Wrapper for tt_all_gather that uses persistent buffers in decode mode"""
+        return tt_all_gather(
+            input_tensor,
+            self.mesh_device,
+            self,
+            cluster_axis=cluster_axis,
+            dim=dim,
+            num_links=num_links,
+            memory_config=memory_config,
+            sharded=sharded,
+            topology=topology,
+            dtype=dtype,
+            buffer_key=buffer_key,
+        )
 
 
 def tt_all_reduce(
