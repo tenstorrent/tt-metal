@@ -228,6 +228,8 @@ class TransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
+        # TODO: create correct memory config in RopeSetup (issue is in ttnn.add op because of different shape in memory config for residual and rot_mats)
+        attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
 
         if self.pre_ff_norm is None:
             hidden_states = ttnn.add(
