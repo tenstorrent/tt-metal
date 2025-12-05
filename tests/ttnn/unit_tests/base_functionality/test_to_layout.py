@@ -456,6 +456,47 @@ def test_to_layout_wh1(shape, input_layout, output_layout, device):
     assert_with_pcc(input_a, output_tensor)
 
 
+@pytest.mark.parametrize("shape", [[32, 128 * 1024]])
+@pytest.mark.parametrize(
+    "sub_core_grids",
+    (
+        # single core
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        # multiple disjoint cores
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+            ]
+        ),
+    ),
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint16])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+        }
+    ],
+    indirect=True,
+)
+def test_to_layout_low_perf(shape, device, sub_core_grids, dtype):
+    torch.manual_seed(0)
+    if dtype == ttnn.int32:
+        input_a = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+    elif dtype == ttnn.uint16:
+        input_a = torch.randint(0, 1000, shape, dtype=torch.int32)
+    else:
+        input_a = torch.randn(shape, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype)
+    output_tensor = ttnn.tilize(input_tensor, sub_core_grids=sub_core_grids, use_low_perf=True)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(input_a, output_tensor)
+
+
 @pytest.mark.parametrize("shape", [[11432, 11021]])
 @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
