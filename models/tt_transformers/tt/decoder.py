@@ -243,10 +243,8 @@ class TransformerBlock(LightweightModule):
             # The output of the ff_norm is replicated across the device
             # but the residual is fractured across the devices
             if self.num_devices > 1:
-                hidden_states = tt_all_reduce(
+                hidden_states = self.tt_ccl.all_reduce(
                     hidden_states,
-                    self.mesh_device,
-                    tt_ccl=self.tt_ccl,
                     cluster_axis=0,
                     dim=3,
                     num_reduce_scatter_links=self.args.num_reduce_scatter_links,
@@ -254,6 +252,7 @@ class TransformerBlock(LightweightModule):
                     topology=ttnn.Topology.Ring,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=self.args.ccl_dtype,
+                    buffer_key="PRE_FF_NORM" if mode == "decode" else None,
                 )
 
                 hidden_states = ttnn.div(hidden_states, self.num_devices)
