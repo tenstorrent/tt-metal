@@ -384,9 +384,17 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         update_sender_channel_servicing(options.fabric_tensix_config, this->risc_configs, topology);
     }
 
+    const bool is_2D_routing = FabricContext::is_2D_topology(topology);
+
     this->channel_buffer_size_bytes = channel_buffer_size_bytes;
-    this->num_used_sender_channels = builder_config::get_num_used_sender_channel_count(topology);
+    this->num_used_sender_channels = builder_config::get_sender_channel_count(is_2D_routing);
     this->num_used_receiver_channels = builder_config::get_receiver_channel_count(is_2D_routing);
+
+    // If the NeighborExchange topology is used, messages are not forwarded between routers, and thus each router only
+    // has one sender channel for local worker
+    if (topology == Topology::NeighborExchange) {
+        this->num_used_sender_channels = builder_config::num_sender_channels_1d_neighbor_exchange;
+    }
 
     // Default, assuming deadlock avoidance is enabled
     // -1 to discount for the tensix worker channel

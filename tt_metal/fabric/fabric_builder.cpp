@@ -172,6 +172,12 @@ void FabricBuilder::connect_routers() {
     const auto topology = fabric_context_.get_fabric_topology();
     const bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy();
 
+    // If NeighborExchange topology is used, message forwarding is not supported, and thus there is no need to connect
+    // routers on the same device together
+    if (topology == Topology::NeighborExchange) {
+        return;
+    }
+
     // Get connection pairs based on topology
     auto connection_pairs = get_router_connection_pairs();
 
