@@ -104,6 +104,11 @@ public:
 
     std::vector<InternalSenderChannelMapping> get_all_sender_mappings() const;
 
+    /**
+     * Check if this is a Z router
+     */
+    bool is_z_router() const;
+
 private:
     Topology topology_;
     eth_chan_directions direction_;
@@ -118,7 +123,6 @@ private:
     void initialize_vc1_mappings();
     bool is_2d_topology() const;
     bool is_ring_or_torus() const;
-    bool is_z_router() const;
 };
 
 }  // namespace tt::tt_fabric

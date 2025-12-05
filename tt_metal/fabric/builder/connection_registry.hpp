@@ -108,6 +108,22 @@ public:
     std::vector<RouterConnectionRecord> get_connections_by_type(ConnectionType type) const;
     
     /**
+     * Get connections by source node (all routers on that node)
+     * 
+     * @param source_node The source fabric node
+     * @return Vector of connections from this node
+     */
+    std::vector<RouterConnectionRecord> get_connections_by_source_node(FabricNodeId source_node) const;
+    
+    /**
+     * Get connections by destination node (all routers on that node)
+     * 
+     * @param dest_node The destination fabric node
+     * @return Vector of connections to this node
+     */
+    std::vector<RouterConnectionRecord> get_connections_by_dest_node(FabricNodeId dest_node) const;
+    
+    /**
      * Clear all recorded connections
      */
     void clear();

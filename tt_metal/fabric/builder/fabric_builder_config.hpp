@@ -58,10 +58,10 @@ static constexpr std::size_t num_sender_channels_1d = 2;
 // VC0: Up to Worker + 3 of [N/E/S/W]
 // VC1: Z + Up to 3 of [N/E/S/W]
 static constexpr std::size_t num_sender_channels_2d = 8;
-static constexpr std::size_t num_max_sender_channels = std::max(num_sender_channels_1d, num_sender_channels_2d, num_sender_channels_z_router);
+static constexpr std::size_t num_max_sender_channels = std::max({num_sender_channels_1d, num_sender_channels_2d, num_sender_channels_z_router});
 static constexpr std::size_t num_receiver_channels_1d = 1;
 static constexpr std::size_t num_receiver_channels_2d = 2;
-static constexpr std::size_t num_max_receiver_channels = std::max(num_receiver_channels_1d, num_receiver_channels_2d, num_receiver_channels_z_router);
+static constexpr std::size_t num_max_receiver_channels = std::max({num_receiver_channels_1d, num_receiver_channels_2d, num_receiver_channels_z_router});
 
 static constexpr std::size_t num_downstream_edms_vc0 = 1;
 static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;

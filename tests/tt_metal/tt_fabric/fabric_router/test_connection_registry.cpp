@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 #include "tt_metal/fabric/builder/connection_registry.hpp"
+#include "tt_metal/fabric/builder/router_connection_mapping.hpp"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 
@@ -597,6 +598,345 @@ TEST_F(ConnectionRegistryTest, Phase1_5_QueryMultiTargetByType) {
     for (const auto& conn : mesh_to_z) {
         EXPECT_EQ(conn.dest_receiver_channel, 0);
     }
+}
+
+// ============ Phase 2 Integration Tests ============
+
+TEST_F(ConnectionRegistryTest, Phase2_MeshRouter_1D_ConnectionMapping) {
+    // Create connection mapping for 1D mesh router
+    auto mapping = RouterConnectionMapping::for_mesh_router(
+        Topology::Linear,
+        RoutingDirection::N,
+        false);  // No Z router
+    
+    // Verify mapping has expected targets
+    auto targets = mapping.get_downstream_targets(0, 1);
+    ASSERT_EQ(targets.size(), 1);
+    EXPECT_EQ(targets[0].type, ConnectionType::INTRA_MESH);
+    EXPECT_EQ(targets[0].target_direction.value(), RoutingDirection::S);
+    
+    // Simulate recording connections based on mapping
+    FabricNodeId source(MeshId{0}, 0);
+    FabricNodeId dest(MeshId{0}, 1);
+    
+    for (const auto& target : targets) {
+        RouterConnectionRecord record{
+            .source_node = source,
+            .source_direction = RoutingDirection::N,
+            .source_eth_chan = 0,
+            .source_vc = 0,
+            .source_sender_channel = 1,
+            .dest_node = dest,
+            .dest_direction = target.target_direction.value(),
+            .dest_eth_chan = 0,
+            .dest_vc = target.target_vc,
+            .dest_receiver_channel = 0,
+            .connection_type = target.type
+        };
+        registry_->record_connection(record);
+    }
+    
+    EXPECT_EQ(registry_->size(), 1);
+    
+    auto intra_mesh = registry_->get_connections_by_type(ConnectionType::INTRA_MESH);
+    EXPECT_EQ(intra_mesh.size(), 1);
+}
+
+TEST_F(ConnectionRegistryTest, Phase2_MeshRouter_2D_WithZ_MultipleTargets) {
+    // Create connection mapping for 2D mesh router with Z
+    auto mapping = RouterConnectionMapping::for_mesh_router(
+        Topology::Mesh,
+        RoutingDirection::N,
+        true);  // Has Z router
+    
+    // Verify mapping has 4 sender channels (3 INTRA_MESH + 1 MESH_TO_Z)
+    EXPECT_EQ(mapping.get_total_sender_count(), 4);
+    
+    // Simulate recording all connections
+    FabricNodeId source(MeshId{0}, 0);
+    
+    // Record INTRA_MESH connections (channels 1-3)
+    for (uint32_t ch = 1; ch <= 3; ++ch) {
+        auto targets = mapping.get_downstream_targets(0, ch);
+        ASSERT_EQ(targets.size(), 1);
+        EXPECT_EQ(targets[0].type, ConnectionType::INTRA_MESH);
+        
+        RouterConnectionRecord record{
+            .source_node = source,
+            .source_direction = RoutingDirection::N,
+            .source_eth_chan = 0,
+            .source_vc = 0,
+            .source_sender_channel = ch,
+            .dest_node = FabricNodeId(MeshId{0}, ch),
+            .dest_direction = targets[0].target_direction.value(),
+            .dest_eth_chan = 0,
+            .dest_vc = 0,
+            .dest_receiver_channel = 0,
+            .connection_type = ConnectionType::INTRA_MESH
+        };
+        registry_->record_connection(record);
+    }
+    
+    // Record MESH_TO_Z connection (channel 4)
+    auto z_targets = mapping.get_downstream_targets(0, 4);
+    ASSERT_EQ(z_targets.size(), 1);
+    EXPECT_EQ(z_targets[0].type, ConnectionType::MESH_TO_Z);
+    
+    RouterConnectionRecord z_record{
+        .source_node = source,
+        .source_direction = RoutingDirection::N,
+        .source_eth_chan = 0,
+        .source_vc = 0,
+        .source_sender_channel = 4,
+        .dest_node = FabricNodeId(MeshId{0}, 100),  // Z router
+        .dest_direction = RoutingDirection::Z,
+        .dest_eth_chan = 0,
+        .dest_vc = 0,
+        .dest_receiver_channel = 0,
+        .connection_type = ConnectionType::MESH_TO_Z
+    };
+    registry_->record_connection(z_record);
+    
+    // Verify registry has all connections
+    EXPECT_EQ(registry_->size(), 4);
+    
+    auto intra_mesh = registry_->get_connections_by_type(ConnectionType::INTRA_MESH);
+    auto mesh_to_z = registry_->get_connections_by_type(ConnectionType::MESH_TO_Z);
+    
+    EXPECT_EQ(intra_mesh.size(), 3);
+    EXPECT_EQ(mesh_to_z.size(), 1);
+}
+
+TEST_F(ConnectionRegistryTest, Phase2_ZRouter_VC1_FourTargets) {
+    // Create connection mapping for Z router
+    auto mapping = RouterConnectionMapping::for_z_router();
+    
+    // Verify mapping has 4 sender channels on VC1
+    EXPECT_EQ(mapping.get_total_sender_count(), 4);
+    
+    // Simulate recording all Z→mesh connections
+    FabricNodeId z_node(MeshId{0}, 100);
+    
+    std::vector<RoutingDirection> expected_directions = {
+        RoutingDirection::N,
+        RoutingDirection::E,
+        RoutingDirection::S,
+        RoutingDirection::W
+    };
+    
+    for (uint32_t ch = 0; ch < 4; ++ch) {
+        auto targets = mapping.get_downstream_targets(1, ch);
+        ASSERT_EQ(targets.size(), 1);
+        EXPECT_EQ(targets[0].type, ConnectionType::Z_TO_MESH);
+        EXPECT_EQ(targets[0].target_direction.value(), expected_directions[ch]);
+        
+        RouterConnectionRecord record{
+            .source_node = z_node,
+            .source_direction = RoutingDirection::Z,
+            .source_eth_chan = 0,
+            .source_vc = 1,
+            .source_sender_channel = ch,
+            .dest_node = FabricNodeId(MeshId{0}, ch),
+            .dest_direction = expected_directions[ch],
+            .dest_eth_chan = 0,
+            .dest_vc = 0,
+            .dest_receiver_channel = 0,
+            .connection_type = ConnectionType::Z_TO_MESH
+        };
+        registry_->record_connection(record);
+    }
+    
+    // Verify registry has all connections
+    EXPECT_EQ(registry_->size(), 4);
+    
+    auto z_to_mesh = registry_->get_connections_by_type(ConnectionType::Z_TO_MESH);
+    EXPECT_EQ(z_to_mesh.size(), 4);
+    
+    // Verify all connections use VC1
+    for (const auto& conn : z_to_mesh) {
+        EXPECT_EQ(conn.source_vc, 1);
+        EXPECT_EQ(conn.dest_vc, 0);  // Target mesh router VC0
+    }
+}
+
+TEST_F(ConnectionRegistryTest, Phase2_FullDevice_MappingDriven) {
+    // Simulate a full device with 4 mesh routers + 1 Z router
+    // All connections driven by connection mappings
+    
+    std::vector<RoutingDirection> mesh_directions = {
+        RoutingDirection::N,
+        RoutingDirection::E,
+        RoutingDirection::S,
+        RoutingDirection::W
+    };
+    
+    // Create mesh router mappings
+    for (size_t i = 0; i < 4; ++i) {
+        auto mapping = RouterConnectionMapping::for_mesh_router(
+            Topology::Mesh,
+            mesh_directions[i],
+            true);  // Has Z router
+        
+        FabricNodeId source(MeshId{0}, i);
+        
+        // Record INTRA_MESH connections (channels 1-3)
+        for (uint32_t ch = 1; ch <= 3; ++ch) {
+            auto targets = mapping.get_downstream_targets(0, ch);
+            if (!targets.empty()) {
+                RouterConnectionRecord record{
+                    .source_node = source,
+                    .source_direction = mesh_directions[i],
+                    .source_eth_chan = static_cast<uint8_t>(i),
+                    .source_vc = 0,
+                    .source_sender_channel = ch,
+                    .dest_node = FabricNodeId(MeshId{0}, (i + ch) % 4),
+                    .dest_direction = targets[0].target_direction.value(),
+                    .dest_eth_chan = 0,
+                    .dest_vc = 0,
+                    .dest_receiver_channel = 0,
+                    .connection_type = ConnectionType::INTRA_MESH
+                };
+                registry_->record_connection(record);
+            }
+        }
+        
+        // Record MESH_TO_Z connection (channel 4)
+        auto z_targets = mapping.get_downstream_targets(0, 4);
+        ASSERT_EQ(z_targets.size(), 1);
+        
+        RouterConnectionRecord z_record{
+            .source_node = source,
+            .source_direction = mesh_directions[i],
+            .source_eth_chan = static_cast<uint8_t>(i),
+            .source_vc = 0,
+            .source_sender_channel = 4,
+            .dest_node = FabricNodeId(MeshId{0}, 100),  // Z router
+            .dest_direction = RoutingDirection::Z,
+            .dest_eth_chan = 0,
+            .dest_vc = 0,
+            .dest_receiver_channel = 0,
+            .connection_type = ConnectionType::MESH_TO_Z
+        };
+        registry_->record_connection(z_record);
+    }
+    
+    // Create Z router mapping and record connections
+    auto z_mapping = RouterConnectionMapping::for_z_router();
+    FabricNodeId z_node(MeshId{0}, 100);
+    
+    for (uint32_t ch = 0; ch < 4; ++ch) {
+        auto targets = z_mapping.get_downstream_targets(1, ch);
+        ASSERT_EQ(targets.size(), 1);
+        
+        RouterConnectionRecord record{
+            .source_node = z_node,
+            .source_direction = RoutingDirection::Z,
+            .source_eth_chan = 0,
+            .source_vc = 1,
+            .source_sender_channel = ch,
+            .dest_node = FabricNodeId(MeshId{0}, ch),
+            .dest_direction = targets[0].target_direction.value(),
+            .dest_eth_chan = 0,
+            .dest_vc = 0,
+            .dest_receiver_channel = 0,
+            .connection_type = ConnectionType::Z_TO_MESH
+        };
+        registry_->record_connection(record);
+    }
+    
+    // Verify total connections: 4 routers × 4 connections + 4 Z connections = 20
+    EXPECT_EQ(registry_->size(), 20);
+    
+    // Verify connection type distribution
+    auto intra_mesh = registry_->get_connections_by_type(ConnectionType::INTRA_MESH);
+    auto mesh_to_z = registry_->get_connections_by_type(ConnectionType::MESH_TO_Z);
+    auto z_to_mesh = registry_->get_connections_by_type(ConnectionType::Z_TO_MESH);
+    
+    EXPECT_EQ(intra_mesh.size(), 12);  // 4 routers × 3 INTRA_MESH
+    EXPECT_EQ(mesh_to_z.size(), 4);    // 4 routers × 1 MESH_TO_Z
+    EXPECT_EQ(z_to_mesh.size(), 4);    // Z router × 4 Z_TO_MESH
+}
+
+TEST_F(ConnectionRegistryTest, Phase2_EdgeDevice_2MeshRouters_MappingDriven) {
+    // Edge device with only 2 mesh routers (NORTH and EAST) + Z router
+    // Z router mapping specifies all 4 directions, but only 2 exist
+    
+    std::vector<RoutingDirection> mesh_directions = {
+        RoutingDirection::N,
+        RoutingDirection::E
+    };
+    
+    // Create mesh router mappings and record connections
+    for (size_t i = 0; i < 2; ++i) {
+        auto mapping = RouterConnectionMapping::for_mesh_router(
+            Topology::Mesh,
+            mesh_directions[i],
+            true);  // Has Z router
+        
+        FabricNodeId source(MeshId{0}, i);
+        
+        // Record MESH_TO_Z connection
+        auto z_targets = mapping.get_downstream_targets(0, 4);
+        ASSERT_EQ(z_targets.size(), 1);
+        
+        RouterConnectionRecord z_record{
+            .source_node = source,
+            .source_direction = mesh_directions[i],
+            .source_eth_chan = static_cast<uint8_t>(i),
+            .source_vc = 0,
+            .source_sender_channel = 4,
+            .dest_node = FabricNodeId(MeshId{0}, 100),
+            .dest_direction = RoutingDirection::Z,
+            .dest_eth_chan = 0,
+            .dest_vc = 0,
+            .dest_receiver_channel = 0,
+            .connection_type = ConnectionType::MESH_TO_Z
+        };
+        registry_->record_connection(z_record);
+    }
+    
+    // Create Z router mapping
+    auto z_mapping = RouterConnectionMapping::for_z_router();
+    FabricNodeId z_node(MeshId{0}, 100);
+    
+    // Z router has intent for all 4 directions, but only 2 exist
+    // Simulate Phase 5 orchestration: only record connections for existing routers
+    std::set<RoutingDirection> existing_routers = {
+        RoutingDirection::N,
+        RoutingDirection::E
+    };
+    
+    for (uint32_t ch = 0; ch < 4; ++ch) {
+        auto targets = z_mapping.get_downstream_targets(1, ch);
+        ASSERT_EQ(targets.size(), 1);
+        
+        // Only record if target router exists
+        if (existing_routers.count(targets[0].target_direction.value())) {
+            RouterConnectionRecord record{
+                .source_node = z_node,
+                .source_direction = RoutingDirection::Z,
+                .source_eth_chan = 0,
+                .source_vc = 1,
+                .source_sender_channel = ch,
+                .dest_node = FabricNodeId(MeshId{0}, ch),
+                .dest_direction = targets[0].target_direction.value(),
+                .dest_eth_chan = 0,
+                .dest_vc = 0,
+                .dest_receiver_channel = 0,
+                .connection_type = ConnectionType::Z_TO_MESH
+            };
+            registry_->record_connection(record);
+        }
+    }
+    
+    // Verify connections: 2 MESH_TO_Z + 2 Z_TO_MESH = 4
+    EXPECT_EQ(registry_->size(), 4);
+    
+    auto mesh_to_z = registry_->get_connections_by_type(ConnectionType::MESH_TO_Z);
+    auto z_to_mesh = registry_->get_connections_by_type(ConnectionType::Z_TO_MESH);
+    
+    EXPECT_EQ(mesh_to_z.size(), 2);
+    EXPECT_EQ(z_to_mesh.size(), 2);
 }
 
 }  // namespace tt::tt_fabric

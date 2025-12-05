@@ -10,6 +10,8 @@ set(UNIT_TESTS_FABRIC_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_router_channel_mapping.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_router_connections.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_multi_target_receiver.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_router_connection_mapping.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_router_archetypes.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_apis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_1d_fabric.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_mux.cpp
