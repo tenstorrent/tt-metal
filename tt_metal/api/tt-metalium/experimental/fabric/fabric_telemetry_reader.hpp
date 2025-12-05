@@ -35,4 +35,19 @@ struct FabricTelemetrySample {
 [[nodiscard]] std::vector<FabricTelemetrySample> read_fabric_telemetry(
     const tt::tt_fabric::FabricNodeId& fabric_node_id);
 
+/**
+ * @brief Read telemetry snapshot for a specific Ethernet channel without MetalContext dependency.
+ *
+ * This overload allows reading telemetry when MetalContext is unavailable, as is the case in the telemetry collector.
+ * The caller must provide cluster and HAL references directly.
+ *
+ * @param cluster Reference to the UMD cluster for device access.
+ * @param hal Reference to the HAL for architecture-specific operations.
+ * @param chip_id Physical chip ID to query.
+ * @param channel Ethernet channel ID on that chip.
+ * @return Telemetry snapshot for the requested channel.
+ */
+[[nodiscard]] tt::tt_fabric::FabricTelemetrySnapshot read_fabric_telemetry(
+    const tt::umd::Cluster& cluster, const tt::tt_metal::Hal& hal, tt::ChipId chip_id, uint32_t channel);
+
 }  // namespace tt::tt_fabric
