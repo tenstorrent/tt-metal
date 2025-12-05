@@ -41,6 +41,7 @@ void bind_reduction_topk_operation(nb::module_& mod) {
                 sorted (bool): whether to return the elements in sorted order. Defaults to `True`.
 
             Keyword Args:
+                stable (bool, optional): If `True`, ensures the original order of equal elements is preserved. Defaults to `False`.
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
                 sub_core_grids (ttnn.CoreRangeSet, optional): Core range set to run the operation on. Defaults to `None`.
@@ -98,6 +99,7 @@ void bind_reduction_topk_operation(nb::module_& mod) {
                const int8_t dim,
                const bool largest,
                const bool sorted,
+               const bool stable,
                const std::optional<std::tuple<ttnn::Tensor, ttnn::Tensor>>& preallocated_output_tensors,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::CoreRangeSet>& sub_core_grids,
@@ -108,6 +110,7 @@ void bind_reduction_topk_operation(nb::module_& mod) {
                     dim,
                     largest,
                     sorted,
+                    stable,
                     memory_config,
                     sub_core_grids,
                     indices_tensor,
@@ -118,6 +121,7 @@ void bind_reduction_topk_operation(nb::module_& mod) {
             nb::arg("dim") = -1,
             nb::arg("largest") = true,
             nb::arg("sorted") = true,
+            nb::arg("stable") = false,
             nb::kw_only(),
             nb::arg("out") = nb::none(),
             nb::arg("memory_config") = nb::none(),

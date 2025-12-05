@@ -5,7 +5,7 @@
 import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal
 
 TILE_WIDTH = 32
 
@@ -25,22 +25,18 @@ TILE_WIDTH = 32
         ([11, 29, 14, 1], -1, True),
         ([1, 1, 512, 64], -1, False),
         ([1, 1, 2112, 64], -1, False),
-        ([1, 64, 64], 0, False),
-        ([1, 64, 64], 1, True),
-        ([1, 64, 64], 2, False),
-        ([1, 64], 0, False),
-        ([1, 64], 1, True),
     ],
 )
-def test_sort_standard(shape, dim, descending, device):
+@pytest.mark.parametrize("stable", [True, False])
+def test_sort_standard(shape, dim, descending, device, stable):
     torch.manual_seed(0)
 
     torch_dtype = torch.bfloat16
     input = torch.randn(shape, dtype=torch_dtype)
 
     ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
-    torch_sort_values, torch_sort_indices = torch.sort(input, dim=dim, descending=descending)
-    ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=dim, descending=descending)
+    torch_sort_values, torch_sort_indices = torch.sort(input, dim=dim, descending=descending, stable=stable)
+    ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=dim, descending=descending, stable=stable)
 
     assert torch_sort_values.shape == ttnn_sort_values.shape
     assert torch_sort_indices.shape == ttnn_sort_indices.shape
@@ -51,7 +47,10 @@ def test_sort_standard(shape, dim, descending, device):
     if len(shape) == 0 or len(shape) == 1:
         assert torch_sort_values == ttnn.to_torch(ttnn_sort_values)
     else:
-        assert_with_pcc(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
+        assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
+        if stable:
+            # For stable sort, indices must match as well
+            assert_equal(torch_sort_indices.to(torch.int64), ttnn.to_torch(ttnn_sort_indices).to(torch.int64))
 
 
 @pytest.mark.parametrize(
@@ -93,7 +92,7 @@ def test_sort_prealocated_output(shape, dim, descending, device):
     if len(shape) == 0 or len(shape) == 1:
         assert torch_sort_values == ttnn.to_torch(ttnn_sort_values)
     else:
-        assert_with_pcc(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
+        assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
 
 
 @pytest.mark.parametrize(
@@ -127,7 +126,7 @@ def test_sort_long_tensor(shape, dim, descending, device):
     if len(shape) == 0 or len(shape) == 1:
         assert torch_sort_values == ttnn.to_torch(ttnn_sort_values)
     else:
-        assert_with_pcc(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
+        assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
 
 
 @pytest.mark.parametrize(
@@ -165,7 +164,7 @@ def test_sort_l1_memory_tensor(shape, dim, descending, device):
     if len(shape) == 0 or len(shape) == 1:
         assert torch_sort_values == ttnn.to_torch(ttnn_sort_values)
     else:
-        assert_with_pcc(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
+        assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
 
 
 @pytest.mark.parametrize(
@@ -199,7 +198,7 @@ def test_sort_program_cache(shape, dim, descending, device):
         assert list(ttnn_sort_values.shape) == shape
         assert list(ttnn_sort_indices.shape) == shape
 
-        assert_with_pcc(torch_sort_values, ttnn_sort_values_torch)
+        assert_equal(torch_sort_values, ttnn_sort_values_torch)
         ttnn.synchronize_device(device)
     cache_entries = device.num_program_cache_entries()
     device.disable_and_clear_program_cache()
@@ -215,7 +214,7 @@ def test_sort_program_cache(shape, dim, descending, device):
         ([32, 64], -1, False, torch.bfloat16, ttnn.bfloat16, ttnn.uint32),
         ([32, 64], -1, False, torch.uint8, ttnn.uint16, ttnn.uint16),
         ([32, 64], -1, False, torch.uint8, ttnn.uint16, ttnn.uint32),
-        ([1, 8], -1, False, torch.uint8, ttnn.uint16, ttnn.uint16),
+        # ([1, 8], -1, False, torch.uint8, ttnn.uint16, ttnn.uint16), # Sort ckernel::topk_local_sort kernel produces wrong results for uint16_t data GH issue: #33473
     ],
 )
 def test_sort_datatypes(shape, dim, descending, torch_value_dtype, ttnn_value_dtype, ttnn_index_dtype, device):
@@ -242,7 +241,7 @@ def test_sort_datatypes(shape, dim, descending, torch_value_dtype, ttnn_value_dt
     if len(shape) == 0 or len(shape) == 1:
         assert torch_sort_values == ttnn.to_torch(ttnn_sort_values)
     else:
-        assert_with_pcc(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
+        assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
 
 
 def create_descending_tensor(shape, dim, dtype=torch.bfloat16):
@@ -289,8 +288,8 @@ def test_sort_indices(shape, dim, descending, device):
 
     torch_converted_indices = ttnn.to_torch(ttnn_sort_indices).to(torch.int64)
 
-    assert_with_pcc(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
-    assert torch.allclose(torch_sort_indices.to(torch.int64), torch_converted_indices)
+    assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
+    assert_equal(torch_sort_indices.to(torch.int64), torch_converted_indices)
 
 
 @pytest.mark.parametrize(

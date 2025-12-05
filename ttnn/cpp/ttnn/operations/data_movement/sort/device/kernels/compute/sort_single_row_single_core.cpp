@@ -80,10 +80,7 @@ void MAIN {
     constexpr uint32_t index_tensor_output_cb_index = get_compile_time_arg_val(5);
     constexpr uint32_t Wt = get_compile_time_arg_val(6);
     constexpr bool descending = get_compile_time_arg_val(7);
-    constexpr bool stable =
-        get_compile_time_arg_val(8);  // TODO: In the future change LLK to have the option or add additional step with
-                                      // checking values and indexes after the sorting
-                                      // Issue: https://github.com/tenstorrent/tt-metal/issues/20625
+    constexpr bool stable = get_compile_time_arg_val(8) == 1;
     constexpr uint32_t synchronization_cb_index = get_compile_time_arg_val(9);
 
     constexpr uint32_t one_tile = 1;
@@ -99,7 +96,7 @@ void MAIN {
     for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
         const bool ascending = !descending;
 
-        sort_Wt_tiles_row_to_bitonic_sequence(
+        sort_Wt_tiles_row_to_bitonic_sequence<stable>(
             input_tensor_cb_index,
             index_tensor_cb_index,
             input_tensor_transposed_cb_index,
@@ -160,9 +157,9 @@ void MAIN {
 
                         if (sub == 1) {
                             // Use sort LLK only the last stage to sort the last pair of tiles - speed up
-                            ckernel::topk_local_sort(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
+                            ckernel::topk_local_sort<stable>(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
                         } else {
-                            ckernel::topk_merge(/*idst=*/0, m_iter, /*k=*/64);
+                            ckernel::topk_merge<false, stable>(/*idst=*/0, m_iter, /*k=*/64);
 
                             // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
                             // We swap their indices when using descending order

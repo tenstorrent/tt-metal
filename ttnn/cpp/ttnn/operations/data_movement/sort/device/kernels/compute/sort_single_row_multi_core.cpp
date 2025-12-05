@@ -61,10 +61,7 @@ void MAIN {
     constexpr uint32_t compute_with_storage_grid_size_x = get_compile_time_arg_val(9);
     constexpr uint32_t compute_with_storage_grid_size_y = get_compile_time_arg_val(10);
     constexpr bool descending = get_compile_time_arg_val(11);
-    constexpr bool stable =
-        get_compile_time_arg_val(12);  // TODO: In the future change LLK to have the option or add additional step with
-                                       // checking values and indexes after the sorting
-                                       // Issue: https://github.com/tenstorrent/tt-metal/issues/20625
+    constexpr bool stable = get_compile_time_arg_val(12) == 1;
     constexpr uint32_t log2Wt = get_compile_time_arg_val(13);
 
     // Constants
@@ -146,12 +143,11 @@ void MAIN {
 
                             if (sub == 1) {
                                 // Use sort LLK only the last substage to sort the last pair of tiles - speed up
-                                ckernel::topk_local_sort(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
+                                ckernel::topk_local_sort<stable>(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
                             } else {
                                 // For all other stages use topk_merge to put the top K values in one tile, and the
                                 // bottom K values in another tile
-                                ckernel::topk_merge(/*idst=*/0, m_iter, /*k=*/32);
-
+                                ckernel::topk_merge<false, stable>(/*idst=*/0, m_iter, /*k=*/32);
                                 // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
                                 // We swap their indices when using descending order
                                 if (dir) {

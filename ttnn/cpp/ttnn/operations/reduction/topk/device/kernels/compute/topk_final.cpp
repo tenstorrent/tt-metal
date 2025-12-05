@@ -30,6 +30,7 @@ void MAIN {
     constexpr uint32_t logWt = get_compile_time_arg_val(11);
     constexpr uint32_t largest = get_compile_time_arg_val(12);
     constexpr uint32_t sorted = get_compile_time_arg_val(13);
+    constexpr bool stable = get_compile_time_arg_val(14) == 1;
 
     // dest indices for where to unpack the tiles for the llk
     // the input goes in index 0,1 and the index goes in index 2,3
@@ -90,7 +91,7 @@ void MAIN {
         // pair. second iteration we compare 0th and 2nd tile, then 4th and 6th, etc. logWt iteration we compare 0th and
         // Wt/2 tile single buffer as we can pack tiles back in-place
         for (uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
-            process_iteration(
+            process_iteration<stable>(
                 m_iter,
                 K,
                 Wt,

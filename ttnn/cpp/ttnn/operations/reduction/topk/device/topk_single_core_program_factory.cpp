@@ -168,7 +168,8 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
         Ht,
         Wt,
         Ktiles,
-        (std::uint32_t)args.largest,
+        static_cast<uint32_t>(args.largest),
+        static_cast<uint32_t>(args.stable),
     };
     tt::tt_metal::CreateKernel(
         program,

@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 namespace NAMESPACE {
+
+template <bool stable = false>
 void process_and_sort_tiles(
     uint32_t input_cb_index,
     uint32_t index_cb_index,
@@ -37,7 +39,7 @@ void process_and_sort_tiles(
             transpose_wh_tile(index_cb_index, 1, 3);
         }
         // llk_topk_sort -> inplace
-        ckernel::topk_local_sort(0, (int)ascending, end_phase);
+        ckernel::topk_local_sort<stable>(0, (int)ascending, end_phase);
         // pack value tiles into cb_intermed0
         pack_reconfig_data_format(input_transposed_cb_index);
         pack_tile(0, input_transposed_cb_index);
@@ -60,6 +62,7 @@ void process_and_sort_tiles(
     cb_push_back(index_transposed_cb_index, Wt);
 }
 
+template <bool stable = false>
 void process_tile_pair(
     uint32_t left_ind,
     uint32_t right_ind,
@@ -91,7 +94,7 @@ void process_tile_pair(
 
     // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
     // sort within the larger 32 values
-    ckernel::topk_rebuild(0, (uint32_t)ascending, m_iter, K, logk, target_tiles_is_one);
+    ckernel::topk_rebuild<stable>(0, (uint32_t)ascending, m_iter, K, logk, target_tiles_is_one);
 
     // pack value tiles in-place in the single-buffered cb_intermed0, we only need the upper 32
     // values for topk, which was in input_dest_start
@@ -111,6 +114,7 @@ void process_tile_pair(
     release_dst();
 }
 
+template <bool stable = false>
 void process_tiles(
     uint32_t m_iter,
     uint32_t K,
@@ -151,9 +155,9 @@ void process_tiles(
 
             // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
             if (largest) {
-                ckernel::topk_merge<false>(0, m_iter, K);
+                ckernel::topk_merge<false, stable>(0, m_iter, K);
             } else {
-                ckernel::topk_merge<true>(0, m_iter, K);
+                ckernel::topk_merge<true, stable>(0, m_iter, K);
             }
 
             // ckernel::topk_merge(0, m_iter, K);
@@ -174,6 +178,7 @@ void process_tiles(
     }
 }
 
+template <bool stable = false>
 void process_iteration(
     uint32_t m_iter,
     uint32_t K,
@@ -194,7 +199,7 @@ void process_iteration(
     cb_wait_front(input_transposed_cb_index, Wt);
     cb_wait_front(index_transposed_cb_index, Wt);
 
-    process_tiles(
+    process_tiles<stable>(
         m_iter,
         K,
         Wt,
@@ -239,7 +244,7 @@ void process_iteration(
             sel_tile_id[sel_tile_id_ptr] = left_ind;
             sel_tile_id_ptr++;
             if (sel_tile_id_ptr == target_tiles) {
-                process_tile_pair(
+                process_tile_pair<stable>(
                     sel_tile_id[0],
                     sel_tile_id[1],
                     input_transposed_cb_index,

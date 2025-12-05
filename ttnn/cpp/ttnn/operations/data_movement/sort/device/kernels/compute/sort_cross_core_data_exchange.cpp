@@ -35,6 +35,7 @@ void MAIN {
     constexpr uint32_t value_tensor_peer_cb_index = get_compile_time_arg_val(15);
     constexpr uint32_t index_tensor_peer_cb_index = get_compile_time_arg_val(16);
     constexpr uint32_t packer_unpacker_sync_cb_index = get_compile_time_arg_val(17);
+    constexpr bool stable = get_compile_time_arg_val(18) == 1;
 
     // Constants
     constexpr uint32_t one_tile = 1;
@@ -61,7 +62,7 @@ void MAIN {
         bool dir = ascending ^ ((core_id & 1) == 1);
 
         // Read input value data
-        sort_Wt_tiles_row_to_bitonic_sequence(
+        sort_Wt_tiles_row_to_bitonic_sequence<stable>(
             input_tensor_cb_index,
             index_tensor_cb_index,
             input_tensor_transposed_cb_index,
@@ -125,9 +126,9 @@ void MAIN {
 
                             if (sub == 1) {
                                 // Use sort LLK only the last stage to sort the last pair of tiles - speed up
-                                ckernel::topk_local_sort(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
+                                ckernel::topk_local_sort<stable>(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
                             } else {
-                                ckernel::topk_merge(/*idst=*/0, m_iter, /*k=*/32);
+                                ckernel::topk_merge<false, stable>(/*idst=*/0, m_iter, /*k=*/32);
 
                                 // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
                                 // We swap their indices when using descending order
@@ -222,7 +223,7 @@ void MAIN {
 
                         cb_pop_front(value_tensor_peer_cb_index, one_tile);
 
-                        ckernel::topk_merge(0, m_iter, 32);
+                        ckernel::topk_merge<false, stable>(0, m_iter, 32);
 
                         // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
                         // If core must keep smallest values, then keep DEST[1] instead of DEST[0]

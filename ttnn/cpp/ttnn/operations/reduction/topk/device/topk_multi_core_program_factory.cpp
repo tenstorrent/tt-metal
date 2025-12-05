@@ -273,10 +273,11 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
         Wt_local,
         args.k,
         Kt,
-        (std::uint32_t)std::log2(args.k),
-        (std::uint32_t)std::log2(Wt_local),
-        (std::uint32_t)args.largest,
-        (std::uint32_t)args.sorted,
+        static_cast<uint32_t>(std::log2(args.k)),
+        static_cast<uint32_t>(std::log2(Wt_local)),
+        static_cast<uint32_t>(args.largest),
+        static_cast<uint32_t>(args.sorted),
+        static_cast<uint32_t>(args.stable),
     };
     tt::tt_metal::KernelHandle topk_compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -295,10 +296,11 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
         Wt_final,
         args.k,
         Kt,
-        (std::uint32_t)std::log2(args.k),
-        (std::uint32_t)std::log2(Wt_final),
-        (std::uint32_t)args.largest,
-        (std::uint32_t)args.sorted,
+        static_cast<uint32_t>(std::log2(args.k)),
+        static_cast<uint32_t>(std::log2(Wt_final)),
+        static_cast<uint32_t>(args.largest),
+        static_cast<uint32_t>(args.sorted),
+        static_cast<uint32_t>(args.stable),
     };
 
     tt::tt_metal::CreateKernel(

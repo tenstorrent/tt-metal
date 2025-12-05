@@ -28,6 +28,18 @@ struct TopKDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input_tensor,
+        uint32_t k,
+        int8_t dim,
+        bool largest,
+        bool sorted,
+        bool stable,
+        const tt::tt_metal::MemoryConfig& memory_config,
+        const tt::tt_metal::CoreRangeSet& sub_core_grids,
+        const std::optional<Tensor>& indices_tensor = std::nullopt,
+        const std::optional<std::tuple<Tensor, Tensor>>& preallocated_output_tensors = std::nullopt);
 };
 
 }  // namespace ttnn::operations::reduction::topk
@@ -39,6 +51,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> topk(
     int8_t dim,
     bool largest,
     bool sorted,
+    bool stable,
     const tt::tt_metal::MemoryConfig& memory_config,
     const tt::tt_metal::CoreRangeSet& sub_core_grids,
     const std::optional<Tensor>& indices_tensor = std::nullopt,
