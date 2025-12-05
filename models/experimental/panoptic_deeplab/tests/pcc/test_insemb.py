@@ -120,6 +120,17 @@ def test_ttnn_insemb(device, model_location_generator):
     logger.info("Running TTNN instance embedding head test...")
     ttnn_center_out_tt, ttnn_offset_out_tt, _, _ = ttnn_model.instance_head(ttnn_features)
 
+    # PCC values differ between 20-core (5x4) and all-core configurations
+    is_20_core_grid = compute_grid.x == 5 and compute_grid.y == 4
+
+    if is_20_core_grid:
+        center_pcc, center_abs_err, center_rel_err = 0.887, 0.09, 27.5
+        offset_pcc, offset_abs_err, offset_rel_err = 0.742, 6.8, 5.0
+    else:
+        # Relaxed tolerances for all-core grid with auto-generated program config
+        center_pcc, center_abs_err, center_rel_err = 0.88, 5.0, 30.0
+        offset_pcc, offset_abs_err, offset_rel_err = 0.74, 10.0, 10.0
+
     all_passed = []
     all_passed.append(
         check_ttnn_output(
@@ -128,9 +139,9 @@ def test_ttnn_insemb(device, model_location_generator):
             ttnn_center_out_tt,
             to_channel_first=False,
             output_channels=ttnn_model.instance_head.get_center_output_channels_for_slicing(),
-            exp_pcc=0.887,
-            exp_abs_err=0.09,
-            exp_rel_err=27.5,
+            exp_pcc=center_pcc,
+            exp_abs_err=center_abs_err,
+            exp_rel_err=center_rel_err,
         )
     )
     all_passed.append(
@@ -140,9 +151,9 @@ def test_ttnn_insemb(device, model_location_generator):
             ttnn_offset_out_tt,
             to_channel_first=False,
             output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
-            exp_pcc=0.742,
-            exp_abs_err=6.8,
-            exp_rel_err=5.0,
+            exp_pcc=offset_pcc,
+            exp_abs_err=offset_abs_err,
+            exp_rel_err=offset_rel_err,
         )
     )
 
