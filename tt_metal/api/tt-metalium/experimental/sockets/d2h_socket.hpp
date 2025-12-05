@@ -70,10 +70,17 @@ public:
      * @param mesh_device The mesh device containing the sender core.
      * @param sender_core The source core coordinate (device + core) that sends data.
      * @param fifo_size Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
+     * @param l1_data_buffer_size If non-zero, allocates an L1 staging buffer on the sender core
+     *        and writes its address into the socket config so the device kernel can use it.
+     *        The address is retrievable via get_l1_data_buffer_address(). Default: 0 (disabled).
      *
      * @throws TT_FATAL if pinned memory allocation fails or addresses are invalid.
      */
-    D2HSocket(const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoreCoord& sender_core, uint32_t fifo_size);
+    D2HSocket(
+        const std::shared_ptr<MeshDevice>& mesh_device,
+        const MeshCoreCoord& sender_core,
+        uint32_t fifo_size,
+        uint32_t l1_data_buffer_size = 0);
 
     /**
      * @brief Connects to an existing D2HSocket from another process.
@@ -130,6 +137,25 @@ public:
      * @return The L1 address of the configuration buffer.
      */
     uint32_t get_config_buffer_address() const { return config_buffer_address_; }
+
+    /**
+     * @brief Returns the L1 address of the optional sender-side staging buffer.
+     *
+     * Non-zero only when the socket was constructed with a non-zero
+     * `l1_data_buffer_size`. Intended to be passed to the sender kernel as a
+     * compile-time argument so it can stage data in L1 before pushing into the
+     * socket FIFO.
+     *
+     * @return The L1 address of the staging buffer, or 0 if not allocated.
+     */
+    uint32_t get_l1_data_buffer_address() const { return l1_data_buffer_address_; }
+
+    /**
+     * @brief Returns the size of the optional sender-side L1 staging buffer.
+     *
+     * @return The staging buffer size in bytes, or 0 if not allocated.
+     */
+    uint32_t get_l1_data_buffer_size() const { return l1_data_buffer_size_; }
 
     /**
      * @brief Sets the page size for subsequent read operations.
@@ -189,6 +215,15 @@ public:
      */
     void barrier(std::optional<uint32_t> timeout_ms = std::nullopt);
 
+    /**
+     * @brief Non-blocking query for the number of pages currently available in the FIFO.
+     *
+     * @return The number of complete pages that can be read immediately.
+     *
+     * @throws TT_FATAL if page_size has not been set.
+     */
+    uint32_t pages_available();
+
     std::vector<MeshCoreCoord> get_active_cores() const;
 
     MeshDevice* get_mesh_device() const;
@@ -210,7 +245,9 @@ private:
         const MeshCoordinateRangeSet& device_range,
         uint32_t pcie_alignment,
         const std::string& shm_name);
+    PinnedBufferInfo init_host_buffer_hugepage(const std::shared_ptr<MeshDevice>& mesh_device);
     void init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_device);
+    void init_l1_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t requested_size);
     void write_socket_metadata(
         const std::shared_ptr<MeshDevice>& mesh_device,
         const PinnedBufferInfo& data_info,
@@ -223,6 +260,7 @@ private:
     void notify_sender();
 
     std::shared_ptr<MeshBuffer> config_buffer_ = nullptr;
+    std::shared_ptr<MeshBuffer> l1_data_buffer_ = nullptr;
     MeshCoreCoord sender_core_;
     uint32_t fifo_size_ = 0;
     uint32_t page_size_ = 0;
@@ -233,6 +271,8 @@ private:
     uint32_t config_buffer_address_ = 0;
     uint32_t pcie_alignment_ = 0;
     uint32_t bytes_acked_device_offset_ = 0;
+    uint32_t l1_data_buffer_address_ = 0;
+    uint32_t l1_data_buffer_size_ = 0;
     tt::umd::TlbWindow* sender_core_tlb_ = nullptr;
     std::shared_ptr<tt::tt_metal::experimental::PinnedMemory> pinned_memory_ = nullptr;
     std::shared_ptr<uint32_t[]> host_buffer_ = nullptr;
@@ -244,6 +284,10 @@ private:
     bool is_owner_ = true;
     std::string descriptor_path_;
     bool exported_ = false;
+
+    bool using_hugepage_ = false;
+    uint32_t* hugepage_data_host_ptr_ = nullptr;
+    volatile uint32_t* hugepage_bytes_sent_host_ptr_ = nullptr;
 };
 
 }  // namespace tt::tt_metal::distributed

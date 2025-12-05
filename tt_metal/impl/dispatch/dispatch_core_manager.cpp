@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <functional>
 #include <list>
+#include <optional>
 #include <unordered_set>
 
 #include <tt_stl/assert.hpp>
@@ -212,6 +213,15 @@ std::vector<CoreCoord> dispatch_core_manager::get_all_logical_dispatch_cores(Chi
     return tt::get_logical_dispatch_cores(this->env_, device_id, MAX_NUM_HW_CQS, this->dispatch_core_config_);
 }
 
+std::optional<tt_cxy_pair> dispatch_core_manager::get_reserved_realtime_profiler_core(ChipId device_id) {
+    std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
+    auto it = reserved_realtime_profiler_core_by_device_.find(device_id);
+    if (it == reserved_realtime_profiler_core_by_device_.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
 // private methods
 
 dispatch_core_manager::dispatch_core_manager(
@@ -225,6 +235,7 @@ void dispatch_core_manager::reset_dispatch_core_manager(
     std::lock_guard<std::mutex> lock(this->dispatch_core_assignments_mutex);
     this->dispatch_core_assignments.clear();
     this->available_dispatch_cores_by_device.clear();
+    this->reserved_realtime_profiler_core_by_device_.clear();
     this->dispatch_core_config_ = dispatch_core_config;
     for (ChipId device_id : env.get_cluster().all_chip_ids()) {
         std::list<CoreCoord>& logical_dispatch_cores = this->available_dispatch_cores_by_device[device_id];
@@ -242,6 +253,27 @@ void dispatch_core_manager::reset_dispatch_core_manager(
             for (const auto& idle_eth_core : env_.get_control_plane().get_inactive_ethernet_cores(device_id)) {
                 add_dispatch_core_to_device_locked(device_id, idle_eth_core);
             }
+        }
+
+        // Reserve a guaranteed-spare tensix for the real-time profiler kernel — MMIO chips only.
+        // Background: get_closest_available_dispatch_core_to_pcie computes "available = pool − assigned",
+        // but RT profiler init runs before any dispatch kernel is assigned, so the entire pool looks
+        // available and the picker can land on a core dispatch will later claim (e.g. (3,7) on N300
+        // nebula_x1, which is dispatch_s under fabric-mux). Reserving the back of the pool here
+        // (dispatch consumes from the front via get_next_available_dispatch_core) makes the slot
+        // permanently invisible to dispatch and removes the race entirely.
+        // - Skipped for remote chips because mesh_device.cpp's is_mmio_capable() guard prevents
+        //   RT profiler from running there; reserving on remote would shrink the dispatch pool for
+        //   no benefit.
+        // - Skipped for ETH dispatch because the pool holds ethernet cores, not tensixes, and RT
+        //   profiler (a worker kernel) cannot use them. Callers fall back to the legacy picker.
+        const bool is_mmio = env.get_cluster().get_associated_mmio_device(device_id) == device_id;
+        if (is_mmio && get_core_type_from_config(dispatch_core_config) == CoreType::WORKER &&
+            !logical_dispatch_cores.empty()) {
+            CoreCoord rt_core = logical_dispatch_cores.back();
+            logical_dispatch_cores.pop_back();
+            this->reserved_realtime_profiler_core_by_device_.emplace(
+                device_id, tt_cxy_pair(device_id, rt_core.x, rt_core.y));
         }
     }
 }
