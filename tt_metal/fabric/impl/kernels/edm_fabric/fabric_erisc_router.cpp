@@ -311,13 +311,13 @@ static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_fr
     sender_channel_4_free_slots_stream_id,
     sender_channel_5_free_slots_stream_id,
     sender_channel_6_free_slots_stream_id};
-static_assert(sender_channel_free_slots_stream_ids[0] == 19);
-static_assert(sender_channel_free_slots_stream_ids[1] == 20);
-static_assert(sender_channel_free_slots_stream_ids[2] == 21);
-static_assert(sender_channel_free_slots_stream_ids[3] == 22);
-static_assert(sender_channel_free_slots_stream_ids[4] == 23);
-static_assert(sender_channel_free_slots_stream_ids[5] == 24);
-static_assert(sender_channel_free_slots_stream_ids[6] == 25);
+static_assert(sender_channel_free_slots_stream_ids[0] == 21);
+static_assert(sender_channel_free_slots_stream_ids[1] == 22);
+static_assert(sender_channel_free_slots_stream_ids[2] == 23);
+static_assert(sender_channel_free_slots_stream_ids[3] == 24);
+static_assert(sender_channel_free_slots_stream_ids[4] == 25);
+static_assert(sender_channel_free_slots_stream_ids[5] == 26);
+static_assert(sender_channel_free_slots_stream_ids[6] == 27);
 
 // For 2D fabric: maps compact index to downstream direction for each my_direction
 // For 1D fabric: only 1 downstream direction per router (EAST forwards to WEST in 1D linear topology)
@@ -2254,7 +2254,7 @@ void kernel_main() {
     [[maybe_unused]]
     const auto downstream_vc0_noc_interface_buffer_index_local_addr = 0;
 
-    // Read MAX_NUM_SENDER_CHANNELS teardown semaphores (host packs builder_config::num_sender_channels = 7)
+    // Read MAX_NUM_SENDER_CHANNELS teardown semaphores (host packs builder_config::num_max_sender_channels = 7)
     const auto my_sem_for_teardown_from_edm_0 = get_arg_val<uint32_t>(arg_idx++);
     const auto my_sem_for_teardown_from_edm_1 = get_arg_val<uint32_t>(arg_idx++);
     const auto my_sem_for_teardown_from_edm_2 = get_arg_val<uint32_t>(arg_idx++);
@@ -2266,8 +2266,8 @@ void kernel_main() {
     ////////////////////////
     // Sender runtime args
     ////////////////////////
-    // Read MAX_NUM_SENDER_CHANNELS sender worker semaphore pointers (host packs builder_config::num_sender_channels =
-    // 7)
+    // Read MAX_NUM_SENDER_CHANNELS sender worker semaphore pointers (host packs builder_config::num_max_sender_channels
+    // = 7)
     auto sender0_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
     auto sender1_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
     auto sender2_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));

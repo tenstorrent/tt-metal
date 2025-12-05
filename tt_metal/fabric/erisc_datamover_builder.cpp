@@ -106,8 +106,8 @@ void configure_risc_settings(
     bool& enable_handshake,
     bool& enable_context_switch,
     bool& enable_interrupts,
-    std::array<bool, builder_config::num_sender_channels>& is_sender_channel_serviced,
-    std::array<bool, builder_config::num_receiver_channels>& is_receiver_channel_serviced) {
+    std::array<bool, builder_config::num_max_sender_channels>& is_sender_channel_serviced,
+    std::array<bool, builder_config::num_max_receiver_channels>& is_receiver_channel_serviced) {
     if (arch == tt::ARCH::WORMHOLE_B0) {
         // Wormhole: All RISC cores handle both sender and receiver channels
         enable_handshake = true;
@@ -166,14 +166,14 @@ void update_sender_channel_servicing(
         for (auto& risc_config : risc_configs) {
             risc_config.reset_sender_channel_serviced();
             // Set the channel corresponding to the current direction
-            for (size_t i = 0; i < builder_config::num_sender_channels; i++) {
+            for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
                 risc_config.set_sender_channel_serviced(i, i == target_channel);
             }
         }
     } else if (arch == tt::ARCH::BLACKHOLE) {
         risc_configs[0].reset_sender_channel_serviced();
         // Set the channel corresponding to the current direction
-        for (size_t i = 0; i < builder_config::num_sender_channels; i++) {
+        for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
             risc_configs[0].set_sender_channel_serviced(i, i == target_channel);
         }
     }
@@ -489,7 +489,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         std::make_shared<tt::tt_fabric::ChannelToPoolMapping>(remote_channels_recipe);
 
     // set default noc and cmd bufs (current setup in TG 4U)
-    for (uint32_t i = 0; i < builder_config::num_receiver_channels; i++) {
+    for (uint32_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
         this->receiver_channel_forwarding_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_RECEIVER_FORWARDING_NOC;
         this->receiver_channel_forwarding_data_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_REG_CMD_BUF;
         this->receiver_channel_forwarding_sync_cmd_buf_ids[i] = FabricEriscDatamoverConfig::RD_CMD_BUF;
@@ -503,7 +503,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
             this->receiver_channel_forwarding_data_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
         }
     }
-    for (uint32_t i = 0; i < builder_config::num_sender_channels; i++) {
+    for (uint32_t i = 0; i < builder_config::num_max_sender_channels; i++) {
         this->sender_channel_ack_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_SENDER_ACK_NOC;
         this->sender_channel_ack_cmd_buf_ids[i] = FabricEriscDatamoverConfig::AT_CMD_BUF;
 
@@ -659,9 +659,9 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         receiver_channels_downstream_flow_control_semaphore_id,
     const std::array<std::optional<size_t>, builder_config::max_downstream_edms>&
         receiver_channels_downstream_teardown_semaphore_id,
-    const std::array<size_t, builder_config::num_sender_channels>& sender_channels_flow_control_semaphore_id,
-    const std::array<size_t, builder_config::num_sender_channels>& sender_channels_connection_semaphore_id,
-    const std::array<size_t, builder_config::num_sender_channels>& sender_channels_buffer_index_semaphore_id,
+    const std::array<size_t, builder_config::num_max_sender_channels>& sender_channels_flow_control_semaphore_id,
+    const std::array<size_t, builder_config::num_max_sender_channels>& sender_channels_connection_semaphore_id,
+    const std::array<size_t, builder_config::num_max_sender_channels>& sender_channels_buffer_index_semaphore_id,
 
     const FabricEriscDatamoverConfig& config,
     eth_chan_directions direction,
@@ -899,6 +899,10 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     auto ct_args = std::vector<uint32_t>(stream_ids.begin(), stream_ids.end());
     ct_args.push_back(0xFFEE0001);
 
+    // Maximum channel counts from builder_config
+    ct_args.push_back(builder_config::num_max_sender_channels);
+    ct_args.push_back(builder_config::num_max_receiver_channels);
+
     // add the downstream tensix connection arg here, num_downstream_tensix_connections
     ct_args.push_back(this->num_downstream_tensix_connections);
 
@@ -1111,12 +1115,12 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
     auto args_pt2 = std::vector<uint32_t>{};
 
     // Pack downstream teardown semaphores (always send MAX_NUM_SENDER_CHANNELS for compatibility)
-    for (uint32_t i = 0; i < builder_config::num_sender_channels; i++) {
+    for (uint32_t i = 0; i < builder_config::num_max_sender_channels; i++) {
         args_pt2.push_back(this->receiver_channels_downstream_teardown_semaphore_id[i].value_or(-1));
     }
 
     // Pack sender flow control semaphores (always send MAX_NUM_SENDER_CHANNELS)
-    for (uint32_t i = 0; i < builder_config::num_sender_channels; i++) {
+    for (uint32_t i = 0; i < builder_config::num_max_sender_channels; i++) {
         args_pt2.push_back(this->sender_channels_flow_control_semaphore_id[i]);
     }
 
@@ -1174,9 +1178,9 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     bool build_in_worker_connection_mode,
     eth_chan_directions direction,
     bool has_tensix_extension) {
-    std::array<size_t, builder_config::num_sender_channels> sender_channels_buffer_index_semaphore_id{};
-    std::array<size_t, builder_config::num_sender_channels> sender_channels_flow_control_semaphore_id{};
-    std::array<size_t, builder_config::num_sender_channels> sender_channels_connection_semaphore_id{};
+    std::array<size_t, builder_config::num_max_sender_channels> sender_channels_buffer_index_semaphore_id{};
+    std::array<size_t, builder_config::num_max_sender_channels> sender_channels_flow_control_semaphore_id{};
+    std::array<size_t, builder_config::num_max_sender_channels> sender_channels_connection_semaphore_id{};
     std::array<std::optional<size_t>, builder_config::max_downstream_edms>
         receiver_channels_downstream_flow_control_semaphore_id;
     std::array<std::optional<size_t>, builder_config::max_downstream_edms>
@@ -1206,7 +1210,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         *remote_multi_pool_allocator->get_pool(0));
 
     if (build_in_worker_connection_mode) {
-        for (uint32_t i = 0; i < builder_config::num_receiver_channels; i++) {
+        for (uint32_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
             receiver_channels_downstream_flow_control_semaphore_id[i] = 0;
             receiver_channels_downstream_teardown_semaphore_id[i] = 0;
         }
@@ -1214,7 +1218,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         sender_channels_buffer_index_semaphore_id[0] = config.sender_channels_buffer_index_semaphore_address[0];
         sender_channels_flow_control_semaphore_id[0] = config.sender_channels_local_flow_control_semaphore_address[0];
         sender_channels_connection_semaphore_id[0] = config.sender_channels_connection_semaphore_address[0];
-        for (uint32_t i = 1; i < builder_config::num_sender_channels; i++) {
+        for (uint32_t i = 1; i < builder_config::num_max_sender_channels; i++) {
             sender_channels_flow_control_semaphore_id[i] = 0;
             sender_channels_connection_semaphore_id[i] = 0;
             sender_channels_buffer_index_semaphore_id[i] = 0;
