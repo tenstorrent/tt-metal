@@ -794,7 +794,7 @@ void py_module(nb::module_& mod) {
             sub_device_id (ttnn.SubDeviceId, optional): the sub device id to be used for the matmul operation. Defaults to `None`.
 
         Returns:
-            ttnn.Tensor: the output tensor.
+            List of ttnn.Tensor: the output tensors.
         )doc",
         ttnn::nanobind_overload_t{
             [](decltype(::ttnn::matmul_batched_weights)& self,

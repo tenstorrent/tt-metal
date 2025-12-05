@@ -486,18 +486,16 @@ void py_module(nb::module_& mod) {
         });
     auto py_mesh_mapper_config = static_cast<nb::class_<MeshMapperConfig>>(mod.attr("MeshMapperConfig"));
 
-    py_mesh_mapper_config
-        .def(
-            "__init__",
-            [](MeshMapperConfig* t,
-               tt::stl::SmallVector<MeshMapperConfig::Placement> placements,
-               const std::optional<MeshShape>& mesh_shape_override) {
-                new (t)
-                    MeshMapperConfig{.placements = std::move(placements), .mesh_shape_override = mesh_shape_override};
-            },
-            nb::arg("placements"),
-            nb::arg("mesh_shape_override") = nb::none(),
-            R"doc(
+    py_mesh_mapper_config.def(
+        "__init__",
+        [](MeshMapperConfig* t,
+           tt::stl::SmallVector<MeshMapperConfig::Placement> placements,
+           const std::optional<MeshShape>& mesh_shape_override) {
+            new (t) MeshMapperConfig{.placements = std::move(placements), .mesh_shape_override = mesh_shape_override};
+        },
+        nb::arg("placements"),
+        nb::arg("mesh_shape_override") = nb::none(),
+        R"doc(
            Creates a MeshMapperConfig object with the given placements and mesh shape override.
 
            Args:
@@ -506,12 +504,15 @@ void py_module(nb::module_& mod) {
                Used for distributing a tensor over ND shape that doesn't match the shape of the mesh device:
                when the shape fits within a mesh device, the tensor shards are distributed within the submesh
                region. Otherwise, the tensor shards are distributed across mesh in row-major order.
-           )doc")
+           )doc");
+
+    using mmc_dim_t = decltype(MeshMapperConfig::Shard::dim);
+    py_mesh_mapper_config
         .def(
             "__init__",
             [](MeshMapperConfig* t,
-               std::optional<size_t> row_dim,  // TODO_NANOBIND: double check types
-               std::optional<size_t> col_dim,
+               std::optional<mmc_dim_t> row_dim,
+               std::optional<mmc_dim_t> col_dim,
                const std::optional<MeshShape>& mesh_shape_override) {
                 new (t) MeshMapperConfig;
                 t->placements.push_back(
@@ -556,8 +557,8 @@ void py_module(nb::module_& mod) {
         .def(
             "__init__",
             [](MeshComposerConfig* t,
-               size_t row_dim,  // TODO_NANOBIND: double check types
-               size_t col_dim,
+               mmc_dim_t row_dim,
+               mmc_dim_t col_dim,
                const std::optional<MeshShape>& mesh_shape_override) {
                 new (t) MeshComposerConfig;
                 t->dims.push_back(row_dim);

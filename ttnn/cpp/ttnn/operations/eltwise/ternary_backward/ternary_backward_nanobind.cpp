@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -287,7 +287,7 @@ void bind_ternary_backward_optional_output(
             nb::arg("input_tensor_c"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("are_required_outputs") = std::vector<bool>{true, true},
+            nb::arg("are_required_outputs") = nb::cast(std::vector<bool>{true, true}),
             nb::arg("input_a_grad") = nb::none(),
             nb::arg("input_b_grad") = nb::none()});
 }

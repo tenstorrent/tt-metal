@@ -48,7 +48,8 @@ void bind_strided_all_gather_minimal_matmul_async_op(
                const std::optional<ttnn::MemoryConfig>& memory_config_mm,
                const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
                std::optional<uint32_t> num_workers_per_link,
-               std::optional<uint32_t> num_buffers_per_channel) -> std::vector<ttnn::Tensor> {
+               std::optional<uint32_t> num_buffers_per_channel,
+               std::optional<bool> read_local_slice_from_input) -> std::vector<ttnn::Tensor> {
                 return self(
                     input_tensor,
                     weight_tensor,
@@ -66,7 +67,8 @@ void bind_strided_all_gather_minimal_matmul_async_op(
                     memory_config_mm,
                     compute_kernel_config,
                     num_workers_per_link,
-                    num_buffers_per_channel);
+                    num_buffers_per_channel,
+                    read_local_slice_from_input);
             },
             nb::arg("input_tensor"),
             nb::arg("weight_tensor"),
@@ -85,7 +87,8 @@ void bind_strided_all_gather_minimal_matmul_async_op(
             nb::arg("memory_config_mm") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("num_workers_per_link") = nb::none(),
-            nb::arg("num_buffers_per_channel") = nb::none()});
+            nb::arg("num_buffers_per_channel") = nb::none(),
+            nb::arg("read_local_slice_from_input") = nb::none()});
 }
 
 }  // namespace
