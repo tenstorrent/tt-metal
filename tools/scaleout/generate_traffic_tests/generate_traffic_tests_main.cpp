@@ -98,14 +98,11 @@ int main(int argc, char* argv[]) {
         if (result.count("help")) {
             std::cout << options.help() << "\n";
             std::cout << "Profiles:\n";
-            std::cout << "  sanity    - Quick validation (~30s-1min)\n";
-            std::cout << "              Tests: simple, inter-mesh, all-to-all\n";
+            std::cout << "  sanity    - Tests: simple, inter-mesh, all-to-all\n";
             std::cout << "              Packets: 100, Sizes: 1024,2048\n\n";
-            std::cout << "  stress    - Thorough testing (~5-15min)\n";
-            std::cout << "              Tests: all categories\n";
+            std::cout << "  stress    - Tests: all categories\n";
             std::cout << "              Packets: 1000, Sizes: 1024,2048,4096\n\n";
-            std::cout << "  benchmark - Performance measurement (~2-5min)\n";
-            std::cout << "              Tests: simple, inter-mesh, all-to-all, flow-control\n";
+            std::cout << "  benchmark - Tests: simple, inter-mesh, all-to-all, flow-control\n";
             std::cout << "              Packets: 1000, Sizes: 512,1024,2048,4096,8192\n";
             return 0;
         }

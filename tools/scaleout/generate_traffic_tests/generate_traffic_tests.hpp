@@ -83,6 +83,5 @@ TrafficTestConfig get_stress_config();
 TrafficTestConfig get_benchmark_config();
 
 void apply_profile_defaults(TrafficTestConfig& config);
-uint32_t estimate_test_duration_seconds(const MeshTopologyInfo& topology, const TrafficTestConfig& config);
 
 }  // namespace tt::scaleout_tools
