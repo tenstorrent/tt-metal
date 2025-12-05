@@ -107,12 +107,11 @@ void process_and_sort_tiles(
     bool& ascending,
     int end_phase) {
     topk_tile_init();
-    cb_wait_front(index_cb_index, Wt);
-    cb_reserve_back(input_transposed_cb_index, Wt);
-    cb_reserve_back(index_transposed_cb_index, Wt);
-
     // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
+    cb_wait_front(index_cb_index, Wt);
     for (uint32_t wt = 0; wt < Wt; wt += 2) {
+        cb_reserve_back(index_transposed_cb_index, 2);
+
         acquire_dst();
         // local sort into k groups
         cb_wait_front(input_cb_index, 2);
@@ -134,22 +133,28 @@ void process_and_sort_tiles(
 
         // pack value tiles into cb_intermed0
         pack_reconfig_data_format(input_transposed_cb_index);
-        pack_tile<true>(0, input_transposed_cb_index, wt);
-        pack_tile<true>(1, input_transposed_cb_index, wt + 1);
+        cb_reserve_back(input_transposed_cb_index, 1);
+        pack_tile(0, input_transposed_cb_index);
+        cb_push_back(input_transposed_cb_index, 1);
+
+        cb_reserve_back(input_transposed_cb_index, 1);
+        pack_tile(1, input_transposed_cb_index);
+        cb_push_back(input_transposed_cb_index, 1);
 
         // pack index tiles into cb_intermed1
         pack_reconfig_data_format(index_transposed_cb_index);
-        pack_tile<true>(2, index_transposed_cb_index, wt);
-        pack_tile<true>(3, index_transposed_cb_index, wt + 1);
+        cb_reserve_back(index_transposed_cb_index, 1);
+        pack_tile(2, index_transposed_cb_index);
+        cb_push_back(index_transposed_cb_index, 1);
+
+        cb_reserve_back(index_transposed_cb_index, 1);
+        pack_tile(3, index_transposed_cb_index);
+        cb_push_back(index_transposed_cb_index, 1);
 
         cb_pop_front(input_cb_index, 2);
-        // don't pop index_cb_index as it gets re-used for the next tile heights
         release_dst();
         ascending = switch_dir ? !ascending : ascending;
     }
-
-    cb_push_back(input_transposed_cb_index, Wt);
-    cb_push_back(index_transposed_cb_index, Wt);
 }
 
 void sum_top_experts_per_group(
