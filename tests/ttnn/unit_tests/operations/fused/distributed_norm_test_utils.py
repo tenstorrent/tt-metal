@@ -200,7 +200,7 @@ def compute_ttnn_distributed_norm(
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
     )
 
-    ttnn_bias = Non
+    ttnn_bias = None
     if norm_type == "layer_norm":
         ttnn_bias = ttnn.from_torch(
             torch_bias.reshape(1, 1, 1, hidden_dim),
