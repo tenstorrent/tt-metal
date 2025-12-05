@@ -56,14 +56,12 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat in, const uint log_base
 
     if constexpr (!FAST_APPROX) {
         sfpi::vInt exp = sfpi::exexp(in);
-        sfpi::vInt man = sfpi::exman9(in);
-        sfpi::vInt signbit = sfpi::reinterpret<sfpi::vInt>(in) & 0x80000000;  // returns 0 for +ve value
-        v_if((exp == 128 && man != 0) || in < 0.0F) {
-            result = std::numeric_limits<float>::quiet_NaN();  // returns nan for fp32 and inf for bf16
-        }
-        v_elseif(sfpi::reinterpret<sfpi::vInt>(in) == 0x7F800000) {
+        v_if(sfpi::reinterpret<sfpi::vInt>(in) == 0x7F800000) {
             // If input is infinity, return infinity
             result = std::numeric_limits<float>::infinity();
+        }
+        v_elseif(exp == 128 || in < 0.f) {                     // +inf or negative input -> NaN
+            result = std::numeric_limits<float>::quiet_NaN();  // returns nan for fp32 and inf for bf16
         }
         v_endif;
     }
