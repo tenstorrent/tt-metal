@@ -620,6 +620,91 @@ def test_image_rotate_nearest_fill_values(device, input_shape, fill_value):
 @pytest.mark.parametrize(
     "input_shape",
     [
+        (100, 100, 256),  # Smaller BEV variant
+    ],
+)
+@pytest.mark.parametrize(
+    "batch_size",
+    [1, 2, 4],
+)
+@pytest.mark.parametrize(
+    "rotation_angle",
+    [0.0, -6.64, -1.33, 1.33, 4.80, 25.0],
+)
+def test_image_rotate_vadv2(device, input_shape, batch_size, rotation_angle):
+    """Test vadv2-specific rotation use case: BEV feature rotation with custom center"""
+
+    torch.manual_seed(42)
+
+    bev_h, bev_w, embed_dims = input_shape
+
+    # Simulate vadv2 BEV features: (bev_h * bev_w, batch_size, embed_dims)
+    flattened_bev = torch.randn(bev_h * bev_w, batch_size, embed_dims, dtype=torch.bfloat16)
+
+    # vadv2 rotation center (typically [100, 100] but adapt to smaller sizes)
+    rotate_center = [100, 100]
+
+    # Process each batch item (vadv2 pattern)
+    torch_outputs = []
+    ttnn_outputs = []
+
+    for i in range(batch_size):
+        # Extract single batch item: (bev_h * bev_w, embed_dims)
+        prev_bev_single = flattened_bev[:, i]  # Shape: (bev_h * bev_w, embed_dims)
+
+        # PyTorch reference (vadv2 pattern):
+        # Reshape to spatial: (bev_h, bev_w, embed_dims)
+        torch_spatial = prev_bev_single.view(bev_h, bev_w, embed_dims)
+        # Permute to CHW: (embed_dims, bev_h, bev_w)
+        torch_chw = torch_spatial.permute(2, 0, 1).to(torch.float32)
+        # Rotate with custom center
+        torch_rotated = TF.rotate(
+            torch_chw, angle=rotation_angle, interpolation=InterpolationMode.NEAREST, center=rotate_center
+        )
+        torch_rotated = torch_rotated.to(torch.bfloat16)
+        # Permute back: (bev_h, bev_w, embed_dims)
+        torch_spatial_out = torch_rotated.permute(1, 2, 0)
+        torch_outputs.append(torch_spatial_out)
+
+        # TTNN (should match the vadv2 pattern):
+        # Convert flattened to NHWC format for ttnn.image_rotate
+        ttnn_spatial = prev_bev_single.view(bev_h, bev_w, embed_dims).unsqueeze(0)  # Add batch dim
+        ttnn_input = ttnn.from_torch(ttnn_spatial, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        # Rotate using ttnn.image_rotate with custom center
+        ttnn_rotated = ttnn.image_rotate(
+            ttnn_input,
+            angle=rotation_angle,
+            center=(float(rotate_center[1]), float(rotate_center[0])),  # ttnn expects (x, y)
+            interpolation_mode="nearest",
+        )
+        ttnn_spatial_out = ttnn.to_torch(ttnn_rotated).squeeze(0)  # Remove batch dim
+        ttnn_outputs.append(ttnn_spatial_out)
+
+    # Compare each batch item
+    for i in range(batch_size):
+        torch_result = torch_outputs[i]
+        ttnn_result = ttnn_outputs[i]
+
+        # Verify shapes match
+        assert (
+            torch_result.shape == ttnn_result.shape
+        ), f"Batch {i}: Shape mismatch torch={torch_result.shape}, ttnn={ttnn_result.shape}"
+
+        # Check accuracy
+        pcc_passed, pcc_message = assert_with_pcc(torch_result, ttnn_result, pcc=0.99)
+        logger.info(f"VADv2 batch {i}, angle {rotation_angle}°, center {rotate_center}: {pcc_message}")
+
+        allclose_passed = torch.equal(torch_result, ttnn_result)
+
+        assert pcc_passed, f"VADv2 test failed for batch {i}, angle {rotation_angle}°"
+        assert allclose_passed, f"VADv2 allclose failed for batch {i}, angle {rotation_angle}°"
+
+    logger.info(f"VADv2 use case passed: shape {input_shape}, batch_size {batch_size}, angle {rotation_angle}°")
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [
         (1, 16, 16, 32),
         (2, 24, 24, 64),
     ],
