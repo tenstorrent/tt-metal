@@ -31,6 +31,7 @@ namespace tt::tt_fabric {
 
 struct FabricRiscConfig;
 class FabricRouterBuilder;
+class ComputeMeshRouterBuilder;
 class MultiPoolChannelAllocator;
 class ChannelToPoolMapping;
 class FabricRemoteChannelsAllocator;
@@ -112,19 +113,28 @@ struct StreamRegAssignments {
     static constexpr uint32_t to_sender_1_pkts_acked_id = 3;
     static constexpr uint32_t to_sender_2_pkts_acked_id = 4;
     static constexpr uint32_t to_sender_3_pkts_acked_id = 5;
-    static constexpr uint32_t to_sender_0_pkts_completed_id = 7;
-    static constexpr uint32_t to_sender_1_pkts_completed_id = 8;
-    static constexpr uint32_t to_sender_2_pkts_completed_id = 9;
-    static constexpr uint32_t to_sender_3_pkts_completed_id = 10;
+    static constexpr uint32_t to_sender_0_pkts_completed_id = 6;
+    static constexpr uint32_t to_sender_1_pkts_completed_id = 7;
+    static constexpr uint32_t to_sender_2_pkts_completed_id = 8;
+    static constexpr uint32_t to_sender_3_pkts_completed_id = 9;
+    static constexpr uint32_t to_sender_4_pkts_completed_id = 10;
+    static constexpr uint32_t to_sender_5_pkts_completed_id = 11;
+    static constexpr uint32_t to_sender_6_pkts_completed_id = 12;
     // Receiver channel free slots stream IDs
-    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_1 = 12;
-    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_2 = 13;
-    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_3 = 14;
+    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_1 = 13;
+    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_2 = 14;
+    static constexpr uint32_t vc_0_free_slots_from_downstream_edge_3 = 15;
+    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_1 = 16;
+    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_2 = 17;
+    static constexpr uint32_t vc_1_free_slots_from_downstream_edge_3 = 18;
     // Sender channel free slots stream IDs
-    static constexpr uint32_t sender_channel_0_free_slots_stream_id = 17;  // for tensix worker
-    static constexpr uint32_t sender_channel_1_free_slots_stream_id = 18;  // for upstream edge on: 1D->VC0, 2D->VC0
-    static constexpr uint32_t sender_channel_2_free_slots_stream_id = 19;  // for upstream edge on: 2D->VC0
-    static constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;  // for upstream edge on: 2D->VC0
+    static constexpr uint32_t sender_channel_0_free_slots_stream_id = 19;  // for tensix worker
+    static constexpr uint32_t sender_channel_1_free_slots_stream_id = 20;  // for upstream edge on: 1D->VC0, 2D->VC0
+    static constexpr uint32_t sender_channel_2_free_slots_stream_id = 21;  // for upstream edge on: 2D->VC0
+    static constexpr uint32_t sender_channel_3_free_slots_stream_id = 22;  // for upstream edge on: 2D->VC0
+    static constexpr uint32_t sender_channel_4_free_slots_stream_id = 23;  // for upstream edge on: 2D->VC1
+    static constexpr uint32_t sender_channel_5_free_slots_stream_id = 24;  // for upstream edge on: 2D->VC1
+    static constexpr uint32_t sender_channel_6_free_slots_stream_id = 25;  // for upstream edge on: 2D->VC1
 
     // Local tensix relay free slots stream ID (UDM mode only)
     static constexpr uint32_t tensix_relay_local_free_slots_stream_id = 29;
@@ -143,12 +153,22 @@ struct StreamRegAssignments {
             to_sender_1_pkts_completed_id,
             to_sender_2_pkts_completed_id,
             to_sender_3_pkts_completed_id,
+            to_sender_4_pkts_completed_id,
+            to_sender_5_pkts_completed_id,
+            to_sender_6_pkts_completed_id,
             vc_0_free_slots_from_downstream_edge_1,
             vc_0_free_slots_from_downstream_edge_2,
             vc_0_free_slots_from_downstream_edge_3,
+            vc_1_free_slots_from_downstream_edge_1,
+            vc_1_free_slots_from_downstream_edge_2,
+            vc_1_free_slots_from_downstream_edge_3,
+            sender_channel_0_free_slots_stream_id,
             sender_channel_1_free_slots_stream_id,
             sender_channel_2_free_slots_stream_id,
             sender_channel_3_free_slots_stream_id,
+            sender_channel_4_free_slots_stream_id,
+            sender_channel_5_free_slots_stream_id,
+            sender_channel_6_free_slots_stream_id,
             tensix_relay_local_free_slots_stream_id,
             multi_risc_teardown_sync_stream_id};
         return stream_ids;
@@ -170,11 +190,6 @@ struct FabricEriscDatamoverConfig {
     static constexpr uint32_t BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_LOCAL_WRITE_NOC = 1;
     static constexpr uint32_t BLACKHOLE_SINGLE_ERISC_MODE_SENDER_ACK_NOC = 1;
 
-    static constexpr std::size_t num_downstream_edms_vc0 = 1;
-    static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;
-    static constexpr std::size_t num_downstream_edms = num_downstream_edms_vc0;
-    static constexpr std::size_t num_downstream_edms_2d = num_downstream_edms_2d_vc0;
-    static constexpr std::size_t max_downstream_edms = std::max(num_downstream_edms, num_downstream_edms_2d);
     static constexpr uint32_t num_virtual_channels = 2;
 
     static constexpr std::size_t field_size = 16;
@@ -221,8 +236,10 @@ struct FabricEriscDatamoverConfig {
 
     // ----------- Receiver Channels
     // persistent mode field
-    std::array<std::size_t, max_downstream_edms> receiver_channels_downstream_flow_control_semaphore_address = {};
-    std::array<std::size_t, max_downstream_edms> receiver_channels_downstream_teardown_semaphore_address = {};
+    std::array<std::size_t, builder_config::max_downstream_edms>
+        receiver_channels_downstream_flow_control_semaphore_address = {};
+    std::array<std::size_t, builder_config::max_downstream_edms>
+        receiver_channels_downstream_teardown_semaphore_address = {};
 
     // Conditionally used fields. BlackHole with 2-erisc uses these fields for sending credits back to sender.
     // We use/have these fields because we can't send reg-writes over Ethernet on both TXQs. Therefore,
@@ -307,6 +324,11 @@ struct FabricRiscConfig {
     }
 
     void set_configured_noc(tt::tt_metal::NOC noc) { noc_ = noc; };
+    bool telemetry_enabled() const { return telemetry_enabled_; }
+    void set_telemetry_enabled(bool enabled) { telemetry_enabled_ = enabled; }
+    uint8_t telemetry_stats_mask() const { return telemetry_stats_mask_; }
+    void set_telemetry_stats_mask(uint8_t mask) { telemetry_stats_mask_ = mask; }
+
 private:
     tt::tt_metal::NOC noc_ = tt::tt_metal::NOC::NOC_0;
     size_t iterations_between_ctx_switch_and_teardown_checks_ = 0;
@@ -315,6 +337,8 @@ private:
     bool enable_interrupts_ = false;
     std::array<bool, builder_config::num_sender_channels> is_sender_channel_serviced_{};
     std::array<bool, builder_config::num_receiver_channels> is_receiver_channel_serviced_{};
+    bool telemetry_enabled_ = true;
+    uint8_t telemetry_stats_mask_ = 0xFF;
 };
 
 struct edm_termination_info_t {
@@ -360,6 +384,7 @@ size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args
  */
 class FabricEriscDatamoverBuilder : public FabricDatamoverBuilderBase {
     friend class FabricRouterBuilder;
+    friend class ComputeMeshRouterBuilder;
 
 public:
     static constexpr size_t default_firmware_context_switch_interval = 10000;
@@ -378,9 +403,9 @@ public:
         const FabricNodeId& local_fabric_node_id,
         const FabricNodeId& peer_fabric_node_id,
 
-        const std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>&
+        const std::array<std::optional<size_t>, builder_config::max_downstream_edms>&
             receiver_channels_downstream_flow_control_semaphore_id,
-        const std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>&
+        const std::array<std::optional<size_t>, builder_config::max_downstream_edms>&
             receiver_channels_downstream_teardown_semaphore_id,
         const std::array<size_t, builder_config::num_sender_channels>& sender_channels_flow_control_semaphore_id,
         const std::array<size_t, builder_config::num_sender_channels>& sender_channels_connection_semaphore_id,
@@ -422,7 +447,7 @@ public:
     [[nodiscard]] std::vector<uint32_t> get_compile_time_args(uint32_t risc_id) const;
 
     // Helper for `get_compile_time_args`
-    void get_telemetry_compile_time_args(std::vector<uint32_t>& ct_args) const;
+    void get_telemetry_compile_time_args(uint32_t risc_id, std::vector<uint32_t>& ct_args) const;
 
     [[nodiscard]] std::vector<uint32_t> get_runtime_args() const;
 
@@ -457,7 +482,8 @@ public:
     size_t channel_buffer_size = 0;
 
     std::shared_ptr<tt::tt_fabric::ChannelConnectionWriterAdapter> receiver_channel_to_downstream_adapter;
-    std::array<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>, FabricEriscDatamoverConfig::max_downstream_edms> downstream_allocators = {};
+    std::array<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>, builder_config::max_downstream_edms>
+        downstream_allocators = {};
 
     std::array<size_t, builder_config::num_receiver_channels> receiver_channels_num_buffers = {};
     std::array<size_t, builder_config::num_receiver_channels> remote_receiver_channels_num_buffers = {};
@@ -474,9 +500,9 @@ public:
 
     // Semaphore IDs
     // this is the receiver channel's local sem for flow controlling with downstream fabric sender
-    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
+    std::array<std::optional<size_t>, builder_config::max_downstream_edms>
         receiver_channels_downstream_flow_control_semaphore_id = {};
-    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
+    std::array<std::optional<size_t>, builder_config::max_downstream_edms>
         receiver_channels_downstream_teardown_semaphore_id = {};
     std::array<size_t, builder_config::num_sender_channels> sender_channels_flow_control_semaphore_id = {};
     std::array<size_t, builder_config::num_sender_channels> sender_channels_connection_semaphore_id = {};
@@ -513,6 +539,9 @@ private:
 
     // Internal implementation for connect_to_downstream_edm
     void connect_to_downstream_edm_impl(FabricDatamoverBuilderBase* downstream_builder);
+
+    // Configure telemetry settings for all RISC cores
+    void configure_telemetry_settings();
 };
 
 }  // namespace tt::tt_fabric
