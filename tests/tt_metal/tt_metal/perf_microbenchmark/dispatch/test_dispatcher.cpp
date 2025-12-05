@@ -14,13 +14,9 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include <umd/device/types/core_coordinates.hpp>
-#include <impl/dispatch/dispatch_mem_map.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <tt-metalium/tt_align.hpp>
-#include "tt_metal/impl/dispatch/system_memory_manager.hpp"
-#include "command_queue_fixture.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
-#include "dispatch/device_command_calculator.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/common.h"
 
 /*
@@ -67,15 +63,6 @@ constexpr uint32_t DEFAULT_ITERATIONS_PACKED_WRITE_LARGE = 1;
 constexpr uint32_t DRAM_DATA_SIZE_BYTES = 16 * 1024 * 1024;
 constexpr uint32_t DRAM_DATA_SIZE_WORDS = DRAM_DATA_SIZE_BYTES / sizeof(uint32_t);
 
-// Forward declare the accessor
-// Exposes the internal system memory manager of the FDMeshCommandQueue
-class FDMeshCQTestAccessor {
-public:
-    static tt_metal::SystemMemoryManager& sysmem(tt_metal::distributed::FDMeshCommandQueue& cq) {
-        return cq.reference_sysmem_manager();
-    }
-};
-
 // Params that control the data volume, iteration count, and multicast/unicast
 // for the linear write test
 struct LinearWriteParams {
@@ -103,42 +90,7 @@ struct PackedWriteParams {
     uint32_t dram_data_size_words{};
 };
 
-// This will be ported to common.h when test_prefetcher.cpp is refactored
 namespace DeviceDataUpdater {
-
-// Update DeviceData for linear write
-// Mirrors a dispatcher linear-write transaction into the DeviceData expectation model
-void update_linear_write(
-    const std::vector<uint32_t>& payload, DeviceData& device_data, const CoreRange& worker_range, bool is_mcast) {
-    // Update expected device_data
-    if (is_mcast) {
-        for (const uint32_t datum : payload) {
-            device_data.push_range(worker_range, datum, true);
-        }
-    } else {
-        for (const uint32_t datum : payload) {
-            device_data.push_one(worker_range.start_coord, 0, datum);
-        }
-    }
-    // Relevel for next multicast command
-    if (is_mcast) {
-        device_data.relevel(tt::CoreType::WORKER);
-    }
-}
-
-// Update DeviceData for paged write
-// Tracks page-wise writes so validate() can check DRAM/L1 bank contents after the test runs
-void update_paged_write(
-    const std::vector<uint32_t>& payload,
-    DeviceData& device_data,
-    const CoreCoord& bank_core,
-    uint32_t bank_id,
-    uint32_t page_alignment) {
-    for (const uint32_t datum : payload) {
-        device_data.push_one(bank_core, bank_id, datum);
-    }
-    device_data.pad(bank_core, bank_id, page_alignment);
-}
 
 // Update DeviceData for packed write
 // Applies packed write payloads to every selected worker
@@ -177,75 +129,12 @@ void update_packed_large_write(
         }
     }
 }
-};  // namespace DeviceDataUpdater
+}  // namespace DeviceDataUpdater
 
 // Host-side helpers used by tests to emit the same CQ commands
 // that dispatcher code emits. This namespace replicates the production code's command generation logic
 // for testing purposes.
-// This will be ported to common.h when test_prefetcher.cpp is refactored
 namespace CommandBuilder {
-
-// Emits a single linear write, optionally multicast, with inline data
-template <bool flush_prefetch, bool inline_data>
-HostMemDeviceCommand build_linear_write_command(
-    const std::vector<uint32_t>& payload,
-    const CoreRange& worker_range,
-    bool is_mcast,
-    uint32_t noc_xy,
-    uint32_t addr,
-    uint32_t xfer_size_bytes) {
-    // Calculate the command size using DeviceCommandCalculator
-    // Pre-calculate the exact size to allocate correct amount of memory in HostMemDeviceCommand buffer
-    DeviceCommandCalculator cmd_calc;
-    cmd_calc.add_dispatch_write_linear<flush_prefetch, inline_data>(xfer_size_bytes);
-    const uint32_t command_size_bytes = cmd_calc.write_offset_bytes();
-
-    // Create the HostMemDeviceCommand with pre-calculated size
-    HostMemDeviceCommand cmd(command_size_bytes);
-
-    // Add the dispatch write linear command
-    cmd.add_dispatch_write_linear<flush_prefetch, inline_data>(
-        is_mcast ? worker_range.size() : 0,  // num_mcast_dests
-        noc_xy,                              // NOC coordinates
-        addr,                                // destination address
-        xfer_size_bytes,                     // data size
-        payload.data()                       // payload data
-    );
-
-    return cmd;
-}
-
-// Emits a paged write (DRAM or L1) chunk
-// payload is already stitched together for all pages in the chunk
-template <bool hugepage_write>
-HostMemDeviceCommand build_paged_write_command(
-    const std::vector<uint32_t>& payload,
-    uint32_t base_addr,
-    uint32_t page_size_bytes,
-    uint32_t pages_in_chunk,
-    uint16_t start_page_cmd,
-    bool is_dram) {
-    // Calculate the command size
-    DeviceCommandCalculator cmd_calc;
-    cmd_calc.add_dispatch_write_paged<hugepage_write>(page_size_bytes, pages_in_chunk);
-    const uint32_t command_size_bytes = cmd_calc.write_offset_bytes();
-
-    // Create the HostMemDeviceCommand with pre-calculated size
-    HostMemDeviceCommand cmd(command_size_bytes);
-
-    // Add the dispatch write paged command
-    cmd.add_dispatch_write_paged<hugepage_write>(
-        true,                           // flush_prefetch (inline data)
-        static_cast<uint8_t>(is_dram),  // is_dram
-        start_page_cmd,                 // start_page
-        base_addr,                      // base_addr
-        page_size_bytes,                // page_size
-        pages_in_chunk,                 // pages
-        payload.data()                  // payload for this chunk
-    );
-
-    return cmd;
-}
 
 // Serializes a packed-unicast command including sub-command table
 // and optional replicated payloads when stride is enabled
@@ -338,303 +227,12 @@ HostMemDeviceCommand build_packed_large_write_command(
 
     return cmd;
 }
-};  // namespace CommandBuilder
+}  // namespace CommandBuilder
 
-// This will be ported to common.h when test_prefetcher.cpp is refactored
-// DispatchPayloadGenerator is used to generate payloads for the tests
-class DispatchPayloadGenerator {
-public:
-    struct Config {
-        bool use_coherent_data = false;
-        uint32_t coherent_start_val = COHERENT_DATA_START_VALUE;
-        uint32_t seed = 0;
-
-        // Perf test configuration
-        bool perf_test = false;
-        uint32_t min_xfer_size_bytes = 0;
-        uint32_t max_xfer_size_bytes = 0;
-    };
-
-    DispatchPayloadGenerator(const Config& cfg) : config_(cfg), coherent_count_(cfg.coherent_start_val) {
-        if (config_.seed == 0) {
-            std::random_device rd;
-            rng_.seed(rd());
-        } else {
-            rng_.seed(config_.seed);
-        }
-    }
-
-    // Getter to log the seed used
-    uint32_t get_seed() const { return config_.seed; }
-
-    // Helper for random number generation in a range [min, max]
-    template <typename T>
-    T get_rand(T min, T max) {
-        static_assert(std::is_integral<T>::value, "T must be an integral type");
-        std::uniform_int_distribution<T> dist(min, max);
-        return dist(rng_);
-    }
-
-    // Helper for generating a random boolean (replaces std::rand() % 2)
-    bool get_rand_bool() { return (bool_dist(rng_) != 0); }
-
-    // Generates either deterministic (coherent) or random 32-bit words
-    // for the requested byte count
-    // In coherent mode, the counter is incremented so validation knows
-    // the exact pattern
-    std::vector<uint32_t> generate_payload(uint32_t xfer_size_bytes) {
-        const uint32_t size_words = xfer_size_bytes / sizeof(uint32_t);
-        std::vector<uint32_t> payload;
-        payload.reserve(size_words);
-
-        for (uint32_t i = 0; i < size_words; ++i) {
-            const uint32_t datum = config_.use_coherent_data ? coherent_count_++ : uint32_dist(rng_);
-            payload.push_back(datum);
-        }
-
-        return payload;
-    }
-
-    // Generate payload with page id
-    // Pass page_id to use for coherent data generation
-    std::vector<uint32_t> generate_payload_with_page_id(uint32_t page_size_words, uint32_t page_id) {
-        std::vector<uint32_t> payload;
-        payload.reserve(page_size_words);
-
-        for (uint32_t i = 0; i < page_size_words; ++i) {
-            const uint32_t datum = config_.use_coherent_data
-                                       ? (((page_id & 0xFF) << 24) | (coherent_count_++ & 0xFFFFFF))
-                                       : uint32_dist(rng_);
-            payload.push_back(datum);
-        }
-
-        return payload;
-    }
-
-    // Helper to generate payload data for a given core
-    // Pass core_id to use for coherent data generation
-    std::vector<uint32_t> generate_payload_with_core(
-        const CoreCoord& core_id,  // Pass the core to use
-        uint32_t xfer_size_bytes) {
-        const uint32_t size_words = xfer_size_bytes / sizeof(uint32_t);
-        std::vector<uint32_t> payload;
-        payload.reserve(size_words);
-
-        for (uint32_t i = 0; i < size_words; ++i) {
-            const uint32_t datum =
-                config_.use_coherent_data
-                    ? (((core_id.x & 0xFF) << 16) | ((core_id.y & 0xFF) << 24) | (coherent_count_++ & 0xFFFF))
-                    : uint32_dist(rng_);
-            payload.push_back(datum);
-        }
-
-        return payload;
-    }
-
-    // Chooses a payload size in 16B units, respecting perf mode clamps and remaining budget
-    uint32_t get_random_size(uint32_t max_allowed, uint32_t bytes_per_unit, uint32_t remaining_bytes) {
-        // Generate random transfer size
-        std::uniform_int_distribution<uint32_t> dist(1, max_allowed);
-        uint32_t xfer_size_16B = dist(rng_);
-        uint32_t xfer_size_bytes = xfer_size_16B * bytes_per_unit;  // Convert 16B units to bytes
-
-        // Clamp to remaining bytes
-        xfer_size_bytes = std::min(xfer_size_bytes, remaining_bytes);
-
-        // Apply perf_test_ constraints if enabled
-        if (config_.perf_test) {
-            xfer_size_bytes = std::clamp(xfer_size_bytes, config_.min_xfer_size_bytes, config_.max_xfer_size_bytes);
-        }
-
-        return xfer_size_bytes;
-    }
-
-private:
-    // Start offset to avoid 0x0 which matches DRAM prefill
-    static constexpr uint32_t COHERENT_DATA_START_VALUE = 0x100;
-    Config config_{};
-    uint32_t coherent_count_ = COHERENT_DATA_START_VALUE;
-
-    // Random number generation
-    std::mt19937 rng_;
-    // Distributions for random number generation
-    std::uniform_int_distribution<int> bool_dist{0, 1};
-    std::uniform_int_distribution<uint32_t> uint32_dist{
-        std::numeric_limits<uint32_t>::min(), std::numeric_limits<uint32_t>::max()};
-};
-
-class BaseDispatchTestFixture : public tt_metal::UnitMeshCQSingleCardFixture {
+class BaseDispatchTestFixture : public BaseTestFixture {
 protected:
-    // DispatchPayloadGenerator for generating payloads
-    std::unique_ptr<DispatchPayloadGenerator> payload_generator_;
-
     // Common constants
     static constexpr uint32_t MAX_XFER_SIZE_16B = 4 * 1024;  // Shouldn't exceed max_fetch_bytes_
-    static constexpr CoreCoord default_worker_start = {0, 1};
-    static constexpr uint32_t bytes_per_16B_unit = 16;  // conversion factor to convert 16-byte "chunks" to bytes
-
-    // Common setup for all dispatch tests
-    // Provides shared wiring for mesh device access,
-    // and command-buffer helpers so derived fixtures
-    // only implement workload-specific planning
-    tt_metal::distributed::MeshDevice* mesh_device_ = nullptr;
-    tt_metal::distributed::FDMeshCommandQueue* fdcq_ = nullptr;
-    tt_metal::SystemMemoryManager* mgr_ = nullptr;
-    tt_metal::distributed::MeshDevice::IDevice* device_ = nullptr;
-
-    // HW properties
-    uint32_t host_alignment_ = 0;
-    uint32_t max_fetch_bytes_ = 0;
-
-    // Knobs from globals
-    uint32_t dispatch_buffer_page_size_ = 0;
-    bool send_to_all_ = false;
-
-    void SetUp() override {
-        tt_metal::UnitMeshCQSingleCardFixture::SetUp();
-
-        // Setup Config
-        DispatchPayloadGenerator::Config cfg;
-        cfg.use_coherent_data = use_coherent_data_g;  // derived from globals
-        cfg.perf_test = perf_test_g;
-        cfg.min_xfer_size_bytes = min_xfer_size_bytes_g;
-        cfg.max_xfer_size_bytes = max_xfer_size_bytes_g;
-
-        // Handle Seeding
-        std::random_device rd;
-        cfg.seed = rd();
-
-        // Initialize Generator
-        payload_generator_ = std::make_unique<DispatchPayloadGenerator>(cfg);
-        log_info(tt::LogTest, "Random seed set to {}", cfg.seed);
-
-        // These are used for test logic (loops, alignment, etc.) rather than generation
-        dispatch_buffer_page_size_ = dispatch_buffer_page_size_g;
-        send_to_all_ = send_to_all_g;
-
-        // Initialize common pointers
-        mesh_device_ = devices_[0].get();
-        auto& mcq = mesh_device_->mesh_command_queue();
-        fdcq_ = &dynamic_cast<distributed::FDMeshCommandQueue&>(mcq);
-        mgr_ = &FDMeshCQTestAccessor::sysmem(*fdcq_);
-        device_ = mesh_device_->get_devices()[0];
-
-        // Initialize common HW properties
-        host_alignment_ = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
-        max_fetch_bytes_ = tt_metal::MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
-    }
-
-    // Helper function to report performance
-    void report_performance(
-        DeviceData& device_data,
-        size_t num_cores_to_log,
-        std::chrono::duration<double> elapsed,
-        uint32_t num_iterations) {
-        const float total_words = static_cast<float>(device_data.size()) * num_iterations;
-        const float bw_gbps = total_words * sizeof(uint32_t) / (elapsed.count() * 1024.0 * 1024.0 * 1024.0);
-
-        log_info(
-            LogTest,
-            "BW: {:.3f} GB/s (total_words: {:.0f}, size: {:.2f} MB, iterations: {}, cores: {})",
-            bw_gbps,
-            total_words,
-            total_words * sizeof(uint32_t) / (1024.0 * 1024.0),
-            num_iterations,
-            num_cores_to_log);
-    }
-
-    // Helper function to execute generated commands
-    // Orchestrates the command buffer reservation, writing, and submission
-    void execute_generated_commands(
-        const std::vector<HostMemDeviceCommand>& commands_per_iteration,
-        DeviceData& device_data,
-        size_t num_cores_to_log,
-        uint32_t num_iterations) {
-        // PHASE 2: Calculate total command buffer size
-        uint64_t per_iter_total = 0;
-        for (const auto& cmd : commands_per_iteration) {
-            per_iter_total += cmd.size_bytes();
-        }
-
-        const uint64_t total_cmd_bytes = num_iterations * per_iter_total;
-        log_info(tt::LogTest, "Total command bytes: {}", total_cmd_bytes);
-
-        // PHASE 3: Reserve and write commands
-        // Reserve a continuous block in the system memory issue queue for all commands across all iterations
-        // This memory is mapped and visible to the device's prefetcher kernel
-        void* cmd_buffer_base = mgr_->issue_queue_reserve(total_cmd_bytes, fdcq_->id());
-
-        // Use DeviceCommand helper (HugepageDeviceCommand) to write to the issue queue memory
-        // Two stage command construction:
-        // 1. Staging (HostMemDeviceCommand):
-        //    - commands_per_iteration: vector of HostMemDeviceCommand objects which holds a deep copy
-        //      of each command header + payload assembled offline without holding issue queue space
-        // 2. Writing (HugepageDeviceCommand):
-        //    - wraps a pointer that points directly to the issue queue memory (cmd_buffer_base)
-        //    - the loop below copies staged commands into the issue queue memory
-        HugepageDeviceCommand dc(cmd_buffer_base, total_cmd_bytes);
-
-        // Store the size of each command entry (per-chunk)
-        std::vector<uint32_t> entry_sizes;
-
-        // Calculate the total number of entries to reserve
-        size_t total_num_entries = num_iterations * commands_per_iteration.size();
-        entry_sizes.reserve(total_num_entries);
-
-        // Write commands to the command buffer for all iterations
-        for (uint32_t iter = 0; iter < num_iterations; ++iter) {
-            for (const auto& cmd : commands_per_iteration) {
-                // Add the command data to the command buffer
-                dc.add_data(cmd.data(), cmd.size_bytes(), cmd.size_bytes());
-                entry_sizes.push_back(cmd.size_bytes());
-            }
-        }
-
-        // Add barrier wait command after all commands across all iterations
-        // Helpful to ensure all commands are completed flush before terminating
-        // Without this, there can be occasional timeouts in MetalContext::initialize_and_launch_firmware()
-        // between test fixtures possibly because the previously issued commands
-        // are not completed before next firmware launch
-        DeviceCommandCalculator cmd_calc;
-        cmd_calc.add_dispatch_wait();
-        HostMemDeviceCommand cmd(cmd_calc.write_offset_bytes());
-        cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
-        dc.add_data(cmd.data(), cmd.size_bytes(), cmd.size_bytes());
-        entry_sizes.push_back(cmd.size_bytes());
-
-        // Verifies destination memory bounds
-        device_data.overflow_check(device_);
-
-        // PHASE 4: Submit and execute commands
-        // Update host-side write pointer
-        // Tells the SystemMemoryManager that valid data exists in the issue queue upto this point
-        mgr_->issue_queue_push_back(dc.write_offset_bytes(), fdcq_->id());
-
-        // Write the commands to the device-side fetch queue
-        // This updates the read/write pointers in the Device's L1 memory, effectively
-        // Signals to the prefetcher kernel that new commands are available to fetch
-        const auto start = std::chrono::steady_clock::now();
-        for (const uint32_t sz : entry_sizes) {
-            mgr_->fetch_queue_reserve_back(fdcq_->id());
-            mgr_->fetch_queue_write(sz, fdcq_->id());
-        }
-
-        // Wait for completion of the issued commands
-        distributed::Finish(mesh_device_->mesh_command_queue());
-        const auto end = std::chrono::steady_clock::now();
-
-        const std::chrono::duration<double> elapsed = end - start;
-        log_info(tt::LogTest, "Ran in {:.3f} ms (for {} iterations)", elapsed.count() * 1000.0, num_iterations);
-
-        // Validate results
-        const bool pass = device_data.validate(device_);
-        EXPECT_TRUE(pass) << "Dispatcher test failed validation";
-
-        // Report performance
-        if (pass) {
-            report_performance(device_data, num_cores_to_log, elapsed, num_iterations);
-        }
-    }
 };
 
 class DispatchLinearWriteTestFixture : public BaseDispatchTestFixture,
@@ -700,11 +298,12 @@ public:
             std::vector<uint32_t> payload = payload_generator_->generate_payload(xfer_size_bytes);
 
             // Update DeviceData for linear write
-            DeviceDataUpdater::update_linear_write(payload, device_data, worker_range, is_mcast_);
+            DeviceDataUpdater::Common::update_linear_write(payload, device_data, worker_range, is_mcast_);
 
             // Create the HostMemDeviceCommand
-            HostMemDeviceCommand cmd = CommandBuilder::build_linear_write_command<flush_prefetch_, inline_data_>(
-                payload, worker_range, is_mcast_, noc_xy, addr, xfer_size_bytes);
+            HostMemDeviceCommand cmd =
+                CommandBuilder::Common::build_linear_write_command<flush_prefetch_, inline_data_>(
+                    payload, worker_range, is_mcast_, noc_xy, addr, xfer_size_bytes);
 
             commands_per_iteration.push_back(std::move(cmd));
             remaining_bytes -= xfer_size_bytes;
@@ -801,7 +400,7 @@ public:
                     payload_generator_->generate_payload_with_page_id(page_size_words, page_id);
 
                 // Update DeviceData for paged write
-                DeviceDataUpdater::update_paged_write(
+                DeviceDataUpdater::Common::update_paged_write(
                     page_payload, device_data, bank_core, bank_id, page_size_alignment_bytes);
 
                 // Append page payload to chunk payload
@@ -816,7 +415,7 @@ public:
             const uint16_t start_page_cmd = absolute_start_page % num_banks;
 
             // Create the HostMemDeviceCommand
-            HostMemDeviceCommand cmd = CommandBuilder::build_paged_write_command<hugepage_write_>(
+            HostMemDeviceCommand cmd = CommandBuilder::Common::build_paged_write_command<hugepage_write_>(
                 chunk_payload, base_addr, page_size_bytes, pages_in_chunk, start_page_cmd, is_dram_);
 
             commands_per_iteration.push_back(std::move(cmd));
