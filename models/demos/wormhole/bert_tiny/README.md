@@ -13,7 +13,7 @@ BERT stands for Bidirectional Encoder Representations from Transformers. Unlike 
 ## How to Run
 - Run the demo:
 ```
-pytest --disable-warnings models/demos/wormhole/bert_tiny/demo/demo.py::test_demo[wormhole_b0-True-models/demos/wormhole/bert_tiny/demo/input_data.json-mrm8488/bert-tiny-finetuned-squadv2-128-device_params0]
+pytest --disable-warnings models/demos/wormhole/bert_tiny/demo/demo.py::test_demo
 ```
 
 - If you wish to run the demo with a different input use:
