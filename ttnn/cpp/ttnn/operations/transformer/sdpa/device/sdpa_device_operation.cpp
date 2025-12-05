@@ -1,15 +1,13 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sdpa_device_operation.hpp"
-
-#include <tt-metalium/constants.hpp>
-
-#include "sdpa_program_factory.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_program_factory.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/device.hpp"
+#include <tt-metalium/constants.hpp>
 
 using namespace tt::tt_metal;
 
@@ -355,17 +353,6 @@ tt::stl::hash::hash_t SDPAOperation::compute_program_hash(
     const Tensor& k = tensors.k;
     const Tensor& v = attrs.use_mla ? tensors.k : tensors.v.value_or(tensors.k);
 
-    std::vector<Tensor> input_tensors{q, k, v};
-    std::vector<std::optional<const Tensor>> optional_input_tensors;
-    optional_input_tensors.reserve(3);
-    optional_input_tensors.emplace_back(
-        tensors.attn_mask.has_value() ? std::optional<const Tensor>(tensors.attn_mask.value()) : std::nullopt);
-    optional_input_tensors.emplace_back(
-        tensors.page_table.has_value() ? std::optional<const Tensor>(tensors.page_table.value()) : std::nullopt);
-    optional_input_tensors.emplace_back(
-        tensors.attention_sink.has_value() ? std::optional<const Tensor>(tensors.attention_sink.value())
-                                           : std::nullopt);
-
     operation::Hash hash = operation::hash_operation<SDPAOperation>(
         attrs.head_dim_v,
         attrs.scale,
@@ -374,8 +361,12 @@ tt::stl::hash::hash_t SDPAOperation::compute_program_hash(
         attrs.is_causal,
         is_chunked_prefill,
         attrs.compute_kernel_config,
-        input_tensors,
-        optional_input_tensors);
+        q,
+        k,
+        v,
+        tensors.attn_mask,
+        tensors.page_table,
+        tensors.attention_sink);
     return hash;
 }
 

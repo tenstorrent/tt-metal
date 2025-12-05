@@ -1,19 +1,17 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sdpa_program_factory.hpp"
-
-#include <optional>
-#include <string>
-#include <cmath>
-
+#include "ttnn/operations/transformer/sdpa/device/sdpa_program_factory.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <optional>
+#include <string>
+#include <cmath>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
