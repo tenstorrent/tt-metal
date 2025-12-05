@@ -189,8 +189,51 @@ void HWCommandQueue::set_exit_condition() {
 
 IDevice* HWCommandQueue::device() { return this->device_; }
 
+template <typename T>
+void HWCommandQueue::enqueue_command(T& command, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    command.process();
+    if (blocking) {
+        this->finish(sub_device_ids);
+    }
+}
+
 CoreType HWCommandQueue::get_dispatch_core_type() {
     return MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
+}
+
+void HWCommandQueue::enqueue_record_event(
+    const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScopedN("HWCommandQueue_enqueue_record_event");
+
+    TT_FATAL(!this->manager_.get_bypass_mode(), "Enqueue Record Event cannot be used with tracing");
+
+    // Populate event struct for caller. When async queues are enabled, this is in child thread, so consumers
+    // of the event must wait for it to be ready (ie. populated) here. Set ready flag last. This couldn't be
+    // in main thread otherwise event_id selection would get out of order due to main/worker thread timing.
+    event->cq_id = this->id_;
+    event->event_id = this->manager_.get_next_event(this->id_);
+    event->device = this->device_;
+    event->ready = true;
+
+    sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
+    event_dispatch::issue_record_event_commands(
+        device_,
+        device_->id(),
+        event->event_id,
+        id_,
+        device_->num_hw_cqs(),
+        this->manager_,
+        sub_device_ids,
+        this->expected_num_workers_completed_);
+    this->issued_completion_q_reads_.push(
+        std::make_shared<CompletionReaderVariant>(std::in_place_type<ReadEventDescriptor>, event->event_id));
+    this->increment_num_entries_in_completion_q();
+
+    auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
+    for (const auto& sub_device_id : sub_device_ids) {
+        auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
+        sub_device_entry.recorded_event(event->event_id, event->cq_id);
+    }
 }
 
 void HWCommandQueue::read_completion_queue() {
@@ -253,6 +296,36 @@ void HWCommandQueue::read_completion_queue() {
         } else if (this->exit_condition_) {
             return;
         }
+    }
+}
+
+void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScopedN("HWCommandQueue_finish");
+    log_debug(tt::LogDispatch, "Finish for command queue {}", this->id_);
+    std::shared_ptr<Event> event = std::make_shared<Event>();
+    this->enqueue_record_event(event, sub_device_ids);
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled()) {
+        while (this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_) {
+            if (MetalContext::instance().dprint_server() and
+                MetalContext::instance().dprint_server()->hang_detected()) {
+                // DPrint Server hang, early exit. We're in test mode, so main thread will assert.
+                this->set_exit_condition();
+                return;
+            } else if (MetalContext::instance().watcher_server()->killed_due_to_error()) {
+                // Illegal NOC txn killed watcher, early exit. We're in test mode, so main thread will assert.
+                this->set_exit_condition();
+                return;
+            }
+        }
+    } else {
+        std::unique_lock<std::mutex> lock(this->reads_processed_cv_mutex_);
+        this->reads_processed_cv_.wait(
+            lock, [this] { return this->num_entries_in_completion_q_ == this->num_completed_completion_q_reads_; });
+    }
+    auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
+    for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids)) {
+        auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
+        sub_device_entry.finished(this->id_);
     }
 }
 
@@ -463,79 +536,6 @@ void HWCommandQueue::record_end() {
     // before the recording
     this->reset_prefetcher_cache_manager();
     swap(this->dummy_prefetcher_cache_manager_, this->prefetcher_cache_manager_);
-}
-
-template <typename T>
-void HWCommandQueue::enqueue_command(T& command, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    command.process();
-    if (blocking) {
-        this->finish(sub_device_ids);
-    }
-}
-
-void HWCommandQueue::enqueue_record_event(
-    const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScopedN("HWCommandQueue_enqueue_record_event");
-
-    TT_FATAL(!this->manager_.get_bypass_mode(), "Enqueue Record Event cannot be used with tracing");
-
-    // Populate event struct for caller. When async queues are enabled, this is in child thread, so consumers
-    // of the event must wait for it to be ready (ie. populated) here. Set ready flag last. This couldn't be
-    // in main thread otherwise event_id selection would get out of order due to main/worker thread timing.
-    event->cq_id = this->id_;
-    event->event_id = this->manager_.get_next_event(this->id_);
-    event->device = this->device_;
-    event->ready = true;
-
-    sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
-    event_dispatch::issue_record_event_commands(
-        device_,
-        device_->id(),
-        event->event_id,
-        id_,
-        device_->num_hw_cqs(),
-        this->manager_,
-        sub_device_ids,
-        this->expected_num_workers_completed_);
-    this->issued_completion_q_reads_.push(
-        std::make_shared<CompletionReaderVariant>(std::in_place_type<ReadEventDescriptor>, event->event_id));
-    this->increment_num_entries_in_completion_q();
-
-    auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
-    for (const auto& sub_device_id : sub_device_ids) {
-        auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
-        sub_device_entry.recorded_event(event->event_id, event->cq_id);
-    }
-}
-
-void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScopedN("HWCommandQueue_finish");
-    log_debug(tt::LogDispatch, "Finish for command queue {}", this->id_);
-    std::shared_ptr<Event> event = std::make_shared<Event>();
-    this->enqueue_record_event(event, sub_device_ids);
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled()) {
-        while (this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_) {
-            if (MetalContext::instance().dprint_server() and
-                MetalContext::instance().dprint_server()->hang_detected()) {
-                // DPrint Server hang, early exit. We're in test mode, so main thread will assert.
-                this->set_exit_condition();
-                return;
-            } else if (MetalContext::instance().watcher_server()->killed_due_to_error()) {
-                // Illegal NOC txn killed watcher, early exit. We're in test mode, so main thread will assert.
-                this->set_exit_condition();
-                return;
-            }
-        }
-    } else {
-        std::unique_lock<std::mutex> lock(this->reads_processed_cv_mutex_);
-        this->reads_processed_cv_.wait(
-            lock, [this] { return this->num_entries_in_completion_q_ == this->num_completed_completion_q_reads_; });
-    }
-    auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
-    for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids)) {
-        auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
-        sub_device_entry.finished(this->id_);
-    }
 }
 
 void HWCommandQueue::terminate() {
