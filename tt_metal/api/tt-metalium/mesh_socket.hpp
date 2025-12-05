@@ -22,6 +22,32 @@ struct MeshCoreCoord {
     }
 };
 
+class H2DSocket {
+public:
+    H2DSocket(
+        const std::shared_ptr<MeshDevice>& mesh_device,
+        const std::vector<MeshCoreCoord>& recv_cores,
+        BufferType buffer_type,
+        uint32_t fifo_size,
+        uint32_t page_size);
+
+    void reserve_pages(uint32_t num_pages);
+    void push_pages(uint32_t num_pages);
+    void notify_receiver();
+    uint32_t get_page_size() const { return page_size_; }
+
+private:
+    std::shared_ptr<MeshBuffer> config_buffer_ = nullptr;
+    std::shared_ptr<MeshBuffer> data_buffer_ = nullptr;
+    std::vector<MeshCoreCoord> recv_cores_ = {};
+    BufferType buffer_type_ = BufferType::L1;
+    uint32_t fifo_size_ = 0;
+    uint32_t page_size_ = 0;
+    std::size_t bytes_sent = 0;
+    std::unordered_map<MeshCoreCoord, std::size_t> bytes_acked = 0;
+    std::size_t write_ptr = 0;
+};
+
 // Specifies how sender cores on a Virtual Mesh connect to receiver cores on the same or another Virtual Mesh.
 // Used to determine which cores the socket config must be written to and the sender to receiver mapping.
 // Cannot reuse senders and receivers in a single socket context. Each socket connection is 1:1.

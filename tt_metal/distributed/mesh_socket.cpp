@@ -5,6 +5,7 @@
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/distributed_context.hpp>
+#include "tt_metal/hw/inc/socket.h"
 
 using namespace tt::tt_metal::distributed::multihost;
 
@@ -129,6 +130,108 @@ const SocketConfig& MeshSocket::get_config() const { return config_; }
 
 tt::tt_fabric::FabricNodeId MeshSocket::get_fabric_node_id(SocketEndpoint endpoint, const MeshCoordinate& coord) const {
     return fabric_node_id_map_[static_cast<std::underlying_type_t<SocketEndpoint>>(endpoint)].at(coord);
+}
+
+std::unordered_map<MeshCoordinate, std::unordered_set<CoreCoord>> group_recv_cores(
+    const std::vector<MeshCoreCoord>& recv_cores) {
+    std::unordered_map<MeshCoordinate, std::unordered_set<CoreCoord>> grouped_cores;
+    for (const auto& recv_core : recv_cores) {
+        grouped_cores[recv_core.device_coord].insert(recv_core.core_coord);
+    }
+    return grouped_cores;
+}
+
+H2DSocket::H2DSocket(
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    const std::vector<MeshCoreCoord>& recv_cores,
+    BufferType buffer_type,
+    uint32_t fifo_size,
+    uint32_t page_size) :
+    recv_cores_(recv_cores), buffer_type_(buffer_type), fifo_size_(fifo_size), page_size_(page_size) {
+    // Allocate memory for the config buffer
+    uint32_t config_buffer_size = sizeof(receiver_socket_md);
+    std::set<CoreRange> all_cores_set;
+    std::unordered_map<MeshCoordinate, std::set<CoreRange>> socket_cores_per_device;
+
+    for (const auto& recv_core : recv_cores_) {
+        const auto& socket_device = recv_core.device_coord;
+        const auto& socket_core = recv_core.core_coord;
+        TT_FATAL(
+            socket_cores_per_device[socket_device].insert(socket_core).second,
+            "Cannot reuse receiver cores in a single socket.");
+        all_cores_set.insert(socket_core);
+    }
+
+    auto all_cores = CoreRangeSet(all_cores_set);
+    auto num_cores = all_cores_set.size();
+    auto total_config_buffer_size = num_cores * config_buffer_size;
+
+    auto shard_params = ShardSpecBuffer(all_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
+
+    DeviceLocalBufferConfig config_buffer_specs = {
+        .page_size = config_buffer_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = std::nullopt,
+        .sub_device_id = std::nullopt,
+    };
+
+    MeshBufferConfig config_mesh_buffer_specs = ReplicatedBufferConfig{
+        .size = total_config_buffer_size,
+    };
+    config_buffer_ = MeshBuffer::create(config_mesh_buffer_specs, config_buffer_specs, mesh_device.get());
+
+    auto sub_device_id = SubDeviceId{0};
+    auto num_data_cores = mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+    auto shard_grid = mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+    auto total_data_buffer_size = num_data_cores * fifo_size_;
+
+    DeviceLocalBufferConfig data_buffer_specs = {
+        .page_size = fifo_size_,
+        .buffer_type = buffer_type_,
+        .sharding_args = BufferShardingArgs(
+            ShardSpecBuffer(shard_grid, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_data_cores, 1}),
+            TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = std::nullopt,
+        .sub_device_id = std::nullopt,
+    };
+    MeshBufferConfig data_mesh_buffer_specs = ReplicatedBufferConfig{
+        .size = total_data_buffer_size,
+    };
+    data_buffer_ = MeshBuffer::create(data_mesh_buffer_specs, data_buffer_specs, mesh_device.get());
+
+    const auto& core_to_core_id = config_buffer_->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
+
+    std::vector<receiver_socket_md> config_data(
+        config_buffer_->size() / sizeof(receiver_socket_md), receiver_socket_md());
+
+    const auto& grouped_cores = group_recv_cores(recv_cores_);
+
+    for (const auto& [device_coord, cores_set] : grouped_cores) {
+        for (const auto& core_coord : cores_set) {
+            uint32_t idx = core_to_core_id.at(core_coord);
+            auto& md = config_data[idx];
+            md.bytes_sent = 0;
+            md.read_ptr = data_buffer_->address();
+            md.fifo_addr = data_buffer_->address();
+            md.fifo_total_size = fifo_size_;
+            md.upstream_mesh_id = 0;
+            md.upstream_chip_id = 0;
+            md.upstream_noc_y = 0;
+            md.upstream_noc_x = 0;
+            md.upstream_bytes_acked_addr = 0;
+            md.is_sender = 0;
+        }
+        distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer_, config_data, device_coord, true);
+    }
+}
+
+void H2DSocket::reserve_pages(uint32_t num_pages) {
+    uint32_t num_bytes = num_pages * page_size_;
+    TT_FATAL(num_bytes <= fifo_size_, "Cannot reserve more pages than the socket FIFO size.");
+    for (const auto& recv_core : recv_cores) {
+        uint32_t bytes_free = fifo_size_ - (bytes_sent - bytes_acked[recv_core]);
+        while (bytes_acked[recv_core]) }
 }
 
 }  // namespace tt::tt_metal::distributed
