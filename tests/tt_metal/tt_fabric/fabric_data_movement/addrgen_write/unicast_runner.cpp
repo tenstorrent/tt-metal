@@ -464,4 +464,181 @@ Notes:
     }
 }
 
+// ----------------------------------- Linear (1D) program -----------------------------------
+void run_linear_unicast_write_test(HelpersFixture* fixture, const AddrgenTestParams& p) {
+    const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
+    namespace Dist = tt::tt_metal::distributed;
+
+    // Linear API test does NOT use FABRIC_2D define
+    std::map<std::string, std::string> defines = {};
+
+    tt::tt_fabric::FabricNodeId src{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip};
+    tt::tt_fabric::FabricNodeId dst{tt::tt_fabric::MeshId{p.mesh_id}, p.dst_chip};
+
+    ChipId src_phys = cp.get_physical_chip_id_from_fabric_node_id(src);
+    ChipId dst_phys = cp.get_physical_chip_id_from_fabric_node_id(dst);
+
+    tt::tt_metal::IDevice* src_dev = nullptr;
+    tt::tt_metal::IDevice* dst_dev = nullptr;
+    if (!lookup_devices_or_fail(src_phys, dst_phys, src_dev, dst_dev)) {
+        return;
+    }
+
+    if (!validate_workload_or_fail(p)) {
+        return;
+    }
+
+    tt::tt_metal::CoreCoord rx_xy = dst_dev->worker_core_from_logical_core(p.receiver_core);
+
+    // --- Mesh device + coords for per-shard IO ---
+    auto mesh = fixture->get_mesh_device();
+    auto view = mesh->get_view();
+    auto coord_of_phys = [&](ChipId phys) -> Dist::MeshCoordinate {
+        for (const auto& c : Dist::MeshCoordinateRange(view.shape())) {
+            if (view.get_device(c)->id() == phys) {
+                return c;
+            }
+        }
+        TT_FATAL(false, "Physical chip {} is not part of this MeshDevice", phys);
+        return Dist::MeshCoordinate(0);
+    };
+    Dist::MeshCoordinate src_coord = coord_of_phys(src_phys);
+    Dist::MeshCoordinate dst_coord = coord_of_phys(dst_phys);
+
+    // --- IO buffers & initialization (MeshBuffer style) ---
+    Dist::DeviceLocalBufferConfig src_local{.page_size = p.page_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
+    Dist::DeviceLocalBufferConfig dst_local{
+        .page_size = p.page_size,
+        .buffer_type = p.use_dram_dst ? tt::tt_metal::BufferType::DRAM : tt::tt_metal::BufferType::L1};
+    Dist::ReplicatedBufferConfig rcfg{.size = p.tensor_bytes};
+    auto src_buf = Dist::MeshBuffer::create(rcfg, src_local, mesh.get());
+    auto dst_buf = Dist::MeshBuffer::create(rcfg, dst_local, mesh.get());
+
+    const size_t n_words = p.tensor_bytes / 4;
+    auto tx = make_tx_pattern(n_words);
+    std::vector<uint32_t> zeros(n_words, 0u);
+
+    // Mesh CQ (needed for shard I/O and later trace)
+    auto& mcq = mesh->mesh_command_queue();
+    // Initialize shards on specific src/dst devices (pass CQ, use vectors)
+    Dist::WriteShard(mcq, src_buf, tx, src_coord, /*blocking=*/true);
+    Dist::WriteShard(mcq, dst_buf, zeros, dst_coord, /*blocking=*/true);
+
+    // --- Global semaphore ---
+    tt::tt_metal::Program receiver_prog = tt::tt_metal::CreateProgram();
+    tt::tt_metal::CoreRangeSet rx_core_set(tt::tt_metal::CoreRange(p.receiver_core, p.receiver_core));
+    static std::optional<tt::tt_metal::GlobalSemaphore> gsem_linear;
+    if (!gsem_linear) {
+        gsem_linear = tt::tt_metal::CreateGlobalSemaphore(mesh.get(), rx_core_set, /*initial_value=*/0);
+    }
+
+    const std::string KDIR = "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/";
+
+    // Receiver kernel
+    auto rx_wait_k = tt::tt_metal::CreateKernel(
+        receiver_prog,
+        KDIR + "rx_addrgen.cpp",
+        p.receiver_core,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
+
+    const uint32_t NUM_PAGES = (p.tensor_bytes + p.page_size - 1) / p.page_size;
+
+    // Calculate aligned page sizes
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    uint32_t src_alignment = hal.get_alignment(tt::tt_metal::HalMemType::DRAM);
+    uint32_t dst_alignment = p.use_dram_dst ? hal.get_alignment(tt::tt_metal::HalMemType::DRAM)
+                                            : hal.get_alignment(tt::tt_metal::HalMemType::L1);
+    uint32_t src_aligned_page_size = ((p.page_size + src_alignment - 1) / src_alignment) * src_alignment;
+    uint32_t dst_aligned_page_size = ((p.page_size + dst_alignment - 1) / dst_alignment) * dst_alignment;
+
+    // Receiver waits for 1 semaphore increment (sent after all writes)
+    tt::tt_metal::SetRuntimeArgs(receiver_prog, rx_wait_k, p.receiver_core, {gsem_linear->address(), 1u});
+
+    // Sender program: READER (RISCV_0) + WRITER (RISCV_1)
+    tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
+    const uint32_t CB_ID = tt::CBIndex::c_0;
+    auto cb_cfg = tt::tt_metal::CircularBufferConfig(8 * src_aligned_page_size, {{CB_ID, tt::DataFormat::Float16}})
+                      .set_page_size(CB_ID, src_aligned_page_size);
+    (void)tt::tt_metal::CreateCircularBuffer(sender_prog, p.sender_core, cb_cfg);
+
+    // Reader kernel - simplified for BasicWrite only (no OPERATION_TYPE needed)
+    std::vector<uint32_t> reader_cta;
+    tt::tt_metal::TensorAccessorArgs(*src_buf).append_to(reader_cta);
+    reader_cta.push_back(static_cast<uint32_t>(OperationType::BasicWrite));  // OPERATION_TYPE
+    reader_cta.push_back(1u);                                                // SRC_IS_DRAM
+    reader_cta.push_back(NUM_PAGES);
+    reader_cta.push_back(p.page_size);
+    reader_cta.push_back(src_aligned_page_size);
+
+    auto reader_k = tt::tt_metal::CreateKernel(
+        sender_prog,
+        KDIR + "tx_reader_to_cb_addrgen.cpp",
+        p.sender_core,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .compile_args = reader_cta,
+            .defines = defines});
+    tt::tt_metal::SetRuntimeArgs(sender_prog, reader_k, p.sender_core, {(uint32_t)src_buf->address()});
+
+    // Writer kernel (linear addrgen)
+    std::vector<uint32_t> writer_cta;
+    tt::tt_metal::TensorAccessorArgs(*dst_buf).append_to(writer_cta);
+    writer_cta.push_back(NUM_PAGES);
+    writer_cta.push_back(p.page_size);
+    writer_cta.push_back(dst_aligned_page_size);
+
+    auto writer_k = tt::tt_metal::CreateKernel(
+        sender_prog,
+        KDIR + "linear_unicast_tx_writer_addrgen.cpp",
+        p.sender_core,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt::tt_metal::NOC::RISCV_1_default,
+            .compile_args = writer_cta,
+            .defines = defines});
+
+    // Get forwarding link for fabric connection
+    auto forwarding_links = tt::tt_fabric::get_forwarding_link_indices(src, dst);
+    if (forwarding_links.empty()) {
+        ADD_FAILURE() << "No forwarding links from src to dst";
+        return;
+    }
+    uint32_t link_idx = forwarding_links[0];
+
+    // For linear fabric, num_hops is a test parameter (like other linear tests)
+    // Hardcoded to 1 for simple single-hop test between adjacent chips
+    uint32_t num_hops = 1;
+
+    std::vector<uint32_t> writer_rt = {
+        (uint32_t)dst_buf->address(),      // 0: dst_base
+        (uint32_t)rx_xy.x,                 // 1: receiver_noc_x
+        (uint32_t)rx_xy.y,                 // 2: receiver_noc_y
+        (uint32_t)gsem_linear->address(),  // 3: receiver L1 semaphore addr
+        num_hops                           // 4: num_hops for linear unicast
+    };
+
+    // Pack fabric connection runtime args
+    tt::tt_fabric::append_fabric_connection_rt_args(src, dst, link_idx, sender_prog, p.sender_core, writer_rt);
+
+    tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
+
+    // --- Execution ---
+    Dist::MeshWorkload receiver_workload;
+    Dist::MeshWorkload sender_workload;
+    receiver_workload.add_program(Dist::MeshCoordinateRange(dst_coord), std::move(receiver_prog));
+    sender_workload.add_program(Dist::MeshCoordinateRange(src_coord), std::move(sender_prog));
+
+    Dist::EnqueueMeshWorkload(mcq, receiver_workload, /*blocking=*/false);
+    Dist::EnqueueMeshWorkload(mcq, sender_workload, /*blocking=*/true);
+
+    // Read back and verify
+    std::vector<uint32_t> rx(n_words, 0u);
+    Dist::ReadShard(mcq, rx, dst_buf, dst_coord, /*blocking=*/true);
+    verify_payload_words(rx, tx);
+}
+
 }  // namespace tt::tt_fabric::test

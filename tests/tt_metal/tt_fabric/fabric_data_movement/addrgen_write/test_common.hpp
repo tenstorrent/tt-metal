@@ -57,7 +57,9 @@ enum class AddrgenApiVariant {
                                           // manager variant)
     ScatterWriteConnMgr,                  // fabric_unicast_noc_scatter_write (connection manager variant)
     ScatterWriteWithStateConnMgr,         // fabric_unicast_noc_scatter_write_with_state (connection manager variant)
-    ScatterWriteSetStateConnMgr           // fabric_unicast_noc_scatter_write_set_state (connection manager variant)
+    ScatterWriteSetStateConnMgr,          // fabric_unicast_noc_scatter_write_set_state (connection manager variant)
+    // Linear (1D) API variants
+    LinearUnicastWrite  // linear fabric_unicast_noc_unicast_write with addrgen
 };
 
 // ---- Reusable defaults for addrgen tests ----

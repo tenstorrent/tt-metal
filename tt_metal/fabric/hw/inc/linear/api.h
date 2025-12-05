@@ -14,9 +14,17 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/api_common.h"
+#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 
 using namespace tt::tt_fabric::common::experimental;
 namespace tt::tt_fabric::linear::experimental {
+
+// Type trait to detect if a type is an addrgen (has get_noc_addr method)
+template <typename T, typename = void>
+struct is_addrgen : std::false_type {};
+
+template <typename T>
+struct is_addrgen<T, std::void_t<decltype(std::declval<const T&>().get_noc_addr(0))>> : std::true_type {};
 
 static FORCE_INLINE void fabric_set_unicast_route(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
@@ -1842,6 +1850,77 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
         fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<UpdateMask>(
             packet_header, start_distance[i], range[i], command_header, packet_size_bytes);
     });
+}
+
+// ============================================================================
+// Addrgen API Overloads
+// ============================================================================
+
+// Unicast Write Addrgen Overloads
+// clang-format off
+/**
+ * Unicast write (addrgen overload): sends payload to destination computed from address generator.
+ *
+ * Return value: None
+ *
+ * | Argument                              | Description                             | Type                                          | Required |
+ * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
+ * | client_interface                      | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*            | True     |
+ * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
+ * | src_addr                              | Source L1 address                       | uint32_t                                      | True     |
+ * | addrgen                               | Address generator (e.g. TensorAccessor) | const AddrGenType&                            | True     |
+ * | page_id                               | Page ID to compute NOC address          | uint32_t                                      | True     |
+ * | num_hops                              | Unicast hop count                       | uint8_t                                       | True     |
+ * | offset                                | Offset within page                      | uint32_t                                      | False    |
+ */
+// clang-format on
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_unicast_write(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint8_t num_hops,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(addrgen);
+
+    uint32_t remaining_size = page_size;
+    uint32_t current_offset = offset;
+
+    // Send full-size packets (loop skips for small pages)
+    while (remaining_size > FABRIC_MAX_PACKET_SIZE) {
+        auto noc_address = tt::tt_fabric::linear::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+        // Ensure hardware has finished reading packet_header before modifying it
+        noc_async_writes_flushed();
+
+        fabric_unicast_noc_unicast_write(
+            client_interface,
+            packet_header,
+            src_addr,
+            FABRIC_MAX_PACKET_SIZE,
+            tt::tt_fabric::NocUnicastCommandHeader{noc_address},
+            num_hops);
+
+        src_addr += FABRIC_MAX_PACKET_SIZE;
+        current_offset += FABRIC_MAX_PACKET_SIZE;
+        remaining_size -= FABRIC_MAX_PACKET_SIZE;
+    }
+
+    // Send remainder packet (for small pages, this is the only packet)
+    auto noc_address = tt::tt_fabric::linear::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+    // Ensure hardware has finished reading packet_header before modifying it
+    noc_async_writes_flushed();
+
+    fabric_unicast_noc_unicast_write(
+        client_interface,
+        packet_header,
+        src_addr,
+        remaining_size,
+        tt::tt_fabric::NocUnicastCommandHeader{noc_address},
+        num_hops);
 }
 
 }  // namespace tt::tt_fabric::linear::experimental
