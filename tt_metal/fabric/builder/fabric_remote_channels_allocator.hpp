@@ -76,8 +76,8 @@ public:
     void print(std::ostream& os) const override;
 
 private:
-    std::array<size_t, builder_config::num_receiver_channels> remote_receiver_channels_base_address_ = {};
-    std::array<size_t, builder_config::num_receiver_channels> remote_receiver_channels_num_buffers_ = {};
+    std::array<size_t, builder_config::num_max_receiver_channels> remote_receiver_channels_base_address_ = {};
+    std::array<size_t, builder_config::num_max_receiver_channels> remote_receiver_channels_num_buffers_ = {};
     size_t num_used_receiver_channels_ = 0;
 };
 
