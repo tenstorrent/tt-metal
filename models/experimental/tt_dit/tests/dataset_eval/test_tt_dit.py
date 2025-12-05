@@ -24,32 +24,6 @@ from models.common.utility_functions import profiler
 
 # COCO captions download path
 COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/coco2014/captions/captions_source.tsv"
-OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "tt_dit_flux1_test_results.json"
-
-
-class SimpleProfiler:
-    def __init__(self):
-        self.times = {}
-        self.start_times = {}
-
-    def start(self, name):
-        self.start_times[name] = time.time()
-        if name not in self.times:
-            self.times[name] = []
-
-    def end(self, name):
-        if name in self.start_times:
-            elapsed = time.time() - self.start_times[name]
-            self.times[name].append(elapsed)
-            del self.start_times[name]
-
-    def get(self, name):
-        if name in self.times and self.times[name]:
-            return sum(self.times[name]) / len(self.times[name])
-        return 0.0
-
-
-# profiler = SimpleProfiler()
 
 
 def get_pipeline(mesh_device, model_id, model_location_generator):
@@ -97,20 +71,18 @@ def get_prompts(captions_path, start_from, num_prompts):
 
 
 @pytest.mark.parametrize(
-    "image_w, image_h, guidance_scale",
+    "mesh_device",
     [
-        (1024, 1024, 3.5),
-    ],
-)
-@pytest.mark.parametrize(
-    "mesh_device, sp, tp, encoder_tp, vae_tp, topology, num_links",
-    [
-        [(2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
-        [(4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 4],
+        (1, 2),
+        (2, 2),
+        (2, 4),
+        (4, 8),
     ],
     ids=[
-        "2x4sp0tp1",
-        "4x8sp0tp1",
+        "1x2",
+        "2x2",
+        "2x4",
+        "4x8",
     ],
     indirect=["mesh_device"],
 )
@@ -122,21 +94,14 @@ def get_prompts(captions_path, start_from, num_prompts):
 def test_tt_dit_accuracy(
     *,
     mesh_device: ttnn.MeshDevice,
-    image_w,
-    image_h,
-    guidance_scale,
     num_inference_steps,
-    sp,
-    tp,
-    encoder_tp,
-    vae_tp,
-    topology,
-    num_links,
     model_id,
     model_location_generator,
     evaluation_range,
 ) -> None:
-    """Accuracy test for TT-Metal Flux.1 pipeline with CLIP and FID score evaluation."""
+    """Accuracy test for TT-Metal DiT pipelines with CLIP and FID score evaluation.
+    It relies on the default configurations set in each pipeline.
+    """
 
     captions_path = "coco_captions/captions.tsv"
     coco_statistics_path = "coco_statistics/val2014.npz"
@@ -146,8 +111,6 @@ def test_tt_dit_accuracy(
 
     logger.info(f"  Mesh shape: {mesh_device.shape}")
     logger.info(f"  Model ID: {model_id}")
-    logger.info(f"  Image size: {image_w}x{image_h}")
-    logger.info(f"  Guidance scale: {guidance_scale}")
     logger.info(f"  Inference steps: {num_inference_steps}")
 
     # Create pipeline similar to test_performance_flux1.py
@@ -160,7 +123,7 @@ def test_tt_dit_accuracy(
     images = []
     total_times = []
 
-    logger.info(f"Starting generation of {len(prompts)} images at {image_w}x{image_h}...")
+    logger.info(f"Starting generation of {len(prompts)} images...")
 
     # Generate images for each prompt
     for i, prompt in enumerate(prompts):
@@ -239,36 +202,21 @@ def test_tt_dit_accuracy(
     clip_std_serializable = float(deviation_clip_score) if deviation_clip_score != "N/A" else "N/A"
     fid_serializable = float(fid_score) if fid_score != "N/A" else "N/A"
 
-    sp_factor = sp[0]
-    tp_factor = tp[0]
-    encoder_tp_factor = encoder_tp[0]
-    vae_tp_factor = vae_tp[0]
-
     data = {
-        "model": "flux1",
+        "model": model_id,
         "metadata": {
             "device": f"TT-Metal-{mesh_device.shape[0]}x{mesh_device.shape[1]}",
-            "model_name": "dev",
-            "actual_model": "black-forest-labs/FLUX.1-dev",
+            "model_name": model_id,
             "start_from": start_from,
             "num_prompts": num_prompts,
-            "image_width": image_w,
-            "image_height": image_h,
-            "guidance_scale": guidance_scale,
             "num_inference_steps": num_inference_steps,
             "backend": "tt-metal",
             "mesh_shape": list(mesh_device.shape),
-            "sp": sp_factor,
-            "tp": tp_factor,
-            "encoder_tp": encoder_tp_factor,
-            "vae_tp": vae_tp_factor,
-            "topology": str(topology),
-            "num_links": num_links,
         },
         "benchmarks_summary": [
             {
                 "device": f"TT-Metal-{mesh_device.shape[0]}x{mesh_device.shape[1]}",
-                "model": "flux1",
+                "model": model_id,
                 "average_denoising_time": average_denoising_time,
                 "average_vae_time": average_vae_time,
                 "average_inference_time": average_inference_time,
@@ -282,13 +230,14 @@ def test_tt_dit_accuracy(
         ],
     }
 
-    os.makedirs(OUT_ROOT, exist_ok=True)
-    with open(f"{OUT_ROOT}/{RESULTS_FILE_NAME}", "w") as f:
+    out_root = "test_reports"
+    os.makedirs(out_root, exist_ok=True)
+    file_path = f"{out_root}/test_{model_id.replace('.', '')}_results.json"
+    with open(file_path, "w") as f:
         json.dump(data, f, indent=4)
-    logger.info(f"test results saved to {OUT_ROOT}/{RESULTS_FILE_NAME}")
+    logger.info(f"test results saved to {file_path}")
 
-    # Clean up
-    pipeline.timing_collector = None
+    # Synchronize devices
     pipeline.synchronize_devices()
 
     print(f"\n🎉 Test completed successfully!")

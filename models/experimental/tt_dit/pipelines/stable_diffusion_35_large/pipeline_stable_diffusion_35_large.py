@@ -29,7 +29,7 @@ from ...models.vae.vae_sd35 import VAEDecoder
 from ...parallel.manager import CCLManager
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig, ParallelFactor
 from ...utils.padding import PaddingConfig
-from ...utils.cache import save_cache_dict, load_cache_dict, cache_dict_exists, get_and_create_cache_path
+from ...utils import cache
 
 TILE_SIZE = 32
 
@@ -176,25 +176,15 @@ class StableDiffusion3Pipeline:
                 padding_config=padding_config,
             )
 
-            if use_cache:
-                cache_path = get_and_create_cache_path(
-                    model_name="stable-diffusion-3.5-large",
-                    subfolder="transformer",
-                    parallel_config=self.dit_parallel_config,
-                    mesh_shape=tuple(submesh_device.shape),
-                    dtype="bf16",
-                )
-                # create cache if it doesn't exist
-                if not cache_dict_exists(cache_path):
-                    logger.info(
-                        f"Cache does not exist. Creating cache: {cache_path} and loading transformer weights from PyTorch state dict"
-                    )
-                    tt_transformer.load_state_dict(torch_transformer.state_dict())
-                    save_cache_dict(tt_transformer.to_cached_state_dict(cache_path), cache_path)
-                else:
-                    logger.info(f"Loading transformer weights from cache: {cache_path}")
-                    tt_transformer.from_cached_state_dict(load_cache_dict(cache_path))
-            else:
+            if not cache.initialize_from_cache(
+                tt_model=tt_transformer,
+                torch_state_dict=torch_transformer.state_dict(),
+                model_name="stable-diffusion-3.5-large",
+                subfolder="transformer",
+                parallel_config=self.dit_parallel_config,
+                mesh_shape=tuple(submesh_device.shape),
+                dtype="bf16",
+            ):
                 logger.info("Loading transformer weights from PyTorch state dict")
                 tt_transformer.load_state_dict(torch_transformer.state_dict())
 
@@ -418,7 +408,7 @@ class StableDiffusion3Pipeline:
 
         return pipeline
 
-    def run_single_prompt(self, prompt, negative_prompt="", num_inference_steps=40, seed=None):
+    def run_single_prompt(self, prompt, negative_prompt="", num_inference_steps=40, seed=None, traced=True):
         return self.__call__(
             prompt_1=[prompt],
             prompt_2=[prompt],
@@ -428,7 +418,7 @@ class StableDiffusion3Pipeline:
             negative_prompt_3=[negative_prompt or ""],
             num_inference_steps=num_inference_steps,
             seed=seed,
-            traced=True,
+            traced=traced,
         )
 
     def __call__(
@@ -842,6 +832,10 @@ class StableDiffusion3Pipeline:
 
         decoded_output = self._vae_decoder(self._vae_input_latents)
         return decoded_output
+
+    def synchronize_devices(self):
+        for submesh_device in self.submesh_devices:
+            ttnn.synchronize_device(submesh_device)
 
     def _encode_prompts(
         self,
