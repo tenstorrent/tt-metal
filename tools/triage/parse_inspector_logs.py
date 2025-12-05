@@ -440,6 +440,10 @@ class InspectorLogsData:
     def getMeshWorkloads(self):
         return self.mesh_workloads
 
+    def getMetalDeviceIdMappings(self):
+        GetMetalDeviceIdMappingsResults = namedtuple("GetMetalDeviceIdMappingsResults", ["mappings"])
+        return GetMetalDeviceIdMappingsResults(mappings=[])
+
     @cached_property
     def kernels(self) -> dict[int, KernelData]:
         return get_kernels(self.log_directory)
