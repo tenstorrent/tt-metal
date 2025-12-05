@@ -654,7 +654,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             all_cores,
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .fp32_dest_acc_en = 1,
                 .math_approx_mode = math_approx_mode,
                 .compile_args = compute_ct_args,
             });

@@ -135,26 +135,21 @@ void kernel_main() {
     cb_push_back(packet_cb_id, 1);
 
     const uint64_t dst_noc_addr = get_noc_addr(core_noc_x, core_noc_y, receiver_base_address);
-    packet_header_ptr->to_noc_unicast_write(
-        NocUnicastCommandHeader{dst_noc_addr}, align(new_payload_size_bytes, alignment));
+    const uint64_t receive_sem_noc_addr = get_noc_addr(core_noc_x, core_noc_y, receive_semaphore_addr);
+
+    // Use fused packet API to send data + semaphore increment in a single packet
+    packet_header_ptr->to_noc_fused_unicast_write_atomic_inc(
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+            dst_noc_addr,          // where to write the data
+            receive_sem_noc_addr,  // semaphore address to increment
+            1,                     // increment value
+            true                   // flush after write
+        },
+        align(new_payload_size_bytes, alignment));
 
     mux_connection.wait_for_empty_write_slot();
     mux_connection.send_payload_without_header_non_blocking_from_address(packet_base_addr, new_payload_size_bytes);
-    mux_connection.send_payload_flush_non_blocking_from_address(
-        (uint32_t)packet_header_ptr, sizeof(PACKET_HEADER_TYPE));
-
-    cb_reserve_back(packet_header_cb_id, 1);
-    const uint32_t sem_header_addr = get_write_ptr(packet_header_cb_id);
-    cb_push_back(packet_header_cb_id, 1);
-
-    const uint64_t receive_sem_noc_addr = get_noc_addr(receive_semaphore_addr);
-
-    auto* sem_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(sem_header_addr);
-    fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)sem_header_ptr, dst_num_hops);
-    sem_header_ptr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{receive_sem_noc_addr, 1});
-
-    mux_connection.wait_for_empty_write_slot();
-    mux_connection.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr, packet_header_size_bytes);
+    mux_connection.send_payload_flush_blocking_from_address((uint32_t)packet_header_ptr, sizeof(PACKET_HEADER_TYPE));
 
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
     if (is_termination_master) {
