@@ -2166,7 +2166,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
 
     // Cap initial payload size to hardware limit for large pages
     // The WithState calls in the loop will handle actual chunking
-    uint32_t init_payload_size = (page_size > FABRIC_MAX_PACKET_SIZE) ? FABRIC_MAX_PACKET_SIZE : page_size;
+    uint32_t init_payload_size = std::min(page_size, static_cast<uint32_t>(FABRIC_MAX_PACKET_SIZE));
 
     fabric_unicast_noc_unicast_write_set_state<UpdateMask>(
         packet_header, dst_dev_id, dst_mesh_id, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, init_payload_size);
@@ -2199,7 +2199,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
 
     // Cap initial payload size to hardware limit for large pages
     // The WithState calls in the loop will handle actual chunking
-    uint32_t init_payload_size = (page_size > FABRIC_MAX_PACKET_SIZE) ? FABRIC_MAX_PACKET_SIZE : page_size;
+    uint32_t init_payload_size = std::min(page_size, static_cast<uint32_t>(FABRIC_MAX_PACKET_SIZE));
 
     fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::All>(
         connection_manager, route_id, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, init_payload_size);
@@ -2581,7 +2581,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
 
     // Cap initial payload size to hardware limit for large pages
     // The WithState calls in the loop will handle actual chunking
-    uint32_t init_payload_size = (page_size > FABRIC_MAX_PACKET_SIZE) ? FABRIC_MAX_PACKET_SIZE : page_size;
+    uint32_t init_payload_size = std::min(page_size, static_cast<uint32_t>(FABRIC_MAX_PACKET_SIZE));
 
     // Call base _set_state to set up all header fields
     // This is typically called once before a loop
@@ -2626,7 +2626,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
 
     // Cap initial payload size to hardware limit for large pages
     // The WithState calls in the loop will handle actual chunking
-    uint32_t init_payload_size = (page_size > FABRIC_MAX_PACKET_SIZE) ? FABRIC_MAX_PACKET_SIZE : page_size;
+    uint32_t init_payload_size = std::min(page_size, static_cast<uint32_t>(FABRIC_MAX_PACKET_SIZE));
 
     fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state<UnicastFusedAtomicIncUpdateMask::All>(
         connection_manager,
@@ -3313,7 +3313,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
 
     // Cap initial payload size to hardware limit for large pages
     // The WithState calls in the loop will handle actual chunking
-    uint32_t init_payload_size = (page_size > FABRIC_MAX_PACKET_SIZE) ? FABRIC_MAX_PACKET_SIZE : page_size;
+    uint32_t init_payload_size = std::min(page_size, static_cast<uint32_t>(FABRIC_MAX_PACKET_SIZE));
 
     fabric_multicast_noc_unicast_write_set_state<UpdateMask>(
         packet_header,
@@ -3357,7 +3357,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
 
     // Cap initial payload size to hardware limit for large pages
     // The WithState calls in the loop will handle actual chunking
-    uint32_t init_payload_size = (page_size > FABRIC_MAX_PACKET_SIZE) ? FABRIC_MAX_PACKET_SIZE : page_size;
+    uint32_t init_payload_size = std::min(page_size, static_cast<uint32_t>(FABRIC_MAX_PACKET_SIZE));
 
     fabric_multicast_noc_unicast_write_set_state<UpdateMask>(
         connection_manager, route_id, ranges, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, init_payload_size);
@@ -4114,7 +4114,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
     auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
     // Cap initial payload size to hardware limit for large pages
-    uint32_t init_payload_size = (page_size > FABRIC_MAX_PACKET_SIZE) ? FABRIC_MAX_PACKET_SIZE : page_size;
+    uint32_t init_payload_size = std::min(page_size, static_cast<uint32_t>(FABRIC_MAX_PACKET_SIZE));
 
     fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<UpdateMask>(
         packet_header,
@@ -4163,7 +4163,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
     auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
     // Cap initial payload size to hardware limit for large pages
-    uint32_t init_payload_size = (page_size > FABRIC_MAX_PACKET_SIZE) ? FABRIC_MAX_PACKET_SIZE : page_size;
+    uint32_t init_payload_size = std::min(page_size, static_cast<uint32_t>(FABRIC_MAX_PACKET_SIZE));
 
     fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<UpdateMask>(
         connection_manager,
