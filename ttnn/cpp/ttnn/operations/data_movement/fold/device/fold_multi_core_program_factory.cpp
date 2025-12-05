@@ -15,6 +15,113 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
+struct FoldTransfer {
+    uint16_t src_noc_x;
+    uint16_t src_noc_y;
+    uint16_t src_local_idx;
+    uint16_t length = 1;
+};
+
+std::vector<std::vector<FoldTransfer>> generate_fold_transfers(
+    const Tensor& input, uint32_t stride_h, uint32_t stride_w) {
+    auto input_shape = input.logical_shape();
+    auto input_shard_spec = input.shard_spec();
+
+    uint32_t N = input_shape[0];
+    uint32_t H = input_shape[1];
+    uint32_t W = input_shape[2];
+
+    uint32_t input_shard_height = input_shard_spec->shape[0];
+    uint32_t num_cores = input_shard_spec->grid.num_cores();
+
+    uint32_t out_H = H / stride_h;
+    uint32_t out_W = W / stride_w;
+
+    uint32_t output_shard_height = input_shard_height / (stride_h * stride_w);
+
+    auto logical_cores = tt::tt_metal::corerange_to_cores(
+        input_shard_spec->grid, num_cores, input_shard_spec->orientation == ShardOrientation::ROW_MAJOR);
+
+    std::vector<CoreCoord> noc_coords;
+    for (const auto& core : logical_cores) {
+        noc_coords.push_back(input.device()->worker_core_from_logical_core(core));
+    }
+
+    std::vector<std::vector<FoldTransfer>> per_core_transfers(num_cores);
+
+    uint32_t output_pixel = 0;
+    for (uint32_t n = 0; n < N; n++) {
+        for (uint32_t h = 0; h < out_H; h++) {
+            for (uint32_t w = 0; w < out_W; w++) {
+                uint32_t dst_core_idx = output_pixel / output_shard_height;
+                for (uint32_t s_h = 0; s_h < stride_h; s_h++) {
+                    for (uint32_t s_w = 0; s_w < stride_w; s_w++) {
+                        uint32_t in_h = h * stride_h + s_h;
+                        uint32_t in_w = w * stride_w + s_w;
+                        uint32_t in_idx = (n * H * W) + (in_h * W) + in_w;
+
+                        uint32_t input_core_id = in_idx / input_shard_height;
+                        uint32_t src_local_idx = in_idx % input_shard_height;
+
+                        auto [src_noc_x, src_noc_y] = noc_coords[input_core_id];
+
+                        per_core_transfers[dst_core_idx].push_back(
+                            {static_cast<uint16_t>(src_noc_x),
+                             static_cast<uint16_t>(src_noc_y),
+                             static_cast<uint16_t>(src_local_idx),
+                             1});
+                    }
+                }
+                output_pixel++;
+            }
+        }
+    }
+    return per_core_transfers;
+}
+
+uint32_t get_max_transfers_per_core(const std::vector<std::vector<FoldTransfer>>& per_core_transfers) {
+    uint32_t max_entries = 0;
+    for (const auto& core_transfers : per_core_transfers) {
+        max_entries = std::max(max_entries, static_cast<uint32_t>(core_transfers.size()));
+    }
+    return max_entries;
+}
+
+Tensor create_fold_transfers_tensor(
+    const std::vector<std::vector<FoldTransfer>>& per_core_transfers,
+    const CoreRangeSet& core_grid,
+    ShardOrientation orientation,
+    const Tensor& input_tensor) {
+    uint32_t num_cores = core_grid.num_cores();
+    uint32_t max_entries = get_max_transfers_per_core(per_core_transfers);
+
+    uint32_t config_shard_width = max_entries * 4;
+
+    // Flatten the transfers into a single vector
+    std::vector<uint16_t> flattened_data;
+    for (auto core_transfers : per_core_transfers) {
+        for (auto transfer : core_transfers) {
+            flattened_data.push_back(transfer.src_noc_x);
+            flattened_data.push_back(transfer.src_noc_y);
+            flattened_data.push_back(transfer.src_local_idx);
+            flattened_data.push_back(transfer.length);
+        }
+        uint32_t padding = (max_entries - core_transfers.size()) * 4;
+        for (uint32_t i = 0; i < padding; i++) {
+            flattened_data.push_back(0);
+        }
+    }
+    ttnn::Shape config_shape({num_cores, config_shard_width});
+    auto config_buffer = HostBuffer(std::move(flattened_data));
+    Tensor host_tensor(std::move(config_buffer), config_shape, DataType::UINT16, Layout::ROW_MAJOR);
+
+    ShardSpec config_shard_spec = ShardSpec(core_grid, {1, config_shard_width}, orientation);
+
+    MemoryConfig config_memory_config =
+        MemoryConfig(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec);
+    return host_tensor.to_device(input_tensor.device(), config_memory_config);
+}
+
 Fold::MultiCore::cached_program_t fold_multi_core(
     const Tensor& input, const Tensor& output, uint32_t stride_h, uint32_t stride_w) {
     Program program = CreateProgram();
@@ -29,11 +136,8 @@ Fold::MultiCore::cached_program_t fold_multi_core(
     uint32_t num_dst_pixels = num_pixels / (stride_h * stride_w);
 
     // chunk consists of channel values of stride_w neighboring pixels along the W dimension
-    uint32_t width = input.padded_shape()[2];
     uint32_t chunk_size = stride_w * pixel_size;
     uint32_t dst_pixel_size = stride_h * chunk_size;
-    uint32_t num_dst_rows = num_pixels / (width * stride_h);
-    uint32_t pixels_per_dst_row = stride_h * width;
 
     // input CB
     uint32_t cb_src0_index = tt::CBIndex::c_0;
@@ -52,38 +156,39 @@ Fold::MultiCore::cached_program_t fold_multi_core(
             .set_globally_allocated_address(*output.buffer());
     auto cb_dst0 = CreateCircularBuffer(program, all_cores, dst_cb_config);
 
+    auto per_core_transfers = generate_fold_transfers(input, stride_h, stride_w);
+    auto config_tensor = create_fold_transfers_tensor(
+        per_core_transfers, output.shard_spec()->grid, input.shard_spec()->orientation, input);
+
+    uint32_t config_cb_index = tt::CBIndex::c_1;
+    uint32_t config_page_size = get_max_transfers_per_core(per_core_transfers) * 4 * sizeof(uint16_t);
+    auto config_cb_config = CircularBufferConfig(config_page_size, {{config_cb_index, tt::DataFormat::UInt16}})
+                                .set_page_size(config_cb_index, config_page_size)
+                                .set_globally_allocated_address(*config_tensor.buffer());
+    CreateCircularBuffer(program, all_cores, config_cb_config);
+
+    uint32_t num_transfers = get_max_transfers_per_core(per_core_transfers);
+
     std::vector<uint32_t> compile_time_args = {
-        cb_src0_index,
-        cb_dst0_index,
-        pixel_size,
-        aligned_pixel_size,
-        aligned_dst_pixel_size,
-        stride_w * aligned_pixel_size,
-        width * aligned_pixel_size,
-        stride_h,
-        stride_w,
-        num_dst_rows,
-        width / stride_w,
-        pixels_per_dst_row * aligned_pixel_size,
-        input.element_size(),
-        true,
+        cb_src0_index,       // 0: input CB
+        cb_dst0_index,       // 1: output CB
+        config_cb_index,     // 2: config CB
+        pixel_size,          // 3: bytes per pixel
+        aligned_pixel_size,  // 4: aligned pixel size
+        num_transfers,       // 5: number of transfers per core
     };
-    // Setup kernel
-    // Set build optimization level to Os. O2 was slower.
-    tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2s_row_major.cpp",
-        all_cores,
-        WriterDataMovementConfig(compile_time_args, {}, {}, tt::tt_metal::KernelBuildOptLevel::Os));
 
-    compile_time_args[13] = false;  // is_reader = false for writer
-    tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
+    // Single kernel for fold with config tensor
+    tt::tt_metal::KernelHandle kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2s_row_major.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/fold_with_config.cpp",
         all_cores,
-        ReaderDataMovementConfig(compile_time_args, {}, {}, tt::tt_metal::KernelBuildOptLevel::Os));
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = compile_time_args});
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, stride_h, stride_w, cb_src0, cb_dst0}};
+    return {std::move(program), {kernel_id, kernel_id, stride_h, stride_w, cb_src0, cb_dst0}};
 }
 
 Fold::MultiCore::cached_program_t Fold::MultiCore::create(
