@@ -138,7 +138,7 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
         unpack_to_dest_mode[src0_cb_index] =
-            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400)
+            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
@@ -332,7 +332,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
         unpack_to_dest_mode[src0_cb_index] =
-            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400)
+            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
@@ -834,7 +834,7 @@ operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_type_
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
         unpack_to_dest_mode[src0_cb_index] =
-            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400)
+            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
         compute_kernel =
@@ -1102,7 +1102,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         compute_kernel = std::string(
             "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp");
         unpack_to_dest_mode[src0_cb_index] =
-            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400)
+            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
         compute_kernel = std::string(
@@ -1464,7 +1464,7 @@ operation::ProgramWithCallbacks untilize_single_core(
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
         unpack_to_dest_mode[src0_cb_index] =
-            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400)
+            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
