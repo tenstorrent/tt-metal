@@ -88,6 +88,7 @@ class Generator:
         self.prefill_traces_warmup = False
         # By default, enable split sampling (break the decode trace into two parts: upto logits, then sampling step)
         self.enable_split_sampling = True
+        self.mode = None
 
     def _chunk_sampling_param(self, values):
         if isinstance(values, List):
@@ -241,6 +242,7 @@ class Generator:
         model_id_warmup=None,
         **kwargs,
     ):
+        self.mode = "prefill"
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
         else:
@@ -468,6 +470,10 @@ class Generator:
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
     ):
+        mode_switched = False
+        if self.mode != "decode":
+            self.mode = "decode"
+            mode_switched = True
         sampling_on_device = sampling_params is not None
         split_sampling_enabled = bool(self.enable_split_sampling and sampling_on_device)
         self._set_sampling_trace_mode(split_sampling_enabled)
@@ -524,7 +530,7 @@ class Generator:
             "sampling_on_device": sampling_on_device,
         }
         if enable_trace:
-            tt_decode_output = self._decode_forward_trace_text(**decode_kwargs, reset_batch=reset_batch)
+            tt_decode_output = self._decode_forward_trace_text(**decode_kwargs, reset_batch=mode_switched)
         else:
             tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
 
@@ -656,12 +662,12 @@ class Generator:
             self.trace_inputs_decode[sampling_on_device] = device_inputs
             self.trace_output_decode[sampling_on_device] = tt_out_trace
 
-        # reset inputs when vllm signals that inputs are shuffled
+        # reset inputs when mode switches from prefill to decode
         reset_inputs = reset_batch or not sampling_on_device
         if self.prev_page_table is None or any(
             not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table)
         ):
-            # If the page table has changed, it means additional pages have been added
+            # If the page table has changed, it means additional pages have been added or inputs are shuffled
             reset_inputs = True
             if page_table is not None:
                 self.prev_page_table = tuple(pt.clone() for pt in page_table)
@@ -675,7 +681,6 @@ class Generator:
                     host_tensors=host_inputs_i,
                     device_tensors=self.trace_inputs_decode[sampling_on_device][i],
                 )
-
         for i, trace_id in self.trace_ids_decode[sampling_on_device].items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
         outputs = self.trace_output_decode[sampling_on_device]
