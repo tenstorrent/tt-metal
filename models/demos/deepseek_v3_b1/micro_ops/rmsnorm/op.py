@@ -208,7 +208,6 @@ class RMSNormSingleCore:
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=core_grid,
             compile_time_args=compute_compile_time_args,
-            runtime_args=[],
             config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=False,
