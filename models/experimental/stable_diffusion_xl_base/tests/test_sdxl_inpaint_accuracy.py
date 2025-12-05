@@ -17,6 +17,7 @@ from models.experimental.stable_diffusion_xl_base.utils.accuracy_utils import (
     calculate_accuracy_metrics,
     create_report_json,
     save_report_json,
+    check_clip_scores,
 )
 
 test_demo.__test__ = False
@@ -133,8 +134,9 @@ def test_accuracy_sdxl_inpaint(
 
     accuracy_metrics = calculate_accuracy_metrics(images, prompts, coco_statistics_path)
 
+    model_name = "sdxl-inpaint-tp" if use_cfg_parallel else "sdxl-inpaint"
     metadata = {
-        "model_name": "sdxl-inpaint-tp" if use_cfg_parallel else "sdxl-inpaint",
+        "model_name": model_name,
         "device": get_device_name(),
         "device_vae": vae_on_device,
         "capture_trace": capture_trace,
@@ -152,6 +154,8 @@ def test_accuracy_sdxl_inpaint(
 
     save_report_json(report_json, metadata)
     print(json.dumps(report_json, indent=4))
+
+    check_clip_scores(model_name, evaluation_range, prompts, accuracy_metrics["clip_scores"])
 
 
 def get_dataset_for_inpainting_accuracy(n_prompts: int):

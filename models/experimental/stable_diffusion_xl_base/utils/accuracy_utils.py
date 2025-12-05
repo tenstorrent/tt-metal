@@ -19,7 +19,6 @@ from models.experimental.stable_diffusion_xl_base.utils.clip_fid_ranges import (
 )
 
 COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/coco2014/captions/captions_source.tsv"
-ERROR_CLIP_SCORE_THRESHOLD, WARNING_CLIP_SCORE_THRESHOLD = 19, 25
 OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
 
 
@@ -53,15 +52,22 @@ def sdxl_get_prompts(
     return prompts
 
 
-def check_clip_scores(start_from, num_prompts, prompts, clip_scores):
+def check_clip_scores(model_name, evaluation_range, prompts, clip_scores):
+    start_from, num_prompts = evaluation_range
+    targets = get_model_targets(model_name)
+    warning_threshold, error_threshold = (
+        targets["clip_score_thresholds"]["warning"],
+        targets["clip_score_thresholds"]["error"],
+    )
+
     assert len(clip_scores) == num_prompts == len(prompts), f"Expected {num_prompts} CLIP scores and prompts."
     logger.info(
-        f"CLIP score error threshold: {ERROR_CLIP_SCORE_THRESHOLD}, warning threshold: {WARNING_CLIP_SCORE_THRESHOLD}"
+        f"CLIP score error threshold: {error_threshold}, warning threshold: {warning_threshold}, for model {model_name}"
     )
     num_of_very_low_clip_scores = 0
     for idx, score in enumerate(clip_scores):
-        if clip_scores[idx] < WARNING_CLIP_SCORE_THRESHOLD:
-            if clip_scores[idx] < ERROR_CLIP_SCORE_THRESHOLD:
+        if clip_scores[idx] < warning_threshold:
+            if clip_scores[idx] < error_threshold:
                 logger.error(
                     f"Very low CLIP score detected for image {start_from + idx + 1}: {score}, prompt: {prompts[idx]},  \
                         this indicates a fragmented image or noise or prompt mismatch or something else very wrong."

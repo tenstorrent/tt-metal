@@ -192,5 +192,4 @@ def test_accuracy_sdxl_base_and_refiner(
     save_report_json(report_json, metadata)
     print(json.dumps(report_json, indent=4))
 
-    logger.info(f"clip_scores: {accuracy_metrics['clip_scores']}")  # TODO: remove this
-    check_clip_scores(start_from, num_prompts, prompts, accuracy_metrics["clip_scores"])
+    check_clip_scores(model_name, evaluation_range, prompts, accuracy_metrics["clip_scores"])
