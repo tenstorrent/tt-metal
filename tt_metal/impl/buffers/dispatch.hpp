@@ -77,9 +77,6 @@ struct BufferReadDispatchParams {
     uint32_t total_pages_to_read = 0;
     uint32_t total_pages_read = 0;
     uint32_t num_banks = 0;
-    bool requires_completion_read = true;
-    void* dst = nullptr;
-    std::shared_ptr<PinnedMemory> pinned_memory = nullptr;
 
     virtual ~BufferReadDispatchParams() = default;
 
@@ -117,7 +114,7 @@ void write_to_device_buffer(
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     CoreType dispatch_core_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    std::shared_ptr<tt_metal::PinnedMemory> pinned_memory = nullptr);
+    std::shared_ptr<tt_metal::experimental::PinnedMemory> pinned_memory = nullptr);
 
 ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
     Buffer& buffer, uint32_t cq_id, tt::stl::Span<const uint32_t> expected_num_workers_completed);
@@ -138,9 +135,7 @@ void copy_interleaved_buffer_to_completion_queue(
     BufferReadDispatchParams& dispatch_params,
     Buffer& buffer,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    CoreType dispatch_core_type,
-    void* dst = nullptr,
-    const std::shared_ptr<PinnedMemory>& pinned_memory = nullptr);
+    CoreType dispatch_core_type);
 
 void copy_completion_queue_data_into_user_space(
     const ReadBufferDescriptor& read_buffer_descriptor,
