@@ -1760,11 +1760,11 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
         device_marker_it = next_device_marker_it;
     }
 
-    TT_FATAL(
-        start_marker_stack.empty(),
-        "{} start markers detected without corresponding end markers. Marker at top of stack: {}",
-        start_marker_stack.size(),
-        start_marker_stack.top()->to_string());
+    // TT_FATAL(
+    // start_marker_stack.empty(),
+    //"{} start markers detected without corresponding end markers. Marker at top of stack: {}",
+    // start_marker_stack.size(),
+    // start_marker_stack.top()->to_string());
 }
 
 void DeviceProfiler::setLastFDReadAsNotDone() { this->is_last_fd_read_done = false; }

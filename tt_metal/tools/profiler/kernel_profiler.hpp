@@ -298,6 +298,9 @@ __attribute__((noinline)) void finish_profiler() {
     if (profiler_control_buffer[PROFILER_DONE] == 1) {
         return;
     }
+    if (profiler_control_buffer[NOC_X] != 18 || profiler_control_buffer[NOC_Y] != 18) {
+        return;
+    }
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
     bool is_dram_set = profiler_control_buffer[DRAM_PROFILER_ADDRESS] != 0;
@@ -306,11 +309,9 @@ __attribute__((noinline)) void finish_profiler() {
         PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * profiler_core_count_per_dram;
 
     NocRegisterStateSave noc_state;
-    for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
+    for (uint32_t riscID = 0; riscID < 1; riscID++) {
         bool do_noc = true;
-        if (!is_dram_set) {
-            do_noc = false;
-        }
+
         // Need to preserve the upper bits of ID_LH which contain the trace ID
         profiler_data_buffer[riscID].data[ID_LH] =
             (profiler_data_buffer[riscID].data[ID_LH] & 0x7FFF800) | (((core_flat_id & 0xFF) << 3) | riscID);
@@ -364,8 +365,8 @@ __attribute__((noinline)) void finish_profiler() {
 }
 
 __attribute__((noinline)) void quick_push() {
-#if (                                                                                               \
-    defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_IDLE_ERISC) || \
+#if (                                                                \
+    defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_IDLE_ERISC) || \
     (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)))
 
     // tt-metal/issues/22578 - forbid quick_push if any cmd buffer has NOC_CMD_VC_LINKED bit set
