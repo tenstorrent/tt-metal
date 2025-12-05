@@ -4,8 +4,8 @@
 
 #include <cstdint>
 
-#include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_second_dim.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_last_dim.hpp"
+#include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_higher_dim.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
@@ -15,9 +15,9 @@ RepeatDeviceOperation::program_factory_t RepeatDeviceOperation::select_program_f
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     bool is_last_dim = operation_attributes.m_is_last_dim;
     if (is_last_dim) {
-        return program::RepeatProgramFactorySecondDim{};
-    } else {
         return program::RepeatProgramFactoryLastDim{};
+    } else {
+        return program::RepeatProgramFactoryHigherDim{};
     }
 }
 
