@@ -24,11 +24,13 @@ ComputeMeshRouterBuilder::ComputeMeshRouterBuilder(
     const RouterLocation& location,
     std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder,
     std::optional<FabricTensixDatamoverBuilder> tensix_builder,
-    FabricRouterChannelMapping channel_mapping) :
+    FabricRouterChannelMapping channel_mapping,
+    std::shared_ptr<ConnectionRegistry> connection_registry) :
     FabricRouterBuilder(local_node, location),
     erisc_builder_(std::move(erisc_builder)),
     tensix_builder_(std::move(tensix_builder)),
-    channel_mapping_(std::move(channel_mapping)) {
+    channel_mapping_(std::move(channel_mapping)),
+    connection_registry_(std::move(connection_registry)) {
     TT_FATAL(erisc_builder_ != nullptr, "Erisc builder cannot be null");
 }
 
@@ -36,7 +38,8 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program,
     FabricNodeId local_node,
-    const RouterLocation& location) {
+    const RouterLocation& location,
+    std::shared_ptr<ConnectionRegistry> connection_registry) {
     // Get fabric context and config
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const auto& builder_context = fabric_context.get_builder_context();
@@ -145,7 +148,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
 
     // Use unique_ptr constructor directly since ComputeMeshRouterBuilder constructor is private
     auto router_builder = std::unique_ptr<ComputeMeshRouterBuilder>(new ComputeMeshRouterBuilder(
-        local_node, location, std::move(edm_builder), std::move(tensix_builder_opt), std::move(channel_mapping)));
+        local_node, location, std::move(edm_builder), std::move(tensix_builder_opt), std::move(channel_mapping), connection_registry));
 
     // Setup the local relay kernel connection if in UDM mode
     if (fabric_tensix_extension_udm_mode && router_builder->has_tensix_builder()) {
@@ -213,6 +216,28 @@ void ComputeMeshRouterBuilder::connect_to_downstream_router_over_noc(ComputeMesh
         uint32_t sender_channel_idx = get_downstream_sender_channel(is_2D_routing, other.get_eth_direction());
         // Connect VC0
         connect_vc(0, get_downstream_builder_for_vc(0, sender_channel_idx), sender_channel_idx);
+        
+        // Record connection in registry if present
+        if (connection_registry_) {
+            // Determine receiver channel (for now, assume same as sender for INTRA_MESH)
+            auto downstream_mapping = other.channel_mapping_.get_sender_mapping(vc, sender_channel_idx);
+            
+            RouterConnectionRecord record{
+                .source_node = local_node_,
+                .source_direction = location_.direction,
+                .source_eth_chan = location_.eth_chan,
+                .source_vc = vc,
+                .source_sender_channel = sender_channel_idx,
+                .dest_node = other.local_node_,
+                .dest_direction = other.location_.direction,
+                .dest_eth_chan = other.location_.eth_chan,
+                .dest_vc = vc,
+                .dest_receiver_channel = downstream_mapping.internal_sender_channel_id,
+                .connection_type = ConnectionType::INTRA_MESH
+            };
+            
+            connection_registry_->record_connection(record);
+        }
     }
 }
 

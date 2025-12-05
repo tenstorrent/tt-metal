@@ -10,6 +10,7 @@
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
+#include "tt_metal/fabric/builder/connection_registry.hpp"
 
 namespace tt::tt_fabric {
 
@@ -32,13 +33,15 @@ public:
      * @param program The fabric program
      * @param local_node The local fabric node ID
      * @param location Router location (eth_chan, remote_node, direction, is_dispatch)
+     * @param connection_registry Optional registry to record connections for testing
      * @return A unique_ptr to the constructed ComputeMeshRouterBuilder
      */
     static std::unique_ptr<ComputeMeshRouterBuilder> build(
         tt::tt_metal::IDevice* device,
         tt::tt_metal::Program& program,
         FabricNodeId local_node,
-        const RouterLocation& location);
+        const RouterLocation& location,
+        std::shared_ptr<ConnectionRegistry> connection_registry = nullptr);
 
     // ============ FabricRouterBuilder Interface Implementation ============
 
@@ -91,7 +94,8 @@ private:
         const RouterLocation& location,
         std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder,
         std::optional<FabricTensixDatamoverBuilder> tensix_builder,
-        FabricRouterChannelMapping channel_mapping);
+        FabricRouterChannelMapping channel_mapping,
+        std::shared_ptr<ConnectionRegistry> connection_registry);
 
     /**
      * Compute which sender channels are traffic injection channels for a specific VC.
@@ -162,6 +166,7 @@ private:
     std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder_;
     std::optional<FabricTensixDatamoverBuilder> tensix_builder_;
     FabricRouterChannelMapping channel_mapping_;
+    std::shared_ptr<ConnectionRegistry> connection_registry_;
 };
 
 }  // namespace tt::tt_fabric
