@@ -8,6 +8,26 @@ Tests:
   # Test 1: Inter-Mesh Directed Traffic
   # ======================================================================================
   - name: InterMeshCrossTraffic
+    sync: true
+    benchmark_mode: true
+    fabric_setup:
+      topology: Mesh
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 4096
+      num_packets: 50000
+    senders:
+      - device: [0, 14]
+        patterns:
+          - destination:
+              device: [1, 0]
+      - device: [1, 1]
+        patterns:
+          - destination:
+              device: [0, 15]
+
+  - name: InterMeshCrossTrafficCyclic
     fabric_setup:
       topology: Mesh
     defaults:
@@ -16,14 +36,37 @@ Tests:
       size: 1024
       num_packets: 10000
     senders:
-      - device: [0, 13]
+      - device: [0, 14]
         patterns:
           - destination:
-              device: [1, 13]
-      - device: [1, 13]
+              device: [1, 2]
+      - device: [1, 1]
         patterns:
           - destination:
               device: [0, 13]
+      - device: [1, 3]
+        patterns:
+          - destination:
+              device: [1, 0]
+      - device: [0, 12]
+        patterns:
+          - destination:
+              device: [0, 15]
+
+  # - name: "FlowControlMultiMesh"
+  #   sync: true
+  #   benchmark_mode: true
+  #   fabric_setup:
+  #     topology: Mesh
+
+  #   defaults:
+  #     ftype: unicast
+  #     ntype: unicast_write
+  #     size: 4096
+  #     num_packets: 50000
+
+  #   patterns:
+  #     - type: all_to_all
 
   # - name: InterMeshCrossTrafficCyclic
   #   fabric_setup:
