@@ -52,15 +52,15 @@ run_quad_galaxy_deepseekv3_tests() {
     fi
 
     local DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528"
-    local DEEPSEEK_V3_CACHE="/home/esmal/wa/tt-metal/models/demos/deepseek_v3/tests/test_caches"
+    local DEEPSEEK_V3_CACHE="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache"
     local MESH_DEVICE="DUAL"
 
     # TODO: For now we just test a single module, we should add all of them here eventually
     local TEST_CASE="pytest -svvv models/demos/deepseek_v3/tests/test_mla.py::test_forward_pass[run_test_forward_pass_mla2d-model.layers.0.self_attn-device_params0-decode-1-32]"
 
-    tt-run --rank-binding $RANK_BINDING_YAML \
+    tt-run --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include cnx1 --bind-to none --output-filename logs/mpi_job --tag-output" \
-        bash -c "source source.sh && export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_CASE" ; fail+=$?
+        bash -c "source ./python_env/bin/activate && export DEEPSEEK_V3_HF_MODEL=$DEEPSEEK_V3_HF_MODEL && export DEEPSEEK_V3_CACHE=$DEEPSEEK_V3_CACHE && export MESH_DEVICE=$MESH_DEVICE && $TEST_CASE" ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1
