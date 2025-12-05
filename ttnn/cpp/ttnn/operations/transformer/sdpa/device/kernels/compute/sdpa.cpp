@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #define REDUCE_OP (PoolType::MAX)
-#define REDUCE_DIM (ReduceDim::REDUCE_ROW)
+#define REDUCE_DIM (ReduceDim::REDUCE_COL)
 
 #include "compute_kernel_api.h"
 #include "compute_common.hpp"
@@ -139,6 +139,7 @@ void MAIN {
                         const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
                         const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
 
+<<<<<<< HEAD
                         /**
                          * QK = Q_CHUNK @ K_CHUNK
                          *
@@ -160,6 +161,38 @@ void MAIN {
                             qk_subblock_h,
                             qk_subblock_w,
                             true /*transpose*/);
+=======
+                    /**
+<<<<<<< HEAD
+                     * QK = Q_CHUNK @ K_CHUNK
+                     *
+                     * matmul_blocks internally waits on both inputs
+                     */
+
+=======
+                     * qk_T: [Sq_chunk_t x Sk_chunk_t] with transposed tiles
+                     *  = matmul(K[Sk_chunk_t x DHt], Q[DHt x Sq_chunk_t]
+                     */
+                    cb_wait_front(cb_k_in, k_chunk_tiles);
+>>>>>>> 08c23c6494 (First pass at transposed SDPA complete. Good correctness. Reduce on FPU)
+                    pack_reconfig_data_format(cb_qk_im);
+                    matmul_blocks(
+                        cb_k_in,
+                        cb_q_in,
+                        cb_qk_im,
+                        Sk_chunk_t,
+                        Sq_chunk_t,
+                        DHt,
+                        qk_num_blocks,
+                        qk_in0_num_subblocks,
+                        qk_in1_num_subblocks,
+                        qk_in0_block_w,
+                        qk_subblock_h,
+                        qk_subblock_w,
+                        true /*transpose*/,
+                        true);
+                    cb_pop_front(cb_k_in, k_chunk_tiles);
+>>>>>>> 1bd6aa97e4 (First pass at transposed SDPA complete. Good correctness. Reduce on FPU)
 
                         /**
                          * Note
@@ -194,6 +227,64 @@ void MAIN {
                             }
                         }
 
+<<<<<<< HEAD
+=======
+                    /**
+                     * reduce_c can perform both reduce_max and eltwise max with previous result.
+                     * if do_eltwise_max:
+                     *  cur_max = eltwise_max(prev_max, max(qk, dim=-1))
+                     * else:
+                     *  cur_max = max(qk, dim=-1)
+                     */
+                    reconfig_data_format(cb_qk_im, cb_identity_scale_in);
+                    reduce_c_transposed_tiles<
+                        PoolType::MAX,
+                        ReduceDim::REDUCE_COL,
+                        cb_qk_im,
+                        cb_identity_scale_in,
+                        Sq_chunk_t,
+                        Sk_chunk_t>(alias_cur_max, alias_prev_max, k_chunk > 0);
+                    /**
+                     * sub_exp fuses a few operations.
+                     * In-place it performs `QK = exp((QK - cur_max) * scale)`
+                     *
+                     * It also partially performs reduce_sum on the output using L1 accumulation.
+                     * `cur_sum = sum_tiles(exp((QK - cur_max) * scale), dim=-1)`
+                     *
+                     * Partial reduce_sum is used to push the final row_reduction within a tile
+                     * outside of the loop over K chunks.
+                     */
+                    sub_exp_block_bcast_rows_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t, scale_fp32, true>(
+                        alias_cur_max, alias_cur_sum);
+
+                    transpose_tiles_inplace(cb_qk_im, Sq_chunk_t * Sk_chunk_t);
+
+                    cb_wait_front(cb_qk_im, qk_chunk_tiles);
+                    cb_wait_front(cb_v_in, k_chunk_tiles);
+                    /* OUT_IM = QK @ V_CHUNK */
+                    matmul_blocks(
+                        cb_qk_im,
+                        cb_v_in,
+                        alias_mm2_cur_out,
+                        Sq_chunk_t,
+                        vDHt,
+                        Sk_chunk_t,
+                        out_num_blocks,
+                        out_in0_num_subblocks,
+                        out_in1_num_subblocks,
+                        out_in0_block_w,
+                        out_subblock_h,
+                        out_subblock_w,
+                        false /*transpose*/);
+
+                    cb_pop_front(cb_v_in, k_chunk_tiles);
+
+                    cb_pop_front(cb_qk_im, qk_chunk_tiles);
+                    reconfig_data_format(alias_prev_max, alias_cur_max);
+
+                    /* OUT_ACC += OUT_IM */
+                    if (k_chunk > 0) {
+>>>>>>> 1bd6aa97e4 (First pass at transposed SDPA complete. Good correctness. Reduce on FPU)
                         /**
                          * reduce_c can perform both reduce_max and eltwise max with previous result.
                          * if do_eltwise_max:
@@ -222,6 +313,7 @@ void MAIN {
                         sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t, scale_fp32, true>(
                             alias_cur_max, alias_cur_sum);
 
+<<<<<<< HEAD
                         /* OUT_IM = QK @ V_CHUNK */
                         matmul_blocks(
                             cb_qk_im,
@@ -326,6 +418,26 @@ void MAIN {
                         // 7. Rescale accumulated output: mm2_prev_out *= exp(prev_max - cur_max)
                         //    Note: We do NOT compute attention_sink @ V, so output only has real token contributions
                         //    But we need to rescale it due to the updated max
+=======
+                        sub_exp_block_transposed<scale_fp32>(
+                            alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                        cb_pop_front(alias_prev_max, Sq_chunk_t);
+
+                        /**
+                         * cb_prev_sum *= cb_exp_max_diff
+                         * This is a bcast_cols since max_diff is a column vector and prev_sum is a partial
+                         * reduction, containing the sum of tiles in dim=-1 of QK.
+                         */
+                        mul_tiles_bcast_rows_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                        /* cb_cur_sum += cb_prev_sum */
+                        add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
+
+                        /**
+                         * alias_mm2_cur_out += alias_mm2_prev_out * cb_exp_max_diff
+                         * This uses L1 accumulation to accumulate onto mm2_cur_out.
+                         */
+                        transpose_tiles_inplace(cb_exp_max_diff, Sq_chunk_t);
+>>>>>>> 1bd6aa97e4 (First pass at transposed SDPA complete. Good correctness. Reduce on FPU)
                         mul_block_bcast_cols<Sq_chunk_t, vDHt>(
                             alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out, false);
                         std::swap(alias_mm2_prev_out, alias_mm2_cur_out);
@@ -333,13 +445,62 @@ void MAIN {
                     /* cb_cur_sum = 1.0 / cb_cur_sum */
                     recip_block_inplace(alias_prev_sum, Sq_chunk_t);
 
+<<<<<<< HEAD
                     /* cb_out_accumulate_im *= cb_cur_sum */
                     pack_reconfig_data_format(cb_out);
                     mul_block_bcast_cols<Sq_chunk_t, vDHt>(alias_mm2_prev_out, alias_prev_sum, cb_out, false);
+=======
+                    // Swap CB handles to prepare for next iteration
+                    std::swap(alias_prev_sum, alias_cur_sum);
+                    std::swap(alias_mm2_prev_out, alias_mm2_cur_out);
+                    std::swap(alias_prev_max, alias_cur_max);
+                }
+                /**
+                 * Performs final row-reduction on the partial sum.
+                 */
+                transpose_tiles_inplace(alias_prev_sum, Sq_chunk_t);
+                matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
+>>>>>>> 1bd6aa97e4 (First pass at transposed SDPA complete. Good correctness. Reduce on FPU)
 
                     cb_pop_front(cb_q_in, q_chunk_tiles);
                     // free up cb_prev_max after K chunks
                     cb_pop_front(alias_prev_max, Sq_chunk_t);
+<<<<<<< HEAD
+=======
+
+                    // 3. Rescale previous sum: prev_sum *= exp(prev_max - cur_max)
+                    mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                    // 4. Compute exp((attention_sink - cur_max) * scale) and accumulate in cur_sum
+                    //    This adds the attention sink's contribution to the softmax denominator
+                    sub_exp_block_bcast_cols_inplace<cb_attention_sink, Sq_chunk_t, 1, scale_fp32, false>(
+                        alias_cur_max, alias_cur_sum);
+
+                    // 5. Add rescaled previous sum to current sum: cur_sum += prev_sum
+                    add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
+
+                    // 6. Update running statistics for final normalization
+                    std::swap(alias_prev_sum, alias_cur_sum);
+                    std::swap(alias_prev_max, alias_cur_max);
+
+                    // 7. Rescale accumulated output: mm2_prev_out *= exp(prev_max - cur_max)
+                    //    Note: We do NOT compute attention_sink @ V, so output only has real token contributions
+                    //    But we need to rescale it due to the updated max
+                    mul_block_bcast_cols<Sq_chunk_t, vDHt>(
+                        alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out, false);
+                    std::swap(alias_mm2_prev_out, alias_mm2_cur_out);
+                }
+                /* cb_cur_sum = 1.0 / cb_cur_sum */
+
+                recip_block_inplace(alias_prev_sum, Sq_chunk_t);
+
+                /* cb_out_accumulate_im *= cb_cur_sum */
+                pack_reconfig_data_format(cb_out);
+                mul_block_bcast_cols<Sq_chunk_t, vDHt>(alias_mm2_prev_out, alias_prev_sum, cb_out, false);
+
+                cb_pop_front(cb_q_in, q_chunk_tiles);
+                // free up cb_prev_max after K chunks
+                cb_pop_front(alias_prev_max, Sq_chunk_t);
+>>>>>>> 1bd6aa97e4 (First pass at transposed SDPA complete. Good correctness. Reduce on FPU)
                 }
                 if constexpr (use_attention_sink) {
                     cb_pop_front(cb_attention_sink, Sq_chunk_t);
