@@ -26,9 +26,9 @@ void kernel_main() {
     auto* socket1_packet_header_addr = PacketHeaderPool::allocate_header();
 
     // Create Socket Interface
-    SocketReceiverInterface receiver0_socket = create_receiver_socket_interface(socket0_config_addr);
+    SocketReceiverInterface receiver0_socket = create_receiver_socket_interface_2(socket0_config_addr);
     set_receiver_socket_page_size(receiver0_socket, page_size);
-    SocketReceiverInterface receiver1_socket = create_receiver_socket_interface(socket1_config_addr);
+    SocketReceiverInterface receiver1_socket = create_receiver_socket_interface_2(socket1_config_addr);
     set_receiver_socket_page_size(receiver1_socket, page_size);
     receiver0_fabric_connection.open_finish();
     receiver1_fabric_connection.open_finish();

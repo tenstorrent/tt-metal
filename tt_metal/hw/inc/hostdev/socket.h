@@ -16,15 +16,15 @@ struct sender_downstream_encoding {
 // Config Buffer on Sender Core will be populated as follows. Metadata size based on number of downstream receivers.
 struct sender_socket_md {
     // Standard Config Entries
-    uint32_t num_downstreams = 0;
-    uint32_t write_ptr = 0;
-    uint32_t bytes_sent = 0;
+    uint32_t bytes_sent = 0;       // 0
+    uint32_t num_downstreams = 0;  // 4
+    uint32_t write_ptr = 0;        // 8
 
-    uint32_t downstream_bytes_sent_addr = 0;
-    uint32_t downstream_fifo_addr = 0;
-    uint32_t downstream_fifo_total_size = 0;
+    uint32_t downstream_bytes_sent_addr = 0;  // 12
+    uint32_t downstream_fifo_addr = 0;        // 16
+    uint32_t downstream_fifo_total_size = 0;  // 20
 
-    uint32_t is_sender = 0;
+    uint32_t is_sender = 0;  // 24
 };
 // After the metadata, the buffer contains the following arrays:
 // uint32_t bytes_acked_array[num_downstreams]

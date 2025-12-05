@@ -36,7 +36,7 @@ void kernel_main() {
 
     constexpr uint32_t num_pages = data_size / page_size;
     // Better optimize to not init the receiver socket interface
-    SocketReceiverInterface receiver_socket = create_receiver_socket_interface(socket_config_addr);
+    SocketReceiverInterface receiver_socket = create_receiver_socket_interface_2(socket_config_addr);
     set_receiver_socket_page_size(receiver_socket, page_size);
 
     // Loop can be optimized to not be page based, and read larger chunks/more in parallel at once.

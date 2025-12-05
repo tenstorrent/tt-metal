@@ -26,6 +26,7 @@ namespace device_dispatch {
 
 struct CoreWriteDispatchParams : public CoreDispatchParams {
     const void* src = nullptr;
+    bool wait_on_workers = false;
 };
 
 void validate_core_read_write_bounds(
@@ -65,8 +66,10 @@ void issue_core_write_command_sequence(const CoreWriteDispatchParams& dispatch_p
     const uint32_t num_worker_counters = dispatch_params.sub_device_ids.size();
 
     DeviceCommandCalculator calculator;
-    for (uint32_t i = 0; i < num_worker_counters; ++i) {
-        calculator.add_dispatch_wait();
+    if (dispatch_params.wait_on_workers) {
+        for (uint32_t i = 0; i < num_worker_counters; ++i) {
+            calculator.add_dispatch_wait();
+        }
     }
     calculator.add_dispatch_write_linear<true, true>(dispatch_params.size_bytes);
 
@@ -75,14 +78,15 @@ void issue_core_write_command_sequence(const CoreWriteDispatchParams& dispatch_p
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
-
-    for (uint32_t i = 0; i < num_worker_counters; ++i) {
-        const uint8_t offset_index = *dispatch_params.sub_device_ids[i];
-        command_sequence.add_dispatch_wait(
-            CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
-            0,
-            tt::tt_metal::MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
-            dispatch_params.expected_num_workers_completed[offset_index]);
+    if (dispatch_params.wait_on_workers) {
+        for (uint32_t i = 0; i < num_worker_counters; ++i) {
+            const uint8_t offset_index = *dispatch_params.sub_device_ids[i];
+            command_sequence.add_dispatch_wait(
+                CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
+                0,
+                tt::tt_metal::MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
+                dispatch_params.expected_num_workers_completed[offset_index]);
+        }
     }
 
     command_sequence.add_dispatch_write_linear<true, true>(
@@ -105,7 +109,8 @@ void write_to_core(
     uint32_t size_bytes,
     uint32_t cq_id,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    bool wait_on_workers) {
     validate_core_read_write_bounds(device, virtual_core, address, size_bytes);
 
     while (size_bytes > 0) {
@@ -123,7 +128,8 @@ void write_to_core(
              dispatch_core_type,
              expected_num_workers_completed,
              sub_device_ids},
-            src};
+            src,
+            wait_on_workers};
         issue_core_write_command_sequence(dispatch_params);
 
         size_bytes -= size_bytes_to_write;

@@ -337,13 +337,13 @@ void write_socket_configs(
                 uint32_t idx = core_to_core_id.at(sender_core.core_coord);
                 // write sender_socket_md (only once per sender core)
                 uint32_t md_offset = idx * sender_total_size_bytes / sizeof(uint32_t);
-                config_data[md_offset++] = connections.size();                   // num_downstreams
-                config_data[md_offset++] = peer_descriptor.data_buffer_address;  // write_ptr
-                config_data[md_offset++] = 0;                                    // bytes_sent
-                config_data[md_offset++] = peer_config_buf_addr;                 // downstream_bytes_sent_addr
-                config_data[md_offset++] = peer_descriptor.data_buffer_address;  // downstream_fifo_addr
-                config_data[md_offset++] = config.socket_mem_config.fifo_size;   // downstream_fifo_total_size
-                config_data[md_offset++] = is_sender;                            // is_sender
+                config_data[md_offset++] = 0;                                         // bytes_sent
+                config_data[md_offset++] = connections.size();                        // num_downstreams
+                config_data[md_offset++] = peer_descriptor.data_buffer_address;       // write_ptr
+                config_data[md_offset++] = peer_config_buf_addr;                      // downstream_bytes_sent_addr
+                config_data[md_offset++] = peer_descriptor.data_buffer_address;       // downstream_fifo_addr
+                config_data[md_offset++] = config.socket_mem_config.fifo_size;        // downstream_fifo_total_size
+                config_data[md_offset++] = is_sender;                                 // is_sender
 
                 // Write downstream encodings for each receiver of this sender core
                 uint32_t enc_offset = (idx * sender_total_size_bytes + sender_size.md_size_bytes +

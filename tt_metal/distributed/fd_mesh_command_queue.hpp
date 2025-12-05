@@ -243,7 +243,8 @@ public:
         const void* src,
         uint32_t size_bytes,
         bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        bool wait_on_workers = false);
     void enqueue_read_shard_from_core(
         DeviceMemoryAddress address,
         void* dst,

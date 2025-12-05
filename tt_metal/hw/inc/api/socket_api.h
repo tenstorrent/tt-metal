@@ -11,6 +11,8 @@
 #include "internal/risc_attribs.h"
 #include "hostdev/socket.h"
 #include "api/alignment.h"
+#include "utils/utils.h"
+#include "debug/dprint.h"
 
 #ifndef COMPILE_FOR_TRISC
 #include <type_traits>
@@ -121,6 +123,8 @@ void socket_reserve_pages(const SocketSenderInterface& socket, uint32_t num_page
 void socket_push_pages(SocketSenderInterface& socket, uint32_t num_pages) {
     uint32_t num_bytes = num_pages * socket.page_size;
     ASSERT(num_bytes <= socket.downstream_fifo_curr_size);
+    volatile tt_l1_ptr sender_socket_md* socket_config =
+        reinterpret_cast<volatile tt_l1_ptr sender_socket_md*>(socket.config_addr);
     if (socket.write_ptr + num_bytes >= socket.downstream_fifo_curr_size + socket.downstream_fifo_addr) {
         socket.write_ptr = socket.write_ptr + num_bytes - socket.downstream_fifo_curr_size;
         socket.bytes_sent += num_bytes + socket.downstream_fifo_total_size - socket.downstream_fifo_curr_size;
@@ -128,6 +132,7 @@ void socket_push_pages(SocketSenderInterface& socket, uint32_t num_pages) {
         socket.write_ptr += num_bytes;
         socket.bytes_sent += num_bytes;
     }
+    socket_config->bytes_sent = socket.bytes_sent;
 }
 
 #ifndef COMPILE_FOR_TRISC
@@ -135,10 +140,27 @@ void socket_notify_receiver(const SocketSenderInterface& socket) {
     // TODO: Store noc encoding in struct?
     for (uint32_t i = 0; i < socket.num_downstreams; i++) {
         sender_downstream_encoding downstream_enc = get_downstream_encoding(socket, i);
+        DPRINT << "Notifying receiver " << downstream_enc.downstream_noc_x << ", " << downstream_enc.downstream_noc_y
+               << " " << socket.downstream_bytes_sent_addr << ENDL();
         auto downstream_bytes_sent_noc_addr = get_noc_addr(
             downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, socket.downstream_bytes_sent_addr);
         noc_inline_dw_write(downstream_bytes_sent_noc_addr, socket.bytes_sent);
     }
+}
+
+void pcie_socket_notify_receiver(const SocketSenderInterface& socket) {
+    uint32_t local_bytes_sent_addr = socket.config_addr;
+    tt_l1_ptr uint32_t* socket_config_words = reinterpret_cast<tt_l1_ptr uint32_t*>(socket.config_addr);
+    // 8 word of MD + 4 Words of Ack
+    uint32_t pcie_xy_enc = socket_config_words[12];
+    uint32_t bytes_sent_addr_hi = socket_config_words[14];
+    uint32_t bytes_sent_addr_lo = socket_config_words[3];
+
+    uint64_t bytes_sent_pcie_addr =
+        (static_cast<uint64_t>(bytes_sent_addr_hi) << 32) | (static_cast<uint64_t>(bytes_sent_addr_lo));
+    noc_write_init_state<0>(NOC_0, NOC_UNICAST_WRITE_VC);
+    noc_wwrite_with_state<DM_DEDICATED_NOC, 0, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
+        NOC_0, local_bytes_sent_addr, pcie_xy_enc, bytes_sent_pcie_addr, 4, 1);
 }
 
 void fabric_socket_notify_receiver(
@@ -179,7 +201,7 @@ void update_socket_config(const SocketSenderInterface& socket) {
     socket_config->write_ptr = socket.write_ptr;
 }
 
-SocketReceiverInterface create_receiver_socket_interface(uint32_t config_addr) {
+SocketReceiverInterface create_receiver_socket_interface_2(uint32_t config_addr) {
     SocketReceiverInterface socket;
 #if !(defined TRISC_PACK || defined TRISC_MATH)
     tt_l1_ptr receiver_socket_md* socket_config = reinterpret_cast<tt_l1_ptr receiver_socket_md*>(config_addr);
