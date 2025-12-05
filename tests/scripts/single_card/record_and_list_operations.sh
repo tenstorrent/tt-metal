@@ -109,78 +109,53 @@ else
 fi
 echo ""
 
-# Extract operations from the SQLite database
+# Extract operations from the SQLite database using Python (sqlite3 module is built-in)
 echo "=========================================="
 echo "Extracting operations from database..."
 echo "=========================================="
 
-# Check if sqlite3 is available
-if ! command -v sqlite3 &> /dev/null; then
-    echo "Error: sqlite3 command not found. Please install sqlite3."
-    exit 1
-fi
-
-# Get total count of operations
-OP_COUNT=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM operations;")
-echo "Total operations recorded: $OP_COUNT"
-echo ""
-
-if [[ "$OP_COUNT" -eq 0 ]]; then
-    echo "Warning: No operations were recorded in the database."
-    exit 0
-fi
-
-# List all operations with their details
-echo "=========================================="
-echo "Operations List (ID | Name | Duration)"
-echo "=========================================="
-sqlite3 -header -column "$DB_FILE" "SELECT operation_id, name, duration FROM operations ORDER BY operation_id;"
-
-echo ""
-echo "=========================================="
-echo "Operations Summary by Name"
-echo "=========================================="
-sqlite3 -header -column "$DB_FILE" "
-SELECT 
-    name,
-    COUNT(*) as count,
-    ROUND(SUM(duration), 4) as total_duration,
-    ROUND(AVG(duration), 4) as avg_duration
-FROM operations 
-GROUP BY name 
-ORDER BY count DESC;
-"
-
-echo ""
-echo "=========================================="
-echo "Unique Operations (sorted alphabetically)"
-echo "=========================================="
-sqlite3 "$DB_FILE" "SELECT DISTINCT name FROM operations ORDER BY name;"
-
-# Save operations to a text file for later reference
 OUTPUT_FILE="${REPORT_DIR}/operations_list.txt"
-echo ""
-echo "=========================================="
-echo "Saving operations list to: $OUTPUT_FILE"
-echo "=========================================="
 
-{
-    echo "TTNN Operations Report"
-    echo "Report Name: $REPORT_NAME"
-    echo "Generated: $(date)"
-    echo "Database: $DB_FILE"
-    echo ""
-    echo "Total Operations: $OP_COUNT"
-    echo ""
-    echo "=========================================="
-    echo "All Operations (ID | Name | Duration)"
-    echo "=========================================="
-    sqlite3 -header -column "$DB_FILE" "SELECT operation_id, name, duration FROM operations ORDER BY operation_id;"
-    echo ""
-    echo "=========================================="
-    echo "Operations Summary by Name"
-    echo "=========================================="
-    sqlite3 -header -column "$DB_FILE" "
+python3 << EOF
+import sqlite3
+from datetime import datetime
+
+db_file = "$DB_FILE"
+report_name = "$REPORT_NAME"
+output_file = "$OUTPUT_FILE"
+
+conn = sqlite3.connect(db_file)
+cursor = conn.cursor()
+
+# Get total count
+cursor.execute("SELECT COUNT(*) FROM operations")
+op_count = cursor.fetchone()[0]
+print(f"Total operations recorded: {op_count}")
+print()
+
+if op_count == 0:
+    print("Warning: No operations were recorded in the database.")
+    conn.close()
+    exit(0)
+
+# List all operations
+print("=" * 50)
+print("Operations List (ID | Name | Duration)")
+print("=" * 50)
+cursor.execute("SELECT operation_id, name, duration FROM operations ORDER BY operation_id")
+print(f"{'ID':<10} {'Name':<50} {'Duration':<15}")
+print("-" * 75)
+for row in cursor.fetchall():
+    op_id, name, duration = row
+    duration_str = f"{duration:.6f}" if duration else "N/A"
+    print(f"{op_id:<10} {name:<50} {duration_str:<15}")
+
+# Operations summary
+print()
+print("=" * 50)
+print("Operations Summary by Name")
+print("=" * 50)
+cursor.execute("""
     SELECT 
         name,
         COUNT(*) as count,
@@ -188,14 +163,68 @@ echo "=========================================="
         ROUND(AVG(duration), 4) as avg_duration
     FROM operations 
     GROUP BY name 
-    ORDER BY count DESC;
-    "
-    echo ""
-    echo "=========================================="
-    echo "Unique Operations"
-    echo "=========================================="
-    sqlite3 "$DB_FILE" "SELECT DISTINCT name FROM operations ORDER BY name;"
-} > "$OUTPUT_FILE"
+    ORDER BY count DESC
+""")
+print(f"{'Name':<50} {'Count':<10} {'Total':<15} {'Avg':<15}")
+print("-" * 90)
+for row in cursor.fetchall():
+    name, count, total_dur, avg_dur = row
+    total_str = f"{total_dur:.4f}" if total_dur else "N/A"
+    avg_str = f"{avg_dur:.4f}" if avg_dur else "N/A"
+    print(f"{name:<50} {count:<10} {total_str:<15} {avg_str:<15}")
+
+# Unique operations
+print()
+print("=" * 50)
+print("Unique Operations (sorted alphabetically)")
+print("=" * 50)
+cursor.execute("SELECT DISTINCT name FROM operations ORDER BY name")
+for row in cursor.fetchall():
+    print(row[0])
+
+# Save to file
+print()
+print("=" * 50)
+print(f"Saving operations list to: {output_file}")
+print("=" * 50)
+
+with open(output_file, 'w') as f:
+    f.write("TTNN Operations Report\n")
+    f.write(f"Report Name: {report_name}\n")
+    f.write(f"Generated: {datetime.now()}\n")
+    f.write(f"Database: {db_file}\n")
+    f.write(f"\nTotal Operations: {op_count}\n\n")
+    
+    f.write("=" * 50 + "\n")
+    f.write("All Operations (ID | Name | Duration)\n")
+    f.write("=" * 50 + "\n")
+    cursor.execute("SELECT operation_id, name, duration FROM operations ORDER BY operation_id")
+    for row in cursor.fetchall():
+        op_id, name, duration = row
+        duration_str = f"{duration:.6f}" if duration else "N/A"
+        f.write(f"{op_id}\t{name}\t{duration_str}\n")
+    
+    f.write("\n" + "=" * 50 + "\n")
+    f.write("Operations Summary by Name\n")
+    f.write("=" * 50 + "\n")
+    cursor.execute("""
+        SELECT name, COUNT(*) as count, ROUND(SUM(duration), 4), ROUND(AVG(duration), 4)
+        FROM operations GROUP BY name ORDER BY count DESC
+    """)
+    for row in cursor.fetchall():
+        name, count, total_dur, avg_dur = row
+        f.write(f"{name}\t{count}\t{total_dur}\t{avg_dur}\n")
+    
+    f.write("\n" + "=" * 50 + "\n")
+    f.write("Unique Operations\n")
+    f.write("=" * 50 + "\n")
+    cursor.execute("SELECT DISTINCT name FROM operations ORDER BY name")
+    for row in cursor.fetchall():
+        f.write(f"{row[0]}\n")
+
+conn.close()
+print(f"Operations list saved to: {output_file}")
+EOF
 
 echo "Operations list saved to: $OUTPUT_FILE"
 echo ""
