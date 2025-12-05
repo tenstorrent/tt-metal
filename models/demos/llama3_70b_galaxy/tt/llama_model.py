@@ -543,6 +543,19 @@ class TtTransformer(LightweightModule):
         result = ttnn.where(full_mask, 0, float("-inf"))
         return result
 
+    def bitmask_to_device(self, bitmask):
+        bitmask_tt = ttnn.from_torch(
+            bitmask,
+            device=None,
+            dtype=ttnn.int32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(-1, None), mesh_shape=self.args.cluster_shape),
+        )
+        if self.bitmask is not None:
+            copy_host_to_device(bitmask_tt, self.bitmask)
+        else:
+            self.bitmask = copy_host_to_device(bitmask_tt, self.mesh_device)
+
     def ttnn_decode_forward(
         self,
         x,
