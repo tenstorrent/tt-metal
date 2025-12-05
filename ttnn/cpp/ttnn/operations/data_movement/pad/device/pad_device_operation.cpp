@@ -25,11 +25,11 @@ PadDeviceOperation::program_factory_t PadDeviceOperation::select_program_factory
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         if (input_tensor.is_sharded()) {
             uint32_t input_tot_h = std::accumulate(
-                operation_attributes.output_logical_shape.view().begin(),
-                operation_attributes.output_logical_shape.view().end() - 1,
+                input_tensor.logical_shape().view().begin(),
+                input_tensor.logical_shape().view().end() - 1,
                 1,
                 std::multiplies<uint32_t>());
-            uint32_t input_w = operation_attributes.output_logical_shape[3];
+            uint32_t input_w = input_tensor.logical_shape()[3];
 
             uint32_t output_tot_h = std::accumulate(
                 operation_attributes.output_logical_shape.view().begin(),
