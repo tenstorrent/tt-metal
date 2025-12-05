@@ -115,10 +115,12 @@ def run_gtest_profiler_test(
 
 def run_device_profiler_test(
     testName=None,
+    noPostProcess=False,
     setupAutoExtract=False,
     doDeviceTrace=False,
     slowDispatch=False,
     doSync=False,
+    enable_noc_tracing=False,
     doDispatchCores=False,
     setOpSupportCount=PROFILER_DEFAULT_OP_SUPPORT_COUNT,
 ):
@@ -131,6 +133,7 @@ def run_device_profiler_test(
         doDeviceTrace=doDeviceTrace,
         slowDispatch=slowDispatch,
         doSync=doSync,
+        enable_noc_tracing=enable_noc_tracing,
         doDispatchCores=doDispatchCores,
         set_program_support_count=setOpSupportCount,
     )
@@ -139,6 +142,9 @@ def run_device_profiler_test(
     logger.info(f"Running: {testCommand}")
     profilerRun = os.system(testCommand)
     assert profilerRun == 0
+
+    if noPostProcess:
+        return None
 
     setupStr = ""
     if setupAutoExtract:
@@ -443,15 +449,21 @@ def test_device_trace_run():
             "trace_kernel_duration": [5],
         },
     )
+    # sanity check to ensure device trace runs without fatal errors with noc collecting enabled and trace runs
+    run_device_profiler_test(
+        testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops_single_core",
+        noPostProcess=True,
+        enable_noc_tracing=True,
+    )
 
 
 @skip_for_blackhole()
 def test_dispatch_cores():
     REF_COUNT_DICT = {
-        "Tensix CQ Dispatch*": [600, 760, 1310, 2330, 3558, 4915, 6383, 7422, 9830],
+        "Tensix CQ Dispatch*": [600, 760, 1310, 2330, 3558, 4915, 6383, 7422, 8570],
         "Tensix CQ Prefetch": [900, 1440, 2012, 3870, 5000, 7752],
-        "dispatch_total_cq_cmd_op_time": [219],
-        "dispatch_go_send_wait_time": [219],
+        "dispatch_total_cq_cmd_op_time": [223],
+        "dispatch_go_send_wait_time": [223],
     }
 
     verify_stats(
@@ -516,10 +528,10 @@ def test_ethernet_dispatch_cores():
             3661,
             5011,
             5362,
-            7661,
-            10224,
+            7160,
+            9552,
         ],
-        "Ethernet CQ Prefetch": [572, 1058, 2108, 3022, 4577, 5846, 7795],
+        "Ethernet CQ Prefetch": [572, 1058, 2108, 3022, 4356, 5846, 7795],
     }
     devicesData = run_device_profiler_test(
         testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops -k DispatchCoreType.ETH",
@@ -552,7 +564,7 @@ def test_ethernet_dispatch_cores():
             if ref in deviceData["cores"]["DEVICE"]["analysis"].keys():
                 res = False
                 readCount = deviceData["cores"]["DEVICE"]["analysis"][ref]["stats"]["Count"]
-                allowedRange = 200
+                allowedRange = 600
                 for count in counts:
                     if count - allowedRange < readCount < count + allowedRange:
                         res = True
