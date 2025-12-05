@@ -1099,7 +1099,7 @@ void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_
         pages -= initial_pages_at_once;
 
         while (initial_pages_at_once != 0) {
-            uint32_t pages_to_read = ncrisc_noc_available_read_transactions(noc_index, 1);
+            uint32_t pages_to_read = ncrisc_noc_available_transactions(noc_index, 1);
             if (pages_to_read > initial_pages_at_once) {
                 pages_to_read = initial_pages_at_once;
             }
@@ -1141,7 +1141,7 @@ void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_
         pages -= prefetch_pages_at_once;
 
         while (prefetch_pages_at_once != 0) {
-            uint32_t pages_to_read = ncrisc_noc_available_read_transactions(noc_index, 1);
+            uint32_t pages_to_read = ncrisc_noc_available_transactions(noc_index, 1);
             if (pages_to_read > prefetch_pages_at_once) {
                 pages_to_read = prefetch_pages_at_once;
             }
