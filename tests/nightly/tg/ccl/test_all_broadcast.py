@@ -41,9 +41,11 @@ def test_all_broadcast_trace(
     num_iters,
     function_level_defaults,
 ):
+    cluster_axis = 0
     if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
         pytest.skip("bfloat8_b not supported for row-major")
     if num_devices < 8:
+        cluster_axis = 1
         mesh_mapper_config = ttnn.MeshMapperConfig(
             [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)], ttnn.MeshShape(1, num_devices)
         )
@@ -59,6 +61,7 @@ def test_all_broadcast_trace(
         input_dtype,
         layout,
         function_level_defaults,
+        cluster_axis=cluster_axis,
         all_broadcast_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
         rand_tensor=True,

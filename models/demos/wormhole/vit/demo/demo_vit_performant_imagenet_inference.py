@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,8 +11,8 @@ from transformers import AutoImageProcessor, ViTConfig
 
 import ttnn
 from models.common.utility_functions import profiler, run_for_wormhole_b0
+from models.demos.vit.tests.vit_helper_funcs import get_batch, get_data_loader
 from models.demos.vit.tests.vit_performant_imagenet import VitTrace2CQ
-from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
 
 NUM_VALIDATION_IMAGES_IMAGENET = 49920
 

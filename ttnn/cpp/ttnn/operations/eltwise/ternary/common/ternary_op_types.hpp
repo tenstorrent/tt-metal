@@ -15,8 +15,9 @@ using TensorScalarVariant = std::variant<float, int, Tensor>;
 
 // Ternary operation types
 enum class TernaryOpType {
-    WHERE,  // conditional selection: out = predicate ? value_true : value_false
-    LERP,   // linear interpolation: out = input + weight * (end - input)
+    WHERE,    // conditional selection: out = predicate ? value_true : value_false
+    LERP,     // linear interpolation: out = input + weight * (end - input)
+    ADDCMUL,  // fused multiply-add: out = input_a + value * input_b * input_c
 };
 
 // Variant types for ternary operations

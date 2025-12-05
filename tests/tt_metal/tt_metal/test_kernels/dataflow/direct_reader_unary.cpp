@@ -12,25 +12,29 @@ void kernel_main() {
     uint32_t src_bank_id = get_arg_val<uint32_t>(1);
     uint32_t num_tiles = get_arg_val<uint32_t>(2);
 #if INTERFACE_WITH_L1 == 1
-    constexpr bool read_from_dram = false;
+    constexpr experimental::AllocatorBankType bank_type = experimental::AllocatorBankType::L1;
 #else
-    constexpr bool read_from_dram = true;
+    constexpr experimental::AllocatorBankType bank_type = experimental::AllocatorBankType::DRAM;
 #endif
+
+    experimental::Noc noc(noc_index);
+    experimental::CircularBuffer cb(cb_id);
+
     // ublocks size defined in tiles
     constexpr uint32_t ublock_size_tiles = 1;
-    uint32_t ublock_size_bytes = get_tile_size(cb_id) * ublock_size_tiles;
+    uint32_t ublock_size_bytes = cb.get_tile_size() * ublock_size_tiles;
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
-        uint64_t src_buffer_noc_addr = get_noc_addr_from_bank_id<read_from_dram>(src_bank_id, src_addr);
-
-        cb_reserve_back(cb_id, ublock_size_tiles);
-        uint32_t l1_write_addr = get_write_ptr(cb_id);
-        noc_async_read(src_buffer_noc_addr, l1_write_addr, ublock_size_bytes);
-
-        noc_async_read_barrier();
-
-        cb_push_back(cb_id, ublock_size_tiles);
+        cb.reserve_back(ublock_size_tiles);
+        noc.async_read(
+            experimental::AllocatorBank<bank_type>(),
+            cb,
+            ublock_size_bytes,
+            {.bank_id = src_bank_id, .addr = src_addr},
+            {});
+        noc.async_read_barrier();
+        cb.push_back(ublock_size_tiles);
         src_addr += ublock_size_bytes;
     }
 }

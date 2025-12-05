@@ -169,17 +169,10 @@ class resnetBlock2D:
                 ttnn.to_torch(self.parameters.norm1.bias), in_channels, num_cores_across_channel
             )
 
-            self.norm1_input_mask_torch_tensor = ttnn.create_group_norm_input_mask(
-                in_channels, self.groups, num_cores_across_channel
+            self.norm1_input_mask = ttnn.create_group_norm_input_mask(
+                in_channels, self.groups, num_cores_across_channel, ttnn.bfloat8_b
             )
-
-            self.norm1_input_mask = ttnn.from_torch(
-                self.norm1_input_mask_torch_tensor,
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            self.norm1_input_mask = ttnn.to_device(self.norm1_input_mask, device)
 
             self.parameters.norm1.weight = ttnn.from_torch(
                 self.parameters.norm1.weight,
@@ -229,16 +222,10 @@ class resnetBlock2D:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-            self.norm2_input_mask_torch_tensor = ttnn.create_group_norm_input_mask(
-                out_channels, self.groups, num_cores_across_channel
+            self.norm2_input_mask = ttnn.create_group_norm_input_mask(
+                out_channels, self.groups, num_cores_across_channel, ttnn.bfloat8_b
             )
-            self.norm2_input_mask = ttnn.from_torch(
-                self.norm2_input_mask_torch_tensor,
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            self.norm2_input_mask = ttnn.to_device(self.norm2_input_mask, device)
             self.parameters.time_emb_proj.weight = weight_to_bfp8(self.parameters.time_emb_proj.weight)
             self.parameters.time_emb_proj.bias = weight_to_bfp8(self.parameters.time_emb_proj.bias)
 

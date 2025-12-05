@@ -7,7 +7,6 @@
 
 #include <cassert>
 #include <core/ttnn_all_includes.hpp>
-#include <cstddef>
 #include <cstdint>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
@@ -16,7 +15,6 @@
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
-#include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 class ProfilerNoOpTest : public ::testing::Test {
 protected:
@@ -44,10 +42,8 @@ TEST_F(ProfilerNoOpTest, ProfilerNoOpTest_Batch) {
         seed);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
-    std::cout << "Input Logits:\n";
-    input.print();
 
     auto result = ttml::metal::profiler_no_op(input, "identifier");
-    std::cout << "Profiler_no_op_test:\nResult:\n";
-    result.print();
+
+    // NOTE: ProfilerNoOp does not change the input, so we just check that the operation completed successfully.
 }

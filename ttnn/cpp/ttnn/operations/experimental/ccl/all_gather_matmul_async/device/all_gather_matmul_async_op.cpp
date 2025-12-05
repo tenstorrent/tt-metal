@@ -34,8 +34,8 @@ void AllGatherMatmulAsync::validate_with_output_tensors(
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_ASSERT(input_tensors.size() == 2, "AllGatherMatmulAsync requires 2 input tensors: [input, weight]");
-    auto& input_tensor = input_tensors[0];
-    auto& weight_tensor = input_tensors[1];
+    const auto& input_tensor = input_tensors[0];
+    const auto& weight_tensor = input_tensors[1];
 
     TT_FATAL(
         std::all_of(
@@ -43,7 +43,7 @@ void AllGatherMatmulAsync::validate_with_output_tensors(
         "AllGatherMatmulAsync requires input tensors to be of rank 4");
 
     if (output_tensors[0].has_value()) {
-        auto& all_gather_output_tensor = output_tensors.at(0).value();
+        const auto& all_gather_output_tensor = output_tensors.at(0).value();
         // All Gather validate
         this->all_gather_async_struct.validate_with_output_tensors({input_tensor}, {all_gather_output_tensor});
         // Matmul validate.
@@ -71,7 +71,7 @@ void AllGatherMatmulAsync::validate_with_output_tensors(
         this->matmul_struct.program_config.value());
 
     if (output_tensors[0].has_value()) {
-        auto& all_gather_output_tensor = output_tensors.at(0).value();
+        const auto& all_gather_output_tensor = output_tensors.at(0).value();
         const auto& all_gather_output_tensor_shard_spec = all_gather_output_tensor.shard_spec();
         if (all_gather_output_tensor_shard_spec.has_value()) {
             const uint32_t num_all_gather_output_shards = shard_builder::get_sharding_core_count(all_gather_output_tensor);
@@ -126,7 +126,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmulAsync::create_progr
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at physical coordinate {} is called", mesh_coord);
-    auto mesh_device = input_tensors[0].device();
+    auto* mesh_device = input_tensors[0].device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coord) : input_tensors[0].device();
 
     uint32_t device_index = ccl::get_linearized_index_from_physical_coord(

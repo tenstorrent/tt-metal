@@ -10,7 +10,7 @@ run_mid_run_data_dump() {
     echo "Smoke test, checking mid-run device data dump for hangs"
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
-    python -m tracy -v -r -p --cpp-post-process --sync-host-device --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_all_devices
+    python -m tracy -v -r -p --cpp-post-process --sync-host-device --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_mesh_device
     runDate=$(ls $PROFILER_OUTPUT_DIR/)
     cat $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv
     python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py
@@ -88,18 +88,18 @@ run_async_tracing_mid_run_dump_T3000_test() {
         fi
 
         midRunDumpRunDate=$(ls $PROFILER_OUTPUT_DIR/)
-        mv $PROFILER_ARTIFACTS_DIR/.logs/cpp_ops_device_perf_report.csv $PROFILER_OUTPUT_DIR/$midRunDumpRunDate/cpp_ops_device_perf_report.csv
+        mv $PROFILER_ARTIFACTS_DIR/.logs/cpp_device_perf_report.csv $PROFILER_OUTPUT_DIR/$midRunDumpRunDate/cpp_device_perf_report.csv
 
         python -m tracy -v -r -p --cpp-post-process -m pytest models/demos/ttnn_resnet/tests/test_resnet50_performant.py::test_run_resnet50_trace_2cqs_inference[wormhole_b0-16-act_dtype0-weight_dtype0-math_fidelity0-device_params0]
 
         nonMidRunDumpRunDate=$(ls $PROFILER_OUTPUT_DIR/ | grep -v $midRunDumpRunDate)
-        mv $PROFILER_ARTIFACTS_DIR/.logs/cpp_ops_device_perf_report.csv $PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/cpp_ops_device_perf_report.csv
+        mv $PROFILER_ARTIFACTS_DIR/.logs/cpp_device_perf_report.csv $PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/cpp_device_perf_report.csv
 
-        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py $PROFILER_OUTPUT_DIR/$midRunDumpRunDate/ops_perf_results_$midRunDumpRunDate.csv $PROFILER_OUTPUT_DIR/$midRunDumpRunDate/cpp_ops_device_perf_report.csv
-        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py $PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/ops_perf_results_$nonMidRunDumpRunDate.csv $PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/cpp_ops_device_perf_report.csv
+        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py $PROFILER_OUTPUT_DIR/$midRunDumpRunDate/ops_perf_results_$midRunDumpRunDate.csv $PROFILER_OUTPUT_DIR/$midRunDumpRunDate/cpp_device_perf_report.csv
+        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py $PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/ops_perf_results_$nonMidRunDumpRunDate.csv $PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/cpp_device_perf_report.csv
 
-        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --only-compare-op-ids $PROFILER_OUTPUT_DIR/$midRunDumpRunDate/ops_perf_results_$midRunDumpRunDate.csv $PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/cpp_ops_device_perf_report.csv
-        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --only-compare-op-ids $PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/ops_perf_results_$nonMidRunDumpRunDate.csv $PROFILER_OUTPUT_DIR/$midRunDumpRunDate/cpp_ops_device_perf_report.csv
+        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --only-compare-op-ids $PROFILER_OUTPUT_DIR/$midRunDumpRunDate/ops_perf_results_$midRunDumpRunDate.csv $PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/cpp_device_perf_report.csv
+        python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py --only-compare-op-ids $PROFILER_OUTPUT_DIR/$nonMidRunDumpRunDate/ops_perf_results_$nonMidRunDumpRunDate.csv $PROFILER_OUTPUT_DIR/$midRunDumpRunDate/cpp_device_perf_report.csv
     fi
 }
 
@@ -136,7 +136,7 @@ run_profiling_test() {
 
     TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py --noconftest --timeout 360
 
-    pytest tests/ttnn/tracy/test_perf_op_report.py --noconftest
+    TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_perf_op_report.py --noconftest
 
     remove_default_log_locations
 }

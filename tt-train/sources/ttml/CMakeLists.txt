@@ -27,6 +27,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/core/mesh_device.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/not_null.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/random.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/random_sse.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/scoped.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/system_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/system_utils.hpp
@@ -134,6 +135,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rope_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/scaled_dot_product_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/scaled_dot_product_attention.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/swiglu_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/swiglu_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/unary_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/unary_ops.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/sampling_op.cpp
@@ -148,6 +151,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd_fused.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd_fused.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/lambda_scheduler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/lambda_scheduler.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/linear_scheduler.cpp
@@ -165,8 +170,6 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serializable.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serialization.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/serialization.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/bpe_tokenizer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/bpe_tokenizer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/char_tokenizer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/char_tokenizer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/char_tokenizer_trainer.cpp
@@ -188,7 +191,9 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/operations.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ttnn_all_includes.hpp
     # Common
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/common/program_utils.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/dataflow_utils.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/compute_utils.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/common/program_utils.hpp
     # RMSNorm
     # RMSNorm Forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.cpp
@@ -206,6 +211,22 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_program_factory.cpp
+    # LayerNorm Backward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/layernorm_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/layernorm_bw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/device/layernorm_bw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/device/layernorm_bw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/device/layernorm_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/device/layernorm_bw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_bw/device/layernorm_bw_program_factory.cpp
+    # LayerNorm Forward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/layernorm_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/layernorm_fw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/device/layernorm_fw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/device/layernorm_fw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/device/layernorm_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/device/layernorm_fw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/layernorm_fw/device/layernorm_fw_program_factory.cpp
     # CrossEntropy
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/cross_entropy_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/cross_entropy_fw.hpp
@@ -253,6 +274,22 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.cpp
+    # SGD Fused Optimizer
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/sgd_fused.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/sgd_fused.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/device/sgd_fused_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/device/sgd_fused_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/device/sgd_fused_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/device/sgd_fused_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/device/sgd_fused_program_factory.cpp
+    # SwiGLU Forward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/swiglu_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/swiglu_fw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})
@@ -346,6 +383,7 @@ if(NOT TARGET TT::Metalium)
                     INTERFACE_INCLUDE_DIRECTORIES
                         "${METALIUM_INCLUDE_DIRS}"
             )
+            target_link_libraries(TTNN::TTNN INTERFACE TT::Metalium)
             message(STATUS "Successfully found _ttnncpp.so at ${TTNNCPP_LIBRARY}")
         else()
             message(FATAL_ERROR "_ttnncpp.so not found in ${METALIUM_LIB_PATH}")
@@ -388,10 +426,10 @@ target_link_libraries(
         xtensor
         xtensor-blas
         xtl
-        tokenizers_cpp
         Boost::core
         Boost::container
         tt-logger
+        simde::simde
 )
 
 message(STATUS "xtensor_SOURCE_DIR: ${xtensor_SOURCE_DIR}")
@@ -403,17 +441,7 @@ target_include_directories(ttml PUBLIC ${msgpack_SOURCE_DIR}/include)
 message(STATUS "cli11_SOURCE_DIR: ${CLI11_SOURCE_DIR}")
 target_include_directories(ttml PUBLIC ${CLI11_SOURCE_DIR}/include)
 
-target_include_directories(ttml PUBLIC ${TOKENZIER_CPP_PATH}/include)
-
 if(ENABLE_LIBCXX)
-    target_link_libraries(
-        tokenizers_cpp
-        PUBLIC
-            ${LIBC++}
-            ${LIBC++ABI}
-    )
-    target_compile_options(tokenizers_cpp PUBLIC -stdlib=libc++)
-
     target_link_libraries(
         PUBLIC
             ${LIBC++}
@@ -492,17 +520,43 @@ target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
 install(
     TARGETS
         _ttml
-    ARCHIVE
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT tar
+        DESTINATION ttml
+        COMPONENT ttml
 )
+
+# Install Python source files
 install(
-    TARGETS
-        _ttml
-        DESTINATION
-        ${PROJECT_SOURCE_DIR}/tt-train/sources/ttml
-        COMPONENT
-        tt_pybinds
+    DIRECTORY
+        ${CMAKE_CURRENT_SOURCE_DIR}/ttml
+    DESTINATION ttml
+    COMPONENT ttml
+    FILES_MATCHING
+    PATTERN
+    "*.py"
+    PATTERN
+    "__pycache__"
+        EXCLUDE
 )
+
+# CPack configuration for creating ttml deb package
+set(CPACK_GENERATOR "DEB")
+set(CPACK_PACKAGE_NAME "ttml")
+set(CPACK_PACKAGE_VERSION "1.0.0")
+set(CPACK_PACKAGE_VENDOR "Tenstorrent")
+set(CPACK_PACKAGE_DESCRIPTION "TT Machine Learning Library - Training framework for Tenstorrent hardware")
+set(CPACK_PACKAGE_CONTACT "support@tenstorrent.com")
+set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Tenstorrent")
+
+# Component-based packaging
+set(CPACK_DEB_COMPONENT_INSTALL ON)
+set(CPACK_COMPONENTS_ALL ttml)
+
+# Debian-specific settings
+set(CPACK_DEBIAN_TTML_PACKAGE_NAME "ttml")
+set(CPACK_DEBIAN_TTML_FILE_NAME "ttml-${CPACK_PACKAGE_VERSION}-Linux.deb")
+
+# Set the package architecture
+set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "amd64")
+
+include(CPack)

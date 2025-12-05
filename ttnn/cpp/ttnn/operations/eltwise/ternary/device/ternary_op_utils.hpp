@@ -30,11 +30,16 @@ enum class KernelName {
     ReaderRowBcastTTT,
     ReaderRowBcastTST,
     ReaderRowBcastTTS,
+    WriterNoBcastTernary,
     WriterColBcastTTT,
-    ComputeNoBcastTTT,      // TTT: no bcast, outer dim and row bcast cases
-    ComputeBcastTTT,        // TTT : column and scalar bcast cases
-    ComputeBcastTTS_TST,    // TTS, TST: column and scalar bcast cases
-    ComputeNoBcastTTS_TST,  // TTS, TST: no bcast, outer dim and row bcast cases
+    ComputeNoBcastTTT,       // TTT: no bcast, outer dim and row bcast cases
+    ComputeBcastTTT,         // TTT : column and scalar bcast cases
+    ComputeRowBcastTTT,      // TTT : row bcast cases : bfloat16 only
+    ComputeBcastTTS_TST,     // TTS, TST: column and scalar bcast cases
+    ComputeNoBcastTTS_TST,   // TTS, TST: no bcast, outer dim and row bcast cases
+    ComputeNoBcastAddcmul,   // ADDCMUL: no bcast, uses existing add/mul operations
+    ComputeBcastAddcmul,     // ADDCMUL: column and scalar bcast cases
+    ComputeRowBcastAddcmul,  // ADDCMUL: row bcast cases : bfloat16 only
 };
 
 struct TernaryKernelConfig {
@@ -45,7 +50,7 @@ struct TernaryKernelConfig {
     KernelName writer_kernel;
 };
 
-std::string get_kernel_file_path(KernelName kernel_name);
+std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu = false);
 
 uint32_t pack_scalar_runtime_arg(float scalar, DataType dtype);
 

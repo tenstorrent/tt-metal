@@ -20,15 +20,30 @@
 #include "hal_types.hpp"
 #include "prefetch.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/debug/inspector/inspector.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
-#include "tt_metal/api/tt-metalium/device_pool.hpp"
+#include "tt_metal/impl/device/device_pool.hpp"
+#include <impl/dispatch/dispatch_query_manager.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 using namespace tt::tt_metal;
 
+DispatchSKernel::DispatchSKernel(
+    int node_id, ChipId device_id, ChipId servicing_device_id, uint8_t cq_id, noc_selection_t noc_selection) :
+    FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection) {
+    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
+    this->logical_core_ = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().dispatcher_s_core(
+        device_id, channel, cq_id_);
+    this->kernel_type_ = FDKernelType::DISPATCH;
+    // Log dispatch_s core info based on virtual core to inspector
+    auto virtual_core = this->GetVirtualCore();
+    tt::tt_metal::Inspector::set_dispatch_s_core_info(virtual_core, DISPATCH_S, cq_id, device_id, servicing_device_id);
+}
+
 void DispatchSKernel::GenerateStaticConfigs() {
-    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
+    const auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
 
     uint32_t dispatch_s_buffer_base = 0xff;
     if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
@@ -68,14 +83,14 @@ void DispatchSKernel::GenerateStaticConfigs() {
 void DispatchSKernel::GenerateDependentConfigs() {
     // Upstream
     TT_ASSERT(upstream_kernels_.size() == 1);
-    auto prefetch_kernel = dynamic_cast<PrefetchKernel*>(upstream_kernels_[0]);
+    auto* prefetch_kernel = dynamic_cast<PrefetchKernel*>(upstream_kernels_[0]);
     TT_ASSERT(prefetch_kernel);
     dependent_config_.upstream_logical_core = prefetch_kernel->GetLogicalCore();
     dependent_config_.upstream_dispatch_cb_sem_id = prefetch_kernel->GetStaticConfig().my_dispatch_s_cb_sem_id;
 
     // Downstream
     TT_ASSERT(downstream_kernels_.size() == 1);
-    auto dispatch_kernel = dynamic_cast<DispatchKernel*>(downstream_kernels_[0]);
+    auto* dispatch_kernel = dynamic_cast<DispatchKernel*>(downstream_kernels_[0]);
     TT_ASSERT(dispatch_kernel);
     dependent_config_.downstream_logical_core = dispatch_kernel->GetLogicalCore();
 }
@@ -156,7 +171,7 @@ void DispatchSKernel::ConfigureCore() {
     }
     // Just need to clear the dispatch message
     std::vector<uint32_t> zero = {0x0};
-    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
+    const auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
     uint32_t dispatch_s_sync_sem_base_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
     for (uint32_t i = 0; i < DispatchSettings::DISPATCH_MESSAGE_ENTRIES; i++) {

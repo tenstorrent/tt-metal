@@ -94,6 +94,8 @@ using byte = std::uint8_t;
 
 // Debug registers
 #define RISCV_DEBUG_REGS_START_ADDR 0xFFB12000
+#define RISCV_DEBUG_REG_PERF_CNT_OUT_L_FPU (RISCV_DEBUG_REGS_START_ADDR | 0x120)
+#define RISCV_DEBUG_REG_PERF_CNT_OUT_H_FPU (RISCV_DEBUG_REGS_START_ADDR | 0x124)
 #define RISCV_DEBUG_REG_SOFT_RESET_0 (RISCV_DEBUG_REGS_START_ADDR | 0x1B0)
 #define RISCV_DEBUG_REG_WDT (RISCV_DEBUG_REGS_START_ADDR | 0x1E0)
 #define RISCV_DEBUG_REG_WDT_CNTL (RISCV_DEBUG_REGS_START_ADDR | 0x1E4)
@@ -593,7 +595,7 @@ inline typename std::make_unsigned<T>::type pack_field(T x, unsigned int to_shif
 }
 
 template <class T>
-inline typename std::make_unsigned<T>::type pack_field(T x, unsigned int bits, unsigned int to_shift) {
+inline typename std::make_unsigned<T>::type pack_field(T x, unsigned int /*bits*/, unsigned int to_shift) {
     typename std::make_unsigned<T>::type u_x(x);
 
     // assert((u_x & ~bitmask<T>(bits)) == 0);

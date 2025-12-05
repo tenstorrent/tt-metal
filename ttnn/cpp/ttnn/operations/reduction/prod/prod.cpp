@@ -1,48 +1,47 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-//
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "prod.hpp"
 #include "device/prod_nc_op.hpp"
 #include "device/prod_op_all.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-#include "ttnn/operations/creation.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/data_movement/permute/permute.hpp"
-#include "ttnn/operations/functions.hpp"
-#include "ttnn/types.hpp"
-#include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
+
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/permute/permute.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/operations/functions.hpp"
 
 namespace ttnn::operations::reduction {
 
-inline Tensor prod_all(const Tensor& input_a, const MemoryConfig& output_mem_config) {
-    using ttnn::operations::experimental::auto_format::AutoFormat;
+inline Tensor compute_prod_all(const Tensor& input_a, const MemoryConfig& output_mem_config) {
     auto formatted_input_tensor = input_a;
     if (formatted_input_tensor.layout() != Layout::TILE) {
-        auto a_pad_shape = AutoFormat::pad_to_tile_shape(input_a.padded_shape());
+        auto a_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_a.padded_shape());
 
-        if (!AutoFormat::check_input_tensor_format(input_a, a_pad_shape)) {
+        auto need_format = input_a.layout() != Layout::TILE || input_a.padded_shape() != a_pad_shape;
+        if (need_format) {
             formatted_input_tensor =
-                AutoFormat::format_input_tensor(input_a, input_a.device(), a_pad_shape, 1.0, Layout::TILE);
+                ttnn::tilize_with_val_padding(input_a, a_pad_shape, PadValue(1.0f), input_a.memory_config());
         }
     }
 
     return tt::operations::primary::prod_all(formatted_input_tensor, output_mem_config);
 }
 
-inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& output_mem_config) {
-    using ttnn::operations::experimental::auto_format::AutoFormat;
+inline Tensor compute_prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& output_mem_config) {
     // layout conversion
     auto formatted_input_tensor = temp;
     if (formatted_input_tensor.layout() == Layout::ROW_MAJOR) {
-        auto a_pad_shape = AutoFormat::pad_to_tile_shape(temp.padded_shape());
+        auto a_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(temp.padded_shape());
         auto out_shape = temp.padded_shape();
         out_shape = ttnn::Shape({out_shape[0], out_shape[1], out_shape[2], out_shape[3]});
-        if (!AutoFormat::check_input_tensor_format(temp, a_pad_shape)) {
+        auto need_format = temp.layout() != Layout::TILE || temp.padded_shape() != a_pad_shape;
+        if (need_format) {
             formatted_input_tensor =
-                AutoFormat::format_input_tensor(temp, temp.device(), a_pad_shape, 1.0, Layout::TILE);
+                ttnn::tilize_with_val_padding(temp, a_pad_shape, PadValue(1.0f), temp.memory_config());
         }
     }
     // Apply prod
@@ -55,7 +54,7 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
         input_shape[3]};
 
     auto ttnn_shape = ttnn::Shape(required);
-    auto ttnn_device = formatted_input_tensor.device();
+    auto* ttnn_device = formatted_input_tensor.device();
 
     return tt::operations::primary::prod_nc(
         formatted_input_tensor,
@@ -82,8 +81,13 @@ Tensor ProdOperation::invoke(
 
     // If no dim is provided, compute the prod across all dimensions
     if (!dim.has_value()) {
-        TT_FATAL(!keepdim, "Not possible to keepdim with all dimensions enabled, as this returns a scalar");
-        return prod_all(input_a, output_mem_config);
+        Tensor result = compute_prod_all(input_a, output_mem_config);
+        if (keepdim) {
+            // Reshape to have all dimensions (as many as the input rank) set to 1.
+            ttnn::SmallVector<uint32_t> output_shape(old_rank, 1);
+            result = ttnn::reshape(result, ttnn::Shape{output_shape});
+        }
+        return result;
     }
 
     TT_FATAL(size > 0, "Tensor has no dimensions");
@@ -119,7 +123,7 @@ Tensor ProdOperation::invoke(
         // Dim0 grows to include the rest of the dimensions, and our "third last" dim moves into dim1, which is our 4D
         // reduction dim
         auto input_tensor_4d = data_movement::squeeze_from_ND_to_4D(permuted);
-        Tensor result = prod_nc(input_tensor_4d, /*dim=*/1, output_mem_config);
+        Tensor result = compute_prod_nc(input_tensor_4d, /*dim=*/1, output_mem_config);
 
         // Unsqueeze dim0 to restore the original tensor rank
         ttnn::Shape output_shape = ttnn::Shape(input_shape);
@@ -156,7 +160,7 @@ Tensor ProdOperation::invoke(
             ttnn::SmallVector<int64_t> permute_dims = {3, 0, 1, 2};
             temp = ttnn::permute(input_tensor_4d, permute_dims, output_mem_config);
         }
-        Tensor result = prod_nc(temp, dim_4d, output_mem_config);
+        Tensor result = compute_prod_nc(temp, dim_4d, output_mem_config);
         // Permute and unpad result for dim 2,3. Don't need to process dim 0,1.
         auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
         if (dim_4d == 0 || dim_4d == 1 || dim_4d == -4 || dim_4d == -3) {
@@ -194,7 +198,7 @@ Tensor ProdOperation::invoke(
     auto mem_cfg = memory_config.value_or(input.memory_config());
 
     if (dims.empty()) {
-        return prod_all(input, mem_cfg);
+        return compute_prod_all(input, mem_cfg);
     }
     return tt::operations::primary::prod_nc(input, output, dims, mem_cfg);
 }

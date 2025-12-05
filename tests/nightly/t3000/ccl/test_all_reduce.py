@@ -8,7 +8,7 @@ from loguru import logger
 import ttnn
 import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.ttnn.unit_tests.operations.ccl.test_all_reduce_async import (
+from tests.nightly.tg.ccl.test_all_reduce_async import (
     run_all_reduce_test,
     run_all_reduce_with_mesh_tensor_along_row,
 )
@@ -208,9 +208,9 @@ def test_nd(mesh_device, input_shape, cluster_axis, dtype, memory_config, topolo
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
-    ids=["fabric_linear", "fabric_2d_dynamic"],
+    ids=["fabric_linear", "fabric_2d"],
 )
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("input_shape", [[2, 2, 32, 32]])

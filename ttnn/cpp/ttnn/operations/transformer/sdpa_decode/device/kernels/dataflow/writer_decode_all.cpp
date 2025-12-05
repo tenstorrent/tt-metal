@@ -198,12 +198,6 @@ void kernel_main() {
                 cb_reserve_back(cb_m_in, PNHt);
                 cb_reserve_back(cb_l_in, PNHt);
 
-                uint32_t q_write_ptr = get_read_ptr(cb_out_o);
-                noc_async_read(intermed_l1_read_addr, q_write_ptr, q_read_size);
-                intermed_l1_read_addr += q_read_size;
-                noc_async_read_barrier();
-                cb_push_back(cb_out_o, out_chunk_tiles);
-
                 uint32_t m_write_ptr = get_read_ptr(cb_m_in);
                 noc_async_read(intermed_l1_read_addr, m_write_ptr, ml_read_size);
                 intermed_l1_read_addr += ml_read_size;
@@ -215,6 +209,12 @@ void kernel_main() {
                 intermed_l1_read_addr += ml_read_size;
                 noc_async_read_barrier();
                 cb_push_back(cb_l_in, PNHt);
+
+                uint32_t q_write_ptr = get_read_ptr(cb_out_o);
+                noc_async_read(intermed_l1_read_addr, q_write_ptr, q_read_size);
+                intermed_l1_read_addr += q_read_size;
+                noc_async_read_barrier();
+                cb_push_back(cb_out_o, out_chunk_tiles);
             }
         }
         // Offset for current batch

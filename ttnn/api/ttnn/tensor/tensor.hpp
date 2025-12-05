@@ -43,7 +43,8 @@ class MeshCommandQueue;
 
 class Tensor {
 public:
-    std::optional<std::int64_t> tensor_id = std::nullopt;
+    constexpr static std::uint64_t INVALID_TENSOR_ID = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t tensor_id{INVALID_TENSOR_ID};
 
     // Shared pointer to all attributes associated with this tensor
     // Can be safely passed between threads when the tensor is copied
@@ -185,7 +186,6 @@ public:
     [[nodiscard]] Tensor unpad_from_tile(const tt::tt_metal::Shape& output_tensor_shape) const;
 
     [[nodiscard]] std::string write_to_string() const;
-    void print() const;
 
     // Deallocates device-side Tensor storage.
     // If the tensor is on host, does nothing.
@@ -266,15 +266,23 @@ public:
             this->tensor_attributes->get_storage(), this->tensor_attributes->get_tensor_spec());
     }
 
+    static std::uint64_t get_tensor_id_counter();
+
+    static void set_tensor_id_counter(std::uint64_t id);
+
+    // TODO #32045: Remove this function since IDs are assigned in the constructor.
+    static std::uint64_t next_tensor_id();
+
 private:
+    static std::atomic<std::uint64_t> tensor_id_counter;
+
     void init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
     void deallocate_impl(bool force);
 };
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
 
-[[deprecated]]
-Tensor create_device_tensor(
+[[deprecated]] Tensor create_device_tensor(
     const tt::tt_metal::Shape& shape,
     DataType dtype,
     Layout layout,
@@ -321,6 +329,14 @@ void write_tensor(
     const Tensor& src, Tensor& dst, bool blocking = true, std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt);
 
 Tensor set_tensor_id(const Tensor& tensor);
+
+namespace ops {
+Tensor view(
+    const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape, const tt::tt_metal::Shape& new_padded_shape);
+Tensor view(const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape);
+Tensor to_dtype(const Tensor& tensor, DataType dtype);
+
+}  // namespace ops
 
 }  // namespace tt_metal
 

@@ -12,12 +12,12 @@ void MorehGroupNormOperation::validate_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
 
-    auto& output = tensor_args.output;
-    auto& mean = tensor_args.mean;
-    auto& rstd = tensor_args.rstd;
+    const auto& output = tensor_args.output;
+    const auto& mean = tensor_args.mean;
+    const auto& rstd = tensor_args.rstd;
 
-    auto& gamma = tensor_args.gamma;
-    auto& beta = tensor_args.beta;
+    const auto& gamma = tensor_args.gamma;
+    const auto& beta = tensor_args.beta;
 
     auto num_groups = operation_attributes.num_groups;
 
@@ -121,7 +121,7 @@ MorehGroupNormOperation::spec_return_value_t MorehGroupNormOperation::compute_ou
 MorehGroupNormOperation::tensor_return_value_t MorehGroupNormOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto output_specs = compute_output_specs(operation_attributes, tensor_args);
-    auto device = tensor_args.input.device();
+    auto* device = tensor_args.input.device();
 
     std::vector<std::optional<Tensor>> result;
     result.reserve(3);
