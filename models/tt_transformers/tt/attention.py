@@ -410,10 +410,8 @@ class Attention(LightweightModule):
             xqkv_fused_sharded = xqkv_fused_sharded + self.wqkv_bias_decode[num_tiles - 1]
 
         ttnn.deallocate(x)
-        xqkv_fused = tt_all_reduce(
+        xqkv_fused = self.tt_ccl.all_reduce(
             xqkv_fused_sharded,
-            self.mesh_device,
-            self.tt_ccl,
             cluster_axis=1,
             num_reduce_scatter_links=self.num_reduce_scatter_links,
             num_all_gather_links=self.num_all_gather_links,
@@ -421,6 +419,7 @@ class Attention(LightweightModule):
             sharded=True,
             dtype=self.ccl_dtype,
             topology=self.ccl_topology,
+            buffer_key="QKV_OUT",  # forward_decode is always decode mode
         )
 
         if self.TG:
