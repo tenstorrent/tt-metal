@@ -32,7 +32,6 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include <tracy/Tracy.hpp>
 #include <tt_stl/overloaded.hpp>
-// For pinned memory NOC addressing (host-only)
 #include "tt_metal/api/tt-metalium/experimental/pinned_memory.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
@@ -896,7 +895,7 @@ void issue_read_buffer_dispatch_command_sequence(
         command_sequence.add_dispatch_write_host(flush_prefetch, xfer_bytes, false, 0);
     }
 
-    // Unified relay from device memory
+    // Buffer layout specific logic
     if constexpr (std::is_same_v<T, ShardedBufferReadDispatchParams>) {
         const CoreCoord virtual_core =
             buffer.device()->virtual_core_from_logical_core(dispatch_params.core, buffer.core_type());
