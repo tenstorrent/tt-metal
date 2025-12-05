@@ -82,6 +82,7 @@ void kernel_main() {
     if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE || core_type == (uint32_t)CORE_TYPE::HOP_CORE) {
         if constexpr (needs_signaler) {
             do_signaling(rt_args_idx);
+            noc_async_write_barrier();
         }
         return;
     }
@@ -193,4 +194,5 @@ void kernel_main() {
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
     noc_async_atomic_barrier();
 #endif
+    noc_async_write_barrier();
 }

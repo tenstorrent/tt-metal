@@ -734,16 +734,15 @@ def test_demo_for_conditional_generation(
         and compression_ratio_threshold is None  # Check perf only when generate_kwargs are None
     ):
         metrics_dictionary = {
-            1: {"prefill_time_to_token": 0.24, "decode_t/s/u": 53.2},
-            2: {"prefill_time_to_token": 0.27, "decode_t/s/u": 48.09},
+            2: {"prefill_time_to_token": 0.18, "decode_t/s/u": 94.03},
             8: {"prefill_time_to_token": 0.28, "decode_t/s/u": 42.1},
             32: {"prefill_time_to_token": 0.35, "decode_t/s/u": 43.1},
         }
         if is_blackhole():
             if mesh_device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
-                expected_perf_metrics = {"prefill_time_to_token": 0.127, "decode_t/s/u": 87.0}
+                expected_perf_metrics = {"prefill_time_to_token": 0.075, "decode_t/s/u": 205.0}
             else:
-                expected_perf_metrics = {"prefill_time_to_token": 0.119, "decode_t/s/u": 94.0}
+                expected_perf_metrics = {"prefill_time_to_token": 0.070, "decode_t/s/u": 228.0}
         else:  # wormhole_b0
             expected_perf_metrics = metrics_dictionary[mesh_device.get_num_devices()]
         total_batch = mesh_device.get_num_devices() * batch_size_per_device
@@ -758,7 +757,9 @@ def test_demo_for_conditional_generation(
             "decode_t/s": True,
             "decode_t/s/u": True,
         }
-        verify_perf(measurements, expected_perf_metrics, expected_measurements=expected_measurements)
+        verify_perf(
+            measurements, expected_perf_metrics, high_tol_percentage=1.20, expected_measurements=expected_measurements
+        )
 
 
 @pytest.mark.parametrize(
