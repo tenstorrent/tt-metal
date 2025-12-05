@@ -31,7 +31,7 @@ from models.experimental.panoptic_deeplab.reference.pytorch_model import DEEPLAB
             "",
         ),
     ],
-    ids=["test_panoptic_deeplab", "test_deeplab_v3_plus"],
+    ids=["test_panoptic_deeplab_20_cores", "test_deeplab_v3_plus_20_cores"],
 )
 @pytest.mark.models_device_performance_bare_metal
 def test_device_perf_pdl_20_cores(
@@ -54,26 +54,26 @@ def test_device_perf_pdl_20_cores(
     [
         (
             "pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py::test_model_panoptic_deeplab -k test_panoptic_deeplab",
-            10_000_000,
+            12_445_978,
             PANOPTIC_DEEPLAB,
             PANOPTIC_DEEPLAB,
             1,
             1,
-            0.5,  # Wide margin until actual perf is measured
+            0.015,
             "",
         ),
         (
             "pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py::test_model_panoptic_deeplab -k test_deeplab_v3_plus",
-            15_000_000,
+            8_521_002,
             DEEPLAB_V3_PLUS,
             DEEPLAB_V3_PLUS,
             1,
             1,
-            0.5,  # Wide margin until actual perf is measured
+            0.015,
             "",
         ),
     ],
-    ids=["test_panoptic_deeplab", "test_deeplab_v3_plus"],
+    ids=["test_panoptic_deeplab_all_cores", "test_deeplab_v3_plus_all_cores"],
 )
 @pytest.mark.models_device_performance_bare_metal
 def test_device_perf_pdl_all_cores(
