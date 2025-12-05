@@ -18,6 +18,11 @@ graph_descriptors {
 
   connections {
     nodes { mesh { mesh_descriptor: "MESH" mesh_id: 0 device_id: 12} }
+    nodes { mesh { mesh_descriptor: "MESH" mesh_id: 1 device_id: 12} }
+    channels { count: 1 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "MESH" mesh_id: 0 device_id: 13} }
     nodes { mesh { mesh_descriptor: "MESH" mesh_id: 1 device_id: 13} }
     channels { count: 1 policy: RELAXED }
   }
