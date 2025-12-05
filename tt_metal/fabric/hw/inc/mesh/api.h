@@ -2404,15 +2404,17 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
     uint32_t current_offset = offset;
     uint32_t packet_src_addr = src_addr;
 
+    // Set noc_send_type once before loop for intermediate unicast writes
+    if (remaining_size > FABRIC_MAX_PACKET_SIZE) {
+        packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
+    }
+
     // Send intermediate chunks as regular writes (loop skips for small pages)
     while (remaining_size > FABRIC_MAX_PACKET_SIZE) {
         auto chunk_noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
 
         // Ensure hardware has finished reading packet_header before modifying it
         noc_async_writes_flushed();
-
-        // Set noc_send_type to match the command fields
-        packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
 
         // Call basic unicast write _with_state for intermediate packets
         fabric_unicast_noc_unicast_write_with_state<
@@ -2434,7 +2436,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
     // Ensure hardware has finished reading packet_header before modifying it
     noc_async_writes_flushed();
 
-    // Set noc_send_type back to fused for final chunk
+    // Set noc_send_type to fused for final chunk
     packet_header->noc_send_type = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
 
     // Call basic fused atomic inc _with_state for final packet
@@ -2490,17 +2492,19 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
     uint32_t current_offset = offset;
     uint32_t current_src_addr = src_addr;
 
+    // Set noc_send_type once before loop for intermediate unicast writes
+    if (remaining_size > FABRIC_MAX_PACKET_SIZE) {
+        PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+            packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
+        });
+    }
+
     // Send intermediate chunks as regular writes (loop skips for small pages)
     while (remaining_size > FABRIC_MAX_PACKET_SIZE) {
         auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
 
         // Ensure hardware has finished reading headers before modifying them for next packet
         noc_async_writes_flushed();
-
-        // Set noc_send_type to unicast write for intermediate chunks
-        PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-            packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
-        });
 
         // Call basic unicast write _with_state for intermediate chunks
         fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::All>(
@@ -3935,15 +3939,17 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
     uint32_t current_offset = offset;
     uint32_t packet_src_addr = src_addr;
 
+    // Set noc_send_type once before loop for intermediate unicast writes
+    if (remaining_size > FABRIC_MAX_PACKET_SIZE) {
+        packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
+    }
+
     // Send intermediate chunks as regular multicast writes (loop skips for small pages)
     while (remaining_size > FABRIC_MAX_PACKET_SIZE) {
         auto chunk_noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
 
         // Ensure hardware has finished reading packet_header before modifying it
         noc_async_writes_flushed();
-
-        // Set noc_send_type to match the command fields
-        packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
 
         // Call basic multicast unicast write _with_state for intermediate packets
         fabric_multicast_noc_unicast_write_with_state<
@@ -3965,7 +3971,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
     // Ensure hardware has finished reading packet_header before modifying it
     noc_async_writes_flushed();
 
-    // Set noc_send_type back to fused for final chunk
+    // Set noc_send_type to fused for final chunk
     packet_header->noc_send_type = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
 
     // Call basic fused atomic inc _with_state for final packet
@@ -4020,17 +4026,19 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
     uint32_t current_offset = offset;
     uint32_t packet_src_addr = src_addr;
 
+    // Set noc_send_type once before loop for intermediate unicast writes
+    if (remaining_size > FABRIC_MAX_PACKET_SIZE) {
+        PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+            packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
+        });
+    }
+
     // Send intermediate chunks as regular multicast writes (loop skips for small pages)
     while (remaining_size > FABRIC_MAX_PACKET_SIZE) {
         auto chunk_noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
 
         // Ensure hardware has finished reading headers before modifying them for next packet
         noc_async_writes_flushed();
-
-        // Fix noc_send_type on all headers for intermediate unicast writes
-        PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-            packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
-        });
 
         // Call multicast unicast write _with_state connection manager variant for intermediate packets
         fabric_multicast_noc_unicast_write_with_state<
@@ -4052,7 +4060,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
     // Ensure hardware has finished reading headers before modifying them
     noc_async_writes_flushed();
 
-    // Set noc_send_type back to fused for final chunk on all headers
+    // Set noc_send_type to fused for final chunk on all headers
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         packet_header->noc_send_type = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
     });
