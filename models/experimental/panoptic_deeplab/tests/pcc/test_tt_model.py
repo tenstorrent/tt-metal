@@ -143,10 +143,9 @@ def test_model_panoptic_deeplab(device, model_category, model_location_generator
         offset_pcc, offset_abs_err, offset_rel_err = 0.990, 10.4, 0.6
     else:
         # PCC values for all-core grid with auto-generated program config
-        # Using very relaxed tolerances
-        semantic_pcc, semantic_abs_err, semantic_rel_err = 0.98, 5.0, 1.0
-        center_pcc, center_abs_err, center_rel_err = 0.81, 10.0, 5.0
-        offset_pcc, offset_abs_err, offset_rel_err = 0.984, 15.0, 2.0
+        semantic_pcc, semantic_abs_err, semantic_rel_err = 0.982, 1.4, 0.5
+        center_pcc, center_abs_err, center_rel_err = 0.811, 0.1, 2.4
+        offset_pcc, offset_abs_err, offset_rel_err = 0.984, 12.2, 0.7
 
     all_passed = []
     all_passed.append(

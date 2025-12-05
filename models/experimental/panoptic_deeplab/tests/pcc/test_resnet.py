@@ -272,12 +272,11 @@ def test_resnet_full_pcc(device, batch_size, height, width, reset_seeds, model_l
             "res5": 0.6,
         }
     else:
-        # Very relaxed tolerances for all-core grid with auto-generated program config
         layer_pcc_thresholds = {
-            "res2": 0.99,
-            "res3": 0.99,
-            "res4": 0.99,
-            "res5": 0.99,
+            "res2": 0.999,
+            "res3": 0.999,
+            "res4": 0.999,
+            "res5": 0.992,
         }
         layer_exp_abs_err = {
             "res2": 0.5,
@@ -286,9 +285,9 @@ def test_resnet_full_pcc(device, batch_size, height, width, reset_seeds, model_l
             "res5": 0.5,
         }
         layer_exp_rel_err = {
-            "res2": 0.7,
-            "res3": 0.7,
-            "res4": 0.7,
+            "res2": 0.3,
+            "res3": 0.6,
+            "res4": 0.3,
             "res5": 0.7,
         }
 

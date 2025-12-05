@@ -121,8 +121,7 @@ def test_ttnn_aspp(device, model_location_generator):
     if is_20_core_grid:
         aspp_pcc, aspp_abs_err, aspp_rel_err = 0.99, 0.03, 0.4
     else:
-        # Relaxed tolerances for all-core grid with auto-generated program config
-        aspp_pcc, aspp_abs_err, aspp_rel_err = 0.99, 0.1, 1.0
+        aspp_pcc, aspp_abs_err, aspp_rel_err = 0.998, 0.04, 0.5
 
     passed = check_ttnn_output(
         "aspp_output",
