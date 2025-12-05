@@ -63,7 +63,7 @@ add_executable(ttml_tests ${SOURCES})
 target_link_libraries(
     ttml_tests
     GTest::gmock_main
-    ttml
+    ttml_core
 )
 add_definitions(-DTEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
 

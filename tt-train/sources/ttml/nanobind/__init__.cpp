@@ -28,7 +28,7 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 namespace ttml::nanobind {
 using namespace ::nanobind;
 
-NB_MODULE(_ttml, m) {
+NB_MODULE(ttml, m) {
     // Bind NamedParameters as a proper map type at the top level
     nb::bind_map<ttml::serialization::NamedParameters>(m, "NamedParameters");
 

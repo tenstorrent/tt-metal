@@ -1,4 +1,4 @@
-project(ttml)
+project(ttml_core)
 
 set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/auto_context.cpp
@@ -393,9 +393,9 @@ else()
     message(STATUS "Metalium targets already exists")
 endif()
 
-add_library(ttml STATIC ${SOURCES})
+add_library(ttml_core STATIC ${SOURCES})
 
-target_include_directories(ttml PUBLIC ${PROJECT_SOURCE_DIR})
+target_include_directories(ttml_core PUBLIC ${PROJECT_SOURCE_DIR})
 
 find_package(
     Python3
@@ -407,11 +407,11 @@ find_package(
 )
 
 foreach(lib ${BoostPackages})
-    target_include_directories(ttml SYSTEM PUBLIC ${Boost${lib}_SOURCE_DIR}/include)
+    target_include_directories(ttml_core SYSTEM PUBLIC ${Boost${lib}_SOURCE_DIR}/include)
 endforeach()
 
 target_link_libraries(
-    ttml
+    ttml_core
     PUBLIC
         dl
         z
@@ -437,9 +437,9 @@ message(STATUS "xtl_SOURCE_DIR: ${xtl_SOURCE_DIR}")
 message(STATUS "xtensor-blas_SOURCE_DIR: ${xtensor-blas_SOURCE_DIR}")
 
 message(STATUS "msgpack_SOURCE_DIR: ${msgpack_SOURCE_DIR}")
-target_include_directories(ttml PUBLIC ${msgpack_SOURCE_DIR}/include)
+target_include_directories(ttml_core PUBLIC ${msgpack_SOURCE_DIR}/include)
 message(STATUS "cli11_SOURCE_DIR: ${CLI11_SOURCE_DIR}")
-target_include_directories(ttml PUBLIC ${CLI11_SOURCE_DIR}/include)
+target_include_directories(ttml_core PUBLIC ${CLI11_SOURCE_DIR}/include)
 
 if(ENABLE_LIBCXX)
     target_link_libraries(
@@ -503,25 +503,25 @@ set(TTML_SRC_NANOBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_util.hpp
 )
 nanobind_add_module(
-    _ttml
+    ttml
     STABLE_ABI NB_STATIC
     ${TTML_SRC_NANOBIND}
 )
 target_link_libraries(
-    _ttml
+    ttml
     PRIVATE
         fmt::fmt-header-only
         TT::Metalium
         TTNN::TTNN
         Python3::Python
-        ttml
+        ttml_core
 )
-target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
+target_include_directories(ttml PUBLIC ${PROJECT_SOURCE_DIR})
 install(
     TARGETS
-        _ttml
+        ttml
     LIBRARY
-        DESTINATION ttml
+        DESTINATION .
         COMPONENT ttml
 )
 
@@ -529,7 +529,7 @@ install(
 install(
     DIRECTORY
         ${CMAKE_CURRENT_SOURCE_DIR}/ttml
-    DESTINATION ttml
+    DESTINATION .
     COMPONENT ttml
     FILES_MATCHING
     PATTERN

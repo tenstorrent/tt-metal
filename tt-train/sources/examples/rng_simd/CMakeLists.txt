@@ -5,6 +5,6 @@ find_package(Threads REQUIRED)
 target_link_libraries(
     rng_simd
     PRIVATE
-        ttml
+        ttml_core
         Threads::Threads
 )
