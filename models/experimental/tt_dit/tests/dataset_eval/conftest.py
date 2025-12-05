@@ -18,6 +18,23 @@ def pytest_addoption(parser):
         help="Number of prompts to process (default: 5)",
     )
 
+    model_id_choices = ["flux1.dev", "flux1.schnell", "sd35.large", "motif.image.6b.preview"]
+    parser.addoption(
+        "--model-id",
+        action="store",
+        required=True,
+        choices=model_id_choices,
+        help=f"Model ID to use for evaluation. Options:{','.join(model_id_choices)}",
+    )
+
+    parser.addoption(
+        "--num-inference-steps",
+        action="store",
+        default=28,
+        type=int,
+        help="Number of inference steps (default: 28)",
+    )
+
 
 @pytest.fixture
 def evaluation_range(request):
@@ -32,6 +49,16 @@ def evaluation_range(request):
     else:
         num_prompts = 5
     return start_from, num_prompts
+
+
+@pytest.fixture
+def model_id(request):
+    return request.config.getoption("--model-id")
+
+
+@pytest.fixture
+def num_inference_steps(request):
+    return request.config.getoption("--num-inference-steps")
 
 
 # python -m pytest model.py::test_accuracy_model -v --start-from=0 --num-prompts=5 -s
