@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::data_movement::repeat::program {
 
-struct RepeatProgramFactorySecondDim {
+struct RepeatProgramFactoryHigherDim {
     using shared_variables_t = RepeatSharedVariables;
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 

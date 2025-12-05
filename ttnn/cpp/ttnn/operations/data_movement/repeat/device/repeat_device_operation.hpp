@@ -7,8 +7,8 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_device_operation_types.hpp"
-#include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_second_dim.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_last_dim.hpp"
+#include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_higher_dim.hpp"
 
 namespace ttnn::operations::data_movement::repeat {
 
@@ -18,7 +18,7 @@ struct RepeatDeviceOperation {
     using spec_return_value_t = spec_return_value_t;
     using tensor_return_value_t = tensor_return_value_t;
     using program_factory_t =
-        std::variant<program::RepeatProgramFactorySecondDim, program::RepeatProgramFactoryLastDim>;
+        std::variant<program::RepeatProgramFactoryLastDim, program::RepeatProgramFactoryHigherDim>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
