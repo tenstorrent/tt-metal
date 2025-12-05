@@ -174,7 +174,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
         (input_cb_data_format == tt::DataFormat::Float32 && num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
-        unpack_to_dest_mode[tt::CBIndex::c_0] =
+        unpack_to_dest_mode[src0_cb_index] =
             UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
