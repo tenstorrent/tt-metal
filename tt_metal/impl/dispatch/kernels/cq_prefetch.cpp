@@ -1164,6 +1164,8 @@ void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_
     // set transaction ID to 0 for other noc read to not use transaction id 1
     // to remove unnecessary barrier delay
     noc_async_read_set_trid(0);
+    // Ensure reads receive the updated data.
+    invalidate_l1_cache();
 }
 
 // processes the relay_inline cmd from an exec_buf
