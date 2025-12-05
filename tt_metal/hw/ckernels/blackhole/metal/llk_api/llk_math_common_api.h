@@ -27,6 +27,8 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
     _llk_math_hw_configure_(unpack_dst_format[srca_operand_id], unpack_dst_format[srcb_operand_id]);
 }
 
+inline void llk_math_configure_remap(bool remap_enabled) { _llk_math_configure_remap_(remap_enabled); }
+
 inline void llk_math_wait_for_dest_available() {
     WAYPOINT("MWDW");
     _llk_math_wait_for_dest_available_<DST_SYNC_MODE>();

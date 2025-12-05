@@ -385,7 +385,8 @@ ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
 
 ALWI void fast_tilize_init_with_dt(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
     UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE>(icb, icb)));
-    MATH((llk_math_reconfig_data_format<true, true>(icb, icb)));
+    // NC: second template arguement was to_from_int8 = true, what to do here?
+    MATH((llk_math_reconfig_data_format<true>(icb, icb)));
 
     fast_tilize_init(icb, full_dim, ocb);
 }

@@ -62,11 +62,12 @@ ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t face_r_dim = 16, uint32
 #ifdef ARCH_BLACKHOLE
     // Needed for setting swizzle_32b:
     MATH((llk_math_hw_configure(0, 0)));
+    MATH((llk_math_configure_remap(true /* remap enabled */)));
     // TODO LP, set swizzle here
 #endif
     // A workaround for tt-metal#17132. Should be addressed more systematically.
     // NC: Need to pass face_r_dim and num_faces as CB metadata, not as runtime arg
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb, face_r_dim, num_faces)));
+    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, narrow_row, row_num_datums>(ocb, face_r_dim, num_faces)));
     PACK((llk_init_packer_dest_offset_registers<true>(ocb)));
 }

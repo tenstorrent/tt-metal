@@ -239,16 +239,10 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const bool partial_face = get_output_partial_face(output_id);
 
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        get_local_cb_interface(output_id).fifo_page_size,
-        face_r_dim,
-        tile_c_dim,
-        num_faces,
-        partial_face);
+        pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, tile_c_dim, num_faces, partial_face);
 }
 
-template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const std::uint32_t new_output) {
     std::uint32_t old_output_id = get_output_id(old_output);
     std::uint32_t new_output_id = get_output_id(new_output);
@@ -256,10 +250,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const 
     if ((pack_dst_format[old_output_id] != pack_dst_format[new_output_id]) &&
         (pack_dst_format[old_output_id] != (uint)DataFormat::Invalid) &&
         (pack_dst_format[new_output_id] != (uint)DataFormat::Invalid)) {
-        llk_pack_reconfig_data_format<is_fp32_dest_acc_en, is_tile_dim_reconfig_en>(new_output);
-    } else if constexpr (is_tile_dim_reconfig_en) {
-        // Same format but different tile dims
-        llk_pack_mop_config<false, false>(new_output);
+        llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(new_output);
     }
 }
 
