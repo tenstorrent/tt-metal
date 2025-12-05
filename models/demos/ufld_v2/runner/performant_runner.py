@@ -105,7 +105,9 @@ class UFLDPerformantRunner:
     def _execute_no_trace_inference(self, tt_inputs_host=None):
         """Run inference without trace for ops recording compatibility."""
         tt_inputs_host = self.tt_inputs_host if tt_inputs_host is None else tt_inputs_host
-        self.runner_infra.input_tensor = ttnn.to_memory_config(self.tt_image_res, self.input_mem_config)
+        # Copy input to device and convert memory config
+        tt_input_device = tt_inputs_host.to(self.device, self.runner_infra.setup_dram_sharded_input(self.device)[1])
+        self.runner_infra.input_tensor = ttnn.to_memory_config(tt_input_device, self.input_mem_config)
         self.runner_infra.run()
         return self.runner_infra.output_tensor_1
 

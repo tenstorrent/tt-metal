@@ -95,6 +95,14 @@ def run_ufld_v2_demo(
     ), f"F1 score difference {abs(reference_f1 - ttnn_f1):.4f} exceeds tolerance of {tolerance}"
 
 
+def get_device_params():
+    """Get device params, adjusting for ops recording mode."""
+    if os.environ.get("TT_DISABLE_TRACE", "0") == "1":
+        # No trace mode: don't allocate trace region, use single command queue
+        return {"l1_small_size": UFLD_V2_L1_SMALL_SIZE}
+    return {"l1_small_size": UFLD_V2_L1_SMALL_SIZE, "trace_region_size": 23887872, "num_command_queues": 2}
+
+
 @pytest.mark.parametrize(
     "batch_size,input_channels,height,width,exp_name_1,exp_name_2",
     [
@@ -114,7 +122,7 @@ def run_ufld_v2_demo(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": UFLD_V2_L1_SMALL_SIZE, "trace_region_size": 23887872, "num_command_queues": 2}],
+    [get_device_params()],
     indirect=True,
 )
 def test_ufld_v2_demo(
@@ -162,7 +170,7 @@ def test_ufld_v2_demo(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": UFLD_V2_L1_SMALL_SIZE, "trace_region_size": 23887872, "num_command_queues": 2}],
+    [get_device_params()],
     indirect=True,
 )
 def test_ufld_v2_demo_dp(
