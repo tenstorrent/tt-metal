@@ -313,7 +313,7 @@ void kernel_main() {
             uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
             uint32_t tiles_to_put_in_current_packet = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
 
-            cb_wait_front(cb_output_id, num_tiles_to_write_per_packet);
+            cb_wait_front(cb_output_id, tiles_to_put_in_current_packet);
             size_t l1_read_addr = get_read_ptr(cb_output_id);
 
             uint64_t noc_addrs[4] = {0, 0, 0, 0};
@@ -339,13 +339,16 @@ void kernel_main() {
                     switch (tiles_to_put_in_current_packet) {
                         case 4:
                             FABRIC_UNICAST((NocUnicastScatterCommandHeader{
-                                {noc_addrs[0], noc_addrs[1], noc_addrs[2], noc_addrs[3]}}));
+                                {noc_addrs[0], noc_addrs[1], noc_addrs[2], noc_addrs[3]},
+                                {page_size, page_size, page_size}}));
                             break;
                         case 3:
-                            FABRIC_UNICAST(
-                                (NocUnicastScatterCommandHeader{{noc_addrs[0], noc_addrs[1], noc_addrs[2]}}));
+                            FABRIC_UNICAST((NocUnicastScatterCommandHeader{
+                                {noc_addrs[0], noc_addrs[1], noc_addrs[2]}, {page_size, page_size}}));
                             break;
-                        case 2: FABRIC_UNICAST((NocUnicastScatterCommandHeader{{noc_addrs[0], noc_addrs[1]}})); break;
+                        case 2:
+                            FABRIC_UNICAST((NocUnicastScatterCommandHeader{{noc_addrs[0], noc_addrs[1]}, {page_size}}));
+                            break;
                         case 1:
                             fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                                 mux_connection_handle,
@@ -366,13 +369,16 @@ void kernel_main() {
                     switch (tiles_to_put_in_current_packet) {
                         case 4:
                             FABRIC_UNICAST((NocUnicastScatterCommandHeader{
-                                {noc_addrs[0], noc_addrs[1], noc_addrs[2], noc_addrs[3]}}));
+                                {noc_addrs[0], noc_addrs[1], noc_addrs[2], noc_addrs[3]},
+                                {page_size, page_size, page_size}}));
                             break;
                         case 3:
-                            FABRIC_UNICAST(
-                                (NocUnicastScatterCommandHeader{{noc_addrs[0], noc_addrs[1], noc_addrs[2]}}));
+                            FABRIC_UNICAST((NocUnicastScatterCommandHeader{
+                                {noc_addrs[0], noc_addrs[1], noc_addrs[2]}, {page_size, page_size}}));
                             break;
-                        case 2: FABRIC_UNICAST((NocUnicastScatterCommandHeader{{noc_addrs[0], noc_addrs[1]}})); break;
+                        case 2:
+                            FABRIC_UNICAST((NocUnicastScatterCommandHeader{{noc_addrs[0], noc_addrs[1]}, {page_size}}));
+                            break;
                         case 1:
                             fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                                 mux_connection_handle,
@@ -387,7 +393,7 @@ void kernel_main() {
 
             noc_async_writes_flushed();
 
-            cb_pop_front(cb_output_id, num_tiles_to_write_per_packet);
+            cb_pop_front(cb_output_id, tiles_to_put_in_current_packet);
 
             chunk_count++;
             if (chunk_count % chunks_per_sync == 0) {
@@ -504,7 +510,7 @@ void kernel_main() {
                 uint32_t tiles_to_put_in_current_packet =
                     std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
 
-                cb_wait_front(cb_output_id, num_tiles_to_write_per_packet);
+                cb_wait_front(cb_output_id, tiles_to_put_in_current_packet);
                 size_t l1_read_addr = get_read_ptr(cb_output_id);
 
                 uint64_t noc_addrs[4] = {0, 0, 0, 0};
@@ -520,13 +526,17 @@ void kernel_main() {
 
                 switch (tiles_to_put_in_current_packet) {
                     case 4:
-                        FABRIC_UNICAST(
-                            (NocUnicastScatterCommandHeader{{noc_addrs[0], noc_addrs[1], noc_addrs[2], noc_addrs[3]}}));
+                        FABRIC_UNICAST((NocUnicastScatterCommandHeader{
+                            {noc_addrs[0], noc_addrs[1], noc_addrs[2], noc_addrs[3]},
+                            {page_size, page_size, page_size}}));
                         break;
                     case 3:
-                        FABRIC_UNICAST((NocUnicastScatterCommandHeader{{noc_addrs[0], noc_addrs[1], noc_addrs[2]}}));
+                        FABRIC_UNICAST((NocUnicastScatterCommandHeader{
+                            {noc_addrs[0], noc_addrs[1], noc_addrs[2]}, {page_size, page_size}}));
                         break;
-                    case 2: FABRIC_UNICAST((NocUnicastScatterCommandHeader{{noc_addrs[0], noc_addrs[1]}})); break;
+                    case 2:
+                        FABRIC_UNICAST((NocUnicastScatterCommandHeader{{noc_addrs[0], noc_addrs[1]}, {page_size}}));
+                        break;
                     case 1:
                         fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                             mux_connection_handle,
@@ -540,7 +550,7 @@ void kernel_main() {
 
                 noc_async_writes_flushed();
 
-                cb_pop_front(cb_output_id, num_tiles_to_write_per_packet);
+                cb_pop_front(cb_output_id, tiles_to_put_in_current_packet);
 
                 chunk_count++;
                 if (chunk_count % chunks_per_sync == 0) {
