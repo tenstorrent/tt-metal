@@ -569,7 +569,7 @@ RingDistributedSdpaMeshWorkloadFactory::create_mesh_workload(
 
     // Determine ring_id: use provided value or infer from device coordinate
     uint32_t curr_ring_id;
-    // Create programs for each coordinate in tensor_coords (filtered by mesh_coords if provided)
+    // Create programs for each coordinate in tensor_coords
     for (const auto& mesh_coord_range : tensor_coords.ranges()) {
         for (const auto& mesh_coord : mesh_coord_range) {
             if (operation_attributes.ring_id.has_value()) {
