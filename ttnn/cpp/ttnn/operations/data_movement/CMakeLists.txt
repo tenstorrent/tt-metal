@@ -109,6 +109,10 @@ target_sources(
         concat/concat.cpp
         concat/device/concat_device_operation.cpp
         concat/device/concat_program_factory.cpp
+        concat/device/concat_s2s_tiled_program_factory.cpp
+        concat/device/concat_s2s_rm_program_factory.cpp
+        concat/device/concat_s2s_multi_program_factory.cpp
+        concat/device/concat_s2i_program_factory.cpp
         copy/copy.cpp
         copy/device/copy_device_operation.cpp
         copy/device/copy_program_factory.cpp
