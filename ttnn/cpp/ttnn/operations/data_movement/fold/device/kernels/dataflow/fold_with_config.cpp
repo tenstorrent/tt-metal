@@ -6,6 +6,9 @@
 #include "dataflow_api.h"
 #include "debug/dprint.h"
 
+// Special marker for padding pixels - kernel fills with zeros
+constexpr uint16_t PADDING_NOC_MARKER = 0xFFFF;
+
 void kernel_main() {
     // Compile-time args
     constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
@@ -37,30 +40,31 @@ void kernel_main() {
         uint16_t src_local_idx = config_data[i * 4 + 2];
         uint16_t length = config_data[i * 4 + 3];
 
-        // Debug: print first few transfers
-        // if (i < 4) {
-        //     DPRINT << "  Transfer[" << i << "]: noc=(" << src_noc_x << "," << src_noc_y
-        //            << ") local_idx=" << src_local_idx << " len=" << length << ENDL();
-        // }
-
-        // Skip if length is 0 (padding entry)
+        // Skip if length is 0 (config tensor padding entry)
         if (length == 0) {
             continue;
         }
 
-        // Calculate source NOC address (use pixel_size for ROW_MAJOR memory layout)
-        uint32_t src_offset = src_local_idx * pixel_size;
-        uint64_t src_noc_addr = get_noc_addr(src_noc_x, src_noc_y, input_l1_addr + src_offset);
-
         // Calculate destination L1 address
         uint32_t dst_l1_addr = output_l1_addr + dst_offset;
+        uint32_t write_size = length * pixel_size;
 
-        // Perform NOC read (read from remote core to local output buffer)
-        uint32_t read_size = length * pixel_size;
-        noc_async_read(src_noc_addr, dst_l1_addr, read_size);
+        // Check if this is a padding pixel (fill with zeros)
+        if (src_noc_x == PADDING_NOC_MARKER) {
+            // Fill with zeros for padding
+            volatile tt_l1_ptr uint8_t* dst_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(dst_l1_addr);
+            for (uint32_t j = 0; j < write_size; ++j) {
+                dst_ptr[j] = 0;
+            }
+        } else {
+            // Normal NOC read from source core
+            uint32_t src_offset = src_local_idx * pixel_size;
+            uint64_t src_noc_addr = get_noc_addr(src_noc_x, src_noc_y, input_l1_addr + src_offset);
+            noc_async_read(src_noc_addr, dst_l1_addr, write_size);
+        }
 
         // Advance destination offset
-        dst_offset += length * pixel_size;
+        dst_offset += write_size;
     }
 
     // Wait for all reads to complete

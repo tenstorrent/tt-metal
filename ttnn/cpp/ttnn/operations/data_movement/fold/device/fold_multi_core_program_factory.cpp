@@ -22,8 +22,18 @@ struct FoldTransfer {
     uint16_t length = 1;
 };
 
+// Special marker for padding pixels - kernel will fill with zeros
+constexpr uint16_t PADDING_NOC_MARKER = 0xFFFF;
+
 std::vector<std::vector<FoldTransfer>> generate_fold_transfers(
-    const Tensor& input, const Tensor& output, uint32_t stride_h, uint32_t stride_w) {
+    const Tensor& input,
+    const Tensor& output,
+    uint32_t stride_h,
+    uint32_t stride_w,
+    uint32_t pad_top,
+    uint32_t pad_bottom,
+    uint32_t pad_left,
+    uint32_t pad_right) {
     auto input_shape = input.logical_shape();
 
     // Input shard spec - for source NOC coordinates
@@ -40,8 +50,12 @@ std::vector<std::vector<FoldTransfer>> generate_fold_transfers(
     uint32_t H = input_shape[1];
     uint32_t W = input_shape[2];
 
-    uint32_t out_H = H / stride_h;
-    uint32_t out_W = W / stride_w;
+    // Padded dimensions
+    uint32_t padded_H = H + pad_top + pad_bottom;
+    uint32_t padded_W = W + pad_left + pad_right;
+
+    uint32_t out_H = padded_H / stride_h;
+    uint32_t out_W = padded_W / stride_w;
 
     // Get NOC coordinates for INPUT cores (source of reads)
     auto input_logical_cores = tt::tt_metal::corerange_to_cores(
@@ -63,21 +77,35 @@ std::vector<std::vector<FoldTransfer>> generate_fold_transfers(
                 uint32_t dst_core_idx = output_pixel / output_shard_height;
                 for (uint32_t s_h = 0; s_h < stride_h; s_h++) {
                     for (uint32_t s_w = 0; s_w < stride_w; s_w++) {
-                        uint32_t in_h = h * stride_h + s_h;
-                        uint32_t in_w = w * stride_w + s_w;
-                        uint32_t in_idx = (n * H * W) + (in_h * W) + in_w;
+                        // Calculate padded coordinates
+                        uint32_t padded_h = h * stride_h + s_h;
+                        uint32_t padded_w = w * stride_w + s_w;
 
-                        // Source core based on INPUT shard height
-                        uint32_t input_core_id = in_idx / input_shard_height;
-                        uint32_t src_local_idx = in_idx % input_shard_height;
+                        // Check if in padding region
+                        bool is_padding = (padded_h < pad_top) || (padded_h >= pad_top + H) || (padded_w < pad_left) ||
+                                          (padded_w >= pad_left + W);
 
-                        auto [src_noc_x, src_noc_y] = input_noc_coords[input_core_id];
+                        if (is_padding) {
+                            // Padding pixel - use special marker
+                            per_core_transfers[dst_core_idx].push_back({PADDING_NOC_MARKER, PADDING_NOC_MARKER, 0, 1});
+                        } else {
+                            // Real input pixel - map to unpadded coordinates
+                            uint32_t in_h = padded_h - pad_top;
+                            uint32_t in_w = padded_w - pad_left;
+                            uint32_t in_idx = (n * H * W) + (in_h * W) + in_w;
 
-                        per_core_transfers[dst_core_idx].push_back(
-                            {static_cast<uint16_t>(src_noc_x),
-                             static_cast<uint16_t>(src_noc_y),
-                             static_cast<uint16_t>(src_local_idx),
-                             1});
+                            // Source core based on INPUT shard height
+                            uint32_t input_core_id = in_idx / input_shard_height;
+                            uint32_t src_local_idx = in_idx % input_shard_height;
+
+                            auto [src_noc_x, src_noc_y] = input_noc_coords[input_core_id];
+
+                            per_core_transfers[dst_core_idx].push_back(
+                                {static_cast<uint16_t>(src_noc_x),
+                                 static_cast<uint16_t>(src_noc_y),
+                                 static_cast<uint16_t>(src_local_idx),
+                                 1});
+                        }
                     }
                 }
                 output_pixel++;
@@ -131,7 +159,14 @@ Tensor create_fold_transfers_tensor(
 }
 
 Fold::MultiCore::cached_program_t fold_multi_core(
-    const Tensor& input, const Tensor& output, uint32_t stride_h, uint32_t stride_w) {
+    const Tensor& input,
+    const Tensor& output,
+    uint32_t stride_h,
+    uint32_t stride_w,
+    uint32_t pad_top,
+    uint32_t pad_bottom,
+    uint32_t pad_left,
+    uint32_t pad_right) {
     Program program = CreateProgram();
 
     // Input tensor info
@@ -172,8 +207,9 @@ Fold::MultiCore::cached_program_t fold_multi_core(
             .set_globally_allocated_address(*output.buffer());
     auto cb_dst0 = CreateCircularBuffer(program, output_cores, dst_cb_config);
 
-    // Generate config tensor with input and output info
-    auto per_core_transfers = generate_fold_transfers(input, output, stride_h, stride_w);
+    // Generate config tensor with input and output info (now with padding)
+    auto per_core_transfers =
+        generate_fold_transfers(input, output, stride_h, stride_w, pad_top, pad_bottom, pad_left, pad_right);
     uint32_t num_transfers = get_max_transfers_per_core(per_core_transfers);
 
     auto config_tensor =
@@ -215,7 +251,14 @@ Fold::MultiCore::cached_program_t Fold::MultiCore::create(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     return fold_multi_core(
-        tensor_args.input_tensor, output_tensor, operation_attributes.stride_h, operation_attributes.stride_w);
+        tensor_args.input_tensor,
+        output_tensor,
+        operation_attributes.stride_h,
+        operation_attributes.stride_w,
+        operation_attributes.pad_top,
+        operation_attributes.pad_bottom,
+        operation_attributes.pad_left,
+        operation_attributes.pad_right);
 }
 
 void Fold::MultiCore::override_runtime_arguments(

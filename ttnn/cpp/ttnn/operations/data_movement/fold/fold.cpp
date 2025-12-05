@@ -438,11 +438,6 @@ Tensor FoldOperation::invoke(
 
         Tensor processed_tensor = input_tensor;
 
-        // // Apply H,W padding using halo if needed
-        // if (has_hw_padding) {
-        //     processed_tensor = apply_halo_padding(processed_tensor, pad_top, pad_bottom, pad_left, pad_right);
-        // }
-
         // // Apply channel padding separately if needed
         // if (has_c_padding) {
         //     const auto current_shape = processed_tensor.logical_shape();
@@ -462,7 +457,19 @@ Tensor FoldOperation::invoke(
         // // Reshard if needed for optimal fold computation
         // processed_tensor = reshard_if_needed(processed_tensor, stride_h, stride_w);
 
-        return ttnn::prim::fold(processed_tensor, stride_h, stride_w, output_shape, 0, 0, 0);
+        // Pass full asymmetric padding to prim::fold - the device op handles it natively
+        return ttnn::prim::fold(
+            processed_tensor,
+            stride_h,
+            stride_w,
+            output_shape,
+            pad_c,
+            pad_h,
+            pad_w,
+            pad_top,
+            pad_bottom,
+            pad_left,
+            pad_right);
     }
     // DRAM tensor path
     if (input_tensor.memory_config().is_dram()) {
@@ -491,7 +498,8 @@ Tensor FoldOperation::invoke(
             processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
         }
 
-        auto output_tensor = ttnn::prim::fold(processed_tensor, stride_h, stride_w, output_shape, 0, 0, 0);
+        // Padding already applied via ttnn::pad above, so pass zeros
+        auto output_tensor = ttnn::prim::fold(processed_tensor, stride_h, stride_w, output_shape, 0, 0, 0, 0, 0, 0, 0);
 
         // Reshape output if input was tiled
         if (was_tiled) {
@@ -502,8 +510,9 @@ Tensor FoldOperation::invoke(
 
         return output_tensor;
     }
-    // Fallback case: interleaved tensor with symmetric padding
-    return ttnn::prim::fold(input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
+    // Fallback case: interleaved tensor with padding
+    return ttnn::prim::fold(
+        input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w, pad_top, pad_bottom, pad_left, pad_right);
 }
 
 }  // namespace ttnn::operations::data_movement

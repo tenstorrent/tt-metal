@@ -57,6 +57,23 @@ void validate_fold(
 void Fold::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     validate_fold(
         {tensors.input_tensor}, op_attr.is_sharded, op_attr.is_dram_interleaved, op_attr.stride_h, op_attr.stride_w);
+
+    // Validate padded dimensions are divisible by strides for sharded path
+    if (op_attr.is_sharded) {
+        const auto& input_shape = tensors.input_tensor.logical_shape();
+        uint32_t padded_h = input_shape[1] + op_attr.pad_top + op_attr.pad_bottom;
+        uint32_t padded_w = input_shape[2] + op_attr.pad_left + op_attr.pad_right;
+        TT_FATAL(
+            padded_h % op_attr.stride_h == 0,
+            "Fold: Padded height ({}) must be divisible by stride_h ({}).",
+            padded_h,
+            op_attr.stride_h);
+        TT_FATAL(
+            padded_w % op_attr.stride_w == 0,
+            "Fold: Padded width ({}) must be divisible by stride_w ({}).",
+            padded_w,
+            op_attr.stride_w);
+    }
 }
 
 void Fold::validate_on_program_cache_hit(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
@@ -75,19 +92,22 @@ Fold::spec_return_value_t Fold::compute_output_specs(
         default: output_dtype = tt::tt_metal::DataType::BFLOAT16; break;
     }
 
+    // Calculate padded input dimensions
+    uint32_t padded_h = input_shape[1] + op_attr.pad_top + op_attr.pad_bottom;
+    uint32_t padded_w = input_shape[2] + op_attr.pad_left + op_attr.pad_right;
+
     // we concatenate (stride_h sticks in H-dim) * (stride_w in W-dim) into 1 stick along C-dim
     ttnn::Shape output_shape(
         {1,
          1,
-         input_shape[0] * input_shape[1] * input_shape[2] / (op_attr.stride_h * op_attr.stride_w),
+         input_shape[0] * padded_h * padded_w / (op_attr.stride_h * op_attr.stride_w),
          input_shape[3] * op_attr.stride_h * op_attr.stride_w});
 
     if (op_attr.is_sharded) {
         auto input_shard_spec = input_tensor.shard_spec().value();
 
-        // Calculate output dimensions
-        uint32_t total_output_height =
-            input_shape[0] * input_shape[1] * input_shape[2] / (op_attr.stride_h * op_attr.stride_w);
+        // Calculate output dimensions with padding
+        uint32_t total_output_height = input_shape[0] * padded_h * padded_w / (op_attr.stride_h * op_attr.stride_w);
         uint32_t output_width = input_shape[3] * op_attr.stride_h * op_attr.stride_w;
 
         // Use max available cores
@@ -148,15 +168,24 @@ std::tuple<Fold::operation_attributes_t, Fold::tensor_args_t> Fold::invoke(
     const std::optional<const ttnn::Shape>& output_shape,
     uint32_t pad_c,
     uint32_t pad_h,
-    uint32_t pad_w) {
+    uint32_t pad_w,
+    uint32_t pad_top,
+    uint32_t pad_bottom,
+    uint32_t pad_left,
+    uint32_t pad_right) {
     bool is_sharded = input_tensor.is_sharded();
     bool is_dram_interleaved =
         input_tensor.storage_type() == StorageType::DEVICE && input_tensor.memory_config().is_dram();
+    // Use explicit asymmetric padding parameters
     Fold::operation_attributes_t op_attr = {
         .stride_h = stride_h,
         .stride_w = stride_w,
         .is_sharded = is_sharded,
-        .is_dram_interleaved = is_dram_interleaved};
+        .is_dram_interleaved = is_dram_interleaved,
+        .pad_top = pad_top,
+        .pad_bottom = pad_bottom,
+        .pad_left = pad_left,
+        .pad_right = pad_right};
     return {op_attr, Fold::tensor_args_t{.input_tensor = input_tensor}};
 }
 
