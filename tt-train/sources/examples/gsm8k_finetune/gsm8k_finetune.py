@@ -327,7 +327,6 @@ def train():
     tokenizer = AutoTokenizer.from_pretrained(
         "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
     )
-    # tokenizer = AutoTokenizer.from_pretrained("gpt2")
 
     yaml_config = load_config(
         CONFIG, f"{get_tt_metal_home()}/tt-train/configs/training_configs"
@@ -378,7 +377,6 @@ def train():
         repo_id="TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T",
         filename="model.safetensors",
     )
-    # safetensors_path = hf_hub_download("gpt2", filename="model.safetensors")
 
     safetensors_path = safetensors_path.replace("model.safetensors", "")
     print(f"Safetensors path: {safetensors_path}")
