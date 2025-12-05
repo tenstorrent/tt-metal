@@ -282,6 +282,8 @@ add_dependencies(
     tt_metal
 )
 
+add_dependencies(generate_traffic_tests scaleout_generated_protos)
+
 set_target_properties(
     generate_traffic_tests
     PROPERTIES
