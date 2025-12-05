@@ -259,16 +259,27 @@ class Generator:
     # Note: This function is called by vLLM
     def prefill_forward_text(
         self,
-        tokens: torch.Tensor,
+        tokens: torch.Tensor,  # Tokens that need to be computed (not the cached ones)
         page_table=None,
         kv_cache=None,
-        prompt_lens=None,
+        prompt_lens=None,  # Prompt lengths that need to be computed (not the cached ones)
         empty_slots=None,
-        enable_trace=True,
+        enable_trace=False,
         model_id_warmup=None,
+        start_pos=None,  # Cached prefixes lengths
         **kwargs,
     ):
         self.mode = "prefill"
+        print(
+            f"prefill_forward_text called with tokens:\n{tokens} shape: {tokens.shape}\n\
+page_table:\n{page_table}, shape: {page_table.shape}\n\
+prompt_lens: {prompt_lens}\n\
+empty_slots: {empty_slots}\n\
+enable_trace: {enable_trace}\n\
+model_id_warmup: {model_id_warmup}\n\
+start_pos: {start_pos}\n\
+kwargs: {kwargs}"
+        )
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
         else:
@@ -294,7 +305,8 @@ class Generator:
             model_id = user_id // max_batch_size_per_model if model_id_warmup is None else model_id_warmup
             group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
             seq_len = int(prompt_lens[idx])
-            last_token_idx = seq_len - 1
+            num_computed_tokens = int(start_pos[idx]) if start_pos is not None else 0
+            last_token_idx = num_computed_tokens + seq_len - 1  # Includes cached tokens
             prefill_seq_len = get_padded_prefill_len(seq_len)
             local_kwargs = kwargs.copy()  # Avoid modifying original kwargs
 
@@ -314,11 +326,12 @@ class Generator:
 
             page_table_user = (
                 self._get_prefill_user_page_table(
-                    page_table[idx : idx + 1],
-                    kv_cache[model_id],
-                    seq_len,
+                    page_table=page_table[idx : idx + 1],  # Slice page table for the current user
+                    kv_cache=kv_cache[model_id],
+                    prefill_len=seq_len,  # Length that needs to be prefilled
                     trace_enabled=enable_trace_current_prompt,
                     prefill_seq_len=prefill_seq_len,
+                    num_cached_tokens=num_computed_tokens,  # Number of cached tokens
                 )
                 if page_table is not None
                 else None
@@ -350,6 +363,7 @@ class Generator:
                     last_token_idx=last_token_idx,
                     kv_cache=model_kv_cache,
                     model_id=model_id,
+                    num_cached_tokens=num_computed_tokens,
                     **local_kwargs,
                 )
             if enable_trace_current_prompt:
@@ -378,7 +392,15 @@ class Generator:
         return output_logits
 
     def prefill_forward_single_user_text(
-        self, tokens, page_table, user_id, last_token_idx, kv_cache=None, model_id=-1, **kwargs
+        self,
+        tokens,
+        page_table,
+        user_id,
+        last_token_idx,
+        kv_cache=None,
+        model_id=-1,
+        num_cached_tokens: int = 0,
+        **kwargs,
     ):
         seq_len = tokens.shape[-1]
         use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
@@ -449,15 +471,26 @@ class Generator:
                 else:
                     del tt_logits
         else:
+            block_size = get_block_size(kv_cache)
+            page_table_user = page_table[user_id : user_id + 1, :]
+            num_padding_blocks = num_blocks_in_seq(seq_len + num_cached_tokens, block_size) - page_table_user.shape[1]
+            page_table_user_padded = torch.cat(
+                [page_table_user, torch.zeros(1, num_padding_blocks, dtype=torch.int32)], dim=-1
+            )
+
+            CHUNK_USER_ID = 0
+            chunk_page_table = page_table_user[:, num_cached_tokens // block_size :]
             (
                 prefill_input,
                 rot_mats_global_prefill,
                 rot_mats_local_prefill,
                 page_table_tt,
-                _,
+                chunk_page_table_tt,
             ) = self.model[model_id].prepare_inputs_prefill(
                 tokens,
-                page_table=page_table,
+                page_table=page_table_user_padded,
+                start_pos=num_cached_tokens,
+                chunk_page_table=chunk_page_table,
                 **kwargs,
             )
 
@@ -465,10 +498,15 @@ class Generator:
                 prefill_input,
                 rot_mats_global=rot_mats_global_prefill,
                 rot_mats_local=rot_mats_local_prefill,
-                user_id=user_id,
+                user_id=CHUNK_USER_ID,
                 page_table=page_table_tt,
-                get_last_token=(last_token_idx // 32) * 32,
+                chunk_page_table=chunk_page_table_tt,
+                chunk_start_idx=num_cached_tokens
+                if num_cached_tokens > 0
+                else None,  # Cannot use chunked if first chunk could be non-full
+                get_last_token=((last_token_idx - num_cached_tokens) // 32) * 32,
                 kv_cache=kv_cache,
+                **kwargs,
             )
             return tt_logits
 
@@ -1743,15 +1781,15 @@ class Generator:
         return generation
 
     def _get_prefill_user_page_table(
-        self, page_table, kv_cache, prefill_len, trace_enabled=False, prefill_seq_len=None
+        self, page_table, kv_cache, prefill_len, trace_enabled=False, prefill_seq_len=None, num_cached_tokens=0
     ):
         # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
         block_size = get_block_size(kv_cache)
         num_blocks = 0
         if trace_enabled:
-            num_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
+            num_blocks = num_blocks_in_seq(prefill_seq_len + num_cached_tokens, block_size)
         else:
-            num_blocks = num_blocks_in_seq(prefill_len, block_size)
+            num_blocks = num_blocks_in_seq(prefill_len + num_cached_tokens, block_size)
         if trace_enabled:
             if page_table.shape[1] < num_blocks:
                 # If page table is too short, pad it with -1
