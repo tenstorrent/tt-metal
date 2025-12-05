@@ -127,9 +127,8 @@ def test_ttnn_insemb(device, model_location_generator):
         center_pcc, center_abs_err, center_rel_err = 0.887, 0.09, 27.5
         offset_pcc, offset_abs_err, offset_rel_err = 0.742, 6.8, 5.0
     else:
-        # Relaxed tolerances for all-core grid with auto-generated program config
-        center_pcc, center_abs_err, center_rel_err = 0.88, 5.0, 30.0
-        offset_pcc, offset_abs_err, offset_rel_err = 0.74, 10.0, 10.0
+        center_pcc, center_abs_err, center_rel_err = 0.887, 0.09, 27.5
+        offset_pcc, offset_abs_err, offset_rel_err = 0.741, 6.8, 5.0
 
     all_passed = []
     all_passed.append(

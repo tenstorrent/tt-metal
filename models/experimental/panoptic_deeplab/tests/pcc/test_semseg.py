@@ -121,8 +121,7 @@ def test_ttnn_semseg(device, model_location_generator):
     if is_20_core_grid:
         semantic_pcc, semantic_abs_err, semantic_rel_err = 0.972, 2.0, 0.4
     else:
-        # Relaxed tolerances for all-core grid with auto-generated program config
-        semantic_pcc, semantic_abs_err, semantic_rel_err = 0.972, 4.5, 2.0
+        semantic_pcc, semantic_abs_err, semantic_rel_err = 0.972, 1.9, 0.4
 
     passed = check_ttnn_output(
         "Semantic",
