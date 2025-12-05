@@ -56,11 +56,16 @@ jobs:
               REMAINING=$(echo "$RESPONSE" | grep -i "x-ratelimit-remaining:" | head -1 | cut -d: -f2- | tr -d ' \r')
               RESOURCE=$(echo "$RESPONSE" | grep -i "x-ratelimit-resource:" | head -1 | cut -d: -f2- | tr -d ' \r')
 
+              # Print each available rate limit detail individually
+              if [ -n "$RESOURCE" ]; then
+                echo "Rate limit resource: $RESOURCE" >&2
+              fi
+              if [ -n "$REMAINING" ]; then
+                echo "Remaining: $REMAINING" >&2
+              fi
               if [ -n "$RESET_TIME" ]; then
                 # GitHub Actions uses Ubuntu runners, so GNU date format is safe
                 RESET_DATE=$(date -u -d "@$RESET_TIME" 2>/dev/null || echo "unknown")
-                echo "Rate limit resource: $RESOURCE" >&2
-                echo "Remaining: $REMAINING" >&2
                 echo "Resets at: $RESET_DATE" >&2
               fi
 
@@ -91,7 +96,8 @@ jobs:
           }
 
           # Separate JSON body from headers for jq parsing
-          ADD_BODY=$(echo "$ADD_RESP" | sed -n '/^$/,$p' | tail -n +2)
+          # Extract everything after the first line starting with { or [
+          ADD_BODY=$(echo "$ADD_RESP" | sed -n '/^[{[]/,$p')
 
           if echo "$ADD_BODY" | jq -e '.errors' > /dev/null 2>&1; then
             echo "Error: Failed to add issue to project:" >&2
@@ -137,7 +143,8 @@ jobs:
           }
 
           # Separate JSON body from headers for jq parsing
-          UPDATE_BODY=$(echo "$UPDATE_RESP" | sed -n '/^$/,$p' | tail -n +2)
+          # Extract everything after the first line starting with { or [
+          UPDATE_BODY=$(echo "$UPDATE_RESP" | sed -n '/^[{[]/,$p')
 
           if echo "$UPDATE_BODY" | jq -e '.errors' > /dev/null 2>&1; then
             echo "Error: Failed to set field value:" >&2
