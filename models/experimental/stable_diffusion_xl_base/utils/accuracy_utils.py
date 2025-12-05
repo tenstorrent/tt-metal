@@ -176,14 +176,14 @@ def create_report_json(metadata, accuracy_metrics):
 
 def save_report_json(report_json, metadata):
     os.makedirs(OUT_ROOT, exist_ok=True)
+
+    model_name = metadata["model_name"].removesuffix("-tp")
     trace_flag = "with_trace" if metadata["capture_trace"] else "no_trace"
     vae_flag = "device_vae" if metadata["device_vae"] else "host_vae"
     encoders_flag = "device_encoders" if metadata["encoders_on_device"] else "host_encoders"
     cfg_parallel_flag = "cfg_parallel" if metadata["use_cfg_parallel"] else "no_cfg_parallel"
-    num_inference_steps = metadata["num_inference_steps"]
-    new_file_name = (
-        f"sdxl_test_results_{trace_flag}_{vae_flag}_{encoders_flag}_{cfg_parallel_flag}_{num_inference_steps}.json"
-    )
+
+    new_file_name = f"{model_name}-{trace_flag}-{vae_flag}-{encoders_flag}-{cfg_parallel_flag}.json"
     with open(f"{OUT_ROOT}/{new_file_name}", "w") as f:
         json.dump(report_json, f, indent=4)
 
