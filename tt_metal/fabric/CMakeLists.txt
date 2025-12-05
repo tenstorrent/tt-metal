@@ -38,6 +38,8 @@ target_sources(
         erisc_datamover_builder.cpp
         fabric_router_channel_mapping.cpp
         fabric_router_builder.cpp
+        compute_mesh_router_builder.cpp
+        fabric_builder.cpp
         builder/fabric_builder_config.cpp
         builder/fabric_builder_helpers.cpp
         builder/fabric_core_placement.cpp
@@ -53,6 +55,7 @@ target_sources(
         fabric_host_utils.cpp
         fabric_telemetry_reader.cpp
         fabric_context.cpp
+        fabric_builder_context.cpp
         fabric_mux_config.cpp
         fabric_tensix_builder.cpp
         fabric_tensix_builder_impl.cpp

@@ -8,11 +8,15 @@ import torch
 import pytest
 from models.common.utility_functions import (
     is_wormhole_b0,
+    is_blackhole,
 )
 from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 import ttnn
 
 torch.set_printoptions(linewidth=400, profile="full", sci_mode=False)
+SliceHeight = ttnn.Conv2dDRAMSliceHeight
+SliceWidth = ttnn.Conv2dDRAMSliceWidth
+L1Full = ttnn.Conv2dL1Full
 
 
 def run_conv_transpose2d(
@@ -37,7 +41,7 @@ def run_conv_transpose2d(
     dilation=1,
     fp32_accum=False,
     packer_l1_acc=False,
-    output_layout=ttnn.TILE_LAYOUT,
+    layout=ttnn.TILE_LAYOUT,
     deallocate_activation=False,
     groups=1,
     has_bias=True,
@@ -47,6 +51,7 @@ def run_conv_transpose2d(
     enable_act_double_buffer=False,
     preprocess_weights_bias=False,
     config_tensors_in_dram=False,
+    dram_slice_config=None,
 ):
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
@@ -83,7 +88,7 @@ def run_conv_transpose2d(
             torch_bias_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
         )
 
-    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, layout=layout, device=device)
 
     if shard_layout is None and not auto_shard:
         shard_layout = (
@@ -94,7 +99,7 @@ def run_conv_transpose2d(
         shard_layout=shard_layout,
         deallocate_activation=deallocate_activation,
         enable_act_double_buffer=enable_act_double_buffer,
-        output_layout=output_layout,
+        output_layout=layout,
         config_tensors_in_dram=config_tensors_in_dram,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
@@ -113,7 +118,7 @@ def run_conv_transpose2d(
         tt_weight_tensor = ttnn.prepare_conv_transpose2d_weights(
             weight_tensor=tt_weight_tensor,
             input_memory_config=ttnn.L1_MEMORY_CONFIG,
-            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            input_layout=layout,
             weights_format="IOHW",
             in_channels=input_channels,
             out_channels=output_channels,
@@ -174,6 +179,7 @@ def run_conv_transpose2d(
         input_width=input_width,
         conv_config=conv_config,
         compute_config=compute_config,
+        dram_slice_config=dram_slice_config,
         groups=groups,
         mirror_kernel=mirror_kernel,
         return_output_dim=True,
@@ -286,6 +292,98 @@ def test_simple_conv_t2d(
         auto_shard=True,
         mirror_kernel=mirror_kernel,
         preprocess_weights_bias=preprocess_weights,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, shard_layout, num_slices, slice_type",
+    (
+        # fmt: off
+        (1,  512, 512,  64, 64,  3, 3, 1, 1, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 4, SliceWidth ),
+        (1,  256, 256,  64, 64,  3, 3, 2, 2, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 4, SliceWidth ),
+        (1,  256, 256,  64, 64,  3, 3, 2, 2, 1, 1, 1, 1, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 4, SliceWidth ),
+        (1,   32,  32,  64, 64,  8, 8, 4, 4, 2, 2, 0, 0, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 2 , SliceWidth ),
+        (1,   32,  32,  64, 64,  8, 8, 4, 4, 2, 2, 2, 2, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 2 , SliceWidth ),
+        (16,  16,  16, 256, 128, 2, 2, 2, 2, 0, 0, 0, 0, None, ttnn.TensorMemoryLayout.BLOCK_SHARDED,  2, SliceWidth ),
+        (1, 512,  512, 512, 512, 3, 3, 1, 1, 1, 1, 0, 0, {'act_block_h' : 256}, ttnn.TensorMemoryLayout.BLOCK_SHARDED, 8, SliceWidth ),
+        # fmt: on
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "activations_dtype, layout",
+    [
+        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize("preprocess_weights", [False])
+@pytest.mark.parametrize("mirror_kernel", [False])
+def test_convt2d_dram(
+    device,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    out_pad_h,
+    out_pad_w,
+    config,
+    shard_layout,
+    layout,
+    mirror_kernel,
+    preprocess_weights,
+    num_slices,
+    slice_type,
+):
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 Grid for Wormhole_b0")
+    dram_slice_config = ttnn.Conv2dSliceConfig(
+        num_slices=num_slices,
+        slice_type=slice_type,
+    )
+    if is_blackhole() and config is not None:
+        # Blackhole requires different act_block_h to be divisble
+        config["act_block_h"] = 32
+    run_conv_transpose2d(
+        device,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        activations_dtype=activations_dtype,
+        weights_dtype=weights_dtype,
+        batch_size=batch_size,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=filter_height,
+        filter_width=filter_width,
+        stride_h=stride_h,
+        stride_w=stride_w,
+        pad_h=pad_h,
+        pad_w=pad_w,
+        out_pad_h=out_pad_h,
+        out_pad_w=out_pad_w,
+        config_override=config,
+        shard_layout=shard_layout,
+        layout=layout,
+        auto_shard=True,
+        mirror_kernel=mirror_kernel,
+        preprocess_weights_bias=preprocess_weights,
+        dram_slice_config=dram_slice_config,
     )
 
 

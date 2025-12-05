@@ -14,6 +14,7 @@
 #include "llrt/core_descriptor.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
@@ -907,7 +908,7 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
     std::vector<bool>&& sender_channel_injection_flags) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
-    const auto& tensix_config = fabric_context.get_tensix_config();
+    const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
     auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
 
     // Get core for this ethernet channel
@@ -977,7 +978,7 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build_for_missing_dir
     eth_chan_directions direction) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
-    const auto& tensix_config = fabric_context.get_tensix_config();
+    const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
     auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
 
     // This method is only valid for UDM mode

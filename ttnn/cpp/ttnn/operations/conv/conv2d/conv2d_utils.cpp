@@ -268,6 +268,21 @@ std::tuple<uint32_t, uint32_t> calculate_output_image_size(
     return {output_height, output_width};
 }
 
+std::tuple<uint32_t, uint32_t> calculate_ct2d_output_image_size(
+    std::array<uint32_t, 2> input_image_size,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 4> padding,
+    std::array<uint32_t, 2> output_padding,
+    std::array<uint32_t, 2> dilation) {
+    uint32_t output_height = ((input_image_size[0] - 1) * stride[0]) - (padding[0] + padding[1]) +
+                             (dilation[0] * (kernel_size[0] - 1)) + output_padding[0] + 1;
+
+    uint32_t output_width = ((input_image_size[1] - 1) * stride[1]) - (padding[2] + padding[3]) +
+                            (dilation[1] * (kernel_size[1] - 1)) + output_padding[1] + 1;
+    return {output_height, output_width};
+}
+
 uint32_t get_num_cores_nhw_from_parallel_config(const ParallelConfig& pconfig) {
     TT_ASSERT(!pconfig.grid.ranges().empty());
     TT_ASSERT(

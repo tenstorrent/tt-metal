@@ -1,0 +1,13 @@
+name: 'Trigger Auto-Triage for Regressions'
+description: 'Triggers auto-triage workflow for each regressed job'
+inputs:
+  regressed_workflows:
+    description: 'JSON array of regressed workflows with failing jobs'
+    required: true
+  github_token:
+    description: 'GitHub token for triggering workflows'
+    required: true
+
+runs:
+  using: 'node20'
+  main: 'index.js'

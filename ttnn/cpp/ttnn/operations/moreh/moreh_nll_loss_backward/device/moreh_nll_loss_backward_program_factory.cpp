@@ -67,6 +67,15 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
             {tt::CBIndex::c_16, 1},                                                             // input_grad
         });
 
+    if (weight_has_value) {
+        // This CB will be used as scratch storage when reading data from DRAM into L1,
+        // since the two have different alignment requirements on some architectures.
+        // Need space for only a single tile in scratch CB, because content is read immediately after writing.
+        CreateCircularBuffer(program, all_cores, data_format, {tt::CBIndex::c_7, 1});
+    }
+    // Need another scratch CB for output_grad reading data from DRAM into L1.
+    CreateCircularBuffer(program, all_cores, data_format, {tt::CBIndex::c_8, 1});
+
     // create read/wrtie kernel
     std::vector<uint32_t> reader_compile_time_args{};
     TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
@@ -238,7 +247,14 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
             {tt::CBIndex::c_16, 1},                                                             // input_grad
         });
 
-    // create read/wrtie kernel
+    if (weight_has_value) {
+        // This CB will be used as scratch storage when reading data from DRAM into L1,
+        // since the two have different alignment requirements on some architectures.
+        // Need space for only a single tile in scratch CB, because content is read immediately after writing.
+        CreateCircularBuffer(program, all_cores, data_format, {tt::CBIndex::c_7, 1});
+    }
+
+    // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{};
     TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
@@ -412,7 +428,14 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
             {tt::CBIndex::c_16, 1},                                                             // input_grad
         });
 
-    // create read/wrtie kernel
+    if (weight_has_value) {
+        // This CB will be used as scratch storage when reading data from DRAM into L1,
+        // since the two have different alignment requirements on some architectures.
+        // Need space for only a single tile in scratch CB, because content is read immediately after writing.
+        CreateCircularBuffer(program, all_cores, data_format, {tt::CBIndex::c_7, 1});
+    }
+
+    // create read/write kernel
     std::vector<uint32_t> reader_compile_time_args{};
     TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
