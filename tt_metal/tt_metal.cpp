@@ -7,7 +7,7 @@
 #include <circular_buffer_constants.h>
 #include <tt_stl/assert.hpp>
 #include <cstdint>
-#include <device_pool.hpp>
+#include "tt_metal/impl/device/device_pool.hpp"
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
 #include <host_api.hpp>

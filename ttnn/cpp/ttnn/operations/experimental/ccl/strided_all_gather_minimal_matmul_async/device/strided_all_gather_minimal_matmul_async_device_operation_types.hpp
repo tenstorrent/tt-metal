@@ -20,6 +20,7 @@ struct operation_attributes_t {
     const minimal_matmul::MinimalMatmulOp matmul_struct;
 
     const CoreCoord all_gather_core_grid_offset;
+    const bool read_local_slice_from_input;
     const std::vector<IDevice*> devices;
     const strided_all_gather_async::StridedAllGatherAsync ag_op;
 };

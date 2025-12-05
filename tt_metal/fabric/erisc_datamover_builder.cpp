@@ -38,6 +38,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
+#include "tt_metal/llrt/rtoptions.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -384,11 +385,21 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     this->channel_buffer_size_bytes = channel_buffer_size_bytes;
     this->num_used_sender_channels = builder_config::get_sender_channel_count(is_2D_routing);
-    this->num_used_receiver_channels = builder_config::num_receiver_channels;
+    this->num_used_receiver_channels = builder_config::get_receiver_channel_count(is_2D_routing);
 
     // Default, assuming deadlock avoidance is enabled
     // -1 to discount for the tensix worker channel
     this->num_fwd_paths = this->num_used_sender_channels - 1;
+
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/32561
+    // Remove VC1 adjustments once VC1 sender/receiver channels are fully implemented
+    // For 2D routing (Mesh/Torus), VC1 channels (sender channels 4-6, receiver channel 1) are not yet implemented
+    // so we exclude them from allocation
+    if ((topology == Topology::Mesh || topology == Topology::Torus) && is_2D_routing) {
+        this->num_used_sender_channels -= builder_config::get_vc1_downstream_edm_count(is_2D_routing);
+        this->num_used_receiver_channels = 1;  // Only VC0 receiver implemented
+        this->num_fwd_paths -= builder_config::get_vc1_downstream_edm_count(is_2D_routing);
+    }
 
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
         TT_FATAL(
@@ -644,9 +655,9 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     const FabricNodeId& local_fabric_node_id,
     const FabricNodeId& peer_fabric_node_id,
 
-    const std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>&
+    const std::array<std::optional<size_t>, builder_config::max_downstream_edms>&
         receiver_channels_downstream_flow_control_semaphore_id,
-    const std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>&
+    const std::array<std::optional<size_t>, builder_config::max_downstream_edms>&
         receiver_channels_downstream_teardown_semaphore_id,
     const std::array<size_t, builder_config::num_sender_channels>& sender_channels_flow_control_semaphore_id,
     const std::array<size_t, builder_config::num_sender_channels>& sender_channels_connection_semaphore_id,
@@ -723,12 +734,39 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         config.num_used_sender_channels,
         config.num_used_receiver_channels,
         static_cast<int>(direction));
+
+    configure_telemetry_settings();
 }
 
-void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(std::vector<uint32_t>& ct_args) const {
+void FabricEriscDatamoverBuilder::configure_telemetry_settings() {
+    auto& telemetry_rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& telemetry_settings = telemetry_rtoptions.get_fabric_telemetry_settings();
+    const bool telemetry_globally_enabled = telemetry_rtoptions.get_enable_fabric_telemetry() &&
+                                            telemetry_settings.enabled && telemetry_settings.stats_mask != 0;
+    const auto local_physical_chip_id =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_chip_id_from_fabric_node_id(
+            this->local_fabric_node_id);
+    for (uint32_t risc_id = 0; risc_id < this->config.num_riscv_cores; risc_id++) {
+        bool telemetry_enabled_on_erisc =
+            telemetry_globally_enabled &&
+            telemetry_settings.is_telemetry_enabled(
+                static_cast<uint32_t>(local_physical_chip_id), static_cast<uint32_t>(this->my_eth_channel), risc_id);
+        this->config.risc_configs[risc_id].set_telemetry_enabled(telemetry_enabled_on_erisc);
+        this->config.risc_configs[risc_id].set_telemetry_stats_mask(telemetry_settings.stats_mask);
+    }
+}
+
+void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
+    uint32_t risc_id, std::vector<uint32_t>& ct_args) const {
+    const auto& risc_config = config.risc_configs[risc_id];
+    const bool telemetry_enabled = risc_config.telemetry_enabled();
+
     auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    uint32_t telemetry_mode = static_cast<uint32_t>(rtoptions.get_enable_fabric_telemetry() ? 1 : 0);
-    ct_args.push_back(telemetry_mode);
+    ct_args.push_back(static_cast<uint32_t>(telemetry_enabled));
+
+    // Add telemetry statistic mask (per ERISC)
+    const uint8_t stats_mask = telemetry_enabled ? risc_config.telemetry_stats_mask() : 0;
+    ct_args.push_back(static_cast<uint32_t>(stats_mask));
 
     uint32_t bw_telemetry_mode = static_cast<uint32_t>(rtoptions.get_enable_fabric_bw_telemetry() ? 1 : 0);
     ct_args.push_back(bw_telemetry_mode);
@@ -893,6 +931,9 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         config.sender_channels_worker_conn_info_base_address[1],
         config.sender_channels_worker_conn_info_base_address[2],
         config.sender_channels_worker_conn_info_base_address[3],
+        config.sender_channels_worker_conn_info_base_address[4],
+        config.sender_channels_worker_conn_info_base_address[5],
+        config.sender_channels_worker_conn_info_base_address[6],
 
         this->termination_signal_ptr,
         this->edm_local_sync_ptr,
@@ -906,7 +947,11 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         config.risc_configs[risc_id].is_sender_channel_serviced(1),
         config.risc_configs[risc_id].is_sender_channel_serviced(2),
         config.risc_configs[risc_id].is_sender_channel_serviced(3),
+        config.risc_configs[risc_id].is_sender_channel_serviced(4),
+        config.risc_configs[risc_id].is_sender_channel_serviced(5),
+        config.risc_configs[risc_id].is_sender_channel_serviced(6),
         config.risc_configs[risc_id].is_receiver_channel_serviced(0),
+        config.risc_configs[risc_id].is_receiver_channel_serviced(1),
         config.risc_configs[risc_id].enable_handshake(),
         config.risc_configs[risc_id].enable_context_switch(),
         config.risc_configs[risc_id].enable_interrupts(),
@@ -1029,7 +1074,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     // Special marker to help with identifying misalignment bugs
     ct_args.push_back(0x10c0ffee);
 
-    get_telemetry_compile_time_args(ct_args);
+    get_telemetry_compile_time_args(risc_id, ct_args);
 
     // Special marker 2
     ct_args.push_back(0x20c0ffee);
@@ -1132,9 +1177,9 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     std::array<size_t, builder_config::num_sender_channels> sender_channels_buffer_index_semaphore_id{};
     std::array<size_t, builder_config::num_sender_channels> sender_channels_flow_control_semaphore_id{};
     std::array<size_t, builder_config::num_sender_channels> sender_channels_connection_semaphore_id{};
-    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
+    std::array<std::optional<size_t>, builder_config::max_downstream_edms>
         receiver_channels_downstream_flow_control_semaphore_id;
-    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
+    std::array<std::optional<size_t>, builder_config::max_downstream_edms>
         receiver_channels_downstream_teardown_semaphore_id;
 
     auto remote_pool_allocators =

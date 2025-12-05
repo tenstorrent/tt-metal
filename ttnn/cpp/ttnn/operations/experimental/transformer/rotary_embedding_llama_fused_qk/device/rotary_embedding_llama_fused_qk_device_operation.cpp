@@ -1,44 +1,67 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "rotary_embedding_llama_fused_qk_device_operation.hpp"
-#include "rotary_embedding_llama_fused_qk_program_factory.hpp"
+#include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/rotary_embedding_llama_fused_qk_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
 
-namespace tt {
+using namespace tt::tt_metal;
+using namespace tt::constants;
 
-namespace tt_metal {
+namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk {
 
-void RotaryEmbeddingLlamaFusedQK::validate(const std::vector<Tensor>& input_tensors) const {
-    using namespace tt::constants;
-    TT_FATAL(input_tensors.size() == 5, "Expected 5 input tensors but got {}", input_tensors.size());
-    const auto& q_input_tensor = input_tensors.at(0);
-    const auto& k_input_tensor = input_tensors.at(1);
-    const auto& cos = input_tensors.at(2);
-    const auto& sin = input_tensors.at(3);
-    const auto& trans_mat = input_tensors.at(4);
+RotaryEmbeddingLlamaFusedQKDeviceOperation::program_factory_t
+RotaryEmbeddingLlamaFusedQKDeviceOperation::select_program_factory(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    return program::RotaryEmbeddingLlamaFusedQKProgramFactory{};
+}
+
+void RotaryEmbeddingLlamaFusedQKDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(args, tensor_args);
+}
+
+void RotaryEmbeddingLlamaFusedQKDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& q_input_tensor = tensor_args.q_input;
+    const auto& k_input_tensor = tensor_args.k_input;
+    const auto& cos = tensor_args.cos;
+    const auto& sin = tensor_args.sin;
+    const auto& trans_mat = tensor_args.trans_mat;
 
     auto* ref_device = q_input_tensor.device();
-    for (const auto& input : input_tensors) {
-        TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
-        TT_FATAL(input.buffer() != nullptr, "Operands to rotary embedding need to be allocated in buffers on device!");
-        TT_FATAL(input.device() == ref_device, "Operands to rotary embedding need to be on same device!");
+
+    auto validate_tensor = [ref_device](const Tensor& tensor, const std::string& name) {
+        TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} tensor must be on device!", name);
+        TT_FATAL(tensor.buffer() != nullptr, "{} tensor must be allocated in buffers on device!", name);
+        TT_FATAL(tensor.device() == ref_device, "{} tensor must be on same device!", name);
         TT_FATAL(
-            (input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED),
-            "inputs for RoPE must be HEIGHT_SHARDED.");
-        TT_FATAL((input.dtype() == DataType::BFLOAT16), "Inputs to rotary embedding must be bfloat16");
-    }
-    Layout tensor_layout = this->row_major_QK ? Layout::ROW_MAJOR : Layout::TILE;
-    for (int i = 0; i < input_tensors.size() - 1; i++) {
-        TT_FATAL(input_tensors[i].layout() == tensor_layout, "input tensor {} must be in layout {}", i, tensor_layout);
-    }
+            tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+            "{} tensor must be HEIGHT_SHARDED.",
+            name);
+        TT_FATAL(tensor.dtype() == DataType::BFLOAT16, "{} tensor must be bfloat16", name);
+    };
+
+    validate_tensor(q_input_tensor, "Q input");
+    validate_tensor(k_input_tensor, "K input");
+    validate_tensor(cos, "Cos");
+    validate_tensor(sin, "Sin");
+    validate_tensor(trans_mat, "Trans mat");
+
+    Layout tensor_layout = args.row_major_QK ? Layout::ROW_MAJOR : Layout::TILE;
+    auto validate_layout = [tensor_layout](const Tensor& tensor, const std::string& name) {
+        TT_FATAL(tensor.layout() == tensor_layout, "{} tensor must be in layout {}", name, tensor_layout);
+    };
+    validate_layout(q_input_tensor, "Q input");
+    validate_layout(k_input_tensor, "K input");
+    validate_layout(cos, "cos");
+    validate_layout(sin, "sin");
 
     // Check for decode mode
     TT_FATAL(
         q_input_tensor.logical_shape()[0] == 1 && k_input_tensor.logical_shape()[0] == 1,
-        "rotary_embedding_llama_fused_qk currently only supports deocde mode qith seq_len=1.");
+        "rotary_embedding_llama_fused_qk currently only supports decode mode with seq_len=1.");
 
     TT_FATAL(
         q_input_tensor.logical_shape()[-1] == k_input_tensor.logical_shape()[-1],
@@ -46,10 +69,10 @@ void RotaryEmbeddingLlamaFusedQK::validate(const std::vector<Tensor>& input_tens
     uint32_t head_dim = q_input_tensor.logical_shape()[-1];
     TT_FATAL(
         head_dim <= 128 ||
-            std::get<ttnn::WormholeComputeKernelConfig>(this->compute_kernel_config).fp32_dest_acc_en == false,
+            std::get<ttnn::WormholeComputeKernelConfig>(args.compute_kernel_config).fp32_dest_acc_en == false,
         "If head_dim is > 128, fp32_dest_acc_en must be False");
 
-    if (this->row_major_QK) {
+    if (args.row_major_QK) {
         TT_FATAL(
             q_input_tensor.logical_shape()[-2] * q_input_tensor.logical_shape()[-1] == TILE_WIDTH * TILE_HEIGHT,
             "For row major, Q input tensor must be wrapped to tile size");
@@ -62,10 +85,10 @@ void RotaryEmbeddingLlamaFusedQK::validate(const std::vector<Tensor>& input_tens
     TT_FATAL(head_dim % TILE_WIDTH == 0, "Head dim must be a multiple of TILE_WIDTH");
 
     TT_FATAL(
-        q_input_tensor.memory_config().memory_layout() == this->q_output_mem_config.memory_layout(),
+        q_input_tensor.memory_config().memory_layout() == args.q_output_mem_config.memory_layout(),
         "Q Input tensor and Q output tensor must have same memory layout");
     TT_FATAL(
-        k_input_tensor.memory_config().memory_layout() == this->k_output_mem_config.memory_layout(),
+        k_input_tensor.memory_config().memory_layout() == args.k_output_mem_config.memory_layout(),
         "K Input tensor and K output tensor must have same memory layout");
 
     // check that q and k have same batch size and lesser that equal to 32
@@ -101,40 +124,56 @@ void RotaryEmbeddingLlamaFusedQK::validate(const std::vector<Tensor>& input_tens
         "Transformation matrix must be sharded to single tile of shape (32, 32)");
 }
 
-std::vector<ttnn::TensorSpec> RotaryEmbeddingLlamaFusedQK::compute_output_specs(
-    const std::vector<Tensor>& input_tensors) const {
-    const auto& q_input_tensor = input_tensors.at(0);
-    const auto& k_input_tensor = input_tensors.at(1);
+spec_return_value_t RotaryEmbeddingLlamaFusedQKDeviceOperation::compute_output_specs(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& q_input_tensor = tensor_args.q_input;
+    const auto& k_input_tensor = tensor_args.k_input;
     const auto& q_shape = q_input_tensor.logical_shape();
     const auto& k_shape = k_input_tensor.logical_shape();
     return {
         TensorSpec(
-            q_shape, TensorLayout(q_input_tensor.dtype(), PageConfig(q_input_tensor.layout()), q_output_mem_config)),
+            q_shape,
+            TensorLayout(q_input_tensor.dtype(), PageConfig(q_input_tensor.layout()), args.q_output_mem_config)),
         TensorSpec(
-            k_shape, TensorLayout(k_input_tensor.dtype(), PageConfig(k_input_tensor.layout()), k_output_mem_config))};
+            k_shape,
+            TensorLayout(k_input_tensor.dtype(), PageConfig(k_input_tensor.layout()), args.k_output_mem_config))};
 }
 
-operation::ProgramWithCallbacks RotaryEmbeddingLlamaFusedQK::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    const auto& q_input_tensor = input_tensors.at(0);
-    const auto& k_input_tensor = input_tensors.at(1);
-    const auto& cos = input_tensors.at(2);
-    const auto& sin = input_tensors.at(3);
-    const auto& trans_mat = input_tensors.at(4);
-    auto& q_output_tensor = output_tensors.at(0);
-    auto& k_output_tensor = output_tensors.at(1);
-    return rotary_embedding_llama_fused_qk_multi_core_sharded(
-        q_input_tensor,
-        k_input_tensor,
-        cos,
-        sin,
-        trans_mat,
-        q_output_tensor,
-        k_output_tensor,
-        this->compute_kernel_config,
-        this->row_major_QK);
+tensor_return_value_t RotaryEmbeddingLlamaFusedQKDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    auto [spec_q, spec_k] = compute_output_specs(operation_attributes, tensor_args);
+    return {
+        create_device_tensor(spec_q, tensor_args.q_input.device()),
+        create_device_tensor(spec_k, tensor_args.k_input.device())};
 }
 
-}  // namespace tt_metal
+std::tuple<
+    RotaryEmbeddingLlamaFusedQKDeviceOperation::operation_attributes_t,
+    RotaryEmbeddingLlamaFusedQKDeviceOperation::tensor_args_t>
+RotaryEmbeddingLlamaFusedQKDeviceOperation::invoke(
+    const Tensor& q_input_tensor,
+    const Tensor& k_input_tensor,
+    const Tensor& cos_cache,
+    const Tensor& sin_cache,
+    const Tensor& trans_mat,
+    const tt::tt_metal::MemoryConfig& q_output_mem_config,
+    const tt::tt_metal::MemoryConfig& k_output_mem_config,
+    const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
+    bool row_major_QK) {
+    operation_attributes_t attributes{
+        .q_output_mem_config = q_output_mem_config,
+        .k_output_mem_config = k_output_mem_config,
+        .compute_kernel_config = compute_kernel_config,
+        .row_major_QK = row_major_QK,
+    };
+    tensor_args_t tensor_args{
+        .q_input = q_input_tensor,
+        .k_input = k_input_tensor,
+        .cos = cos_cache,
+        .sin = sin_cache,
+        .trans_mat = trans_mat,
+    };
+    return std::make_tuple(std::move(attributes), std::move(tensor_args));
+}
 
-}  // namespace tt
+}  // namespace ttnn::operations::experimental::transformer::rotary_embedding_llama_fused_qk

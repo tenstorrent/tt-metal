@@ -404,7 +404,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_set_state(
 
 // clang-format off
 /**
- * Issues a unicast scatter write from local L1 to destination chunks (split into up to two chunks).
+ * Issues a unicast scatter write from local L1 to destination chunks (split into up to four chunks).
  *
  * Return value: None
  *
