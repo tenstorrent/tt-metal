@@ -20,59 +20,66 @@ namespace tt::scaleout_tools {
 namespace proto = cabling_generator::proto;
 
 // =============================================================================
-// Test Profile Configuration
+// Test Categories - users can enable/disable specific test types
 // =============================================================================
 
-/// Test profile determines the complexity and coverage of generated tests
-/// Tests are ordered from easiest (top) to hardest (bottom) in the output YAML
-enum class TestProfile {
-    SANITY,     // Quick functional validation - simple patterns, low packet counts
-    STRESS,     // High-volume stress testing - flow control, high packet counts
-    BENCHMARK,  // Performance measurement - bandwidth/latency focused
-    COVERAGE    // Full coverage - all patterns, all mesh pairs, all noc types
+/// Individual test categories that can be enabled/disabled
+struct TestCategories {
+    bool simple_unicast = true;   // Basic intra-mesh unicast (always recommended)
+    bool inter_mesh = true;       // Mesh-to-mesh connectivity tests
+    bool all_to_all = true;       // All devices send to all devices
+    bool random_pairing = false;  // Random sender/receiver pairing
+    bool all_to_one = false;      // Convergence test (many->one)
+    bool flow_control = false;    // High-volume flow control stress
+    bool sequential = false;      // Sequential all-to-all (slowest)
 };
 
-/// NoC send types to include in parametrization
-enum class NocSendTypeSet {
-    BASIC,     // unicast_write only
-    STANDARD,  // unicast_write, atomic_inc, fused_atomic_inc
-    FULL       // All types including unicast_scatter_write
-};
+// =============================================================================
+// Test Profile - preset configurations
+// =============================================================================
 
-/// Fabric type patterns to include
-enum class FabricTypeSet {
-    UNICAST_ONLY,  // Only unicast patterns
-    ALL            // Unicast and multicast
-};
+/// Test profile determines default settings
+/// - SANITY: Quick validation (<1 min), basic patterns only
+/// - STRESS: Thorough testing (5-15 min), flow control, high packet counts
+/// - BENCHMARK: Performance focused, varied packet sizes, consistent counts
+enum class TestProfile { SANITY, STRESS, BENCHMARK };
 
 // =============================================================================
 // Traffic Test Configuration
 // =============================================================================
 
 struct TrafficTestConfig {
+    // --- Profile (sets sensible defaults) ---
     TestProfile profile = TestProfile::SANITY;
 
-    // MGD configuration
-    bool generate_mgd = true;  // Auto-generate MGD file alongside tests
+    // --- Test selection ---
+    TestCategories categories;  // Which test types to generate
+
+    // --- MGD configuration ---
+    bool generate_mgd = true;
     std::filesystem::path mgd_output_path;
-    std::optional<std::filesystem::path> existing_mgd_path;  // Use existing MGD instead of generating
+    std::optional<std::filesystem::path> existing_mgd_path;
 
-    // Test content configuration
-    NocSendTypeSet noc_types = NocSendTypeSet::STANDARD;
-    FabricTypeSet fabric_types = FabricTypeSet::UNICAST_ONLY;
-    bool include_flow_control = false;
-    bool include_sync = true;  // Enable sync for timing consistency
+    // --- Packet configuration ---
+    // If not set, uses profile defaults
+    std::optional<std::vector<uint32_t>> packet_sizes;  // e.g., {1024, 2048, 4096}
+    std::optional<uint32_t> num_packets;                // Packets per sender (single value for simplicity)
 
-    // Packet configuration (defaults vary by profile)
-    std::optional<std::vector<uint32_t>> packet_sizes;
-    std::optional<std::vector<uint32_t>> packet_counts;
-    std::optional<uint32_t> top_level_iterations;
+    // --- NoC types to test ---
+    // If empty, uses profile defaults. Common types:
+    // - "unicast_write" (basic, always works)
+    // - "atomic_inc", "fused_atomic_inc" (stress testing)
+    // - "unicast_scatter_write" (advanced)
+    std::vector<std::string> noc_types;
 
-    // Platform skip configuration
-    std::vector<std::string> skip_platforms;  // e.g., ["GALAXY", "BLACKHOLE_GALAXY"]
+    // --- Test behavior ---
+    bool include_sync = true;  // Synchronize timing across devices
 
-    // Test naming
-    std::string test_name_prefix;  // Optional prefix for generated test names
+    // --- Platform skip ---
+    std::vector<std::string> skip_platforms;  // e.g., {"GALAXY", "BLACKHOLE"}
+
+    // --- Naming ---
+    std::string test_name_prefix;
 };
 
 // =============================================================================
@@ -81,43 +88,44 @@ struct TrafficTestConfig {
 
 struct MeshTopologyInfo {
     size_t num_meshes{};
-    std::vector<int> device_dims;  // [rows, cols] per mesh (from node type)
+    std::vector<int> device_dims;  // [rows, cols] per mesh
     std::string node_type;
     std::string architecture;  // "WORMHOLE_B0" or "BLACKHOLE"
 
-    // Mesh connectivity graph: mesh_id -> { connected_mesh_id -> channel_count }
+    // Mesh connectivity: mesh_id -> { connected_mesh_id -> channel_count }
     std::map<uint32_t, std::map<uint32_t, uint32_t>> mesh_connections;
 
-    // Ordered list of unique mesh pairs (for deterministic test generation)
+    // Ordered unique mesh pairs for deterministic output
     std::vector<std::pair<uint32_t, uint32_t>> connected_pairs;
+
+    // Computed stats
+    size_t total_devices() const { return num_meshes * device_dims[0] * device_dims[1]; }
 };
 
 // =============================================================================
 // Public API
 // =============================================================================
 
-/// Extract topology information from a cabling descriptor
-[[nodiscard]] MeshTopologyInfo extract_topology_info(const proto::ClusterDescriptor& cluster_desc, bool verbose = false);
+/// Extract topology from cabling descriptor protobuf
+[[nodiscard]] MeshTopologyInfo extract_topology_info(
+    const proto::ClusterDescriptor& cluster_desc, bool verbose = false);
 
-/// Extract topology information from a cabling descriptor file
+/// Extract topology from cabling descriptor file
 [[nodiscard]] MeshTopologyInfo extract_topology_info(
     const std::filesystem::path& cabling_descriptor_path, bool verbose = false);
 
-/// Generate traffic test YAML content as a string
-[[nodiscard]] std::string generate_traffic_tests_yaml(
-    const proto::ClusterDescriptor& cluster_desc,
-    const TrafficTestConfig& config = {},
-    bool verbose = false);
-
-/// Generate traffic test YAML content from topology info
+/// Generate traffic test YAML as string
 [[nodiscard]] std::string generate_traffic_tests_yaml(
     const MeshTopologyInfo& topology, const std::filesystem::path& mgd_path, const TrafficTestConfig& config = {});
 
-/// Write traffic test YAML to file
+/// Generate traffic test YAML from cabling descriptor
+[[nodiscard]] std::string generate_traffic_tests_yaml(
+    const proto::ClusterDescriptor& cluster_desc, const TrafficTestConfig& config = {}, bool verbose = false);
+
+/// Write YAML content to file (adds license header)
 void write_traffic_tests_to_file(const std::string& yaml_content, const std::filesystem::path& output_path);
 
-/// Convenience function: generate and write traffic tests in one call
-/// Also generates MGD if config.generate_mgd is true
+/// Convenience: generate and write in one call
 void generate_traffic_tests(
     const std::filesystem::path& cabling_descriptor_path,
     const std::filesystem::path& output_path,
@@ -125,19 +133,34 @@ void generate_traffic_tests(
     bool verbose = false);
 
 // =============================================================================
-// Profile Presets
+// Profile Presets - get config with sensible defaults for each profile
 // =============================================================================
 
-/// Get default configuration for sanity testing (quick validation)
+/// Sanity: Quick validation, ~30s-1min
+/// Tests: simple_unicast, inter_mesh, all_to_all
+/// Packets: 100, Sizes: 1024, 2048
 [[nodiscard]] TrafficTestConfig get_sanity_config();
 
-/// Get default configuration for stress testing
+/// Stress: Thorough testing, ~5-15min depending on cluster size
+/// Tests: all categories enabled
+/// Packets: 1000-10000, Sizes: 1024, 2048, 4096
 [[nodiscard]] TrafficTestConfig get_stress_config();
 
-/// Get default configuration for benchmark testing
+/// Benchmark: Performance measurement, ~2-5min
+/// Tests: simple_unicast, inter_mesh, all_to_all
+/// Packets: 1000, Sizes: 512, 1024, 2048, 4096, 8192
 [[nodiscard]] TrafficTestConfig get_benchmark_config();
 
-/// Get default configuration for full coverage testing
-[[nodiscard]] TrafficTestConfig get_coverage_config();
+// =============================================================================
+// Utility
+// =============================================================================
+
+/// Apply profile defaults to config (fills in unset optional fields)
+void apply_profile_defaults(TrafficTestConfig& config);
+
+/// Estimate test duration based on config and topology
+/// Returns rough estimate in seconds
+[[nodiscard]] uint32_t estimate_test_duration_seconds(
+    const MeshTopologyInfo& topology, const TrafficTestConfig& config);
 
 }  // namespace tt::scaleout_tools
