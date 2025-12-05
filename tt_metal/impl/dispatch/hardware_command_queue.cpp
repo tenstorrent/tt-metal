@@ -149,44 +149,6 @@ std::optional<uint32_t> HWCommandQueue::tid() const { return this->tid_; }
 
 SystemMemoryManager& HWCommandQueue::sysmem_manager() { return this->manager_; }
 
-void HWCommandQueue::reset_worker_state(
-    bool reset_launch_msg_state,
-    uint32_t num_sub_devices,
-    const vector_aligned<uint32_t>& go_signal_noc_data,
-    const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) {
-    TT_FATAL(!this->manager_.get_bypass_mode(), "Cannot reset worker state during trace capture");
-    cq_shared_state_->sub_device_cq_owner.clear();
-    cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
-    // TODO: This could be further optimized by combining all of these into a single prefetch entry
-    // Currently each one will be pushed into its own prefetch entry
-    program_dispatch::reset_worker_dispatch_state_on_device(
-        device_,
-        this->manager_,
-        id_,
-        this->virtual_enqueue_program_dispatch_core_,
-        this->expected_num_workers_completed_,
-        reset_launch_msg_state);
-    program_dispatch::set_num_worker_sems_on_dispatch(device_, this->manager_, id_, num_sub_devices);
-    program_dispatch::set_go_signal_noc_data_on_dispatch(device_, go_signal_noc_data, this->manager_, id_);
-    if (reset_launch_msg_state) {
-        program_dispatch::set_core_go_message_mapping_on_device(device_, core_go_message_mapping, this->manager_, id_);
-    }
-    // expected_num_workers_completed is reset on the dispatcher, as part of this step - this must be reflected
-    // on host, along with the config_buf_manager being reset, since we wait for all programs across SubDevices
-    // to complete as part of resetting the worker state
-    program_dispatch::reset_config_buf_mgrs_and_expected_workers(
-        this->config_buffer_mgr_,
-        this->expected_num_workers_completed_,
-        device_->num_sub_devices(),
-        device_->allocator()->get_config().l1_unreserved_base);
-    if (reset_launch_msg_state) {
-        std::for_each(
-            this->cq_shared_state_->worker_launch_message_buffer_state.begin(),
-            this->cq_shared_state_->worker_launch_message_buffer_state.begin() + num_sub_devices,
-            std::mem_fn(&LaunchMessageRingBufferState::reset));
-    }
-}
-
 void HWCommandQueue::set_go_signal_noc_data_and_dispatch_sems(
     uint32_t num_dispatch_sems, const vector_aligned<uint32_t>& noc_mcast_unicast_data) {
     program_dispatch::set_num_worker_sems_on_dispatch(device_, this->manager_, id_, num_dispatch_sems);
