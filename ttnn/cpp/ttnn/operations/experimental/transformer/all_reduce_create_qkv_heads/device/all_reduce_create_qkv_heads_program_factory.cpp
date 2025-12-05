@@ -808,10 +808,10 @@ void AllReduceCreateQkvHeadsMeshWorkloadFactory::override_runtime_arguments(
     const auto& k_output = tensor_return_value[2];
     const auto& v_output = tensor_return_value[3];
 
-    auto* q_base_addr = q_output.buffer();
-    auto* k_base_addr = k_output.buffer();
-    auto* v_base_addr = v_output.buffer();
-    auto* batch_base_addr = batch_tensor.buffer();
+    auto q_base_addr = q_output.buffer()->address();
+    auto k_base_addr = k_output.buffer()->address();
+    auto v_base_addr = v_output.buffer()->address();
+    auto batch_base_addr = batch_tensor.buffer()->address();
 
     for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(mesh_coord_range);
@@ -836,15 +836,15 @@ void AllReduceCreateQkvHeadsMeshWorkloadFactory::override_runtime_arguments(
         for (uint32_t i = 0; i < shared_vars.output_cores_vec.size(); i++) {
             const auto& core = shared_vars.output_cores_vec[i];
             auto& reader_args = reduction_reader_args_by_core[core.x][core.y];
-            reader_args[0] = q_base_addr->address();
-            reader_args[1] = k_base_addr->address();
-            reader_args[2] = v_base_addr->address();
-            reader_args[3] = batch_base_addr->address();
+            reader_args[0] = q_base_addr;
+            reader_args[1] = k_base_addr;
+            reader_args[2] = v_base_addr;
+            reader_args[3] = batch_base_addr;
             auto& writer_args = reduction_writer_args_by_core[core.x][core.y];
-            writer_args[0] = q_base_addr->address();
-            writer_args[1] = k_base_addr->address();
-            writer_args[2] = v_base_addr->address();
-            writer_args[3] = batch_base_addr->address();
+            writer_args[0] = q_base_addr;
+            writer_args[1] = k_base_addr;
+            writer_args[2] = v_base_addr;
+            writer_args[3] = batch_base_addr;
         }
         UpdateDynamicCircularBufferAddress(program, shared_vars.cb_out, *output.buffer());
         UpdateDynamicCircularBufferAddress(program, shared_vars.cb_reduction, *buffer_tensor.buffer());
