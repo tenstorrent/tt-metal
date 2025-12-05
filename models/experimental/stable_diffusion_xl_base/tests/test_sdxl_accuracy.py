@@ -178,6 +178,8 @@ def test_accuracy_sdxl(
         "encoders_on_device": encoders_on_device,
         "use_cfg_parallel": use_cfg_parallel,
         "use_refiner": use_refiner,
+        "negative_prompt": negative_prompt,
+        "guidance_scale": guidance_scale,
         "denoising_split": denoising_split,
         "refiner_strength": refiner_strength,
         "refiner_aesthetic_score": refiner_aesthetic_score,
