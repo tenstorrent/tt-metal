@@ -21,23 +21,18 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::transformer::ring_distributed_sdpa::program {
 
 // Ring-distributed SDPA program factory
-RingDistributedSdpaProgramFactory::cached_program_t RingDistributedSdpaProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    const auto& input_tensor_q = tensor_args.q;
-    const auto& input_tensor_k = tensor_args.k;
-    const auto& input_tensor_v = tensor_args.v;
-    auto& output_tensor = tensor_return_value;
-    const auto& ring_size = operation_attributes.ring_size;
-    // At this point ring_id is guaranteed to have a value due to the call in create_mesh_workload
-    TT_FATAL(operation_attributes.ring_id.has_value(), "ring_id must have a value at this point");
-    const auto ring_id = operation_attributes.ring_id.value();
-    const auto scale = operation_attributes.scale;
-    const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
-    const auto& program_config = operation_attributes.program_config;
-    const auto& q_chunk_size = program_config.has_value() ? program_config->q_chunk_size : 32;
-    const auto& k_chunk_size = program_config.has_value() ? program_config->k_chunk_size : 32;
+RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMeshWorkloadFactory::create_at(
+    const Tensor& input_tensor_q,
+    const Tensor& input_tensor_k,
+    const Tensor& input_tensor_v,
+    const Tensor& output_tensor,
+    uint32_t ring_size,
+    uint32_t ring_id,
+    std::optional<float> scale,
+    std::size_t q_chunk_size,
+    std::size_t k_chunk_size,
+    DeviceComputeKernelConfig compute_kernel_config,
+    std::optional<SDPAProgramConfig> program_config) {
     /*
     Q: B x NQH x S*ring_size x DH
     K: B x NKH x DH x S
@@ -513,44 +508,6 @@ RingDistributedSdpaProgramFactory::cached_program_t RingDistributedSdpaProgramFa
         });
 }
 
-void RingDistributedSdpaProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    auto& program = cached_program.program;
-    const auto& reader_kernels_id = cached_program.shared_variables.reader_kernel_id;
-    const auto& writer_kernels_id = cached_program.shared_variables.writer_kernel_id;
-    const auto& num_cores = cached_program.shared_variables.num_cores;
-    const auto& grid_size = cached_program.shared_variables.grid_size;
-
-    auto* q_buffer = tensor_args.q.buffer();
-    auto* k_buffer = tensor_args.k.buffer();
-    auto* v_buffer = tensor_args.v.buffer();
-
-    auto* out0_buffer = tensor_return_value.buffer();
-    uint32_t q_addr = q_buffer->address();
-    uint32_t k_addr = k_buffer->address();
-    uint32_t v_addr = v_buffer->address();
-    uint32_t out_addr = out0_buffer->address();
-
-    auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
-    auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
-
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = {i % grid_size.x, i / grid_size.x};
-
-        auto& reader_args = reader_args_by_core[core.x][core.y];
-        auto& writer_args = writer_args_by_core[core.x][core.y];
-
-        reader_args[0] = q_addr;
-        reader_args[1] = k_addr;
-        reader_args[2] = v_addr;
-
-        writer_args[0] = out_addr;
-    }
-}
-
 RingDistributedSdpaMeshWorkloadFactory::cached_mesh_workload_t
 RingDistributedSdpaMeshWorkloadFactory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
@@ -562,6 +519,13 @@ RingDistributedSdpaMeshWorkloadFactory::create_mesh_workload(
 
     // Create programs for each coordinate in tensor_coords
     const auto& input_tensor_q = tensor_args.q;
+    const auto& input_tensor_k = tensor_args.k;
+    const auto& input_tensor_v = tensor_args.v;
+
+    const auto q_chunk_size =
+        operation_attributes.program_config.has_value() ? operation_attributes.program_config->q_chunk_size : 32;
+    const auto k_chunk_size =
+        operation_attributes.program_config.has_value() ? operation_attributes.program_config->k_chunk_size : 32;
 
     // Determine ring_id: use provided value or infer from device coordinate
     uint32_t curr_ring_id;
@@ -605,15 +569,18 @@ RingDistributedSdpaMeshWorkloadFactory::create_mesh_workload(
             }
             // Create a program for this specific coordinate using the base factory
             const ttnn::MeshCoordinateRange single_coord_range{mesh_coord, mesh_coord};
-            operation_attributes_t curr_operation_attributes{
-                .ring_size = operation_attributes.ring_size,
-                .ring_id = curr_ring_id,
-                .scale = operation_attributes.scale,
-                .output_mem_config = operation_attributes.output_mem_config,
-                .program_config = operation_attributes.program_config,
-                .compute_kernel_config = operation_attributes.compute_kernel_config};
-            auto cached_program =
-                RingDistributedSdpaProgramFactory::create(curr_operation_attributes, tensor_args, tensor_return_value);
+            auto cached_program = create_at(
+                input_tensor_q,
+                input_tensor_k,
+                input_tensor_v,
+                tensor_return_value,
+                operation_attributes.ring_size,
+                curr_ring_id,
+                operation_attributes.scale,
+                q_chunk_size,
+                k_chunk_size,
+                operation_attributes.compute_kernel_config,
+                operation_attributes.program_config);
             shared_variables[single_coord_range] = cached_program.shared_variables;
             mesh_workload.add_program(single_coord_range, std::move(cached_program.program));
         }
@@ -627,19 +594,40 @@ void RingDistributedSdpaMeshWorkloadFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    RingDistributedSdpaProgramFactory program_factory;
-
+    // Update runtime arguments for each program in the mesh workload
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        auto& shared_variables = cached_workload.shared_variables.at(coordinate_range);
+        const auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
-        ttnn::device_operation::mesh_device_operation_utils::apply_override_runtime_arguments(
-            program_factory,
-            program,
-            shared_variables,
-            operation_attributes,
-            *(coordinate_range.begin()),
-            tensor_args,
-            tensor_return_value);
+        const auto& reader_kernels_id = shared_vars.reader_kernel_id;
+        const auto& writer_kernels_id = shared_vars.writer_kernel_id;
+        const auto num_cores = shared_vars.num_cores;
+        const auto& grid_size = shared_vars.grid_size;
+
+        auto* q_buffer = tensor_args.q.buffer();
+        auto* k_buffer = tensor_args.k.buffer();
+        auto* v_buffer = tensor_args.v.buffer();
+
+        auto* out0_buffer = tensor_return_value.buffer();
+        uint32_t q_addr = q_buffer->address();
+        uint32_t k_addr = k_buffer->address();
+        uint32_t v_addr = v_buffer->address();
+        uint32_t out_addr = out0_buffer->address();
+
+        auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
+        auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
+
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            CoreCoord core = {i % grid_size.x, i / grid_size.x};
+
+            auto& reader_args = reader_args_by_core[core.x][core.y];
+            auto& writer_args = writer_args_by_core[core.x][core.y];
+
+            reader_args[0] = q_addr;
+            reader_args[1] = k_addr;
+            reader_args[2] = v_addr;
+
+            writer_args[0] = out_addr;
+        }
     }
 }
 }  // namespace ttnn::operations::transformer::ring_distributed_sdpa::program
