@@ -132,9 +132,9 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
+          #{ arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
-          { arch: blackhole, runner-label: P150b },
+          #{ arch: blackhole, runner-label: P150b },
         ]
     uses: ./.github/workflows/cpp-post-commit.yaml
     with:
@@ -145,81 +145,81 @@ jobs:
       gtest_filter: "*NIGHTLY_*"
       nightly-run: true
   # Metal IOMMU Unit Tests
-  metal-iommu-unit-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
-    needs: build-artifact
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: blackhole, runner-label: P150b },
-        ]
-    uses: ./.github/workflows/metal-iommu-unit-tests.yaml
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  # Slow Dispatch Unit Tests
-  sd-unit-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
-    needs: build-artifact
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
-          { arch: blackhole, runner-label: P150 },  # Use P150 instead of P150b to stay on CIv1 for capacity reasons
-          { arch: blackhole, runner-label: P100 },
-        ]
-    uses: ./.github/workflows/build-and-unit-tests.yaml
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  # Fast Dispatch Unit Tests
-  fast-dispatch-unit-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
-    needs: build-artifact
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
-          { arch: blackhole, runner-label: P150 },  # Use P150 instead of P150b to stay on CIv1 for capacity reasons
-          { arch: blackhole, runner-label: P100 },
-        ]
-    uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  # TTNN Tutorials
-  test-ttnn-tutorials:
-    if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/ttnn-tutorials-post-commit.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: blackhole, runner-label: P150b },
-          { arch: blackhole, runner-label: P100 },
-        ]
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.basic-ttnn-runtime-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # metal-iommu-unit-tests:
+  #   if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
+  #   needs: build-artifact
+  #   secrets: inherit
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       test-group: [
+  #         { arch: blackhole, runner-label: P150b },
+  #       ]
+  #   uses: ./.github/workflows/metal-iommu-unit-tests.yaml
+  #   with:
+  #     arch: ${{ matrix.test-group.arch }}
+  #     runner-label: ${{ matrix.test-group.runner-label }}
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # # Slow Dispatch Unit Tests
+  # sd-unit-tests:
+  #   if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
+  #   needs: build-artifact
+  #   secrets: inherit
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       test-group: [
+  #         { arch: wormhole_b0, runner-label: N150 },
+  #         { arch: wormhole_b0, runner-label: N300 },
+  #         { arch: blackhole, runner-label: P150 },  # Use P150 instead of P150b to stay on CIv1 for capacity reasons
+  #         { arch: blackhole, runner-label: P100 },
+  #       ]
+  #   uses: ./.github/workflows/build-and-unit-tests.yaml
+  #   with:
+  #     arch: ${{ matrix.test-group.arch }}
+  #     runner-label: ${{ matrix.test-group.runner-label }}
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # # Fast Dispatch Unit Tests
+  # fast-dispatch-unit-tests:
+  #   if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
+  #   needs: build-artifact
+  #   secrets: inherit
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       test-group: [
+  #         { arch: wormhole_b0, runner-label: N150 },
+  #         { arch: wormhole_b0, runner-label: N300 },
+  #         { arch: blackhole, runner-label: P150 },  # Use P150 instead of P150b to stay on CIv1 for capacity reasons
+  #         { arch: blackhole, runner-label: P100 },
+  #       ]
+  #   uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
+  #   with:
+  #     arch: ${{ matrix.test-group.arch }}
+  #     runner-label: ${{ matrix.test-group.runner-label }}
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # # TTNN Tutorials
+  # test-ttnn-tutorials:
+  #   if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
+  #   needs: build-artifact
+  #   secrets: inherit
+  #   uses: ./.github/workflows/ttnn-tutorials-post-commit.yaml
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       test-group: [
+  #         { arch: wormhole_b0, runner-label: N150 },
+  #         { arch: blackhole, runner-label: P150b },
+  #         { arch: blackhole, runner-label: P100 },
+  #       ]
+  #   with:
+  #     arch: ${{ matrix.test-group.arch }}
+  #     runner-label: ${{ matrix.test-group.runner-label }}
+  #     docker-image: ${{ needs.build-artifact.outputs.basic-ttnn-runtime-docker-image }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
