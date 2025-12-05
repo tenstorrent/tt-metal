@@ -17,11 +17,11 @@ set(AGGREGATOR_SOURCES
 )
 
 add_executable(nano_gpt ${MAIN_SOURCES})
-target_link_libraries(nano_gpt PRIVATE ttml_core)
+target_link_libraries(nano_gpt PRIVATE ttml)
 add_executable(nano_gpt_aggregator ${AGGREGATOR_SOURCES})
-target_link_libraries(nano_gpt_aggregator PRIVATE ttml_core)
+target_link_libraries(nano_gpt_aggregator PRIVATE ttml)
 add_executable(nano_gpt_optimizer ${OPTIMIZER_SOURCES})
-target_link_libraries(nano_gpt_optimizer PRIVATE ttml_core)
+target_link_libraries(nano_gpt_optimizer PRIVATE ttml)
 
 target_compile_definitions(
     nano_gpt
