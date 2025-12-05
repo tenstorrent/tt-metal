@@ -355,8 +355,8 @@ def test_reduce_to_root(bh_2d_mesh_device, num_iters):
     # Use relaxed tolerance for bfloat16 and exponential operations
     # bfloat16 has ~3 decimal digits of precision, and we have multiple operations
     # (exponentials, multiplications, additions, divisions) which accumulate errors
-    rtol = 0.02  # 2% relative tolerance for accumulated rounding errors
-    atol = 0.1  # 0.1 absolute tolerance (reasonable for values in range 0.5-3.0)
+    rtol = 0.01  # 2% relative tolerance for accumulated rounding errors
+    atol = 0.06  # 0.1 absolute tolerance (reasonable for values in range 0.5-3.0)
 
     # Verify outputs for each iteration
     all_iterations_passed = True
