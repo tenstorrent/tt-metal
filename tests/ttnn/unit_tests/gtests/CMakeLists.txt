@@ -158,6 +158,14 @@ target_sources(
 target_link_libraries(unit_tests_ttnn_accessor PRIVATE Metalium::Metal::Hardware)
 setup_ttnn_test_target(unit_tests_ttnn_accessor)
 
+# unit_tests_ttnn_udm
+
+add_executable(unit_tests_ttnn_udm)
+target_sources(unit_tests_ttnn_udm PRIVATE udm/test_udm_program.cpp)
+# needs access to "compile_time_args.h" and tensor accessor headers
+target_link_libraries(unit_tests_ttnn_udm PRIVATE Metalium::Metal::Hardware)
+setup_ttnn_test_target(unit_tests_ttnn_udm)
+
 # unit_tests_ttnn_tensor
 
 add_library(unit_tests_ttnn_tensor_lib OBJECT)
