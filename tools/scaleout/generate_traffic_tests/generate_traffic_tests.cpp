@@ -131,7 +131,6 @@ void emit_skip_platforms(YAML::Emitter& out, const std::vector<std::string>& pla
 
 void generate_simple_unicast_test(
     YAML::Emitter& out,
-    const MeshTopologyInfo& topology,
     const std::filesystem::path& mgd_path,
     const TrafficTestConfig& config,
     uint32_t num_packets,
@@ -211,7 +210,6 @@ void generate_inter_mesh_test(
 
 void generate_all_to_all_test(
     YAML::Emitter& out,
-    const MeshTopologyInfo& topology,
     const std::filesystem::path& mgd_path,
     const TrafficTestConfig& config,
     uint32_t num_packets,
@@ -238,7 +236,6 @@ void generate_all_to_all_test(
 
 void generate_random_pairing_test(
     YAML::Emitter& out,
-    const MeshTopologyInfo& topology,
     const std::filesystem::path& mgd_path,
     const TrafficTestConfig& config,
     uint32_t num_packets,
@@ -259,7 +256,6 @@ void generate_random_pairing_test(
 
 void generate_all_to_one_test(
     YAML::Emitter& out,
-    const MeshTopologyInfo& topology,
     const std::filesystem::path& mgd_path,
     const TrafficTestConfig& config,
     uint32_t num_packets,
@@ -285,7 +281,6 @@ void generate_all_to_one_test(
 
 void generate_flow_control_test(
     YAML::Emitter& out,
-    const MeshTopologyInfo& topology,
     const std::filesystem::path& mgd_path,
     const TrafficTestConfig& config,
     uint32_t num_packets,
@@ -314,7 +309,6 @@ void generate_flow_control_test(
 
 void generate_sequential_test(
     YAML::Emitter& out,
-    const MeshTopologyInfo& topology,
     const std::filesystem::path& mgd_path,
     const TrafficTestConfig& config,
     uint32_t num_packets,
@@ -487,25 +481,25 @@ std::string generate_traffic_tests_yaml(
     const auto& cat = cfg.categories;
 
     if (cat.simple_unicast) {
-        generate_simple_unicast_test(out, topology, mgd_path, cfg, num_packets, sizes);
+        generate_simple_unicast_test(out, mgd_path, cfg, num_packets, sizes);
     }
     if (cat.inter_mesh && topology.num_meshes > 1) {
         generate_inter_mesh_test(out, topology, mgd_path, cfg, num_packets, sizes);
     }
     if (cat.all_to_all) {
-        generate_all_to_all_test(out, topology, mgd_path, cfg, num_packets, sizes, noc_types);
+        generate_all_to_all_test(out, mgd_path, cfg, num_packets, sizes, noc_types);
     }
     if (cat.random_pairing) {
-        generate_random_pairing_test(out, topology, mgd_path, cfg, num_packets, sizes);
+        generate_random_pairing_test(out, mgd_path, cfg, num_packets, sizes);
     }
     if (cat.all_to_one) {
-        generate_all_to_one_test(out, topology, mgd_path, cfg, num_packets, sizes);
+        generate_all_to_one_test(out, mgd_path, cfg, num_packets, sizes);
     }
     if (cat.flow_control) {
-        generate_flow_control_test(out, topology, mgd_path, cfg, num_packets, sizes, noc_types);
+        generate_flow_control_test(out, mgd_path, cfg, num_packets, sizes, noc_types);
     }
     if (cat.sequential) {
-        generate_sequential_test(out, topology, mgd_path, cfg, num_packets, sizes, noc_types);
+        generate_sequential_test(out, mgd_path, cfg, num_packets, sizes, noc_types);
     }
 
     out << YAML::EndSeq;
