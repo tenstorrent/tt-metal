@@ -105,7 +105,7 @@ test_demo_base_and_refiner.__test__ = False
 )
 @pytest.mark.parametrize("captions_path", ["models/experimental/stable_diffusion_xl_base/coco_data/captions.tsv"])
 @pytest.mark.parametrize("coco_statistics_path", ["models/experimental/stable_diffusion_xl_base/coco_data/val2014.npz"])
-def test_accuracy_sdxl_base_and_refiner(
+def test_accuracy_sdxl(
     validate_fabric_compatibility,
     mesh_device,
     is_ci_env,
