@@ -705,8 +705,9 @@ class ModelArgs:
             )
 
             # Chunk values based on what works best empirically
+            sdpa_grid_size = (13, 10) if is_blackhole() else (8, 8)
             self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
+                compute_with_storage_grid_size=sdpa_grid_size,
                 exp_approx_mode=False,
                 q_chunk_size=256 if seqlen >= 2048 else 64,
                 k_chunk_size=256 if seqlen >= 2048 else 64,
@@ -765,7 +766,7 @@ class ModelArgs:
 
             # For maximum performance, set the prefill grid row to 8, even if it can fit in a smaller grid
             # prefill_rows = lambda seq_len: min(seq_len, 1024) // self.tile_size
-            prefill_rows = 8  # TODO if BH = 10, if wh = 8
+            prefill_rows = 13 if is_blackhole() else 8  # P150 has 13x10 grid
             mlp1_3_grid = lambda seq_len: (
                 (8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
@@ -786,7 +787,7 @@ class ModelArgs:
                 k=self.dim // self.cluster_shape[0],
                 n=n_w1_w3,
                 grid_size=mlp1_3_grid(seq_len),
-                per_core_N=math.ceil(n_w1_w3 / (self.tile_size * dram_shard_grid_width))
+                per_core_N=math.ceil(n_w1_w3 / (self.tile_size * mlp1_3_grid(seq_len)[0]))
                 if mlp_w_dram_sharded
                 else None,
             )
@@ -796,7 +797,7 @@ class ModelArgs:
                 k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
                 n=n_w2,
                 grid_size=mlp2_grid(seq_len),
-                per_core_N=math.ceil(n_w2 / (self.tile_size * dram_shard_grid_width)) if mlp_w_dram_sharded else None,
+                per_core_N=math.ceil(n_w2 / (self.tile_size * mlp2_grid(seq_len)[0])) if mlp_w_dram_sharded else None,
             )
             self.model_config["PREFILL_MIXTRAL_MLP_W1_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
@@ -835,14 +836,15 @@ class ModelArgs:
             )
             num_rows = lambda seq_len: min(seq_len, 1024)
             dram_sharded_wo = not (self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] or self.is_galaxy)
+            wo_grid = lambda seq_len: self.find_prefill_grid(prefill_rows, k_dim // self.tile_size)
             self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
                 m=num_rows(seq_len),
                 k=k_dim,
                 n=n_dim,
-                grid_size=self.find_prefill_grid(prefill_rows, k_dim // self.tile_size),
+                grid_size=wo_grid(seq_len),
                 in0_block_w=1 if self.is_galaxy else None,
                 fuse_batch=seq_len <= 1024,
-                per_core_N=math.ceil(n_dim / (self.tile_size * dram_shard_grid_width)) if dram_sharded_wo else None,
+                per_core_N=math.ceil(n_dim / (self.tile_size * wo_grid(seq_len)[0])) if dram_sharded_wo else None,
             )
 
             # Calculate largest number of lm_head_num_rows such that self.dim % (lm_head_num_rows * lm_head_cores_per_row) == 0
@@ -882,17 +884,20 @@ class ModelArgs:
             )
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
+            qkv_grid_size = (13, 10) if is_blackhole() else (8, 8)
+            qkv_grid_rows = 13 if is_blackhole() else 8
+            qkv_grid_cols = 10 if is_blackhole() else 8
             self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
+                compute_with_storage_grid_size=qkv_grid_size,
                 in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=max(
                     1,
-                    8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8),  # 8 rows
+                    qkv_grid_rows if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / qkv_grid_rows),
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=math.ceil(
-                    self.qkv_size / self.cluster_shape[1] / 32 / dram_shard_grid_width
+                    self.qkv_size / self.cluster_shape[1] / 32 / qkv_grid_cols
                 ),  # N / TILE_WIDTH / grid width
                 transpose_mcast=False,
                 fused_activation=None,
@@ -2043,8 +2048,8 @@ class ModelArgs:
         """Find a grid such that the number of row tiles evenly divides into the number
         of rows and the number of column tiles evenly divides into the number of columns
         """
-        max_rows = 8
-        max_cols = 8
+        max_rows = 13 if is_blackhole() else 8  # P150: 13x10, N150: 8x8
+        max_cols = 10 if is_blackhole() else 8
         # TODO Improve configuration for BH (higher core grid than WH)
 
         # Find number of cols that evenly divides into the number of columns
@@ -2084,8 +2089,8 @@ class ModelArgs:
         Raises:
             AssertionError: If it's not possible to find such a grid configuration.
         """
-        max_rows = 8
-        max_cols = 8  # Maximum number of rows or columns
+        max_rows = 13 if is_blackhole() else 8  # P150: 13x10, N150: 8x8
+        max_cols = 10 if is_blackhole() else 8  # Maximum number of rows or columns
         max_cores = max_rows * max_cols  # Maximum number of cores
 
         # Find all possible numbers of cores that divide N and are less than or equal to max_cores
