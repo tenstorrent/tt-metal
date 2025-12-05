@@ -12,16 +12,16 @@
 namespace ttnn::operations::data_movement::pad {
 
 struct operation_attributes_t {
-    const ttnn::Shape output_logical_shape;
-    const ttnn::Shape output_padded_shape;
-    const ttnn::Shape input_tensor_start;
-    const float pad_value;
-    const tt::tt_metal::MemoryConfig output_mem_config;
-    const bool use_multicore;
+    ttnn::Shape output_logical_shape;
+    ttnn::Shape output_padded_shape;
+    ttnn::Shape input_tensor_start;
+    float pad_value{};
+    tt::tt_metal::MemoryConfig output_mem_config;
+    bool use_multicore{};
 };
 
 struct tensor_args_t {
-    const Tensor& input;
+    Tensor input;
     std::optional<Tensor> preallocated_output;
 };
 
