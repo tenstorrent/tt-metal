@@ -564,7 +564,7 @@ RingDistributedSdpaMeshWorkloadFactory::create_mesh_workload(
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    // Filter coordinates based on mesh_coords if provided
+    // Create programs for each coordinate in tensor_coords
     const auto& input_tensor_q = tensor_args.q;
 
     // Determine ring_id: use provided value or infer from device coordinate
