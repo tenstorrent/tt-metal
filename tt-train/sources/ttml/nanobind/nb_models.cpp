@@ -225,7 +225,8 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
                 &models::llama::Llama::operator()),
             nb::arg("tensor"),
             nb::arg("mask"),
-            nb::arg("use_cache") = false);
+            nb::arg("use_cache") = false,
+            "Model forward pass. use_cache=True if you want to use kv cache for inference.");
         // KV cache methods
         py_llama.def(
             "initialize_kv_cache",

@@ -10,7 +10,6 @@
 #include "linear_module.hpp"
 #include "ops/multi_head_utils.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
-#include "ttnn/operations/experimental/slice_write/slice_write.hpp"
 
 namespace ttml::modules {
 
