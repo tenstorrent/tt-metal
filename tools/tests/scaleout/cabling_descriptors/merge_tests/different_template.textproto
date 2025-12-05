@@ -1,0 +1,25 @@
+# Different graph template - adds a new template "test_superpod"
+# This should merge successfully with any other descriptor
+graph_templates {
+  key: "test_superpod"
+  value {
+    children {
+      name: "pod1"
+      graph_ref { graph_template: "test_pod" }
+    }
+    children {
+      name: "pod2"
+      graph_ref { graph_template: "test_pod" }
+    }
+    internal_connections {
+      key: "QSFP_DD"
+      value {
+        # Cross-pod connection
+        connections {
+          port_a { path: ["pod1", "node1"] tray_id: 1 port_id: 0 }
+          port_b { path: ["pod2", "node1"] tray_id: 1 port_id: 0 }
+        }
+      }
+    }
+  }
+}
