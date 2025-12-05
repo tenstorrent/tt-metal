@@ -145,7 +145,7 @@ protected:
         // Determine which batch and hw this position represents
         // For output shard idx, we get elements output_shard_idx * output_shard_width to (idx+1) * output_shard_width -
         // 1
-        uint32_t global_pos = output_shard_idx * output_shard_width + pos;
+        uint32_t global_pos = (output_shard_idx * output_shard_width) + pos;
         uint32_t b = global_pos / HW;
         uint32_t hw = global_pos % HW;
 
@@ -155,7 +155,7 @@ protected:
 
         // Input shard layout: [B*C, HW/num_input_cores]
         // Row = b*C + c
-        uint32_t input_row = b * C + c;
+        uint32_t input_row = (b * C) + c;
         uint32_t input_col = hw_in_shard;
 
         // Calculate the value: each input core starts with a base value
@@ -163,7 +163,7 @@ protected:
         // Core 1: starts at (B*C) * input_shard_width
         // Core k: starts at k * (B*C) * input_shard_width
         uint32_t base_value = input_core_idx * (B * C) * input_shard_width;
-        uint32_t value = base_value + input_row * input_shard_width + input_col;
+        uint32_t value = base_value + (input_row * input_shard_width) + input_col;
 
         return static_cast<float>(value);
     }
@@ -184,7 +184,7 @@ protected:
 
             for (uint32_t c = 0; c < C; c++) {
                 for (uint32_t pos = 0; pos < output_shard_width; pos++) {
-                    uint32_t idx = c * output_shard_width + pos;
+                    uint32_t idx = (c * output_shard_width) + pos;
                     float expected =
                         compute_expected_output_value(shard_idx, c, pos, B, C, HW, num_input_cores, num_output_cores);
                     float actual = shard[idx];
