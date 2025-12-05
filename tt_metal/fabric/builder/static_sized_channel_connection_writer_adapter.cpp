@@ -189,7 +189,8 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::pack_downstream_noc_x_rt_arg
  * X and Y have separate uint32s
  */
 uint32_t StaticSizedChannelConnectionWriterAdapter::encode_noc_ord_for_2d(
-    const std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_receiver_channels>& downstream_edms_connected_by_vc,
+    const std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_max_receiver_channels>&
+        downstream_edms_connected_by_vc,
     uint32_t vc_idx,
     const std::function<uint32_t(CoreCoord)>& get_noc_ord) const {
     if (vc_idx == 1) {
