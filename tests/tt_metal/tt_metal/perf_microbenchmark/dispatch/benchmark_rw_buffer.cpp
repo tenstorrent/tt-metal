@@ -126,7 +126,7 @@ static void BM_read(benchmark::State& state, const std::shared_ptr<MeshDevice>& 
     state.SetBytesProcessed(transfer_size * state.iterations());
 }
 
-static void BM_read_pinned_memory(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_device) {
+static void BM_read_pinned_memory(benchmark::State& state, const std::shared_ptr<MeshDevice>& mesh_device) {
     auto page_size = state.range(0);
     auto transfer_size = state.range(1);
     auto buffer_type = BUFFER_TYPES[state.range(2)];
@@ -147,7 +147,7 @@ static void BM_read_pinned_memory(benchmark::State& state, std::shared_ptr<MeshD
 
     // Allocate destination host buffer with 16-byte alignment
     auto dst_storage = std::make_shared<vector_aligned<std::uint8_t>>(static_cast<std::size_t>(transfer_size), 0);
-    auto aligned_ptr = reinterpret_cast<void*>(dst_storage->data());
+    void* aligned_ptr = reinterpret_cast<void*>(dst_storage->data());
 
     // Create HostBuffer on top of aligned memory
     HostBuffer host_buffer(

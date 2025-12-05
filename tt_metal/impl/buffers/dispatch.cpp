@@ -818,7 +818,7 @@ void issue_read_buffer_dispatch_command_sequence(
         return;
     }
 
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
 
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
     uint32_t num_worker_counters = sub_device_ids.size();
@@ -853,7 +853,7 @@ void issue_read_buffer_dispatch_command_sequence(
 
     // Build calculator with the chosen path
     tt::tt_metal::DeviceCommandCalculator calculator;
-    for (int i = 0; i < static_cast<int>(num_worker_counters); ++i) {
+    for (uint32_t i = 0; i < num_worker_counters; ++i) {
         calculator.add_dispatch_wait();
     }
     calculator.add_prefetch_stall();

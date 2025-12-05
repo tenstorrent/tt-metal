@@ -361,7 +361,7 @@ experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::Me
 }
 
 void HostBufferSetPinnedMemory(HostBuffer& host_buffer, std::shared_ptr<PinnedMemory> pinned_memory) {
-    host_buffer.pinned_memory_ = pinned_memory;
+    host_buffer.pinned_memory_ = std::move(pinned_memory);
 }
 
 std::shared_ptr<PinnedMemory> HostBufferGetPinnedMemory(HostBuffer& host_buffer) { return host_buffer.pinned_memory_; }
