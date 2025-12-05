@@ -717,11 +717,11 @@ private:
             // assign hops for 2d LL and 1D
             if (src_node_id.mesh_id == dst_node_ids[0].mesh_id) {
                 hops = this->fixture_->get_hops_to_chip(src_node_id, dst_node_ids[0]);
-                // If the topology is NeighborExchange, make sure that all traffic patterns are single-hop.
-                if (fixture_->get_topology() == tt::tt_fabric::Topology::NeighborExchange) {
-                    fixture_->validate_single_hop(hops.value());
-                }
             }
+        }
+        // If the topology is NeighborExchange, make sure that all traffic patterns are single-hop.
+        if (fixture_->get_topology() == tt::tt_fabric::Topology::NeighborExchange) {
+            fixture_->validate_single_hop(hops.value());
         }
 
         // for 2d, we need to specify the mcast start node id

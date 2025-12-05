@@ -784,6 +784,10 @@ private:
             "Test '{}': Multicast pattern for sender on device {} must have a destination specified by 'hops'.",
             test.name,
             sender.device);
+        TT_FATAL(
+            test.fabric_setup.topology != tt::tt_fabric::Topology::NeighborExchange,
+            "Test '{}': Multicast pattern is not supported for NeighborExchange topology.",
+            test.name);
     }
 
     void validate_sync_pattern(
