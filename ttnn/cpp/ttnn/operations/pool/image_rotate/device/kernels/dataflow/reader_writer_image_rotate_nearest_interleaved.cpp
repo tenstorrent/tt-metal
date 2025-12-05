@@ -33,6 +33,8 @@ void kernel_main() {
     constexpr uint32_t input_height = get_compile_time_arg_val(4);
     constexpr uint32_t input_width = get_compile_time_arg_val(5);
     constexpr uint32_t input_channels = get_compile_time_arg_val(6);
+    constexpr uint32_t enable_split_reader = get_compile_time_arg_val(7);
+    constexpr uint32_t reader_id = get_compile_time_arg_val(8);
 
     // Reinterpret rotation parameter bits as float
     union {
@@ -50,8 +52,8 @@ void kernel_main() {
     const float center_x = cx_conv.f;
     const float center_y = cy_conv.f;
 
-    // Tensor accessor for input tensor (starts at compile-time arg index 7)
-    constexpr auto src_args = TensorAccessorArgs<7>();
+    // Tensor accessor for input tensor (starts at compile-time arg index 9)
+    constexpr auto src_args = TensorAccessorArgs<9>();
     const auto input_tensor_accessor = TensorAccessor(src_args, input_addr, input_stick_nbytes);
 
     // Tensor accessor for output tensor
@@ -63,8 +65,17 @@ void kernel_main() {
     uint32_t l1_write_addr = get_write_ptr(output_cb_index);
 
     // Process each output pixel
-    for (uint32_t local_stick_idx = 0; local_stick_idx < num_sticks; local_stick_idx++) {
-        const uint32_t global_stick_idx = start_stick_id + local_stick_idx;
+    // For split reader mode, each reader processes alternate pixels
+    const uint32_t stride = enable_split_reader ? 2 : 1;
+    const uint32_t initial_offset = enable_split_reader ? reader_id : 0;
+
+    for (uint32_t local_stick_idx = 0; local_stick_idx < num_sticks; local_stick_idx += stride) {
+        const uint32_t global_stick_idx = start_stick_id + local_stick_idx + initial_offset;
+
+        // Skip if we've exceeded the total number of sticks
+        if (global_stick_idx >= start_stick_id + num_sticks) {
+            break;
+        }
 
         // Decode output pixel position from global stick index (NHWC format)
         const uint32_t batch_idx = global_stick_idx / (input_height * input_width);
