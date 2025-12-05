@@ -20,7 +20,7 @@ void kernel_main() {
     const uint32_t cND = get_arg_val<uint32_t>(9);
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr auto dst_args = TensorAccessorArgs<1>();
+    constexpr auto dst_args = TensorAccessorArgs<1, 0>();
 
 #if !DST_SHARDED
     constexpr uint32_t onetile = 1;
