@@ -15,7 +15,6 @@ PadTileCoreProgramFactory::cached_program_t PadTileCoreProgramFactory::create(
     const auto& a = tensor_args.input;
     const auto& pad_value = operation_attributes.pad_value;
     const auto& output_padded_shape = operation_attributes.output_padded_shape;
-    const auto& input_tensor_start = operation_attributes.input_tensor_start;
     tt::tt_metal::Program program{};
 
     CoreRange core({0, 0}, {0, 0});
@@ -36,7 +35,7 @@ PadTileCoreProgramFactory::cached_program_t PadTileCoreProgramFactory::create(
     log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
     log_debug(tt::LogOp, "single_tile_size: {}", single_tile_size);
     log_debug(tt::LogOp, "output_tensor_shape: {}", output_padded_shape);
-    log_debug(tt::LogOp, "input_tensor_start: {}", input_tensor_start);
+    log_debug(tt::LogOp, "input_tensor_start: {}", operation_attributes.input_tensor_start);
     log_debug(tt::LogOp, "pad_value: {}", pad_value);
 
     uint32_t src0_cb_index = 0;
