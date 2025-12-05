@@ -130,7 +130,6 @@ def _collect_running_operations(
     aggregations: dict[int, RunningOperationAggregation] = {}
 
     for device in run_checks.devices:
-        print(device.unique_id)
         device_label = device_description_serializer(device_descriptions[device.unique_id])
         for block_type in BLOCK_TYPES_TO_CHECK:
             locations = run_checks.block_locations[device].get(block_type, [])
