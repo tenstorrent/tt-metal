@@ -24,11 +24,7 @@ using namespace tt::tt_metal;
 constexpr uint32_t NEAREST_BUFFERING_FACTOR = 2;
 
 // Helper function to decide whether to use split reader for nearest mode
-static bool should_use_split_reader_nearest(const Tensor& input_tensor, const Tensor& output_tensor) {
-    // Enable split reader for nearest mode to improve performance by distributing work
-    // Similar to grid_sample nearest mode
-    return true;
-}
+static bool should_use_split_reader_nearest(const Tensor& input_tensor, const Tensor& output_tensor) { return true; }
 
 // Helper to convert float to bfloat16 representation (nearest-specific)
 static uint16_t nearest_float_to_bfloat16(float value) {

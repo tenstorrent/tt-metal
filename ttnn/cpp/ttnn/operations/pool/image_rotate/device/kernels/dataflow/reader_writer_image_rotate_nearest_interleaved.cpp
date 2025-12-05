@@ -60,71 +60,127 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     const auto output_tensor_accessor = TensorAccessor(dst_args, output_addr, output_stick_nbytes);
 
-    // Initialize CB
-    cb_reserve_back(output_cb_index, 1);
-    uint32_t l1_write_addr = get_write_ptr(output_cb_index);
-
     // Process each output pixel
     // For split reader mode, each reader processes alternate pixels
-    const uint32_t stride = enable_split_reader ? 2 : 1;
-    const uint32_t initial_offset = enable_split_reader ? reader_id : 0;
+    if constexpr (enable_split_reader) {
+        // Split mode: process every other stick starting from reader_id offset
+        for (uint32_t local_stick_idx = reader_id; local_stick_idx < num_sticks; local_stick_idx += 2) {
+            const uint32_t global_stick_idx = start_stick_id + local_stick_idx;
 
-    for (uint32_t local_stick_idx = 0; local_stick_idx < num_sticks; local_stick_idx += stride) {
-        const uint32_t global_stick_idx = start_stick_id + local_stick_idx + initial_offset;
+            // Reserve CB space for this stick
+            cb_reserve_back(output_cb_index, 1);
+            uint32_t l1_write_addr = get_write_ptr(output_cb_index);
 
-        // Skip if we've exceeded the total number of sticks
-        if (global_stick_idx >= start_stick_id + num_sticks) {
-            break;
-        }
+            // Decode output pixel position from global stick index (NHWC format)
+            const uint32_t batch_idx = global_stick_idx / (input_height * input_width);
+            const uint32_t spatial_idx = global_stick_idx % (input_height * input_width);
+            const uint32_t y_out = spatial_idx / input_width;
+            const uint32_t x_out = spatial_idx % input_width;
 
-        // Decode output pixel position from global stick index (NHWC format)
-        const uint32_t batch_idx = global_stick_idx / (input_height * input_width);
-        const uint32_t spatial_idx = global_stick_idx % (input_height * input_width);
-        const uint32_t y_out = spatial_idx / input_width;
-        const uint32_t x_out = spatial_idx % input_width;
+            // Compute source coordinates using inverse rotation
+            // Translate to center-relative coordinates
+            const float x_centered = static_cast<float>(x_out) - center_x;
+            const float y_centered = static_cast<float>(y_out) - center_y;
 
-        // Compute source coordinates using inverse rotation
-        // Translate to center-relative coordinates
-        const float x_centered = static_cast<float>(x_out) - center_x;
-        const float y_centered = static_cast<float>(y_out) - center_y;
+            // Apply inverse rotation
+            const float x_in = x_centered * cos_angle - y_centered * sin_angle + center_x;
+            const float y_in = x_centered * sin_angle + y_centered * cos_angle + center_y;
 
-        // Apply inverse rotation
-        const float x_in = x_centered * cos_angle - y_centered * sin_angle + center_x;
-        const float y_in = x_centered * sin_angle + y_centered * cos_angle + center_y;
+            // Round to nearest pixel (nearest interpolation)
+            const int32_t nearest_x = static_cast<int32_t>(round(x_in));
+            const int32_t nearest_y = static_cast<int32_t>(round(y_in));
 
-        // Round to nearest pixel (nearest interpolation)
-        const int32_t nearest_x = static_cast<int32_t>(round(x_in));
-        const int32_t nearest_y = static_cast<int32_t>(round(y_in));
+            // Check if the nearest pixel is in bounds
+            const bool x_valid = is_coordinate_valid(nearest_x, input_width);
+            const bool y_valid = is_coordinate_valid(nearest_y, input_height);
 
-        // Check if the nearest pixel is in bounds
-        const bool x_valid = is_coordinate_valid(nearest_x, input_width);
-        const bool y_valid = is_coordinate_valid(nearest_y, input_height);
-
-        if (x_valid && y_valid) {
-            // Read the nearest neighbor pixel
-            const uint32_t input_stick_index =
-                batch_idx * (input_height * input_width) + nearest_y * input_width + nearest_x;
-            const uint64_t input_noc_addr = input_tensor_accessor.get_noc_addr(input_stick_index);
-            noc_async_read(input_noc_addr, l1_write_addr, input_stick_nbytes);
-            noc_async_read_barrier();
-        } else {
-            // Fill the entire stick with the fill value
-            volatile tt_l1_ptr uint16_t* output_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);
-            for (uint32_t i = 0; i < input_channels; i++) {
-                output_ptr[i] = static_cast<uint16_t>(fill_value_bf16);
+            if (x_valid && y_valid) {
+                // Read the nearest neighbor pixel
+                const uint32_t input_stick_index =
+                    batch_idx * (input_height * input_width) + nearest_y * input_width + nearest_x;
+                const uint64_t input_noc_addr = input_tensor_accessor.get_noc_addr(input_stick_index);
+                noc_async_read(input_noc_addr, l1_write_addr, input_stick_nbytes);
+                noc_async_read_barrier();
+            } else {
+                // Fill the entire stick with the fill value
+                volatile tt_l1_ptr uint16_t* output_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);
+                for (uint32_t i = 0; i < input_channels; i++) {
+                    output_ptr[i] = static_cast<uint16_t>(fill_value_bf16);
+                }
             }
+
+            // Publish data to CB
+            cb_push_back(output_cb_index, 1);
+
+            const uint32_t output_stick_index = global_stick_idx;
+            const uint64_t output_noc_addr = output_tensor_accessor.get_noc_addr(output_stick_index);
+
+            // Read from CB and write to DRAM
+            cb_wait_front(output_cb_index, 1);
+            uint32_t l1_read_addr = get_read_ptr(output_cb_index);
+            noc_async_write(l1_read_addr, output_noc_addr, output_stick_nbytes);
+            noc_async_write_barrier();
+            cb_pop_front(output_cb_index, 1);
         }
+    } else {
+        // Non-split mode: process all sticks sequentially
+        for (uint32_t local_stick_idx = 0; local_stick_idx < num_sticks; local_stick_idx++) {
+            const uint32_t global_stick_idx = start_stick_id + local_stick_idx;
 
-        // Write the output stick to DRAM
-        cb_push_back(output_cb_index, 1);
+            // Reserve CB space for this stick
+            cb_reserve_back(output_cb_index, 1);
+            uint32_t l1_write_addr = get_write_ptr(output_cb_index);
 
-        const uint32_t output_stick_index = global_stick_idx;
-        const uint64_t output_noc_addr = output_tensor_accessor.get_noc_addr(output_stick_index);
+            // Decode output pixel position from global stick index (NHWC format)
+            const uint32_t batch_idx = global_stick_idx / (input_height * input_width);
+            const uint32_t spatial_idx = global_stick_idx % (input_height * input_width);
+            const uint32_t y_out = spatial_idx / input_width;
+            const uint32_t x_out = spatial_idx % input_width;
 
-        cb_wait_front(output_cb_index, 1);
-        uint32_t l1_read_addr = get_read_ptr(output_cb_index);
-        noc_async_write(l1_read_addr, output_noc_addr, output_stick_nbytes);
-        noc_async_write_barrier();
-        cb_pop_front(output_cb_index, 1);
+            // Compute source coordinates using inverse rotation
+            // Translate to center-relative coordinates
+            const float x_centered = static_cast<float>(x_out) - center_x;
+            const float y_centered = static_cast<float>(y_out) - center_y;
+
+            // Apply inverse rotation
+            const float x_in = x_centered * cos_angle - y_centered * sin_angle + center_x;
+            const float y_in = x_centered * sin_angle + y_centered * cos_angle + center_y;
+
+            // Round to nearest pixel (nearest interpolation)
+            const int32_t nearest_x = static_cast<int32_t>(round(x_in));
+            const int32_t nearest_y = static_cast<int32_t>(round(y_in));
+
+            // Check if the nearest pixel is in bounds
+            const bool x_valid = is_coordinate_valid(nearest_x, input_width);
+            const bool y_valid = is_coordinate_valid(nearest_y, input_height);
+
+            if (x_valid && y_valid) {
+                // Read the nearest neighbor pixel
+                const uint32_t input_stick_index =
+                    batch_idx * (input_height * input_width) + nearest_y * input_width + nearest_x;
+                const uint64_t input_noc_addr = input_tensor_accessor.get_noc_addr(input_stick_index);
+                noc_async_read(input_noc_addr, l1_write_addr, input_stick_nbytes);
+                noc_async_read_barrier();
+            } else {
+                // Fill the entire stick with the fill value
+                volatile tt_l1_ptr uint16_t* output_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);
+                for (uint32_t i = 0; i < input_channels; i++) {
+                    output_ptr[i] = static_cast<uint16_t>(fill_value_bf16);
+                }
+            }
+
+            // Publish data to CB
+            cb_push_back(output_cb_index, 1);
+
+            const uint32_t output_stick_index = global_stick_idx;
+            const uint64_t output_noc_addr = output_tensor_accessor.get_noc_addr(output_stick_index);
+
+            // Read from CB and write to DRAM
+            cb_wait_front(output_cb_index, 1);
+            uint32_t l1_read_addr = get_read_ptr(output_cb_index);
+            noc_async_write(l1_read_addr, output_noc_addr, output_stick_nbytes);
+            noc_async_write_barrier();
+            cb_pop_front(output_cb_index, 1);
+        }
     }
 }
