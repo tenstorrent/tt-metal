@@ -91,23 +91,6 @@ class TrainingConfig:
         self.weight_decay = float(tc.get("weight_decay", 0.01))
         self.checkpoint_dir = tc.get("checkpoint_dir", "checkpoints")
 
-    def update_config(self, yaml_config: dict):
-        """Update training configuration from another YAML config.
-
-        Args:
-            yaml_config: Dictionary containing configuration
-        """
-        tc = yaml_config.get("training_config", {})
-        self.batch_size = int(tc.get("batch_size", self.batch_size))
-        self.steps = int(tc.get("max_steps", self.steps))
-        self.epochs = int(tc.get("num_epochs", self.epochs))
-        self.eval_every = int(tc.get("eval_every", self.eval_every))
-        self.save_every = int(tc.get("model_save_interval", self.save_every))
-        self.gradient_accumulation_steps = int(
-            tc.get("gradient_accumulation_steps", self.gradient_accumulation_steps)
-        )
-        self.checkpoint_dir = tc.get("checkpoint_dir", self.checkpoint_dir)
-
 
 class TransformerConfig:
     """Configuration for transformer model hyperparameters."""
@@ -151,47 +134,6 @@ class TransformerConfig:
                 "original_context_length", None
             )
 
-    def update_config(self, yaml_config: dict):
-        """Update transformer configuration from another YAML config.
-
-        Args:
-            yaml_config: Dictionary containing configuration
-        """
-        if "transformer_config" not in yaml_config:
-            return
-
-        tc = yaml_config.get("transformer_config", {})
-        self.runner_type = tc.get("runner_type", self.runner_type)
-        self.num_heads = int(tc.get("num_heads", self.num_heads))
-        self.embedding_dim = int(tc.get("embedding_dim", self.embedding_dim))
-        self.dropout_prob = float(tc.get("dropout_prob", self.dropout_prob))
-        self.num_blocks = int(tc.get("num_blocks", self.num_blocks))
-        self.vocab_size = int(tc.get("vocab_size", self.vocab_size))
-        self.weight_tying = tc.get("weight_tying", self.weight_tying)
-        self.max_sequence_length = int(
-            tc.get("max_sequence_length", self.max_sequence_length)
-        )
-
-        self.intermediate_dim = tc.get("intermediate_dim", self.intermediate_dim)
-        self.theta = tc.get("theta", self.theta)
-        self.num_groups = tc.get("num_groups", self.num_groups)
-
-        if "rope_scaling" in tc:
-            self.rope = tc.get("rope_scaling", self.rope)
-            if self.rope:
-                self.scaling_factor = self.rope.get(
-                    "scaling_factor", self.scaling_factor
-                )
-                self.high_freq_factor = self.rope.get(
-                    "high_freq_factor", self.high_freq_factor
-                )
-                self.low_freq_factor = self.rope.get(
-                    "low_freq_factor", self.low_freq_factor
-                )
-                self.original_context_length = self.rope.get(
-                    "original_context_length", self.original_context_length
-                )
-
 
 class SchedulerConfig:
     """Configuration for learning rate scheduler."""
@@ -215,24 +157,6 @@ class SchedulerConfig:
         self.beta1_end = float(sc.get("beta1_end", 0.95))
         self.beta1_warmup_steps = int(sc.get("beta1_warmup_steps", 0))
 
-    def update_config(self, yaml_config: dict):
-        """Update scheduler configuration from another YAML config.
-
-        Args:
-            yaml_config: Dictionary containing configuration
-        """
-        sc = yaml_config.get("scheduler_config", {})
-        self.max_lr = float(sc.get("max_lr", self.max_lr))
-        self.min_lr = float(sc.get("min_lr", self.min_lr))
-        self.warmup_steps = int(sc.get("warmup_steps", self.warmup_steps))
-        self.hold_steps = int(sc.get("hold_steps", self.hold_steps))
-
-        # optional momentum warmup (beta1 ramp)
-        self.beta1_start = float(sc.get("beta1_start", self.beta1_start))
-        self.beta1_end = float(sc.get("beta1_end", self.beta1_end))
-        self.beta1_warmup_steps = int(
-            sc.get("beta1_warmup_steps", self.beta1_warmup_steps)
-        )
 
 
 class PipelineParallelHostConfig:
@@ -271,6 +195,24 @@ class MultiHostConfig:
             PipelineParallelHostConfig(pp_cfg) if isinstance(pp_cfg, dict) else None
         )
 
+def yaml_deep_update(original: dict, updates: dict) -> dict:
+    """Recursively update a dictionary with another dictionary.
+
+    Args:
+        original: Original dictionary to be updated
+        updates: Dictionary containing updates
+
+    Returns:
+        Updated dictionary
+    """
+    for key, value in updates.items():
+        if isinstance(value, dict) and key in original and isinstance(
+            original[key], dict
+        ):
+            original[key] = yaml_deep_update(original[key], value)
+        else:
+            original[key] = value
+    return original
 
 def load_config(path: str, configs_root: str = None) -> dict:
     """Load configuration from YAML file.

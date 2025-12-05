@@ -8,7 +8,7 @@ GSM8K Fine-tuning Script
 Fine-tunes a Llama model on the GSM8K math word problems dataset using TT-Metal.
 """
 
-import os, sys
+import os
 import datasets
 import numpy as np
 import torch
@@ -24,6 +24,7 @@ from ttml.common.config import (
     DeviceConfig,
     SchedulerConfig,
     load_config,
+    yaml_deep_update,
 )
 from ttml.common.model_factory import TransformerModelFactory
 from ttml.common.schedulers import SpeedrunScheduler, OptimParamSetter
@@ -342,16 +343,8 @@ def train():
 
         override_config = load_config(override_config_path)
 
-        def deep_update(a: dict, b: dict) -> dict:
-            for k, v in b.items():
-                if k in a and isinstance(a[k], dict) and isinstance(v, dict):
-                    deep_update(a[k], v)  # recursive update
-                else:
-                    a[k] = v  # overwrite or add
-            return a
-
-        deep_update(yaml_config, override_config)
-        deep_update(model_config, override_config)
+        yaml_config = yaml_deep_update(yaml_config, override_config)
+        model_config = yaml_deep_update(model_config, override_config)
 
         # pretty output of yaml config
         import yaml
