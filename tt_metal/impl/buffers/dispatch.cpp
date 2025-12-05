@@ -645,7 +645,8 @@ void issue_buffer_dispatch_command_sequence(
     if constexpr (std::is_same_v<T, ShardedBufferWriteDispatchParams>) {
         calculator.add_dispatch_write_linear<true, false>(data_size_bytes);
     } else {
-        calculator.add_dispatch_write_paged<false>(dispatch_params.page_size_to_write, num_pages_to_write);
+        calculator.add_dispatch_write_paged<false>(0, 0);  // arguments are don't care for <false>
+        calculator.add_alignment();
     }
     if (not use_pinned_memory) {
         calculator.add_data<false>(data_size_bytes);
