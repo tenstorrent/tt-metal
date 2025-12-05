@@ -1,29 +1,29 @@
 Test Configuration,Metric,Unit,GCC Result,LLVM Result,Difference,% Change,Notes
-Write/32/67108864/0/0,Bandwidth,bytes_per_second,788.244 Mi/s,788.347 Mi/s,0.103 Mi/s,0.01%,Device 0 Page Size 32
-Write/64/67108864/0/0,Bandwidth,bytes_per_second,1.539 Gi/s,1.53824 Gi/s,-0.00076 Gi/s,-0.05%,Device 0 Page Size 64
-Write/128/67108864/0/0,Bandwidth,bytes_per_second,3.06105 Gi/s,3.06398 Gi/s,0.00293 Gi/s,0.10%,Device 0 Page Size 128
-Write/256/67108864/0/0,Bandwidth,bytes_per_second,6.06681 Gi/s,6.07217 Gi/s,0.00536 Gi/s,0.09%,Device 0 Page Size 256
-Write/512/67108864/0/0,Bandwidth,bytes_per_second,11.843 Gi/s,11.8978 Gi/s,0.0548 Gi/s,0.46%,Device 0 Page Size 512
-Write/1024/67108864/0/0,Bandwidth,bytes_per_second,13.7939 Gi/s,13.7203 Gi/s,-0.0736 Gi/s,-0.53%,Device 0 Page Size 1024
-Write/2048/67108864/0/0,Bandwidth,bytes_per_second,13.7434 Gi/s,13.8493 Gi/s,0.1059 Gi/s,0.77%,Device 0 Page Size 2048
-Read/32/67108864/0/0,Bandwidth,bytes_per_second,903.426 Mi/s,903.661 Mi/s,0.235 Mi/s,0.03%,Device 0 Page Size 32
-Read/64/67108864/0/0,Bandwidth,bytes_per_second,1.77425 Gi/s,1.77379 Gi/s,-0.00046 Gi/s,-0.03%,Device 0 Page Size 64
-Read/128/67108864/0/0,Bandwidth,bytes_per_second,3.44194 Gi/s,3.4411 Gi/s,-0.00084 Gi/s,-0.02%,Device 0 Page Size 128
-Read/256/67108864/0/0,Bandwidth,bytes_per_second,6.52 Gi/s,6.50225 Gi/s,-0.01775 Gi/s,-0.27%,Device 0 Page Size 256
-Read/512/67108864/0/0,Bandwidth,bytes_per_second,11.7209 Gi/s,11.7174 Gi/s,-0.0035 Gi/s,-0.03%,Device 0 Page Size 512
-Read/1024/67108864/0/0,Bandwidth,bytes_per_second,13.2402 Gi/s,13.1294 Gi/s,-0.1108 Gi/s,-0.84%,Device 0 Page Size 1024
-Read/2048/67108864/0/0,Bandwidth,bytes_per_second,13.5016 Gi/s,13.1202 Gi/s,-0.3814 Gi/s,-2.82%,Device 0 Page Size 2048
-Write/32/67108864/1/0,Bandwidth,bytes_per_second,761.052 Mi/s,761.234 Mi/s,0.182 Mi/s,0.02%,Device 1 Page Size 32
-Write/64/67108864/1/0,Bandwidth,bytes_per_second,1.48266 Gi/s,1.48307 Gi/s,0.00041 Gi/s,0.03%,Device 1 Page Size 64
-Write/128/67108864/1/0,Bandwidth,bytes_per_second,2.94974 Gi/s,2.95123 Gi/s,0.00149 Gi/s,0.05%,Device 1 Page Size 128
-Write/256/67108864/1/0,Bandwidth,bytes_per_second,5.82676 Gi/s,5.83164 Gi/s,0.00488 Gi/s,0.08%,Device 1 Page Size 256
-Write/512/67108864/1/0,Bandwidth,bytes_per_second,11.4654 Gi/s,11.4272 Gi/s,-0.0382 Gi/s,-0.33%,Device 1 Page Size 512
-Write/1024/67108864/1/0,Bandwidth,bytes_per_second,13.8607 Gi/s,13.6816 Gi/s,-0.1791 Gi/s,-1.29%,Device 1 Page Size 1024
-Write/2048/67108864/1/0,Bandwidth,bytes_per_second,13.7592 Gi/s,13.713 Gi/s,-0.0462 Gi/s,-0.34%,Device 1 Page Size 2048
-Read/32/67108864/1/0,Bandwidth,bytes_per_second,875.609 Mi/s,875.52 Mi/s,-0.089 Mi/s,-0.01%,Device 1 Page Size 32
-Read/64/67108864/1/0,Bandwidth,bytes_per_second,1.69583 Gi/s,1.69569 Gi/s,-0.00014 Gi/s,-0.01%,Device 1 Page Size 64
-Read/128/67108864/1/0,Bandwidth,bytes_per_second,3.29884 Gi/s,3.29656 Gi/s,-0.00228 Gi/s,-0.07%,Device 1 Page Size 128
-Read/256/67108864/1/0,Bandwidth,bytes_per_second,6.25022 Gi/s,6.22638 Gi/s,-0.02384 Gi/s,-0.38%,Device 1 Page Size 256
-Read/512/67108864/1/0,Bandwidth,bytes_per_second,11.2803 Gi/s,11.2776 Gi/s,-0.0027 Gi/s,-0.02%,Device 1 Page Size 512
-Read/1024/67108864/1/0,Bandwidth,bytes_per_second,13.14 Gi/s,13.0479 Gi/s,-0.0921 Gi/s,-0.70%,Device 1 Page Size 1024
-Read/2048/67108864/1/0,Bandwidth,bytes_per_second,13.3396 Gi/s,13.3067 Gi/s,-0.0329 Gi/s,-0.25%,Device 1 Page Size 2048
+Write/32/67108864/0/0,Bandwidth,bytes_per_second,788.244 Mi/s,788.347 Mi/s,0.103 Mi/s,0.01%,Device 0 Page Size 32 - Equivalent (within 1%)
+Write/64/67108864/0/0,Bandwidth,bytes_per_second,1.539 Gi/s,1.53824 Gi/s,-0.00076 Gi/s,-0.05%,Device 0 Page Size 64 - Equivalent (within 1%)
+Write/128/67108864/0/0,Bandwidth,bytes_per_second,3.06105 Gi/s,3.06398 Gi/s,0.00293 Gi/s,0.10%,Device 0 Page Size 128 - Equivalent (within 1%)
+Write/256/67108864/0/0,Bandwidth,bytes_per_second,6.06681 Gi/s,6.07217 Gi/s,0.00536 Gi/s,0.09%,Device 0 Page Size 256 - Equivalent (within 1%)
+Write/512/67108864/0/0,Bandwidth,bytes_per_second,11.843 Gi/s,11.8978 Gi/s,0.0548 Gi/s,0.46%,Device 0 Page Size 512 - Equivalent (within 1%)
+Write/1024/67108864/0/0,Bandwidth,bytes_per_second,13.7939 Gi/s,13.7203 Gi/s,-0.0736 Gi/s,-0.53%,Device 0 Page Size 1024 - Equivalent (within 1%)
+Write/2048/67108864/0/0,Bandwidth,bytes_per_second,13.7434 Gi/s,13.8493 Gi/s,0.1059 Gi/s,0.77%,Device 0 Page Size 2048 - Equivalent (within 1%)
+Read/32/67108864/0/0,Bandwidth,bytes_per_second,903.426 Mi/s,903.661 Mi/s,0.235 Mi/s,0.03%,Device 0 Page Size 32 - Equivalent (within 1%)
+Read/64/67108864/0/0,Bandwidth,bytes_per_second,1.77425 Gi/s,1.77379 Gi/s,-0.00046 Gi/s,-0.03%,Device 0 Page Size 64 - Equivalent (within 1%)
+Read/128/67108864/0/0,Bandwidth,bytes_per_second,3.44194 Gi/s,3.4411 Gi/s,-0.00084 Gi/s,-0.02%,Device 0 Page Size 128 - Equivalent (within 1%)
+Read/256/67108864/0/0,Bandwidth,bytes_per_second,6.52 Gi/s,6.50225 Gi/s,-0.01775 Gi/s,-0.27%,Device 0 Page Size 256 - Equivalent (within 1%)
+Read/512/67108864/0/0,Bandwidth,bytes_per_second,11.7209 Gi/s,11.7174 Gi/s,-0.0035 Gi/s,-0.03%,Device 0 Page Size 512 - Equivalent (within 1%)
+Read/1024/67108864/0/0,Bandwidth,bytes_per_second,13.2402 Gi/s,13.1294 Gi/s,-0.1108 Gi/s,-0.84%,Device 0 Page Size 1024 - Equivalent (within 1%)
+Read/2048/67108864/0/0,Bandwidth,bytes_per_second,13.5016 Gi/s,13.1202 Gi/s,-0.3814 Gi/s,-2.82%,Device 0 Page Size 2048 - GCC 2.82% higher (better)
+Write/32/67108864/1/0,Bandwidth,bytes_per_second,761.052 Mi/s,761.234 Mi/s,0.182 Mi/s,0.02%,Device 1 Page Size 32 - Equivalent (within 1%)
+Write/64/67108864/1/0,Bandwidth,bytes_per_second,1.48266 Gi/s,1.48307 Gi/s,0.00041 Gi/s,0.03%,Device 1 Page Size 64 - Equivalent (within 1%)
+Write/128/67108864/1/0,Bandwidth,bytes_per_second,2.94974 Gi/s,2.95123 Gi/s,0.00149 Gi/s,0.05%,Device 1 Page Size 128 - Equivalent (within 1%)
+Write/256/67108864/1/0,Bandwidth,bytes_per_second,5.82676 Gi/s,5.83164 Gi/s,0.00488 Gi/s,0.08%,Device 1 Page Size 256 - Equivalent (within 1%)
+Write/512/67108864/1/0,Bandwidth,bytes_per_second,11.4654 Gi/s,11.4272 Gi/s,-0.0382 Gi/s,-0.33%,Device 1 Page Size 512 - Equivalent (within 1%)
+Write/1024/67108864/1/0,Bandwidth,bytes_per_second,13.8607 Gi/s,13.6816 Gi/s,-0.1791 Gi/s,-1.29%,Device 1 Page Size 1024 - GCC 1.29% higher (better)
+Write/2048/67108864/1/0,Bandwidth,bytes_per_second,13.7592 Gi/s,13.713 Gi/s,-0.0462 Gi/s,-0.34%,Device 1 Page Size 2048 - Equivalent (within 1%)
+Read/32/67108864/1/0,Bandwidth,bytes_per_second,875.609 Mi/s,875.52 Mi/s,-0.089 Mi/s,-0.01%,Device 1 Page Size 32 - Equivalent (within 1%)
+Read/64/67108864/1/0,Bandwidth,bytes_per_second,1.69583 Gi/s,1.69569 Gi/s,-0.00014 Gi/s,-0.01%,Device 1 Page Size 64 - Equivalent (within 1%)
+Read/128/67108864/1/0,Bandwidth,bytes_per_second,3.29884 Gi/s,3.29656 Gi/s,-0.00228 Gi/s,-0.07%,Device 1 Page Size 128 - Equivalent (within 1%)
+Read/256/67108864/1/0,Bandwidth,bytes_per_second,6.25022 Gi/s,6.22638 Gi/s,-0.02384 Gi/s,-0.38%,Device 1 Page Size 256 - Equivalent (within 1%)
+Read/512/67108864/1/0,Bandwidth,bytes_per_second,11.2803 Gi/s,11.2776 Gi/s,-0.0027 Gi/s,-0.02%,Device 1 Page Size 512 - Equivalent (within 1%)
+Read/1024/67108864/1/0,Bandwidth,bytes_per_second,13.14 Gi/s,13.0479 Gi/s,-0.0921 Gi/s,-0.70%,Device 1 Page Size 1024 - Equivalent (within 1%)
+Read/2048/67108864/1/0,Bandwidth,bytes_per_second,13.3396 Gi/s,13.3067 Gi/s,-0.0329 Gi/s,-0.25%,Device 1 Page Size 2048 - Equivalent (within 1%)
