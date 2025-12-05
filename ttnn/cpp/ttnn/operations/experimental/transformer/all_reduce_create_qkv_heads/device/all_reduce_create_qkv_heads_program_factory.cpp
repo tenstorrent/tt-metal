@@ -36,11 +36,12 @@ namespace {
 
 // Helper function to convert cores to corerangeset
 CoreRangeSet cores_to_corerangeset(const std::vector<CoreCoord>& cores) {
-    std::set<CoreRange> core_ranges;
+    std::vector<CoreRange> core_ranges;
+    core_ranges.reserve(cores.size());
     for (const auto& core : cores) {
-        core_ranges.insert(CoreRange(core, core));
+        core_ranges.push_back(CoreRange(core));
     }
-    return CoreRangeSet(core_ranges);
+    return CoreRangeSet(std::move(core_ranges));
 }
 
 // Helper function to choose worker cores for fused operations
