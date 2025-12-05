@@ -98,6 +98,7 @@ tt_metal::AsicTopology validate_connectivity(
     const std::string& fsd_path,
     const std::string& gsd_yaml_path,
     bool fail_on_warning,
-    PhysicalSystemDescriptor& physical_system_descriptor);
+    PhysicalSystemDescriptor& physical_system_descriptor,
+    std::optional<uint32_t> min_connections = std::nullopt);
 
 }  // namespace tt::scaleout_tools
