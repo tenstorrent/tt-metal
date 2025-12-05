@@ -4,10 +4,10 @@
 
 #include "topology.hpp"
 
-#include "tt_metal/impl/device/device_pool.hpp"
+#include "device/device_manager.hpp"
 #include <host_api.hpp>
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <experimental/fabric/mesh_graph.hpp>
 #include <tt_metal.hpp>
 #include <cstdint>
 #include <map>
@@ -22,17 +22,19 @@
 #include "core_coord.hpp"
 #include "data_types.hpp"
 #include "device.hpp"
-#include "impl/context/metal_context.hpp"
+#include "context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
 #include "kernel_config/fd_kernel.hpp"
 #include "program/program_impl.hpp"
-#include "tt-metalium/program.hpp"
+#include "program.hpp"
 #include <tt_stl/span.hpp>
-#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <experimental/fabric/fabric.hpp>
 #include "system_memory_manager.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <impl/dispatch/dispatch_mem_map.hpp>
+#include "dispatch_mem_map.hpp"
+#include <llrt/tt_cluster.hpp>
+#include "dispatch_core_manager.hpp"
 
 namespace tt::tt_metal {
 
@@ -753,7 +755,8 @@ void configure_dispatch_cores(IDevice* device) {
                 tt_cxy_pair completion_q_writer_location =
                     MetalContext::instance().get_dispatch_core_manager().completion_queue_writer_core(
                         serviced_device_id, channel, cq_id);
-                IDevice* mmio_device = tt::DevicePool::instance().get_active_device(completion_q_writer_location.chip);
+                IDevice* mmio_device = tt::tt_metal::MetalContext::instance().device_manager()->get_active_device(
+                    completion_q_writer_location.chip);
                 uint32_t completion_q_wr_ptr =
                     my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
                 uint32_t completion_q_rd_ptr =

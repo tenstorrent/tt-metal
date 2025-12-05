@@ -6,24 +6,19 @@
 #include "fabric_tensix_builder_impl.hpp"
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <hal.hpp>
+#include <tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "llrt/core_descriptor.hpp"
-#include "tt_metal/impl/device/device_pool.hpp"
-#include "tt_metal/fabric/fabric_context.hpp"
-#include "tt_metal/fabric/fabric_builder_context.hpp"
-#include "tt_metal/fabric/fabric_host_utils.hpp"
-#include "tt_metal/fabric/builder/fabric_builder_config.hpp"
+#include "impl/device/device_manager.hpp"
+#include "fabric_context.hpp"
+#include "fabric_builder_context.hpp"
+#include "fabric_host_utils.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
-#include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
-#include "tt_align.hpp"
-#include <array>
 #include <bit>
 #include <algorithm>
-#include <set>
 #include <utility>
 
 namespace tt::tt_fabric {
@@ -294,8 +289,8 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
         (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG);
     TT_FATAL(!is_TG, "Fabric with tensix extension is not supported for TG");
 
-    const auto& all_active_devices = tt::DevicePool::instance().get_all_active_devices();
-    TT_FATAL(!all_active_devices.empty(), "No active devices found in DevicePool");
+    const auto& all_active_devices = tt::tt_metal::MetalContext::instance().device_manager()->get_all_active_devices();
+    TT_FATAL(!all_active_devices.empty(), "No active devices found in DeviceManager");
 
     // Calculate and cache min/max ethernet channels once for later use
     find_min_max_eth_channels(all_active_devices);
@@ -312,8 +307,8 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
     TT_FATAL(!logical_fabric_mux_cores_.empty(), "No logical fabric mux cores found for device {}", device_id);
 
     // Initialize translated mux cores (coordinates should be same across devices)
-    auto* device = tt::DevicePool::instance().get_active_device(device_id);
-    TT_FATAL(device != nullptr, "Device {} not found in DevicePool", device_id);
+    auto* device = tt::tt_metal::MetalContext::instance().device_manager()->get_active_device(device_id);
+    TT_FATAL(device != nullptr, "Device {} not found in DeviceManager", device_id);
     for (const auto& logical_core : logical_fabric_mux_cores_) {
         CoreCoord translated_core = device->worker_core_from_logical_core(logical_core);
         translated_fabric_or_dispatch_mux_cores_.insert(translated_core);
@@ -495,7 +490,7 @@ std::map<ChannelTypes, uint32_t> FabricTensixDatamoverConfig::calculate_mux_chan
 void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const auto& all_active_devices = tt::DevicePool::instance().get_all_active_devices();
+    const auto& all_active_devices = tt::tt_metal::MetalContext::instance().device_manager()->get_all_active_devices();
 
     // Get buffer size from fabric context
     buffer_size_bytes_full_size_channel_ =

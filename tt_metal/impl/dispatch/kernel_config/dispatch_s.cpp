@@ -14,19 +14,19 @@
 #include "dispatch/command_queue_common.hpp"
 #include "device.hpp"
 #include "dispatch.hpp"
-#include "dispatch/kernel_config/fd_kernel.hpp"
+#include "fd_kernel.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "hal_types.hpp"
 #include "prefetch.hpp"
-#include "impl/context/metal_context.hpp"
-#include "impl/debug/inspector/inspector.hpp"
+#include "context/metal_context.hpp"
+#include "debug/inspector/inspector.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
-#include "tt_metal/impl/device/device_pool.hpp"
-#include <impl/dispatch/dispatch_query_manager.hpp>
-#include <impl/dispatch/dispatch_mem_map.hpp>
+#include "device/device_manager.hpp"
+#include <dispatch/dispatch_query_manager.hpp>
+#include <dispatch/dispatch_mem_map.hpp>
 
 using namespace tt::tt_metal;
 
@@ -103,7 +103,8 @@ void DispatchSKernel::CreateKernel() {
     // num_physical_ethernet_cores is the number of actual available ethernet cores on the current device.
     // virtualize_num_eth_cores is set if the number of virtual cores is greater than the number of actual
     // ethernet cores in the chip.
-    uint32_t num_virtual_active_eth_cores = tt::DevicePool::instance().get_max_num_eth_cores_across_all_devices();
+    uint32_t num_virtual_active_eth_cores =
+        tt::tt_metal::MetalContext::instance().device_manager()->get_max_num_eth_cores_across_all_devices();
     uint32_t num_physical_active_eth_cores =
         MetalContext::instance()
             .get_control_plane()

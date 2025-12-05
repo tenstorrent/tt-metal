@@ -17,32 +17,34 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
-#include "tt_metal/fabric/fabric_host_utils.hpp"
-#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
-#include "tt_metal/impl/debug/dprint_server.hpp"
-#include "tt_metal/impl/debug/inspector/inspector.hpp"
-#include "tt_metal/impl/debug/inspector/data.hpp"
-#include "tt_metal/impl/debug/noc_logging.hpp"
-#include "tt_metal/impl/debug/watcher_server.hpp"
-#include "tt_metal/impl/dispatch/topology.hpp"
-#include "tt_metal/impl/profiler/profiler_state_manager.hpp"
-#include "tt_metal/jit_build/build_env_manager.hpp"
-#include "tt_metal/llrt/get_platform_architecture.hpp"
-#include "tt_metal/llrt/llrt.hpp"
-#include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include "tt_metal/impl/device/device_pool.hpp"
-#include <tt-metalium/distributed_context.hpp>
-#include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include "tt_metal/impl/dispatch/data_collector.hpp"
+#include "fabric/fabric_host_utils.hpp"
+#include "allocator/l1_banking_allocator.hpp"
+#include "debug/dprint_server.hpp"
+#include "debug/inspector/inspector.hpp"
 
-#include <impl/dispatch/dispatch_query_manager.hpp>
-#include <impl/dispatch/dispatch_core_manager.hpp>
+#include <umd/device/types/xy_pair.hpp>
+#include "debug/inspector/data.hpp"
+#include "debug/noc_logging.hpp"
+#include "debug/watcher_server.hpp"
+#include "dispatch/topology.hpp"
+#include "profiler/profiler_state_manager.hpp"
+#include "jit_build/build_env_manager.hpp"
+#include "llrt/get_platform_architecture.hpp"
+#include "llrt/llrt.hpp"
+#include <experimental/fabric/control_plane.hpp>
+#include "device/device_manager.hpp"
+#include <distributed_context.hpp>
+#include <experimental/fabric/fabric.hpp>
+
+#include <tt_metal.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include "dispatch/data_collector.hpp"
+
+#include <dispatch/dispatch_query_manager.hpp>
+#include <dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
-#include <impl/dispatch/dispatch_mem_map.hpp>
-#include "tt_metal/common/executor.hpp"
+#include <dispatch/dispatch_mem_map.hpp>
+#include "common/executor.hpp"
 
 namespace tt::tt_metal {
 
@@ -63,6 +65,28 @@ void validate_worker_l1_size(size_t& worker_l1_size, Hal& hal) {
 }
 
 }  // namespace
+
+void MetalContext::initialize_device_manager(
+    const std::vector<ChipId>& device_ids,
+    uint8_t num_hw_cqs,
+    size_t l1_small_size,
+    size_t trace_region_size,
+    const tt_metal::DispatchCoreConfig& dispatch_core_config,
+    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    size_t worker_l1_size,
+    bool init_profiler,
+    bool initialize_fabric_and_dispatch_fw) {
+    initialize(dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
+    device_manager_->initialize(
+        device_ids,
+        num_hw_cqs,
+        l1_small_size,
+        trace_region_size,
+        l1_bank_remap,
+        worker_l1_size,
+        init_profiler,
+        initialize_fabric_and_dispatch_fw);
+}
 
 void MetalContext::initialize(
     const DispatchCoreConfig& dispatch_core_config,
@@ -392,6 +416,8 @@ MetalContext::MetalContext() {
         worker_logical_row_to_virtual_row_.emplace(device_id, std::vector<uint8_t>{});
     }
 
+    device_manager_ = std::make_unique<DeviceManager>();
+
     // We do need to call Cluster teardown at the end of the program, use atexit temporarily until we have clarity on
     // how MetalContext lifetime will work through the API.
     std::atexit([]() { MetalContext::instance().~MetalContext(); });
@@ -407,7 +433,10 @@ std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_di
     return distributed_context_;
 }
 
-MetalContext::~MetalContext() { teardown_base_objects(); }
+MetalContext::~MetalContext() {
+    device_manager_.reset();
+    teardown_base_objects();
+}
 
 llrt::RunTimeOptions& MetalContext::rtoptions() { return rtoptions_; }
 
@@ -538,7 +567,7 @@ void MetalContext::set_custom_fabric_topology(
     const std::string& mesh_graph_desc_file,
     const std::map<tt_fabric::FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     TT_FATAL(
-        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().empty(),
+        !device_manager_->is_initialized() || device_manager_->get_all_active_devices().empty(),
         "Modifying control plane requires no devices to be active");
     // Set the user specified mesh graph descriptor file and FabricNodeID to physical chip mapping.
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_ = logical_mesh_chip_id_to_physical_chip_id_mapping;
@@ -548,7 +577,7 @@ void MetalContext::set_custom_fabric_topology(
 
 void MetalContext::set_default_fabric_topology() {
     TT_FATAL(
-        !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().empty(),
+        !device_manager_->is_initialized() || device_manager_->get_all_active_devices().empty(),
         "Modifying control plane requires no devices to be active");
     // Reset the control plane, since it was initialized with custom parameters.
     control_plane_.reset();
