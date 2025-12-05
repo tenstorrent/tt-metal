@@ -1300,8 +1300,6 @@ void kernel_main() {
 
         // Move to next page
         cmd_ptr = round_up_pow2(cmd_ptr, dispatch_cb_page_size);
-        // DPRINT << "[dispatch_" << is_h_variant << is_d_variant << "] bottom: cmd_ptr:0x" << HEX() << cmd_ptr << ",
-        // fence:0x" << cb_fence << ENDL();
     }
 
     dispatch_cb_reader.release_all_pages(cmd_ptr);
