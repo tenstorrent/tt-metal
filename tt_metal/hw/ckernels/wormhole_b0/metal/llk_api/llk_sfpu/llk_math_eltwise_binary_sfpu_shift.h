@@ -7,6 +7,7 @@
 #include "llk_math_eltwise_binary_sfpu_init.h"
 #include "llk_math_eltwise_binary_sfpu_params.h"
 #include "ckernel_sfpu_shift.h"
+#include "llk_defs.h"
 
 namespace ckernel {
 
@@ -24,7 +25,11 @@ inline void llk_math_eltwise_binary_sfpu_left_shift(
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
     _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_binary_left_shift<APPROXIMATE, 8, INSTRUCTION_MODE, SIGN_MAGNITUDE_FORMAT>,
+        ckernel::sfpu::calculate_binary_left_shift<
+            (APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise),
+            8,
+            INSTRUCTION_MODE,
+            SIGN_MAGNITUDE_FORMAT>,
         dst_index0,
         dst_index1,
         odst,
@@ -40,7 +45,11 @@ inline void llk_math_eltwise_binary_sfpu_right_shift(
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
     _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_binary_right_shift<APPROXIMATE, 8, INSTRUCTION_MODE, SIGN_MAGNITUDE_FORMAT>,
+        ckernel::sfpu::calculate_binary_right_shift<
+            (APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise),
+            8,
+            INSTRUCTION_MODE,
+            SIGN_MAGNITUDE_FORMAT>,
         dst_index0,
         dst_index1,
         odst,
@@ -56,7 +65,11 @@ inline void llk_math_eltwise_binary_sfpu_logical_right_shift(
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
     _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::_calculate_logical_right_shift_<APPROXIMATE, 8, INSTRUCTION_MODE, SIGN_MAGNITUDE_FORMAT>,
+        ckernel::sfpu::_calculate_logical_right_shift_<
+            (APPROXIMATE ? ApproximationMode::Fast : ApproximationMode::Precise),
+            8,
+            INSTRUCTION_MODE,
+            SIGN_MAGNITUDE_FORMAT>,
         dst_index0,
         dst_index1,
         odst,
