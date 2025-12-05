@@ -553,11 +553,6 @@ function computeStatusChanges(filteredGrouped, filteredPreviousGrouped, context)
       const commitUrl = info?.head_sha ? `https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${info.head_sha}` : undefined;
       const commitShort = info?.head_sha ? info.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
 
-      // MOCK REGRESSION FOR TESTING
-      if (name === 'galaxy-quick') {
-         change = 'success_to_fail';
-      }
-
       changes.push({
         name,
         previous,
@@ -602,6 +597,19 @@ function computeStatusChanges(filteredGrouped, filteredPreviousGrouped, context)
         });
       }
     }
+  }
+
+  // MOCK INJECTION
+  const mockName = 'galaxy-quick';
+  if (!regressedDetails.some(r => r.name === mockName)) {
+    regressedDetails.push({
+      name: mockName,
+      workflow_path: '.github/workflows/galaxy-quick.yaml',
+      run_id: 123456,
+      run_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions`,
+      created_at: new Date().toISOString(),
+      failing_jobs: ['quick-bh-glx-health'] // Pre-populated for trigger logic
+    });
   }
 
   return { changes, regressedDetails, stayedFailingDetails };
@@ -694,11 +702,6 @@ async function enrichRegressions(regressedDetails, filteredGrouped, errorSnippet
           })();
           item.failing_jobs = failingJobNames;
         } catch (_) { /* ignore */ }
-
-        // MOCK REGRESSION FOR TESTING
-        if (item.name === 'galaxy-quick') {
-           item.failing_jobs = ['quick-bh-glx-health'];
-        }
 
         item.repeated_errors = [];
         const changeRef = changes.find(c => c.name === item.name && c.change === 'success_to_fail');
