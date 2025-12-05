@@ -1,0 +1,25 @@
+#loc1 = loc("p0.2")
+#loc2 = loc("p1.7")
+module @SyncTensorsGraph.16 attributes {mhlo.cross_program_prefetches = [], mhlo.input_output_alias = [], mhlo.is_dynamic = false, mhlo.use_auto_spmd_partitioning = false, ttcore.meshes = #ttcore.meshes<[<"mesh" = 1x1>]>} {
+  ttcore.device_module {
+    builtin.module @SyncTensorsGraph.16 attributes {mhlo.cross_program_prefetches = [], mhlo.input_output_alias = [], mhlo.is_dynamic = false, mhlo.use_auto_spmd_partitioning = false, ttcore.meshes = #ttcore.meshes<[<"mesh" = 1x1>]>} {
+      func.func @main(%arg0: tensor<1x12x39x128xbf16> {ttcore.argument_type = #ttcore.argument_type<input>, ttcore.shard_status = #ttcore.shard_status<unsharded>, ttir.name = "args_0"} loc("p0.2"), %arg1: tensor<1x12x39x128xbf16> {ttcore.argument_type = #ttcore.argument_type<input>, ttcore.shard_status = #ttcore.shard_status<unsharded>, ttir.name = "args_1"} loc("p1.7")) -> (tensor<1x12x39x39xbf16> {ttcore.shard_status = #ttcore.shard_status<unsharded>}) {
+        %0 = "ttir.constant"() <{value = dense<8.837890e-02> : tensor<1x12x39x39xbf16>}> : () -> tensor<1x12x39x39xbf16> loc(#loc)
+        %1 = "ttir.reshape"(%arg1) <{shape = [12 : i32, 39 : i32, 128 : i32]}> : (tensor<1x12x39x128xbf16>) -> tensor<12x39x128xbf16> loc(#loc3)
+        %2 = "ttir.permute"(%arg0) <{permutation = array<i64: 0, 1, 3, 2>}> : (tensor<1x12x39x128xbf16>) -> tensor<1x12x128x39xbf16> loc(#loc4)
+        %3 = "ttir.reshape"(%2) <{shape = [12 : i32, 128 : i32, 39 : i32]}> : (tensor<1x12x128x39xbf16>) -> tensor<12x128x39xbf16> loc(#loc5)
+        %4 = "ttir.dot_general"(%1, %3) <{batch_dims_lhs = array<i64: 0>, batch_dims_rhs = array<i64: 0>, contract_dims_lhs = array<i64: 2>, contract_dims_rhs = array<i64: 1>}> : (tensor<12x39x128xbf16>, tensor<12x128x39xbf16>) -> tensor<12x39x39xbf16> loc(#loc6)
+        %5 = "ttir.reshape"(%4) <{shape = [1 : i32, 12 : i32, 39 : i32, 39 : i32]}> : (tensor<12x39x39xbf16>) -> tensor<1x12x39x39xbf16> loc(#loc7)
+        %6 = "ttir.multiply"(%5, %0) : (tensor<1x12x39x39xbf16>, tensor<1x12x39x39xbf16>) -> tensor<1x12x39x39xbf16> loc(#loc8)
+        return %6 : tensor<1x12x39x39xbf16> loc(#loc)
+      } loc(#loc)
+    } loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+#loc = loc(unknown)
+#loc3 = loc("reshape.10")
+#loc4 = loc("transpose.4")
+#loc5 = loc("reshape.6")
+#loc6 = loc("dot.11")
+#loc7 = loc("reshape.12")
+#loc8 = loc("multiply.14")
