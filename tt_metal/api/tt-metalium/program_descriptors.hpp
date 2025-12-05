@@ -98,7 +98,7 @@ struct KernelDescriptor {
     using CompileTimeArgs = std::vector<uint32_t>;
     using Defines = std::vector<std::pair<std::string, std::string>>;
     using CoreRuntimeArgs = std::vector<uint32_t>;
-    using RuntimeArgs = std::vector<std::vector<CoreRuntimeArgs>>;
+    using RuntimeArgs = std::vector<std::pair<CoreCoord, CoreRuntimeArgs>>;
     using CommonRuntimeArgs = std::vector<uint32_t>;
     using ConfigDescriptor = std::variant<
         ReaderConfigDescriptor,
@@ -115,7 +115,8 @@ struct KernelDescriptor {
     CompileTimeArgs compile_time_args;
     Defines defines;
 
-    // triple-nested vectors, where runtime_args[i][j] is a vector of rt args for core(i, j)
+    // vector of pairs, where runtime_args[i].first is the core coord and runtime_args[i].second is the vector of
+    // runtime args for that core
     RuntimeArgs runtime_args;
     CommonRuntimeArgs common_runtime_args;
 
