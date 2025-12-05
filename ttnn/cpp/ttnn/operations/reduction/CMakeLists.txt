@@ -34,8 +34,9 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        argmax/device/argmax_op.cpp
-        argmax/device/argmax_program_factory.cpp
+        argmax/device/argmax_device_operation.cpp
+        argmax/device/argmax_multi_core_program_factory.cpp
+        argmax/device/argmax_single_core_program_factory.cpp
         argmax/argmax.cpp
         accumulation/accumulation_common.cpp
         accumulation/cumprod/cumprod.cpp
@@ -52,12 +53,16 @@ target_sources(
         moe/device/moe_program_factory.cpp
         moe/moe.cpp
         prod/device/prod_all_program_factory.cpp
-        generic/device/single_core_hw/reduce_op_single_core_hw.cpp
-        generic/device/multi_core_h/reduce_op_multi_core_h.cpp
-        generic/device/multi_core_w/reduce_op_multi_core_w.cpp
+        generic/device/reduce_op_device_operation.cpp
+        generic/device/reduce_op_single_core_hw_program_factory.cpp
+        generic/device/reduce_op_multi_core_h_program_factory.cpp
+        generic/device/reduce_op_multi_core_w_program_factory.cpp
         generic/device/reduce_op.cpp
+        generic/device/common.cpp
         generic/generic_reductions.cpp
+        prod/device/prod_all_device_operation.cpp
         prod/device/prod_nc_op.cpp
+        prod/device/prod_nc_device_operation.cpp
         prod/device/prod_nc_program_factory.cpp
         prod/device/prod_op_all.cpp
         prod/prod.cpp
