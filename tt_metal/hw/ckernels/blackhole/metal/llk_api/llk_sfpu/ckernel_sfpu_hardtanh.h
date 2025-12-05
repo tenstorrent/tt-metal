@@ -9,16 +9,27 @@
 namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-// Hardtanh(x) = max_val if x > max_val, min_val if x < min_val, else x
 inline void calculate_hardtanh(uint param0, uint param1) {
-    sfpi::vFloat min_val = Converter::as_float(param0);
-    sfpi::vFloat max_val = Converter::as_float(param1);
-    // SFPU microcode
+    // Load both params outside the loop for better performance
+    // param0 = min_val -> LREG2, param1 = max_val -> LREG3
+    TT_SFPLOADI(p_sfpu::LREG2, 10, param0 & 0xFFFF);
+    TT_SFPLOADI(p_sfpu::LREG2, 8, param0 >> 16);
+    TT_SFPLOADI(p_sfpu::LREG3, 10, param1 & 0xFFFF);
+    TT_SFPLOADI(p_sfpu::LREG3, 8, param1 >> 16);
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat val = sfpi::dst_reg[0];
-        v_if(val < min_val) { sfpi::dst_reg[0] = min_val; }
-        v_elseif(val > max_val) { sfpi::dst_reg[0] = max_val; }
-        v_endif;
+        // x = max(x, min_val) using LREG2
+        TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
+        TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, 1);
+        TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0);  // store max
+
+        // x = min(x, max_val) using LREG3
+        TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
+        TTI_SFPMOV(0, p_sfpu::LREG3, p_sfpu::LREG1, 0);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, 1);
+        TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);  // store min
+
         sfpi::dst_reg++;
     }
 }
