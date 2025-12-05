@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #include "pad_rm_sharded_height_only_program_factory.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
