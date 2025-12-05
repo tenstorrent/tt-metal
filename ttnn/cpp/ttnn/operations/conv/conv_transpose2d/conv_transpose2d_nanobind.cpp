@@ -7,10 +7,12 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <variant>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
 
 #include "conv_transpose2d.hpp"
 #include "prepare_conv_transpose2d_weights.hpp"
@@ -71,6 +73,7 @@ void bind_conv_transpose2d(nb::module_& mod) {
             conv_config (ttnn.Conv2dConfig, optional): configuration for convolution. Default: None
             compute_config (ttnn.DeviceComputeKernelConfig, optional): configuration for compute kernel. Default: None
             mirror_kernel (bool, optional): Determines if the op should mirror the kernel internally. Should be set to True if the kernel has already been mirrored. Default: False
+            dram_slice_config (ttnn.Conv2dSliceConfig, optional): Configuration for DRAM slicing. If provided, the operation will use DRAM slicing, else will fall back to L1 version. Default: None
             return_output_dim (bool, optional): If true, the op also returns the height and width of the output tensor in [N, H, W, C] format. Default: False
             return_weights_and_bias (bool, optional): If true, the op also returns the preprocessed weight and bias on device. Default: False
 
@@ -95,18 +98,19 @@ void bind_conv_transpose2d(nb::module_& mod) {
                uint32_t input_width,
                std::array<uint32_t, 2> kernel_size,
                std::array<uint32_t, 2> stride,
-               std::array<uint32_t, 2> padding,
+               std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
                std::array<uint32_t, 2> output_padding,
                std::array<uint32_t, 2> dilation,
                uint32_t groups,
                const std::optional<const DataType>& dtype,
-               std::optional<const ttnn::Tensor> bias_tensor,
+               std::optional<ttnn::Tensor>& bias_tensor,
                const std::optional<const Conv2dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
+               const std::optional<const Conv2dSliceConfig>& dram_slice_config,
                bool mirror_kernel,
                const bool return_output_dim,
-               const bool return_weights_and_bias) -> Result {
+               const bool return_weights_and_bias) -> ResultWithOptions {
                 return self(
                     input_tensor,
                     weight_tensor,
@@ -127,6 +131,7 @@ void bind_conv_transpose2d(nb::module_& mod) {
                     conv_config,
                     compute_config,
                     memory_config,
+                    dram_slice_config,
                     mirror_kernel,
                     return_output_dim,
                     return_weights_and_bias);
@@ -151,6 +156,7 @@ void bind_conv_transpose2d(nb::module_& mod) {
             nb::arg("conv_config") = nb::none(),
             nb::arg("compute_config") = nb::none(),
             nb::arg("memory_config") = nb::none(),
+            nb::arg("dram_slice_config") = nb::none(),
             nb::arg("mirror_kernel") = true,
             nb::arg("return_output_dim") = false,
             nb::arg("return_weights_and_bias") = false});
@@ -179,6 +185,7 @@ void bind_conv_transpose2d(nb::module_& mod) {
         nb::arg("output_dtype") = nb::none(),
         nb::arg("conv_config") = nb::none(),
         nb::arg("compute_config") = nb::none(),
+        nb::arg("dram_slice_config") = nb::none(),
         nb::arg("mirror_kernel") = true);
 
     mod.def(
@@ -202,7 +209,8 @@ void bind_conv_transpose2d(nb::module_& mod) {
         nb::arg("input_dtype"),
         nb::arg("output_dtype") = nb::none(),
         nb::arg("conv_config") = nb::none(),
-        nb::arg("compute_config") = nb::none());
+        nb::arg("compute_config") = nb::none(),
+        nb::arg("dram_slice_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::conv::conv_transpose2d
