@@ -81,7 +81,7 @@ run_python_model_tests_slow_runtime_mode_wormhole_b0() {
 }
 
 run_python_model_tests_blackhole() {
-    HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home/hub pytest models/demos/blackhole/stable_diffusion/tests --ignore=models/demos/blackhole/stable_diffusion/tests/test_perf.py
+    HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home pytest models/demos/blackhole/stable_diffusion/tests --ignore=models/demos/blackhole/stable_diffusion/tests/test_perf.py
 
     # Llama3.1-8B
     llama8b=meta-llama/Llama-3.1-8B-Instruct
