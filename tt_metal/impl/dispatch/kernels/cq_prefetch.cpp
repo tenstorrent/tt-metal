@@ -1837,26 +1837,13 @@ CBReaderWithManualRelease<
 // at once.
 template <typename RelayInlineState>
 inline void relay_raw_data_to_downstream(
-    uint32_t& fence, uint32_t& data_ptr, uint64_t wlength, uint32_t& local_downstream_data_ptr) {
+    uint32_t& data_ptr, uint64_t wlength, uint32_t& local_downstream_data_ptr) {
     // Stream data to downstream as it arrives. Acquire upstream pages incrementally.
     while (wlength > 0) {
         // Ensure at least one upstream page is available
         uint32_t available_data = h_cmddat_q_reader.wait_for_available_data(data_ptr);
 
-        // Compute contiguous bytes available to read now without wrapping
-        uint32_t contiguous_until_wrap = cmddat_q_end - data_ptr;
-        uint32_t contiguous_until_fence;
-        if (data_ptr < fence) {
-            contiguous_until_fence = fence - data_ptr;
-        } else if (data_ptr > fence) {
-            // Fence wrapped but data_ptr has not; only read until end-of-buffer
-            contiguous_until_fence = contiguous_until_wrap;
-        } else {
-            // Should not happen due to ensure above; treat as no data
-            continue;
-        }
-
-        uint32_t can_read_now = contiguous_until_fence;
+        uint32_t can_read_now = available_data;
         if (can_read_now > wlength) {
             can_read_now = wlength;
         }
@@ -1873,10 +1860,7 @@ inline void relay_raw_data_to_downstream(
 
         // Release pages consumed by this chunk
         if (npages != 0) {
-            cb_release_pages<
-                my_noc_index,
-                RelayInlineState::downstream_noc_encoding,
-                RelayInlineState::downstream_cb_sem>(npages);
+            RelayInlineState::cb_writer.release_pages(npages, local_downstream_data_ptr);
         }
 
         // Advance pointers and wlength
@@ -1889,11 +1873,10 @@ inline void relay_raw_data_to_downstream(
         uint32_t pages_to_free = (can_read_now + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
         relay_client.release_pages<my_noc_index, upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);
     }
+    local_downstream_data_ptr = round_up_pow2(local_downstream_data_ptr, RelayInlineState::downstream_page_size);
     // Release an extra page to account for the dispatch command (via CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH) that would
     // have headed the first relayed segment
-    cb_release_pages<my_noc_index, RelayInlineState::downstream_noc_encoding, RelayInlineState::downstream_cb_sem>(1);
-    // Align downstream write pointer
-    local_downstream_data_ptr = round_up_pow2(local_downstream_data_ptr, RelayInlineState::downstream_page_size);
+    RelayInlineState::cb_writer.release_pages(1, local_downstream_data_ptr);
     // Round upstream pointer to next cmddat page boundary for next command
     data_ptr = round_up_pow2(data_ptr, cmddat_q_page_size);
 }
@@ -1909,11 +1892,7 @@ inline uint32_t relay_cb_get_cmds(uint32_t& data_ptr, uint32_t& downstream_data_
     while (true) {
         // DPRINT << "get_commands: data_ptr:0x" << HEX() << data_ptr << ", fence:0x" << fence << ",
         // downstream_data_ptr:0x" << downstream_data_ptr << ENDL();
-        if (data_ptr == fence) {
-            // Ensure header is present
-            get_cb_page<cmddat_q_base, cmddat_q_blocks, cmddat_q_log_page_size, my_upstream_cb_sem_id>(
-                data_ptr, fence, block_next_start_addr, rd_block_idx, upstream_total_acquired_page_count);
-        }
+        h_cmddat_q_reader.wait_for_available_data(data_ptr);
 
         volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* cmd_ptr =
             (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)data_ptr;
@@ -1922,10 +1901,12 @@ inline uint32_t relay_cb_get_cmds(uint32_t& data_ptr, uint32_t& downstream_data_
             uint64_t wlength = cmd_ptr->header.length;
             data_ptr += sizeof(CQPrefetchHToPrefetchDHeader);
             relay_raw_data_to_downstream<DispatchRelayInlineState>(
-                fence, data_ptr, wlength - sizeof(CQPrefetchHToPrefetchDHeader), downstream_data_ptr);
+                data_ptr,
+                wlength - sizeof(CQPrefetchHToPrefetchDHeader),
+                downstream_data_ptr);
         } else {
             uint32_t length = cmd_ptr->header.length;
-            uint32_t pages_ready = (fence - data_ptr) >> cmddat_q_log_page_size;
+            uint32_t pages_ready = h_cmddat_q_reader.available_bytes(data_ptr) >> cmddat_q_log_page_size;
             uint32_t pages_needed = (length + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
             int32_t pages_pending = pages_needed - pages_ready;
             int32_t npages = 0;
