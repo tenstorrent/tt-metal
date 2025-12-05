@@ -21,10 +21,6 @@ namespace tt::scaleout_tools {
 
 namespace {
 
-// =============================================================================
-// Cabling Descriptor Helpers
-// =============================================================================
-
 void collect_host_ids(const proto::GraphInstance& instance, std::set<uint32_t>& host_ids) {
     for (const auto& [child_name, child_mapping] : instance.child_mappings()) {
         if (child_mapping.has_host_id()) {
@@ -45,7 +41,8 @@ std::string find_node_type_from_template(
     for (const auto& child : it->second.children()) {
         if (child.has_node_ref()) {
             return child.node_ref().node_descriptor();
-        } else if (child.has_graph_ref()) {
+        }
+        if (child.has_graph_ref()) {
             return find_node_type_from_template(child.graph_ref().graph_template(), cluster_desc);
         }
     }
@@ -61,10 +58,6 @@ std::vector<std::string> generate_hostnames(size_t num_hosts) {
     }
     return hostnames;
 }
-
-// =============================================================================
-// YAML Emission Helpers
-// =============================================================================
 
 void emit_fabric_setup(YAML::Emitter& out, const std::filesystem::path& mgd_path) {
     out << YAML::Key << "fabric_setup";
@@ -105,7 +98,7 @@ void emit_parametrization(
 
     out << YAML::Key << "size";
     out << YAML::Value << YAML::Flow << YAML::BeginSeq;
-    for (const auto& s : sizes) {
+    for (auto s : sizes) {
         out << s;
     }
     out << YAML::EndSeq;
@@ -113,8 +106,7 @@ void emit_parametrization(
     out << YAML::EndMap;
 }
 
-void emit_pattern(
-    YAML::Emitter& out, const std::string& pattern_type, std::optional<uint32_t> iterations = std::nullopt) {
+void emit_pattern(YAML::Emitter& out, const std::string& pattern_type, std::optional<uint32_t> iterations = {}) {
     out << YAML::Key << "patterns";
     out << YAML::Value << YAML::BeginSeq;
     out << YAML::BeginMap;
@@ -127,19 +119,16 @@ void emit_pattern(
 }
 
 void emit_skip_platforms(YAML::Emitter& out, const std::vector<std::string>& platforms) {
-    if (!platforms.empty()) {
-        out << YAML::Key << "skip";
-        out << YAML::Value << YAML::Flow << YAML::BeginSeq;
-        for (const auto& p : platforms) {
-            out << p;
-        }
-        out << YAML::EndSeq;
+    if (platforms.empty()) {
+        return;
     }
+    out << YAML::Key << "skip";
+    out << YAML::Value << YAML::Flow << YAML::BeginSeq;
+    for (const auto& p : platforms) {
+        out << p;
+    }
+    out << YAML::EndSeq;
 }
-
-// =============================================================================
-// Test Generators
-// =============================================================================
 
 void generate_simple_unicast_test(
     YAML::Emitter& out,
@@ -157,7 +146,6 @@ void generate_simple_unicast_test(
     emit_fabric_setup(out, mgd_path);
     emit_defaults(out, "unicast", "unicast_write", sizes[0], num_packets);
 
-    // Simple: device [0,0,0] -> [0,0,1]
     out << YAML::Key << "senders";
     out << YAML::Value << YAML::BeginSeq;
     out << YAML::BeginMap;
@@ -314,7 +302,6 @@ void generate_flow_control_test(
     emit_fabric_setup(out, mgd_path);
     emit_parametrization(out, noc_types, sizes);
 
-    // Flow control tests use higher packet counts
     uint32_t fc_packets = std::max(num_packets, 5000u);
     out << YAML::Key << "defaults";
     out << YAML::Value << YAML::BeginMap;
@@ -343,7 +330,6 @@ void generate_sequential_test(
     emit_skip_platforms(out, config.skip_platforms);
     emit_fabric_setup(out, mgd_path);
 
-    // Sequential uses fewer sizes to limit runtime
     std::vector<uint32_t> seq_sizes = {sizes[0]};
     if (sizes.size() > 2) {
         seq_sizes.push_back(sizes[sizes.size() / 2]);
@@ -360,11 +346,7 @@ void generate_sequential_test(
     out << YAML::EndMap;
 }
 
-}  // anonymous namespace
-
-// =============================================================================
-// Public API
-// =============================================================================
+}  // namespace
 
 MeshTopologyInfo extract_topology_info(const proto::ClusterDescriptor& cluster_desc, bool verbose) {
     MeshTopologyInfo info;
@@ -409,7 +391,7 @@ MeshTopologyInfo extract_topology_info(const proto::ClusterDescriptor& cluster_d
     info.connected_pairs.assign(unique_pairs.begin(), unique_pairs.end());
 
     if (verbose) {
-        std::cout << "Topology: " << info.num_meshes << " meshes, " << info.total_devices() << " total devices, "
+        std::cout << "Topology: " << info.num_meshes << " meshes, " << info.total_devices() << " devices, "
                   << info.architecture << "\n";
         std::cout << "  Node type: " << info.node_type << " (" << info.device_dims[0] << "x" << info.device_dims[1]
                   << ")\n";
@@ -435,10 +417,8 @@ MeshTopologyInfo extract_topology_info(const std::filesystem::path& path, bool v
 }
 
 void apply_profile_defaults(TrafficTestConfig& config) {
-    // Set category defaults based on profile if not explicitly configured
     switch (config.profile) {
         case TestProfile::SANITY:
-            // Sanity: quick tests only
             if (!config.packet_sizes) {
                 config.packet_sizes = {1024, 2048};
             }
@@ -451,7 +431,6 @@ void apply_profile_defaults(TrafficTestConfig& config) {
             break;
 
         case TestProfile::STRESS:
-            // Stress: all categories, high volume
             config.categories.random_pairing = true;
             config.categories.all_to_one = true;
             config.categories.flow_control = true;
@@ -468,7 +447,6 @@ void apply_profile_defaults(TrafficTestConfig& config) {
             break;
 
         case TestProfile::BENCHMARK:
-            // Benchmark: varied sizes, consistent packets
             if (!config.packet_sizes) {
                 config.packet_sizes = {512, 1024, 2048, 4096, 8192};
             }
@@ -483,17 +461,11 @@ void apply_profile_defaults(TrafficTestConfig& config) {
 }
 
 uint32_t estimate_test_duration_seconds(const MeshTopologyInfo& topology, const TrafficTestConfig& config) {
-    // Very rough estimate based on:
-    // - Number of devices (more = longer)
-    // - Number of test categories enabled
-    // - Packet counts
-
     size_t devices = topology.total_devices();
     uint32_t packets = config.num_packets.value_or(100);
     size_t sizes = config.packet_sizes.has_value() ? config.packet_sizes->size() : 2;
     size_t ntypes = config.noc_types.empty() ? 1 : config.noc_types.size();
 
-    // Base time per test type (seconds)
     uint32_t base_time = 0;
     const auto& cat = config.categories;
     if (cat.simple_unicast) {
@@ -518,7 +490,6 @@ uint32_t estimate_test_duration_seconds(const MeshTopologyInfo& topology, const 
         base_time += 60;
     }
 
-    // Scale by cluster size and packet count
     double scale = (devices / 8.0) * (packets / 100.0);
     return static_cast<uint32_t>(base_time * std::max(1.0, scale));
 }
@@ -528,11 +499,9 @@ std::string generate_traffic_tests_yaml(
     const std::filesystem::path& mgd_path,
     const TrafficTestConfig& config,
     bool verbose) {
-    // Make a mutable copy to apply defaults
     TrafficTestConfig cfg = config;
     apply_profile_defaults(cfg);
 
-    // Get resolved values
     std::vector<uint32_t> sizes = cfg.packet_sizes.value_or(std::vector<uint32_t>{1024, 2048});
     uint32_t num_packets = cfg.num_packets.value_or(100);
     std::vector<std::string> noc_types =
@@ -567,7 +536,6 @@ std::string generate_traffic_tests_yaml(
     out << YAML::Key << "Tests";
     out << YAML::Value << YAML::BeginSeq;
 
-    // Generate enabled tests in order of complexity
     const auto& cat = cfg.categories;
 
     if (cat.simple_unicast) {
@@ -644,7 +612,6 @@ void generate_traffic_tests(
         throw std::runtime_error("Failed to parse: " + cabling_path.string());
     }
 
-    // Generate MGD if requested
     std::filesystem::path mgd_path = config.mgd_output_path;
     if (config.generate_mgd && !config.mgd_output_path.empty()) {
         auto mgd = generate_mgd_from_cabling(cluster_desc, verbose);
@@ -664,10 +631,6 @@ void generate_traffic_tests(
         std::cout << "Generated: " << output_path << "\n";
     }
 }
-
-// =============================================================================
-// Profile Presets
-// =============================================================================
 
 TrafficTestConfig get_sanity_config() {
     TrafficTestConfig config;
