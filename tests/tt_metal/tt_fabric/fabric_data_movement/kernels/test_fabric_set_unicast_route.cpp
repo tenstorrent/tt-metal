@@ -101,8 +101,8 @@ void kernel_main() {
 #else
     constexpr uint32_t MAX_ROUTE_BUFFER_SIZE =
         SINGLE_ROUTE_SIZE_1D;  // 1D: store only 4 bytes (single 32-bit routing field)
-    auto expected_packet_header = reinterpret_cast<volatile tt_l1_ptr LowLatencyPacketHeader*>(expected_buffer);
-    auto actual_packet_header = reinterpret_cast<volatile tt_l1_ptr LowLatencyPacketHeader*>(actual_buffer);
+    auto expected_packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(expected_buffer);
+    auto actual_packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(actual_buffer);
     volatile uint8_t* actual_route_buffer = (uint8_t*)&actual_packet_header->routing_fields.value;
     volatile uint8_t* expected_route_buffer = (uint8_t*)&expected_packet_header->routing_fields.value;
 #endif

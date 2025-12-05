@@ -20,6 +20,10 @@ FORCE_INLINE void validate(const LowLatencyPacketHeader& packet_header) {}
 FORCE_INLINE bool is_valid(const LowLatencyPacketHeader& packet_header) {
     return (packet_header.noc_send_type <= NOC_SEND_TYPE_LAST);
 }
+FORCE_INLINE void validate(const BigLowLatencyPacketHeader& packet_header) {}
+FORCE_INLINE bool is_valid(const BigLowLatencyPacketHeader& packet_header) {
+    return (packet_header.noc_send_type <= NOC_SEND_TYPE_LAST);
+}
 
 FORCE_INLINE void validate(const HybridMeshPacketHeader& packet_header) {
     ASSERT(packet_header.noc_send_type <= NOC_SEND_TYPE_LAST);

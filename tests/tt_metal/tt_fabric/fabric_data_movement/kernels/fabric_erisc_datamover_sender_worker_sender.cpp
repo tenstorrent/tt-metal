@@ -104,13 +104,13 @@ void kernel_main() {
         } else {
             if (write_scatter_mode && pages_to_send == 2) {
                 uint64_t dest_noc_address2 = get_noc_addr(p + 1, dest_addr_gen, 0, NORMALIZED_NOC_INDEX);
-                fabric_set_unicast_route<false>((LowLatencyPacketHeader*)packet_header, config.unicast.distance);
+                fabric_set_unicast_route<false>(packet_header, config.unicast.distance);
                 packet_header->to_noc_unicast_scatter_write(
                     tt::tt_fabric::NocUnicastScatterCommandHeader(
                         {dest_noc_address, dest_noc_address2}, {static_cast<uint16_t>(page_size)}),
                     (pages_to_send * page_size));
             } else {
-                fabric_set_unicast_route<false>((LowLatencyPacketHeader*)packet_header, config.unicast.distance);
+                fabric_set_unicast_route<false>(packet_header, config.unicast.distance);
                 packet_header->to_noc_unicast_write(
                     tt::tt_fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
             }
