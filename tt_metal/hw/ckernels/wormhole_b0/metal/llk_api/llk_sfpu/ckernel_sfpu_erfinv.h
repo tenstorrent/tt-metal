@@ -45,9 +45,9 @@ sfpi_inline vFloat calculate_erfinv_body(vFloat in) {
     temp = 4.5469 + temp;
     temp = -temp;
     vFloat calculated_value = (temp * temp) - (log_value * 7.1427);
-    vFloat intermediate_result = calculate_sqrt_custom<false>(calculated_value);
+    vFloat intermediate_result = calculate_sqrt_custom<ApproximationMode::Precise>(calculated_value);
     calculated_value = temp + intermediate_result;
-    log_value = calculate_sqrt_custom<false>(calculated_value);
+    log_value = calculate_sqrt_custom<ApproximationMode::Precise>(calculated_value);
     dst_reg[0] = log_value;
     return log_value;
 }
@@ -63,10 +63,10 @@ inline void calculate_erfinv() {
             dst_reg[0] = std::numeric_limits<float>::quiet_NaN();
         }
         v_elseif(v < 0.0f) {
-            calculate_erfinv_body<true>(v);
+            calculate_erfinv_body<ApproximationMode::Fast>(v);
             dst_reg[0] = -dst_reg[0];
         }
-        v_else { calculate_erfinv_body<true>(v); }
+        v_else { calculate_erfinv_body<ApproximationMode::Fast>(v); }
         v_endif;
         dst_reg++;
     }

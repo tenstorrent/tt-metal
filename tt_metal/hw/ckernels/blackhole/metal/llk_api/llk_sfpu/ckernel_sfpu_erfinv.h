@@ -60,10 +60,10 @@ inline void calculate_erfinv() {
             dst_reg[0] = std::numeric_limits<float>::quiet_NaN();
         }
         v_elseif(v < 0.0f) {
-            calculate_erfinv_body<true>(v);
+            calculate_erfinv_body<ApproximationMode::Fast>(v);
             dst_reg[0] = -dst_reg[0];
         }
-        v_else { calculate_erfinv_body<true>(v); }
+        v_else { calculate_erfinv_body<ApproximationMode::Fast>(v); }
         v_endif;
         dst_reg++;
     }
