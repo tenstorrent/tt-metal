@@ -1032,13 +1032,7 @@ void writeToCoreControlBuffer(IDevice* device, const CoreCoord& virtual_core, co
             mesh_cq.enqueue_write_shard_to_core(
                 address, data.data(), kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, true);
         } else {
-            dynamic_cast<HWCommandQueue&>(device->command_queue())
-                .enqueue_write_to_core(
-                    virtual_core,
-                    data.data(),
-                    control_vector_addr,
-                    kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-                    true);
+            TT_FATAL(false, "Fast dispatch write to control buffer requires mesh device support");
         }
     } else {
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
@@ -1065,13 +1059,7 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
                         profile_buffer_bank_size_bytes,
                         true);
             } else {
-                dynamic_cast<HWCommandQueue&>(device->command_queue())
-                    .enqueue_read_from_core(
-                        dram_core,
-                        &(profile_buffer[profile_buffer_idx]),
-                        profiler_addr,
-                        profile_buffer_bank_size_bytes,
-                        true);
+                TT_FATAL(false, "Fast dispatch read from profiler buffer requires mesh device support");
             }
             profile_buffer_idx += profile_buffer_bank_size_bytes / sizeof(uint32_t);
         }
@@ -1120,13 +1108,7 @@ void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
                 kernel_profiler::PROFILER_L1_BUFFER_SIZE * num_risc_processors,
                 true);
     } else {
-        dynamic_cast<HWCommandQueue&>(device->command_queue())
-            .enqueue_read_from_core(
-                worker_core,
-                core_l1_data_buffer.data(),
-                buffer_addr,
-                kernel_profiler::PROFILER_L1_BUFFER_SIZE * num_risc_processors,
-                true);
+        TT_FATAL(false, "Fast dispatch read from L1 buffer requires mesh device support");
     }
 }
 
@@ -1187,14 +1169,7 @@ void DeviceProfiler::readControlBufferForCore(IDevice* device, const CoreCoord& 
                 kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
                 true);
         } else {
-            core_control_buffers[virtual_core].resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
-            dynamic_cast<HWCommandQueue&>(device->command_queue())
-                .enqueue_read_from_core(
-                    virtual_core,
-                    core_control_buffers[virtual_core].data(),
-                    control_vector_addr,
-                    kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-                    true);
+            TT_FATAL(false, "Fast dispatch read from control buffer requires mesh device support");
         }
     } else {
         core_control_buffers[virtual_core] = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
