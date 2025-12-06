@@ -117,10 +117,12 @@ FORCE_INLINE void send_packets_unicast_write_impl(
         uint16_t send_size1 = (uint16_t)params.payload_size_bytes >> 1;
         uint32_t send_size2 = params.payload_size_bytes - send_size1;
         pkt_hdr_fwd->to_noc_unicast_scatter_write(
-            NocUnicastScatterCommandHeader{{noc0_dest_addr_fwd, noc0_dest_addr_fwd + send_size1}, send_size1},
+            tt::tt_fabric::NocUnicastScatterCommandHeader(
+                {noc0_dest_addr_fwd, noc0_dest_addr_fwd + send_size1}, {send_size1}),
             params.payload_size_bytes);
         pkt_hdr_bwd->to_noc_unicast_scatter_write(
-            NocUnicastScatterCommandHeader{{noc0_dest_addr_bwd, noc0_dest_addr_bwd + send_size1}, send_size1},
+            tt::tt_fabric::NocUnicastScatterCommandHeader(
+                {noc0_dest_addr_bwd, noc0_dest_addr_bwd + send_size1}, {send_size1}),
             params.payload_size_bytes);
     } else {
         pkt_hdr_fwd->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr_fwd}, params.payload_size_bytes);

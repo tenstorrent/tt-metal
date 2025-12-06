@@ -96,11 +96,11 @@ target_sources(
         send_recv_async/send_async/device/send_async_op_device_operation.cpp
         send_recv_async/send_async/device/send_async_op_program_factory.cpp
         send_recv_async/recv_async/recv_async.cpp
-        send_recv_async/recv_async/device/recv_async_op.cpp
-        send_recv_async/recv_async/device/recv_async_program.cpp
+        send_recv_async/recv_async/device/recv_async_op_device_operation.cpp
+        send_recv_async/recv_async/device/recv_async_op_program_factory.cpp
         neighbor_pad_async/neighbor_pad_async.cpp
-        neighbor_pad_async/device/neighbor_pad_async_op.cpp
-        neighbor_pad_async/device/neighbor_pad_async_program.cpp
+        neighbor_pad_async/device/neighbor_pad_async_device_operation.cpp
+        neighbor_pad_async/device/neighbor_pad_async_program_factory.cpp
         slice_reshard_async/slice_reshard_async.cpp
         slice_reshard_async/device/slice_reshard_async_op.cpp
         slice_reshard_async/device/slice_reshard_async_program.cpp

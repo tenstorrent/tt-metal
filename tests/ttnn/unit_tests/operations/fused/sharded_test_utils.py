@@ -199,10 +199,11 @@ def torch_layer_norm(torch_input_tensor, residual=None, weight=None, bias=None):
     Returns:
         The output tensor as a torch tensor.
     """
-    if residual is not None:
-        torch_input_tensor += residual
     return torch.nn.functional.layer_norm(
-        torch_input_tensor, normalized_shape=[torch_input_tensor.shape[1]], weight=weight, bias=bias
+        torch_input_tensor if residual is None else torch_input_tensor + residual,
+        normalized_shape=[torch_input_tensor.shape[1]],
+        weight=weight,
+        bias=bias,
     )
 
 
