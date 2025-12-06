@@ -693,7 +693,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRange) {
     auto mesh_buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
 
     auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    constexpr int device_read_align{32};
+    constexpr int device_read_align{64};
     ASSERT_TRUE(device_read_align == hal.get_read_alignment(HalMemType::HOST))
         << "Source vector alignment must be equal to PCIE read alignment: " << hal.get_read_alignment(HalMemType::HOST)
         << std::endl;
