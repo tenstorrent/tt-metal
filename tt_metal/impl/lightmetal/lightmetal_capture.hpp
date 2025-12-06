@@ -32,6 +32,9 @@ class Kernel;
 using CBHandle = uintptr_t;
 using TraceDescriptorByTraceIdOffset = flatbuffers::Offset<tt::tt_metal::flatbuffer::TraceDescriptorByTraceId>;
 
+using experimental::lightmetal::LightMetalBinary;
+using experimental::lightmetal::LightMetalReplay;
+
 class LightMetalCaptureContext {
 public:
     static LightMetalCaptureContext& get();

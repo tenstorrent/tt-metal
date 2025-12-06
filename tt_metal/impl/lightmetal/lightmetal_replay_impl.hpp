@@ -51,7 +51,7 @@ using FlatbufferRuntimeArgVector =
     const flatbuffers::Vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::RuntimeArg>>*;
 using RuntimeArgs = std::vector<std::variant<tt::tt_metal::Buffer*, uint32_t>>;
 
-namespace tt::tt_metal {
+namespace tt::tt_metal::experimental::lightmetal {
 
 namespace detail {
 class LightMetalReplayImpl {
@@ -138,4 +138,4 @@ private:
 };
 
 }  // namespace detail
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::experimental::lightmetal

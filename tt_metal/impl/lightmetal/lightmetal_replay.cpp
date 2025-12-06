@@ -8,7 +8,7 @@
 
 #include "impl/lightmetal/lightmetal_replay_impl.hpp"
 
-namespace tt::tt_metal {
+namespace tt::tt_metal::experimental::lightmetal {
 
 LightMetalReplay::LightMetalReplay(LightMetalBinary&& binary, IDevice* device) :
     pimpl_(std::make_unique<detail::LightMetalReplayImpl>(std::move(binary), device)) {}
@@ -20,4 +20,4 @@ LightMetalReplay& LightMetalReplay::operator=(LightMetalReplay&&) noexcept = def
 
 bool LightMetalReplay::run() { return pimpl_->run(); }
 
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::experimental::lightmetal
