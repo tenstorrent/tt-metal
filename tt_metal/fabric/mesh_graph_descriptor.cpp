@@ -1408,17 +1408,17 @@ void MeshGraphDescriptor::print_node(GlobalNodeId id, int indent_level) {
 
     const auto it = instances_.find(id);
     if (it == instances_.end()) {
-        ss << indent << "Unknown instance id: " << id << std::endl;
+        ss << indent << "Unknown instance id: " << id << '\n';
         log_debug(tt::LogFabric, "{}", ss.str());
         return;
     }
 
     const InstanceData & inst = it->second;
     if (inst.kind == NodeKind::Mesh) {
-        ss << indent << "=== MESH INSTANCE ===" << std::endl;
-        ss << indent << "Global ID: " << id << std::endl;
-        ss << indent << "Local ID: " << inst.local_id << std::endl;
-        ss << indent << "Name: " << inst.name << std::endl;
+        ss << indent << "=== MESH INSTANCE ===" << '\n';
+        ss << indent << "Global ID: " << id << '\n';
+        ss << indent << "Local ID: " << inst.local_id << '\n';
+        ss << indent << "Name: " << inst.name << '\n';
         const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(inst.desc);
         ss << indent << "Device Topology Dimensions: [";
         for (int i = 0; i < mesh_desc->device_topology().dims_size(); ++i) {
@@ -1427,7 +1427,7 @@ void MeshGraphDescriptor::print_node(GlobalNodeId id, int indent_level) {
             }
             ss << mesh_desc->device_topology().dims(i);
         }
-        ss << "]" << std::endl;
+        ss << "]" << '\n';
         ss << indent << "Host Topology Dimensions: [";
         for (int i = 0; i < mesh_desc->host_topology().dims_size(); ++i) {
             if (i > 0) {
@@ -1435,11 +1435,11 @@ void MeshGraphDescriptor::print_node(GlobalNodeId id, int indent_level) {
             }
             ss << mesh_desc->host_topology().dims(i);
         }
-        ss << "]" << std::endl;
-        ss << indent << "Channel Count: " << mesh_desc->channels().count() << std::endl;
-        ss << indent << "Express Connections: " << mesh_desc->express_connections_size() << std::endl;
+        ss << "]" << '\n';
+        ss << indent << "Channel Count: " << mesh_desc->channels().count() << '\n';
+        ss << indent << "Express Connections: " << mesh_desc->express_connections_size() << '\n';
         if (!inst.sub_instances.empty()) {
-            ss << indent << "Devices:" << std::endl;
+            ss << indent << "Devices:" << '\n';
             log_debug(tt::LogFabric, "{}", ss.str());
             ss.str(std::string());
             // Print devices in ascending local_id order
@@ -1455,19 +1455,19 @@ void MeshGraphDescriptor::print_node(GlobalNodeId id, int indent_level) {
             return; // children already printed with their own trailing separators
         }
     } else if (inst.kind == NodeKind::Graph) {
-        ss << indent << "=== GRAPH INSTANCE ===" << std::endl;
-        ss << indent << "Global ID: " << id << std::endl;
-        ss << indent << "Local ID: " << inst.local_id << std::endl;
-        ss << indent << "Name: " << inst.name << std::endl;
-        ss << indent << "Type: " << inst.type << std::endl;
+        ss << indent << "=== GRAPH INSTANCE ===" << '\n';
+        ss << indent << "Global ID: " << id << '\n';
+        ss << indent << "Local ID: " << inst.local_id << '\n';
+        ss << indent << "Name: " << inst.name << '\n';
+        ss << indent << "Type: " << inst.type << '\n';
         const auto* graph_desc = std::get<const proto::GraphDescriptor*>(inst.desc);
-        ss << indent << "Total Instances in Descriptor: " << graph_desc->instances_size() << std::endl;
-        ss << indent << "Connections: " << graph_desc->connections_size() << std::endl;
+        ss << indent << "Total Instances in Descriptor: " << graph_desc->instances_size() << '\n';
+        ss << indent << "Connections: " << graph_desc->connections_size() << '\n';
         if (graph_desc->has_graph_topology()) {
-            ss << indent << "Has Graph Topology: Yes" << std::endl;
+            ss << indent << "Has Graph Topology: Yes" << '\n';
         }
         if (!inst.sub_instances.empty()) {
-            ss << indent << "Sub-instances:" << std::endl;
+            ss << indent << "Sub-instances:" << '\n';
             log_debug(tt::LogFabric, "{}", ss.str());
             ss.str(std::string());
             // Print children in ascending local_id order
@@ -1483,25 +1483,25 @@ void MeshGraphDescriptor::print_node(GlobalNodeId id, int indent_level) {
             return; // children already printed with their own trailing separators
         }
     } else if (inst.kind == NodeKind::Device) {
-        ss << indent << "=== DEVICE INSTANCE ===" << std::endl;
-        ss << indent << "Global ID: " << id << std::endl;
-        ss << indent << "Local ID: " << inst.local_id << std::endl;
-        ss << indent << "Name: " << inst.name << std::endl;
-        ss << indent << "Hierarchy Depth: " << inst.hierarchy.size() << std::endl;
+        ss << indent << "=== DEVICE INSTANCE ===" << '\n';
+        ss << indent << "Global ID: " << id << '\n';
+        ss << indent << "Local ID: " << inst.local_id << '\n';
+        ss << indent << "Name: " << inst.name << '\n';
+        ss << indent << "Hierarchy Depth: " << inst.hierarchy.size() << '\n';
     } else {
-        ss << indent << "=== UNKNOWN NODE TYPE ===" << std::endl;
-        ss << indent << "Global ID: " << id << std::endl;
+        ss << indent << "=== UNKNOWN NODE TYPE ===" << '\n';
+        ss << indent << "Global ID: " << id << '\n';
     }
 
-    ss << indent << "---" << std::endl;
+    ss << indent << "---" << '\n';
     log_debug(tt::LogFabric, "{}", ss.str());
 }
 
 void MeshGraphDescriptor::print_all_nodes() {
     std::stringstream ss;
-    ss << "\n=== PRINTING ALL NODE INSTANCES (recursive from top-level) ===" << std::endl;
-    ss << "Total instances: " << instances_.size() << std::endl;
-    ss << "=====================================" << std::endl;
+    ss << "\n=== PRINTING ALL NODE INSTANCES (recursive from top-level) ===" << '\n';
+    ss << "Total instances: " << instances_.size() << '\n';
+    ss << "=====================================" << '\n';
     log_debug(tt::LogFabric, "{}", ss.str());
 
     // Start from top-level and recursively print in local-id order

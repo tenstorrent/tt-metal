@@ -151,7 +151,7 @@ TEST(Cluster, TestFactorySystemDescriptor5WHGalaxyYTorus) {
                     "tools/tests/scaleout/global_system_descriptors/"
                     "5_wh_galaxy_y_torus_physical_desc.yaml");
             } catch (const std::runtime_error& e) {
-                std::cout << e.what() << std::endl;
+                std::cout << e.what() << '\n';
                 throw;
             }
         },
@@ -185,7 +185,7 @@ TEST(Cluster, TestGenerateClusterDescriptorFromFSD) {
     EXPECT_TRUE(std::filesystem::exists(result_file));
     EXPECT_GT(std::filesystem::file_size(result_file), 0);
 
-    std::cout << "Generated cluster descriptor written to: " << result_file << std::endl;
+    std::cout << "Generated cluster descriptor written to: " << result_file << '\n';
 }
 
 TEST(Cluster, TestGenerateMultiHostClusterDescriptorFromFSD) {

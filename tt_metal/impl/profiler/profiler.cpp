@@ -116,7 +116,7 @@ void populateZoneSrcLocations(
         auto ret = hash_to_zone_src_locations.emplace(hash_16bit, details);
         if (ret.second && push_new) {
             std::ofstream log_file_write(log_name, std::ios::app);
-            log_file_write << line << std::endl;
+            log_file_write << line << '\n';
             log_file_write.close();
         }
     }
@@ -924,10 +924,10 @@ void writeCSVHeader(
     std::ofstream& log_file_ofs, tt::ARCH device_architecture, int device_core_frequency, uint32_t max_compute_cores) {
     log_file_ofs << "ARCH: " << get_string_lowercase(device_architecture)
                  << ", CHIP_FREQ[MHz]: " << device_core_frequency << ", Max Compute Cores: " << max_compute_cores
-                 << std::endl;
+                 << '\n';
     log_file_ofs << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, run "
                     "host ID, trace id, trace id counter, zone name, type, source line, source file, meta data"
-                 << std::endl;
+                 << '\n';
 }
 
 void dumpDeviceResultsToCSV(

@@ -478,7 +478,7 @@ std::string to_string_impl(const Tensor& tensor) {
                 for (size_t i = 0; i < buffers.size(); i++) {
                     detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
                     if (i + 1 != buffers.size()) {
-                        ss << std::endl;
+                        ss << '\n';
                     }
                 }
                 return ss.str();
@@ -505,11 +505,11 @@ std::string to_string_impl(const Tensor& tensor) {
                 for (size_t i = 0; i < buffers.size(); i++) {
                     const distributed::MeshCoordinate coord = *coords_it++;
                     if (mesh_device->is_local(coord)) {
-                        ss << "device_id: " << mesh_device->get_device(coord)->id() << ", " << coord << std::endl;
+                        ss << "device_id: " << mesh_device->get_device(coord)->id() << ", " << coord << '\n';
                         detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
                     }
                     if (i + 1 != buffers.size()) {
-                        ss << std::endl;
+                        ss << '\n';
                     }
                 }
                 return ss.str();

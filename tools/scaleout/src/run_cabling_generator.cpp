@@ -47,21 +47,20 @@ InputConfig parse_arguments(int argc, char** argv) {
         auto result = options.parse(argc, argv);
 
         if (result.count("help") || argc == 1) {
-            std::cout << options.help() << std::endl;
-            std::cout << "\nOutput files:" << std::endl;
-            std::cout << "  - out/scaleout/factory_system_descriptor_<output_name>.textproto" << std::endl;
-            std::cout << "  - out/scaleout/cabling_guide_<output_name>.csv" << std::endl;
-            std::cout << "\nExamples:" << std::endl;
-            std::cout << "  " << argv[0] << " --cabling cabling.textproto --deployment deployment.textproto"
-                      << std::endl;
-            std::cout << "  # Generates files with default names (no suffix)" << std::endl;
+            std::cout << options.help() << '\n';
+            std::cout << "\nOutput files:" << '\n';
+            std::cout << "  - out/scaleout/factory_system_descriptor_<output_name>.textproto" << '\n';
+            std::cout << "  - out/scaleout/cabling_guide_<output_name>.csv" << '\n';
+            std::cout << "\nExamples:" << '\n';
+            std::cout << "  " << argv[0] << " --cabling cabling.textproto --deployment deployment.textproto" << '\n';
+            std::cout << "  # Generates files with default names (no suffix)" << '\n';
             std::cout << "  " << argv[0]
-                      << " --cabling cabling.textproto --deployment deployment.textproto --output test" << std::endl;
-            std::cout << "  # Generates detailed CSV with rack/shelf information" << std::endl;
+                      << " --cabling cabling.textproto --deployment deployment.textproto --output test" << '\n';
+            std::cout << "  # Generates detailed CSV with rack/shelf information" << '\n';
             std::cout << "  " << argv[0]
                       << " --cabling cabling.textproto --deployment deployment.textproto --output test --simple"
-                      << std::endl;
-            std::cout << "  # Generates simple CSV with hostname information only" << std::endl;
+                      << '\n';
+            std::cout << "  # Generates simple CSV with hostname information only" << '\n';
             exit(0);
         }
 
@@ -113,8 +112,8 @@ InputConfig parse_arguments(int argc, char** argv) {
         return config;
 
     } catch (const cxxopts::exceptions::exception& e) {
-        std::cerr << "Error parsing arguments: " << e.what() << std::endl;
-        std::cerr << options.help() << std::endl;
+        std::cerr << "Error parsing arguments: " << e.what() << '\n';
+        std::cerr << options.help() << '\n';
         exit(1);
     }
 }
@@ -123,12 +122,12 @@ int main(int argc, char** argv) {
     try {
         InputConfig config = parse_arguments(argc, argv);
 
-        std::cout << "Generating cabling configuration..." << std::endl;
-        std::cout << "  Cabling descriptor: " << config.cabling_descriptor_path << std::endl;
-        std::cout << "  Deployment descriptor: " << config.deployment_descriptor_path << std::endl;
-        std::cout << "  Output name suffix: " << config.output_name << std::endl;
+        std::cout << "Generating cabling configuration..." << '\n';
+        std::cout << "  Cabling descriptor: " << config.cabling_descriptor_path << '\n';
+        std::cout << "  Deployment descriptor: " << config.deployment_descriptor_path << '\n';
+        std::cout << "  Output name suffix: " << config.output_name << '\n';
 
-        std::cout << "Loading descriptors and initializing generator..." << std::endl;
+        std::cout << "Loading descriptors and initializing generator..." << '\n';
         CablingGenerator cabling_generator(config.cabling_descriptor_path, config.deployment_descriptor_path);
 
         std::string factory_output = "out/scaleout/factory_system_descriptor" + config.output_name + ".textproto";
@@ -137,19 +136,20 @@ int main(int argc, char** argv) {
         // Ensure output directory exists
         std::filesystem::create_directories("out/scaleout");
 
-        std::cout << "Generating factory system descriptor..." << std::endl;
+        std::cout << "Generating factory system descriptor..." << '\n';
         cabling_generator.emit_factory_system_descriptor(factory_output);
 
-        std::cout << "Generating cabling guide CSV..." << std::endl;
-        std::cout << "  CSV format: " << (config.loc_info ? "detailed (with location info)" : "simple (hostname-based)") << std::endl;
+        std::cout << "Generating cabling guide CSV..." << '\n';
+        std::cout << "  CSV format: " << (config.loc_info ? "detailed (with location info)" : "simple (hostname-based)")
+                  << '\n';
         cabling_generator.emit_cabling_guide_csv(cabling_output, config.loc_info);
 
-        std::cout << "Successfully generated:" << std::endl;
-        std::cout << "  - " << factory_output << std::endl;
-        std::cout << "  - " << cabling_output << std::endl;
+        std::cout << "Successfully generated:" << '\n';
+        std::cout << "  - " << factory_output << '\n';
+        std::cout << "  - " << cabling_output << '\n';
 
     } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
+        std::cerr << "Error: " << e.what() << '\n';
         return 1;
     }
 

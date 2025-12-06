@@ -52,7 +52,7 @@ void TestProgressMonitor::poll_until_complete() {
     }
 
     // Always print newline after final progress update
-    std::cout << std::endl;
+    std::cout << '\n';
 }
 
 std::unordered_map<tt::tt_fabric::FabricNodeId, DeviceProgress> TestProgressMonitor::poll_devices() {

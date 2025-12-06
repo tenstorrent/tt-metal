@@ -197,8 +197,8 @@ bool eth_direct_sender_receiver_kernels(
         byte_size);
     pass &= (readback_vec == inputs);
     if (not pass) {
-        std::cout << "Mismatch at Core: " << eth_receiver_core.str() << std::endl;
-        std::cout << readback_vec[0] << std::endl;
+        std::cout << "Mismatch at Core: " << eth_receiver_core.str() << '\n';
+        std::cout << readback_vec[0] << '\n';
     }
     return pass;
 }

@@ -115,7 +115,7 @@ protected:
             json_programs_perf_data_list.push_back(programs_perf_data);
         }
         std::ofstream file(get_profiler_logs_dir() + file_name);
-        file << std::setw(4) << json_programs_perf_data_list << std::endl;
+        file << std::setw(4) << json_programs_perf_data_list << '\n';
     }
 
 private:

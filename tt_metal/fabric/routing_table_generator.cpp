@@ -325,9 +325,9 @@ void RoutingTableGenerator::load_intermesh_connections(const AnnotatedIntermeshC
 
 void RoutingTableGenerator::print_routing_tables() const {
     std::stringstream ss;
-    ss << "Routing Table Generator: IntraMesh Routing Tables" << std::endl;
+    ss << "Routing Table Generator: IntraMesh Routing Tables" << '\n';
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < this->intra_mesh_table_.size(); mesh_id_val++) {
-        ss << "M" << mesh_id_val << ":" << std::endl;
+        ss << "M" << mesh_id_val << ":" << '\n';
         for (ChipId src_chip_id = 0; src_chip_id < this->intra_mesh_table_[mesh_id_val].size(); src_chip_id++) {
             ss << "   D" << src_chip_id << ": ";
             for (ChipId dst_chip_or_mesh_id = 0;
@@ -336,14 +336,14 @@ void RoutingTableGenerator::print_routing_tables() const {
                 auto direction = this->intra_mesh_table_[mesh_id_val][src_chip_id][dst_chip_or_mesh_id];
                 ss << dst_chip_or_mesh_id << "(" << enchantum::to_string(direction) << ") ";
             }
-            ss << std::endl;
+            ss << '\n';
         }
     }
     log_debug(tt::LogFabric, "{}", ss.str());
     ss.str(std::string());
-    ss << "Routing Table Generator: InterMesh Routing Tables" << std::endl;
+    ss << "Routing Table Generator: InterMesh Routing Tables" << '\n';
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < this->inter_mesh_table_.size(); mesh_id_val++) {
-        ss << "M" << mesh_id_val << ":" << std::endl;
+        ss << "M" << mesh_id_val << ":" << '\n';
         for (ChipId src_chip_id = 0; src_chip_id < this->inter_mesh_table_[mesh_id_val].size(); src_chip_id++) {
             ss << "   D" << src_chip_id << ": ";
             for (ChipId dst_chip_or_mesh_id = 0;
@@ -352,7 +352,7 @@ void RoutingTableGenerator::print_routing_tables() const {
                 auto direction = this->inter_mesh_table_[mesh_id_val][src_chip_id][dst_chip_or_mesh_id];
                 ss << dst_chip_or_mesh_id << "(" << enchantum::to_string(direction) << ") ";
             }
-            ss << std::endl;
+            ss << '\n';
         }
     }
     log_debug(tt::LogFabric, "{}", ss.str());

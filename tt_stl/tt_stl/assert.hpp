@@ -39,7 +39,7 @@ inline std::vector<std::string> backtrace(int size = 64, int skip = 1) {
     size_t s = ::backtrace(array, size);
     char** strings = backtrace_symbols(array, s);
     if (strings == nullptr) {
-        std::cout << "backtrace_symbols error." << std::endl;
+        std::cout << "backtrace_symbols error." << '\n';
         return bt;
     }
     for (size_t i = skip; i < s; ++i) {
@@ -96,9 +96,9 @@ template <typename... Args>
     }
 
     std::stringstream trace_message_ss = {};
-    trace_message_ss << assert_type << " @ " << file << ":" << line << ": " << condition_str << std::endl;
+    trace_message_ss << assert_type << " @ " << file << ":" << line << ": " << condition_str << '\n';
     if constexpr (sizeof...(args) > 0) {
-        trace_message_ss << "info:" << std::endl;
+        trace_message_ss << "info:" << '\n';
         trace_message_ss << fmt::format(args...) << std::endl;
         log_critical(tt::LogAlways, "{}: {}", assert_type, fmt::format(args...));
     }

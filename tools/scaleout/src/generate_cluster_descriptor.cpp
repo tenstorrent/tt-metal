@@ -41,26 +41,26 @@ InputConfig parse_arguments(int argc, char** argv) {
         auto result = options.parse(argc, argv);
 
         if (result.count("help") || argc == 1) {
-            std::cout << options.help() << std::endl;
-            std::cout << "\nDescription:" << std::endl;
+            std::cout << options.help() << '\n';
+            std::cout << "\nDescription:" << '\n';
             std::cout << "  This tool generates cluster descriptor YAML files from a Factory System Descriptor."
-                      << std::endl;
+                      << '\n';
             std::cout << "  It automatically detects single-host vs multi-host systems and generates appropriate files."
-                      << std::endl;
-            std::cout << "\nOutput files:" << std::endl;
-            std::cout << "  Single-host system:" << std::endl;
-            std::cout << "    - {output_dir}/{base_filename}.yaml" << std::endl;
-            std::cout << "\n  Multi-host system:" << std::endl;
-            std::cout << "    - {output_dir}/{base_filename}_rank_0.yaml" << std::endl;
-            std::cout << "    - {output_dir}/{base_filename}_rank_1.yaml" << std::endl;
-            std::cout << "    - ... (one per host)" << std::endl;
-            std::cout << "    - {output_dir}/{base_filename}_mapping.yaml" << std::endl;
-            std::cout << "\nExamples:" << std::endl;
-            std::cout << "  " << argv[0] << " --fsd my_fsd.textproto" << std::endl;
-            std::cout << "  # Generates cluster descriptor(s) in out/scaleout/ with default naming" << std::endl;
+                      << '\n';
+            std::cout << "\nOutput files:" << '\n';
+            std::cout << "  Single-host system:" << '\n';
+            std::cout << "    - {output_dir}/{base_filename}.yaml" << '\n';
+            std::cout << "\n  Multi-host system:" << '\n';
+            std::cout << "    - {output_dir}/{base_filename}_rank_0.yaml" << '\n';
+            std::cout << "    - {output_dir}/{base_filename}_rank_1.yaml" << '\n';
+            std::cout << "    - ... (one per host)" << '\n';
+            std::cout << "    - {output_dir}/{base_filename}_mapping.yaml" << '\n';
+            std::cout << "\nExamples:" << '\n';
+            std::cout << "  " << argv[0] << " --fsd my_fsd.textproto" << '\n';
+            std::cout << "  # Generates cluster descriptor(s) in out/scaleout/ with default naming" << '\n';
             std::cout << "\n  " << argv[0]
-                      << " --fsd my_fsd.textproto --output-dir /tmp/cluster --base-filename my_cluster" << std::endl;
-            std::cout << "  # Generates cluster descriptor(s) in /tmp/cluster/ with custom naming" << std::endl;
+                      << " --fsd my_fsd.textproto --output-dir /tmp/cluster --base-filename my_cluster" << '\n';
+            std::cout << "  # Generates cluster descriptor(s) in /tmp/cluster/ with custom naming" << '\n';
             exit(0);
         }
 
@@ -81,7 +81,7 @@ InputConfig parse_arguments(int argc, char** argv) {
         // Validate file extension
         if (!config.fsd_path.ends_with(".textproto")) {
             std::cerr << "Warning: FSD file should typically have .textproto extension: '" << config.fsd_path << "'"
-                      << std::endl;
+                      << '\n';
         }
 
         // Check for invalid filename characters in base_filename
@@ -96,8 +96,8 @@ InputConfig parse_arguments(int argc, char** argv) {
         return config;
 
     } catch (const cxxopts::exceptions::exception& e) {
-        std::cerr << "Error parsing arguments: " << e.what() << std::endl;
-        std::cerr << options.help() << std::endl;
+        std::cerr << "Error parsing arguments: " << e.what() << '\n';
+        std::cerr << options.help() << '\n';
         exit(1);
     }
 }
@@ -106,28 +106,28 @@ int main(int argc, char** argv) {
     try {
         InputConfig config = parse_arguments(argc, argv);
 
-        std::cout << "Generating cluster descriptor(s) from FSD..." << std::endl;
-        std::cout << "  FSD file: " << config.fsd_path << std::endl;
-        std::cout << "  Output directory: " << config.output_dir << std::endl;
-        std::cout << "  Base filename: " << config.base_filename << std::endl;
+        std::cout << "Generating cluster descriptor(s) from FSD..." << '\n';
+        std::cout << "  FSD file: " << config.fsd_path << '\n';
+        std::cout << "  Output directory: " << config.output_dir << '\n';
+        std::cout << "  Base filename: " << config.base_filename << '\n';
 
         // Ensure output directory exists
         std::filesystem::create_directories(config.output_dir);
 
-        std::cout << "Processing FSD and generating cluster descriptor(s)..." << std::endl;
+        std::cout << "Processing FSD and generating cluster descriptor(s)..." << '\n';
         std::string output_file =
             generate_cluster_descriptor_from_fsd(config.fsd_path, config.output_dir, config.base_filename);
 
-        std::cout << "\nSuccessfully generated cluster descriptor(s)!" << std::endl;
-        std::cout << "  Main output file: " << output_file << std::endl;
+        std::cout << "\nSuccessfully generated cluster descriptor(s)!" << '\n';
+        std::cout << "  Main output file: " << output_file << '\n';
 
         // Check if this is a multi-host mapping file to provide additional info
         if (output_file.find("_mapping.yaml") != std::string::npos) {
-            std::cout << "  (Multi-host system detected - individual rank files also generated)" << std::endl;
+            std::cout << "  (Multi-host system detected - individual rank files also generated)" << '\n';
         }
 
     } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
+        std::cerr << "Error: " << e.what() << '\n';
         return 1;
     }
 

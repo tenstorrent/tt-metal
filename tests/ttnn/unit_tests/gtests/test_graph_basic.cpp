@@ -125,7 +125,7 @@ TEST_P(BufferTestFixture, BufferTest) {
         EXPECT_EQ(params.shape_b.volume() * 2, size_b);
 
         // Print the trace for reference
-        std::cout << trace << std::endl;
+        std::cout << trace << '\n';
     }
 }
 
@@ -177,7 +177,7 @@ TEST_F(TestScopedGraphCapture, ScopedGraphCapture) {
         ref_calltrace = ttnn::graph::extract_calltrace(ref_json_trace);
     }
     for (const auto& call : ref_calltrace) {
-        std::cout << call << std::endl;
+        std::cout << call << '\n';
     }
 
     // with manual exception in the nested loop

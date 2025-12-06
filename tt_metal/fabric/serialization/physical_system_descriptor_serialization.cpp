@@ -293,7 +293,7 @@ void emit_physical_system_descriptor_to_text_proto(
         file << text_proto;
         file.close();
     } else {
-        std::cout << text_proto << std::endl;
+        std::cout << text_proto << '\n';
     }
 }
 

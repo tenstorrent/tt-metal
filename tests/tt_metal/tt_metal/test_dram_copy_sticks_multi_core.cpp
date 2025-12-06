@@ -120,7 +120,7 @@ int main(int argc, char** argv) {
             dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
         tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
-        std::cout << "Num cores " << num_cores_r * num_cores_c << std::endl;
+        std::cout << "Num cores " << num_cores_r * num_cores_c << '\n';
         uint32_t core_index = 0;
         for (int i = start_core.y; i < start_core.y + num_cores_r; i++) {
             for (int j = start_core.x; j < start_core.x + num_cores_c; j++) {

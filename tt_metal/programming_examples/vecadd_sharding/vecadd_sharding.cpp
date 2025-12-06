@@ -71,7 +71,7 @@ CBHandle MakeCircularBufferBFP16(
 
 std::string next_arg(int& i, int argc, char** argv) {
     if (i + 1 >= argc) {
-        std::cerr << "Expected argument after " << argv[i] << std::endl;
+        std::cerr << "Expected argument after " << argv[i] << '\n';
         exit(1);
     }
     return argv[++i];
@@ -130,12 +130,12 @@ int main(int argc, char** argv) {
         } else if (arg == "--sharding_type" || arg == "-s") {
             sharding_type = next_arg(i, argc, argv);
             if (not test_configs.contains(sharding_type)) {
-                std::cout << "Invalid sharding type: " << sharding_type << std::endl;
+                std::cout << "Invalid sharding type: " << sharding_type << '\n';
                 help(argv[0]);
                 return 1;
             }
         } else {
-            std::cout << "Unknown argument: " << arg << std::endl;
+            std::cout << "Unknown argument: " << arg << '\n';
             help(argv[0]);
         }
     }
@@ -253,7 +253,7 @@ int main(int argc, char** argv) {
                 static_cast<float>(b_data[i]),
                 static_cast<float>(c_data[i]));
         }
-        std::cout << std::endl;
+        std::cout << '\n';
         core_idx++;
     }
 

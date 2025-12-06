@@ -26,7 +26,7 @@ struct RuntimeArgsData {
     bool in_bounds(std::size_t index) const noexcept {
         if (index >= rt_args_count) {
             std::cerr << "TT_FATAL: Index " << index << " is larger than runtime args size " << rt_args_count << " at "
-                      << __FILE__ << ":" << __LINE__ << std::endl;
+                      << __FILE__ << ":" << __LINE__ << '\n';
             return false;
         }
         return true;

@@ -427,17 +427,17 @@ void print_page(
     uint32_t l1_address,
     uint32_t bank_id,
     const std::vector<uint32_t>& page) {
-    std::cout << "dev_page_index " << dev_page_id << " on core " << core.str() << std::endl;
-    std::cout << "host_page_index " << host_page_id << std::endl;
-    std::cout << "noc coordinates " << noc_coordinates.str() << std::endl;
-    std::cout << "l1_address " << l1_address << std::endl;
-    std::cout << "bank id " << bank_id << std::endl;
+    std::cout << "dev_page_index " << dev_page_id << " on core " << core.str() << '\n';
+    std::cout << "host_page_index " << host_page_id << '\n';
+    std::cout << "noc coordinates " << noc_coordinates.str() << '\n';
+    std::cout << "l1_address " << l1_address << '\n';
+    std::cout << "bank id " << bank_id << '\n';
 
     std::cout << "0x";
     for (auto entry : page) {
         std::cout << std::hex << entry << std::dec;
     }
-    std::cout << std::dec << std::endl;
+    std::cout << std::dec << '\n';
 }
 
 void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {

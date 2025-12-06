@@ -37,7 +37,7 @@ InputConfig parse_arguments(int argc, char** argv) {
         auto result = options.parse(argc, argv);
 
         if (result.count("help")) {
-            std::cout << options.help() << std::endl;
+            std::cout << options.help() << '\n';
             exit(0);
         }
 
@@ -113,8 +113,8 @@ InputConfig parse_arguments(int argc, char** argv) {
         return config;
 
     } catch (const cxxopts::exceptions::exception& e) {
-        std::cerr << "Error parsing arguments: " << e.what() << std::endl;
-        std::cerr << options.help() << std::endl;
+        std::cerr << "Error parsing arguments: " << e.what() << '\n';
+        std::cerr << options.help() << '\n';
         exit(1);
     }
 }
@@ -287,10 +287,10 @@ int main(int argc, char** argv) {
         output_file << output_string;
         output_file.close();
 
-        std::cout << "Successfully generated cluster descriptor: " << output_path << std::endl;
+        std::cout << "Successfully generated cluster descriptor: " << output_path << '\n';
 
     } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
+        std::cerr << "Error: " << e.what() << '\n';
         return 1;
     }
 

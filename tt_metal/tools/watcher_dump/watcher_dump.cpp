@@ -57,7 +57,7 @@ void dump_data(
             id, num_hw_cqs, DispatchCoreConfig{eth_dispatch ? DispatchCoreType::ETH : DispatchCoreType::WORKER});
         devices.push_back(std::unique_ptr<IDevice>(device));
         if (dump_cqs) {
-            cout << "Dumping Command Queues into: " << cq_dir.string() << endl;
+            cout << "Dumping Command Queues into: " << cq_dir.string() << '\n';
             std::unique_ptr<SystemMemoryManager> sysmem_manager = std::make_unique<SystemMemoryManager>(id, num_hw_cqs);
             internal::dump_cqs(cq_file, iq_file, *sysmem_manager, dump_cqs_raw_data);
         }
@@ -65,7 +65,7 @@ void dump_data(
 
     // Watcher doesn't have kernel ids since we didn't create them here, need to read from file.
     if (dump_watcher) {
-        cout << "Dumping Watcher Log into: " << MetalContext::instance().watcher_server()->log_file_name() << endl;
+        cout << "Dumping Watcher Log into: " << MetalContext::instance().watcher_server()->log_file_name() << '\n';
         MetalContext::instance().watcher_server()->isolated_dump(device_ids);
     }
 
@@ -76,25 +76,25 @@ void dump_data(
 }
 
 void print_usage(const char* exec_name) {
-    cout << "Usage: " << exec_name << " [OPTION]" << endl;
-    cout << "\t-h, --help: Display this message." << endl;
+    cout << "Usage: " << exec_name << " [OPTION]" << '\n';
+    cout << "\t-h, --help: Display this message." << '\n';
     cout << "\t-d=LIST, --devices=LIST: Device IDs of chips to dump, LIST is comma separated list (\"0,2,3\") or "
             "\"all\"."
-         << endl;
-    cout << "\t-n=INT, --num-hw-cqs=INT: Number of CQs, should match the original program." << endl;
-    cout << "\t-c, --dump-cqs: Dump Command Queue data." << endl;
-    cout << "\t--dump-cqs-data: Dump Command Queue raw data (bytes), this can take minutes per CQ." << endl;
+         << '\n';
+    cout << "\t-n=INT, --num-hw-cqs=INT: Number of CQs, should match the original program." << '\n';
+    cout << "\t-c, --dump-cqs: Dump Command Queue data." << '\n';
+    cout << "\t--dump-cqs-data: Dump Command Queue raw data (bytes), this can take minutes per CQ." << '\n';
     cout << "\t-w, --dump-watcher: Dump watcher data, available data depends on whether watcher was enabled for "
             "original program."
-         << endl;
+         << '\n';
     cout << "\t--dump-noc-transfer-data: Dump NOC transfer data. Data is only available if previous run had "
             "TT_METAL_RECORD_NOC_TRANSFER_DATA defined."
-         << endl;
-    cout << "\t--eth-dispatch: Assume eth dispatch, should match previous run." << endl;
+         << '\n';
+    cout << "\t--eth-dispatch: Assume eth dispatch, should match previous run." << '\n';
 }
 
 int main(int argc, char* argv[]) {
-    cout << "Running watcher dump tool..." << endl;
+    cout << "Running watcher dump tool..." << '\n';
     // Default devices is all of them.
     vector<ChipId> device_ids;
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
@@ -126,7 +126,7 @@ int main(int argc, char* argv[]) {
             while (std::getline(iss, item, ',')) {
                 if (stoi(item) >= num_devices) {
                     cout << "Error: illegal device (" << stoi(item) << "), allowed range is [0, " << num_devices << ")"
-                         << endl;
+                         << '\n';
                     print_usage(argv[0]);
                     return 1;
                 }
@@ -138,10 +138,10 @@ int main(int argc, char* argv[]) {
         } else if (s == "-w" || s == "--dump-watcher") {
             dump_watcher = true;
         } else if (s == "-c" || s == "--dump-cqs") {
-            cout << "CQ dumping currently disabled" << endl;
+            cout << "CQ dumping currently disabled" << '\n';
             // dump_cqs = true;
         } else if (s == "--dump-cqs-data") {
-            cout << "CQ raw data dumping currently disabled" << endl;
+            cout << "CQ raw data dumping currently disabled" << '\n';
             // dump_cqs_raw_data = true;
         } else if (s == "--dump-noc-transfer-data") {
             tt::tt_metal::MetalContext::instance().rtoptions().set_record_noc_transfers(true);
@@ -149,7 +149,7 @@ int main(int argc, char* argv[]) {
         } else if (s == "--eth-dispatch") {
             eth_dispatch = true;
         } else {
-            cout << "Error: unrecognized command line argument: " << s << endl;
+            cout << "Error: unrecognized command line argument: " << s << '\n';
             print_usage(argv[0]);
             return 1;
         }
@@ -157,5 +157,5 @@ int main(int argc, char* argv[]) {
 
     // Call dump function with user config.
     dump_data(device_ids, dump_watcher, dump_cqs, dump_cqs_raw_data, dump_noc_xfers, eth_dispatch, num_hw_cqs);
-    std::cout << "Watcher dump tool finished." << std::endl;
+    std::cout << "Watcher dump tool finished." << '\n';
 }

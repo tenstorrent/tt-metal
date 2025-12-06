@@ -117,7 +117,7 @@ std::vector<std::uint32_t> create_arange_vector_of_bfloat16(size_t num_bytes, bo
             std::cout << "num_1_float: " << num_1_float << ", num_1_bfloat16 : " << static_cast<float>(num_1_bfloat16)
                       << ", \t\t";
             std::cout << "num_2_float: " << num_2_float << ", num_2_bfloat16 : " << static_cast<float>(num_2_bfloat16)
-                      << std::endl;
+                      << '\n';
         }
 
         // pack 2 uint16 into uint32
@@ -241,7 +241,7 @@ void print_vec_of_uint32_as_packed_bfloat16(
     const std::vector<std::uint32_t>& vec, int num_tiles, const std::string& name, int tile_print_offset) {
     int idx = 0;
     for (int i = 0; i < num_tiles; i++) {
-        std::cout << name << " tile " << i + tile_print_offset << std::endl;
+        std::cout << name << " tile " << i + tile_print_offset << '\n';
         for (int j = 0; j < 32; j++) {
             for (int k = 0; k < 32; k += 2) {
                 uint32_t uint32_data = vec.at(idx);
@@ -250,9 +250,9 @@ void print_vec_of_uint32_as_packed_bfloat16(
                           << ", ";
                 idx++;
             }
-            std::cout << std::endl;
+            std::cout << '\n';
         }
-        std::cout << std::endl;
+        std::cout << '\n';
     }
 }
 
@@ -260,30 +260,30 @@ void print_vec_of_bfloat16(
     const std::vector<bfloat16>& vec, int num_tiles, const std::string& name, int tile_print_offset) {
     int idx = 0;
     for (int i = 0; i < num_tiles; i++) {
-        std::cout << name << " tile " << i + tile_print_offset << std::endl;
+        std::cout << name << " tile " << i + tile_print_offset << '\n';
         for (int j = 0; j < 32; j++) {
             for (int k = 0; k < 32; k++) {
                 std::cout << static_cast<float>(vec.at(idx)) << ", ";
                 idx++;
             }
-            std::cout << std::endl;
+            std::cout << '\n';
         }
-        std::cout << std::endl;
+        std::cout << '\n';
     }
 }
 
 void print_vec(const std::vector<uint32_t>& vec, int num_tiles, const std::string& name, int tile_print_offset) {
     int idx = 0;
     for (int i = 0; i < num_tiles; i++) {
-        std::cout << name << " tile " << i + tile_print_offset << std::endl;
+        std::cout << name << " tile " << i + tile_print_offset << '\n';
         for (int j = 0; j < 32; j++) {
             for (int k = 0; k < 32; k++) {
                 std::cout << vec.at(idx) << ", ";
                 idx++;
             }
-            std::cout << std::endl;
+            std::cout << '\n';
         }
-        std::cout << std::endl;
+        std::cout << '\n';
     }
 }
 
@@ -329,7 +329,7 @@ bool equal_within_n_sig_figs(float a, float b, int n) {
                 num_correct_sig_figs++;
             }
         } else {
-            std::cout << "Floats being compared: A: " << a << ", B: " << b << std::endl;
+            std::cout << "Floats being compared: A: " << a << ", B: " << b << '\n';
             return false;
         }
 
@@ -352,9 +352,9 @@ bool is_close(float a, float b, float rtol, float atol) {
     auto reldenom = fmaxf(fabsf(a), fabsf(b));
     auto result = (absdiff <= atol) || (absdiff <= rtol * reldenom);
     if (!result) {
-        std::cout << "Discrepacy: A = " << a << " B = " << b << std::endl;
-        std::cout << "   absdiff = " << absdiff << std::endl;
-        std::cout << "   reldiff = " << absdiff / (reldenom + 1e-6f) << std::endl;
+        std::cout << "Discrepacy: A = " << a << " B = " << b << '\n';
+        std::cout << "   absdiff = " << absdiff << '\n';
+        std::cout << "   reldiff = " << absdiff / (reldenom + 1e-6f) << '\n';
     }
     return result;
 }
@@ -365,7 +365,7 @@ bool packed_uint32_t_vector_comparison(
     const std::function<bool(float, float)>& comparison_function,
     int* argfail) {
     if (vec_a.size() != vec_b.size()) {
-        std::cout << "Sizes don't match, returning false" << std::endl;
+        std::cout << "Sizes don't match, returning false" << '\n';
         return false;
     }
 
@@ -382,10 +382,10 @@ bool packed_uint32_t_vector_comparison(
         if (not(comparison_function(a1, b1) and comparison_function(a2, b2))) {
             if (argfail) {
                 *argfail = i;
-                std::cout << "a1 = " << std::hex << a1 << std::endl;
-                std::cout << "b1 = " << std::hex << b1 << std::endl;
-                std::cout << "a2 = " << std::hex << a2 << std::endl;
-                std::cout << "b2 = " << std::hex << b2 << std::endl;
+                std::cout << "a1 = " << std::hex << a1 << '\n';
+                std::cout << "b1 = " << std::hex << b1 << '\n';
+                std::cout << "a2 = " << std::hex << a2 << '\n';
+                std::cout << "b2 = " << std::hex << b2 << '\n';
             }
             return false;
         }

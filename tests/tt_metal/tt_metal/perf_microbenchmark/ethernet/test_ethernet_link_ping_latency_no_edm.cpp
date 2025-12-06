@@ -185,7 +185,7 @@ void run(
         tt::tt_metal::distributed::EnqueueMeshWorkload(device0->mesh_command_queue(), mesh_workload0, false);
         tt::tt_metal::distributed::EnqueueMeshWorkload(device1->mesh_command_queue(), mesh_workload1, false);
 
-        std::cout << "Calling Finish" << std::endl;
+        std::cout << "Calling Finish" << '\n';
         tt::tt_metal::distributed::Finish(device0->mesh_command_queue());
         tt::tt_metal::distributed::Finish(device1->mesh_command_queue());
     }
@@ -235,9 +235,9 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    std::cout << "setting up test fixture" << std::endl;
+    std::cout << "setting up test fixture" << '\n';
     N300TestDevice test_fixture;
-    std::cout << "done setting up test fixture" << std::endl;
+    std::cout << "done setting up test fixture" << '\n';
 
     const auto& device_0 = test_fixture.devices_.at(0);
     const auto& active_eth_cores = device_0->get_devices()[0]->get_active_ethernet_cores(true);
@@ -265,7 +265,7 @@ int main(int argc, char** argv) {
     // Add more configurations here until proper argc parsing added
     bool success = false;
     success = true;
-    std::cout << "STARTING" << std::endl;
+    std::cout << "STARTING" << '\n';
     try {
         for (auto num_samples : sample_counts) {
             for (auto sample_page_size : sample_sizes) {

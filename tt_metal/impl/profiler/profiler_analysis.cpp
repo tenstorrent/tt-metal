@@ -390,7 +390,7 @@ void writeProgramsPerfResultsToCSV(
             }
         }
 
-        log_file_ofs << header_string << std::endl;
+        log_file_ofs << header_string << '\n';
     }
 
     for (const auto& [_, results_string] : results_string_per_program_execution_uid) {

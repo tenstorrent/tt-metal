@@ -192,10 +192,10 @@ bool flatten(
     pass &= (golden == result_vec);
 
     if (not pass) {
-        std::cout << "GOLDEN" << std::endl;
+        std::cout << "GOLDEN" << '\n';
         print_vec_of_uint32_as_packed_bfloat16(golden, num_tiles * 32);
 
-        std::cout << "RESULT" << std::endl;
+        std::cout << "RESULT" << '\n';
         print_vec_of_uint32_as_packed_bfloat16(result_vec, num_tiles * 32);
     }
     return pass;
@@ -306,10 +306,10 @@ bool flatten_stress(
         pass &= (golden == result_vec);
 
         if (not pass) {
-            std::cout << "GOLDEN" << std::endl;
+            std::cout << "GOLDEN" << '\n';
             print_vec_of_uint32_as_packed_bfloat16(golden, num_tiles * 32);
 
-            std::cout << "RESULT" << std::endl;
+            std::cout << "RESULT" << '\n';
             print_vec_of_uint32_as_packed_bfloat16(result_vec, num_tiles * 32);
         }
     }

@@ -1395,7 +1395,7 @@ public:
 
         out << YAML::EndMap;
 
-        fout << out.c_str() << std::endl;
+        fout << out.c_str() << '\n';
     }
 
     static void dump(const AllocatorPolicies& policies, std::ofstream& fout) {
@@ -1408,7 +1408,7 @@ public:
 
         out << YAML::EndMap;
 
-        fout << out.c_str() << std::endl;
+        fout << out.c_str() << '\n';
     }
 
     static void dump(const std::vector<TestConfig>& test_configs, std::ofstream& fout) {
@@ -1426,7 +1426,7 @@ public:
 
         out << YAML::EndMap;
 
-        fout << out.c_str() << std::endl;
+        fout << out.c_str() << '\n';
     }
 
 private:

@@ -264,7 +264,7 @@ TEST(Cluster, ReportSystemHealth) {
             unique_chip_ids[chip_id] = chip_id;
         }
     }
-    ss << "Found " << unique_chip_ids.size() << " chips in cluster:" << std::endl;
+    ss << "Found " << unique_chip_ids.size() << " chips in cluster:" << '\n';
 
     auto cluster_type = cluster.get_cluster_type();
 
@@ -277,7 +277,7 @@ TEST(Cluster, ReportSystemHealth) {
         if (not physical_loc.empty()) {
             chip_id_ss << " " << physical_loc;
         }
-        ss << chip_id_ss.str() << std::endl;
+        ss << chip_id_ss.str() << '\n';
         for (const auto& [eth_core, chan] : soc_desc.logical_eth_core_to_chan_map) {
             if (get_connector_type(chip_id, eth_core, chan, cluster_type) == ConnectorType::UNUSED) {
                 continue;
@@ -331,9 +331,9 @@ TEST(Cluster, ReportSystemHealth) {
                 eth_ss << " link DOWN/unconnected " << connection_type;
                 unexpected_system_states.push_back(chip_id_ss.str() + eth_ss.str());
             }
-            ss << eth_ss.str() << std::endl;
+            ss << eth_ss.str() << '\n';
         }
-        ss << std::endl;
+        ss << '\n';
     }
     log_info(tt::LogTest, "{}", ss.str());
 

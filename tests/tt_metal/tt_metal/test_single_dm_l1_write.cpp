@@ -27,23 +27,23 @@ int main() {
     if (env_var == nullptr) {
         std::cerr << "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to 0,0 to see the output of "
                      "the Data Movement kernels."
-                  << std::endl;
-        std::cerr << "WARNING: For example, export TT_METAL_DPRINT_CORES=0,0" << std::endl;
+                  << '\n';
+        std::cerr << "WARNING: For example, export TT_METAL_DPRINT_CORES=0,0" << '\n';
     }
     env_var = std::getenv("TT_METAL_SIMULATOR");
     if (env_var == nullptr) {
         std::cerr
             << "ERROR: This test can only be run using a simulator. Please set Environment Variable TT_METAL_SIMULATOR"
-            << std::endl;
-        std::cerr << "ERROR: with a valid simulator path" << std::endl;
+            << '\n';
+        std::cerr << "ERROR: with a valid simulator path" << '\n';
         return 1;
     }
     env_var = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (env_var == nullptr) {
         std::cerr << "ERROR: This test can only be run in slow dispatch mode. Please set Environment Variable "
                      "TT_METAL_SLOW_DISPATCH_MODE"
-                  << std::endl;
-        std::cerr << "ERROR: using export TT_METAL_SLOW_DISPATCH_MODE=1" << std::endl;
+                  << '\n';
+        std::cerr << "ERROR: using export TT_METAL_SLOW_DISPATCH_MODE=1" << '\n';
         return 1;
     }
 
@@ -74,7 +74,7 @@ int main() {
     SetRuntimeArgs(program, data_movement_kernel_0, core, {address});
     SetCommonRuntimeArgs(program, data_movement_kernel_0, {value});
     std::cout << "Hello, Core {0, 0} on Device 0, Please start execution. I will standby for your communication."
-              << std::endl;
+              << '\n';
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -82,10 +82,10 @@ int main() {
     mesh_device->close();
 
     if (outputs[0] == value) {
-        std::cout << "Test passed!" << std::endl;
+        std::cout << "Test passed!" << '\n';
         return 0;
     } else {
-        std::cout << "Test failed! Got the value " << std::hex << outputs[0] << " instead of " << value << std::endl;
+        std::cout << "Test failed! Got the value " << std::hex << outputs[0] << " instead of " << value << '\n';
         return 1;
     }
 }

@@ -516,13 +516,13 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
     CablingGenerator::get_all_connections_of_type(root_instance_, {PortType::QSFP_DD}, conn_list);
     output_file.fill('0');
     if (loc_info) {
-        output_file << "Source,,,,,,,,,Destination,,,,,,,,,Cable Length,Cable Type" << std::endl;
+        output_file << "Source,,,,,,,,,Destination,,,,,,,,,Cable Length,Cable Type" << '\n';
         output_file << "Hostname,Hall,Aisle,Rack,Shelf U,Tray,Port,Label,Node Type,Hostname,Hall,Aisle,Rack,Shelf "
                        "U,Tray,Port,Label,Node Type,,"
-                    << std::endl;
+                    << '\n';
     } else {
-        output_file << "Source,,,,Destination,,," << std::endl;
-        output_file << "Hostname,Tray,Port,Node Type,Hostname,Tray,Port,Node Type" << std::endl;
+        output_file << "Source,,,,Destination,,," << '\n';
+        output_file << "Hostname,Tray,Port,Node Type,Hostname,Tray,Port,Node Type" << '\n';
     }
     for (const auto& [start, end] : conn_list) {
         auto host_id1 = std::get<0>(start).get();
@@ -573,10 +573,10 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
                         << host2.shelf_u << "-" << tray_id2 << "-" << port_id2 << "," << host2_node_type << ",";
 
             output_file << ",";        // Length blank, leaving up to technician
-            output_file << std::endl;  // Type blank, leaving up to technician
+            output_file << '\n';       // Type blank, leaving up to technician
         } else {
             output_file << host1.hostname << "," << tray_id1 << "," << port_id1 << "," << host1_node_type << ",";
-            output_file << host2.hostname << "," << tray_id2 << "," << port_id2 << "," << host2_node_type << std::endl;
+            output_file << host2.hostname << "," << tray_id2 << "," << port_id2 << "," << host2_node_type << '\n';
         }
     }
 
