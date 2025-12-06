@@ -2331,7 +2331,6 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
     }
 }
 
-
 // Intermesh Connectivity Generation Functions
 
 void ControlPlane::generate_intermesh_connectivity() {

@@ -214,16 +214,20 @@ void Logger::log_mesh_device_created(const MeshDeviceData& mesh_device_data) noe
 
         const auto* mesh_device = mesh_device_data.mesh_device;
         if (mesh_device) {
-            mesh_devices_ostream << "    devices: [";
-            bool first = true;
-            for (const auto& device : mesh_device->get_devices()) {
-                if (!first) {
-                    mesh_devices_ostream << ", ";
+            if (!mesh_device->get_view().get_devices().empty()) {
+                mesh_devices_ostream << "    devices: [";
+                bool first = true;
+                for (const auto& device : mesh_device->get_devices()) {
+                    if (!first) {
+                        mesh_devices_ostream << ", ";
+                    }
+                    first = false;
+                    mesh_devices_ostream << device->id();
                 }
-                first = false;
-                mesh_devices_ostream << device->id();
+                mesh_devices_ostream << "]\n";
+            } else {
+                mesh_devices_ostream << "    devices: all remote\n";
             }
-            mesh_devices_ostream << "]\n";
 
             const auto& shape = mesh_device->get_view().shape();
             mesh_devices_ostream << "    shape: [";
