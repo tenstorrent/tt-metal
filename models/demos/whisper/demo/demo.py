@@ -125,11 +125,11 @@ def init_conditional_generation_tt_model(
         device=mesh_device,
     )
     # Note: config.max_length is typically 448 for whisper large models
-    kv_cache = init_kv_cache(
+    kv_cache, cross_attn_cache = init_kv_cache(
         config, mesh_device, max_batch_size, max_seq_len=max_seq_len, weights_mesh_mapper=weights_mesh_mapper
     )
 
-    return parameters, ttnn_linear_weight, kv_cache
+    return parameters, ttnn_linear_weight, kv_cache, cross_attn_cache
 
 
 def create_functional_whisper_for_conditional_generation_inference_pipeline(
@@ -154,7 +154,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
     hf_ref_model, config, processor, feature_extractor = load_conditional_generation_ref_model(
         model_repo, generation_params.language, generation_params.task
     )
-    parameters, ttnn_linear_weight, kv_cache = init_conditional_generation_tt_model(
+    parameters, ttnn_linear_weight, kv_cache, cross_attn_cache = init_conditional_generation_tt_model(
         hf_ref_model, config, mesh_device, weights_mesh_mapper=weights_mesh_mapper
     )
 
@@ -187,6 +187,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
             output_mesh_composer=output_mesh_composer,
             weights_mesh_mapper=weights_mesh_mapper,
             kv_cache=kv_cache,
+            cross_attn_cache=cross_attn_cache,
             generation_params=params,
             stream_generation=stream,
             return_perf_metrics=return_perf_metrics,
