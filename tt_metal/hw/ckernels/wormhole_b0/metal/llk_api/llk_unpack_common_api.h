@@ -53,7 +53,7 @@ inline void llk_unpack_debug_dump(std::uint8_t* data, std::uint32_t byte_size) {
 
 inline void llk_unpack_debug_dump_seek(std::uint8_t offset) { _llk_unpack_debug_dump_seek_(offset); }
 
-template <bool is_fp32_dest_acc_ene>
+template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
     const std::uint32_t srca_operand_id = get_operand_id(srca_new_operand);
     const std::uint32_t num_faces = get_operand_num_faces(srca_operand_id);
