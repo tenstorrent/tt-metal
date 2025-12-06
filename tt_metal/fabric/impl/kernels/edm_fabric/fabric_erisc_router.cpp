@@ -1897,7 +1897,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 uint64_t loop_delta_cycles = loop_end_cycles - loop_start_cycles;
                 update_bw_cycles(loop_delta_cycles, tx_progress, rx_progress, local_fabric_telemetry);
             }
-        } else if (router_state == RouterStateCommon::PAUSED) {
+        } else if (router_state == RouterStateCommon::PAUSE) {
             *router_state_l1 = RouterStateCommon::DRAINING;
             // drain()
             *router_state_l1 = RouterStateCommon::PAUSED;

@@ -222,8 +222,8 @@ enum RouterStateCommon : std::uint32_t {
     PAUSE = 2,
     PAUSED = 3,
     DRAINING = 4,
-    TERMINATE = 5,
-    TERMINATED = 6,
+    STOP = 5,
+    STOPPED = 6,
 };
 
 struct routing_l1_info_t {
