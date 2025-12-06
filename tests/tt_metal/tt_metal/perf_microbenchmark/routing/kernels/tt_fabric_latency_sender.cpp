@@ -64,8 +64,8 @@ void kernel_main() {
     // Setup packet headers for routing
     if constexpr (!is_2d_fabric) {
         // 1D routing: use Low Latency header with hop count
-        fabric_set_unicast_route<false>((LowLatencyPacketHeader*)payload_packet_header, num_hops_to_responder);
-        fabric_set_unicast_route<false>((LowLatencyPacketHeader*)sem_inc_packet_header, num_hops_to_responder);
+        fabric_set_unicast_route<false>(payload_packet_header, num_hops_to_responder);
+        fabric_set_unicast_route<false>(sem_inc_packet_header, num_hops_to_responder);
     } else {
         // 2D routing: use Hybrid Mesh header with device/mesh IDs (static routing)
         fabric_set_unicast_route((HybridMeshPacketHeader*)payload_packet_header, dst_device_id, dst_mesh_id);
