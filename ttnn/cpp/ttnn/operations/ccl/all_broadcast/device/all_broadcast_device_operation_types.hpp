@@ -11,16 +11,16 @@
 namespace ttnn::operations::ccl::all_broadcast {
 
 struct operation_attributes_t {
-    uint32_t num_links;
-    uint32_t ring_size;
+    uint32_t num_links = 0;
+    uint32_t ring_size = 0;
     MemoryConfig output_mem_config;
     std::optional<uint32_t> cluster_axis;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
-    tt::tt_fabric::Topology topology;
+    tt::tt_fabric::Topology topology{};
 };
 
 struct tensor_args_t {
-    const Tensor input_tensor;
+    Tensor input_tensor;
 };
 
 using spec_return_value_t = std::vector<TensorSpec>;

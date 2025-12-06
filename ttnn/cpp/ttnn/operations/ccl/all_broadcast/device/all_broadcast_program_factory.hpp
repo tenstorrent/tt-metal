@@ -13,7 +13,7 @@ struct AllBroadcastProgramFactory {
         tt::tt_metal::KernelHandle worker_sender_writer_kernel_id{};
         tt::tt_metal::GlobalSemaphore semaphore;
         tt::tt_metal::GlobalSemaphore barrier_semaphore;
-        uint32_t ring_index;
+        uint32_t ring_index = 0;
     };
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
