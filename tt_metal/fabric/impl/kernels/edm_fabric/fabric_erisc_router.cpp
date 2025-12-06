@@ -1240,6 +1240,12 @@ FORCE_INLINE void update_telemetry(
     bool rx_progress,
     LocalTelemetryT& local_fabric_telemetry,
     volatile tt_l1_ptr LocalTelemetryT* fabric_telemetry) {
+    if constexpr (FABRIC_TELEMETRY_ROUTER_STATE) {
+        const auto* routing_table_l1 =
+            reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+        auto* router_state_l1 = const_cast<tt_l1_ptr RouterStateCommon*>(&routing_table_l1->state);
+        fabric_telemetry->dynamic_info.erisc[MY_ERISC_ID].router_state = *router_state_l1;
+    }
     if constexpr (FABRIC_TELEMETRY_HEARTBEAT_TX) {
         bool sender_idle = false;
         if (!tx_progress) {
@@ -1775,6 +1781,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
 
     const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    auto* router_state_l1 = const_cast<tt_l1_ptr RouterStateCommon*>(&routing_table_l1->state);
+    *router_state_l1 = RouterStateCommon::ACTIVE;
     tt::tt_fabric::routing_l1_info_t routing_table = *routing_table_l1;
 
     // May want to promote to part of the handshake but for now we just initialize in this standalone way
@@ -1807,24 +1815,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         init_receiver_channel_response_credit_senders<NUM_RECEIVER_CHANNELS>();
     auto sender_channel_from_receiver_credits =
         init_sender_channel_from_receiver_credits_flow_controllers<NUM_SENDER_CHANNELS>();
-    // This value defines the number of loop iterations we perform of the main control sequence before exiting
-    // to check for termination and context switch. Removing the these checks from the inner loop can drastically
-    // improve performance. The value of 32 was chosen somewhat empirically and then raised up slightly.
-
-    uint64_t loop_start_cycles;
-    while (!got_immediate_termination_signal(termination_signal_ptr)) {
-        did_something = false;
-
-        uint32_t tx_progress = 0;
-        uint32_t rx_progress = 0;
-        if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
-            loop_start_cycles = get_timestamp();
-        }
-
-        if constexpr (is_sender_channel_serviced[0]) {
-            open_perf_recording_window(inner_loop_perf_telemetry_collector);
-        }
-
+    auto run_active_loop = [&](uint32_t& tx_progress, uint32_t& rx_progress) {
         for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
             invalidate_l1_cache();
             // Capture these to see if we made progress
@@ -1884,14 +1875,43 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     local_fabric_telemetry);
             }
         }
+    };
+    // This value defines the number of loop iterations we perform of the main control sequence before exiting
+    // to check for termination and context switch. Removing the these checks from the inner loop can drastically
+    // improve performance. The value of 32 was chosen somewhat empirically and then raised up slightly.
 
-        // Compute idle conditions and update heartbeats in one helper
-        if constexpr (FABRIC_TELEMETRY_ANY_DYNAMIC_STAT) {
+    uint64_t loop_start_cycles;
+    while (!got_immediate_termination_signal(termination_signal_ptr)) {
+        did_something = false;
+
+        uint32_t tx_progress = 0;
+        uint32_t rx_progress = 0;
+
+        if constexpr (is_sender_channel_serviced[0]) {
+            open_perf_recording_window(inner_loop_perf_telemetry_collector);
+        }
+        auto router_state = *router_state_l1;
+        if (router_state == RouterStateCommon::ACTIVE) {
+            if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
+                loop_start_cycles = get_timestamp();
+            }
+
+            run_active_loop(tx_progress, rx_progress);
+
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 uint64_t loop_end_cycles = get_timestamp();
                 uint64_t loop_delta_cycles = loop_end_cycles - loop_start_cycles;
                 update_bw_cycles(loop_delta_cycles, tx_progress, rx_progress, local_fabric_telemetry);
             }
+        } else if (router_state == RouterStateCommon::PAUSE) {
+            *router_state_l1 = RouterStateCommon::DRAINING;
+            // drain()
+            *router_state_l1 = RouterStateCommon::PAUSED;
+        } else {
+        }
+
+        // Compute idle conditions and update heartbeats in one helper
+        if constexpr (FABRIC_TELEMETRY_ANY_DYNAMIC_STAT) {
             update_telemetry(
                 local_sender_channel_free_slots_stream_ids,
                 tx_progress,

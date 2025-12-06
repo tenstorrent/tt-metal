@@ -215,9 +215,19 @@ struct tensix_fabric_connections_l1_info_t {
     fabric_aligned_connection_info_t read_write[MAX_FABRIC_ENDPOINTS];
 };
 
+// TODO: move to *_msgs.h definition
+enum RouterStateCommon : std::uint32_t {
+    INITIALIZED = 0,
+    ACTIVE = 1,
+    PAUSE = 2,
+    PAUSED = 3,
+    DRAINING = 4,
+    STOP = 5,
+    STOPPED = 6,
+};
+
 struct routing_l1_info_t {
-    // TODO: https://github.com/tenstorrent/tt-metal/issues/28534
-    //       these fabric node ids should be another struct as really commonly used data
+    RouterStateCommon state;
     uint16_t my_mesh_id = 0;    // Current mesh ID
     uint16_t my_device_id = 0;  // Current chip ID
     // NOTE: Compressed version has additional overhead (2x slower) to read values,
@@ -225,11 +235,14 @@ struct routing_l1_info_t {
     //       Need to evaluate once actual workloads are available
     direction_table_t<MAX_MESH_SIZE> intra_mesh_direction_table{};          // 96 bytes
     direction_table_t<MAX_NUM_MESHES> inter_mesh_direction_table{};         // 384 bytes
-    intra_mesh_routing_path_t<1, false> routing_path_table_1d{};            // 64 bytes
+    intra_mesh_routing_path_t<1, false> routing_path_table_1d{};            // 256 bytes
     intra_mesh_routing_path_t<2, true> routing_path_table_2d{};             // 512 bytes
     std::uint8_t exit_node_table[MAX_NUM_MESHES] = {};                      // 1024 bytes
-    uint8_t padding[12] = {};  // pad to 16-byte alignment
-} __attribute__((packed));
+    uint8_t padding1[8] = {};                                               // pad to 16-byte alignment
+};
+static_assert(offsetof(routing_l1_info_t, routing_path_table_1d) == 488);
+static_assert(offsetof(routing_l1_info_t, state) % 16 == 0);
+static_assert(sizeof(routing_l1_info_t) % 16 == 0);
 
 struct worker_routing_l1_info_t {
     routing_l1_info_t routing_info{};
