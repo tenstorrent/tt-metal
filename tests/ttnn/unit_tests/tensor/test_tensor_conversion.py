@@ -70,7 +70,23 @@ def test_tensor_conversion_with_tt_dtype(python_lib, shape, tt_dtype, convert_to
     elif python_lib == np:
         py_tensor_after_round_trip = tt_tensor.to_numpy()
 
+    if py_tensor.dtype == torch.int16:
+        # TTNN does not have int16 type, so roundtrip with default parameters will
+        # convert types as `int16 -> uint16 -> int32`
+        py_tensor_after_round_trip = py_tensor_after_round_trip.to(torch.int16)
+
+    elif py_tensor.dtype == torch.int32:
+        # Same for `int32 -> uint32 -> int64` conversion sequence
+        py_tensor_after_round_trip = py_tensor_after_round_trip.to(torch.int32)
+
+    elif py_tensor.dtype == np.int16:
+        py_tensor_after_round_trip = py_tensor_after_round_trip.astype(np.int16)
+
+    elif py_tensor.dtype == np.int32:
+        py_tensor_after_round_trip = py_tensor_after_round_trip.astype(np.int32)
+
     assert py_tensor.dtype == py_tensor_after_round_trip.dtype
+
     assert py_tensor.shape == py_tensor_after_round_trip.shape
 
     allclose_kwargs = {}
