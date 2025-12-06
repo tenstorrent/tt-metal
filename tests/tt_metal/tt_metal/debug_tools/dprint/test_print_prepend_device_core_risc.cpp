@@ -108,7 +108,7 @@ void RunTest(
     fixture->RunProgram(mesh_device, workload);
 
     // Check the print log against golden output.
-    EXPECT_TRUE(FileContainsAllStrings(DPrintMeshFixture::dprint_file_name, golden_output));
+    EXPECT_TRUE(FileContainsAllStrings(fixture->dprint_file_name, golden_output));
 }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
