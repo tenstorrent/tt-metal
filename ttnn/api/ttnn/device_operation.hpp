@@ -16,6 +16,7 @@
 #include <tt-metalium/program_cache.hpp>
 #include <tracy/Tracy.hpp>
 #include "tools/profiler/op_profiler.hpp"
+#include "tools/inspector/inspector.hpp"
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/concepts.hpp>
 #include <tt-metalium/graph_tracking.hpp>
@@ -268,10 +269,10 @@ void log_operation_info(
         },
         tensor_args);
 
-    ttnn::debug_event::log_operation_info(
+    ttnn::inspector::log_operation_info(
         workflow_id, operation_name, std::string_view(tensor_args_buffer.data(), tensor_args_buffer.size()));
 #else
-    ttnn::debug_event::log_operation_info(workflow_id, operation_name, "");
+    ttnn::inspector::log_operation_info(workflow_id, operation_name, "");
 #endif
 }
 

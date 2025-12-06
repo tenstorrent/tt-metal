@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/debug_event.hpp"
+#include "api/tools/inspector/inspector.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -18,57 +18,39 @@
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
 
-namespace ttnn::debug_event {
+namespace ttnn::inspector {
 
 namespace {  // anonymous namespace
 
-constexpr char kGeneratedDir[] = "generated";
-constexpr char kDebugEventsDir[] = "debug_events";
-constexpr char kTmpDebugEventsDir[] = "/tmp/debug_events";  // Default directory for debug events
-constexpr char kRolloverSuffix[] = ".prev";                 // Suffix for previous file where runtime ids are written
-constexpr std::chrono::seconds kFlushInterval{1};           // Background thread that flush files on time interval
+constexpr char kDefaultDir[] = "generated/ttnn/inspector";
+constexpr char kTmpInspectorDir[] = "/tmp/ttnn/inspector";  // Default directory for inspector
+constexpr char kRolloverSuffix[] = ".prev";                 // Suffix for previous file
+constexpr std::chrono::seconds kFlushInterval{1};           // Flush interval for background thread
 constexpr size_t kRuntimeIdLineBufferSize = 256;            // Buffer size for runtime id line
-constexpr size_t kRuntimeIdRolloverEventLimit = 8192;       // Write every 8k runtime ids to a new file
+constexpr size_t kRuntimeIdRolloverEntryLimit = 8192;       // Write every 8k runtime ids to a new file
 
 uint64_t get_timestamp_ns() {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
         .count();
 }
 
-// Escape special characters for JSON string
-std::string escape_json_string(std::string_view input) {
-    std::string result;
-    result.reserve(input.size() * 2);  // Reserve extra space for escapes
-    for (char c : input) {
-        switch (c) {
-            case '"': result += "\\\""; break;
-            case '\\': result += "\\\\"; break;
-            case '\n': result += "\\n"; break;
-            case '\r': result += "\\r"; break;
-            case '\t': result += "\\t"; break;
-            default: result += c; break;
-        }
-    }
-    return result;
-}
-
 std::string get_rollover_filename(std::string_view base_path) { return std::string(base_path) + kRolloverSuffix; }
 
 std::filesystem::path get_default_log_directory() {
     // Check environment variable first
-    const char* env_path = std::getenv("TT_METAL_DEBUG_EVENT_LOG_PATH");
+    const char* env_path = std::getenv("TT_METAL_INSPECTOR_LOG_PATH");
     if (env_path) {
         return std::filesystem::path(env_path);
     }
 
-    // Default to {TT_METAL_HOME}/generated/ttnn_debug_events
+    // Default to {TT_METAL_HOME}/generated/ttnn/inspector
     const char* root_dir = std::getenv("TT_METAL_HOME");
     if (root_dir) {
-        return std::filesystem::path(root_dir) / kGeneratedDir / kDebugEventsDir;
+        return std::filesystem::path(root_dir) / kDefaultDir;
     }
 
     // Fallback to /tmp if TT_METAL_RUNTIME_ROOT not set
-    return std::filesystem::path(kTmpDebugEventsDir);
+    return std::filesystem::path(kTmpInspectorDir);
 }
 
 // Internal file writer class with optional rollover
@@ -77,15 +59,15 @@ public:
     ~FileWriter() { close(); }
 
     // Open file with optional rollover
-    // max_events = 0 means no rollover (but starts fresh each run)
-    // max_events > 0 means rollover after that many events
-    void open(const std::filesystem::path& file_path, std::string header, size_t max_events = 0) {
+    // max_entries = 0 means no rollover (but starts fresh each run)
+    // max_entries > 0 means rollover after that many entries
+    void open(const std::filesystem::path& file_path, std::string header, size_t max_entries = 0) {
         std::lock_guard<std::mutex> lock(mutex_);
 
         file_path_ = file_path;
         header_ = std::move(header);
-        max_events_ = max_events;
-        total_event_count_ = 0;
+        max_entries_ = max_entries;
+        total_entry_count_ = 0;
 
         // Always open in truncate mode (start fresh)
         file_.open(file_path, std::ios::out | std::ios::trunc);
@@ -103,14 +85,14 @@ public:
             return;
         }
 
-        // Check if rollover is needed (only if max_events > 0)
-        if (max_events_ > 0 && total_event_count_ >= max_events_) {
+        // Check if rollover is needed (only if max_entries > 0)
+        if (max_entries_ > 0 && total_entry_count_ >= max_entries_) {
             rollover();
         }
 
         // Write directly to file (it has its own buffering)
         file_.write(line.data(), line.size());
-        total_event_count_++;
+        total_entry_count_++;
     }
 
     void flush() {
@@ -145,22 +127,22 @@ private:
         }
 
         // Reset counters
-        total_event_count_ = 0;
+        total_entry_count_ = 0;
     }
 
     std::ofstream file_;
     std::mutex mutex_;
     std::filesystem::path file_path_;
     std::string header_;
-    size_t max_events_ = 0;
-    size_t total_event_count_ = 0;
+    size_t max_entries_ = 0;
+    size_t total_entry_count_ = 0;
 };
 
 // Singleton logger with lazy initialization and auto-cleanup
-class DebugEventLogger {
+class InspectorLogger {
 public:
-    static DebugEventLogger& instance() {
-        static DebugEventLogger logger;  // Constructed on first use, destroyed at program exit
+    static InspectorLogger& instance() {
+        static InspectorLogger logger;  // Constructed on first use, destroyed at program exit
         return logger;
     }
 
@@ -172,16 +154,12 @@ public:
 
         uint64_t timestamp = get_timestamp_ns();
 
-        // Escape strings for JSON and format as JSONL
-        auto escaped_name = escape_json_string(operation_name);
-        auto escaped_attrs = escape_json_string(operation_attributes);
-
         auto line = fmt::format(
             "{{\"timestamp_ns\":{},\"workflow_id\":{},\"operation_name\":\"{}\",\"operation_attributes\":\"{}\"}}\n",
             timestamp,
             workflow_id,
-            escaped_name,
-            escaped_attrs);
+            operation_name,
+            operation_attributes);
 
         operation_info_writer_.write(line);
     }
@@ -218,10 +196,10 @@ public:
     }
 
 private:
-    DebugEventLogger() = default;
+    InspectorLogger() = default;
 
     // Auto-cleanup on destruction (program exit)
-    ~DebugEventLogger() {
+    ~InspectorLogger() {
         stop_background_flush();
         if (initialized_.load()) {
             operation_info_writer_.close();
@@ -245,7 +223,7 @@ private:
                 std::filesystem::create_directories(log_dir);
             } catch (const std::exception& e) {
                 log_warning(
-                    tt::LogOp, "Failed to create debug event log directory: {}. Error: {}", log_dir.string(), e.what());
+                    tt::LogOp, "Failed to create inspector log directory: {}. Error: {}", log_dir.string(), e.what());
                 return;
             }
 
@@ -265,11 +243,11 @@ private:
                 runtime_id_writer_.open(
                     runtime_id_path,
                     "",
-                    kRuntimeIdRolloverEventLimit  // Rollover after 8k events
+                    kRuntimeIdRolloverEntryLimit  // Rollover after 8k entries
                 );
             } catch (const std::exception& e) {
                 log_warning(
-                    tt::LogOp, "Failed to open debug event log files in: {}. Error: {}", log_dir.string(), e.what());
+                    tt::LogOp, "Failed to open inspector log files in: {}. Error: {}", log_dir.string(), e.what());
                 return;
             }
             start_background_flush_thread();
@@ -304,8 +282,8 @@ private:
         }
     }
 
-    DebugEventLogger(const DebugEventLogger&) = delete;
-    DebugEventLogger& operator=(const DebugEventLogger&) = delete;
+    InspectorLogger(const InspectorLogger&) = delete;
+    InspectorLogger& operator=(const InspectorLogger&) = delete;
 
     FileWriter operation_info_writer_;
     FileWriter runtime_id_writer_;
@@ -322,11 +300,11 @@ private:
 
 // Public API implementation
 void log_operation_info(uint32_t workflow_id, std::string_view operation_name, std::string_view operation_attributes) {
-    DebugEventLogger::instance().log_operation_info(workflow_id, operation_name, operation_attributes);
+    InspectorLogger::instance().log_operation_info(workflow_id, operation_name, operation_attributes);
 }
 
 void log_runtime_id(uint32_t workflow_id, uint32_t runtime_id) {
-    DebugEventLogger::instance().log_runtime_id(workflow_id, runtime_id);
+    InspectorLogger::instance().log_runtime_id(workflow_id, runtime_id);
 }
 
-}  // namespace ttnn::debug_event
+}  // namespace ttnn::inspector
