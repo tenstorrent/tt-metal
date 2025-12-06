@@ -366,10 +366,85 @@ void ComputeMeshRouterBuilder::connect_to_local_tensix_builder(FabricTensixDatam
     tensix_builder.append_relay_router_noc_xy(erisc_builder_->get_noc_x(), erisc_builder_->get_noc_y());
 }
 
+void ComputeMeshRouterBuilder::establish_connections_to_router(
+    ComputeMeshRouterBuilder& downstream_router,
+    const std::function<bool(ConnectionType)>& connection_type_filter) {
+    
+    // Iterate through all VCs and sender channels
+    uint32_t num_vcs = channel_mapping_.get_num_virtual_channels();
+    
+    for (uint32_t vc = 0; vc < num_vcs; ++vc) {
+        uint32_t num_senders = channel_mapping_.get_num_sender_channels_for_vc(vc);
+        
+        for (uint32_t sender_ch = 0; sender_ch < num_senders; ++sender_ch) {
+            auto targets = connection_mapping_.get_downstream_targets(vc, sender_ch);
+            
+            for (const auto& target : targets) {
+                // Apply connection type filter
+                if (!connection_type_filter(target.type)) {
+                    continue;
+                }
+                
+                // Get target builder using helper method
+                auto* downstream_builder = downstream_router.get_builder_for_vc_channel(
+                    target.target_vc, target.target_sender_channel);
+                
+                // Get downstream internal channel mapping
+                auto downstream_mapping = downstream_router.channel_mapping_.get_sender_mapping(
+                    target.target_vc, target.target_sender_channel);
+                uint32_t internal_channel_id = downstream_mapping.internal_sender_channel_id;
+                
+                // Setup producer → consumer connection
+                if (auto* downstream_erisc_builder = dynamic_cast<FabricEriscDatamoverBuilder*>(downstream_builder)) {
+                    erisc_builder_->setup_downstream_vc_connection(
+                        downstream_erisc_builder, target.target_vc, internal_channel_id);
+                } else if (auto* downstream_tensix_builder = dynamic_cast<FabricTensixDatamoverBuilder*>(downstream_builder)) {
+                    erisc_builder_->setup_downstream_vc_connection(
+                        downstream_tensix_builder, target.target_vc, internal_channel_id);
+                }
+                
+                // Record connection in registry if present
+                if (connection_registry_) {
+                    RouterConnectionRecord record{
+                        .source_node = local_node_,
+                        .source_direction = location_.direction,
+                        .source_eth_chan = location_.eth_chan,
+                        .source_vc = vc,
+                        .source_sender_channel = sender_ch,
+                        .dest_node = downstream_router.local_node_,
+                        .dest_direction = downstream_router.location_.direction,
+                        .dest_eth_chan = downstream_router.location_.eth_chan,
+                        .dest_vc = target.target_vc,
+                        .dest_receiver_channel = internal_channel_id,
+                        .connection_type = target.type
+                    };
+                    
+                    connection_registry_->record_connection(record);
+                }
+                
+                log_debug(
+                    tt::LogTest,
+                    "Router at x={}, y={}, Direction={}, FabricNodeId={} :: Connecting VC{} sender_ch={} to downstream "
+                    "router at x={}, y={}, Direction={}, VC{}, internal_ch={}",
+                    get_noc_x(),
+                    get_noc_y(),
+                    get_eth_direction(),
+                    local_node_,
+                    vc,
+                    sender_ch,
+                    downstream_builder->get_noc_x(),
+                    downstream_builder->get_noc_y(),
+                    downstream_builder->get_direction(),
+                    target.target_vc,
+                    internal_channel_id);
+            }
+        }
+    }
+}
+
 void ComputeMeshRouterBuilder::configure_connection(
     FabricRouterBuilder& peer, uint32_t link_idx, uint32_t num_links, Topology topology, bool is_galaxy) {
     // Validate invariant: FabricBuilder guarantees all routers on a device are the same concrete type
-    // This is enforced by the factory method which determines router type based on mesh_id
     auto* peer_compute_ptr = dynamic_cast<ComputeMeshRouterBuilder*>(&peer);
     TT_FATAL(
         peer_compute_ptr != nullptr,
@@ -381,81 +456,11 @@ void ComputeMeshRouterBuilder::configure_connection(
         !erisc_builder_->build_in_worker_connection_mode,
         "Tried to connect router to downstream in worker connection mode");
 
-    // Phase 4: Mapping-driven connection logic
-    // Establish producer → consumer connections for both routers
-    // FabricBuilder calls this once per pair, so we handle both directions here
+    // Establish INTRA_MESH connections between the two routers (bidirectional)
+    auto intra_mesh_filter = [](ConnectionType type) { return type == ConnectionType::INTRA_MESH; };
     
-    auto establish_connections_from_producer = [](
-        ComputeMeshRouterBuilder& producer,
-        ComputeMeshRouterBuilder& consumer) {
-        
-        uint32_t num_vc0_senders = producer.channel_mapping_.get_num_sender_channels_for_vc(0);
-        
-        for (uint32_t sender_ch = 0; sender_ch < num_vc0_senders; ++sender_ch) {
-            auto targets = producer.connection_mapping_.get_downstream_targets(0, sender_ch);
-            
-            for (const auto& target : targets) {
-                if (target.type == ConnectionType::INTRA_MESH) {
-                    // Get target builder using helper method
-                    auto* downstream_builder = consumer.get_builder_for_vc_channel(
-                        target.target_vc, target.target_sender_channel);
-                    
-                    // Get downstream internal channel mapping
-                    auto downstream_mapping = consumer.channel_mapping_.get_sender_mapping(
-                        target.target_vc, target.target_sender_channel);
-                    uint32_t internal_channel_id = downstream_mapping.internal_sender_channel_id;
-                    
-                    // Setup producer → consumer connection
-                    if (auto* downstream_erisc_builder = dynamic_cast<FabricEriscDatamoverBuilder*>(downstream_builder)) {
-                        producer.erisc_builder_->setup_downstream_vc_connection(
-                            downstream_erisc_builder, target.target_vc, internal_channel_id);
-                    } else if (auto* downstream_tensix_builder = dynamic_cast<FabricTensixDatamoverBuilder*>(downstream_builder)) {
-                        producer.erisc_builder_->setup_downstream_vc_connection(
-                            downstream_tensix_builder, target.target_vc, internal_channel_id);
-                    }
-                    
-                    // Record connection in registry if present
-                    if (producer.connection_registry_) {
-                        RouterConnectionRecord record{
-                            .source_node = producer.local_node_,
-                            .source_direction = producer.location_.direction,
-                            .source_eth_chan = producer.location_.eth_chan,
-                            .source_vc = 0,
-                            .source_sender_channel = sender_ch,
-                            .dest_node = consumer.local_node_,
-                            .dest_direction = consumer.location_.direction,
-                            .dest_eth_chan = consumer.location_.eth_chan,
-                            .dest_vc = target.target_vc,
-                            .dest_receiver_channel = internal_channel_id,
-                            .connection_type = ConnectionType::INTRA_MESH
-                        };
-                        
-                        producer.connection_registry_->record_connection(record);
-                    }
-                    
-                    log_debug(
-                        tt::LogTest,
-                        "Router at x={}, y={}, Direction={}, FabricNodeId={} :: Connecting VC{} sender_ch={} to downstream "
-                        "router at x={}, y={}, Direction={}, VC{}, internal_ch={}",
-                        producer.get_noc_x(),
-                        producer.get_noc_y(),
-                        producer.get_eth_direction(),
-                        producer.local_node_,
-                        0,
-                        sender_ch,
-                        downstream_builder->get_noc_x(),
-                        downstream_builder->get_noc_y(),
-                        downstream_builder->get_direction(),
-                        target.target_vc,
-                        internal_channel_id);
-                }
-            }
-        }
-    };
-    
-    // Establish connections from both routers (each as producer)
-    establish_connections_from_producer(*this, peer_compute);
-    establish_connections_from_producer(peer_compute, *this);
+    establish_connections_to_router(peer_compute, intra_mesh_filter);
+    peer_compute.establish_connections_to_router(*this, intra_mesh_filter);
 
     // Configure NOC VC based on link index (must be same for both routers)
     auto edm_noc_vc = erisc_builder_->config.DEFAULT_NOC_VC + (link_idx % erisc_builder_->config.NUM_EDM_NOC_VCS);
@@ -474,7 +479,16 @@ void ComputeMeshRouterBuilder::configure_connection(
 void ComputeMeshRouterBuilder::configure_local_connections(
     const std::map<RoutingDirection, ComputeMeshRouterBuilder*>& local_routers) {
     
-    // Iterate through all sender channels across all VCs
+    // Establish local connections (MESH_TO_Z or Z_TO_MESH) to routers on same device
+    // We need to look up target routers by direction from the map
+    auto local_connection_filter = [](ConnectionType type) {
+        return type == ConnectionType::MESH_TO_Z || type == ConnectionType::Z_TO_MESH;
+    };
+    
+    // Track which target routers we've already connected to (to avoid redundant calls)
+    std::set<RoutingDirection> connected_targets;
+    
+    // Iterate through all sender channels to find local connection targets
     uint32_t num_vcs = channel_mapping_.get_num_virtual_channels();
     
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
@@ -484,73 +498,28 @@ void ComputeMeshRouterBuilder::configure_local_connections(
             auto targets = connection_mapping_.get_downstream_targets(vc, sender_ch);
             
             for (const auto& target : targets) {
-                // Only handle local connections (MESH_TO_Z or Z_TO_MESH)
-                if (target.type == ConnectionType::MESH_TO_Z || target.type == ConnectionType::Z_TO_MESH) {
-                    // Check if target direction exists (handles 2-4 router configs)
-                    TT_FATAL(
-                        target.target_direction.has_value(),
-                        "Local connection target must have direction specified");
-                    
-                    auto target_dir = target.target_direction.value();
-                    if (local_routers.count(target_dir) == 0) {
-                        // Target router doesn't exist (e.g., edge device with only 2-3 mesh routers)
-                        // This is expected for Z routers on edge devices
-                        continue;
-                    }
-                    
+                // Only handle local connections
+                if (!local_connection_filter(target.type)) {
+                    continue;
+                }
+                
+                // Check if target direction exists (handles 2-4 router configs)
+                TT_FATAL(
+                    target.target_direction.has_value(),
+                    "Local connection target must have direction specified");
+                
+                auto target_dir = target.target_direction.value();
+                if (local_routers.count(target_dir) == 0) {
+                    // Target router doesn't exist (e.g., edge device with only 2-3 mesh routers)
+                    // This is expected for Z routers on edge devices
+                    continue;
+                }
+                
+                // Establish connections to this target router (if not already done)
+                if (connected_targets.find(target_dir) == connected_targets.end()) {
                     auto* local_router = local_routers.at(target_dir);
-                    auto* downstream_builder = local_router->get_builder_for_vc_channel(
-                        target.target_vc, target.target_sender_channel);
-                    
-                    // Get downstream internal channel mapping
-                    auto downstream_mapping = local_router->channel_mapping_.get_sender_mapping(
-                        target.target_vc, target.target_sender_channel);
-                    uint32_t internal_channel_id = downstream_mapping.internal_sender_channel_id;
-                    
-                    // Setup producer → consumer connection
-                    if (auto* downstream_erisc_builder = dynamic_cast<FabricEriscDatamoverBuilder*>(downstream_builder)) {
-                        erisc_builder_->setup_downstream_vc_connection(
-                            downstream_erisc_builder, target.target_vc, internal_channel_id);
-                    } else if (auto* downstream_tensix_builder = dynamic_cast<FabricTensixDatamoverBuilder*>(downstream_builder)) {
-                        erisc_builder_->setup_downstream_vc_connection(
-                            downstream_tensix_builder, target.target_vc, internal_channel_id);
-                    }
-                    
-                    // Record connection in registry if present
-                    if (connection_registry_) {
-                        RouterConnectionRecord record{
-                            .source_node = local_node_,
-                            .source_direction = location_.direction,
-                            .source_eth_chan = location_.eth_chan,
-                            .source_vc = vc,
-                            .source_sender_channel = sender_ch,
-                            .dest_node = local_router->local_node_,
-                            .dest_direction = local_router->location_.direction,
-                            .dest_eth_chan = local_router->location_.eth_chan,
-                            .dest_vc = target.target_vc,
-                            .dest_receiver_channel = internal_channel_id,
-                            .connection_type = target.type
-                        };
-                        
-                        connection_registry_->record_connection(record);
-                    }
-                    
-                    log_debug(
-                        tt::LogTest,
-                        "Router at x={}, y={}, Direction={}, FabricNodeId={} :: Local connection VC{} sender_ch={} to "
-                        "router at x={}, y={}, Direction={}, VC{}, internal_ch={}, type={}",
-                        get_noc_x(),
-                        get_noc_y(),
-                        get_eth_direction(),
-                        local_node_,
-                        vc,
-                        sender_ch,
-                        downstream_builder->get_noc_x(),
-                        downstream_builder->get_noc_y(),
-                        downstream_builder->get_direction(),
-                        target.target_vc,
-                        internal_channel_id,
-                        static_cast<int>(target.type));
+                    establish_connections_to_router(*local_router, local_connection_filter);
+                    connected_targets.insert(target_dir);
                 }
             }
         }

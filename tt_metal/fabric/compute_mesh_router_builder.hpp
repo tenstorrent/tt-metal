@@ -119,6 +119,17 @@ private:
         FabricRouterChannelMapping channel_mapping,
         RouterConnectionMapping connection_mapping,
         std::shared_ptr<ConnectionRegistry> connection_registry);
+    
+    /**
+     * Generic helper to establish connections from this router to a downstream router.
+     * Iterates through all VCs and sender channels, applying the provided connection type filter.
+     * 
+     * @param downstream_router The target router to connect to
+     * @param connection_type_filter Function that returns true for connection types to establish
+     */
+    void establish_connections_to_router(
+        ComputeMeshRouterBuilder& downstream_router,
+        const std::function<bool(ConnectionType)>& connection_type_filter);
 
     /**
      * Compute which sender channels are traffic injection channels for a specific VC.

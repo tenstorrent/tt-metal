@@ -91,14 +91,17 @@ private:
     std::vector<RouterConnectionPair> get_router_connection_pairs() const;
 
     /**
-     * Configure local mesh↔Z connections on this device.
+     * Configure local connections between routers on this device.
      * 
-     * Finds Z routers on this device and connects them to local mesh routers.
-     * Handles 2-4 mesh router configurations (edge devices).
+     * Generic connection establishment: iterates through all routers and
+     * establishes connections to local targets based on their connection mappings.
+     * Each router's mapping determines which local routers to connect to.
+     * 
+     * Handles variable router configurations (e.g., 2-4 mesh routers on edge devices).
      * 
      * Called by connect_routers() after inter-device connections are established.
      */
-    void configure_local_mesh_z_connections();
+    void configure_local_connections();
 
     /**
      * Compile kernels for directions that have no router/eth channel.
