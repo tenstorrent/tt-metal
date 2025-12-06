@@ -45,6 +45,10 @@ void kernel_main() {
     constexpr uint32_t beta_stick_size = get_compile_time_arg_val(3);
     constexpr uint32_t gamma_is_row_major = get_compile_time_arg_val(4);
     constexpr uint32_t beta_is_row_major = get_compile_time_arg_val(5);
+    DPRINT << "gamma_stick_size" << gamma_stick_size << ENDL();
+    DPRINT << "beta_stick_size" << beta_stick_size << ENDL();
+    DPRINT << "gamma_is_row_major" << gamma_is_row_major << ENDL();
+    DPRINT << "beta_is_row_major" << beta_is_row_major << ENDL();
     constexpr uint32_t cb_length = get_compile_time_arg_val(6);
     constexpr uint32_t Wt = get_compile_time_arg_val(7);  // Width in tiles
     constexpr auto src_args = TensorAccessorArgs<8>();
@@ -56,12 +60,12 @@ void kernel_main() {
     const auto src_stats = TensorAccessor(stats_args, stats_addr, stats_tile_bytes);
 
 #ifdef FUSE_GAMMA
-    const auto addrg = TensorAccessor(gamma_args, gamma_addr, get_tile_size(cb_gamma));
+    const auto addrg = TensorAccessor(gamma_args, gamma_addr, gamma_stick_size);
     DPRINT << "gamma_stick_size" << gamma_stick_size << ENDL();
     const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
 #endif
 #ifdef FUSE_BETA
-    const auto addrb = TensorAccessor(beta_args, beta_addr, gamma_stick_size);
+    const auto addrb = TensorAccessor(beta_args, beta_addr, beta_stick_size);
     const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
 #endif
 
@@ -161,12 +165,12 @@ void kernel_main() {
 }
 template <uint32_t t>
 void async_read_row_to_tile(const uint64_t DRAM_src_addr, uint32_t L1_dst_addr) {
-    noc_async_read(DRAM_src_addr, L1_dst_addr, 32 * 2);
+    noc_async_read(DRAM_src_addr, L1_dst_addr, 32 * 2);  // reads 32 elements (64 bytes) 16 usefull, the next bad
     if constexpr (t == 0) {  // TILE LAYOUT
-        noc_async_read(DRAM_src_addr + 512, L1_dst_addr + 512, 64);
+        noc_async_read(DRAM_src_addr + 512, L1_dst_addr + 512, 64);  // Fills the second face with next 16 elements
     } else if constexpr (t == 1) {  // ROW MAJOR LAYOUT
         noc_async_read_barrier();
-        uint64_t noc_addr = get_noc_addr(L1_dst_addr + 32);
+        uint64_t noc_addr = get_noc_addr(L1_dst_addr + 32);  // 16 elements from DRAM to L1.  L1->L1
         noc_async_read(noc_addr, L1_dst_addr + 512, 64);
     } else {
         static_assert(false, "Layout must be ROW_MAJOR(t == 1) or TILE_LAYOUT(t == 0)");

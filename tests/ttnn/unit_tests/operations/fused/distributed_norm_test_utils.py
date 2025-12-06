@@ -182,6 +182,7 @@ def compute_ttnn_distributed_norm(
         TTNN output converted to torch tensor
     """
     hidden_dim = torch_weight.shape[0]
+    num_mesh_devices = mesh_device.get_num_devices()
 
     # Convert to TTNN tensors
     ttnn_input = ttnn.from_torch(
@@ -192,22 +193,47 @@ def compute_ttnn_distributed_norm(
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
     )
 
+    # Reshape and shard weight based on layout
+    if weight_layout == ttnn.ROW_MAJOR_LAYOUT:
+        # ROW_MAJOR: Reshape to (num_mesh_devices, 1, -1, 32) and shard over dim 0
+        weight_shape = (num_mesh_devices, 1, -1, 32)
+        weight_shard_dim = 0
+    else:
+        # TILE: Reshape to (1, 1, 1, hidden_dim) and shard over dim -1
+        weight_shape = (1, 1, 1, hidden_dim)
+        weight_shard_dim = -1
+
     ttnn_weight = ttnn.from_torch(
-        torch_weight.reshape(1, 1, 1, hidden_dim),
+        torch_weight.reshape(weight_shape),
         dtype=ttnn.bfloat16,
         device=mesh_device,
         layout=weight_layout,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=weight_shard_dim),
     )
 
     ttnn_bias = None
     if norm_type == "layer_norm":
+        # Reshape and shard bias based on layout
+        if bias_layout == ttnn.ROW_MAJOR_LAYOUT:
+            # ROW_MAJOR: Reshape to (num_mesh_devices, 1, -1, 32) and shard over dim 0
+            print("tyyooooooooooooo================")
+            print("tyyooooooooooooo================")
+            print("tyyooooooooooooo================")
+            print("num_mesh_devices")
+            print(num_mesh_devices)
+            bias_shape = (num_mesh_devices, 1, -1, 32)
+            bias_shard_dim = 0
+        else:
+            # TILE: Reshape to (1, 1, 1, hidden_dim) and shard over dim -1
+            bias_shape = (1, 1, 1, hidden_dim)
+            bias_shard_dim = -1
+
         ttnn_bias = ttnn.from_torch(
-            torch_bias.reshape(1, 1, 1, hidden_dim),
+            torch_bias.reshape(bias_shape),
             dtype=ttnn.bfloat16,
             device=mesh_device,
             layout=bias_layout,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=bias_shard_dim),
         )
 
     # Configure compute kernel
