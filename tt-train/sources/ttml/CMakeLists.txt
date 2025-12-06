@@ -521,7 +521,7 @@ install(
     TARGETS
         _ttml
     LIBRARY
-        DESTINATION ttml
+        DESTINATION .
         COMPONENT ttml
 )
 
@@ -529,7 +529,7 @@ install(
 install(
     DIRECTORY
         ${CMAKE_CURRENT_SOURCE_DIR}/ttml
-    DESTINATION ttml
+    DESTINATION .
     COMPONENT ttml
     FILES_MATCHING
     PATTERN
