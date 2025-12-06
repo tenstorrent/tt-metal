@@ -867,10 +867,10 @@ def test_mlp_non_tg_config_creation():
 
     from models.common.modules.mlp.mlp_non_tg import (
         MeshContext,
-        MLPNonTGConfig,
-        MLPNonTGDecodeConfigs,
-        MLPNonTGOptimizationConfig,
-        MLPNonTGPrefillConfigs,
+        MLP1DConfig,
+        MLP1DDecodeConfigs,
+        MLP1DOptimizationConfig,
+        MLP1DPrefillConfigs,
     )
 
     # Create a mock MeshContext for testing (no real device needed)
@@ -895,7 +895,7 @@ def test_mlp_non_tg_config_creation():
 
     mock_ctx = MockMeshContext(_num_devices=8, _cluster_shape=[1, 8])
 
-    config = MLPNonTGConfig(
+    config = MLP1DConfig(
         dim=4096,
         hidden_dim=14336,
         mesh_ctx=mock_ctx,
@@ -909,17 +909,17 @@ def test_mlp_non_tg_config_creation():
     assert not hasattr(config, "is_galaxy") or config.__dict__.get("is_galaxy") is None
 
     # Nested configs should be auto-created by __post_init__ with parent reference
-    assert isinstance(config.decode, MLPNonTGDecodeConfigs)
-    assert isinstance(config.prefill, MLPNonTGPrefillConfigs)
-    assert isinstance(config.optimization, MLPNonTGOptimizationConfig)
+    assert isinstance(config._config, MLP1DDecodeConfigs)
+    assert isinstance(config.prefill, MLP1DPrefillConfigs)
+    assert isinstance(config.optimization, MLP1DOptimizationConfig)
 
     # Each sub-config should have a reference back to the parent
-    assert config.decode.cfg is config
+    assert config._config.cfg is config
     assert config.prefill.cfg is config
     assert config.optimization.cfg is config
 
     # Sub-configs should have callable methods
-    assert callable(config.decode.w1_w3_prg_config)
+    assert callable(config._config.w1_w3_prg_config)
     assert callable(config.prefill.w1_w3_prg_config)
     assert callable(config.optimization.ff1_3_dtype)
 
@@ -928,7 +928,7 @@ def test_mlp_non_tg_configs_creation():
     """Test that MLPNonTGDecodeConfigs and MLPNonTGPrefillConfigs work with parent config."""
     from dataclasses import dataclass
 
-    from models.common.modules.mlp.mlp_non_tg import MeshContext, MLPNonTGConfig
+    from models.common.modules.mlp.mlp_non_tg import MeshContext, MLP1DConfig
 
     # Create a mock MeshContext for testing (no real device needed)
     @dataclass
@@ -953,28 +953,28 @@ def test_mlp_non_tg_configs_creation():
     mock_ctx = MockMeshContext(_num_devices=8, _cluster_shape=[1, 8])
 
     # Create a parent config first
-    parent_config = MLPNonTGConfig(
+    parent_config = MLP1DConfig(
         dim=4096,
         hidden_dim=14336,
         mesh_ctx=mock_ctx,
     )
 
     # Decode should have decode-specific methods
-    assert callable(parent_config.decode.w1_w3_prg_config)
-    assert callable(parent_config.decode.w2_prg_config)
-    assert callable(parent_config.decode.sharded_mlp2_input_memcfg)
-    assert callable(parent_config.decode.decode_residual_memcfg)
+    assert callable(parent_config._config.w1_w3_prg_config)
+    assert callable(parent_config._config.w2_prg_config)
+    assert callable(parent_config._config.sharded_mlp2_input_memcfg)
+    assert callable(parent_config._config.decode_residual_memcfg)
 
     # Prefill should have prefill-specific methods (that take seq_len)
     assert callable(parent_config.prefill.w1_w3_prg_config)
     assert callable(parent_config.prefill.w2_prg_config)
 
     # Neither should have TG-specific methods
-    assert not hasattr(parent_config.decode, "ff1_3_tg_progcfg")
+    assert not hasattr(parent_config._config, "ff1_3_tg_progcfg")
     assert not hasattr(parent_config.prefill, "ff1_3_tg_progcfg")
 
     # Test that methods can be called and return values
-    decode_w1_w3 = parent_config.decode.w1_w3_prg_config()
+    decode_w1_w3 = parent_config._config.w1_w3_prg_config()
     assert decode_w1_w3 is not None
 
     prefill_w1_w3 = parent_config.prefill.w1_w3_prg_config(seq_len=512)
@@ -1003,7 +1003,7 @@ def test_mlp_non_tg_class_vs_reference(ttnn_mesh_device: ttnn.MeshDevice, seq_le
     """
     Test that MLPNonTG class matches the HuggingFace/Meta reference model.
     """
-    from models.common.modules.mlp.mlp_non_tg import MLPNonTG
+    from models.common.modules.mlp.mlp_non_tg import MLP1D
     from models.tt_transformers.tests.test_utils import get_ref_model_dype
     from models.tt_transformers.tt.ccl import TT_CCL
     from models.tt_transformers.tt.model_config import ModelArgs
@@ -1051,7 +1051,7 @@ def test_mlp_non_tg_class_vs_reference(ttnn_mesh_device: ttnn.MeshDevice, seq_le
             )
 
     tt_ccl = TT_CCL(ttnn_mesh_device)
-    tt_model = MLPNonTG.from_model_args(
+    tt_model = MLP1D.from_model_args(
         mesh_device=ttnn_mesh_device,
         tt_ccl=tt_ccl,
         args=model_args,
@@ -1113,7 +1113,7 @@ def test_mlp_non_tg_rejects_galaxy(mesh_device, reset_seeds, ensure_gc):
     """
     Test that MLPNonTG.from_model_args() raises ValueError for Galaxy devices.
     """
-    from models.common.modules.mlp.mlp_non_tg import MLPNonTG
+    from models.common.modules.mlp.mlp_non_tg import MLP1D
     from models.tt_transformers.tt.ccl import TT_CCL
     from models.tt_transformers.tt.model_config import ModelArgs
 
@@ -1127,7 +1127,7 @@ def test_mlp_non_tg_rejects_galaxy(mesh_device, reset_seeds, ensure_gc):
     tt_ccl = TT_CCL(mesh_device)
 
     with pytest.raises(ValueError, match="MLPNonTG cannot be used for Galaxy devices"):
-        MLPNonTG.from_model_args(
+        MLP1D.from_model_args(
             mesh_device=mesh_device,
             tt_ccl=tt_ccl,
             args=model_args,

@@ -253,14 +253,14 @@ def _create_dram_sharded_mem_config(
 # =============================================================================
 
 
-class MLPNonTGDecodeConfigs:
+class MLP1DDecodeConfigs:
     """
     Decode config methods. Subclass and override to customize.
 
     All methods access terminal params via self.cfg (the parent MLPNonTGConfig).
     """
 
-    def __init__(self, cfg: MLPNonTGConfig):
+    def __init__(self, cfg: MLP1DConfig):
         self.cfg = cfg
 
     def _mlp_core_grid(self) -> ttnn.CoreGrid:
@@ -318,14 +318,14 @@ class MLPNonTGDecodeConfigs:
         )
 
 
-class MLPNonTGPrefillConfigs:
+class MLP1DPrefillConfigs:
     """
     Prefill config methods. Subclass and override to customize.
 
     Methods take seq_len as argument since prefill configs are sequence-length dependent.
     """
 
-    def __init__(self, cfg: MLPNonTGConfig):
+    def __init__(self, cfg: MLP1DConfig):
         self.cfg = cfg
 
     def _mlp_grid(self, seq_len: int) -> tuple[int, int]:
@@ -363,14 +363,14 @@ class MLPNonTGPrefillConfigs:
         )
 
 
-class MLPNonTGOptimizationConfig:
+class MLP1DOptimizationConfig:
     """
     Optimization settings (dtypes, compute kernels). Subclass and override to customize.
 
     Default is 'performance' preset (BFP8 weights, HiFi2 FP16 accumulation).
     """
 
-    def __init__(self, cfg: MLPNonTGConfig):
+    def __init__(self, cfg: MLP1DConfig):
         self.cfg = cfg
 
     def ff1_3_dtype(self):
@@ -400,7 +400,7 @@ class MLPNonTGOptimizationConfig:
 
 
 @dataclass
-class MLPNonTGConfig:
+class MLP1DConfig:
     """
     Top-level configuration for non-TG MLP.
 
@@ -426,16 +426,16 @@ class MLPNonTGConfig:
 
     # Sub-configs - override these factory methods in subclasses
     @cached_property
-    def decode(self) -> MLPNonTGDecodeConfigs:
-        return MLPNonTGDecodeConfigs(self)
+    def decode_config(self) -> MLP1DDecodeConfigs:
+        return MLP1DDecodeConfigs(self)
 
     @cached_property
-    def prefill(self) -> MLPNonTGPrefillConfigs:
-        return MLPNonTGPrefillConfigs(self)
+    def prefill_config(self) -> MLP1DPrefillConfigs:
+        return MLP1DPrefillConfigs(self)
 
     @cached_property
-    def optimization(self) -> MLPNonTGOptimizationConfig:
-        return MLPNonTGOptimizationConfig(self)
+    def optimization_config(self) -> MLP1DOptimizationConfig:
+        return MLP1DOptimizationConfig(self)
 
     # Cached properties - shorthand for mesh_ctx access
     @cached_property
@@ -530,11 +530,11 @@ class MLPNonTGConfig:
 
 
 # =============================================================================
-# MLPNonTG - Unified MLP for non-TG devices with decode and prefill modes
+# MLP1D - Unified MLP for 1D-topology devices (Linear or Ring) with decode and prefill modes
 # =============================================================================
 
 
-class MLPNonTG(LightweightModule):
+class MLP1D(LightweightModule):
     """
     MLP for non-TG devices supporting both decode and prefill modes.
 
@@ -543,7 +543,7 @@ class MLPNonTG(LightweightModule):
       Prefill: [reshape] → linear(w1) → linear(w3) → mul+silu → linear(w2) → all_reduce → reshape
     """
 
-    def __init__(self, config: MLPNonTGConfig):
+    def __init__(self, config: MLP1DConfig):
         super().__init__()
 
         # Get hardware context from config
@@ -554,7 +554,7 @@ class MLPNonTG(LightweightModule):
         self.ccl_topology = mesh_ctx.topology()
 
         # Get optimization settings
-        opt = config.optimization
+        opt = config.optimization_config
         self.activation_dtype = opt.activation_dtype()
         self.li_ff1_3_compute_kernel_cfg = opt.li_ff1_3_compute_kernel_cfg()
         self.li_ff2_compute_kernel_cfg = opt.li_ff2_compute_kernel_cfg()
@@ -568,13 +568,13 @@ class MLPNonTG(LightweightModule):
         self.activation_type = config.mlp_activation_type
 
         # Get decode configs (computed once at init)
-        self.decode_pc_w1_w3 = config.decode.w1_w3_prg_config()
-        self.decode_pc_w2 = config.decode.w2_prg_config()
-        self.sharded_mlp2_input_memcfg = config.decode.sharded_mlp2_input_memcfg()
-        self.decode_residual_memcfg = config.decode.decode_residual_memcfg()
+        self.decode_pc_w1_w3 = config.decode_config.w1_w3_prg_config()
+        self.decode_pc_w2 = config.decode_config.w2_prg_config()
+        self.sharded_mlp2_input_memcfg = config.decode_config.sharded_mlp2_input_memcfg()
+        self.decode_residual_memcfg = config.decode_config.decode_residual_memcfg()
 
         # Store prefill config object for runtime method calls
-        self._prefill_cfg = config.prefill
+        self._prefill_cfg = config.prefill_config
         self.prefill_len_cutoff = config.prefill_len_cutoff
 
         # Weights from config (lazy-loaded on first access)
@@ -607,10 +607,10 @@ class MLPNonTG(LightweightModule):
         from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
         # Create MLPNonTGConfig subclass with all overrides (captures args/model_config via closure)
-        class _ArgsMLPNonTGConfig(MLPNonTGConfig):
+        class _ArgsMLPNonTGConfig(MLP1DConfig):
             @cached_property
-            def decode(self) -> MLPNonTGDecodeConfigs:
-                class _Decode(MLPNonTGDecodeConfigs):
+            def decode(self) -> MLP1DDecodeConfigs:
+                class _Decode(MLP1DDecodeConfigs):
                     def w1_w3_prg_config(inner_self):
                         return model_config.get("DECODE_MLP_W1_W3_PRG_CONFIG")
 
@@ -626,8 +626,8 @@ class MLPNonTG(LightweightModule):
                 return _Decode(self)
 
             @cached_property
-            def prefill(self) -> MLPNonTGPrefillConfigs:
-                class _Prefill(MLPNonTGPrefillConfigs):
+            def prefill(self) -> MLP1DPrefillConfigs:
+                class _Prefill(MLP1DPrefillConfigs):
                     def w1_w3_prg_config(inner_self, seq_len: int):
                         return model_config.get("PREFILL_MLP_W1_W3_PRG_CONFIG")(seq_len)
 
@@ -637,8 +637,8 @@ class MLPNonTG(LightweightModule):
                 return _Prefill(self)
 
             @cached_property
-            def optimization(self) -> MLPNonTGOptimizationConfig:
-                class _Opt(MLPNonTGOptimizationConfig):
+            def optimization(self) -> MLP1DOptimizationConfig:
+                class _Opt(MLP1DOptimizationConfig):
                     def ff1_3_dtype(inner_self):
                         return decoders_opt.get_tensor_dtype(decoder_id=effective_layer_num, tensor=TensorGroup.FF1_FF3)
 
