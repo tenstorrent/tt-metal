@@ -91,7 +91,9 @@ void kernel_main() {
     constexpr uint32_t write_page_by_page = get_compile_time_arg_val(35);
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(36);
 
-    constexpr auto input_args = TensorAccessorArgs<37>();
+    // CT arg 37 is unused here
+
+    constexpr auto input_args = TensorAccessorArgs<38>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto mapping_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<mapping_args.next_compile_time_args_offset()>();
