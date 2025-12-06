@@ -5,10 +5,13 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/function.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/vector.h>
+
+#include <optional>
 
 #include "models/base_transformer.hpp"
 #include "models/distributed/gpt2.hpp"
@@ -214,6 +217,31 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
 
         auto py_llama = static_cast<nb::class_<models::llama::Llama>>(py_llama_module.attr("Llama"));
         py_llama.def(nb::init<models::llama::LlamaConfig>());
+        // Override __call__ to support use_cache parameter
+        py_llama.def(
+            "__call__",
+            static_cast<ttml::autograd::TensorPtr (models::llama::Llama::*)(
+                const ttml::autograd::TensorPtr&, const ttml::autograd::TensorPtr&, const bool)>(
+                &models::llama::Llama::operator()),
+            nb::arg("tensor"),
+            nb::arg("mask"),
+            nb::arg("use_cache") = false,
+            "Model forward pass. use_cache=True if you want to use kv cache for inference.");
+        // KV cache methods
+        py_llama.def(
+            "initialize_kv_cache",
+            &models::llama::Llama::initialize_kv_cache,
+            nb::arg("batch_size") = 1,
+            "Initialize KV cache for inference");
+        py_llama.def("reset_cache", &models::llama::Llama::reset_cache, "Reset cache position for new sequence");
+        py_llama.def(
+            "get_inference_mode",
+            &models::llama::Llama::get_inference_mode,
+            "Get current inference mode (PREFILL or DECODE)");
+        py_llama.def(
+            "get_original_vocab_size",
+            &models::llama::Llama::get_original_vocab_size,
+            "Get the original vocabulary size");
     }
 
     {
