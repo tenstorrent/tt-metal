@@ -28,6 +28,7 @@
 #include "dev_msgs.h"
 #include "accessor/tensor_accessor.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "debug/assert.h"
 
 // clang-format off
 /**
@@ -171,7 +172,10 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
  * tiles visible to the consumer. Writing of the tiles and pushing is separated
  * to allow the producer to: 1) write the tile data to the CB via multiple
  * writes of sub-tiles 2) modify tiles (or sub-tiles) by random access of the
- * valid section of the CB
+ * valid section of the CB.
+ *
+ * Important note: CB total size must be an even multiple of the argument passed to this call, and each push to a CB
+ * should have the same number of pages.
  *
  * Return value: None
  *
@@ -389,6 +393,10 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
             get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked);
         free_space_pages = (int32_t)free_space_pages_wrap;
     } while (free_space_pages < num_pages);
+    // Assert that region is contiguous.
+    ASSERT(
+        get_local_cb_interface(operand).fifo_wr_ptr + num_pages * get_local_cb_interface(operand).fifo_page_size <=
+        get_local_cb_interface(operand).fifo_limit);
     WAYPOINT("CRBD");
 }
 
@@ -460,6 +468,10 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
     do {
         pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
     } while (pages_received < num_pages);
+    // Assert that region is contiguous.
+    ASSERT(
+        get_local_cb_interface(operand).fifo_rd_ptr + num_pages * get_local_cb_interface(operand).fifo_page_size <=
+        get_local_cb_interface(operand).fifo_limit);
     WAYPOINT("CWFD");
 }
 
