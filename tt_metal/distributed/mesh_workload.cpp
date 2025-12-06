@@ -465,4 +465,6 @@ uint32_t MeshWorkload::get_cb_size(
     return pimpl_->get_cb_size(mesh_device, logical_core, core_type);
 }
 
+uint64_t MeshWorkload::get_id() const { return pimpl_->get_id(); }
+
 }  // namespace tt::tt_metal::distributed
