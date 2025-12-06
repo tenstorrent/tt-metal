@@ -336,9 +336,10 @@ void SetFabricConfig(
     FabricReliabilityMode reliability_mode,
     std::optional<uint8_t> num_routing_planes,
     FabricTensixConfig fabric_tensix_config,
-    FabricUDMMode fabric_udm_mode) {
+    FabricUDMMode fabric_udm_mode,
+    FabricRouterConfig router_config) {
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        fabric_config, reliability_mode, num_routing_planes, fabric_tensix_config, fabric_udm_mode);
+        fabric_config, reliability_mode, num_routing_planes, fabric_tensix_config, fabric_udm_mode, router_config);
 }
 
 std::optional<eth_chan_directions> get_eth_forwarding_direction(
