@@ -55,8 +55,9 @@ void print_tile(
 namespace blocks {
 void sigmoid(uint32_t scores_cb_index, uint32_t sigmoid_input_cb_index, uint32_t width_tiles) {
     // Perform sigmoid on scores
+
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
-        cb_wait_front(scores_cb_index, 1);
+        cb_wait_front(scores_cb_index, width_tile + 1);
 
         tile_regs_acquire();
         // copy tile from scores cb to destination register 0
@@ -69,7 +70,7 @@ void sigmoid(uint32_t scores_cb_index, uint32_t sigmoid_input_cb_index, uint32_t
 
         cb_reserve_back(sigmoid_input_cb_index, 1);
         tile_regs_wait();
-        pack_tile<true>(0, sigmoid_input_cb_index, 0);
+        pack_tile(0, sigmoid_input_cb_index);
         tile_regs_release();
         cb_push_back(sigmoid_input_cb_index, 1);
     }
@@ -212,7 +213,6 @@ void topk_group_scores(
     // pack index tile into sorted_group_indices_cb_index
     pack_reconfig_data_format(sorted_group_indices_cb_index);
     pack_tile(2, sorted_group_indices_cb_index);
-
     cb_pop_front(group_scores_cb_index, 1);
     // don't pop group indices as it gets re-used for the next tile heights
     release_dst();

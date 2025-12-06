@@ -230,7 +230,7 @@ FORCE_INLINE void generate_summed_experts_tiles(
 
 FORCE_INLINE void generate_winning_group_tiles(
     const uint32_t sorted_group_indices_cb_index,
-    const uint32_t scores_cb_index,
+    const uint32_t sigmoid_input_cb_index,
     const uint32_t topk_index_creation_cb_index,
     const uint32_t winning_group_scores_cb_index,
     const uint32_t winning_group_indices_cb_index,
@@ -242,7 +242,7 @@ FORCE_INLINE void generate_winning_group_tiles(
     constexpr uint32_t face_size_bytes = 512;
     constexpr uint32_t face_line_bytes = 32;  // 16 elements * 2 bytes
 
-    cb_wait_front(scores_cb_index, width_tiles);
+    cb_wait_front(sigmoid_input_cb_index, width_tiles);
     cb_wait_front(topk_index_creation_cb_index, width_tiles);
     cb_wait_front(sorted_group_indices_cb_index, num_group_tiles);
 
@@ -250,7 +250,7 @@ FORCE_INLINE void generate_winning_group_tiles(
     cb_reserve_back(winning_group_indices_cb_index, topk_groups);
 
     // Pointers
-    uint64_t scores_base_noc_addr = get_noc_addr(get_read_ptr(scores_cb_index));
+    uint64_t scores_base_noc_addr = get_noc_addr(get_read_ptr(sigmoid_input_cb_index));
     uint64_t indices_base_noc_addr = get_noc_addr(get_read_ptr(topk_index_creation_cb_index));
     uint32_t scores_dest_base_addr = get_write_ptr(winning_group_scores_cb_index);
     uint32_t indices_dest_base_addr = get_write_ptr(winning_group_indices_cb_index);
@@ -348,7 +348,7 @@ FORCE_INLINE void generate_winning_group_tiles(
     cb_push_back(winning_group_indices_cb_index, topk_groups);
 
     // Pop inputs
-    cb_pop_front(scores_cb_index, width_tiles);
+    cb_pop_front(sigmoid_input_cb_index, width_tiles);
     cb_pop_front(topk_index_creation_cb_index, width_tiles);
     cb_pop_front(sorted_group_indices_cb_index, num_group_tiles);
 }
