@@ -834,7 +834,16 @@ jobs:
           ccl_batches = chunk_modules(ccl_modules, BATCH_SIZE)
 
           is_comprehensive = schedule_expr == "0 4 * * 3" or schedule_expr == "0 5 * * 6" or sweep_name == "ALL SWEEPS (Comprehensive)"
-          wormhole_suite_name = "nightly" if not is_comprehensive else None
+          is_model_traced = schedule_expr == "30 4 * * *" or sweep_name == "ALL SWEEPS (Model Traced)"
+          # For model_traced runs, use "model_traced" suite only
+          # For nightly runs, use "nightly" suite
+          # For comprehensive runs, don't override suite_name
+          if is_model_traced:
+              wormhole_suite_name = "model_traced"
+          elif is_comprehensive:
+              wormhole_suite_name = None
+          else:
+              wormhole_suite_name = "nightly"
 
           include_entries = []
 
