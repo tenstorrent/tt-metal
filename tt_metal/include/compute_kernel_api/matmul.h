@@ -5,6 +5,7 @@
 #pragma once
 
 #include "compute_kernel_api/common.h"
+#include "tt_metal/include/compute_kernel_api/state_tracker.h"
 #ifdef TRISC_MATH
 #include "llk_math_matmul_api.h"
 #endif
@@ -89,6 +90,7 @@ ALWI void matmul_block_math_dynamic_throttle(
  */
 // clang-format on
 ALWI void mm_init(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t out_cb_id, const uint32_t transpose = 0) {
+    state_configure<Operation::MATMUL>(in0_cb_id, in1_cb_id, out_cb_id);
     UNPACK((llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
 
@@ -143,7 +145,7 @@ ALWI void matmul_tiles(
  * |----------------|-------------------------------------------------------------------------|----------|------------------------------------------------|----------|
  * | idst           | The index of the tile in DST REG to which the result C will be written. | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
- // clang-format on
+// clang-format on
 template <uint32_t num_faces = 4>
 ALWI void matmul_tiles_math(uint32_t idst) {
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE, num_faces>(idst)));
@@ -164,6 +166,7 @@ ALWI void matmul_tiles_math(uint32_t idst) {
  */
 // clang-format on
 ALWI void mm_init_short(uint32_t in0_cb_id, uint32_t in1_cb_id, const uint32_t transpose = 0) {
+    state_configure<Operation::MATMUL>(in0_cb_id, in1_cb_id);
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
 }
@@ -182,7 +185,7 @@ ALWI void mm_init_short(uint32_t in0_cb_id, uint32_t in1_cb_id, const uint32_t t
  * | c_in_old_srca  | The identifier of the old input to src A circular buffer (CB) | uint32_t | 0 to 31                                           | False    |
  * | transpose      | The transpose flag for performing transpose operation on B    | uint32_t | Any positive value will indicate tranpose is set  | False    |
  */
- // clang-format on
+// clang-format on
 ALWI void mm_init_short_with_dt(
     uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t c_in_old_srca, const uint32_t transpose = 0) {
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(c_in_old_srca, in1_cb_id)));
@@ -214,6 +217,8 @@ ALWI void mm_block_init(
     uint32_t ct_dim = 1,
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
+    state_configure<Operation::MATMUL>(in0_cb_id, in1_cb_id, out_cb_id);
+
     UNPACK((llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
 
@@ -262,6 +267,7 @@ ALWI void matmul_block(
     uint32_t ct_dim,
     uint32_t rt_dim,
     uint32_t kt_dim) {
+    state_configure<Operation::MATMUL>(in0_cb_id, in1_cb_id);
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
 #ifdef ARCH_BLACKHOLE
     // Dynamic throttling is only available on Blackhole architecture
@@ -295,6 +301,7 @@ ALWI void mm_block_init_short(
     uint32_t ct_dim = 1,
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
+    state_configure<Operation::MATMUL>(in0_cb_id, in1_cb_id);
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
 #ifdef ARCH_BLACKHOLE

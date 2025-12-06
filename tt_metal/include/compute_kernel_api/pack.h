@@ -5,6 +5,7 @@
 #pragma once
 
 #include "common_globals.h"
+#include "tt_metal/include/compute_kernel_api/state_tracker.h"
 
 namespace ckernel {
 
