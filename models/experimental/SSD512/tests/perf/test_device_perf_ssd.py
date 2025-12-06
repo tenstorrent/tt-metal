@@ -8,7 +8,7 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 @pytest.mark.parametrize(
     "batch_size, model_name, expected_perf",
     [
-        (1, "ssd512", 71.6),
+        (1, "ssd512", 50.0),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

@@ -276,6 +276,15 @@ def load_multibox_weights_from_torch(
     return loc_layers_config, conf_layers_config
 
 
+_extras_weight_device_cache = {}
+
+
+def clear_extras_weight_cache():
+    """Clear the global weight cache. Call this at the start of each test."""
+    global _extras_weight_device_cache
+    _extras_weight_device_cache.clear()
+
+
 def forward_extras(
     x, extras_config, batch_size, input_height, input_width, device, dtype=ttnn.bfloat8_b, memory_config=None
 ):
@@ -307,24 +316,160 @@ def forward_extras(
             dilation = config["dilation"]
             groups = config["groups"]
 
+            # Initialize cache_key for pre-formatted weight check
+            cache_key = None
+            used_cache_fallback = False
             if isinstance(weight, ttnn.Tensor):
-                weight_ttnn = weight
-                if bias is not None:
-                    bias_ttnn = bias if isinstance(bias, ttnn.Tensor) else None
-                    if bias_ttnn is None:
-                        bias_torch = bias if isinstance(bias, torch.Tensor) else ttnn.to_torch(bias)
-                        bias_reshaped = bias_torch.reshape((1, 1, 1, -1))
-                        bias_ttnn = ttnn.from_torch(bias_reshaped, dtype=ttnn.float32)
+                weight_id = id(weight)
+                input_mem_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+                input_layout = ttnn.TILE_LAYOUT
+                cache_key = (
+                    weight_id,
+                    in_channels,
+                    out_channels,
+                    kernel_size,
+                    stride,
+                    padding,
+                    groups,
+                    id(input_mem_config) if input_mem_config else None,
+                    input_layout,
+                )
+
+                if cache_key in _extras_weight_device_cache:
+                    weight_ttnn, bias_ttnn = _extras_weight_device_cache[cache_key]
+                    used_cache_fallback = True
                 else:
-                    bias_ttnn = None
+                    try:
+                        if ttnn.is_tensor_storage_on_device(weight):
+                            weight_torch = ttnn.to_torch(weight)
+                        else:
+                            weight_torch = ttnn.to_torch(weight)
+
+                        bias_torch = None
+                        if bias is not None:
+                            if isinstance(bias, ttnn.Tensor):
+                                if ttnn.is_tensor_storage_on_device(bias):
+                                    bias_torch = ttnn.to_torch(bias).reshape(-1)
+                                else:
+                                    bias_torch = ttnn.to_torch(bias).reshape(-1)
+                            elif isinstance(bias, torch.Tensor):
+                                bias_torch = bias.reshape(-1)
+                            else:
+                                bias_torch = ttnn.to_torch(bias).reshape(-1) if hasattr(bias, "shape") else None
+
+                        weight_ttnn, bias_ttnn = Conv2dConfiguration.convert_torch_weight_and_bias_to_ttnn(
+                            weight_torch, bias_torch
+                        )
+                        if device is not None:
+                            weight_ttnn = ttnn.to_device(weight_ttnn, device)
+                            if bias_ttnn is not None:
+                                bias_ttnn = ttnn.to_device(bias_ttnn, device)
+
+                        try:
+                            weight_host = ttnn.from_torch(
+                                weight_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=None
+                            )
+                            if bias_torch is not None:
+                                bias_host = ttnn.from_torch(
+                                    bias_torch.reshape((1, 1, 1, -1)),
+                                    dtype=ttnn.bfloat16,
+                                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                                    device=None,
+                                )
+                            else:
+                                bias_host = None
+
+                            conv_config_for_weights = ttnn.Conv2dConfig(weights_dtype=ttnn.bfloat16)
+                            weight_prep = ttnn.prepare_conv_weights(
+                                weight_tensor=weight_host,
+                                weights_format="OIHW",
+                                input_memory_config=input_mem_config,
+                                input_layout=input_layout,
+                                in_channels=in_channels,
+                                out_channels=out_channels,
+                                batch_size=batch_size,
+                                input_height=current_h,
+                                input_width=current_w,
+                                kernel_size=kernel_size,
+                                stride=stride,
+                                padding=padding,
+                                dilation=dilation,
+                                has_bias=bias is not None,
+                                groups=groups,
+                                device=device,
+                                input_dtype=dtype,
+                                output_dtype=dtype,
+                                conv_config=conv_config_for_weights,
+                                compute_config=None,
+                            )
+
+                            if bias_host is not None:
+                                conv_config_for_bias = ttnn.Conv2dConfig(weights_dtype=ttnn.bfloat16)
+                                bias_prep = ttnn.prepare_conv_bias(
+                                    bias_tensor=bias_host,
+                                    input_memory_config=input_mem_config,
+                                    input_layout=input_layout,
+                                    in_channels=in_channels,
+                                    out_channels=out_channels,
+                                    batch_size=batch_size,
+                                    input_height=current_h,
+                                    input_width=current_w,
+                                    kernel_size=kernel_size,
+                                    stride=stride,
+                                    padding=padding,
+                                    dilation=dilation,
+                                    groups=groups,
+                                    device=device,
+                                    input_dtype=dtype,
+                                    output_dtype=dtype,
+                                    conv_config=conv_config_for_bias,
+                                    compute_config=None,
+                                )
+                            else:
+                                bias_prep = None
+
+                            _extras_weight_device_cache[cache_key] = (weight_prep, bias_prep)
+                            # weight_ttnn = weight_prep
+                            # bias_ttnn = bias_prep
+                            # used_cache_fallback = True
+                        except (RuntimeError, ValueError):
+                            pass
+                    except RuntimeError as e:
+                        error_msg = str(e) if e else ""
+                        if (
+                            "trace" in error_msg.lower()
+                            or "Reads are not supported" in error_msg
+                            or "Writes are not supported" in error_msg
+                        ):
+                            if cache_key in _extras_weight_device_cache:
+                                weight_ttnn, bias_ttnn = _extras_weight_device_cache[cache_key]
+                                used_cache_fallback = True
+                            else:
+                                raise RuntimeError(
+                                    f"Weight cache not populated during warmup. Original error: {error_msg}"
+                                ) from e
+                        else:
+                            raise
+
             else:
-                weight_torch = weight if isinstance(weight, torch.Tensor) else ttnn.to_torch(weight)
+                if isinstance(weight, torch.Tensor):
+                    weight_torch = weight
+                else:
+                    weight_torch = ttnn.to_torch(weight) if hasattr(weight, "shape") else None
+
                 bias_torch = None
                 if bias is not None:
-                    bias_torch = bias if isinstance(bias, torch.Tensor) else ttnn.to_torch(bias)
-                weight_ttnn, bias_ttnn = Conv2dConfiguration.convert_torch_weight_and_bias_to_ttnn(
-                    weight_torch, bias_torch
-                )
+                    if isinstance(bias, torch.Tensor):
+                        bias_torch = bias
+                    else:
+                        bias_torch = ttnn.to_torch(bias) if hasattr(bias, "shape") else None
+
+                if weight_torch is not None:
+                    weight_ttnn, bias_ttnn = Conv2dConfiguration.convert_torch_weight_and_bias_to_ttnn(
+                        weight_torch, bias_torch
+                    )
+                else:
+                    raise ValueError("Weight must be either a TTNN tensor or torch tensor")
 
             tensor_size_estimate = batch_size * current_h * current_w * in_channels
             is_very_small = current_h <= 2 or current_w <= 2
@@ -356,33 +501,77 @@ def forward_extras(
                 enable_act_double_buffer = False
                 deallocate_activation = False
 
-            conv_config = Conv2dConfiguration(
-                input_height=current_h,
-                input_width=current_w,
-                in_channels=in_channels,
-                out_channels=out_channels,
-                batch_size=batch_size,
-                kernel_size=kernel_size,
-                weight=weight_ttnn,
-                stride=stride,
-                padding=padding,
-                dilation=dilation,
-                groups=groups,
-                bias=bias_ttnn,
-                activation_dtype=dtype,
-                weights_dtype=ttnn.bfloat16,
-                output_dtype=dtype,
-                sharding_strategy=sharding_strategy,
-                slice_strategy=slice_strategy,
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=False,
-                enable_act_double_buffer=enable_act_double_buffer,
-                enable_weights_double_buffer=False,
-                deallocate_activation=deallocate_activation,
-                reallocate_halo_output=True,
-                config_tensors_in_dram=not is_l1_memory and not force_l1_slice,
-            )
+            if used_cache_fallback:
+                cached_weight, cached_bias = _extras_weight_device_cache[cache_key]
+                dummy_weight_shape = (out_channels, in_channels // groups, kernel_size[0], kernel_size[1])
+                dummy_weight = ttnn.zeros(
+                    dummy_weight_shape, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=None
+                )
+                dummy_bias = None
+                if cached_bias is not None:
+                    dummy_bias = ttnn.zeros(
+                        (1, 1, 1, out_channels), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None
+                    )
+
+                conv_config = Conv2dConfiguration(
+                    input_height=current_h,
+                    input_width=current_w,
+                    in_channels=in_channels,
+                    out_channels=out_channels,
+                    batch_size=batch_size,
+                    kernel_size=kernel_size,
+                    weight=dummy_weight,
+                    stride=stride,
+                    padding=padding,
+                    dilation=dilation,
+                    groups=groups,
+                    bias=dummy_bias,
+                    activation_dtype=dtype,
+                    weights_dtype=ttnn.bfloat16,
+                    output_dtype=dtype,
+                    sharding_strategy=sharding_strategy,
+                    slice_strategy=slice_strategy,
+                    math_fidelity=ttnn.MathFidelity.HiFi4,
+                    fp32_dest_acc_en=True,
+                    packer_l1_acc=False,
+                    enable_act_double_buffer=enable_act_double_buffer,
+                    enable_weights_double_buffer=False,
+                    deallocate_activation=deallocate_activation,
+                    reallocate_halo_output=True,
+                    config_tensors_in_dram=not is_l1_memory and not force_l1_slice,
+                )
+                object.__setattr__(conv_config, "weight", cached_weight)
+                if cached_bias is not None:
+                    object.__setattr__(conv_config, "bias", cached_bias)
+            else:
+                # Normal path for non-pre-formatted weights
+                conv_config = Conv2dConfiguration(
+                    input_height=current_h,
+                    input_width=current_w,
+                    in_channels=in_channels,
+                    out_channels=out_channels,
+                    batch_size=batch_size,
+                    kernel_size=kernel_size,
+                    weight=weight_ttnn,
+                    stride=stride,
+                    padding=padding,
+                    dilation=dilation,
+                    groups=groups,
+                    bias=bias_ttnn,
+                    activation_dtype=dtype,
+                    weights_dtype=ttnn.bfloat16,
+                    output_dtype=dtype,
+                    sharding_strategy=sharding_strategy,
+                    slice_strategy=slice_strategy,
+                    math_fidelity=ttnn.MathFidelity.HiFi4,
+                    fp32_dest_acc_en=True,
+                    packer_l1_acc=False,
+                    enable_act_double_buffer=enable_act_double_buffer,
+                    enable_weights_double_buffer=False,
+                    deallocate_activation=deallocate_activation,
+                    reallocate_halo_output=True,
+                    config_tensors_in_dram=not is_l1_memory and not force_l1_slice,
+                )
 
             conv_layer = TtConv2d(conv_config, device)
             output_tensor = conv_layer(x)
@@ -482,13 +671,6 @@ class SSD512Network:
 
         batch_size = x.shape[0]
 
-        if self.device is not None:
-            ttnn.synchronize_device(self.device)
-            import gc
-
-            gc.collect()
-            ttnn.synchronize_device(self.device)
-
         vgg_result = apply_vgg_backbone(
             x,
             self.vgg_config,
@@ -497,9 +679,6 @@ class SSD512Network:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             return_sources=[22],
         )
-
-        if self.device is not None:
-            ttnn.synchronize_device(self.device)
 
         if isinstance(vgg_result, tuple):
             conv7, vgg_sources = vgg_result
@@ -530,37 +709,37 @@ class SSD512Network:
         sources.extend(extra_sources)
 
         expected_channels = [512, 1024, 512, 256, 256, 256, 256]
-        torch_sources = []
+        processed_sources = []
         for idx, source in enumerate(sources):
-            source_torch = ttnn.to_torch(source)
-            if source_torch.dim() == 4:
+            source_shape = source.shape
+            if len(source_shape) == 4:
                 expected_c = expected_channels[idx] if idx < len(expected_channels) else None
-                dim1_val = source_torch.shape[1]
-                dim3_val = source_torch.shape[3]
+                dim1_val = source_shape[1]
+                dim3_val = source_shape[3]
 
                 if expected_c is not None:
                     if dim1_val == expected_c:
-                        pass
+                        source = ttnn.permute(source, (0, 2, 3, 1))
                     elif dim3_val == expected_c:
-                        source_torch = source_torch.permute(0, 3, 1, 2)
+                        pass
                     else:
                         if dim3_val > dim1_val:
-                            source_torch = source_torch.permute(0, 3, 1, 2)
+                            if dim3_val == expected_c:
+                                pass
+                            else:
+                                source = ttnn.permute(source, (0, 2, 3, 1))
                 else:
                     if dim3_val > dim1_val:
-                        source_torch = source_torch.permute(0, 3, 1, 2)
-            torch_sources.append(source_torch)
-            if hasattr(source, "is_allocated") and source.is_allocated():
-                try:
-                    ttnn.deallocate(source)
-                except:
-                    pass
+                        pass
+                    else:
+                        source = ttnn.permute(source, (0, 2, 3, 1))
+            processed_sources.append(source)
 
         loc_outputs = []
         conf_outputs = []
-        for idx, source in enumerate(torch_sources):
-            source_h, source_w = source.shape[2], source.shape[3]
-            source_channels = source.shape[1]
+        for idx, source in enumerate(processed_sources):
+            source_h, source_w = source.shape[1], source.shape[2]
+            source_channels = source.shape[3]
             tensor_size_estimate = batch_size * source_h * source_w * source_channels
             use_l1_for_this_layer = source_h <= 128 and source_w <= 128 and tensor_size_estimate <= 2 * 1024 * 1024
             source_memory_config = ttnn.L1_MEMORY_CONFIG
@@ -568,11 +747,16 @@ class SSD512Network:
             if idx < len(self.loc_config):
                 actual_weight_channels = None
                 if "weight" in self.loc_config[idx]:
-                    weight_torch = ttnn.to_torch(self.loc_config[idx]["weight"])
-                    actual_weight_channels = weight_torch.shape[1]
+                    weight = self.loc_config[idx]["weight"]
+                    if isinstance(weight, ttnn.Tensor):
+                        weight_shape = weight.shape
+                        if len(weight_shape) >= 2:
+                            actual_weight_channels = weight_shape[1] if len(weight_shape) == 4 else None
+                    else:
+                        actual_weight_channels = None
 
                 if source_channels != self.loc_config[idx].get("in_channels", 0):
-                    if actual_weight_channels == source_channels:
+                    if actual_weight_channels is not None and actual_weight_channels == source_channels:
                         self.loc_config[idx]["in_channels"] = source_channels
                         if "config" in self.loc_config[idx]:
                             self.loc_config[idx]["config"]["in_channels"] = source_channels
@@ -580,11 +764,16 @@ class SSD512Network:
             if idx < len(self.conf_config):
                 actual_weight_channels = None
                 if "weight" in self.conf_config[idx]:
-                    weight_torch = ttnn.to_torch(self.conf_config[idx]["weight"])
-                    actual_weight_channels = weight_torch.shape[1]
+                    weight = self.conf_config[idx]["weight"]
+                    if isinstance(weight, ttnn.Tensor):
+                        weight_shape = weight.shape
+                        if len(weight_shape) >= 2:
+                            actual_weight_channels = weight_shape[1] if len(weight_shape) == 4 else None
+                    else:
+                        actual_weight_channels = None
 
                 if source_channels != self.conf_config[idx].get("in_channels", 0):
-                    if actual_weight_channels == source_channels:
+                    if actual_weight_channels is not None and actual_weight_channels == source_channels:
                         self.conf_config[idx]["in_channels"] = source_channels
                         if "config" in self.conf_config[idx]:
                             self.conf_config[idx]["config"]["in_channels"] = source_channels
@@ -593,47 +782,41 @@ class SSD512Network:
                 source, self.loc_config[idx], device=self.device, dtype=dtype, memory_config=source_memory_config
             )
 
-            loc_torch = tt_to_torch_tensor(loc_out)
-            if hasattr(loc_out, "is_allocated") and loc_out.is_allocated():
-                try:
-                    ttnn.deallocate(loc_out)
-                except:
-                    pass
-
-            if self.device is not None:
-                ttnn.synchronize_device(self.device)
+            loc_out_flat = ttnn.reshape(loc_out, (batch_size, -1, 4))
+            loc_outputs.append(loc_out_flat)
 
             conf_out = apply_multibox_head(
                 source, self.conf_config[idx], device=self.device, dtype=dtype, memory_config=source_memory_config
             )
 
-            conf_torch = tt_to_torch_tensor(conf_out)
-            if hasattr(conf_out, "is_allocated") and conf_out.is_allocated():
-                try:
-                    ttnn.deallocate(conf_out)
-                except:
-                    pass
+            conf_out_flat = ttnn.reshape(conf_out, (batch_size, -1, self.num_classes))
+            conf_outputs.append(conf_out_flat)
 
-            if self.device is not None:
-                ttnn.synchronize_device(self.device)
+        if len(loc_outputs) > 1:
+            loc = ttnn.concat(loc_outputs, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            loc = loc_outputs[0]
 
-            loc_torch = loc_torch.reshape(batch_size, -1, 4)
-            conf_torch = conf_torch.reshape(batch_size, -1, self.num_classes)
+        if len(conf_outputs) > 1:
+            conf = ttnn.concat(conf_outputs, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            conf = conf_outputs[0]
 
-            loc_outputs.append(loc_torch)
-            conf_outputs.append(conf_torch)
-
-        loc = torch.cat([o.view(batch_size, -1) for o in loc_outputs], dim=1)
-        conf = torch.cat([o.view(batch_size, -1) for o in conf_outputs], dim=1)
-
+        # Return TTNN tensors directly to avoid device-to-host reads during trace capture
+        # The pipeline model function will handle conversion if needed
         if debug:
+            debug_sources = [tt_to_torch_tensor(s) for s in processed_sources]
             debug_dict = {
-                "sources": torch_sources,
-                "loc_preds": loc_outputs,
-                "conf_preds": conf_outputs,
+                "sources": debug_sources,
+                "loc_preds": [tt_to_torch_tensor(l) for l in loc_outputs],
+                "conf_preds": [tt_to_torch_tensor(c) for c in conf_outputs],
             }
-            return loc, conf, debug_dict
+            loc_torch = tt_to_torch_tensor(loc)
+            conf_torch = tt_to_torch_tensor(conf)
+            return loc_torch, conf_torch, debug_dict
 
+        # Return TTNN tensors directly (not converted to torch)
+        # This avoids device-to-host reads during trace capture
         return loc, conf
 
 

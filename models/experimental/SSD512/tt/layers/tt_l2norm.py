@@ -3,7 +3,7 @@
 
 import ttnn
 import torch
-from models.common.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
+from models.common.utility_functions import torch_to_tt_tensor_rm
 
 
 class TtL2Norm:
@@ -17,13 +17,20 @@ class TtL2Norm:
 
     def __call__(self, x, memory_config=None):
         """Apply L2 normalization and learned scale."""
-        x_torch = tt_to_torch_tensor(x)
-        if x_torch.shape[1] == self.n_channels:
-            x_nchw = x_torch
+        x_shape = x.shape
+        if len(x_shape) == 4:
+            dim1_val = x_shape[1]
+            dim3_val = x_shape[3]
+            if dim1_val == self.n_channels:
+                x_nchw_ttnn = x
+            elif dim3_val == self.n_channels:
+                x_nchw_ttnn = ttnn.permute(x, (0, 3, 1, 2))
+            else:
+                x_nchw_ttnn = x
         else:
-            x_nchw = x_torch.permute(0, 3, 1, 2)
+            x_nchw_ttnn = x
 
-        batch_size, channels, height, width = x_nchw.shape
+        batch_size, channels, height, width = x_nchw_ttnn.shape
         tensor_size_estimate = batch_size * height * width * channels
 
         if memory_config is None:
@@ -31,16 +38,11 @@ class TtL2Norm:
         else:
             layer_memory_config = memory_config
 
-        if self.device is not None:
-            x_nchw_ttnn = ttnn.from_torch(
-                x_nchw,
-                device=self.device,
-                dtype=self.dtype,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=layer_memory_config,
-            )
-        else:
-            x_nchw_ttnn = torch_to_tt_tensor_rm(x_nchw, device=self.device)
+        if x_nchw_ttnn.layout != ttnn.TILE_LAYOUT:
+            x_nchw_ttnn = ttnn.to_layout(x_nchw_ttnn, ttnn.TILE_LAYOUT)
+
+        if x_nchw_ttnn.memory_config() != layer_memory_config:
+            x_nchw_ttnn = ttnn.to_memory_config(x_nchw_ttnn, layer_memory_config)
 
         squared = ttnn.mul(x_nchw_ttnn, x_nchw_ttnn, memory_config=layer_memory_config)
         squared = ttnn.to_layout(squared, layout=ttnn.TILE_LAYOUT)

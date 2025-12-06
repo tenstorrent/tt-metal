@@ -225,6 +225,9 @@ def apply_multibox_heads(
     return loc_preds, conf_preds
 
 
+_multibox_weight_device_cache = {}
+
+
 def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttnn.bfloat16, memory_config=None):
     """Apply a single multibox head (location or confidence) to input tensor."""
     if isinstance(input_tensor, torch.Tensor):
@@ -317,13 +320,18 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
     dilation = config["dilation"]
     groups = config["groups"]
 
-    if isinstance(weight, torch.Tensor):
+    if isinstance(weight, ttnn.Tensor):
+        weight_shape = weight.shape
+        if len(weight_shape) >= 2:
+            actual_weight_in_channels = weight_shape[1] if len(weight_shape) == 4 else None
+        else:
+            actual_weight_in_channels = None
+    elif isinstance(weight, torch.Tensor):
         actual_weight_in_channels = weight.shape[1]
     else:
-        weight_torch = ttnn.to_torch(weight)
-        actual_weight_in_channels = weight_torch.shape[1]
+        raise ValueError("Weight must be either a TTNN tensor or torch tensor")
 
-    if actual_weight_in_channels != in_channels:
+    if actual_weight_in_channels is not None and actual_weight_in_channels != in_channels:
         raise ValueError(
             f"Input tensor channels ({in_channels}) don't match weight's expected input channels ({actual_weight_in_channels})!"
         )
@@ -341,21 +349,159 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
         and ((tensor_size_estimate > 1024 * 1024 or input_height > 64 or input_width > 64))
     )
 
+    # Initialize cache_key for pre-formatted weight check
+    cache_key = None
+    used_cache_fallback = False
     if isinstance(weight, ttnn.Tensor):
-        weight_ttnn = weight
-        if bias is not None:
-            bias_ttnn = bias if isinstance(bias, ttnn.Tensor) else None
-            if bias_ttnn is None:
-                bias_torch = bias if isinstance(bias, torch.Tensor) else ttnn.to_torch(bias)
-                bias_reshaped = bias_torch.reshape((1, 1, 1, -1))
-                bias_ttnn = ttnn.from_torch(bias_reshaped, dtype=ttnn.float32)
+        weight_id = id(weight)
+        input_mem_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+        input_layout = ttnn.TILE_LAYOUT
+        # cache_key = (weight_id, in_channels, out_channels, kernel_size, stride, padding, groups, id(input_mem_config) if input_mem_config else None, input_layout)
+        cache_key = (
+            weight_id,
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride,
+            padding,
+            groups,
+            id(input_mem_config) if input_mem_config else None,
+            input_layout,
+            input_height,
+            input_width,
+            batch_size,
+            dtype,
+        )
+
+        if cache_key in _multibox_weight_device_cache:
+            weight_ttnn, bias_ttnn = _multibox_weight_device_cache[cache_key]
+            used_cache_fallback = True
         else:
-            bias_ttnn = None
+            try:
+                if ttnn.is_tensor_storage_on_device(weight):
+                    weight_torch = ttnn.to_torch(weight)
+                else:
+                    weight_torch = ttnn.to_torch(weight)
+
+                bias_torch = None
+                if bias is not None:
+                    if isinstance(bias, ttnn.Tensor):
+                        if ttnn.is_tensor_storage_on_device(bias):
+                            bias_torch = ttnn.to_torch(bias).reshape(-1)
+                        else:
+                            bias_torch = ttnn.to_torch(bias).reshape(-1)
+                    elif isinstance(bias, torch.Tensor):
+                        bias_torch = bias.reshape(-1)
+                    else:
+                        raise ValueError("Bias must be either a TTNN tensor or torch tensor")
+
+                weight_ttnn, bias_ttnn = Conv2dConfiguration.convert_torch_weight_and_bias_to_ttnn(
+                    weight_torch, bias_torch
+                )
+                if device is not None:
+                    weight_ttnn = ttnn.to_device(weight_ttnn, device)
+                    if bias_ttnn is not None:
+                        bias_ttnn = ttnn.to_device(bias_ttnn, device)
+
+                try:
+                    weight_host = ttnn.from_torch(
+                        weight_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=None
+                    )
+                    if bias_torch is not None:
+                        bias_host = ttnn.from_torch(
+                            bias_torch.reshape((1, 1, 1, -1)),
+                            dtype=ttnn.float32,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            device=None,
+                        )
+                    else:
+                        bias_host = None
+
+                    conv_config_for_weights = ttnn.Conv2dConfig(weights_dtype=dtype)
+                    weight_prep = ttnn.prepare_conv_weights(
+                        weight_tensor=weight_host,
+                        weights_format="OIHW",
+                        input_memory_config=input_mem_config,
+                        input_layout=input_layout,
+                        in_channels=in_channels,
+                        out_channels=out_channels,
+                        batch_size=batch_size,
+                        input_height=input_height,
+                        input_width=input_width,
+                        kernel_size=kernel_size,
+                        stride=stride,
+                        padding=padding,
+                        dilation=dilation,
+                        has_bias=bias is not None,
+                        groups=groups,
+                        device=device,
+                        input_dtype=dtype,
+                        output_dtype=dtype,
+                        conv_config=conv_config_for_weights,
+                        compute_config=None,
+                    )
+
+                    if bias_host is not None:
+                        conv_config_for_bias = ttnn.Conv2dConfig(weights_dtype=dtype)
+                        bias_prep = ttnn.prepare_conv_bias(
+                            bias_tensor=bias_host,
+                            input_memory_config=input_mem_config,
+                            input_layout=input_layout,
+                            in_channels=in_channels,
+                            out_channels=out_channels,
+                            batch_size=batch_size,
+                            input_height=input_height,
+                            input_width=input_width,
+                            kernel_size=kernel_size,
+                            stride=stride,
+                            padding=padding,
+                            dilation=dilation,
+                            groups=groups,
+                            device=device,
+                            input_dtype=dtype,
+                            output_dtype=dtype,
+                            conv_config=conv_config_for_bias,
+                            compute_config=None,
+                        )
+                    else:
+                        bias_prep = None
+
+                    _multibox_weight_device_cache[cache_key] = (weight_prep, bias_prep)
+                    # weight_ttnn = weight_prep
+                    # bias_ttnn = bias_prep
+                    # used_cache_fallback = True
+                except (RuntimeError, ValueError):
+                    pass
+            except RuntimeError as e:
+                error_msg = str(e) if e else ""
+                if (
+                    "trace" in error_msg.lower()
+                    or "Reads are not supported" in error_msg
+                    or "Writes are not supported" in error_msg
+                ):
+                    if cache_key in _multibox_weight_device_cache:
+                        weight_ttnn, bias_ttnn = _multibox_weight_device_cache[cache_key]
+                        used_cache_fallback = True
+                    else:
+                        raise RuntimeError(
+                            f"Weight cache not populated during warmup. Original error: {error_msg}"
+                        ) from e
+                else:
+                    raise
+
     else:
-        weight_torch = weight if isinstance(weight, torch.Tensor) else ttnn.to_torch(weight)
+        if isinstance(weight, torch.Tensor):
+            weight_torch = weight
+        else:
+            raise ValueError("Weight must be either a TTNN tensor or torch tensor")
+
         bias_torch = None
         if bias is not None:
-            bias_torch = bias if isinstance(bias, torch.Tensor) else ttnn.to_torch(bias)
+            if isinstance(bias, torch.Tensor):
+                bias_torch = bias
+            else:
+                raise ValueError("Bias must be either a TTNN tensor or torch tensor")
+
         weight_ttnn, bias_ttnn = Conv2dConfiguration.convert_torch_weight_and_bias_to_ttnn(weight_torch, bias_torch)
 
     if use_dram_slicing and x.layout != ttnn.ROW_MAJOR_LAYOUT:
@@ -411,33 +557,75 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
         enable_act_double_buffer = False
         deallocate_activation = False
 
-    conv_config = Conv2dConfiguration(
-        input_height=input_height,
-        input_width=input_width,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        batch_size=batch_size,
-        kernel_size=kernel_size,
-        weight=weight_ttnn,
-        stride=stride,
-        padding=padding,
-        dilation=dilation,
-        groups=groups,
-        bias=bias_ttnn,
-        activation_dtype=dtype,
-        weights_dtype=dtype,
-        output_dtype=dtype,
-        sharding_strategy=sharding_strategy,
-        slice_strategy=slice_strategy,
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=False,
-        enable_act_double_buffer=enable_act_double_buffer,
-        enable_weights_double_buffer=False,
-        deallocate_activation=deallocate_activation,
-        reallocate_halo_output=True,
-        config_tensors_in_dram=not use_l1_for_this_layer,
-    )
+    if used_cache_fallback:
+        cached_weight, cached_bias = _multibox_weight_device_cache[cache_key]
+        dummy_weight_shape = (out_channels, in_channels // groups, kernel_size[0], kernel_size[1])
+        dummy_weight = ttnn.zeros(dummy_weight_shape, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=None)
+        dummy_bias = None
+        if cached_bias is not None:
+            dummy_bias = ttnn.zeros(
+                (1, 1, 1, out_channels), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None
+            )
+
+        conv_config = Conv2dConfiguration(
+            input_height=input_height,
+            input_width=input_width,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            batch_size=batch_size,
+            kernel_size=kernel_size,
+            weight=dummy_weight,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
+            groups=groups,
+            bias=dummy_bias,
+            activation_dtype=dtype,
+            weights_dtype=dtype,
+            output_dtype=dtype,
+            sharding_strategy=sharding_strategy,
+            slice_strategy=slice_strategy,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+            enable_act_double_buffer=enable_act_double_buffer,
+            enable_weights_double_buffer=False,
+            deallocate_activation=deallocate_activation,
+            reallocate_halo_output=True,
+            config_tensors_in_dram=not use_l1_for_this_layer,
+        )
+        object.__setattr__(conv_config, "weight", cached_weight)
+        if cached_bias is not None:
+            object.__setattr__(conv_config, "bias", cached_bias)
+    else:
+        # Normal path for non-pre-formatted weights
+        conv_config = Conv2dConfiguration(
+            input_height=input_height,
+            input_width=input_width,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            batch_size=batch_size,
+            kernel_size=kernel_size,
+            weight=weight_ttnn,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
+            groups=groups,
+            bias=bias_ttnn,
+            activation_dtype=dtype,
+            weights_dtype=dtype,
+            output_dtype=dtype,
+            sharding_strategy=sharding_strategy,
+            slice_strategy=slice_strategy,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+            enable_act_double_buffer=enable_act_double_buffer,
+            enable_weights_double_buffer=False,
+            deallocate_activation=deallocate_activation,
+            reallocate_halo_output=True,
+            config_tensors_in_dram=not use_l1_for_this_layer,
+        )
 
     conv_layer = TtConv2d(conv_config, device)
     output_tensor = conv_layer(x)

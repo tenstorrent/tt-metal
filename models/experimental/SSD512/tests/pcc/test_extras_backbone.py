@@ -30,6 +30,8 @@ def test_extras_backbone(device, pcc, size, reset_seeds):
     """
     from models.experimental.SSD512.common import setup_seeds_and_deterministic
 
+    # from models.experimental.SSD512.tt.layers.tt_extras_backbone import clear_extras_weight_cache
+    # clear_extras_weight_cache()
     setup_seeds_and_deterministic(reset_seeds=reset_seeds, seed=0)
 
     cfg = extras[str(size)]

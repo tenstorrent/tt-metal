@@ -30,6 +30,8 @@ def test_multibox_heads(device, pcc, size, reset_seeds):
     """
     from models.experimental.SSD512.common import setup_seeds_and_deterministic
 
+    # from models.experimental.SSD512.tt.layers.tt_multibox_heads import clear_multibox_weight_cache
+    # clear_multibox_weight_cache()
     setup_seeds_and_deterministic(reset_seeds=reset_seeds, seed=0)
 
     num_classes = 21  # VOC dataset
