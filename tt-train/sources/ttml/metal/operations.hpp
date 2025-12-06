@@ -14,8 +14,10 @@
 #include "ops/sdpa_fw/sdpa_fw.hpp"
 #include "ops/silu_bw/silu_bw.hpp"
 #include "ops/softmax/softmax.hpp"
-#include "optimizers/sgd_fused/sgd_fused.hpp"
 #include "ops/swiglu_fw/swiglu_fw.hpp"
+#include "optimizers/adamw_full_precision/adamw_full_precision.hpp"
+#include "optimizers/adamw_fused/adamw_fused.hpp"
+#include "optimizers/sgd_fused/sgd_fused.hpp"
 
 namespace ttml::metal {
 
@@ -56,5 +58,12 @@ constexpr auto swiglu_fw =
 
 constexpr auto sgd_fused =
     ttnn::register_operation<"ttml::metal::sgd_fused", ttml::metal::optimizers::sgd_fused::SGDFusedOptimizer>();
+
+constexpr auto adamw_fused =
+    ttnn::register_operation<"ttml::metal::adamw_fused", ttml::metal::optimizers::adamw_fused::AdamWFusedOptimizer>();
+
+constexpr auto adamw_full_precision = ttnn::register_operation<
+    "ttml::metal::adamw_full_precision",
+    ttml::metal::optimizers::adamw_full_precision::AdamWFullPrecisionOptimizer>();
 
 }  // namespace ttml::metal
