@@ -11,8 +11,12 @@
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/fabric_router_channel_mapping.hpp"
 #include "tt_metal/fabric/builder/connection_registry.hpp"
+#include "tt_metal/fabric/builder/router_connection_mapping.hpp"
 
 namespace tt::tt_fabric {
+
+// Forward declarations
+class FabricDatamoverBuilderBase;
 
 /**
  * ComputeMeshRouterBuilder
@@ -72,6 +76,16 @@ public:
     size_t get_noc_y() const;
     size_t get_configured_risc_count() const;
 
+    /**
+     * Get the builder for a specific VC/channel combination
+     * Encapsulates channel mapping + builder resolution
+     * 
+     * @param vc Virtual channel index
+     * @param channel Sender channel index within the VC
+     * @return Pointer to the appropriate builder (erisc or tensix)
+     */
+    FabricDatamoverBuilderBase* get_builder_for_vc_channel(uint32_t vc, uint32_t channel) const;
+
     // ============ Compute-Mesh Specific Accessors ============
 
     FabricEriscDatamoverBuilder& get_erisc_builder() { return *erisc_builder_; }
@@ -95,6 +109,7 @@ private:
         std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder,
         std::optional<FabricTensixDatamoverBuilder> tensix_builder,
         FabricRouterChannelMapping channel_mapping,
+        RouterConnectionMapping connection_mapping,
         std::shared_ptr<ConnectionRegistry> connection_registry);
 
     /**
@@ -166,6 +181,7 @@ private:
     std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder_;
     std::optional<FabricTensixDatamoverBuilder> tensix_builder_;
     FabricRouterChannelMapping channel_mapping_;
+    RouterConnectionMapping connection_mapping_;
     std::shared_ptr<ConnectionRegistry> connection_registry_;
 };
 

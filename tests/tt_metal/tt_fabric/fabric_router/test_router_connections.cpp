@@ -307,13 +307,13 @@ TEST_F(RouterConnectionsTest, ZToMesh_VC1_Connection) {
         EXPECT_EQ(sender_mapping.internal_sender_channel_id, 4 + i);
     }
     
-    // Simulate connection: Z (VC1, sender ch 0) → mesh North (VC0, receiver)
+    // Simulate connection: Z (VC1, sender ch 0) → mesh North (VC1, receiver)
     record_test_connection(
         registry_,
         device0, RoutingDirection::Z, 4,  // Z router
         1, 0,  // VC1, sender channel 0 (maps to erisc 4)
         device0, RoutingDirection::N, 0,  // mesh router
-        0, 2,  // VC0, receiver channel (internal mapping)
+        1, 0,  // VC1, receiver channel 0
         ConnectionType::Z_TO_MESH);
     
     EXPECT_EQ(registry_->size(), 1);
@@ -326,7 +326,7 @@ TEST_F(RouterConnectionsTest, ZToMesh_VC1_Connection) {
     EXPECT_EQ(conn.source_vc, 1);
     EXPECT_EQ(conn.source_sender_channel, 0);
     EXPECT_EQ(conn.dest_direction, RoutingDirection::N);
-    EXPECT_EQ(conn.dest_vc, 0);
+    EXPECT_EQ(conn.dest_vc, 1);
     EXPECT_EQ(conn.connection_type, ConnectionType::Z_TO_MESH);
 }
 
@@ -338,14 +338,14 @@ TEST_F(RouterConnectionsTest, ZToMesh_AllFourDirections) {
         RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W
     };
     
-    // Z router uses VC1 sender channels 0-3 to connect to 4 mesh routers
+    // Z router uses VC1 sender channels 0-3 to connect to 4 mesh routers VC1
     for (size_t i = 0; i < 4; ++i) {
         record_test_connection(
             registry_,
             device0, RoutingDirection::Z, 4,  // Z router
             1, static_cast<uint32_t>(i),  // VC1, sender channel i
             device0, mesh_dirs[i], static_cast<uint8_t>(i),  // mesh router
-            0, 2,  // VC0, receiver channel
+            1, 0,  // VC1, receiver channel 0
             ConnectionType::Z_TO_MESH);
     }
     
@@ -377,7 +377,7 @@ TEST_F(RouterConnectionsTest, ZToMesh_VariableRouterCount) {
         device0, RoutingDirection::Z, 4,
         1, 0,  // VC1, sender channel 0
         device0, RoutingDirection::N, 0,
-        0, 2,
+        1, 0,  // VC1, receiver channel 0
         ConnectionType::Z_TO_MESH);
     
     record_test_connection(
@@ -385,7 +385,7 @@ TEST_F(RouterConnectionsTest, ZToMesh_VariableRouterCount) {
         device0, RoutingDirection::Z, 4,
         1, 1,  // VC1, sender channel 1
         device0, RoutingDirection::E, 1,
-        0, 2,
+        1, 0,  // VC1, receiver channel 0
         ConnectionType::Z_TO_MESH);
     
     EXPECT_EQ(registry_->size(), 2);
@@ -427,13 +427,13 @@ TEST_F(RouterConnectionsTest, CompleteDevice_WithZRouter) {
         1, 0,
         ConnectionType::MESH_TO_Z);
     
-    // 3. Z_TO_MESH: device0 Z router → device0 North router
+    // 3. Z_TO_MESH: device0 Z router VC1 → device0 North router VC1
     record_test_connection(
         registry_,
         device0, RoutingDirection::Z, 4,
         1, 0,
         device0, RoutingDirection::N, 0,
-        0, 2,
+        1, 0,
         ConnectionType::Z_TO_MESH);
     
     EXPECT_EQ(registry_->size(), 3);
@@ -482,14 +482,14 @@ TEST_F(RouterConnectionsTest, FullMesh_4Routers_WithZ) {
             ConnectionType::MESH_TO_Z);
     }
     
-    // Z_TO_MESH connections (Z → all 4 mesh routers)
+    // Z_TO_MESH connections (Z VC1 → all 4 mesh routers VC1)
     for (size_t i = 0; i < 4; ++i) {
         record_test_connection(
             registry_,
             device0, RoutingDirection::Z, 4,
             1, static_cast<uint32_t>(i),
             device0, dirs[i], static_cast<uint8_t>(i),
-            0, 2,
+            1, 0,
             ConnectionType::Z_TO_MESH);
     }
     
@@ -641,7 +641,7 @@ TEST_F(RouterConnectionsTest, Phase1_5_Bidirectional_ZAndMesh) {
             device0, RoutingDirection::Z, 4,
             1, static_cast<uint32_t>(i),  // Z VC1 sender i
             device0, mesh_dirs[i], static_cast<uint8_t>(i),
-            0, 2,  // mesh VC0 receiver
+            1, 0,  // mesh VC1 receiver
             ConnectionType::Z_TO_MESH);
     }
     
@@ -862,7 +862,7 @@ TEST_F(RouterConnectionsTest, Phase2_MappingDriven_ZToMesh_AllDirections) {
             z_node, RoutingDirection::Z, 0,
             1, channel,  // VC1, sender channel
             mesh_node, expected_dir, 0,
-            0, 0,  // Mesh router VC0
+            1, 0,  // Mesh router VC1
             ConnectionType::Z_TO_MESH);
     }
     
@@ -871,10 +871,10 @@ TEST_F(RouterConnectionsTest, Phase2_MappingDriven_ZToMesh_AllDirections) {
     auto z_to_mesh = registry_->get_connections_by_type(ConnectionType::Z_TO_MESH);
     EXPECT_EQ(z_to_mesh.size(), 4);
     
-    // Verify all use VC1
+    // Verify all use VC1 (Z VC1 → mesh VC1)
     for (const auto& conn : z_to_mesh) {
         EXPECT_EQ(conn.source_vc, 1);
-        EXPECT_EQ(conn.dest_vc, 0);
+        EXPECT_EQ(conn.dest_vc, 1);
     }
 }
 
@@ -927,7 +927,7 @@ TEST_F(RouterConnectionsTest, Phase2_MappingDriven_FullDevice_Orchestration) {
             z_node, RoutingDirection::Z, 0,
             1, ch,
             mesh_node, mesh_directions[ch], static_cast<uint8_t>(ch),
-            0, 0,
+            1, 0,
             ConnectionType::Z_TO_MESH);
     }
     
@@ -1000,7 +1000,7 @@ TEST_F(RouterConnectionsTest, Phase2_MappingDriven_EdgeDevice_DynamicSizing) {
                 z_node, RoutingDirection::Z, 0,
                 1, ch,
                 mesh_node, targets[0].target_direction.value(), static_cast<uint8_t>(ch),
-                0, 0,
+                1, 0,
                 ConnectionType::Z_TO_MESH);
         }
     }

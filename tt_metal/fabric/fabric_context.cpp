@@ -125,6 +125,14 @@ bool FabricContext::is_switch_mesh(MeshId mesh_id) const {
     return false;
 }
 
+bool FabricContext::has_z_router_on_device(ChipId device_id) const {
+    // Stub for Phase 3: returns false
+    // TODO(Phase 5): Implement proper Z router detection
+    // Will need to query ControlPlane or track router locations in FabricBuilder
+    (void)device_id;  // Unused for now
+    return false;
+}
+
 // ============ Builder Context Access ============
 
 FabricBuilderContext& FabricContext::get_builder_context() {

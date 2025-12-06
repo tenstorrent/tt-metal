@@ -25,11 +25,13 @@ ComputeMeshRouterBuilder::ComputeMeshRouterBuilder(
     std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder,
     std::optional<FabricTensixDatamoverBuilder> tensix_builder,
     FabricRouterChannelMapping channel_mapping,
+    RouterConnectionMapping connection_mapping,
     std::shared_ptr<ConnectionRegistry> connection_registry) :
     FabricRouterBuilder(local_node, location),
     erisc_builder_(std::move(erisc_builder)),
     tensix_builder_(std::move(tensix_builder)),
     channel_mapping_(std::move(channel_mapping)),
+    connection_mapping_(std::move(connection_mapping)),
     connection_registry_(std::move(connection_registry)) {
     TT_FATAL(erisc_builder_ != nullptr, "Erisc builder cannot be null");
 }
@@ -68,7 +70,20 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     const auto& edm_config = builder_context.get_fabric_router_config(tensix_config_for_lookup, eth_direction);
 
     // Create channel mapping EARLY (needed for computing injection flags)
-    auto channel_mapping = FabricRouterChannelMapping(topology, eth_direction, downstream_is_tensix_builder);
+    RouterVariant variant = (location.direction == RoutingDirection::Z) ? 
+        RouterVariant::Z_ROUTER : RouterVariant::MESH;
+    auto channel_mapping = FabricRouterChannelMapping(topology, eth_direction, downstream_is_tensix_builder, variant);
+    
+    // Create connection mapping (Phase 3)
+    RouterConnectionMapping connection_mapping;
+    if (variant == RouterVariant::Z_ROUTER) {
+        connection_mapping = RouterConnectionMapping::for_z_router();
+    } else {
+        // Check if this device has a Z router
+        bool has_z = fabric_context.has_z_router_on_device(device->id());
+        connection_mapping = RouterConnectionMapping::for_mesh_router(topology, location.direction, has_z);
+    }
+    
     // Compute injection channel flags at router level BEFORE creating builders
     // Injection semantics are per-VC, so compute for each VC and flatten into router-level vector
     // Injection channel status flags are used by sender channels to understand if that channel must
@@ -148,7 +163,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
 
     // Use unique_ptr constructor directly since ComputeMeshRouterBuilder constructor is private
     auto router_builder = std::unique_ptr<ComputeMeshRouterBuilder>(new ComputeMeshRouterBuilder(
-        local_node, location, std::move(edm_builder), std::move(tensix_builder_opt), std::move(channel_mapping), connection_registry));
+        local_node, location, std::move(edm_builder), std::move(tensix_builder_opt), std::move(channel_mapping), std::move(connection_mapping), connection_registry));
 
     // Setup the local relay kernel connection if in UDM mode
     if (fabric_tensix_extension_udm_mode && router_builder->has_tensix_builder()) {
@@ -539,6 +554,15 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         eth_chan,
         get_eth_direction(),
         eth_chan == ctx.master_router_chan);
+}
+
+FabricDatamoverBuilderBase* ComputeMeshRouterBuilder::get_builder_for_vc_channel(uint32_t vc, uint32_t channel) const {
+    auto mapping = channel_mapping_.get_sender_mapping(vc, channel);
+    if (mapping.builder_type == BuilderType::TENSIX) {
+        TT_FATAL(tensix_builder_.has_value(), "Tensix builder required but not present");
+        return const_cast<FabricTensixDatamoverBuilder*>(&tensix_builder_.value());
+    }
+    return erisc_builder_.get();
 }
 
 }  // namespace tt::tt_fabric

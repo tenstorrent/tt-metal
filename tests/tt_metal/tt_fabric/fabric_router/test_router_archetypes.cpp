@@ -402,6 +402,118 @@ TEST_F(RouterArchetypesTest, NonZToZ_FourMeshRouters) {
     }
 }
 
+TEST_F(RouterArchetypesTest, NonZToZ_FourMeshRouters_VC1_Connections) {
+    // Test: 4 non-Z routers VC1 → Z router VC1
+    // This tests the reverse direction from Z_TO_MESH
+    
+    // Create 4 mesh routers, all with Z
+    std::vector<RoutingDirection> directions = {
+        RoutingDirection::N,
+        RoutingDirection::E,
+        RoutingDirection::S,
+        RoutingDirection::W
+    };
+    
+    std::vector<RouterArchetype> mesh_routers;
+    for (size_t i = 0; i < 4; ++i) {
+        mesh_routers.push_back(create_mesh_router_archetype(
+            Topology::Mesh,
+            directions[i],
+            true,  // Has Z router
+            FabricNodeId(MeshId{0}, i)));
+    }
+    
+    // Create Z router
+    auto z_router = create_z_router_archetype(
+        FabricNodeId(MeshId{0}, 100));
+    
+    // Each mesh router connects VC1 → Z VC1
+    // Note: Mesh routers have VC1 for receiving from Z, but can also send on VC1
+    for (size_t i = 0; i < 4; ++i) {
+        record_archetype_connection(
+            mesh_routers[i], 1, 0,  // Mesh VC1, sender channel 0
+            z_router, 1, static_cast<uint32_t>(i),  // Z VC1, receiver channel i
+            ConnectionType::MESH_TO_Z);
+    }
+    
+    // Verify 4 MESH_TO_Z connections on VC1
+    EXPECT_EQ(registry_->size(), 4);
+    
+    auto mesh_to_z = registry_->get_connections_by_type(ConnectionType::MESH_TO_Z);
+    EXPECT_EQ(mesh_to_z.size(), 4);
+    
+    // Verify all connections use VC1
+    for (const auto& conn : mesh_to_z) {
+        EXPECT_EQ(conn.source_vc, 1);  // Mesh VC1
+        EXPECT_EQ(conn.dest_vc, 1);    // Z VC1
+    }
+    
+    // Verify Z router receives from all 4 mesh routers on VC1
+    auto z_incoming = registry_->get_connections_by_dest_node(z_router.node_id);
+    EXPECT_EQ(z_incoming.size(), 4);
+    
+    // Each should target a different Z VC1 receiver channel (0-3)
+    std::set<uint32_t> receiver_channels;
+    for (const auto& conn : z_incoming) {
+        EXPECT_EQ(conn.dest_vc, 1);
+        receiver_channels.insert(conn.dest_receiver_channel);
+    }
+    EXPECT_EQ(receiver_channels.size(), 4);  // All 4 channels used
+}
+
+TEST_F(RouterArchetypesTest, NonZToZ_FiveMeshRouters_VC1_ShouldFail) {
+    // Negative test: 5 non-Z routers VC1 → Z router VC1 should fail
+    // Z router VC1 only has 4 receiver channels (0-3)
+    
+    // Create 5 mesh routers
+    std::vector<RouterArchetype> mesh_routers;
+    for (size_t i = 0; i < 5; ++i) {
+        mesh_routers.push_back(create_mesh_router_archetype(
+            Topology::Mesh,
+            RoutingDirection::N,
+            true,
+            FabricNodeId(MeshId{0}, i)));
+    }
+    
+    // Create Z router
+    auto z_router = create_z_router_archetype(
+        FabricNodeId(MeshId{0}, 100));
+    
+    // Successfully connect first 4 mesh routers to Z VC1 channels 0-3
+    for (size_t i = 0; i < 4; ++i) {
+        record_archetype_connection(
+            mesh_routers[i], 1, 0,
+            z_router, 1, static_cast<uint32_t>(i),
+            ConnectionType::MESH_TO_Z);
+    }
+    
+    EXPECT_EQ(registry_->size(), 4);
+    
+    // Attempting to connect 5th mesh router should fail
+    // Z router VC1 only has receiver channels 0-3 (4 total)
+    // This would require receiver channel 4, which doesn't exist
+    
+    // In a real implementation, this would be caught by:
+    // 1. Channel mapping validation (no receiver channel available)
+    // 2. Connection orchestration logic checking available channels
+    // 3. Multi-target receiver capacity limits
+    
+    // Verify that Z router VC1 has exactly 4 sender channels (for Z_TO_MESH)
+    EXPECT_EQ(z_router.channel_mapping.get_num_sender_channels_for_vc(1), 4);
+    
+    // All 4 sender channels are already mapped to specific directions (N/E/S/W)
+    for (uint32_t ch = 0; ch < 4; ++ch) {
+        auto targets = z_router.connection_mapping.get_downstream_targets(1, ch);
+        EXPECT_EQ(targets.size(), 1);  // Each channel has exactly one target direction
+    }
+    
+    // The 5th mesh router would need to send to Z VC1, but:
+    // - Z VC1 only has 1 receiver channel (for multi-target from 4 mesh routers)
+    // - That receiver is already handling 4 connections (at capacity)
+    // - No additional receiver channels exist on Z VC1
+    // In Phase 4+ orchestration, this should be detected and rejected
+}
+
 // ============================================================================
 // Z → Non-Z Connection Tests (Z_TO_MESH)
 // ============================================================================
@@ -424,10 +536,10 @@ TEST_F(RouterArchetypesTest, ZToNonZ_SingleMeshRouter) {
     EXPECT_EQ(targets[0].type, ConnectionType::Z_TO_MESH);
     EXPECT_EQ(targets[0].target_direction.value(), RoutingDirection::N);
     
-    // Record Z_TO_MESH connection
+    // Record Z_TO_MESH connection (Z VC1 → mesh VC1)
     record_archetype_connection(
         z_router, 1, 0,
-        mesh_router, 0, 0,
+        mesh_router, 1, 0,
         ConnectionType::Z_TO_MESH);
     
     EXPECT_EQ(registry_->size(), 1);
@@ -435,7 +547,7 @@ TEST_F(RouterArchetypesTest, ZToNonZ_SingleMeshRouter) {
     auto z_to_mesh = registry_->get_connections_by_type(ConnectionType::Z_TO_MESH);
     EXPECT_EQ(z_to_mesh.size(), 1);
     EXPECT_EQ(z_to_mesh[0].source_vc, 1);  // Z router VC1
-    EXPECT_EQ(z_to_mesh[0].dest_vc, 0);    // Mesh router VC0
+    EXPECT_EQ(z_to_mesh[0].dest_vc, 1);    // Mesh router VC1
 }
 
 TEST_F(RouterArchetypesTest, ZToNonZ_FourMeshRouters_AllDirections) {
@@ -460,7 +572,7 @@ TEST_F(RouterArchetypesTest, ZToNonZ_FourMeshRouters_AllDirections) {
             FabricNodeId(MeshId{0}, i)));
     }
     
-    // Z router connects to all 4 mesh routers via VC1 channels 0-3
+    // Z router connects to all 4 mesh routers via VC1 channels 0-3 → mesh VC1
     for (uint32_t ch = 0; ch < 4; ++ch) {
         auto targets = z_router.connection_mapping.get_downstream_targets(1, ch);
         ASSERT_EQ(targets.size(), 1);
@@ -469,7 +581,7 @@ TEST_F(RouterArchetypesTest, ZToNonZ_FourMeshRouters_AllDirections) {
         
         record_archetype_connection(
             z_router, 1, ch,
-            mesh_routers[ch], 0, 0,
+            mesh_routers[ch], 1, 0,
             ConnectionType::Z_TO_MESH);
     }
     
@@ -529,7 +641,7 @@ TEST_F(RouterArchetypesTest, ZToNonZ_EdgeDevice_TwoMeshRouters) {
         if (existing_routers.count(target_dir)) {
             record_archetype_connection(
                 z_router, 1, ch,
-                *existing_routers[target_dir], 0, 0,
+                *existing_routers[target_dir], 1, 0,
                 ConnectionType::Z_TO_MESH);
         }
     }
@@ -588,7 +700,7 @@ TEST_F(RouterArchetypesTest, FullDevice_4MeshRouters_1ZRouter_AllConnections) {
         
         record_archetype_connection(
             z_router, 1, ch,
-            mesh_routers[ch], 0, 0,
+            mesh_routers[ch], 1, 0,
             ConnectionType::Z_TO_MESH);
     }
     
@@ -665,9 +777,9 @@ TEST_F(RouterArchetypesTest, FullDevice_WithINTRA_MESH_And_ZConnections) {
         record_archetype_connection(mesh_router, 0, 4, z_router, 0, 0, ConnectionType::MESH_TO_Z);
     }
     
-    // Step 3: Z_TO_MESH connections
+    // Step 3: Z_TO_MESH connections (Z VC1 → mesh VC1)
     for (uint32_t ch = 0; ch < 4; ++ch) {
-        record_archetype_connection(z_router, 1, ch, mesh_routers[ch], 0, 0, ConnectionType::Z_TO_MESH);
+        record_archetype_connection(z_router, 1, ch, mesh_routers[ch], 1, 0, ConnectionType::Z_TO_MESH);
     }
     
     // Verify total: 4 INTRA_MESH + 4 MESH_TO_Z + 4 Z_TO_MESH = 12

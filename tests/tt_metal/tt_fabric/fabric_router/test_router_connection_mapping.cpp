@@ -249,7 +249,7 @@ TEST_F(RouterConnectionMappingTest, ZRouter_VC1_CorrectDirectionMapping) {
 TEST_F(RouterConnectionMappingTest, ZRouter_AllTargets_SameVC) {
     auto mapping = RouterConnectionMapping::for_z_router();
     
-    // All Z router VC1 targets should go to mesh router VC0
+    // All Z router VC1 targets should go to mesh router VC1
     for (uint32_t ch = 0; ch < 4; ++ch) {
         auto targets = mapping.get_downstream_targets(1, ch);
         ASSERT_EQ(targets.size(), 1);
