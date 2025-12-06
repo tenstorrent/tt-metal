@@ -262,35 +262,6 @@ public:
 
     InterMeshConnectivity get_inter_mesh_connectivity(MeshId mesh_id) const;
 
-    /**
-     * @brief Build logical adjacency maps from mesh graph connectivity
-     *
-     * Creates adjacency maps for each mesh based on the logical connectivity defined in the mesh graph.
-     * For each fabric node in a mesh, this function identifies its logical neighbors by examining
-     * the intra-mesh connectivity from the mesh graph and creates a mapping of FabricNodeId to
-     * its vector of adjacent FabricNodeIds.
-     *
-     * @param mesh_graph Reference to the mesh graph object containing fabric topology
-     * @return std::map<MeshId, LogicalAdjacencyMap> Map from mesh ID to logical adjacency map
-     */
-    static std::map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical(const MeshGraph& mesh_graph);
-
-    /**
-     * @brief Build physical adjacency maps from system descriptor connectivity
-     *
-     * Creates adjacency maps for each mesh based on the physical connectivity defined in the physical system
-     * descriptor. For each ASIC in a mesh, this function identifies its physical neighbors by examining the ASIC
-     * neighbors from the physical system descriptor and filters them to only include neighbors that are also part of
-     * the same mesh. The resulting map contains ASIC IDs mapped to their vectors of adjacent ASIC IDs within the mesh.
-     *
-     * @param physical_system_descriptor Reference to the physical system descriptor containing ASIC topology
-     * @param asic_id_to_mesh_rank Mapping of mesh IDs to ASIC IDs to mesh host ranks
-     * @return std::map<MeshId, PhysicalAdjacencyMap> Map from mesh ID to physical adjacency map
-     */
-    static std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
-        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
-
 private:
     /**
      * @brief Build the mapping between fabric node IDs and physical ASIC IDs
