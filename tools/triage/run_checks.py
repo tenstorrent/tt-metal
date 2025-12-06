@@ -36,7 +36,7 @@ from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDev
 
 script_config = ScriptConfig(
     data_provider=True,
-    depends=["inspector_data"],
+    depends=["inspector_data", "metal_device_id_mapping"],
 )
 
 # List of block types that script returns, can be extended if other block types are needed

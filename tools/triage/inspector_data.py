@@ -178,8 +178,7 @@ def run(args, context) -> InspectorData:
     try:
         return InspectorRpcSerialized(log_directory)
     except:
-        # Fall back to reading Inspector logs
-        return get_logs_data(log_directory)
+        raise InspectorException("There is no Inspector RPC data, cannot continue")
 
 
 if __name__ == "__main__":
