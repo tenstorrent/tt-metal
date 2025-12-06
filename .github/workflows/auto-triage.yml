@@ -11,11 +11,7 @@ on:
         description: "Job/subjob name within the workflow"
         required: true
         type: string
-      slack_ts:
-        description: "Slack message timestamp for threading replies"
-        required: false
-        type: string
-        default: ""
+
 
 jobs:
   auto-triage:
