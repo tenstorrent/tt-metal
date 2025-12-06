@@ -37,6 +37,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <tt-metalium/buffer.hpp>
+#include "tt_metal/common/tt_backend_api_types.hpp"
 
 namespace tt::tt_metal {
 namespace buffer_dispatch {
@@ -69,7 +70,10 @@ struct BufferWriteDispatchParams {
 
     BufferWriteDispatchParams() = default;
     BufferWriteDispatchParams(uint32_t src_noc_xy, uint32_t src_addr_32B, bool src_pinned = false) :
-        pinned_src_noc_xy{src_noc_xy | 0}, pinned_src_addr_lo{src_addr_32B}, use_pinned_transfer{src_pinned} {}
+        pinned_src_addr_lo{src_addr_32B}, use_pinned_transfer{src_pinned} {
+        pinned_src_noc_xy = src_noc_xy;
+        pinned_src_noc_xy |= MetalContext::instance().hal().get_arch() == tt::ARCH::WORMHOLE_B0 ? 8 : 0;
+    }
 
     void calculate_issue_wait() {
         this->issue_wait = this->total_pages_written == 0;  // only stall for the first write of the buffer
