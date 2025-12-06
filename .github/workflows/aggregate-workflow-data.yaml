@@ -267,7 +267,7 @@ jobs:
 
   trigger-auto-triage:
     needs: [analyze-data, handle-failures]
-    if: ${{ fromJson(needs.analyze-data.outputs.regressed_workflows) != '[]' }}
+    if: ${{ always() && needs.analyze-data.result == 'success' && fromJson(needs.analyze-data.outputs.regressed_workflows) != '[]' }}
     runs-on: ubuntu-latest
     permissions:
       actions: write
