@@ -1,0 +1,58 @@
+# Duplicate connections - has the same node1<->node2 connection as base
+# This should WARN but succeed when merged with base_intrapod.textproto
+graph_templates {
+  key: "test_pod"
+  value {
+    children {
+      name: "node1"
+      node_ref { node_descriptor: "BH_GALAXY" }
+    }
+    children {
+      name: "node2"
+      node_ref { node_descriptor: "BH_GALAXY" }
+    }
+    children {
+      name: "node3"
+      node_ref { node_descriptor: "BH_GALAXY" }
+    }
+    children {
+      name: "node4"
+      node_ref { node_descriptor: "BH_GALAXY" }
+    }
+    internal_connections {
+      key: "QSFP_DD"
+      value {
+        # DUPLICATE: same as in base_intrapod.textproto
+        connections {
+          port_a { path: ["node1"] tray_id: 0 port_id: 0 }
+          port_b { path: ["node2"] tray_id: 0 port_id: 0 }
+        }
+        # NEW: additional connection
+        connections {
+          port_a { path: ["node2"] tray_id: 0 port_id: 2 }
+          port_b { path: ["node3"] tray_id: 0 port_id: 2 }
+        }
+      }
+    }
+  }
+}
+
+root_instance {
+  template_name: "test_pod"
+  child_mappings {
+    key: "node1"
+    value { host_id: 0 }
+  }
+  child_mappings {
+    key: "node2"
+    value { host_id: 1 }
+  }
+  child_mappings {
+    key: "node3"
+    value { host_id: 2 }
+  }
+  child_mappings {
+    key: "node4"
+    value { host_id: 3 }
+  }
+}

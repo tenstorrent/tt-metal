@@ -207,4 +207,102 @@ TEST(Cluster, TestGenerateMultiHostClusterDescriptorFromFSD) {
     EXPECT_GT(std::filesystem::file_size(result_file), 0);
 }
 
+// ============================================================================
+// Tests for multi-path and directory-based descriptor merging
+// ============================================================================
+
+// Helper to create a 4-host deployment descriptor for merge tests
+void create_4host_deployment_descriptor(tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment) {
+    deployment.set_rack_capacity(4);
+
+    for (int i = 0; i < 4; ++i) {
+        auto* host = deployment.add_hosts();
+        host->set_hall("0");
+        host->set_aisle("0");
+        host->set_rack(0);
+        host->set_shelf_u(i);
+        host->set_node_type("BH_GALAXY");
+        host->set_host("host" + std::to_string(i));
+    }
+}
+
+TEST(Cluster, TestCablingGeneratorWithMultiplePaths) {
+    // Test constructing CablingGenerator with multiple explicit descriptor paths
+    std::vector<std::string> cluster_paths = {
+        "tools/tests/scaleout/cabling_descriptors/merge_tests/base_intrapod.textproto",
+        "tools/tests/scaleout/cabling_descriptors/merge_tests/additional_interpod.textproto"};
+
+    // Create a deployment descriptor for 4 hosts
+    tt::scaleout_tools::deployment::proto::DeploymentDescriptor deployment;
+    create_4host_deployment_descriptor(deployment);
+    std::string deployment_file = serialize_proto_to_temp_file(deployment, "merge_test_deployment.textproto");
+
+    // Create the cabling generator with multiple paths
+    CablingGenerator cabling_generator(cluster_paths, deployment_file);
+
+    // Should have 4 hosts
+    EXPECT_EQ(cabling_generator.get_deployment_hosts().size(), 4);
+
+    // Should have chip connections (the merged connections)
+    const auto& connections = cabling_generator.get_chip_connections();
+    EXPECT_GT(connections.size(), 0) << "Expected merged connections to produce chip connections";
+
+    // Generate FSD to verify it works end-to-end
+    const std::string fsd_file = root_output_dir + "fsd/factory_system_descriptor_merged_multipaths.textproto";
+    cabling_generator.emit_factory_system_descriptor(fsd_file);
+    EXPECT_TRUE(std::filesystem::exists(fsd_file));
+}
+
+TEST(Cluster, TestCablingGeneratorWithMultiplePathsHostnames) {
+    // Test constructing CablingGenerator with multiple paths and hostnames (no deployment descriptor)
+    std::vector<std::string> cluster_paths = {
+        "tools/tests/scaleout/cabling_descriptors/merge_tests/base_intrapod.textproto",
+        "tools/tests/scaleout/cabling_descriptors/merge_tests/additional_interpod.textproto"};
+
+    std::vector<std::string> hostnames = {"host0", "host1", "host2", "host3"};
+
+    // Create the cabling generator with multiple paths and hostnames
+    CablingGenerator cabling_generator(cluster_paths, hostnames);
+
+    // Should have 4 hosts
+    EXPECT_EQ(cabling_generator.get_deployment_hosts().size(), 4);
+
+    // Verify hostnames are correctly set
+    const auto& hosts = cabling_generator.get_deployment_hosts();
+    for (size_t i = 0; i < hostnames.size(); ++i) {
+        EXPECT_EQ(hosts[i].hostname, hostnames[i]);
+    }
+}
+
+TEST(Cluster, TestCablingGeneratorWithConflictingDescriptors) {
+    // Test that conflicting descriptors throw an error
+    std::vector<std::string> cluster_paths = {
+        "tools/tests/scaleout/cabling_descriptors/merge_tests/base_intrapod.textproto",
+        "tools/tests/scaleout/cabling_descriptors/merge_tests/conflicting_connection.textproto"};
+
+    tt::scaleout_tools::deployment::proto::DeploymentDescriptor deployment;
+    create_4host_deployment_descriptor(deployment);
+    std::string deployment_file = serialize_proto_to_temp_file(deployment, "merge_test_conflict_deployment.textproto");
+
+    // Should throw due to conflicting connections
+    EXPECT_THROW({ CablingGenerator cabling_generator(cluster_paths, deployment_file); }, std::runtime_error);
+}
+
+TEST(Cluster, TestCablingGeneratorMergeWithDifferentTemplates) {
+    // Test merging descriptors that add completely different graph templates
+    std::vector<std::string> cluster_paths = {
+        "tools/tests/scaleout/cabling_descriptors/merge_tests/base_intrapod.textproto",
+        "tools/tests/scaleout/cabling_descriptors/merge_tests/different_template.textproto"};
+
+    tt::scaleout_tools::deployment::proto::DeploymentDescriptor deployment;
+    create_4host_deployment_descriptor(deployment);
+    std::string deployment_file =
+        serialize_proto_to_temp_file(deployment, "merge_test_difftemplate_deployment.textproto");
+
+    // Should succeed - different templates don't conflict
+    CablingGenerator cabling_generator(cluster_paths, deployment_file);
+
+    EXPECT_EQ(cabling_generator.get_deployment_hosts().size(), 4);
+}
+
 }  // namespace tt::scaleout_tools
