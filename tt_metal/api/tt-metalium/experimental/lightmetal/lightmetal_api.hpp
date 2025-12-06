@@ -4,7 +4,7 @@
 
 #include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
 
-namespace tt::tt_metal {
+namespace tt::tt_metal::experimental::lightmetal {
 
 // clang-format off
 /**
@@ -27,4 +27,4 @@ void LightMetalBeginCapture();
 // clang-format on
 LightMetalBinary LightMetalEndCapture();
 
-};  // namespace tt::tt_metal
+};  // namespace tt::tt_metal::experimental::lightmetal
