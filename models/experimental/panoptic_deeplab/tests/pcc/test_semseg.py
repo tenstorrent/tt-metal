@@ -26,8 +26,9 @@ from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_out
 def test_ttnn_semseg(device, model_location_generator):
     """Test semantic segmentation head using the full model with real weights."""
     compute_grid = device.compute_with_storage_grid_size()
-    if compute_grid.x != 5 or compute_grid.y != 4:
-        pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
+    logger.info(
+        f"Running test on compute grid: {compute_grid.x}x{compute_grid.y} ({compute_grid.x * compute_grid.y} cores)"
+    )
 
     torch.manual_seed(0)
 
@@ -114,14 +115,22 @@ def test_ttnn_semseg(device, model_location_generator):
     logger.info("Running TTNN semantic segmentation head test...")
     ttnn_out_tt, _ = ttnn_model.semantic_head(ttnn_features)
 
+    # PCC values differ between 20-core (5x4) and all-core configurations
+    is_20_core_grid = compute_grid.x == 5 and compute_grid.y == 4
+
+    if is_20_core_grid:
+        semantic_pcc, semantic_abs_err, semantic_rel_err = 0.972, 2.0, 0.4
+    else:
+        semantic_pcc, semantic_abs_err, semantic_rel_err = 0.972, 1.9, 0.4
+
     passed = check_ttnn_output(
         "Semantic",
         torch_out,
         ttnn_out_tt,
         to_channel_first=False,
         output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
-        exp_pcc=0.972,
-        exp_abs_err=2.0,
-        exp_rel_err=0.4,
+        exp_pcc=semantic_pcc,
+        exp_abs_err=semantic_abs_err,
+        exp_rel_err=semantic_rel_err,
     )
     assert passed, f"Semantic segmentation PCC and tolerance tests failed"

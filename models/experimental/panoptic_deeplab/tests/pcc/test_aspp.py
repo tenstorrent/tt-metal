@@ -26,8 +26,9 @@ def test_ttnn_aspp(device, model_location_generator):
     """Test ASPP component using the full model with real weights."""
 
     compute_grid = device.compute_with_storage_grid_size()
-    if compute_grid.x != 5 or compute_grid.y != 4:
-        pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
+    logger.info(
+        f"Running test on compute grid: {compute_grid.x}x{compute_grid.y} ({compute_grid.x * compute_grid.y} cores)"
+    )
 
     torch.manual_seed(0)
 
@@ -114,15 +115,23 @@ def test_ttnn_aspp(device, model_location_generator):
     ttnn_aspp_output_torch = ttnn.to_torch(ttnn_aspp_output).permute(0, 3, 1, 2)
     ttnn_aspp_output_torch = torch.reshape(ttnn_aspp_output_torch, (1, 256, 32, 64))
 
+    # PCC values differ between 20-core (5x4) and all-core configurations
+    is_20_core_grid = compute_grid.x == 5 and compute_grid.y == 4
+
+    if is_20_core_grid:
+        aspp_pcc, aspp_abs_err, aspp_rel_err = 0.99, 0.03, 0.4
+    else:
+        aspp_pcc, aspp_abs_err, aspp_rel_err = 0.998, 0.04, 0.5
+
     passed = check_ttnn_output(
         "aspp_output",
         pytorch_aspp_output,
         ttnn_aspp_output,
         to_channel_first=True,
         output_shape=(1, 256, 32, 64),
-        exp_pcc=0.99,
-        exp_abs_err=0.03,
-        exp_rel_err=0.4,
+        exp_pcc=aspp_pcc,
+        exp_abs_err=aspp_abs_err,
+        exp_rel_err=aspp_rel_err,
     )
 
     assert passed, f"ASPP PCC and tolerance test failed"

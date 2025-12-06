@@ -24,7 +24,6 @@ from models.experimental.panoptic_deeplab.tt.common import (
 )
 from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
 from models.experimental.panoptic_deeplab.tt.common import preprocess_nchw_input_tensor
-from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 
 
 @pytest.mark.parametrize(
@@ -36,7 +35,11 @@ from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import s
 def test_model_panoptic_deeplab(device, model_category, model_location_generator):
     """Test PCC comparison between PyTorch and TTNN implementations with fused Conv+BatchNorm."""
 
-    skip_if_not_blackhole_20_cores(device)
+    compute_grid = device.compute_with_storage_grid_size()
+    logger.info(
+        f"Running test on compute grid: {compute_grid.x}x{compute_grid.y} ({compute_grid.x * compute_grid.y} cores)"
+    )
+
     torch.manual_seed(0)
 
     # Get the weights path using the common utility function
@@ -129,6 +132,21 @@ def test_model_panoptic_deeplab(device, model_category, model_location_generator
     logger.info("Running TTNN model with fused Conv+BatchNorm parameters...")
     ttnn_semantic, ttnn_center, ttnn_offset, _ = ttnn_model.forward(ttnn_input)
 
+    # PCC values differ between 20-core (5x4) and all-core configurations
+    # due to different matmul program configs and compute distribution
+    is_20_core_grid = compute_grid.x == 5 and compute_grid.y == 4
+
+    if is_20_core_grid:
+        # PCC values for 20-core (5x4) grid with optimized MatmulMultiCoreReuseMultiCast1DProgramConfig
+        semantic_pcc, semantic_abs_err, semantic_rel_err = 0.986, 1.3, 0.4
+        center_pcc, center_abs_err, center_rel_err = 0.805, 0.1, 2.0
+        offset_pcc, offset_abs_err, offset_rel_err = 0.990, 10.4, 0.6
+    else:
+        # PCC values for all-core grid with auto-generated program config
+        semantic_pcc, semantic_abs_err, semantic_rel_err = 0.982, 1.4, 0.5
+        center_pcc, center_abs_err, center_rel_err = 0.811, 0.1, 2.4
+        offset_pcc, offset_abs_err, offset_rel_err = 0.984, 12.2, 0.7
+
     all_passed = []
     all_passed.append(
         check_ttnn_output(
@@ -137,9 +155,9 @@ def test_model_panoptic_deeplab(device, model_category, model_location_generator
             ttnn_semantic,
             to_channel_first=False,
             output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
-            exp_pcc=0.986,
-            exp_abs_err=1.3,
-            exp_rel_err=0.4,
+            exp_pcc=semantic_pcc,
+            exp_abs_err=semantic_abs_err,
+            exp_rel_err=semantic_rel_err,
         )
     )
     if model_category == PANOPTIC_DEEPLAB:
@@ -150,9 +168,9 @@ def test_model_panoptic_deeplab(device, model_category, model_location_generator
                 ttnn_center,
                 to_channel_first=False,
                 output_channels=ttnn_model.instance_head.get_center_output_channels_for_slicing(),
-                exp_pcc=0.805,
-                exp_abs_err=0.1,
-                exp_rel_err=2.0,
+                exp_pcc=center_pcc,
+                exp_abs_err=center_abs_err,
+                exp_rel_err=center_rel_err,
             )
         )
         all_passed.append(
@@ -162,9 +180,9 @@ def test_model_panoptic_deeplab(device, model_category, model_location_generator
                 ttnn_offset,
                 to_channel_first=False,
                 output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
-                exp_pcc=0.990,
-                exp_abs_err=10.4,
-                exp_rel_err=0.6,
+                exp_pcc=offset_pcc,
+                exp_abs_err=offset_abs_err,
+                exp_rel_err=offset_rel_err,
             )
         )
 
