@@ -229,6 +229,11 @@ class TransformerBlock(LightweightModule):
             kv_cache=kv_cache,
         )
 
+        # To match the batch-related reshape inside the attention module
+        batch_size = residual.shape[-3]
+        if batch_size > 1:
+            residual = ttnn.reshape(residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[-4], -1])
+
         if self.pre_ff_norm is None:
             hidden_states = ttnn.add(
                 residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
