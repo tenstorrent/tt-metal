@@ -200,30 +200,6 @@ def generate_text_tt(
     )
     return tokenizer.decode(generated_tokens)
 
-    # mapper = None
-    # if device_config is not None:
-    #     device = ttml.autograd.AutoContext.get_instance().get_device()
-    #     mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
-
-    # while True:
-    #     for batch in dataloader:
-    #         X_np, y_np, loss_scaler_np = batch
-
-    #         X = ttml.autograd.Tensor.from_numpy(
-    #             X_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32, mapper
-    #         )
-    #         y = ttml.autograd.Tensor.from_numpy(
-    #             y_np, ttml.Layout.ROW_MAJOR, ttml.autograd.DataType.UINT32, mapper
-    #         )
-    #         loss_scaler = ttml.autograd.Tensor.from_numpy(
-    #             loss_scaler_np,
-    #             ttml.Layout.TILE,
-    #             ttml.autograd.DataType.BFLOAT16,
-    #             mapper,
-    #         )
-
-    #         yield (X, y, loss_scaler)
-
 
 def test_tinyllama_grad_sync(tinyllama_model, causal_mask, logits_mask_tensor, configs):
     mapper = None
