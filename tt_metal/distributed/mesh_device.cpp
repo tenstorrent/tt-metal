@@ -24,7 +24,7 @@
 #include <unordered_map>
 #include <utility>
 
-#include "allocator.hpp"
+#include "impl/allocator/allocator.hpp"
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "device/device_impl.hpp"
@@ -210,9 +210,9 @@ uint32_t MeshDevice::dram_size_per_channel() const {
 
 IDevice* MeshDevice::reference_device() const { return this->get_devices().at(0); }
 
-void MeshDevice::mark_allocations_unsafe() { this->allocator()->mark_allocations_unsafe(); }
+void MeshDevice::mark_allocations_unsafe() { this->allocator_impl()->mark_allocations_unsafe(); }
 
-void MeshDevice::mark_allocations_safe() { this->allocator()->mark_allocations_safe(); }
+void MeshDevice::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
 
 MeshDevice::MeshDevice(
     std::shared_ptr<ScopedDevices> mesh_handle,
@@ -418,7 +418,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
         std::make_unique<MeshDeviceView>(submesh_shape, submesh_devices, submesh_fabric_node_ids),
         shared_from_this());
 
-    const auto& allocator_config = reference_device()->allocator()->get_config();
+    const auto& allocator_config = reference_device()->allocator_impl()->get_config();
     submesh->initialize(
         num_hw_cqs(),
         allocator_config.l1_small_size,
@@ -978,7 +978,7 @@ bool MeshDevice::initialize(
     auto cq_shared_state = std::make_shared<CQSharedState>();
     cq_shared_state->sub_device_cq_owner.resize(1);
 
-    const auto& allocator = reference_device()->allocator();
+    const auto& allocator = reference_device()->allocator_impl();
     sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
         this, std::make_unique<L1BankingAllocator>(allocator->get_config()), sub_devices);
     // Issue #19729: Store the maximum number of active ethernet cores across opened physical devices in the Mesh
@@ -1124,11 +1124,18 @@ std::optional<DeviceAddr> MeshDevice::lowest_occupied_compute_l1_address(
     return sub_device_manager_tracker_->lowest_occupied_compute_l1_address(sub_device_ids);
 }
 
-const std::unique_ptr<Allocator>& MeshDevice::allocator() const {
+const std::unique_ptr<AllocatorImpl>& MeshDevice::allocator_impl() const {
     return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(SubDeviceId{0});
 }
-const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_id) const {
+
+const std::unique_ptr<Allocator>& MeshDevice::allocator() const { return this->allocator_impl()->view(); }
+
+const std::unique_ptr<AllocatorImpl>& MeshDevice::allocator_impl(SubDeviceId sub_device_id) const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->allocator(sub_device_id);
+}
+
+const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_id) const {
+    return this->allocator_impl(sub_device_id)->view();
 }
 
 std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }

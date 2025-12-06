@@ -23,6 +23,13 @@ enum class BufferType;
 
 namespace tt::tt_metal {
 
+/*
+MemoryBlockTable is a list of memory blocks in the following format:
+[{"blockID": "0", "address": "0", "size": "0", "prevID": "0", "nextID": "0", "allocated": true}]
+address: bytes
+size: bytes
+*/
+using MemoryBlockTable = std::vector<std::unordered_map<std::string, std::string>>;
 class IDevice;
 class Program;
 
