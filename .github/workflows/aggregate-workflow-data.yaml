@@ -286,31 +286,33 @@ jobs:
         id: parent
         uses: slackapi/slack-github-action@v1.26.0
         with:
+          channel-id: ${{ secrets.SLACK_TESTING_CHANNEL_ID }}
           payload: |
             {
-              "text": "Parent message for threading test"
+              "text": "Parent message for threading test (Bot Token)"
             }
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_TESTING_CHANNEL }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
       - name: Send Channel Message (Control)
         uses: slackapi/slack-github-action@v1.26.0
         with:
+          channel-id: ${{ secrets.SLACK_TESTING_CHANNEL_ID }}
           payload: |
             {
               "text": "Control message in channel (should be separate)"
             }
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_TESTING_CHANNEL }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
       - name: Send Thread Reply
         uses: slackapi/slack-github-action@v1.26.0
         with:
-          # Try threading using the TS from the parent message
+          channel-id: ${{ secrets.SLACK_TESTING_CHANNEL_ID }}
           payload: |
             {
               "text": "This is a reply in the thread",
               "thread_ts": "${{ steps.parent.outputs.ts }}"
             }
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_TESTING_CHANNEL }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
