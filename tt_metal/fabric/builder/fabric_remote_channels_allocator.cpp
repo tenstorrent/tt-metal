@@ -15,9 +15,15 @@ FabricRemoteChannelsAllocator::FabricRemoteChannelsAllocator(
     FabricChannelAllocator(static_allocator.topology_, static_allocator.options_, static_allocator.memory_regions_),
     num_used_receiver_channels_(builder_config::num_max_receiver_channels) {
     // Extract remote receiver channel information from the static allocator
+    // For now, only VC0 is used (all channels in VC0, none in VC1)
+    // TODO: Review this code.
+    // UC: FIXME.
+    constexpr size_t vc_id = 0;
     for (size_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
-        this->remote_receiver_channels_base_address_[i] = static_allocator.remote_receiver_channels_base_address[i];
-        this->remote_receiver_channels_num_buffers_[i] = static_allocator.remote_receiver_channels_num_buffers[i];
+        this->remote_receiver_channels_base_address_[i] =
+            static_allocator.remote_receiver_channels_base_address[vc_id][i];
+        this->remote_receiver_channels_num_buffers_[i] =
+            static_allocator.remote_receiver_channels_num_buffers[vc_id][i];
     }
 }
 

@@ -460,11 +460,17 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         0, this->num_used_receiver_channels);
 
     // Create the single static pool allocator
+    // For now, assign all channels to VC0, VC1 gets 0 channels (future: distribute based on topology)
+    std::array<size_t, tt::tt_fabric::FabricStaticSizedChannelsAllocator::MAX_NUM_VCS> num_sender_channels_per_vc = {
+        this->num_used_sender_channels, 0};
+    std::array<size_t, tt::tt_fabric::FabricStaticSizedChannelsAllocator::MAX_NUM_VCS> num_receiver_channels_per_vc = {
+        this->num_used_receiver_channels, 0};
+
     auto static_allocator = std::make_shared<tt::tt_fabric::FabricStaticSizedChannelsAllocator>(
         topology,
         options,
-        this->num_used_sender_channels,
-        this->num_used_receiver_channels,
+        num_sender_channels_per_vc,
+        num_receiver_channels_per_vc,
         this->channel_buffer_size_bytes,
         available_channel_buffering_space,
         this->available_buffer_memory_regions);
