@@ -32,6 +32,17 @@ def setup_worker_environment(worker_id: int, config: SDXLConfig):
     if config.is_galaxy:
         os.environ["TT_MM_THROTTLE_PERF"] = "5"
 
+        # Set mesh graph descriptor for 1x1 Galaxy mode (matches tt-media-server)
+        tt_metal_home = os.environ.get("TT_METAL_HOME", os.getcwd())
+        if config.device_mesh_shape == (1, 1):
+            os.environ[
+                "TT_MESH_GRAPH_DESC_PATH"
+            ] = f"{tt_metal_home}/tt_metal/fabric/mesh_graph_descriptors/n150_mesh_graph_descriptor.textproto"
+        elif config.device_mesh_shape == (2, 1):
+            os.environ[
+                "TT_MESH_GRAPH_DESC_PATH"
+            ] = f"{tt_metal_home}/tt_metal/fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.textproto"
+
 
 def device_worker_process(
     worker_id: int,

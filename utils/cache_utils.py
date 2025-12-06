@@ -10,8 +10,10 @@ from typing import List, Tuple
 
 def get_cache_dirs() -> List[str]:
     """Get list of cache directories used by SDXL server"""
+    # Use default tt-metal cache (shared with tt-media-server) unless TT_METAL_CACHE is set
+    tt_metal_cache = os.environ.get("TT_METAL_CACHE", os.path.expanduser("~/.cache/tt-metal-cache"))
     return [
-        os.path.expanduser("~/.cache/tt_metal_sdxl"),
+        tt_metal_cache,
         os.path.expanduser("~/.cache/ttnn/models"),
     ]
 

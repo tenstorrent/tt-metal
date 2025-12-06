@@ -57,12 +57,17 @@ class SDXLRunner:
 
         # No fabric config needed for 1x1 mesh (single device)
 
-        # Open mesh device
+        # Always use open_mesh_device like tt-media-server does (even for 1x1 mesh)
+        # This ensures consistent behavior with the reference implementation
+        dispatch_core_config = ttnn.DispatchCoreConfig()  # Uses system defaults
         rows, cols = self.config.device_mesh_shape
+
+        # Use open_mesh_device for all mesh shapes (matching tt-media-server)
         self.ttnn_device = ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(rows, cols),
             l1_small_size=self.config.l1_small_size,
             trace_region_size=self.config.trace_region_size,
+            dispatch_core_config=dispatch_core_config,
         )
 
         self.logger.info(f"Device initialized with mesh shape {self.config.device_mesh_shape}")
@@ -123,6 +128,10 @@ class SDXLRunner:
 
         self.tt_sdxl.prepare_input_tensors([tt_latents, tt_prompts[0], tt_texts[0]])
 
+        # NOTE: DO NOT set guidance_rescale before trace capture.
+        # tt-media-server traces with default 0.0 - device tensor values can be
+        # updated before trace execution since trace captures addresses not values.
+
         # Compile with warmup
         self.logger.info("Compiling image processing...")
         self.tt_sdxl.compile_image_processing()
@@ -145,15 +154,15 @@ class SDXLRunner:
         negative_prompts_2 = [req.get("negative_prompt_2") for req in requests]
 
         # Update num_inference_steps if specified in request
-        if requests[0].get("num_inference_steps"):
+        if requests[0].get("num_inference_steps") is not None:
             self.tt_sdxl.set_num_inference_steps(requests[0]["num_inference_steps"])
 
         # Update guidance_scale if specified in request
-        if requests[0].get("guidance_scale"):
+        if requests[0].get("guidance_scale") is not None:
             self.tt_sdxl.set_guidance_scale(requests[0]["guidance_scale"])
 
         # Update guidance_rescale if specified in request
-        if requests[0].get("guidance_rescale"):
+        if requests[0].get("guidance_rescale") is not None:
             self.tt_sdxl.set_guidance_rescale(requests[0]["guidance_rescale"])
 
         # Reset scheduler state for new inference run (fixes progress bar and ensures correct timesteps)
@@ -192,5 +201,6 @@ class SDXLRunner:
             self.tt_sdxl.release_traces()
 
         if self.ttnn_device:
+            # Always use close_mesh_device since we always use open_mesh_device
             self.logger.info("Closing mesh device")
             ttnn.close_mesh_device(self.ttnn_device)

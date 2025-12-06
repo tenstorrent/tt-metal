@@ -47,7 +47,9 @@ export TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="7,7"
 export HF_HOME="${HOME}/.cache/huggingface"
 
 # Enable persistent caching for faster subsequent startups
-export TT_METAL_CACHE="${HOME}/.cache/tt_metal_sdxl"
+# Use default cache (~/.cache/tt-metal-cache) to share with tt-media-server
+# This allows reusing pre-compiled programs that work with l1_small_size=30000
+# export TT_METAL_CACHE="${HOME}/.cache/tt_metal_sdxl"
 export TTNN_CONFIG_OVERRIDES='{"enable_model_cache": true, "model_cache_path": "'${HOME}'/.cache/ttnn/models"}'
 
 # Performance settings
@@ -104,9 +106,9 @@ for arg in "$@"; do
     if [ "$arg" = "--clear-cache" ]; then
         echo ""
         echo "Clearing caches..."
-        rm -rf "${HOME}/.cache/tt_metal_sdxl"
+        rm -rf "${HOME}/.cache/tt-metal-cache"
         rm -rf "${HOME}/.cache/ttnn/models"
-        echo "✓ Caches cleared"
+        echo "✓ Caches cleared (Note: This will trigger recompilation)"
         break
     fi
 done

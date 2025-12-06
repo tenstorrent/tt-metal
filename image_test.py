@@ -19,34 +19,53 @@ def generate_image(
     server_url: str = "http://127.0.0.1:8000",
     num_inference_steps: int = 50,
     guidance_scale: float = 5.0,
+    guidance_rescale: float = 0.0,
     seed: int = 14241,
+    prompt_2: str = None,
+    negative_prompt: str = "cartoon, drawing, low quality, bad quality, distorted, noise, watermark, text, signature",
+    negative_prompt_2: str = None,
 ) -> tuple:
     """
     Send request to server and get generated image
 
     Args:
-        prompt: Text prompt for image generation
+        prompt: Text prompt for image generation (primary)
         server_url: Server URL
         num_inference_steps: Number of denoising steps
         guidance_scale: CFG guidance scale
+        guidance_rescale: Guidance rescale factor (0.0-1.0)
         seed: Random seed for reproducibility
+        prompt_2: Secondary prompt for SDXL's second text encoder
+        negative_prompt: Negative prompt (primary)
+        negative_prompt_2: Negative prompt for SDXL's second text encoder
 
     Returns:
         Tuple of (PIL Image, inference_time)
     """
     print(f"Sending request to {server_url}...")
     print(f"Prompt: {prompt}")
+    if prompt_2:
+        print(f"Prompt 2: {prompt_2}")
+
+    request_data = {
+        "prompt": prompt,
+        "negative_prompt": negative_prompt,
+        "num_inference_steps": num_inference_steps,
+        "guidance_scale": guidance_scale,
+        "guidance_rescale": guidance_rescale,
+        "seed": seed,
+        "number_of_images": 1,
+    }
+
+    # Add optional dual prompts if provided
+    if prompt_2 is not None:
+        request_data["prompt_2"] = prompt_2
+    if negative_prompt_2 is not None:
+        request_data["negative_prompt_2"] = negative_prompt_2
 
     response = requests.post(
         f"{server_url}/image/generations",
-        json={
-            "prompt": prompt,
-            "negative_prompt": "cartoon, drawing, low quality, bad quality, distorted, noise, watermark, text, signature",
-            "num_inference_steps": num_inference_steps,
-            "guidance_scale": guidance_scale,
-            "seed": seed,
-            "number_of_images": 1,
-        },
+        json=request_data,
         timeout=300,
     )
 
@@ -73,7 +92,16 @@ def main():
     parser.add_argument("--server", type=str, default="http://127.0.0.1:8000", help="Server URL")
     parser.add_argument("--steps", type=int, default=50, help="Number of inference steps (12-100)")
     parser.add_argument("--guidance", type=float, default=5.0, help="Guidance scale (1.0-20.0)")
+    parser.add_argument("--rescale", type=float, default=0.0, help="Guidance rescale factor (0.0-1.0)")
     parser.add_argument("--seed", type=int, default=14241, help="Random seed for reproducibility")
+    parser.add_argument("--prompt2", type=str, help="Secondary prompt for SDXL's second text encoder")
+    parser.add_argument(
+        "--negative",
+        type=str,
+        default="cartoon, drawing, low quality, bad quality, distorted, noise, watermark, text, signature",
+        help="Negative prompt",
+    )
+    parser.add_argument("--negative2", type=str, help="Negative prompt for SDXL's second text encoder")
     args = parser.parse_args()
 
     # Check server health first
@@ -93,7 +121,17 @@ def main():
     # Generate image
     print("")
     try:
-        image, inference_time = generate_image(args.prompt, args.server, args.steps, args.guidance, args.seed)
+        image, inference_time = generate_image(
+            args.prompt,
+            args.server,
+            args.steps,
+            args.guidance,
+            args.rescale,
+            args.seed,
+            prompt_2=args.prompt2,
+            negative_prompt=args.negative,
+            negative_prompt_2=args.negative2,
+        )
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)

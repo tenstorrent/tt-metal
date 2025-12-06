@@ -19,11 +19,11 @@ class SDXLConfig:
     # Device settings (T3K) - 4 workers with 1x1 mesh each
     device_ids: Tuple[int, ...] = (0, 1, 2, 3)
     device_mesh_shape: Tuple[int, int] = (1, 1)
-    is_galaxy: bool = False
+    is_galaxy: bool = False  # T3K uses False (Galaxy uses True)
 
     # Device parameters
-    l1_small_size: int = 23000
-    trace_region_size: int = 34000000
+    l1_small_size: int = 23000  # Match tt-media-server (from test_common.py at base commit)
+    trace_region_size: int = 34541598  # Match tt-media-server (extra space for VAE trace)
 
     # Model settings
     model_name: str = "stabilityai/stable-diffusion-xl-base-1.0"

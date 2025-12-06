@@ -720,6 +720,8 @@ class TtSDXLPipeline(LightweightModule):
             self.ag_semaphores,
             capture_trace=True,
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
+            guidance_rescale=self.guidance_rescale,
+            one_minus_guidance_rescale=self.one_minus_guidance_rescale,
         )
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("capture_model_trace")
