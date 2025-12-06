@@ -227,31 +227,16 @@ GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFact
             input_cb_index_1,                  // ct_arg[8]: input_cb_index_1
             scalar_cb_index_0,                 // ct_arg[9]: scalar_cb_index_0
             scalar_cb_index_1,                 // ct_arg[10]: scalar_cb_index_1
-            DUMMY_CB_ID,                       // ct_arg[11]: unused
-            DUMMY_CB_ID,                       // ct_arg[12]: unused
-            DUMMY_CB_ID,                       // ct_arg[13]: unused
-            DUMMY_CB_ID,                       // ct_arg[14]: unused
-            DUMMY_CB_ID,                       // ct_arg[15]: unused
-            DUMMY_CB_ID,                       // ct_arg[16]: unused
-            output_cb_index,                   // ct_arg[17]: output_cb_index
-            DUMMY_CB_ID,                       // ct_arg[18]: unused
-            ONE_SCALAR_PER_CORE,               // ct_arg[19]: ONE_SCALAR_PER_CORE
-            pre_tilize_cb_id,                  // ct_arg[20]: pre_tilize_cb_id
-            is_output_tiled ? 1U : 0U,         // ct_arg[21]: is_output_tiled
-            is_output_block_format ? 1U : 0U,  // ct_arg[22]: is_output_block_format
-            false,                             // ct_arg[23]: return_indices (unused)
-            1,                                 // ct_arg[24]: stride_h (unused)
-            1,                                 // ct_arg[25]: stride_w (unused)
-            1,                                 // ct_arg[26]: in_h_padded (unused)
-            1,                                 // ct_arg[27]: in_w_padded (unused)
-            1,                                 // ct_arg[28]: eff_kernel_h (unused)
-            1,                                 // ct_arg[29]: eff_kernel_w (unused)
-            1,                                 // ct_arg[30]: pad_l (unused)
+            output_cb_index,                   // ct_arg[11]: output_cb_index
+            ONE_SCALAR_PER_CORE,               // ct_arg[12]: ONE_SCALAR_PER_CORE
+            pre_tilize_cb_id,                  // ct_arg[13]: pre_tilize_cb_id
+            is_output_tiled ? 1U : 0U,         // ct_arg[14]: is_output_tiled
+            is_output_block_format ? 1U : 0U,  // ct_arg[15]: is_output_block_format
         };
 
         return tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp",
+            "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/compute/compute_grid_sample.cpp",
             cores,
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,
