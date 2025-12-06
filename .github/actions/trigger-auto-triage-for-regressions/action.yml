@@ -7,6 +7,9 @@ inputs:
   github_token:
     description: 'GitHub token for triggering workflows'
     required: true
+  slack_ts:
+    description: 'Slack message timestamp for threading replies'
+    required: false
 
 runs:
   using: 'node20'
