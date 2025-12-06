@@ -85,6 +85,8 @@ class BGEPerformanceRunnerInfra:
             self.extended_mask = extended_mask
             self.token_type_ids = token_type_ids
             self.position_ids = position_ids
+            # Update batch_size from input_ids shape to reflect actual batch size being processed
+            self.batch_size = input_ids.shape[0]
 
         self.torch_output = self.torch_model(
             self.input_ids,

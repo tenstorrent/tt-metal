@@ -72,8 +72,8 @@ def compute_ttnn_embeddings(
         logger.info("Running inference on TTNN model for current batch...")
         ttnn_output = ttnn.to_torch(ttnn_output, mesh_composer=sentence_bert_module.runner_infra.output_mesh_composer)
 
-        # Always slice to the original batch size (before padding)
-        all_embeddings.append(ttnn_output)
+        # Always slice to the original batch size (before padding) to match number of sentences
+        all_embeddings.append(ttnn_output[:orig_batch_size])
         all_sentences.extend(sentences[i : i + orig_batch_size])
 
     all_embeddings = torch.cat(all_embeddings, dim=0)

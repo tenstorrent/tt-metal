@@ -161,7 +161,10 @@ class BGEPerformantRunner:
         self.ttnn_att_mask = ttnn.reshard(self.tt_att_mask, self.input_mem_config, self.ttnn_att_mask)
         self.op_event = ttnn.record_event(self.device, 0)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
-        ttnn.synchronize_device(self.device)
+        # ttnn.synchronize_device(self.device)
+        # Wait for trace execution to complete before returning output tensor
+        # This ensures the output is ready when ttnn.to_torch is called
+        ttnn.wait_for_event(1, self.op_event)
         return self.runner_infra.ttnn_output_tensor[0]
 
     def _validate(self, result_output_tensor):
