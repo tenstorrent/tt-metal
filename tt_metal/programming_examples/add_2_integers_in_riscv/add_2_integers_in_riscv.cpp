@@ -121,16 +121,16 @@ int main() {
     std::vector<uint32_t> result_vec;
     distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
     if (result_vec.size() != 1) {
-        std::cout << "Error: Expected result vector size of 1, got " << result_vec.size() << std::endl;
+        std::cout << "Error: Expected result vector size of 1, got " << result_vec.size() << '\n';
         mesh_device->close();
         return -1;
     }
     if (result_vec[0] != 21) {
-        std::cout << "Error: Expected result of 21, got " << result_vec[0] << std::endl;
+        std::cout << "Error: Expected result of 21, got " << result_vec[0] << '\n';
         mesh_device->close();
         return -1;
     }
 
-    std::cout << "Success: Result is " << result_vec[0] << std::endl;
+    std::cout << "Success: Result is " << result_vec[0] << '\n';
     mesh_device->close();
 }

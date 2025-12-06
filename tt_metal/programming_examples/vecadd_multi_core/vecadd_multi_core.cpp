@@ -70,7 +70,7 @@ CBHandle MakeCircularBufferBFP16(Program& program, const CoreSpec& core, tt::CBI
 
 std::string next_arg(int& i, int argc, char** argv) {
     if (i + 1 >= argc) {
-        std::cerr << "Expected argument after " << argv[i] << std::endl;
+        std::cerr << "Expected argument after " << argv[i] << '\n';
         exit(1);
     }
     return argv[++i];
@@ -100,7 +100,7 @@ int main(int argc, char** argv) {
             help(argv[0]);
             return 0;
         } else {
-            std::cout << "Unknown argument: " << arg << std::endl;
+            std::cout << "Unknown argument: " << arg << '\n';
             help(argv[0]);
         }
     }
@@ -247,7 +247,7 @@ int main(int argc, char** argv) {
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
-    std::cout << "Kernel execution finished" << std::endl;
+    std::cout << "Kernel execution finished" << '\n';
 
     // Read the output buffer.
     std::vector<bfloat16> c_data;

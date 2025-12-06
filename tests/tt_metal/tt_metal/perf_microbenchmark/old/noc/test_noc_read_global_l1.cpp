@@ -299,7 +299,7 @@ int main(int argc, char** argv) {
 
                 if (debug) {
                     std::cout << c << "," << r << " " << l1_buffer_offset << " " << num_blocks << " " << cb_n << " "
-                              << cb_n * single_tile_size << std::endl;
+                              << cb_n * single_tile_size << '\n';
                 }
                 tt_metal::SetRuntimeArgs(
                     program, mm_reader_kernel, core, {l1_buffer_addr, l1_buffer_offset, num_blocks, cb_n});

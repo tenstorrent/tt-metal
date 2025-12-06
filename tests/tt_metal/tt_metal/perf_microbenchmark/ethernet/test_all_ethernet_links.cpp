@@ -489,7 +489,7 @@ void dump_eth_link_stats(
         log_file << fmt::format(
                         ",Receiver Device ID,Receiver Eth,R Retrain Count,R CRC Errs,R PCS Faults,R Total "
                         "Corr,R Total Uncorr,R Retrain by PCS,R Retrain by CRC")
-                 << std::endl;
+                 << '\n';
     } else {
         log_file.open(log_path, std::ios_base::app);
     }
@@ -583,7 +583,7 @@ void dump_eth_link_stats(
                             r.total_uncorr_cw,
                             r.retrains_triggered_by_pcs,
                             r.retrains_triggered_by_crcs)
-                     << std::endl;
+                     << '\n';
         }
     }
 

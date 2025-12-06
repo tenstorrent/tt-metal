@@ -166,24 +166,24 @@ TEST_P(RingbufferCacheRandomizedTestsFixture, RandomizedQueries) {
             ASSERT_TRUE((result->offset + pgm_size) % params.cache_size_blocks == get_next_block_offset())
                 << "Failed check (iter:" << i << "): cache size: " << params.cache_size_blocks << ", pgm_id: " << pgm_id
                 << ", pgm_size: " << pgm_size << ", offset: " << result->offset
-                << ", next_block_offset: " << get_next_block_offset() << std::endl;
+                << ", next_block_offset: " << get_next_block_offset() << '\n';
         }
         ASSERT_GE(get_manager_entry_size(), std::min(params.initial_manager_size, params.cache_size_blocks))
             << "Manager size: " << get_manager_entry_size() << ", cache size: " << params.cache_size_blocks
             << ", initial manager size: " << params.initial_manager_size << ", oldest_idx: " << get_oldest_idx()
             << ", next_index: " << get_next_idx() << ", oldest_block_offset: " << get_oldest_block_offset()
-            << ", next_block_offset: " << get_next_block_offset() << std::endl;
+            << ", next_block_offset: " << get_next_block_offset() << '\n';
         if (result->is_cached) {
             ++hits_count;
         }
     }
     auto end_rbcache = std::chrono::high_resolution_clock::now();
     auto duration_rbcache = std::chrono::duration_cast<std::chrono::milliseconds>(end_rbcache - start_rbcache).count();
-    std::cout << "Ringbuffer cache runtime: " << duration_rbcache << " ms, hits: " << hits_count << std::endl;
+    std::cout << "Ringbuffer cache runtime: " << duration_rbcache << " ms, hits: " << hits_count << '\n';
     ASSERT_LE(get_manager_entry_size(), params.cache_size_blocks)
-        << "Manager size: " << get_manager_entry_size() << ", cache size: " << params.cache_size_blocks << std::endl;
+        << "Manager size: " << get_manager_entry_size() << ", cache size: " << params.cache_size_blocks << '\n';
     std::cout << "Cache size: " << params.cache_size_blocks << ", initial manager size: " << params.initial_manager_size
-              << ", final manager size: " << get_manager_entry_size() << std::endl;
+              << ", final manager size: " << get_manager_entry_size() << '\n';
 }
 
 }  // namespace tt::tt_metal

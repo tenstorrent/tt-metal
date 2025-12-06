@@ -78,7 +78,7 @@ public:
             }
             print_datum(ss, data[i]);
         }
-        ss << std::endl;
+        ss << '\n';
     }
 
     virtual size_t get_elements_per_line() const = 0;
@@ -90,10 +90,10 @@ protected:
 
     void print_new_line(std::stringstream& ss, uint32_t i) {
         if (i > 0) {
-            ss << std::endl;
+            ss << '\n';
         }
         if (i % get_elements_per_tile() == 0) {
-            ss << "Tile ID = " << i / get_elements_per_tile() << std::endl;
+            ss << "Tile ID = " << i / get_elements_per_tile() << '\n';
         }
     }
 };

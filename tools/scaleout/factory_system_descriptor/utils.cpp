@@ -443,7 +443,7 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
             oss << "  - " << conn.first << " <-> " << conn.second << "\n";
         }
         if (log_output) {
-            std::cout << oss.str() << std::endl;
+            std::cout << oss.str() << '\n';
         }
     }
 
@@ -465,7 +465,7 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
             oss << "  - " << conn.first << " <-> " << conn.second << "\n";
         }
         if (log_output) {
-            std::cout << oss.str() << std::endl;
+            std::cout << oss.str() << '\n';
         }
     }
 
@@ -481,10 +481,10 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
         if (log_output) {
             if (strict_validation) {
                 std::cout << "All connections match between FSD and GSD (" << generated_connections.size()
-                          << " connections)" << std::endl;
+                          << " connections)" << '\n';
             } else {
                 std::cout << "All GSD connections found in FSD (" << discovered_connections.size()
-                          << " connections checked)" << std::endl;
+                          << " connections checked)" << '\n';
             }
         }
     }

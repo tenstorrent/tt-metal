@@ -122,7 +122,7 @@ void jit_build_genfiles_triscs_src(
     string generated_defines_fname = out_dir + "/defines_generated.h";
     gen_defines_file.open(generated_defines_fname, std::ios_base::out);
     settings.process_defines([&gen_defines_file](const string& define, const string& value) {
-        gen_defines_file << "#define " << define << " " << value << endl;
+        gen_defines_file << "#define " << define << " " << value << '\n';
     });
 }
 
@@ -140,9 +140,9 @@ std::string create_formats_array_string(
     const std::string& array_type, const std::string& array_name, int array_size, const std::string& array_data) {
     stringstream str_stream;
 
-    str_stream << array_type << " " << array_name << "[" << array_size << "] = {" << endl;
-    str_stream << "    " << array_data << endl;
-    str_stream << "};" << endl;
+    str_stream << array_type << " " << array_name << "[" << array_size << "] = {" << '\n';
+    str_stream << "    " << array_data << '\n';
+    str_stream << "};" << '\n';
 
     return str_stream.str();
 }
@@ -359,9 +359,9 @@ void generate_dst_accum_mode_descriptor(JitBuildOptions& options) {
     file_stream.open(dst_accum_format_descriptor);
 
     if (options.fp32_dest_acc_en == 0) {
-        file_stream << "constexpr bool DST_ACCUM_MODE = false;" << endl;
+        file_stream << "constexpr bool DST_ACCUM_MODE = false;" << '\n';
     } else {
-        file_stream << "constexpr bool DST_ACCUM_MODE = true;" << endl;
+        file_stream << "constexpr bool DST_ACCUM_MODE = true;" << '\n';
     }
 
     file_stream.close();
@@ -375,9 +375,9 @@ void generate_dst_sync_mode_descriptor(JitBuildOptions& options) {
     file_stream.open(dst_sync_mode_descriptor);
 
     if (options.dst_full_sync_en) {
-        file_stream << "#define DST_SYNC_MODE DstSync::SyncFull" << endl;
+        file_stream << "#define DST_SYNC_MODE DstSync::SyncFull" << '\n';
     } else {
-        file_stream << "#define DST_SYNC_MODE DstSync::SyncHalf" << endl;
+        file_stream << "#define DST_SYNC_MODE DstSync::SyncHalf" << '\n';
     }
 
     file_stream.close();
@@ -391,7 +391,7 @@ void generate_math_fidelity_descriptor(JitBuildOptions& options) {
     ofstream file_stream;
 
     file_stream.open(math_fidelity_descriptor);
-    file_stream << "constexpr std::int32_t MATH_FIDELITY = " << (int)desc.get_hlk_math_fidelity() << ";" << endl;
+    file_stream << "constexpr std::int32_t MATH_FIDELITY = " << (int)desc.get_hlk_math_fidelity() << ";" << '\n';
     file_stream.close();
 }
 
@@ -404,7 +404,7 @@ void generate_math_approx_mode_descriptor(JitBuildOptions& options) {
     ofstream file_stream;
 
     file_stream.open(approx_descriptor);
-    file_stream << "constexpr bool APPROX = " << std::boolalpha << desc.get_hlk_math_approx_mode() << ";" << endl;
+    file_stream << "constexpr bool APPROX = " << std::boolalpha << desc.get_hlk_math_approx_mode() << ";" << '\n';
     file_stream.close();
 }
 
@@ -430,7 +430,7 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env, JitBuildOptions& opt
         tf.join();
         ts.join();
     } catch (std::runtime_error& ex) {
-        std::cerr << "EXCEPTION FROM THREADING IN GENERATE_DESCRIPTORS: " << ex.what() << std::endl;
+        std::cerr << "EXCEPTION FROM THREADING IN GENERATE_DESCRIPTORS: " << ex.what() << '\n';
     }
 }
 // clang-format on

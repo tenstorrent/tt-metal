@@ -208,8 +208,8 @@ bool chip_to_chip_dram_buffer_transfer(
     fixture->ReadBuffer(receiver_mesh_device, output_dram_buffer, dest_dram_data);
     pass &= (dest_dram_data == inputs);
     if (not pass) {
-        std::cout << "Mismatch" << std::endl;
-        std::cout << dest_dram_data[0] << std::endl;
+        std::cout << "Mismatch" << '\n';
+        std::cout << dest_dram_data[0] << '\n';
     }
     return pass;
 }

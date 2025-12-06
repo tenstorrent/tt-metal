@@ -29,7 +29,7 @@ constexpr bool debug_concat = false;
 inline void concat_db_print(bool condition, const std::string& msg) {
     if constexpr (debug_concat) {
         if (condition) {
-            std::cout << "[DEBUG] concat: " << msg << std::endl;
+            std::cout << "[DEBUG] concat: " << msg << '\n';
         }
     }
 }

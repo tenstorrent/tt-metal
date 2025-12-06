@@ -105,7 +105,7 @@ bool reader_only(
     tt_metal::detail::ReadFromDeviceL1(device, reader_core, l1_byte_address, byte_size, dest_core_data);
     pass &= (dest_core_data == inputs);
     if (not pass) {
-        std::cout << "Mismatch at Core: " << reader_core.str() << std::endl;
+        std::cout << "Mismatch at Core: " << reader_core.str() << '\n';
     }
     return pass;
 }
@@ -174,7 +174,7 @@ bool writer_only(
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
     pass &= (dest_buffer_data == inputs);
     if (not pass) {
-        std::cout << "Mismatch at Core: " << writer_core.str() << std::endl;
+        std::cout << "Mismatch at Core: " << writer_core.str() << '\n';
     }
     return pass;
 }

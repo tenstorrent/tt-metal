@@ -131,7 +131,7 @@ bool reader_kernel_no_send(
         device->id(), eth_noc_xy, eth_l1_byte_address, byte_size);
     pass &= (readback_vec == inputs);
     if (not pass) {
-        std::cout << "Mismatch at Core: " << eth_noc_xy.str() << std::endl;
+        std::cout << "Mismatch at Core: " << eth_noc_xy.str() << '\n';
     }
     return pass;
 }
@@ -206,7 +206,7 @@ bool writer_kernel_no_receive(
     fixture->ReadBuffer(mesh_device, output_dram_buffer, readback_vec);
     pass &= (readback_vec == inputs);
     if (not pass) {
-        std::cout << "Mismatch" << std::endl;
+        std::cout << "Mismatch" << '\n';
     }
     return pass;
 }

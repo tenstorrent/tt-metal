@@ -368,7 +368,7 @@ void dump_completion_queue_entries(
                     page_addr - DispatchSettings::TRANSFER_PAGE_SIZE >= (completion_read_ptr)) {
                     cq_file << fmt::format(" << read_ptr (0x{:08x})", completion_read_ptr);
                 }
-                cq_file << std::endl;
+                cq_file << '\n';
             }
             uint32_t stride = dump_dispatch_cmd(cmd, page_addr, cq_file);
             // Completion Q is page-aligned
@@ -381,7 +381,7 @@ void dump_completion_queue_entries(
             if (page_addr == completion_read_ptr) {
                 cq_file << fmt::format(" << read_ptr (0x{:08x})", completion_read_ptr);
             }
-            cq_file << std::endl;
+            cq_file << '\n';
 
             // Show which pages have data if present.
             if (cmd_pages > 2) {
@@ -408,7 +408,7 @@ void dump_completion_queue_entries(
         cq_file << fmt::format(
             "{:#010x}-{:#010x}: No valid dispatch commands detected.", last_span_start, base_addr + completion_q_bytes);
     }
-    std::cout << std::endl;
+    std::cout << '\n';
 }
 
 void dump_issue_queue_entries(
@@ -477,7 +477,7 @@ void dump_issue_queue_entries(
                     curr_addr - hal.get_alignment(HalMemType::HOST) >= (issue_read_ptr)) {
                     iq_file << fmt::format(" << read_ptr (0x{:08x})", issue_read_ptr);
                 }
-                iq_file << std::endl;
+                iq_file << '\n';
             }
 
             uint32_t cmd_stride = dump_prefetch_cmd(cmd, curr_addr, iq_file);
@@ -495,7 +495,7 @@ void dump_issue_queue_entries(
             if (curr_addr == issue_read_ptr) {
                 iq_file << fmt::format(" << read_ptr (0x{:08x})", issue_read_ptr);
             }
-            iq_file << std::endl;
+            iq_file << '\n';
 
             // If it's a RELAY_INLINE command, then the data inside is dispatch commands, show them.
             if ((cmd->base.cmd_id == CQ_PREFETCH_CMD_RELAY_INLINE ||
@@ -521,7 +521,7 @@ void dump_issue_queue_entries(
                         uint32_t dispatch_cmd_stride =
                             dump_dispatch_cmd(dispatch_cmd, issue_q_base_addr + dispatch_offset, iq_file);
                         dispatch_offset += dispatch_cmd_stride;
-                        iq_file << std::endl;
+                        iq_file << '\n';
                     } else {
                         dispatch_offset += sizeof(CQDispatchCmd);
                     }
@@ -546,7 +546,7 @@ void dump_issue_queue_entries(
             last_span_start,
             issue_q_base_addr + issue_q_bytes);
     }
-    std::cout << std::endl;
+    std::cout << '\n';
 }
 
 // Define a queue type, for when they're interchangeable.
@@ -593,7 +593,7 @@ void dump_command_queue_raw_data(
     // Read out in pages
     std::vector<uint8_t> read_data;
     read_data.resize(DispatchSettings::TRANSFER_PAGE_SIZE);
-    out_file << std::endl;
+    out_file << '\n';
     out_file << fmt::format(
                     "Device {}, CQ {}, {} Queue Raw Data:\n",
                     sysmem_manager.get_device_id(),
@@ -635,10 +635,10 @@ void dump_command_queue_raw_data(
             if (line_addr == read_ptr) {
                 out_file << fmt::format(" << read_ptr (0x{:08x})", read_ptr);
             }
-            out_file << std::endl;
+            out_file << '\n';
         }
     }
-    std::cout << std::endl;
+    std::cout << '\n';
 }
 
 void dump_cqs(std::ofstream& cq_file, std::ofstream& iq_file, SystemMemoryManager& sysmem_manager, bool dump_raw_data) {

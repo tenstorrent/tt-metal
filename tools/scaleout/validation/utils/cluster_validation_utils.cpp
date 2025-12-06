@@ -656,13 +656,13 @@ void print_ethernet_connectivity(
         }
 
         // Print connection type header
-        std::cout << std::endl;
+        std::cout << '\n';
         if (is_cross_host) {
             std::cout << " ============================== CROSS-HOST CONNECTIONS =============================== "
-                      << std::endl;
+                      << '\n';
         } else {
             std::cout << " ============================== HOST-LOCAL CONNECTIONS =============================== "
-                      << std::endl;
+                      << '\n';
         }
 
         // Iterate through hostnames
@@ -672,9 +672,9 @@ void print_ethernet_connectivity(
             }
 
             // Print hostname header
-            std::cout << std::endl
+            std::cout << '\n'
                       << "  =============================== Hostname: " << hostname
-                      << " =============================== " << std::endl;
+                      << " =============================== " << '\n';
 
             // Iterate through port types
             for (const auto& [port_type, connections] : port_types_map) {
@@ -683,23 +683,23 @@ void print_ethernet_connectivity(
                 }
 
                 // Print port type header
-                std::cout << std::endl
+                std::cout << '\n'
                           << "             ---------------------- Port Type: " << port_type
-                          << " ---------------------- " << std::endl
-                          << std::endl;
+                          << " ---------------------- " << '\n'
+                          << '\n';
 
                 // Print all connections for this port type
                 for (const auto& conn : connections) {
                     std::cout << " [" << conn.host << "] Unique ID: " << std::hex << *conn.asic_id
                               << " Tray: " << std::dec << *conn.tray_id << ", ASIC Location: " << std::dec
                               << *conn.asic_location << ", Ethernet Channel: " << std::dec << +conn.channel
-                              << ", Port ID: " << std::dec << *conn.port_id << std::endl;
+                              << ", Port ID: " << std::dec << *conn.port_id << '\n';
 
                     std::cout << "\tConnected to [" << conn.connected_host << "] Unique ID: " << std::hex
                               << *conn.connected_asic_id << " Tray: " << std::dec << *conn.connected_tray_id
                               << ", ASIC Location: " << std::dec << *conn.connected_asic_location
-                              << ", Ethernet Channel: " << std::dec << +conn.connected_channel << std::endl;
-                    std::cout << std::endl;
+                              << ", Ethernet Channel: " << std::dec << +conn.connected_channel << '\n';
+                    std::cout << '\n';
                 }
             }
         }
@@ -799,25 +799,25 @@ void log_link_metrics(
     }
 
     // Print console table
-    std::cout << std::endl;
+    std::cout << '\n';
     std::cout << "╔═══════════════════════════════════════════════════════════════════════════════════════════════════╗"
-              << std::endl;
+              << '\n';
     if (log_ethernet_metrics) {
         std::cout
             << "║                          ETHERNET METRICS REPORT                                                  ║"
-            << std::endl;
+            << '\n';
     } else {
         std::cout
             << "║                              FAULTY LINKS REPORT                                                  ║"
-            << std::endl;
+            << '\n';
     }
     std::cout << "╚═══════════════════════════════════════════════════════════════════════════════════════════════════╝"
-              << std::endl;
+              << '\n';
     if (log_ethernet_metrics) {
-        std::cout << "Total Links: " << link_metrics.size() << std::endl;
-        std::cout << "Total Metric Entries: " << metric_rows.size() << std::endl << std::endl;
+        std::cout << "Total Links: " << link_metrics.size() << '\n';
+        std::cout << "Total Metric Entries: " << metric_rows.size() << '\n' << '\n';
     } else {
-        std::cout << "Total Faulty Links: " << link_metrics.size() << std::endl << std::endl;
+        std::cout << "Total Faulty Links: " << link_metrics.size() << '\n' << '\n';
     }
 
     // Table header
@@ -830,9 +830,9 @@ void log_link_metrics(
         std::cout << std::setw(40) << "Failure Type";
     }
 
-    std::cout << std::setw(12) << "Pkt Size" << std::setw(12) << "Data Size" << std::endl;
+    std::cout << std::setw(12) << "Pkt Size" << std::setw(12) << "Data Size" << '\n';
 
-    std::cout << std::string(log_ethernet_metrics ? 177 : 217, '-') << std::endl;
+    std::cout << std::string(log_ethernet_metrics ? 177 : 217, '-') << '\n';
 
     // Table rows
     for (const auto& row : metric_rows) {
@@ -879,10 +879,10 @@ void log_link_metrics(
         }
 
         std::cout << std::setw(12) << (std::to_string(row.traffic_params.packet_size_bytes) + " B") << std::setw(12)
-                  << (std::to_string(row.traffic_params.data_size) + " B") << std::endl;
+                  << (std::to_string(row.traffic_params.data_size) + " B") << '\n';
     }
 
-    std::cout << std::string(log_ethernet_metrics ? 177 : 217, '-') << std::endl << std::endl;
+    std::cout << std::string(log_ethernet_metrics ? 177 : 217, '-') << '\n' << '\n';
 
     // Write CSV file
     std::filesystem::path csv_path =
@@ -897,7 +897,7 @@ void log_link_metrics(
         }
         csv_file << ",Packet_Size_Bytes,Data_Size_Bytes,"
                  << "Retrain_Count,CRC_Error_Count,Corrected_Codeword_Count,Uncorrected_Codeword_Count,Mismatched_Words"
-                 << std::endl;
+                 << '\n';
 
         // CSV rows
         for (const auto& row : metric_rows) {
@@ -914,7 +914,7 @@ void log_link_metrics(
                      << "0x" << std::hex << row.crc_error_count << std::dec << ","
                      << "0x" << std::hex << row.corrected_codeword_count << std::dec << ","
                      << "0x" << std::hex << row.uncorrected_codeword_count << std::dec << ","
-                     << row.num_mismatched_words << std::endl;
+                     << row.num_mismatched_words << '\n';
         }
 
         csv_file.close();

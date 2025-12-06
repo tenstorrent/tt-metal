@@ -238,7 +238,7 @@ inline bool DeleteLinesStartingWith(const std::string& file_name, const std::str
     }
     log_file.close();
     if (!OpenFile(file_name, log_file, std::fstream::out | std::fstream::trunc)) {
-        std::cout << "Could not open file " << file_name << " for writing!" << std::endl;
+        std::cout << "Could not open file " << file_name << " for writing!" << '\n';
         return false;
     }
     log_file << content;

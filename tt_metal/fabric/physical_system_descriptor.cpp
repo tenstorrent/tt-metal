@@ -594,7 +594,7 @@ void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& pa
             TT_THROW("Failed to write YAML content to file: {}", path_to_yaml.value());
         }
     } else {
-        std::cout << root << std::endl;
+        std::cout << root << '\n';
     }
 }
 

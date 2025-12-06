@@ -435,8 +435,8 @@ Statistics FreeListOpt::get_statistics() const {
 }
 
 void FreeListOpt::dump_blocks(std::ostream& out) const {
-    out << "FreeListOpt allocator info:" << std::endl;
-    out << "segregated free blocks by size:" << std::endl;
+    out << "FreeListOpt allocator info:" << '\n';
+    out << "segregated free blocks by size:" << '\n';
     for (size_t i = 0; i < free_blocks_segregated_by_size_.size(); i++) {
         if (i != free_blocks_segregated_by_size_.size() - 1) {
             out << "  Size class " << i << ": (" << size_t(size_segregated_base * (size_t{1} << i)) << " - "
@@ -449,16 +449,16 @@ void FreeListOpt::dump_blocks(std::ostream& out) const {
             out << free_blocks_segregated_by_size_[i][j] << " ";
         }
 
-        out << std::endl;
+        out << '\n';
     }
 
     out << "Free slots in block table: ";
     for (size_t i = 0; i < free_meta_block_indices_.size(); i++) {
         out << free_meta_block_indices_[i] << " ";
     }
-    out << std::endl;
+    out << '\n';
 
-    out << "Block table:" << std::endl;
+    out << "Block table:" << '\n';
     auto leftpad = [](std::string str, size_t width) {
         if (str.size() >= width) {
             return str;
@@ -477,7 +477,7 @@ void FreeListOpt::dump_blocks(std::ostream& out) const {
     for (auto& header : headers) {
         out << leftpad(header, pad) << " ";
     }
-    out << std::endl;
+    out << '\n';
     for (size_t i = 0; i < block_address_.size(); i++) {
         if (!meta_block_is_allocated_[i]) {
             continue;
@@ -485,7 +485,7 @@ void FreeListOpt::dump_blocks(std::ostream& out) const {
         out << leftpad_num(i, pad) << " " << leftpad_num(block_address_[i], pad) << " "
             << leftpad_num(block_size_[i], pad) << " " << leftpad_num(block_prev_block_[i], pad) << " "
             << leftpad_num(block_next_block_[i], pad) << " " << leftpad(block_is_allocated_[i] ? "yes" : "no", pad)
-            << std::endl;
+            << '\n';
     }
 }
 

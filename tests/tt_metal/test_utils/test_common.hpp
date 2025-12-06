@@ -239,9 +239,9 @@ inline void validate_remaining_args(const std::vector<std::string>& remaining_ar
         // Only executable is left, so all good
         return;
     }
-    std::cout << "Remaining test_args:" << std::endl;
+    std::cout << "Remaining test_args:" << '\n';
     for (int i = 1; i < remaining_args.size(); i++) {
-        std::cout << "\t" << remaining_args.at(i) << std::endl;
+        std::cout << "\t" << remaining_args.at(i) << '\n';
     }
     throw std::runtime_error("Not all test_args were parsed");
 }

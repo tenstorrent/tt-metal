@@ -564,7 +564,7 @@ std::optional<int> get_device_id_from_args(const std::vector<std::string>& input
             try {
                 return std::stoi(device_id_str);
             } catch (const std::exception&) {
-                std::cerr << "Invalid device ID: " << device_id_str << std::endl;
+                std::cerr << "Invalid device ID: " << device_id_str << '\n';
                 return std::nullopt;
             }
         }
@@ -582,7 +582,7 @@ int main(int argc, char* argv[]) {
     // Parse device ID if specified
     g_user_device_id = get_device_id_from_args(input_args);
     if (g_user_device_id.has_value()) {
-        std::cout << "Using device ID: " << g_user_device_id.value() << std::endl;
+        std::cout << "Using device ID: " << g_user_device_id.value() << '\n';
     }
 
     // Force TT_METAL options

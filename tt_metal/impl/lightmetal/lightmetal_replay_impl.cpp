@@ -28,7 +28,7 @@ namespace tt::tt_metal {
 
 TraceDescriptor from_flatbuffer(const flatbuffer::TraceDescriptor* fb_desc) {
     if (!fb_desc) {
-        std::cerr << "TraceDescriptor is null." << std::endl;
+        std::cerr << "TraceDescriptor is null." << '\n';
         return {};
     }
 
@@ -128,14 +128,14 @@ const tt::tt_metal::flatbuffer::LightMetalBinary* LightMetalReplayImpl::parse_fl
         // Verify the FlatBuffer data.
         flatbuffers::Verifier verifier(data_ptr, size);
         if (!tt::tt_metal::flatbuffer::VerifyLightMetalBinaryBuffer(verifier)) {
-            std::cerr << "Failed to verify FlatBuffer data." << std::endl;
+            std::cerr << "Failed to verify FlatBuffer data." << '\n';
             return nullptr;
         }
 
         // Parse and return the FlatBuffer object.
         return tt::tt_metal::flatbuffer::GetLightMetalBinary(data_ptr);
     } catch (const std::exception& e) {
-        std::cerr << "Exception while parsing FlatBuffer binary: " << e.what() << std::endl;
+        std::cerr << "Exception while parsing FlatBuffer binary: " << e.what() << '\n';
         return nullptr;
     }
 }
@@ -150,7 +150,7 @@ std::optional<TraceDescriptor> LightMetalReplayImpl::get_trace_by_id(uint32_t ta
         }
     }
 
-    std::cerr << "Failed to find trace_id: " << target_trace_id << " in binary." << std::endl;
+    std::cerr << "Failed to find trace_id: " << target_trace_id << " in binary." << '\n';
     return std::nullopt;
 }
 
@@ -679,7 +679,7 @@ void LightMetalReplayImpl::execute(const ::tt::tt_metal::flatbuffer::LightMetalC
 // Main entry point to execute a light metal binary blob, return true if pass.
 bool LightMetalReplayImpl::run() {
     if (!fb_binary_) {
-        std::cerr << "Cannot Replay empty/uninitialized Light Metal Binary." << std::endl;
+        std::cerr << "Cannot Replay empty/uninitialized Light Metal Binary." << '\n';
         return false;
     }
 
@@ -689,7 +689,7 @@ bool LightMetalReplayImpl::run() {
         const auto* trace_descs = fb_binary_->trace_descriptors();
         const auto* commands = fb_binary_->commands();
         if (!commands) {
-            std::cerr << "Nothing to run, no commands in binary." << std::endl;
+            std::cerr << "Nothing to run, no commands in binary." << '\n';
             return false;
         }
 

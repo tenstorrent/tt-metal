@@ -67,14 +67,14 @@ inline std::vector<bfloat16> get_col_slice(
 }
 
 inline void print_faces(std::vector<bfloat16> data, const std::string& name) {
-    std::cout << name << ": " << std::endl;
+    std::cout << name << ": " << '\n';
 
     int tile_index = 0;
     int face_index = 0;
     for (int i = 0; i < data.size(); i++) {
         if (i % 256 == 0) {
-            std::cout << "Tile " << tile_index / 4 << std::endl;
-            std::cout << "Face = " << face_index << std::endl;
+            std::cout << "Tile " << tile_index / 4 << '\n';
+            std::cout << "Face = " << face_index << '\n';
             face_index++;
             tile_index++;
             if (face_index == 4) {
@@ -83,10 +83,10 @@ inline void print_faces(std::vector<bfloat16> data, const std::string& name) {
         }
         std::cout << static_cast<float>(data.at(i)) << ", ";
         if ((i + 1) % 16 == 0) {
-            std::cout << std::endl;
+            std::cout << '\n';
         }
     }
-    std::cout << std::endl;
+    std::cout << '\n';
 }
 
 // Transpose 2D matrix of tiles so that its column major of tiles instead of row major.

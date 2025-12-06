@@ -236,7 +236,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
                         "device id,core_x, "
                         "core_y,device,host_tracy,host_real,write_overhead,host_start,delay,frequency,tracy_ratio,"
                         "tracy_base_time,device_frequency_ratio,device_shift")
-                 << std::endl;
+                 << '\n';
     } else {
         log_file.open(log_path, std::ios_base::app);
     }
@@ -257,7 +257,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
                         frequencyFit,
                         tracyToSecRatio,
                         tracyBaseTime)
-                 << std::endl;
+                 << '\n';
     }
     log_file.close();
     log_info(
@@ -303,7 +303,7 @@ void setShift(int device_id, int64_t shift, double scale, const SyncInfo& root_s
         std::filesystem::path log_path = output_dir / "sync_device_info.csv";
         std::ofstream log_file;
         log_file.open(log_path, std::ios_base::app);
-        log_file << fmt::format("{:5},,,,,,,,,,,,{:20.15f},{:20}", device_id, scale, shift) << std::endl;
+        log_file << fmt::format("{:5},,,,,,,,,,,,{:20.15f},{:20}", device_id, scale, shift) << '\n';
         log_file.close();
     }
 }

@@ -140,8 +140,8 @@ void parse_link_reset_args(int argc, char* argv[], InputArgs& input_args) {
                 false, "All link_reset parameters must be specified: --host, --tray-id, --asic-location, --channel");
         }
     } catch (const cxxopts::exceptions::exception& e) {
-        std::cerr << "Error parsing link_reset arguments: " << e.what() << std::endl;
-        std::cerr << options.help() << std::endl;
+        std::cerr << "Error parsing link_reset arguments: " << e.what() << '\n';
+        std::cerr << options.help() << '\n';
         exit(1);
     }
 }
@@ -223,8 +223,8 @@ void parse_validation_args(int argc, char* argv[], InputArgs& input_args) {
             input_args.cabling_descriptor_path.has_value() || input_args.fsd_path.has_value();
 
     } catch (const cxxopts::exceptions::exception& e) {
-        std::cerr << "Error parsing arguments: " << e.what() << std::endl;
-        std::cerr << options.help() << std::endl;
+        std::cerr << "Error parsing arguments: " << e.what() << '\n';
+        std::cerr << options.help() << '\n';
         exit(1);
     }
 }
@@ -321,12 +321,12 @@ AsicTopology run_connectivity_validation(
 void print_usage_info(CommandMode mode = CommandMode::VALIDATE) {
     if (mode == CommandMode::LINK_RETRAIN) {
         auto options = create_link_reset_options();
-        std::cout << options.help() << std::endl;
+        std::cout << options.help() << '\n';
     } else {
         auto options = create_validation_options();
-        std::cout << options.help() << std::endl;
-        std::cout << "link_reset Subcommand:" << std::endl;
-        std::cout << "  Use 'run_cluster_validation link_reset --help' for link_reset options." << std::endl;
+        std::cout << options.help() << '\n';
+        std::cout << "link_reset Subcommand:" << '\n';
+        std::cout << "  Use 'run_cluster_validation link_reset --help' for link_reset options." << '\n';
     }
 }
 
