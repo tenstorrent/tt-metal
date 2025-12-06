@@ -6,9 +6,11 @@
 
 #include "compute_kernel_api/common.h"
 #ifdef TRISC_MATH
+#include "llk_math_common_api.h"
 #include "llk_math_matmul_api.h"
 #endif
 #ifdef TRISC_UNPACK
+#include "llk_unpack_AB_api.h"
 #include "llk_unpack_AB_matmul_api.h"
 #endif
 // defines the default throttle level for matmul kernels (default 0)

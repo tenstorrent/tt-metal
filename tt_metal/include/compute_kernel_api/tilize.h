@@ -6,11 +6,13 @@
 
 #include "compute_kernel_api/common.h"
 #ifdef TRISC_MATH
-#include "llk_math_unary_datacopy_api.h"
-#include "llk_math_reduce_api.h"
+#include "llk_math_common_api.h"
 #include "llk_math_matmul_api.h"
+#include "llk_math_reduce_api.h"
+#include "llk_math_unary_datacopy_api.h"
 #endif
 #ifdef TRISC_UNPACK
+#include "llk_unpack_AB_api.h"
 #include "llk_unpack_tilize_api.h"
 #endif
 
