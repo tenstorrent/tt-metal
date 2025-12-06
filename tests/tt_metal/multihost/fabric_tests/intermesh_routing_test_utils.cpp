@@ -74,7 +74,7 @@ std::shared_ptr<tt_metal::Program> create_receiver_program(
 void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distributed::multihost::Rank recv_host_rank) {
     // The following code runs on the sender host
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
 
     constexpr uint32_t num_packets = 100;
 
@@ -86,7 +86,7 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
 
     // Synchronize seeds across hosts (sender and receiver must use the same seed for randomization)
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
-    distributed_context->send(
+    distributed_context.send(
         tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&time_seed), sizeof(time_seed)),
         tt::tt_metal::distributed::multihost::Rank{recv_host_rank},  // send to receiver host
         tt::tt_metal::distributed::multihost::Tag{0}                 // exchange seed over tag 0
@@ -105,14 +105,14 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
     CoreCoord receiver_logical_core = {0, 0};
 
     // Request randomized logical core from the receiver host
-    distributed_context->recv(
+    distributed_context.recv(
         tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&receiver_logical_core), sizeof(receiver_logical_core)),
         tt::tt_metal::distributed::multihost::Rank{recv_host_rank},  // receive from receiver host
         tt::tt_metal::distributed::multihost::Tag{0}                 // exchange logical core over tag 0
     );
     FabricNodeId dst_fabric_node_id(MeshId{0}, 0);
     // Receive the randomized destination fabric node id from the receiver host
-    distributed_context->recv(
+    distributed_context.recv(
         tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&dst_fabric_node_id), sizeof(dst_fabric_node_id)),
         tt::tt_metal::distributed::multihost::Rank{recv_host_rank},  // receive from receiver host
         tt::tt_metal::distributed::multihost::Tag{0}                 // exchange fabric node id over tag 0
@@ -181,13 +181,13 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
 
     // Send test results to the receiver host
     uint64_t receiver_bytes = 0;
-    distributed_context->send(
+    distributed_context.send(
         tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sender_bytes), sizeof(sender_bytes)),
         tt::tt_metal::distributed::multihost::Rank{recv_host_rank},  // send to receiver host
         tt::tt_metal::distributed::multihost::Tag{0}                 // exchange tests results over tag 0
     );
     // Request test results from the receiver host and ensure that they match
-    distributed_context->recv(
+    distributed_context.recv(
         tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&receiver_bytes), sizeof(receiver_bytes)),
         tt::tt_metal::distributed::multihost::Rank{recv_host_rank},  // recv from receiver host
         tt::tt_metal::distributed::multihost::Tag{0}                 // exchange tests results over tag 0
@@ -198,7 +198,7 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
 void run_unicast_recv_step(BaseFabricFixture* fixture, tt::tt_metal::distributed::multihost::Rank sender_host_rank) {
     // The following code runs on the receiver host
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
     constexpr uint32_t num_packets = 100;
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
@@ -207,7 +207,7 @@ void run_unicast_recv_step(BaseFabricFixture* fixture, tt::tt_metal::distributed
 
     // Synchronize seeds across hosts (sender and receiver must use the same seed for randomization)
     uint32_t time_seed = 0;
-    distributed_context->recv(
+    distributed_context.recv(
         tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&time_seed), sizeof(time_seed)),
         tt::tt_metal::distributed::multihost::Rank{sender_host_rank},  // recv from sender host
         tt::tt_metal::distributed::multihost::Tag{0}                   // exchange seed over tag 0
@@ -225,14 +225,14 @@ void run_unicast_recv_step(BaseFabricFixture* fixture, tt::tt_metal::distributed
     CoreCoord receiver_logical_core = {recv_x, recv_x};
 
     // Send the randomized rx core to the sender host, so it can send packets to the correct destination
-    distributed_context->send(
+    distributed_context.send(
         tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&receiver_logical_core), sizeof(receiver_logical_core)),
         tt::tt_metal::distributed::multihost::Rank{sender_host_rank},  // send to sender host
         tt::tt_metal::distributed::multihost::Tag{0}                   // exchange logical core over tag 0
     );
 
     // Send the randomized rx fabric node id to the sender host, so it can send packets to the correct destination
-    distributed_context->send(
+    distributed_context.send(
         tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&dst_fabric_node_id), sizeof(dst_fabric_node_id)),
         tt::tt_metal::distributed::multihost::Rank{sender_host_rank},  // send to sender host
         tt::tt_metal::distributed::multihost::Tag{0}                   // exchange fabric node id over tag 0
@@ -269,13 +269,13 @@ void run_unicast_recv_step(BaseFabricFixture* fixture, tt::tt_metal::distributed
         ((uint64_t)receiver_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | receiver_status[TT_FABRIC_WORD_CNT_INDEX];
     // Get test results from the sender host and ensure that they match
     uint64_t sender_bytes = 0;
-    distributed_context->recv(
+    distributed_context.recv(
         tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sender_bytes), sizeof(sender_bytes)),
         tt::tt_metal::distributed::multihost::Rank{sender_host_rank},  // recv from sender host
         tt::tt_metal::distributed::multihost::Tag{0}                   // exchange tests results over tag 0
     );
     // Send test results to the sender host
-    distributed_context->send(
+    distributed_context.send(
         tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&receiver_bytes), sizeof(receiver_bytes)),
         tt::tt_metal::distributed::multihost::Rank{sender_host_rank},  // send to sender host
         tt::tt_metal::distributed::multihost::Tag{0}                   // exchange tests results over tag 0
@@ -292,7 +292,7 @@ void run_mcast_sender_step(
     uint32_t recv_rank) {
     // The following code runs on the sender host
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
 
     constexpr uint32_t num_packets = 100;
 
@@ -302,7 +302,7 @@ void run_mcast_sender_step(
 
     // Synchronize seeds across hosts (sender and receiver must use the same seed for randomization)
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
-    distributed_context->send(
+    distributed_context.send(
         tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&time_seed), sizeof(time_seed)),
         tt::tt_metal::distributed::multihost::Rank{recv_rank},  // send to receiver host
         tt::tt_metal::distributed::multihost::Tag{0}            // exchange seed over tag 0
@@ -318,7 +318,7 @@ void run_mcast_sender_step(
 
     // Request randomized logical core from the receiver host
     CoreCoord receiver_logical_core = {0, 0};
-    distributed_context->recv(
+    distributed_context.recv(
         tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&receiver_logical_core), sizeof(receiver_logical_core)),
         tt::tt_metal::distributed::multihost::Rank{recv_rank},  // receive from receiver host
         tt::tt_metal::distributed::multihost::Tag{0}            // exchange logical core over tag 0
@@ -385,7 +385,7 @@ void run_mcast_sender_step(
     uint64_t sender_bytes =
         ((uint64_t)sender_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | sender_status[TT_FABRIC_WORD_CNT_INDEX];
     // Send test results to the receiver host
-    distributed_context->send(
+    distributed_context.send(
         tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sender_bytes), sizeof(sender_bytes)),
         tt::tt_metal::distributed::multihost::Rank{recv_rank},  // send to receiver host
         tt::tt_metal::distributed::multihost::Tag{0}            // exchange test results over tag 0
@@ -393,7 +393,7 @@ void run_mcast_sender_step(
     // Request test results from all devices on the receiver host and ensure that they match
     for (std::size_t recv_idx = 0; recv_idx < mcast_group_node_ids.size() + 1; recv_idx++) {
         uint64_t recv_bytes = 0;
-        distributed_context->recv(
+        distributed_context.recv(
             tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&recv_bytes), sizeof(recv_bytes)),
             tt::tt_metal::distributed::multihost::Rank{recv_rank},  // recv from receiver host
             tt::tt_metal::distributed::multihost::Tag{0}            // exchange test results over tag 0
@@ -409,7 +409,7 @@ void run_mcast_recv_step(
     uint32_t sender_rank) {
     // The following code runs on the receiver host
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
     constexpr uint32_t num_packets = 100;
 
     const auto& fabric_context = control_plane.get_fabric_context();
@@ -418,7 +418,7 @@ void run_mcast_recv_step(
 
     // Synchronize seeds across hosts (sender and receiver must use the same seed for randomization)
     uint32_t time_seed = 0;
-    distributed_context->recv(
+    distributed_context.recv(
         tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&time_seed), sizeof(time_seed)),
         tt::tt_metal::distributed::multihost::Rank{sender_rank},  // recv from sender host
         tt::tt_metal::distributed::multihost::Tag{0}              // exchange seed over tag 0
@@ -433,7 +433,7 @@ void run_mcast_recv_step(
     CoreCoord receiver_logical_core = {recv_x, recv_x};
 
     // Send the randomized receiver core to the sender host, so it can send packets to the correct destination
-    distributed_context->send(
+    distributed_context.send(
         tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&receiver_logical_core), sizeof(receiver_logical_core)),
         tt::tt_metal::distributed::multihost::Rank{sender_rank},  // send to sender host
         tt::tt_metal::distributed::multihost::Tag{0}              // exchange logical core over tag 0
@@ -476,7 +476,7 @@ void run_mcast_recv_step(
     // Validate status of the receiver
     // Request test results from the sender host and ensure that they match
     uint64_t sender_bytes = 0;
-    distributed_context->recv(
+    distributed_context.recv(
         tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sender_bytes), sizeof(sender_bytes)),
         tt::tt_metal::distributed::multihost::Rank{sender_rank},  // recv from sender host
         tt::tt_metal::distributed::multihost::Tag{0}              // exchange tests results over tag 0
@@ -497,7 +497,7 @@ void run_mcast_recv_step(
         // Send test results for this device to the sender host
         uint64_t receiver_bytes =
             ((uint64_t)receiver_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | receiver_status[TT_FABRIC_WORD_CNT_INDEX];
-        distributed_context->send(
+        distributed_context.send(
             tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&receiver_bytes), sizeof(receiver_bytes)),
             tt::tt_metal::distributed::multihost::Rank{sender_rank},  // send to sender host
             tt::tt_metal::distributed::multihost::Tag{0}              // exchange test results over tag 0
@@ -507,8 +507,8 @@ void run_mcast_recv_step(
 }
 
 void RandomizedInterMeshUnicast(BaseFabricFixture* fixture) {
-    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    if (*(distributed_context->rank()) == 0) {
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
+    if (*distributed_context.rank() == 0) {
         run_unicast_sender_step(fixture, tt::tt_metal::distributed::multihost::Rank{1});
     } else {
         run_unicast_recv_step(fixture, tt::tt_metal::distributed::multihost::Rank{0});
@@ -523,9 +523,9 @@ void InterMeshLineMcast(
     const std::vector<FabricNodeId>& mcast_group_node_ids,
     uint32_t sender_rank,
     uint32_t receiver_rank) {
-    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
 
-    if (*(distributed_context->rank()) == sender_rank) {
+    if (*distributed_context.rank() == sender_rank) {
         run_mcast_sender_step(
             fixture, mcast_sender_node, mcast_start_node, mcast_routing_info, mcast_group_node_ids, receiver_rank);
     } else {
