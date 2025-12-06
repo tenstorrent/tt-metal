@@ -62,9 +62,9 @@ template <
 ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4) {
 #ifdef ARCH_BLACKHOLE
     // Needed for setting swizzle_32b:
-    MATH((llk_math_hw_configure(0, 0)));
-    MATH((llk_math_configure_remap(true /* remap enabled */)));
+    // MATH((llk_math_hw_configure(0, 0)));
     // TODO LP, set swizzle here
+    MATH((llk_math_configure_remap(true /* remap enabled */)));
 #endif
     // A workaround for tt-metal#17132. Should be addressed more systematically.
     // NC: Need to pass face_r_dim and num_faces as CB metadata, not as runtime arg

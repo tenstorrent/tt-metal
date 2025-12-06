@@ -117,6 +117,10 @@ inline void llk_enable_int8_fpu_math() { _llk_enable_int8_fpu_math_(); }
 
 inline void llk_unpack_set_srcb_dummy_valid() { _llk_unpack_set_srcb_dummy_valid_(); }
 
+inline void llk_unpack_disable_src_zero_flag(bool disable_src_zero_flag) {
+    _llk_unpack_disable_src_zero_flag_(disable_src_zero_flag);
+}
+
 // All TILE_SIZE related functions were deprecared in BBE for WH.  The following is needed for pack_shifted so just
 // keeping here.
 // FIXME: Need to review and adjust accordingly
