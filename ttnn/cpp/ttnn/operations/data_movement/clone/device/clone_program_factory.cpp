@@ -35,11 +35,58 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
     uint32_t num_units =
         tilized ? output.physical_volume() / TILE_HW : output.physical_volume() / output.logical_shape()[-1];
 
-    auto compute_with_storage_grid_size = output.device()->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, num_units);
+    auto output_memory_layout = output.memory_config().memory_layout();
+    bool is_sharded = output_memory_layout != TensorMemoryLayout::INTERLEAVED;
+
+    uint32_t num_cores;
+    CoreRangeSet all_cores;
+    CoreRangeSet core_group_1;
+    CoreRangeSet core_group_2;
+    uint32_t num_units_per_core_group_1;
+    uint32_t num_units_per_core_group_2;
+    uint32_t num_cores_x;
+    uint32_t num_cores_y;
+
+    if (is_sharded) {
+        auto shard_spec = output.buffer()->shard_spec();
+        all_cores = shard_spec.grid();
+        num_cores = all_cores.num_cores();
+
+        auto shard_shape = shard_spec.shape();
+        uint32_t shard_height = shard_shape[0];
+        uint32_t shard_width = shard_shape[1];
+
+        if (tilized) {
+            num_units_per_core_group_1 = (shard_height * shard_width) / TILE_HW;
+        } else {
+            num_units_per_core_group_1 = shard_height;
+        }
+
+        num_units_per_core_group_2 = 0;
+        core_group_1 = all_cores;
+        core_group_2 = CoreRangeSet();
+
+        auto grid_size = all_cores.bounding_box();
+        num_cores_x = grid_size.end_coord.x + 1;
+        num_cores_y = grid_size.end_coord.y + 1;
+    } else {
+        auto compute_with_storage_grid_size = output.device()->compute_with_storage_grid_size();
+        num_cores_x = compute_with_storage_grid_size.x;
+        num_cores_y = compute_with_storage_grid_size.y;
+        auto
+            [num_cores_result,
+             all_cores_result,
+             core_group_1_result,
+             core_group_2_result,
+             num_units_per_core_group_1_result,
+             num_units_per_core_group_2_result] = split_work_to_cores(compute_with_storage_grid_size, num_units);
+        num_cores = num_cores_result;
+        all_cores = all_cores_result;
+        core_group_1 = core_group_1_result;
+        core_group_2 = core_group_2_result;
+        num_units_per_core_group_1 = num_units_per_core_group_1_result;
+        num_units_per_core_group_2 = num_units_per_core_group_2_result;
+    }
 
     auto alignment = input.buffer()->alignment();
 
@@ -74,19 +121,28 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
         TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
     }
 
-    auto read_kernel_id = CreateKernel(
-        program,
-        tilized ? "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/read_kernel.cpp"
-                : "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/read_kernel_rm.cpp",
-        all_cores,
-        ReaderDataMovementConfig(reader_compile_time_args, {}));
+    std::string read_kernel_path;
+    std::string write_kernel_path;
 
-    auto write_kernel_id = CreateKernel(
-        program,
-        tilized ? "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/write_kernel.cpp"
-                : "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/write_kernel_rm.cpp",
-        all_cores,
-        WriterDataMovementConfig(writer_compile_time_args, {}));
+    if (is_sharded) {
+        read_kernel_path =
+            tilized ? "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/read_kernel_sharded.cpp"
+                    : "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/read_kernel_rm_sharded.cpp";
+        write_kernel_path =
+            tilized ? "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/write_kernel_sharded.cpp"
+                    : "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/write_kernel_rm_sharded.cpp";
+    } else {
+        read_kernel_path = tilized ? "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/read_kernel.cpp"
+                                   : "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/read_kernel_rm.cpp";
+        write_kernel_path = tilized ? "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/write_kernel.cpp"
+                                    : "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/write_kernel_rm.cpp";
+    }
+
+    auto read_kernel_id =
+        CreateKernel(program, read_kernel_path, all_cores, ReaderDataMovementConfig(reader_compile_time_args, {}));
+
+    auto write_kernel_id =
+        CreateKernel(program, write_kernel_path, all_cores, WriterDataMovementConfig(writer_compile_time_args, {}));
 
     if (convert_dtype) {
         auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -122,48 +178,89 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
     for (size_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
         uint32_t num_units_per_core = i < num_cores_group_1 ? num_units_per_core_group_1 : num_units_per_core_group_2;
-        if (tilized) {
-            SetRuntimeArgs(
-                program,
-                read_kernel_id,
-                core,
-                {
-                    (uint32_t)input_buffer->address(),
-                    (uint32_t)num_units_per_core,
-                    (uint32_t)start_id,
-                });
-            SetRuntimeArgs(
-                program,
-                write_kernel_id,
-                core,
-                {
-                    (uint32_t)output_buffer->address(),
-                    (uint32_t)num_units_per_core,
-                    (uint32_t)start_id,
-                });
+
+        if (is_sharded) {
+            if (tilized) {
+                SetRuntimeArgs(
+                    program,
+                    read_kernel_id,
+                    core,
+                    {
+                        (uint32_t)input_buffer->address(),
+                        (uint32_t)num_units_per_core,
+                    });
+                SetRuntimeArgs(
+                    program,
+                    write_kernel_id,
+                    core,
+                    {
+                        (uint32_t)output_buffer->address(),
+                        (uint32_t)num_units_per_core,
+                    });
+            } else {
+                SetRuntimeArgs(
+                    program,
+                    read_kernel_id,
+                    core,
+                    {
+                        (uint32_t)input_buffer->address(),
+                        (uint32_t)input_unit_size,
+                        (uint32_t)num_units_per_core,
+                    });
+                SetRuntimeArgs(
+                    program,
+                    write_kernel_id,
+                    core,
+                    {
+                        (uint32_t)output_buffer->address(),
+                        (uint32_t)output_unit_size,
+                        (uint32_t)num_units_per_core,
+                    });
+            }
         } else {
-            SetRuntimeArgs(
-                program,
-                read_kernel_id,
-                core,
-                {
-                    (uint32_t)input_buffer->address(),
-                    (uint32_t)input_unit_size,
-                    (uint32_t)num_units_per_core,
-                    (uint32_t)start_id,
-                });
-            SetRuntimeArgs(
-                program,
-                write_kernel_id,
-                core,
-                {
-                    (uint32_t)output_buffer->address(),
-                    (uint32_t)output_unit_size,
-                    (uint32_t)num_units_per_core,
-                    (uint32_t)start_id,
-                });
+            if (tilized) {
+                SetRuntimeArgs(
+                    program,
+                    read_kernel_id,
+                    core,
+                    {
+                        (uint32_t)input_buffer->address(),
+                        (uint32_t)num_units_per_core,
+                        (uint32_t)start_id,
+                    });
+                SetRuntimeArgs(
+                    program,
+                    write_kernel_id,
+                    core,
+                    {
+                        (uint32_t)output_buffer->address(),
+                        (uint32_t)num_units_per_core,
+                        (uint32_t)start_id,
+                    });
+            } else {
+                SetRuntimeArgs(
+                    program,
+                    read_kernel_id,
+                    core,
+                    {
+                        (uint32_t)input_buffer->address(),
+                        (uint32_t)input_unit_size,
+                        (uint32_t)num_units_per_core,
+                        (uint32_t)start_id,
+                    });
+                SetRuntimeArgs(
+                    program,
+                    write_kernel_id,
+                    core,
+                    {
+                        (uint32_t)output_buffer->address(),
+                        (uint32_t)output_unit_size,
+                        (uint32_t)num_units_per_core,
+                        (uint32_t)start_id,
+                    });
+            }
+            start_id += num_units_per_core;
         }
-        start_id += num_units_per_core;
     }
     return {std::move(program), {read_kernel_id, write_kernel_id, cores}};
 }
