@@ -332,9 +332,6 @@ void AllBroadcastProgramFactory::override_runtime_arguments(
         // const auto& coord = coordinate_range.start_coord();
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
-        // auto ring_index = ::ttnn::ccl::get_linearized_index_from_physical_coord(
-        //     input, coord, operation_attributes.cluster_axis);
-
         log_trace(tt::LogOp, "DEBUG: semaphore: {}", shared_vars.semaphore.address());
         log_trace(tt::LogOp, "DEBUG: barrier_semaphore: {}", shared_vars.barrier_semaphore.address());
 
