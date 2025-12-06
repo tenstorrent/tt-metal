@@ -7,10 +7,11 @@
 #include "compute_kernel_api/common.h"
 #ifdef TRISC_MATH
 #include "llk_math_binary_api.h"
+#include "llk_math_common_api.h"
 #endif
 #ifdef TRISC_UNPACK
-#include "llk_unpack_AB_api.h"
 #include "llk_unpack_A_api.h"
+#include "llk_unpack_AB_api.h"
 #endif
 
 namespace ckernel {
@@ -28,15 +29,15 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
-    UNPACK((llk_unpack_AB_hw_configure_disaggregated<DST_ACCUM_MODE>(icb0, icb1)));
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
 
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure_disaggregated(icb0, icb1)));
+    MATH((llk_math_hw_configure(icb0, icb1)));
 
-    PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(ocb)));
+    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE>()));
 }
 
 // clang-format off

@@ -256,10 +256,10 @@ void MAIN {
                         // Workaround until #27504 is not closed
                         // We should be calling tilizeA_B_uninit and for BFP4 output may be a reconfig_data_format
                         // and also remove the tensix_syncs. Currently they are incomplete and hence the full call
-                        // to unpack_A_hw_configure.
+                        // to llk_unpack_hw_configure.
                         tensix_sync();
-                        UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, false>(
-                            pre_tilize_cb_id)));
+                        UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(
+                            pre_tilize_cb_id, pre_tilize_cb_id /* second operand, unused for this operation*/)));
                         tensix_sync();
                         pack_reconfig_data_format(out_cb_id);
 
@@ -281,9 +281,12 @@ void MAIN {
                         MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
 #ifdef ARCH_BLACKHOLE
                         // need this on BH to set swizzle bit before pack untilize dest
-                        MATH((llk_math_hw_configure_disaggregated<true, true>(0, 0)));
+                        // TODO LP, set swizzle with specific function
+                        // NC: Need to handle differently:
+                        // MATH((llk_math_hw_configure_disaggregated<true, true>(0, 0)));
+                        MATH((llk_math_hw_configure(0, 0)));
 #endif
-                        PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, false, TILE_C_DIM>(
+                        PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, TILE_C_DIM>(
                             pre_tilize_cb_id, 1, num_faces_in_output_tile)));
                     }
                 } else {
