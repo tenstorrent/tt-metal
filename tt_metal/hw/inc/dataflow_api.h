@@ -577,7 +577,8 @@ FORCE_INLINE void noc_async_read_one_packet_set_state(
         Read responses - assigned VCs dynamically
     */
     DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ_SET_STATE, src_noc_addr, size, (use_vc) ? static_cast<int8_t>(vc) : -1);
+    RECORD_NOC_EVENT_WITH_ADDR(
+        NocEventType::READ_SET_STATE, src_noc_addr, size, (use_vc) ? static_cast<int8_t>(vc) : -1);
 
     WAYPOINT("NASW");
     ncrisc_noc_read_set_state<noc_mode, true /* one_packet */, use_vc>(noc, read_cmd_buf, src_noc_addr, size, vc);
@@ -609,7 +610,10 @@ FORCE_INLINE void noc_async_read_one_packet_with_state(
         Read responses - assigned VCs dynamically
     */
     RECORD_NOC_EVENT_WITH_ADDR(
-        NocEventType::READ_WITH_STATE, static_cast<uint64_t>(src_local_l1_addr), 0, (use_vc) ? static_cast<int8_t>(vc) : -1);
+        NocEventType::READ_WITH_STATE,
+        static_cast<uint64_t>(src_local_l1_addr),
+        0,
+        (use_vc) ? static_cast<int8_t>(vc) : -1);
 
     WAYPOINT("NATW");
 
@@ -2402,7 +2406,7 @@ private:
     using dst_args_mcast_t = typename noc_traits_t<T>::dst_args_mcast_type;
 
     template <AddressType address_type>
-    using addr_underlying_t = std::conditional_t<address_type == AddressType::LOCAL_L1, uint32_t, uint64_t>;
+    using addr_underlying_t = std::conditional_t<address_type == AddressType::LOCAL_L1, uintptr_t, uint64_t>;
 
     template <AddressType address_type, typename Src>
     auto get_src_ptr(const Src& src, const src_args_t<Src>& src_args) const {
@@ -2513,7 +2517,8 @@ public:
         uint32_t vc = NOC_UNICAST_WRITE_VC,
         uint32_t trid = INVALID_TXN_ID) const {
         if constexpr (txn_id_mode == TxnIdMode::ENABLED) {
-            // TODO (#31535): Need to add check in ncrisc_noc_fast_write_any_len to ensure outstanding transaction register does not overflow
+            // TODO (#31535): Need to add check in ncrisc_noc_fast_write_any_len to ensure outstanding transaction
+            // register does not overflow
             WAYPOINT("NAWW");
             ASSERT(trid != INVALID_TXN_ID);
             auto src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
@@ -2547,7 +2552,8 @@ public:
         }
     }
 
-    /** @brief Initiates an asynchronous write from a source address in memory on the core executing this function call to a rectangular destination grid.
+    /** @brief Initiates an asynchronous write from a source address in memory on the core executing this function call
+     * to a rectangular destination grid.
      *
      * The destination nodes must be a set of Tensix cores and must form a rectangular grid.
      *
@@ -2586,7 +2592,9 @@ public:
         bool linked = false,
         uint32_t trid = INVALID_TXN_ID) const {
         static_assert(txn_id_mode == TxnIdMode::DISABLED, "Mcasts with transaction id are not supported yet");
-        static_assert(response_mode == ResponseMode::NON_POSTED, "Mcasts with posted transactions are not supported"); // TODO: Make this an arch specific assertion
+        static_assert(
+            response_mode == ResponseMode::NON_POSTED,
+            "Mcasts with posted transactions are not supported");  // TODO: Make this an arch specific assertion
 
         auto src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
         auto dst_noc_addr = get_dst_ptr_mcast<AddressType::NOC>(dst, dst_args);
@@ -2700,7 +2708,8 @@ public:
      * Can wait on posted or non-posted transactions.
      *
      * @param trid Transaction ID to wait on for outstanding writes (default: INVALID_TXN_ID for full barrier)
-     * @tparam response_mode Indicates whether to wait for outstanding posted or non-posted transactions (default: NON_POSTED)
+     * @tparam response_mode Indicates whether to wait for outstanding posted or non-posted transactions (default:
+     * NON_POSTED)
      * @tparam barrier_type Indicates whether to issue a full barrier or on a transaction id
      */
     // TODO (#31405): there is no variant of this for transaction ids. Use
@@ -2810,19 +2819,25 @@ struct noc_traits_t<CircularBuffer> {
     };
     template <Noc::AddressType address_type>
     static auto src_addr(const CircularBuffer& src, const Noc&, const src_args_type& args) {
-        static_assert(address_type == Noc::AddressType::LOCAL_L1, "CircularBuffer without mcast range can only be used as L1 source");
+        static_assert(
+            address_type == Noc::AddressType::LOCAL_L1,
+            "CircularBuffer without mcast range can only be used as L1 source");
         return src.get_read_ptr() + args.offset_bytes;
     }
     template <Noc::AddressType address_type>
     static auto dst_addr(const CircularBuffer& dst, const Noc& noc, const dst_args_type& args) {
-        static_assert(address_type == Noc::AddressType::LOCAL_L1, "CircularBuffer without mcast range can only be used as L1 source");
+        static_assert(
+            address_type == Noc::AddressType::LOCAL_L1,
+            "CircularBuffer without mcast range can only be used as L1 source");
         return dst.get_write_ptr() + args.offset_bytes;
     }
     template <Noc::AddressType address_type>
     static auto dst_addr_mcast(const CircularBuffer& dst, const Noc& noc, const dst_args_mcast_type& args) {
-        static_assert(address_type == Noc::AddressType::NOC, "CircularBuffer with mcast range cannot be used as L1 source");
+        static_assert(
+            address_type == Noc::AddressType::NOC, "CircularBuffer with mcast range cannot be used as L1 source");
         auto local_addr = dst.get_write_ptr() + args.offset_bytes;
-        return ::get_noc_multicast_addr(args.noc_x_start, args.noc_y_start, args.noc_x_end, args.noc_y_end, local_addr, noc.get_noc_id());
+        return ::get_noc_multicast_addr(
+            args.noc_x_start, args.noc_y_start, args.noc_x_end, args.noc_y_end, local_addr, noc.get_noc_id());
     }
 };
 
@@ -2858,20 +2873,26 @@ public:
     };
     template <Noc::AddressType address_type>
     static auto src_addr(const CircularBufferView<AddrSel>& view, const Noc&, const src_args_type& args) {
-        static_assert(address_type == Noc::AddressType::LOCAL_L1, "CircularBuffer without mcast range can only be used as L1 source");
+        static_assert(
+            address_type == Noc::AddressType::LOCAL_L1,
+            "CircularBuffer without mcast range can only be used as L1 source");
         return get_local_addr(view) + args.offset_bytes;
     }
     template <Noc::AddressType address_type>
     static auto dst_addr(const CircularBufferView<AddrSel>& view, const Noc& noc, const dst_args_type& args) {
-        static_assert(address_type == Noc::AddressType::LOCAL_L1, "CircularBuffer without mcast rangecan only be used as L1 source");
+        static_assert(
+            address_type == Noc::AddressType::LOCAL_L1,
+            "CircularBuffer without mcast rangecan only be used as L1 source");
         return get_local_addr(view) + args.offset_bytes;
     }
     template <Noc::AddressType address_type>
     static auto dst_addr_mcast(
         const CircularBufferView<AddrSel>& view, const Noc& noc, const dst_args_mcast_type& args) {
-        static_assert(address_type == Noc::AddressType::NOC, "CircularBuffer with mcast range cannot be used as L1 source");
+        static_assert(
+            address_type == Noc::AddressType::NOC, "CircularBuffer with mcast range cannot be used as L1 source");
         auto local_addr = get_local_addr(view) + args.offset_bytes;
-        return ::get_noc_multicast_addr(args.noc_x_start, args.noc_y_start, args.noc_x_end, args.noc_y_end, local_addr, noc.get_noc_id());
+        return ::get_noc_multicast_addr(
+            args.noc_x_start, args.noc_y_start, args.noc_x_end, args.noc_y_end, local_addr, noc.get_noc_id());
     }
 
 private:
@@ -3010,7 +3031,8 @@ public:
         uint64_t multicast_addr =
             get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, local_l1_addr_, noc.get_noc_id());
         if constexpr (mcast_mode == Noc::McastMode::INCLUDE_SRC) {
-            noc_semaphore_set_multicast_loopback_src(local_l1_addr_, multicast_addr, num_dests, linked, noc.get_noc_id());
+            noc_semaphore_set_multicast_loopback_src(
+                local_l1_addr_, multicast_addr, num_dests, linked, noc.get_noc_id());
         } else if constexpr (mcast_mode == Noc::McastMode::EXCLUDE_SRC) {
             noc_semaphore_set_multicast(local_l1_addr_, multicast_addr, num_dests, linked, noc.get_noc_id());
         }
@@ -3021,7 +3043,8 @@ private:
 };
 
 /**
- * @brief Experimental wrapper around calculating unicast noc address given x, y, and address. This allows direct address to be supplied to NoC apis
+ * @brief Experimental wrapper around calculating unicast noc address given x, y, and address. This allows direct
+ * address to be supplied to NoC apis
  *
  * @note This API is experimental and subject to change.
  */
@@ -3032,7 +3055,8 @@ struct UnicastEndpoint {
 };
 
 /**
- * @brief Experimental wrapper around calculating multicast noc address given 2D multicast rectangle and address. This allows direct address to be supplied to NoC apis
+ * @brief Experimental wrapper around calculating multicast noc address given 2D multicast rectangle and address. This
+ * allows direct address to be supplied to NoC apis
  *
  * @note This API is experimental and subject to change.
  */
