@@ -77,7 +77,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     const std::optional<const DataType>& output_dtype,
     const std::optional<const conv2d::Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
+    const std::optional<const conv2d::Conv2dSliceConfig>& dram_slice_config_,
     bool mirror_kernel = true);
 
 ttnn::Tensor prepare_conv_transpose2d_bias(

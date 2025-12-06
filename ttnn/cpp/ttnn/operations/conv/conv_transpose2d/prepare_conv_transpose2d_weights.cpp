@@ -14,11 +14,13 @@
 #include <ttnn/operations/sliding_window/sliding_window.hpp>
 #include <ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp>
 
+using namespace ttnn::operations::sliding_window;
+
 namespace ttnn::operations::conv::conv_transpose2d {
 
 // Compute all transposed conv2d dimension transformations in one place
-// This is the single source of truth for how transposed conv2d parameters
-// are transformed into conv2d parameters
+// This uses SlidingWindowConfig as the single source of truth for how transposed conv2d
+// parameters are transformed into conv2d parameters
 ConvTranspose2dDimensions compute_conv_transpose2d_dimensions(
     uint32_t input_height,
     uint32_t input_width,
@@ -27,36 +29,38 @@ ConvTranspose2dDimensions compute_conv_transpose2d_dimensions(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> output_padding,
     std::array<uint32_t, 2> dilation) {
+    // Create SlidingWindowConfig with transposed conv parameters
+    SlidingWindowConfig config;
+    config.batch_size = 1;  // Batch size not needed for dimension calculations
+    config.input_hw = {input_height, input_width};
+    config.window_hw = {kernel_size[0], kernel_size[1]};
+    config.stride_hw = {stride[0], stride[1]};
+    config.padding = get_pair_n4_padding(padding);
+    config.output_pad_hw = {output_padding[0], output_padding[1]};
+    config.dilation_hw = {dilation[0], dilation[1]};
+    config.is_transpose = true;
+
+    // Use SlidingWindowConfig methods to compute dimensions
+    auto output_shape = config.get_output_shape();
+    auto full_input_shape = config.get_transposed_full_input_shape();
+    auto real_padding = config.get_transposed_real_padding();
+
+    // Calculate strided dimensions (not exposed by SlidingWindowConfig, but simple formula)
+    uint32_t strided_input_height = ((input_height - 1) * stride[0]) + 1;
+    uint32_t strided_input_width = ((input_width - 1) * stride[1]) + 1;
+
+    // Populate result struct
     ConvTranspose2dDimensions dims;
-
-    // Convert padding to 4-element array [top, bottom, left, right]
-    std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
-    uint32_t pad_h = padding_n4[0] + padding_n4[1];  // top + bottom (supports asymmetric padding)
-    uint32_t pad_w = padding_n4[2] + padding_n4[3];  // left + right (supports asymmetric padding)
-
-    // Calculate output dimensions of the transposed convolution
-    // This is the inverse of the forward conv2d output calculation
-    dims.output_height =
-        ((input_height - 1) * stride[0]) - pad_h + (dilation[0] * (kernel_size[0] - 1)) + output_padding[0] + 1;
-    dims.output_width =
-        ((input_width - 1) * stride[1]) - pad_w + (dilation[1] * (kernel_size[1] - 1)) + output_padding[1] + 1;
-
-    // Calculate full input dimensions for conv2d micro-op (after halo/padding expansion)
-    // The conv2d micro-op will receive input with these dimensions
-    dims.full_input_height = dims.output_height + (dilation[0] * (kernel_size[0] - 1));
-    dims.full_input_width = dims.output_width + (dilation[1] * (kernel_size[1] - 1));
-
-    // Calculate strided input dimensions (after adding interleaved 0s for stride > 1)
-    dims.strided_input_height = ((input_height - 1) * stride[0]) + 1;
-    dims.strided_input_width = ((input_width - 1) * stride[1]) + 1;
-
-    // Calculate real padding that will be applied by halo operation
-    // This centers the strided input within the full input space
-    dims.input_pad_top = (dims.full_input_height - dims.strided_input_height) / 2;
-    dims.input_pad_bottom = dims.full_input_height - dims.strided_input_height - dims.input_pad_top;
-
-    dims.input_pad_left = (dims.full_input_width - dims.strided_input_width) / 2;
-    dims.input_pad_right = dims.full_input_width - dims.strided_input_width - dims.input_pad_left;
+    dims.output_height = output_shape[1];
+    dims.output_width = output_shape[2];
+    dims.full_input_height = full_input_shape[1];
+    dims.full_input_width = full_input_shape[2];
+    dims.strided_input_height = strided_input_height;
+    dims.strided_input_width = strided_input_width;
+    dims.input_pad_top = real_padding[0].first;
+    dims.input_pad_bottom = real_padding[0].second;
+    dims.input_pad_left = real_padding[1].first;
+    dims.input_pad_right = real_padding[1].second;
 
     return dims;
 }
