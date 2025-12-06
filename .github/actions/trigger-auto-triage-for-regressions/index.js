@@ -5,11 +5,15 @@ async function run() {
   try {
     const regressedWorkflowsJson = core.getInput('regressed_workflows', { required: true });
     const githubToken = core.getInput('github_token', { required: true });
+    const slackTs = core.getInput('slack_ts') || '';
 
     const regressedWorkflows = JSON.parse(regressedWorkflowsJson);
     const octokit = github.getOctokit(githubToken);
 
     core.info(`Found ${regressedWorkflows.length} regressed workflow(s)`);
+    if (slackTs) {
+      core.info(`Slack timestamp provided: ${slackTs}`);
+    }
 
     for (const workflow of regressedWorkflows) {
       const workflowPath = workflow.workflow_path || workflow.name;
@@ -39,7 +43,8 @@ async function run() {
             ref: 'main',
             inputs: {
               workflow_name: workflowFileName,
-              job_name: jobName
+              job_name: jobName,
+              slack_ts: slackTs
             }
           });
 
