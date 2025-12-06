@@ -21,7 +21,6 @@ void kernel_main() {
     // Read src buffer into local L1 buffer
     constexpr auto bank_type = experimental::AllocatorBankType::DRAM;
     experimental::CoreLocalMem<std::uint32_t> local_buffer(local_addr);
-
     experimental::Noc noc;
     noc.async_read(
         experimental::AllocatorBank<bank_type>(),
@@ -33,7 +32,7 @@ void kernel_main() {
 
     // multicast local L1 buffer to all destination cores
     experimental::MulticastEndpoint dst_mcast_endpoint;
-    noc.async_write_multicast<experimental::Noc::McastMode::INCLUDE_SRC>(
+    noc.async_write_multicast(
         local_buffer,
         dst_mcast_endpoint,
         src_buffer_size,
