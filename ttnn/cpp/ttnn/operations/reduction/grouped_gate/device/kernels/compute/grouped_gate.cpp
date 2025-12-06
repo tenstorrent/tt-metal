@@ -310,6 +310,9 @@ void topk(
 
     transpose_and_pack(post_sort_transpose_cb_index, unnormalized_scores_cb_index, 1);
     transpose_and_pack(intermediate_local_sort_indices_cb_index, output_indices_cb_index, 1);
+
+    cb_pop_front(winning_group_scores_cb_index, tiles);
+    cb_pop_front(winning_group_indices_cb_index, tiles);
 }
 
 void normalize_scores(
