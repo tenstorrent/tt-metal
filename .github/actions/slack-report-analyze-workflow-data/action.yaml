@@ -3,13 +3,20 @@ description: "Report the workflow status to Slack to help identify breakages fas
 inputs:
   slack_webhook_url:
     description: "Webhook URL for the Slack channel to be posted to. Generated via slack app!"
-    required: true
+    required: false
+  channel_id:
+    description: "Channel ID for the Slack channel (required if using Bot Token)"
+    required: false
   regressed_workflows:
     description: "JSON array from analyze step output 'regressed_workflows'"
     required: true
   alert_all_message:
     description: "Optional Slack-ready alert text from analyze step output 'alert_all_message'"
     required: false
+outputs:
+  slack_ts:
+    description: "The timestamp of the sent Slack message (only available when using Bot Token)"
+    value: ${{ steps.slack_send.outputs.ts }}
 runs:
   using: "composite"
   steps:
@@ -127,8 +134,11 @@ runs:
 
     - name: Report GitHub Pipeline Status Slack Action
       if: steps.build.outputs.has_regressions == 'true'
+      id: slack_send
       uses: slackapi/slack-github-action@v1.26.0
       with:
         payload: ${{ steps.build.outputs.payload }}
+        channel-id: ${{ inputs.channel_id }}
       env:
         SLACK_WEBHOOK_URL: ${{ inputs.slack_webhook_url }}
+        SLACK_BOT_TOKEN: ${{ env.SLACK_BOT_TOKEN }}
