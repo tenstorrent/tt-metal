@@ -46,6 +46,7 @@ struct from_json_t;
 namespace tt::tt_metal {
 
 class Allocator;
+class AllocatorImpl;
 class IDevice;
 
 struct ShardSpec {
@@ -213,7 +214,7 @@ public:
     ~Buffer();
 
     IDevice* device() const { return device_; }
-    Allocator* allocator() const { return allocator_; }
+    Allocator* allocator() const;
     DeviceAddr size() const { return size_; }
     bool is_allocated() const;
 
@@ -304,7 +305,7 @@ private:
     const bool owns_data_;
 
     std::optional<SubDeviceManagerId> sub_device_manager_id_;
-    Allocator* allocator_;
+    AllocatorImpl* allocator_;
 
     AllocationStatus allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
     bool hooked_allocation_ = false;
