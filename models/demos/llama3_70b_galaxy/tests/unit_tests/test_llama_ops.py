@@ -166,10 +166,8 @@ def test_llama_tg_LayerNorm(
         (
             ttnn.CoreCoord(1, 0),
             ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-                ]
+                [ttnn.CoreRange(ttnn.CoreCoord(1, i), ttnn.CoreCoord(3, i)) for i in range(8)]
+                + [ttnn.CoreRange(ttnn.CoreCoord(5, i), ttnn.CoreCoord(5, i)) for i in range(8)]
             ),
         ),
     ],
