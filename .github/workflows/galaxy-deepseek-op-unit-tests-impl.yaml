@@ -1,0 +1,86 @@
+name: "[internal] Galaxy DeepSeek op unit tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
+      topology:
+        required: false
+        type: string
+        default: "topology-6u"
+
+jobs:
+  galaxy-deepseek-op-unit-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { name: "(Galaxy) DeepSeek op unit tests", arch: wormhole_b0, model: deepseek, timeout: 60, owner_id: U03HY7MK4BT},
+        ]
+    runs-on:
+      - arch-wormhole_b0
+      - ${{ inputs.topology }}
+      - bare-metal
+      - pipeline-functional
+      - ${{ inputs.extra-tag }}
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        ARCH_NAME: ${{ matrix.test-group.arch }}
+        DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+        DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:rw
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: Run DeepSeek op unit tests
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          set -e
+          echo "LOG_METAL: Installing DeepSeek dependencies"
+          pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+          echo "LOG_METAL: Running DeepSeek op unit tests (tests/unit)"
+          start_time=$(date +%s)
+          pytest models/demos/deepseek_v3/tests/unit --timeout 10 --durations=0
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+          echo "LOG_METAL: DeepSeek op unit tests took $duration seconds"
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: ${{ matrix.test-group.owner_id }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "op_unit_test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
