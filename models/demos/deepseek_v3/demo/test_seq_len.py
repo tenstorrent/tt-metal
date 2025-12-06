@@ -69,7 +69,7 @@ def create_prompt_of_length(target_token_length: int, tokenizer) -> str:
     return prompt
 
 
-@pytest.mark.parametrize("target_prompt_tokens", [128, 256, 512, 999, 1024])
+@pytest.mark.parametrize("target_prompt_tokens", [1024, 2048, 3145, 8192])
 def test_long_context_input_sequences(target_prompt_tokens):
     """
     Test with varying input prompt lengths to test long context sequence handling.
