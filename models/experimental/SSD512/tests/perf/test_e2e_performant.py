@@ -176,7 +176,6 @@ def test_ssd512_e2e_performant(
         device=device,
         dram_input_memory_config=dram_input_memory_config,
         l1_input_memory_config=l1_input_memory_config,
-        # dram_output_memory_config=dram_output_memory_config,
     )
 
     input_tensors = [ttnn_input_tensor] * num_iterations

@@ -195,12 +195,15 @@ def run_ttnn_detection(model, image_tensor, priors, device, conf_thresh=0.01, nm
     # Forward pass
     loc, conf = model.forward(image_tensor, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    # Convert to torch tensors
-    loc_torch = loc.float()
-    conf_torch = conf.float()
+    # Convert TTNN tensors to torch tensors
+    loc_torch = ttnn.to_torch(loc).float()
+    conf_torch = ttnn.to_torch(conf).float()
 
-    # Reshape to [batch, num_priors, 4] and [batch, num_priors, num_classes]
+    # Flatten tensors and reshape to [batch, num_priors, 4] and [batch, num_priors, num_classes]
     batch_size = 1
+    loc_torch = loc_torch.reshape(batch_size, -1)  # Flatten to [1, total_elements]
+    conf_torch = conf_torch.reshape(batch_size, -1)  # Flatten to [1, total_elements]
+
     num_priors = loc_torch.shape[1] // 4
     loc_torch = loc_torch.view(batch_size, num_priors, 4)
     conf_torch = conf_torch.view(batch_size, num_priors, model.num_classes)
@@ -263,7 +266,7 @@ def main():
         "--l1_small_size",
         type=int,
         default=98304,
-        help="L1 small size in bytes (default: 98304, matching test_ssd.py). Use 0 to use device default",
+        help="L1 small size in bytes (default: 98304). Use 0 to use device default",
     )
 
     args = parser.parse_args()
@@ -296,7 +299,6 @@ def main():
             device = ttnn.open_device(device_id=args.device_id, l1_small_size=l1_size)
 
         # Build TTNN model and load weights
-        # Use device=None (host) for weights to avoid OOM - conv2d will prepare them correctly
         ttnn_model = build_and_load_ttnn_model(torch_model, device, num_classes=21, weight_device=None)
 
         return device, ttnn_model
