@@ -40,7 +40,7 @@ async function run() {
             owner: github.context.repo.owner,
             repo: github.context.repo.repo,
             workflow_id: 'auto-triage.yml',
-            ref: github.context.ref,
+            ref: 'main',
             inputs: {
               workflow_name: workflowFileName,
               job_name: jobName,
