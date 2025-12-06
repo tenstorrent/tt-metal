@@ -1,0 +1,21 @@
+{
+  "model": "yolos-small",
+  "mode": "tt_run",
+  "device": "wormhole_n300",
+  "dtype": "bfloat16",
+  "image_h": 320,
+  "image_w": 320,
+  "batch_size": 1,
+  "num_detection_tokens": 100,
+  "stage": 3,
+  "latency_ms": 6.81,
+  "latency_ms_std": 2.43,
+  "fps": 146.82,
+  "speedup_vs_pytorch": 18.28,
+  "tt_submodules": [
+    "patch_embeddings",
+    "encoder",
+    "classification_head",
+    "bbox_head"
+  ]
+}
