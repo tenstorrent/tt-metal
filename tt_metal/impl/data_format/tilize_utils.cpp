@@ -492,9 +492,12 @@ std::vector<T> convert_layout(
     uint64_t H = shape[shape.size() - 2];
     uint32_t W = shape[shape.size() - 1];
     for (size_t i = 0; i < shape.size() - 2; i++) {
+        TT_ASSERT(
+            shape[i] == 0 || H <= UINT32_MAX / shape[i],
+            "Shape dimension product would exceed UINT32_MAX");
         H *= shape[i];
-        TT_ASSERT(H <= UINT32_MAX, "Shape dimension product {} exceeds UINT32_MAX", H);
     }
+    TT_ASSERT(H <= UINT32_MAX, "Shape dimension product {} exceeds UINT32_MAX", H);
     return convert_layout(
         inp, PhysicalSize{static_cast<uint32_t>(H), W}, inL, outL, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
 }
