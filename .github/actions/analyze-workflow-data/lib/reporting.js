@@ -716,6 +716,25 @@ async function enrichRegressions(regressedDetails, filteredGrouped, errorSnippet
       core.warning(`Failed to find first failing run for ${item.name}: ${e.message}`);
     }
   }
+
+  // Manually inject a fake regression for testing purposes
+  regressedDetails.push({
+    name: 'all-post-commit-workflows',
+    workflow_path: '.github/workflows/all-post-commit-workflows.yaml',
+    workflow_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/workflows/all-post-commit-workflows.yaml`,
+    run_id: 'fake-run-id',
+    run_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions`,
+    created_at: new Date().toISOString(),
+    first_failed_run_id: 'fake-run-id',
+    first_failed_run_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions`,
+    first_failed_created_at: new Date().toISOString(),
+    first_failed_head_sha: '0000000000000000000000000000000000000000',
+    first_failed_head_short: '0000000',
+    first_failed_author_name: 'Test User',
+    owners: [],
+    failing_jobs: ['mock-failing-job'],
+    error_snippets: []
+  });
 }
 
 /**
@@ -928,7 +947,6 @@ function buildStayedFailingSection(stayedFailingDetails, context) {
 
   return ['', '## Still Failing (No Recovery)', ...lines, ''].join('\n');
 }
-
 module.exports = {
   getWorkflowLink,
   findGoodBadCommits,
