@@ -43,6 +43,8 @@
 #include "ttnn/operations/eltwise/complex/complex_pybind.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary_pybind.hpp"
 #include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward_pybind.hpp"
+#include "ttnn/operations/eltwise/expression/expression_pybind.hpp"
+#include "ttnn/operations/eltwise/materialize/materialize_pybind.hpp"
 #include "ttnn/operations/eltwise/quantization/quantization_pybind.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_pybind.hpp"
 #include "ttnn/operations/eltwise/ternary_backward/ternary_backward_pybind.hpp"
@@ -178,6 +180,12 @@ void py_module(py::module& module) {
 
     auto m_experimental = module.def_submodule("experimental", "experimental operations");
     experimental::py_module(m_experimental);
+
+    auto m_expression = m_experimental.def_submodule("expression", "expression operations");
+    expression::py_module(m_expression);
+
+    auto m_materialize = m_experimental.def_submodule("materialize", "materialize operations");
+    materialize::py_module(m_materialize);
 
     auto m_moreh = module.def_submodule("moreh", "moreh operations");
     moreh::bind_moreh_operations(m_moreh);
