@@ -46,13 +46,10 @@ using namespace tt::tt_metal;
 
 namespace tt {
 
-namespace llrt {
-
-namespace internal_ {
+namespace llrt::internal_ {
 void wait_until_cores_done(
     ChipId device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms);
-}  // namespace internal_
-}  // namespace llrt
+}  // namespace llrt::internal_
 
 namespace device_cpu_allocator {
 std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node(std::unordered_set<uint32_t>& free_cores) {

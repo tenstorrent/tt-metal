@@ -7,10 +7,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 
-namespace ttnn {
-
-namespace operations::conv {
-namespace conv_transpose2d {
+namespace ttnn::operations::conv::conv_transpose2d {
 
 Tensor transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel);
 
@@ -59,6 +56,4 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_);
 
-}  // namespace conv_transpose2d
-}  // namespace operations::conv
-}  // namespace ttnn
+}  // namespace ttnn::operations::conv::conv_transpose2d

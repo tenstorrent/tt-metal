@@ -14,10 +14,8 @@
 #include "ttnn/types.hpp"
 #include "ttnn/operations/conv/conv_transpose2d/prepare_conv_transpose2d_weights.hpp"
 #include "ttnn/operations/core/core.hpp"
-namespace ttnn {
 
-namespace operations::conv {
-namespace conv_transpose2d {
+namespace ttnn::operations::conv::conv_transpose2d {
 
 template <typename T>
 Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel = true) {
@@ -194,6 +192,4 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
         dram_slice_config_);
 }
 
-}  // namespace conv_transpose2d
-}  // namespace operations::conv
-}  // namespace ttnn
+}  // namespace ttnn::operations::conv::conv_transpose2d

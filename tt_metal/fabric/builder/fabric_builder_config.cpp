@@ -7,8 +7,7 @@
 
 #include <cstdint>
 
-namespace tt::tt_fabric {
-namespace builder_config {
+namespace tt::tt_fabric::builder_config {
 
 uint32_t get_sender_channel_count(const bool is_2D_routing) {
     return is_2D_routing ? builder_config::num_sender_channels_2d : builder_config::num_sender_channels_1d;
@@ -54,6 +53,4 @@ uint32_t get_vc1_downstream_edm_count(bool is_2D_routing) {
     return builder_config::num_downstream_edms_2d_vc1;
 }
 
-}  // namespace builder_config
-
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::builder_config

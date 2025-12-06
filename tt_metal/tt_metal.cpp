@@ -57,9 +57,7 @@
 #include "get_platform_architecture.hpp"
 #include "common/tt_backend_api_types.hpp"
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 enum class FabricConfig : uint32_t;
 struct RuntimeArgsData;
 struct TraceDescriptor;
@@ -1480,6 +1478,4 @@ void UpdateDynamicCircularBufferAddress(
 
 }  // namespace experimental
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

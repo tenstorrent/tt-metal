@@ -32,9 +32,7 @@
  * https://www.tablesgenerator.com/markdown_tables
  * */
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 struct TraceDescriptor;
 
@@ -678,6 +676,4 @@ uint8_t PopCurrentCommandQueueIdForThread();
 // clang-format on
 uint8_t GetCurrentCommandQueueIdForThread();
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal
