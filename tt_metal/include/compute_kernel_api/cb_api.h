@@ -144,7 +144,7 @@ ALWI uint32_t get_tile_address(uint32_t cb_id, uint32_t tile_index) {
 
     UNPACK({
         uint32_t operand_id = get_operand_id(cb_id);
-        uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
+        uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr;
         uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
         address = (base_address + offset_address) << 4;  // Convert to byte address
 
@@ -169,7 +169,7 @@ ALWI uint32_t get_tile_address(uint32_t cb_id, uint32_t tile_index) {
  * |----------------|--------------------------------------------|----------|-------------|----------|
  * | cb_id          | The index of the circular buffer (CB)      | uint32_t | 0 to 31     | True     |
  * | tile_index     | The tile index within the CB               | uint32_t | 0 to CB size| True     |
- * | element_offset | The uint32_t element offset within the tile| uint32_t | N/A         | True     |
+ * | element_offset | The uint32_t element offset within the tile| uint32_t | >= 0        | True     |
  */
 // clang-format on
 ALWI uint32_t read_tile_value(uint32_t cb_id, uint32_t tile_index, uint32_t element_offset) {
@@ -177,7 +177,7 @@ ALWI uint32_t read_tile_value(uint32_t cb_id, uint32_t tile_index, uint32_t elem
 
     UNPACK({
         uint32_t operand_id = get_operand_id(cb_id);
-        uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
+        uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr;
         uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
         uint32_t byte_address = (base_address + offset_address) << 4;  // Convert to byte address
 

@@ -28,10 +28,6 @@ namespace norm::kernel_util::compute::memory {
  */
 template <typename To>
 ALWI auto get_pointer_to_cb_data(uint32_t cb_id, uint32_t tile_index) -> To* {
-    // Offset to skip metadata (4 uint32_t elements = 16 bytes)
-    constexpr uint32_t cb_data_offset_bytes = 4 * sizeof(uint32_t);
-
-    uint32_t address = get_tile_address(cb_id, tile_index);
-    return reinterpret_cast<To*>(address + cb_data_offset_bytes);
+    return reinterpret_cast<To*>(get_tile_address(cb_id, tile_index));
 }
 }  // namespace norm::kernel_util::compute::memory

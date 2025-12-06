@@ -22,13 +22,11 @@ void MAIN {
 
     unary_op_init_common(cb_grad, cb_out);
 
-    constexpr uint32_t cb_data_offset = 4;
-
     for (uint32_t i = 0; i < input_height; ++i) {
         cb_wait_front(cb_grad, max_tiles_per_core);
 
         // Get chunk_count from CB using mailbox-based synchronization (issue #27979)
-        uint32_t chunk_count = read_tile_value(cb_chunk_count_scratch, 0, cb_data_offset);
+        uint32_t chunk_count = read_tile_value(cb_chunk_count_scratch, 0, 0);
 
         for (uint32_t chunk = 0; chunk < chunk_count; ++chunk) {
             cb_wait_front(cb_mask, 1);
@@ -54,7 +52,11 @@ void MAIN {
                 copy_tile(cb_out_intermed, hidden_dim, 1);
 
                 reshuffle_rows_tile_init();
-                reshuffle_rows_tile(0, idx_addr);
+                // reshuffle_rows_tile expects that tiles have a header of 16 bytes.
+                // This isn't true, so we have to substract 16 bytes from the address.
+                // Check implementation of reshuffle_rows_tile in LLK for more details.
+                // tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_reshuffle_rows.h
+                reshuffle_rows_tile(0, idx_addr - 16);
 
                 pack_tile(1, cb_out, hidden_dim);  // reshuffle puts output into Tile 1 in DEST
 

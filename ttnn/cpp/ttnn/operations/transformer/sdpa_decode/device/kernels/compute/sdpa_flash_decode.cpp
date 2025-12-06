@@ -129,10 +129,9 @@ void MAIN {
         } else {
             // Read cur_pos from CB using mailbox-based synchronization (issue #27979)
             constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
-            constexpr uint32_t cb_data_offset = 4;
 
             cb_wait_front(cb_index_id, 1);
-            cur_pos = read_tile_value(cb_index_id, 0, cb_data_offset + (cur_batch / q_heads_parallel_factor));
+            cur_pos = read_tile_value(cb_index_id, 0, cur_batch / q_heads_parallel_factor);
             cb_pop_front(cb_index_id, 1);
         }
         if (cur_pos == UINT32_MAX) {
