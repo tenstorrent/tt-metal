@@ -190,11 +190,6 @@ Tensor _multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_
     return result;
 }
 
-Tensor _swish(const Tensor& a, const std::optional<MemoryConfig>& output_mem_config) {
-    // x / (1.0f + exp(-x))
-    return ttnn::silu(a);
-}
-
 // Function variance of whole tensor.
 // Tensor variance(const Tensor& y,const Tensor& mean_y);
 Tensor _variance_impl(
@@ -440,7 +435,7 @@ Tensor _swiglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryCon
 
     std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
 
-    Tensor swish_b = _swish(ab[1], output_mem_config);
+    Tensor swish_b = ttnn::swish(ab[1], output_mem_config);
     Tensor swiglu_result = ttnn::multiply(ab[0], swish_b, std::nullopt, output_mem_config);
     return swiglu_result;
 }
