@@ -9,6 +9,8 @@
 
 #include "pybind11/stl.h"
 
+#include <sstream>
+
 namespace ttnn::graph {
 
 namespace py = pybind11;
@@ -21,6 +23,31 @@ void py_graph_module_types(py::module& m) {
 }
 
 void py_graph_module(py::module& m) {
+    // Bind TensorInfo struct for extract_output_info
+    py::class_<ttnn::graph::TensorInfo>(m, "TensorInfo")
+        .def_readonly("shape", &ttnn::graph::TensorInfo::shape)
+        .def_readonly("size", &ttnn::graph::TensorInfo::size)
+        .def_readonly("type", &ttnn::graph::TensorInfo::type)
+        .def("__repr__", [](const ttnn::graph::TensorInfo& info) {
+            std::stringstream ss;
+            std::string type_str;
+            switch (info.type) {
+                case tt::tt_metal::BufferType::DRAM:
+                    type_str = "DRAM";
+                    break;
+                case tt::tt_metal::BufferType::L1:
+                    type_str = "L1";
+                    break;
+                // Add more cases here as needed for other BufferType values
+                default:
+                    type_str = "UNKNOWN";
+                    break;
+            }
+            ss << "TensorInfo(shape=" << info.shape << ", size=" << info.size
+               << ", type=" << type_str << ")";
+            return ss.str();
+        });
+
     const auto* doc_begin =
         R"doc(begin_graph_capture()
     )doc";
@@ -31,7 +58,7 @@ void py_graph_module(py::module& m) {
         doc_begin,
         py::arg("run_mode") = IGraphProcessor::RunMode::NORMAL);
 
-    const auto* doc_end =
+    const char* doc_end =
         R"doc(end_graph_capture() -> Union[None, bool, int, float, list, dict]
         returns the value captured graph as a json object converted to python object
     )doc";
@@ -70,6 +97,75 @@ void py_graph_module(py::module& m) {
         "Extracts levelized graph from the graph trace",
         py::arg("trace"),
         py::arg("max_level") = 1);
+
+    m.def(
+        "extract_peak_L1_memory_usage",
+        [](const py::object& py_trace) {
+            auto json_module = py::module::import("json");
+            std::string trace_str = py::str(json_module.attr("dumps")(py_trace));
+            nlohmann::json trace = nlohmann::json::parse(trace_str);
+            return extract_peak_L1_memory_usage(trace);
+        },
+        "Extracts peak L1 memory usage from the graph trace in bytes",
+        py::arg("trace"));
+
+    m.def(
+        "count_intermediate_and_output_tensors",
+        [](const py::object& py_trace) {
+            auto json_module = py::module::import("json");
+            std::string trace_str = py::str(json_module.attr("dumps")(py_trace));
+            nlohmann::json trace = nlohmann::json::parse(trace_str);
+            auto result = count_intermediate_and_output_tensors(trace);
+            return py::make_tuple(result.first, result.second);
+        },
+        "Counts intermediate and output tensors. Returns (intermediate_count, output_count)",
+        py::arg("trace"));
+
+    m.def(
+        "extract_output_info",
+        [](const py::object& py_trace) {
+            auto json_module = py::module::import("json");
+            std::string trace_str = py::str(json_module.attr("dumps")(py_trace));
+            nlohmann::json trace = nlohmann::json::parse(trace_str);
+            return extract_output_info(trace);
+        },
+        "Extracts output tensor information. Returns list of TensorInfo objects",
+        py::arg("trace"));
+
+    m.def(
+        "extract_circular_buffers_peak_size_per_core",
+        [](const py::object& py_trace) {
+            auto json_module = py::module::import("json");
+            std::string trace_str = py::str(json_module.attr("dumps")(py_trace));
+            nlohmann::json trace = nlohmann::json::parse(trace_str);
+            return extract_circular_buffers_peak_size_per_core(trace);
+        },
+        "Extracts peak circular buffer size per core in bytes",
+        py::arg("trace"));
+
+    m.def(
+        "extract_l1_buffer_allocation_peak_size_per_core",
+        [](const py::object& py_trace, size_t interleaved_storage_cores) {
+            auto json_module = py::module::import("json");
+            std::string trace_str = py::str(json_module.attr("dumps")(py_trace));
+            nlohmann::json trace = nlohmann::json::parse(trace_str);
+            return extract_l1_buffer_allocation_peak_size_per_core(trace, interleaved_storage_cores);
+        },
+        "Extracts peak L1 buffer allocation size per core. Requires interleaved_storage_cores "
+        "(get from device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y)",
+        py::arg("trace"),
+        py::arg("interleaved_storage_cores"));
+
+    m.def(
+        "extract_output_tensors",
+        [](const py::object& py_trace) {
+            auto json_module = py::module::import("json");
+            std::string trace_str = py::str(json_module.attr("dumps")(py_trace));
+            nlohmann::json trace = nlohmann::json::parse(trace_str);
+            return extract_output_tensors(trace);
+        },
+        "Extracts output tensor IDs from the trace. Returns set of tensor IDs",
+        py::arg("trace"));
 }
 
 }  // namespace ttnn::graph
