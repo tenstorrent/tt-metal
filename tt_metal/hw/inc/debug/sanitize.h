@@ -504,9 +504,9 @@ void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
     }
 }
 
-// Validate that num_dests matches the actual rectangle size for multicast transactions
-void debug_sanitize_multicast_num_dests(
-    uint8_t noc_id, uint64_t noc_addr, uint32_t l1_addr, uint32_t len, uint32_t num_dests) {
+// Validate multicast transactions: num_dests and loopback usage
+void debug_sanitize_multicast(
+    uint8_t noc_id, uint64_t noc_addr, uint32_t l1_addr, uint32_t len, uint32_t num_dests, bool loopback) {
     // Extract multicast rectangle coordinates
     uint8_t x_start = (uint8_t)NOC_MCAST_ADDR_START_X(noc_addr);
     uint8_t y_start = (uint8_t)NOC_MCAST_ADDR_START_Y(noc_addr);
@@ -518,6 +518,7 @@ void debug_sanitize_multicast_num_dests(
     uint32_t height = (y_start <= y_end) ? (y_end - y_start + 1) : (y_start - y_end + 1);
     uint32_t expected_num_dests = width * height;
 
+    // Check num_dests matches grid size
     if (num_dests != expected_num_dests) {
         debug_sanitize_post_addr_and_hang(
             noc_id,
@@ -528,6 +529,41 @@ void debug_sanitize_multicast_num_dests(
             DEBUG_SANITIZE_NOC_WRITE,
             DEBUG_SANITIZE_NOC_TARGET,
             DebugSanitizeNocMulticastNumDestsMismatch);
+    }
+
+    // Check if sender (current core) is within the multicast rectangle
+    uint8_t sender_x = my_x[noc_id];
+    uint8_t sender_y = my_y[noc_id];
+    uint8_t x_min = (x_start <= x_end) ? x_start : x_end;
+    uint8_t x_max = (x_start <= x_end) ? x_end : x_start;
+    uint8_t y_min = (y_start <= y_end) ? y_start : y_end;
+    uint8_t y_max = (y_start <= y_end) ? y_end : y_start;
+    bool sender_in_grid = (sender_x >= x_min && sender_x <= x_max && sender_y >= y_min && sender_y <= y_max);
+
+    // Validate loopback usage
+    if (!loopback && sender_in_grid) {
+        // Sender is in grid but loopback_src variant not used - undefined behavior
+        debug_sanitize_post_addr_and_hang(
+            noc_id,
+            noc_addr,
+            l1_addr,
+            len,
+            DEBUG_SANITIZE_NOC_MULTICAST,
+            DEBUG_SANITIZE_NOC_WRITE,
+            DEBUG_SANITIZE_NOC_TARGET,
+            DebugSanitizeNocMulticastLoopbackRequired);
+    }
+    if (loopback && !sender_in_grid) {
+        // Sender is not in grid but loopback_src variant used - not permitted
+        debug_sanitize_post_addr_and_hang(
+            noc_id,
+            noc_addr,
+            l1_addr,
+            len,
+            DEBUG_SANITIZE_NOC_MULTICAST,
+            DEBUG_SANITIZE_NOC_WRITE,
+            DEBUG_SANITIZE_NOC_TARGET,
+            DebugSanitizeNocMulticastLoopbackNotPermitted);
     }
 }
 
@@ -583,11 +619,20 @@ void debug_sanitize_multicast_num_dests(
     debug_insert_delay((uint8_t)TransactionWrite)
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id, noc_a, worker_a, l) \
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_(noc_id, noc_a, worker_a, l, true);
-#define DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc_id, noc_a, worker_a, l, num_dests)          \
-    debug_sanitize_noc_and_worker_addr(                                                            \
-        noc_id, noc_a, worker_a, l, DEBUG_SANITIZE_NOC_MULTICAST, DEBUG_SANITIZE_NOC_WRITE, true); \
-    debug_sanitize_multicast_num_dests(noc_id, noc_a, worker_a, l, num_dests);                     \
-    LOG_LEN(l);                                                                                    \
+
+// Conditional wrapper for multicast validation (num_dests and loopback)
+#if defined(WATCHER_ENABLE_NOC_SANITIZE_MULTICAST)
+#define DEBUG_SANITIZE_MULTICAST(noc_id, noc_a, worker_a, l, num_dests, loopback) \
+    debug_sanitize_multicast(noc_id, noc_a, worker_a, l, num_dests, loopback)
+#else
+#define DEBUG_SANITIZE_MULTICAST(noc_id, noc_a, worker_a, l, num_dests, loopback)
+#endif
+
+#define DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc_id, noc_a, worker_a, l, num_dests, loopback) \
+    debug_sanitize_noc_and_worker_addr(                                                             \
+        noc_id, noc_a, worker_a, l, DEBUG_SANITIZE_NOC_MULTICAST, DEBUG_SANITIZE_NOC_WRITE, true);  \
+    DEBUG_SANITIZE_MULTICAST(noc_id, noc_a, worker_a, l, num_dests, loopback);                      \
+    LOG_LEN(l);                                                                                     \
     debug_insert_delay((uint8_t)TransactionWrite);
 
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id, noc_a_lower, worker_a)                \
@@ -655,7 +700,7 @@ inline void debug_insert_delay(uint8_t transaction_type) {
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc_id, noc_a, worker_a, l) LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_MULTI_READ_TRANSACTION(noc_id, noc_a, worker_a, l) LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id, noc_a, worker_a, l) LOG_LEN(l)
-#define DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc_id, noc_a, worker_a, l, num_dests) LOG_LEN(l)
+#define DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc_id, noc_a, worker_a, l, num_dests, loopback) LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id, noc_a_lower, worker_a) \
     LOG_READ_LEN_FROM_STATE(noc_id)
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_STATE(noc_id, noc_a_lower, worker_a, l) LOG_LEN(l)

@@ -246,6 +246,8 @@ enum debug_sanitize_noc_return_code_enum {
     DebugSanitizeNocLinkedTransactionViolation = 13,
     DebugSanitizeL1AddrOverflow = 14,
     DebugSanitizeNocMulticastNumDestsMismatch = 15,
+    DebugSanitizeNocMulticastLoopbackRequired = 16,
+    DebugSanitizeNocMulticastLoopbackNotPermitted = 17,
 };
 
 struct debug_assert_msg_t {
