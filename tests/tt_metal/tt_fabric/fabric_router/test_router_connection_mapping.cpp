@@ -358,7 +358,7 @@ TEST_F(RouterConnectionMappingTest, Scenario_EdgeDevice_2MeshRouters_WithZ) {
     auto z_mapping = RouterConnectionMapping::for_z_router();
     
     // Z router still has intent for all 4 directions
-    // Phase 5 orchestration will skip SOUTH and WEST
+    // FabricBuilder will skip SOUTH and WEST if routers don't exist
     EXPECT_EQ(z_mapping.get_total_sender_count(), 4);
     
     // Mesh routers still have MESH_TO_Z connections

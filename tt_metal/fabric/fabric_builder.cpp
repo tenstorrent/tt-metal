@@ -4,6 +4,7 @@
 
 #include "fabric_builder.hpp"
 #include "tt_metal/fabric/fabric_router_builder.hpp"
+#include "tt_metal/fabric/compute_mesh_router_builder.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "impl/context/metal_context.hpp"
@@ -175,12 +176,79 @@ void FabricBuilder::connect_routers() {
     // Get connection pairs based on topology
     auto connection_pairs = get_router_connection_pairs();
 
-    // Connect each pair
+    // Connect each pair (inter-device INTRA_MESH connections)
     for (const auto& pair : connection_pairs) {
         auto& router1 = routers_.at(pair.chan1);
         auto& router2 = routers_.at(pair.chan2);
 
         router1->configure_connection(*router2, pair.link_idx, pair.num_links, topology, is_galaxy);
+    }
+    
+    // Phase 5: Configure local mesh↔Z connections on this device
+    configure_local_mesh_z_connections();
+}
+
+void FabricBuilder::configure_local_mesh_z_connections() {
+    // Phase 5: Find Z routers on this device and connect to local mesh routers
+    
+    // Step 1: Find all Z routers on this device
+    std::vector<chan_id_t> z_router_chans;
+    for (const auto& [chan, router] : routers_) {
+        if (router->get_location().direction == RoutingDirection::Z) {
+            z_router_chans.push_back(chan);
+        }
+    }
+    
+    // If no Z routers, nothing to do
+    if (z_router_chans.empty()) {
+        return;
+    }
+    
+    // Step 2: For each Z router, connect to local mesh routers
+    for (auto z_chan : z_router_chans) {
+        auto* z_router = dynamic_cast<ComputeMeshRouterBuilder*>(routers_.at(z_chan).get());
+        TT_FATAL(
+            z_router != nullptr,
+            "Z router at channel {} is not a ComputeMeshRouterBuilder",
+            z_chan);
+        
+        // Build map of ALL local mesh routers (2-4 depending on device position)
+        std::map<RoutingDirection, ComputeMeshRouterBuilder*> local_mesh;
+        for (const auto& [chan, router] : routers_) {
+            auto dir = router->get_location().direction;
+            if (chan != z_chan && dir != RoutingDirection::Z) {
+                auto* mesh_router = dynamic_cast<ComputeMeshRouterBuilder*>(router.get());
+                TT_FATAL(
+                    mesh_router != nullptr,
+                    "Mesh router at channel {} is not a ComputeMeshRouterBuilder",
+                    chan);
+                local_mesh[dir] = mesh_router;
+            }
+        }
+        
+        // Validate at least 2 mesh routers (edge devices may have 2-3)
+        TT_FATAL(
+            local_mesh.size() >= 2,
+            "Expected at least 2 mesh routers for Z router, found {}",
+            local_mesh.size());
+        
+        log_debug(
+            tt::LogTest,
+            "Device {} (FabricNodeId={}): Configuring Z router connections to {} local mesh routers",
+            device_->id(),
+            local_node_,
+            local_mesh.size());
+        
+        // Configure Z→mesh connections
+        z_router->configure_local_connections(local_mesh);
+        
+        // Configure mesh→Z connections
+        for (auto& [dir, mesh_router] : local_mesh) {
+            std::map<RoutingDirection, ComputeMeshRouterBuilder*> z_map = {
+                {RoutingDirection::Z, z_router}
+            };
+            mesh_router->configure_local_connections(z_map);
+        }
     }
 }
 

@@ -91,6 +91,16 @@ private:
     std::vector<RouterConnectionPair> get_router_connection_pairs() const;
 
     /**
+     * Configure local mesh↔Z connections on this device.
+     * 
+     * Finds Z routers on this device and connects them to local mesh routers.
+     * Handles 2-4 mesh router configurations (edge devices).
+     * 
+     * Called by connect_routers() after inter-device connections are established.
+     */
+    void configure_local_mesh_z_connections();
+
+    /**
      * Compile kernels for directions that have no router/eth channel.
      *
      * In UDM mode, edge devices (e.g., corner of a mesh) don't have neighbors

@@ -165,7 +165,7 @@ TEST_F(Phase4ConnectionLogicTest, EdgeDevice_TwoMeshRouters_ZMapping) {
         EXPECT_EQ(targets[0].type, ConnectionType::Z_TO_MESH);
     }
     
-    // Phase 5 orchestration will check if routers exist before connecting
+    // FabricBuilder will check if routers exist before connecting
     // This test validates the mapping is correct regardless of actual router count
 }
 

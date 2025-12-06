@@ -152,7 +152,7 @@ RouterConnectionMapping RouterConnectionMapping::for_z_router() {
     // VC1: Multi-target Z_TO_MESH connections
     // Sender channels 0-3 map to N/E/S/W mesh routers
     // Each sender channel has intent to connect to a specific direction
-    // Phase 5 orchestration will skip non-existent directions (2-4 mesh routers)
+    // FabricBuilder will skip non-existent directions (2-4 mesh routers on edge devices)
     
     std::vector<RoutingDirection> mesh_directions = {
         RoutingDirection::N,   // Sender channel 0

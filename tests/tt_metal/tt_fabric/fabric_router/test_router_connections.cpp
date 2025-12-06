@@ -878,8 +878,8 @@ TEST_F(RouterConnectionsTest, Phase2_MappingDriven_ZToMesh_AllDirections) {
     }
 }
 
-TEST_F(RouterConnectionsTest, Phase2_MappingDriven_FullDevice_Orchestration) {
-    // Simulate Phase 5 orchestration using Phase 2 mappings
+TEST_F(RouterConnectionsTest, Phase2_MappingDriven_FullDevice_Connections) {
+    // Simulate FabricBuilder connection establishment using Phase 2 mappings
     // Full device: 4 mesh routers + 1 Z router
     
     std::vector<RoutingDirection> mesh_directions = {
@@ -991,7 +991,7 @@ TEST_F(RouterConnectionsTest, Phase2_MappingDriven_EdgeDevice_DynamicSizing) {
         auto targets = z_mapping.get_downstream_targets(1, ch);
         ASSERT_EQ(targets.size(), 1);
         
-        // Only record if target router exists (Phase 5 orchestration logic)
+        // Only record if target router exists (FabricBuilder connection logic)
         if (existing_set.count(targets[0].target_direction.value())) {
             FabricNodeId mesh_node(MeshId{0}, ch);
             

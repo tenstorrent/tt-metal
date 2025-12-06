@@ -17,7 +17,7 @@ namespace tt::tt_fabric {
  * - Non-Z → Non-Z (INTRA_MESH)
  * - Non-Z → Z (MESH_TO_Z)
  * - Z → Non-Z (Z_TO_MESH)
- * - Full device orchestration
+ * - Full device connection establishment
  */
 class RouterArchetypesTest : public ::testing::Test {
 protected:
@@ -495,7 +495,7 @@ TEST_F(RouterArchetypesTest, NonZToZ_FiveMeshRouters_VC1_ShouldFail) {
     
     // In a real implementation, this would be caught by:
     // 1. Channel mapping validation (no receiver channel available)
-    // 2. Connection orchestration logic checking available channels
+    // 2. Connection establishment logic checking available channels
     // 3. Multi-target receiver capacity limits
     
     // Verify that Z router VC1 has exactly 4 sender channels (for Z_TO_MESH)
@@ -511,7 +511,7 @@ TEST_F(RouterArchetypesTest, NonZToZ_FiveMeshRouters_VC1_ShouldFail) {
     // - Z VC1 only has 1 receiver channel (for multi-target from 4 mesh routers)
     // - That receiver is already handling 4 connections (at capacity)
     // - No additional receiver channels exist on Z VC1
-    // In Phase 4+ orchestration, this should be detected and rejected
+    // In Phase 4+ connection logic, this should be detected and rejected
 }
 
 // ============================================================================
@@ -637,7 +637,7 @@ TEST_F(RouterArchetypesTest, ZToNonZ_EdgeDevice_TwoMeshRouters) {
         
         auto target_dir = targets[0].target_direction.value();
         
-        // Only record if target router exists (Phase 5 orchestration logic)
+        // Only record if target router exists (FabricBuilder connection logic)
         if (existing_routers.count(target_dir)) {
             record_archetype_connection(
                 z_router, 1, ch,
@@ -654,7 +654,7 @@ TEST_F(RouterArchetypesTest, ZToNonZ_EdgeDevice_TwoMeshRouters) {
 }
 
 // ============================================================================
-// Full Device Orchestration Tests
+// Full Device Connection Tests
 // ============================================================================
 
 TEST_F(RouterArchetypesTest, FullDevice_4MeshRouters_1ZRouter_AllConnections) {

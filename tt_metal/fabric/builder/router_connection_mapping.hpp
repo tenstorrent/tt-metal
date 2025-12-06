@@ -104,7 +104,7 @@ public:
      * - VC0: Standard mesh forwarding (if applicable)
      * - VC1: Multi-target Z_TO_MESH connections (N/E/S/W intent)
      * 
-     * Note: Mapping specifies all 4 directions as intent. Phase 5 orchestration
+     * Note: Mapping specifies all 4 directions as intent. FabricBuilder
      * will skip non-existent directions based on device position (2-4 mesh routers).
      * 
      * @return Configured RouterConnectionMapping for Z router

@@ -900,7 +900,7 @@ TEST_F(ConnectionRegistryTest, Phase2_EdgeDevice_2MeshRouters_MappingDriven) {
     FabricNodeId z_node(MeshId{0}, 100);
     
     // Z router has intent for all 4 directions, but only 2 exist
-    // Simulate Phase 5 orchestration: only record connections for existing routers
+    // Simulate FabricBuilder: only record connections for existing routers
     std::set<RoutingDirection> existing_routers = {
         RoutingDirection::N,
         RoutingDirection::E
