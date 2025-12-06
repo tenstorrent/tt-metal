@@ -19,9 +19,13 @@ class Shape final : protected ShapeBase {
 public:
     using ShapeBase::ShapeBase;
     using ShapeBase::operator[];
+    using ShapeBase::begin;
     using ShapeBase::cbegin;
     using ShapeBase::cend;
+    using ShapeBase::Container;
+    using ShapeBase::coord_type;
     using ShapeBase::empty;
+    using ShapeBase::end;
     using ShapeBase::size;
     using ShapeBase::view;
 

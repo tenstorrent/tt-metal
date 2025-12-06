@@ -30,7 +30,7 @@
 #include "ttnn-pybind/types.hpp"
 
 #include "ttnn/core.hpp"
-#include "ttnn/deprecated/tt_lib/csrc/operations/primary/module.hpp"
+// #include "ttnn/deprecated/tt_lib/csrc/operations/primary/module.hpp"
 #include "ttnn/distributed/distributed_pybind.hpp"
 #include "ttnn/graph/graph_pybind.hpp"
 #include "ttnn/operations/bernoulli/bernoulli_pybind.hpp"
@@ -291,7 +291,7 @@ PYBIND11_MODULE(_ttnn, module) {
     // because ttnn defines additional type bindings.
     // TODO: pull them out of the ttnn::operations::py_module.
     ttnn::operations::py_module(m_operations);
-    tt::operations::primary::py_module(m_primary_ops);
+    // tt::operations::primary::py_module(m_primary_ops);
 
     module.attr("CONFIG") = &ttnn::CONFIG;
     module.def(

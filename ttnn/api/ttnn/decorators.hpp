@@ -1,14 +1,21 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#include <cstddef>  // size_t
+#include <string>
+#include <type_traits>  // is_same_v, decay
+#include <utility>      // index_sequence, forward
+
+#include <fmt/format.h>
 #include <reflect>
-#include <tt-metalium/graph_tracking.hpp>
-#include <tracy/Tracy.hpp>
+
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
+#include <tracy/Tracy.hpp>
+#include <tt-metalium/graph_tracking.hpp>
 
 namespace ttnn {
 namespace decorators {
