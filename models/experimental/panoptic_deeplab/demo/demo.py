@@ -13,7 +13,6 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
     create_panoptic_deeplab_parameters,
     fuse_conv_bn_parameters,
 )
-from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab, create_resnet_dtype_config
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
 from models.experimental.panoptic_deeplab.tt.common import (
@@ -248,7 +247,7 @@ def run_panoptic_deeplab_demo(
 )
 @pytest.mark.parametrize("model_category", [PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS])
 def test_panoptic_deeplab_demo(device, output_dir, model_category, model_location_generator):
-    skip_if_not_blackhole_20_cores(device)
+    # skip_if_not_blackhole_20_cores(device)
     images, weights_path, output_dir = preprocess_input_params(
         output_dir, model_category, current_dir=__file__, model_location_generator=model_location_generator
     )

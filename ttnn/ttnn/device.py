@@ -9,6 +9,8 @@ import os
 import ttnn
 from loguru import logger
 
+B0_SIZE_750_KB = (1024 * 3 // 4) * 1024
+
 
 def get_device_core_grid(device):
     compute_with_storage_grid_size = device.compute_with_storage_grid_size()
@@ -160,7 +162,7 @@ def CreateDevice(
     trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
     dispatch_core_config: DispatchCoreConfig = None,
     *,
-    worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+    worker_l1_size: int = B0_SIZE_750_KB,  # ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
 ):
     return ttnn._ttnn.device.CreateDevice(
         device_id,
@@ -179,7 +181,7 @@ def CreateDevices(
     trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
     dispatch_core_config: DispatchCoreConfig = None,
     *,
-    worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+    worker_l1_size: int = B0_SIZE_750_KB,  # ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
 ):
     return ttnn._ttnn.device.CreateDevices(
         device_ids,

@@ -188,6 +188,9 @@ class TtBottleneck(LightweightModule):
 
         # Conv2 + separate ReLU (BatchNorm fused into Conv2)
         logger.debug(f"TtBottleneck {self.block_id} processing conv2 (3x3 spatial)")
+        logger.debug(
+            f"TtBottleneck {self.block_id} conv2 input shape: {out.shape}; memory_config: {out.memory_config()}"
+        )
         out = self.conv2(out)
 
         if "res2" in self.block_id or "res3.0" in self.block_id:
@@ -200,11 +203,20 @@ class TtBottleneck(LightweightModule):
 
         # Conv3 (no ReLU yet, BatchNorm fused into Conv3)
         logger.debug(f"TtBottleneck {self.block_id} processing conv3 (1x1 expansion)")
+        logger.debug(
+            f"TtBottleneck {self.block_id} conv3 input shape: {out.shape}; memory_config: {out.memory_config()}"
+        )
+
+        # breakpoint()
+        if "res4.2" in self.block_id or "res4.5" in self.block_id:
+            out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
         out = self.conv3(out)
         # TT CNN returns flattened [B, 1, H*W, C], reshape to pre-computed output shape
         if out.memory_config().buffer_type != ttnn.BufferType.DRAM:
             out = ttnn.move(out)
-        logger.debug(f"TtBottleneck {self.block_id} conv3 complete, output shape: {out.shape}")
+        logger.debug(
+            f"TtBottleneck {self.block_id} conv3 complete, output shape: {out.shape}; memory_config: {out.memory_config()}"
+        )
 
         # Residual connection + ReLU
         logger.debug(f"TtBottleneck {self.block_id} adding residual connection and applying final ReLU")

@@ -238,7 +238,7 @@ class ModelOptimisations:
         # Conv2: First block downsamples with stride=2
         self.register_layer_override(
             "res3.0.conv2",
-            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=256),  # 8 tiles
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=128),  # 4 tiles
         )
 
         # Conv2: Remaining blocks at 64x128 resolution
