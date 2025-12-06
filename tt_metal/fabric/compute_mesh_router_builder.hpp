@@ -52,6 +52,14 @@ public:
     void configure_connection(
         FabricRouterBuilder& peer, uint32_t link_idx, uint32_t num_links, Topology topology, bool is_galaxy) override;
 
+    /**
+     * Configure local connections between routers on the same device (e.g., mesh↔Z)
+     * 
+     * @param local_routers Map of direction → router builder for all routers on this device
+     */
+    void configure_local_connections(
+        const std::map<RoutingDirection, ComputeMeshRouterBuilder*>& local_routers);
+
     void configure_for_dispatch() override;
 
     void compile_ancillary_kernels(tt::tt_metal::Program& program) override;
@@ -165,17 +173,6 @@ private:
      * @param tensix_builder The tensix builder to connect
      */
     void connect_to_local_tensix_builder(FabricTensixDatamoverBuilder& tensix_builder);
-
-    /**
-     * Connect the downstream router over noc or Ethernet. Iterates through all VCs and channels
-     * between the routers and connects them.
-     *
-     * Establishes one-way connection
-     *
-     * @param other The other router builder to connect to
-     * @param vc Virtual channel ID
-     */
-    void connect_to_downstream_router_over_noc(ComputeMeshRouterBuilder& other, uint32_t vc);
 
     // Compute-mesh specific state
     std::unique_ptr<FabricEriscDatamoverBuilder> erisc_builder_;

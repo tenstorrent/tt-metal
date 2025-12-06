@@ -167,8 +167,8 @@ RouterConnectionMapping RouterConnectionMapping::for_z_router() {
             i,  // Sender channels 0-3
             ConnectionTarget(
                 ConnectionType::Z_TO_MESH,
-                0,  // Target mesh router VC0
-                0,  // Target sender channel (resolved by mesh router)
+                1,  // Target mesh router VC1
+                0,  // Target receiver channel (resolved by mesh router)
                 mesh_directions[i]));
     }
     

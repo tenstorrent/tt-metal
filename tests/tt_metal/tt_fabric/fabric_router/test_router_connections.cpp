@@ -853,7 +853,7 @@ TEST_F(RouterConnectionsTest, Phase2_MappingDriven_ZToMesh_AllDirections) {
         ASSERT_EQ(targets.size(), 1);
         EXPECT_EQ(targets[0].type, ConnectionType::Z_TO_MESH);
         EXPECT_EQ(targets[0].target_direction.value(), expected_dir);
-        EXPECT_EQ(targets[0].target_vc, 0);  // Target mesh router VC0
+        EXPECT_EQ(targets[0].target_vc, 1);  // Target mesh router VC1
         
         // Record connection
         FabricNodeId mesh_node(MeshId{0}, channel);

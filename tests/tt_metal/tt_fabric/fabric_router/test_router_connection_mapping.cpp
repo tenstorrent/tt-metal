@@ -228,22 +228,22 @@ TEST_F(RouterConnectionMappingTest, ZRouter_VC1_CorrectDirectionMapping) {
     // Sender channel 0 → NORTH
     auto targets_ch0 = mapping.get_downstream_targets(1, 0);
     ASSERT_EQ(targets_ch0.size(), 1);
-    verify_target(targets_ch0[0], ConnectionType::Z_TO_MESH, 0, RoutingDirection::N);
+    verify_target(targets_ch0[0], ConnectionType::Z_TO_MESH, 1, RoutingDirection::N);
     
     // Sender channel 1 → EAST
     auto targets_ch1 = mapping.get_downstream_targets(1, 1);
     ASSERT_EQ(targets_ch1.size(), 1);
-    verify_target(targets_ch1[0], ConnectionType::Z_TO_MESH, 0, RoutingDirection::E);
+    verify_target(targets_ch1[0], ConnectionType::Z_TO_MESH, 1, RoutingDirection::E);
     
     // Sender channel 2 → SOUTH
     auto targets_ch2 = mapping.get_downstream_targets(1, 2);
     ASSERT_EQ(targets_ch2.size(), 1);
-    verify_target(targets_ch2[0], ConnectionType::Z_TO_MESH, 0, RoutingDirection::S);
+    verify_target(targets_ch2[0], ConnectionType::Z_TO_MESH, 1, RoutingDirection::S);
     
     // Sender channel 3 → WEST
     auto targets_ch3 = mapping.get_downstream_targets(1, 3);
     ASSERT_EQ(targets_ch3.size(), 1);
-    verify_target(targets_ch3[0], ConnectionType::Z_TO_MESH, 0, RoutingDirection::W);
+    verify_target(targets_ch3[0], ConnectionType::Z_TO_MESH, 1, RoutingDirection::W);
 }
 
 TEST_F(RouterConnectionMappingTest, ZRouter_AllTargets_SameVC) {
@@ -253,7 +253,7 @@ TEST_F(RouterConnectionMappingTest, ZRouter_AllTargets_SameVC) {
     for (uint32_t ch = 0; ch < 4; ++ch) {
         auto targets = mapping.get_downstream_targets(1, ch);
         ASSERT_EQ(targets.size(), 1);
-        EXPECT_EQ(targets[0].target_vc, 0);
+        EXPECT_EQ(targets[0].target_vc, 1);  // Z VC1 → mesh VC1
         EXPECT_EQ(targets[0].type, ConnectionType::Z_TO_MESH);
     }
 }
