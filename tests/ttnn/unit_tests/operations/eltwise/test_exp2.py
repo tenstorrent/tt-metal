@@ -108,3 +108,49 @@ def test_exp2_atol(input_shapes, low, high, device):
     tt_result = ttnn.exp2(tt_in)
     result = ttnn.to_torch(tt_result)
     assert_allclose(tt_result, golden, rtol=1e-2, atol=1e-3)
+
+
+def test_exp2_fp32_arange_masking(device):
+    # Exp2 Working range - Overflow from 128(inf), Underflow till -149(<0)
+
+    # TODO : CHANGE RANGE TO 126 TO 127 AND COMBINE THIS TEST WITH THE ONE ABOVE (test_exp2_arange_masking)
+    # TODO : Add atol rtol test for (-149,-126) and also for (-149,127) for fp32 in above test (test_exp2_atol)
+    low = -149.0
+    high = -126.0
+
+    # Generate all possible bit pattersn for bf16
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    input_tensor = all_bitpatterns.view(torch.bfloat16)
+    input_tensor_f32 = input_tensor.to(torch.float32)
+
+    # masking to working range
+    mask = (input_tensor_f32 >= low) & (input_tensor_f32 <= high)
+    input_tensor_f32 = input_tensor_f32[mask]
+
+    tt_in = ttnn.from_torch(
+        input_tensor_f32,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.exp2)
+    golden = golden_function(input_tensor_f32, device=device)
+
+    tt_result = ttnn.exp2(tt_in)
+    result = ttnn.to_torch(tt_result)
+
+    # Print results as a table
+    print("\n" + "=" * 120)
+    print(f"{'Input':<25} {'TTNN':<30} {'Golden':<30} {'Difference':<30}")
+    print("=" * 120)
+    for i in range(len(input_tensor_f32)):  # Print all entries
+        inp_val = input_tensor_f32[i].item()
+        ttnn_val = result[i].item()
+        golden_val = golden[i].item()
+        diff = golden_val - ttnn_val
+        print(f"{inp_val:<25.10f} {ttnn_val:<30.10e} {golden_val:<30.10e} {diff:<30.10e}")
+    print("=" * 120 + "\n")
+
+    assert_with_ulp(golden, result, 1)
