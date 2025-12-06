@@ -198,7 +198,7 @@ void device_module(nb::module_& m_device) {
         nb::arg("num_command_queues") = 1,
         nb::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         nb::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
-        nb::arg("DispatchCoreConfig") = tt::tt_metal::DispatchCoreConfig{},
+        nb::arg("DispatchCoreConfig") = nb::cast(tt::tt_metal::DispatchCoreConfig{}),
         nb::kw_only(),
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
     m_device.def(
@@ -231,7 +231,7 @@ void device_module(nb::module_& m_device) {
         nb::arg("num_command_queues") = 1,
         nb::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         nb::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
-        nb::arg("DispatchCoreConfig") = tt::tt_metal::DispatchCoreConfig{},
+        nb::arg("DispatchCoreConfig") = nb::cast(tt::tt_metal::DispatchCoreConfig{}),
         nb::kw_only(),
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
     m_device.def("CloseDevice", [](MeshDevice* device) { device->close(); }, R"doc(
@@ -373,7 +373,7 @@ void device_module(nb::module_& m_device) {
     m_device.def(
         "DumpDeviceMemoryState",
         &tt::tt_metal::detail::DumpDeviceMemoryState,
-        nb::arg().noconvert(),
+        nb::arg("device").noconvert(),
         nb::arg("prefix").noconvert() = std::string(""),
         dump_device_memory_state_doc.data());
     m_device.def(
@@ -381,7 +381,7 @@ void device_module(nb::module_& m_device) {
         [](MeshDevice* device, const std::string& prefix) {
             tt::tt_metal::detail::DumpDeviceMemoryState(device, prefix);
         },
-        nb::arg().noconvert(),
+        nb::arg("device").noconvert(),
         nb::arg("prefix").noconvert() = std::string(""),
         dump_device_memory_state_doc.data());
 
@@ -398,16 +398,16 @@ void device_module(nb::module_& m_device) {
     m_device.def(
         "GetMemoryView",
         &tt::tt_metal::detail::GetMemoryView,
-        nb::arg().noconvert(),
-        nb::arg().noconvert(),
+        nb::arg("device").noconvert(),
+        nb::arg("buffer_type").noconvert(),
         get_memory_view_doc.data());
     m_device.def(
         "GetMemoryView",
         [](MeshDevice* device, const BufferType& buffer_type) {
             return tt::tt_metal::detail::GetMemoryView(device, buffer_type);
         },
-        nb::arg().noconvert(),
-        nb::arg().noconvert(),
+        nb::arg("device").noconvert(),
+        nb::arg("buffer_type").noconvert(),
         get_memory_view_doc.data());
 
     constexpr std::string_view synchronize_device_doc = R"doc(
