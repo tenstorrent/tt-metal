@@ -43,6 +43,9 @@ from helpers.utils import passed_test
 
 # SUPPORTED FORMATS FOR TEST
 supported_formats = [
+    DataFormat.Int32,
+    DataFormat.UInt32,
+    DataFormat.UInt16,
     DataFormat.Float32,
     DataFormat.Float16,
     DataFormat.Float16_b,
@@ -84,6 +87,7 @@ test_formats = input_output_formats(supported_formats, False)
 unpack_A_param_combinations = list(
     product(
         broadcast_types,
+        dest_acc,
         disable_src_zero_flags,
         acc_to_dest_flags,
         stochastic_rnd,
@@ -111,20 +115,22 @@ for base_param in base_params:
 
     for unpack_params in unpack_A_param_combinations:
         broadcast_type = unpack_params[0]
-        disable_src_zero = unpack_params[1]
-        acc_to_dest = unpack_params[2]
-        stochastic_rnd = unpack_params[3]
-        reuse_dest = unpack_params[4]
-        transpose_of_faces = unpack_params[5]
-        within_face_16x16_transpose = unpack_params[6]
-        num_faces = unpack_params[7]
-        face_r_dim = unpack_params[8]
+        dest_acc = unpack_params[1]
+        disable_src_zero = unpack_params[2]
+        acc_to_dest = unpack_params[3]
+        stochastic_rnd = unpack_params[4]
+        reuse_dest = unpack_params[5]
+        transpose_of_faces = unpack_params[6]
+        within_face_16x16_transpose = unpack_params[7]
+        num_faces = unpack_params[8]
+        face_r_dim = unpack_params[9]
 
         # Create complete parameter tuple matching test signature
         combined_params = (
             base_testname,  # testname
             formats,  # formats
             broadcast_type,  # broadcast_type
+            dest_acc,  # dest_acc
             disable_src_zero,  # disable_src_zero
             acc_to_dest,  # acc_to_dest
             stochastic_rnd,  # stochastic_rnd
@@ -150,6 +156,7 @@ def filter_params_with_constraints(all_params):
             testname,
             formats,
             broadcast_type,
+            dest_acc,
             disable_src_zero,
             acc_to_dest,
             stochastic_rnd,
@@ -159,6 +166,45 @@ def filter_params_with_constraints(all_params):
             num_faces,
             face_r_dim,
         ) = params
+
+        # remove me - if broadcast_type is not ROW, skip the test
+        if broadcast_type != BroadcastType.Row:
+            continue
+
+        # remove me - if formats.input_format is not Float32, Int32, UInt32, UInt16, skip the test, if output format is not Float32, Int32, UInt32, UInt16, skip the test
+        if formats.input_format not in (
+            DataFormat.Float32,
+            DataFormat.Int32,
+            DataFormat.UInt32,
+            DataFormat.UInt16,
+        ) or formats.output_format not in (
+            DataFormat.Float32,
+            DataFormat.Int32,
+            DataFormat.UInt32,
+            DataFormat.UInt16,
+        ):
+            continue
+
+        # remove me - should skip if disable_src_zero is true, if acc_to_dest is true, if stochastic_rnd is not StochasticRounding.No, if reuse_dest is not EltwiseBinaryReuseDestType.NONE, if transpose_of_faces is not Transpose.No, if within_face_16x16_transpose is not Transpose.No, if num_faces is not 2, if face_r_dim is less than 16
+        if (
+            disable_src_zero
+            or acc_to_dest
+            or stochastic_rnd != StochasticRounding.No
+            or reuse_dest != EltwiseBinaryReuseDestType.NONE
+            or transpose_of_faces != Transpose.No
+            or within_face_16x16_transpose != Transpose.No
+            or num_faces != 4
+            or face_r_dim < 16
+        ):
+            continue
+
+        # remove me - should skip if input format is not equal to output format
+        if formats.input_format != formats.output_format:
+            continue
+
+        # remove me - should skip if dest_acc is DestAccumulation.Yes and acc_to_dest is True
+        if dest_acc == DestAccumulation.No and formats.input_format.is_32_bit():
+            continue
 
         # Fast checks first: simple integer/enum comparisons
         # For partial faces (face_r_dim < 16), require num_faces = 2
@@ -266,27 +312,29 @@ def create_simple_ids(all_params):
     """Create comprehensive but readable IDs for unpack_A tests"""
     ids = []
     for i, params in enumerate(all_params):
-        # params = (testname, formats, broadcast_type, disable_src_zero,
+        # params = (testname, formats, broadcast_type, dest_acc, disable_src_zero,
         #           acc_to_dest, stoch_rnd_type, reuse_dest, transpose_of_faces,
         #           within_face_16x16_transpose, num_faces, face_r_dim)
 
         testname = params[0]
         formats = params[1]
         broadcast_type = params[2]
-        disable_src_zero = params[3]
-        acc_to_dest = params[4]
-        stochastic_rnd = params[5]
-        reuse_dest = params[6]
-        transpose_of_faces = params[7]
-        within_face_16x16_transpose = params[8]
-        num_faces = params[9]
-        face_r_dim = params[10]
+        dest_acc = params[3]
+        disable_src_zero = params[4]
+        acc_to_dest = params[5]
+        stochastic_rnd = params[6]
+        reuse_dest = params[7]
+        transpose_of_faces = params[8]
+        within_face_16x16_transpose = params[9]
+        num_faces = params[10]
+        face_r_dim = params[11]
 
         # Create a comprehensive but readable ID
         id_parts = [
             f"in_{formats.input_format.name}",
             f"out_{formats.output_format.name}",
             f"bcast_{broadcast_type.name}",
+            f"dest_acc_{dest_acc.name}",
             f"disable_src_zero_{disable_src_zero}",
             f"acc_to_dest_{acc_to_dest}",
             f"stoch_rnd_{stochastic_rnd.name}",
@@ -307,7 +355,7 @@ param_ids = create_simple_ids(all_params)
 
 
 @pytest.mark.parametrize(
-    "testname, formats, broadcast_type, disable_src_zero, acc_to_dest, "
+    "testname, formats, broadcast_type, dest_acc, disable_src_zero, acc_to_dest, "
     "stochastic_rnd, reuse_dest, transpose_of_faces, "
     "within_face_16x16_transpose, num_faces, face_r_dim",
     all_params,
@@ -317,6 +365,7 @@ def test_unpack_comprehensive(
     testname,
     formats,
     broadcast_type,
+    dest_acc,
     disable_src_zero,
     acc_to_dest,
     stochastic_rnd,

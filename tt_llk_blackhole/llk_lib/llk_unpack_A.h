@@ -36,8 +36,10 @@ inline void _llk_unpack_A_mop_config_(
         TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr uint unpack_srca_to_dest =
         TT_OP_UNPACR(SrcA, 0b00010001 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // ch0/ch1 z_inc
-    // static constexpr uint unpack_srca_to_dest_bcast_row =
-    //     TT_OP_UNPACR(SrcA, 0b00010000 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 0);
+    static constexpr uint unpack_srca_to_dest_bcast_row_face_done =
+        TT_OP_UNPACR(SrcA, 0b01000001 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 0);
+    static constexpr uint unpack_srca_to_dest_bcast_row_tile_done =
+        TT_OP_UNPACR(SrcA, 0b01000001 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr uint unpack_srca_to_dest_transpose_of_faces =
         TT_OP_UNPACR(SrcA, 0b00010010, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // inc srcA ch1_z+=1, ch0_z+=2
     static constexpr uint unpack_srca_set_dvalid = TT_OP_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
@@ -48,6 +50,7 @@ inline void _llk_unpack_A_mop_config_(
     static constexpr uint unpack_srcb_set_dvalid = TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
     static constexpr uint srca_set_z_1           = TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001); // set srcA ch0_z = 1
     static constexpr uint srcb_set_z_2           = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 2, 0b0001); // set srcB ch0_z = 2
+    static constexpr uint srca_clear_z           = TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0001); // set srcA ch0_z = 0
     static constexpr uint srcb_clear_z           = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001); // set srcB ch0_z = 0
 
     if (unpack_to_dest && is_32bit_input(unpack_src_format, unpack_dst_format))
@@ -60,14 +63,28 @@ inline void _llk_unpack_A_mop_config_(
             tmp.set_end_op(TT_OP_SETADCZW(p_setadc::UNP_A, 0, 2, 0, 1, 0b0101));
             tmp.program();
         }
-        // else if (BType == BroadcastType::ROW)
-        // {
-        //     const uint32_t outerloop     = 1;
-        //     constexpr uint32_t innerloop = 2;
-        //     ckernel_template tmp(outerloop, innerloop, unpack_srca_to_dest);
-        //     tmp.set_end_op(unpack_srca_set_dvalid);
-        //     tmp.program();
-        // }
+        else if (BType == BroadcastType::ROW)
+        {
+            constexpr uint replay_buf_len = 15; // will need a different MOP for tiny tiles
+            load_replay_buf(
+                0,
+                replay_buf_len,
+                []
+                {
+#pragma GCC unroll(replay_buf_len)
+                    for (uint i = 0; i < replay_buf_len; i++)
+                    {
+                        TTI_UNPACR(SrcA, 0b01000000 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 0);
+                    }
+                });
+
+            const uint32_t outerloop     = 2;
+            constexpr uint32_t innerloop = 2;
+            ckernel_template tmp(outerloop, innerloop, lltt::replay_insn(0, replay_buf_len), unpack_srca_to_dest_bcast_row_face_done);
+            tmp.set_end_op(srca_clear_z);
+            tmp.set_last_inner_loop_instr(unpack_srca_to_dest_bcast_row_tile_done);
+            tmp.program();
+        }
         else
         {
             const uint32_t outerloop     = num_faces;
@@ -100,7 +117,7 @@ inline void _llk_unpack_A_mop_config_(
     else if constexpr (BType == BroadcastType::ROW)
     {
         constexpr uint32_t innerloop = 2;
-        constexpr uint32_t outerloop = unpack_to_dest ? 1 : 2; // TODO: add support for num_faces
+        constexpr uint32_t outerloop = 2; // TODO: add support for num_faces
         if constexpr (acc_to_dest)
         {
             ckernel_template tmp(outerloop, innerloop, unpack_srcb, unpack_srca_set_dvalid);
@@ -205,8 +222,14 @@ inline void _llk_unpack_A_init_(
     // cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable_src_zero_flag_val ? 1 : 0);
 
     constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE || unpack_to_dest) ? p_setadc::UNP_A : p_setadc::UNP_B;
-    config_unpacker_x_end<UNP_SEL>(face_r_dim);
-
+    if constexpr (BType == BroadcastType::ROW && unpack_to_dest)
+    {
+        config_unpacker_x_end<UNP_SEL>(1);
+    }
+    else
+    {
+        config_unpacker_x_end<UNP_SEL>(face_r_dim);
+    }
     _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(transpose_of_faces > 0, num_faces, unpack_src_format, unpack_dst_format);
 }
 
@@ -219,6 +242,10 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
 {
     // Clear z/w start counters
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    if (BType == BroadcastType::ROW && unpack_to_dest)
+    {
+        TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
+    }
 
     // Program srcA and srcB base addresses
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID

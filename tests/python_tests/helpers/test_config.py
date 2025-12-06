@@ -662,6 +662,8 @@ class TestConfig:
         TILE_SIZES = {
             DataFormat.Bfp8_b: 68,
             DataFormat.Float32: 256,
+            DataFormat.Int32: 256,
+            DataFormat.UInt32: 256,
         }
 
         pack_size = TILE_SIZES.get(self.formats.output_format, 128)
