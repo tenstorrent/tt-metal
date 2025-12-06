@@ -106,15 +106,6 @@ void LayerNormPostAllGather::validate(
 
         if (beta.has_value()) {
             const auto& beta_tensor = beta.value();
-            TT_FATAL(
-                gamma_tensor.layout() == beta_tensor.layout(),
-                "Gamma and beta must have the same layout, got gamma: {} vs beta: {}",
-                gamma_tensor.layout(),
-                beta_tensor.layout());
-            // TT_FATAL(
-            //     beta_tensor.layout() == Layout::ROW_MAJOR,
-            //     "Beta tensor must have ROW_MAJOR layout, got: {}",
-            //     beta_tensor.layout());
             if (beta_tensor.layout() == Layout::TILE) {
                 TT_FATAL(
                     a.padded_shape()[-1] == beta_tensor.padded_shape()[-1],
