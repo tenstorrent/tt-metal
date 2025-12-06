@@ -21,7 +21,6 @@ Checks: >
   -bugprone-sizeof-expression,
   -bugprone-unchecked-optional-access,
   -bugprone-unhandled-self-assignment,
-  -bugprone-unused-local-non-trivial-variable,
   -cert-arr39-c,
   -cert-dcl16-c,
   -cert-dcl21-cpp,
