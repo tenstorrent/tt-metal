@@ -246,6 +246,8 @@ jobs:
     needs: analyze-data
     if: ${{ fromJson(needs.analyze-data.outputs.failed_workflows) != '[]' }}
     runs-on: ubuntu-latest
+    outputs:
+      slack_ts: ${{ steps.slack-report.outputs.slack_ts }}
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
       - name: Handle failed workflows
@@ -254,14 +256,17 @@ jobs:
           echo '${{ needs.analyze-data.outputs.failed_workflows }}' | jq -r '.[]'
           # Add any additional failure handling steps here
       - name: Post regressions to Slack
+        id: slack-report
         uses: ./.github/actions/slack-report-analyze-workflow-data
         with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_AGGREGATE_PIPELINE_STATUS_ALERT }}
+          channel_id: ${{ secrets.SLACK_TESTING_CHANNEL_ID }}
           regressed_workflows: ${{ needs.analyze-data.outputs.regressed_workflows }}
           alert_all_message: ${{ needs.analyze-data.outputs.alert_all_message }}
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
   trigger-auto-triage:
-    needs: analyze-data
+    needs: [analyze-data, handle-failures]
     if: ${{ fromJson(needs.analyze-data.outputs.regressed_workflows) != '[]' }}
     runs-on: ubuntu-latest
     permissions:
@@ -277,42 +282,43 @@ jobs:
         with:
           regressed_workflows: ${{ needs.analyze-data.outputs.regressed_workflows }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          slack_ts: ${{ needs.handle-failures.outputs.slack_ts }}
 
-  test-slack-threads:
-    runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_dispatch' }}
-    steps:
-      - name: Send Parent Message
-        id: parent
-        uses: slackapi/slack-github-action@v1.26.0
-        with:
-          channel-id: ${{ secrets.SLACK_TESTING_CHANNEL_ID }}
-          payload: |
-            {
-              "text": "Parent message for threading test (Bot Token)"
-            }
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+  # test-slack-threads:
+  #   runs-on: ubuntu-latest
+  #   if: ${{ github.event_name == 'workflow_dispatch' }}
+  #   steps:
+  #     - name: Send Parent Message
+  #       id: parent
+  #       uses: slackapi/slack-github-action@v1.26.0
+  #       with:
+  #         channel-id: ${{ secrets.SLACK_TESTING_CHANNEL_ID }}
+  #         payload: |
+  #           {
+  #             "text": "Parent message for threading test (Bot Token)"
+  #           }
+  #       env:
+  #         SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
-      - name: Send Channel Message (Control)
-        uses: slackapi/slack-github-action@v1.26.0
-        with:
-          channel-id: ${{ secrets.SLACK_TESTING_CHANNEL_ID }}
-          payload: |
-            {
-              "text": "Control message in channel (should be separate)"
-            }
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+  #     - name: Send Channel Message (Control)
+  #       uses: slackapi/slack-github-action@v1.26.0
+  #       with:
+  #         channel-id: ${{ secrets.SLACK_TESTING_CHANNEL_ID }}
+  #         payload: |
+  #           {
+  #             "text": "Control message in channel (should be separate)"
+  #           }
+  #       env:
+  #         SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
-      - name: Send Thread Reply
-        uses: slackapi/slack-github-action@v1.26.0
-        with:
-          channel-id: ${{ secrets.SLACK_TESTING_CHANNEL_ID }}
-          payload: |
-            {
-              "text": "This is a reply in the thread",
-              "thread_ts": "${{ steps.parent.outputs.ts }}"
-            }
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+  #     - name: Send Thread Reply
+  #       uses: slackapi/slack-github-action@v1.26.0
+  #       with:
+  #         channel-id: ${{ secrets.SLACK_TESTING_CHANNEL_ID }}
+  #         payload: |
+  #           {
+  #             "text": "This is a reply in the thread",
+  #             "thread_ts": "${{ steps.parent.outputs.ts }}"
+  #           }
+  #       env:
+  #         SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
