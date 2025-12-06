@@ -5,6 +5,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
 #include <tt-metalium/experimental/lightmetal/lightmetal_replay.hpp>
+#include <tt-metalium/experimental/lightmetal/lightmetal_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <string>
 #include <utility>
