@@ -208,6 +208,7 @@ tests/ttnn/multidevice_perf_tests/ @tenstorrent/metalium-developers-ops-data-mov
 tests/nightly/t3000/ccl/test_all_reduce.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/nightly/tg/ccl/test_all_reduce.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/ttnn/unit_tests/gtests/ccl/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
+tests/ttnn/unit_tests/gtests/conv/ @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 tests/ttnn/unit_tests/operations/ccl/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 tests/ttnn/unit_tests/operations/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT @tenstorrent/codeowner-bypass
 tests/ttnn/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
