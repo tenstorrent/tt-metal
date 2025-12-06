@@ -1,6 +1,9 @@
 include(CTest)
 enable_testing()
 
+# Include GoogleTest before using gtest_discover_tests
+include(GoogleTest)
+
 set(SOURCES
     core/tensor_utils_test.cpp
     core/n300_utils_test.cpp
@@ -37,7 +40,7 @@ set(SOURCES
     optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
     serialization/model_serializer_test.cpp
-    serialization/msgpack_serializer_test.cpp
+    serialization/flatbuffer_serializer_test.cpp
     serialization/tensor_serializer_test.cpp
     serialization/safetensors_test.cpp
     ops/cross_entropy_fw_op_test.cpp
@@ -105,4 +108,11 @@ else()
 endif()
 
 include(GoogleTest)
-gtest_discover_tests(ttml_tests)
+# Set a reasonable default timeout for unit tests. If specific tests need more time,
+# use set_tests_properties(<test> PROPERTIES TIMEOUT <seconds>) after discovery.
+gtest_discover_tests(
+    ttml_tests
+    PROPERTIES
+        TIMEOUT
+            60
+)
