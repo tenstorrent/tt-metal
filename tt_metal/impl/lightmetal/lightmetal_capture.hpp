@@ -7,7 +7,7 @@
 #include <vector>
 #include <memory>
 #include <flatbuffers/flatbuffers.h>
-#include <lightmetal_binary.hpp>
+#include <tt-metalium/experimental/lightmetal/lightmetal_replay.hpp>
 
 // Forward decl for command_generated.h
 namespace tt::tt_metal::flatbuffer {
@@ -31,6 +31,9 @@ class Program;
 class Kernel;
 using CBHandle = uintptr_t;
 using TraceDescriptorByTraceIdOffset = flatbuffers::Offset<tt::tt_metal::flatbuffer::TraceDescriptorByTraceId>;
+
+using experimental::lightmetal::LightMetalBinary;
+using experimental::lightmetal::LightMetalReplay;
 
 class LightMetalCaptureContext {
 public:
