@@ -129,6 +129,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         dynamic_load=False,
         topology: ttnn.Topology = ttnn.Topology.Linear,
         is_fsdp: bool = True,
+        quantization_config: Optional[dict] = None,
     ):
         super().__init__()
 
@@ -196,6 +197,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         # Record time information for different steps.
         self.timing_data = None
+
+        self.quantization_config = quantization_config
 
     @staticmethod
     def create_pipeline(
@@ -287,6 +290,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             ccl_manager=self.dit_ccl_manager,
             parallel_config=self.parallel_config,
             is_fsdp=self.is_fsdp,
+            quantization_config=self.quantization_config,
         )
 
         if self.use_cache:
@@ -328,6 +332,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             mesh_device=self.mesh_device,
             ccl_manager=self.dit_ccl_manager,
             parallel_config=self.parallel_config,
+            quantization_config=self.quantization_config,
             is_fsdp=self.is_fsdp,
         )
 
