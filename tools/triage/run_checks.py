@@ -87,9 +87,12 @@ class DeviceDescription:
 
     def __init__(self, device: Device, metal_device_id_mapping: MetalDeviceIdMapping):
         self.device = device
-        # Check if exalens device._id maps to the same unique_id as device.unique_id
-        inspector_unique_id = metal_device_id_mapping.get_unique_id(device._id)
-        self.use_unique_id = inspector_unique_id != device.unique_id
+        # Check if exalens device._id maps to the same unique_id as metal device id
+        if metal_device_id_mapping.has_metal_device_id(device._id):
+            inspector_unique_id = metal_device_id_mapping.get_unique_id(device._id)
+            self.use_unique_id = inspector_unique_id != device.unique_id
+        else:
+            self.use_unique_id = False
 
 
 def device_description_serializer(device_desc: DeviceDescription) -> str:
@@ -187,8 +190,7 @@ def get_devices(
     elif len(devices) == 1 and devices[0].lower() == "all":
         device_ids = [int(id) for id in context.devices.keys()]
     else:
-        metal_device_ids = [int(id) for id in devices]
-        device_ids = _convert_metal_device_ids_to_device_ids(metal_device_ids, metal_device_id_mapping, context)
+        device_ids = [int(id) for id in devices]
 
     return [context.devices[id] for id in device_ids]
 
