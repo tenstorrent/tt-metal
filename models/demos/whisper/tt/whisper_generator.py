@@ -406,12 +406,15 @@ def _generate_with_temperature(
     avg_decode_throughput = 0.0
 
     # Run prefill pass for KV cache mode to populate cache with prompt context
-    # Process all but the last prefix token; the last one will be handled by the generation loop
-    # to avoid processing the same token twice with different position embeddings
+    # Process all prefix tokens; the last iteration samples the first transcription token
+    # NOTE: This is sub-optimal - processing tokens one at a time (decode-style prefill)
+    # rather than a single batched prefill forward pass. A true prefill implementation
+    # would process all prefix tokens in one forward pass for better performance.
     if kv_cache and prompt is not None and prefix_len > 1:
-        logger.debug(f"Running prefill pass for {prefix_len - 1} prefix tokens (out of {prefix_len})")
-        # Process prefix tokens except the last one
-        for prefill_pos in range(prefix_len - 1):
+        logger.debug(f"Running prefill pass for {prefix_len} prefix tokens")
+        first_transcription_token = None
+
+        for prefill_pos in range(prefix_len):
             prefill_input = input_ids[:, prefill_pos : prefill_pos + 1]
             current_decode_pos = ttnn.from_torch(
                 torch.full((unpadded_batch_size,), prefill_pos),
@@ -431,7 +434,7 @@ def _generate_with_temperature(
                 input_mesh_mapper=input_mesh_mapper,
             )
 
-            _ = ttnn_optimized_functional_whisper.decoder(
+            decoder_output = ttnn_optimized_functional_whisper.decoder(
                 config,
                 decoder_hidden_states,
                 decoder_attention_mask=decoder_attention_mask,
@@ -441,16 +444,73 @@ def _generate_with_temperature(
                 parameters=parameters.decoder,
             )
 
-        # Set decode position to last prefix position for generation to continue
-        # Prefill filled positions 0 to prefix_len-2, generation continues from prefix_len-1
+            # On last prefill iteration, sample the first transcription token
+            if prefill_pos == prefix_len - 1:
+                decoder_output = decoder_output @ ttnn_linear_weight
+                logits_to_torch = ttnn.to_torch(decoder_output, mesh_composer=output_mesh_composer)
+                next_token_logits = logits_to_torch[:, 0, :]
+                next_tokens_scores = logits_processor(input_ids, next_token_logits)
+                first_transcription_token = _sample_token(next_tokens_scores, temperature)
+
+                # Record TTFT
+                ttft = time.time() - start_encode
+
+                # Extract no_speech probability from first frame logits
+                with torch.no_grad():
+                    probs = torch.softmax(next_token_logits, dim=-1)
+                    no_speech_probs = probs[:, NO_SPEECH_TOKEN_ID]
+
+                    # Track log probabilities for first transcription token
+                    log_probs.append(
+                        torch.log_softmax(next_tokens_scores, dim=-1)
+                        .gather(1, first_transcription_token.unsqueeze(1))
+                        .squeeze(1)
+                    )
+
+                output_ids.append(first_transcription_token)
+
+                # Track full token sequences for timestamp extraction
+                if return_timestamps:
+                    for batch_idx in range(unpadded_batch_size):
+                        full_token_sequences[batch_idx].append(first_transcription_token[batch_idx].item())
+
+                # Check for EOS on first token
+                for user_id, user_decode_id in enumerate(first_transcription_token[:unpadded_batch_size]):
+                    if user_decode_id == config.eos_token_id:
+                        prompt_is_done[user_id] = True
+
+                # If streaming, yield the first token
+                if streaming:
+                    ttnn_transcription = processor.batch_decode(
+                        first_transcription_token.unsqueeze(dim=1), skip_special_tokens=True
+                    )
+                    current_avg_logprob = (
+                        log_probs[0].unsqueeze(0) if log_probs else torch.zeros(input_features.shape[0])
+                    )
+                    if len(log_probs) > 1:
+                        current_avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
+
+                    if return_perf_metrics:
+                        yield ttnn_transcription, current_avg_logprob, no_speech_probs, ttft, 0.0, False
+                    else:
+                        yield ttnn_transcription, current_avg_logprob, no_speech_probs, False
+                else:
+                    # Non-streaming mode: collect the first token
+                    ttnn_transcription = processor.batch_decode(
+                        first_transcription_token.unsqueeze(dim=1), skip_special_tokens=True
+                    )
+                    for idx in range(input_features.shape[0]):
+                        output[idx].append(ttnn_transcription[idx])
+
+        # Set decode position to prefix_len for generation to continue
         current_decode_pos = ttnn.from_torch(
-            torch.full((unpadded_batch_size,), prefix_len - 1),
+            torch.full((unpadded_batch_size,), prefix_len),
             device=mesh_device,
             dtype=ttnn.int32,
             mesh_mapper=input_mesh_mapper,
         )
-        # Set input_ids to the second-to-last prefix token (the last one processed by prefill)
-        input_ids = input_ids[:, -2:-1]
+        # Set input_ids to the first transcription token (sampled during prefill)
+        input_ids = first_transcription_token[:, None]
     else:
         # Initial decode position for non-KV-cache mode or no prompt
         current_decode_pos = (
@@ -464,11 +524,17 @@ def _generate_with_temperature(
         if kv_cache:
             input_ids = input_ids[:, :1]
 
-    # Generation loop start: if prefill ran, start from last prefix position; otherwise start from 0
+    # Generation loop start: if prefill ran, first token was already sampled, so start from transcription_start_pos + 1
+    # Otherwise start from 0
     if kv_cache and prompt is not None:
-        generation_start = transcription_start_pos - 1
+        generation_start = transcription_start_pos + 1
     else:
         generation_start = 0
+
+    # Skip decode loop if all prompts finished during prefill (e.g., first token was EOS)
+    if all(prompt_is_done):
+        generation_start = MAX_GEN_LEN  # Skip the loop
+
     for i in tqdm(range(generation_start, MAX_GEN_LEN), desc=f"Decode inference iterations (temp={temperature})"):
         start_iter = time.time()
 
@@ -529,7 +595,8 @@ def _generate_with_temperature(
                 for batch_idx in range(unpadded_batch_size):
                     full_token_sequences[batch_idx].append(next_tokens[batch_idx].item())
 
-        if i == generation_start:
+        # Record TTFT on first decode iteration (only if not already set by prefill)
+        if i == generation_start and ttft == 0.0:
             first_token_time = time.time()
             ttft = first_token_time - start_encode
             # Extract no_speech probability from first frame logits

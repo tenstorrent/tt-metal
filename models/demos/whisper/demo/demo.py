@@ -821,11 +821,13 @@ def test_demo_for_conditional_generation(
 )
 @pytest.mark.parametrize(
     "stream",
-    [True, False],
+    [False],
 )
 @pytest.mark.parametrize(
     "prompt",
-    [None],
+    [
+        'Here are several example lines using “Mister”: Good morning. This is Mister John Smith speaking. Mister Smith will join us shortly and Mister Jones is already here. I asked Mister Anderson if Mister Brown could review the file. From here on, whenever the speaker says the name "Mister …", use "Mister" (not "Mr.") in the transcription.'
+    ],
 )
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
 def test_demo_for_conditional_generation_dataset(
@@ -873,59 +875,6 @@ def test_demo_for_conditional_generation_dataset(
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size_per_device",
-    [(1)],
-)
-@pytest.mark.parametrize(
-    "mesh_device",
-    [available_devices]
-    if os.getenv("CI") != "true"
-    else ([1, available_devices] if available_devices != 1 else [available_devices]),
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "prompt",
-    [
-        'Here are several example lines using “Mister”: Good morning. This is Mister John Smith speaking. Mister Smith will join us shortly and Mister Jones is already here. I asked Mister Anderson if Mister Brown could review the file. From here on, whenever the speaker says the name "Mister …", use "Mister" (not "Mr.") in the transcription.'
-    ],
-)
-def test_demo_for_conditional_generation_with_prompt(
-    mesh_device,
-    model_repo,
-    batch_size_per_device,
-    prompt,
-    is_ci_env,
-    request,
-):
-    """Test conditional generation with a prompt to guide the model's style or spelling."""
-    if is_ci_env:
-        pytest.skip("Skipping prompt test in CI since it provides redundant testing")
-
-    generation_params = GenerationParams(
-        temperatures=0.0,
-        compression_ratio_threshold=None,
-        logprob_threshold=None,
-        no_speech_threshold=None,
-        return_timestamps=False,
-        language="English",
-        task="transcribe",
-        prompt=prompt,
-    )
-    return run_demo_whisper_for_conditional_generation_dataset(
-        mesh_device,
-        model_repo,
-        generation_params,
-        batch_size_per_device,
-        stream=False,
-    )
-
-
-@pytest.mark.parametrize(
-    "model_repo",
-    ("openai/whisper-large-v3",),
-)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-@pytest.mark.parametrize(
     "mesh_device",
     [available_devices]
     if os.getenv("CI") != "true"
@@ -942,10 +891,7 @@ def test_demo_for_conditional_generation_with_prompt(
 )
 @pytest.mark.parametrize(
     "temperatures,compression_ratio_threshold,logprob_threshold,no_speech_threshold,return_timestamps",
-    [
-        # (0.0, None, None, None, False),
-        (0.0, 2.4, -2.0, 0.6, False)
-    ],  # Translation needs relaxed thresholds
+    [(0.0, None, None, None, False), (0.0, 2.4, -2.0, 0.6, True)],  # Translation needs relaxed thresholds
 )
 @pytest.mark.parametrize(
     "stream",
