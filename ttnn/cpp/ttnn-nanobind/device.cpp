@@ -283,6 +283,7 @@ void device_module(nb::module_& m_device) {
     m_device.def(  // afuller
         "SetDefaultDevice",
         [](std::optional<MeshDevice*> device) { ttnn::SetDefaultDevice(device.value_or(nullptr)); },
+        nb::arg("device") = nb::none(),
         R"doc(
             Sets the default device to use for operations when inputs are not on the device.
 
