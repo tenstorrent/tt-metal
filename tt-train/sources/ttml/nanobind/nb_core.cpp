@@ -90,7 +90,7 @@ void py_module(nb::module_& m) {
             nb::arg("mesh_shape_override"));
         // Synchronize gradients across devices for DDP
         py_distributed.def(
-            "synchronize_parameters", &ttml::core::distributed::synchronize_parameters, nb::arg("parameters"));
+            "synchronize_gradients", &ttml::core::distributed::synchronize_gradients, nb::arg("parameters"));
 
         // Bind DistributedContext methods
         using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
