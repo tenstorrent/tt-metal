@@ -34,27 +34,26 @@ constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(5);
 constexpr bool fuse_op = get_compile_time_arg_val(6);
 constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(7));
 constexpr bool direction = get_compile_time_arg_val(8);  // 1 is forward, 0 is backward
-constexpr uint32_t tiles_per_chunk = get_compile_time_arg_val(9);
-constexpr uint32_t ag_worker_cores = get_compile_time_arg_val(10);
-constexpr uint32_t ag_worker_id = get_compile_time_arg_val(11);
-constexpr bool is_termination_master = get_compile_time_arg_val(12);
-constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(13);
-constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(14);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(15);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(16);
-constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(17);
-constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(18);
-constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(19);
-constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(20);
-constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(21);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(22);
-constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(23);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(24);
+constexpr uint32_t ag_worker_cores = get_compile_time_arg_val(9);
+constexpr uint32_t ag_worker_id = get_compile_time_arg_val(10);
+constexpr bool is_termination_master = get_compile_time_arg_val(11);
+constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(12);
+constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(13);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(14);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(15);
+constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(16);
+constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(17);
+constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(18);
+constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(19);
+constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(20);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(21);
+constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(22);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(23);
 
 constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info =
-    ccl_routing_utils::get_line_unicast_route_info_from_args<25>();
+    ccl_routing_utils::get_line_unicast_route_info_from_args<24>();
 
-inline constexpr uint32_t sharded_args_start_idx = 25 + ccl_routing_utils::num_line_unicast_args;
+inline constexpr uint32_t sharded_args_start_idx = 24 + ccl_routing_utils::num_line_unicast_args;
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -80,6 +79,8 @@ void kernel_main() {
     uint32_t mm_block_wt = get_arg_val<uint32_t>(arg_idx++);
     uint32_t mm_block_ht = get_arg_val<uint32_t>(arg_idx++);
     uint32_t mm_cores_y = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t warmup_mm_block_ht = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t warmup_mm_Ht = get_arg_val<uint32_t>(arg_idx++);
     bool read_local_slice_from_input = (bool)get_arg_val<uint32_t>(arg_idx++);
 
     uint32_t device_k_block_counts[ring_size];
@@ -198,7 +199,9 @@ void kernel_main() {
 
     uint32_t padded_M_tiles = round_up(input_tensor_Ht, mm_cores_y);
     uint32_t M_tiles_per_core = padded_M_tiles / mm_cores_y;
-    uint32_t M_blocks_per_core = div_up(M_tiles_per_core, mm_block_ht);
+    uint32_t M_warmup_blocks_per_core = warmup_mm_Ht / warmup_mm_block_ht;
+    uint32_t M_normal_blocks_per_core = div_up(M_tiles_per_core - warmup_mm_Ht, mm_block_ht);
+    uint32_t M_blocks_per_core = M_warmup_blocks_per_core + M_normal_blocks_per_core;
 
     // Write out the local slice to both DRAM and forward and backward
     for (uint32_t b_idx = 0; b_idx < num_batches; b_idx++) {
@@ -208,7 +211,12 @@ void kernel_main() {
             for (uint32_t chunk_idx = 0; chunk_idx < device_k_block_counts[my_chip_id]; chunk_idx++) {
                 uint32_t actual_chunk_w = device_chunk_widths[my_chip_id][chunk_idx];
                 uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
-                    input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
+                    input_chunk_start_tile,
+                    M_tiles_per_core,
+                    input_tensor_Wt,
+                    mm_block_ht,
+                    warmup_mm_block_ht,
+                    M_warmup_blocks_per_core);
                 uint32_t tiles_in_current_chunk = actual_chunk_w * actual_chunk_h * mm_cores_y;
                 write_chunk(
                     input_chunk_start_tile,
@@ -250,9 +258,13 @@ void kernel_main() {
                 for (uint32_t chunk_idx = 0; chunk_idx < device_k_block_counts[actual_sender_chip_id]; chunk_idx++) {
                     uint32_t actual_chunk_w = device_chunk_widths[actual_sender_chip_id][chunk_idx];
                     uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
-                        input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
+                        input_chunk_start_tile,
+                        M_tiles_per_core,
+                        input_tensor_Wt,
+                        mm_block_ht,
+                        warmup_mm_block_ht,
+                        M_warmup_blocks_per_core);
                     uint32_t tiles_in_current_chunk = actual_chunk_w * actual_chunk_h * mm_cores_y;
-
                     write_chunk(
                         input_chunk_start_tile,
                         batch_output_tile_offset,

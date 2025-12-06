@@ -54,12 +54,13 @@ tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
         attributes.output_mem_config,
         attributes.topology,
         attributes.cluster_axis,
-        attributes.tiles_per_chunk,
         attributes.num_workers_per_link,
         attributes.num_buffers_per_channel,
         attributes.mm_cores_y,
         attributes.mm_block_ht,
         attributes.mm_block_wt,
+        attributes.warmup_mm_block_ht,
+        attributes.warmup_mm_ht,
         tensor_args.input_tensor.logical_shape(),
         tensor_args.input_tensor.layout(),
         tensor_args.input_tensor.dtype(),
@@ -76,12 +77,13 @@ StridedAllGatherAsync::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     const std::optional<uint32_t>& cluster_axis,
-    const std::optional<uint32_t>& tiles_per_chunk,
     const std::optional<uint32_t>& num_workers_per_link,
     const std::optional<uint32_t>& num_buffers_per_channel,
     const std::optional<uint32_t>& mm_cores_y,
     const std::optional<uint32_t>& mm_block_ht,
-    const std::optional<uint32_t>& mm_block_wt) {
+    const std::optional<uint32_t>& mm_block_wt,
+    const std::optional<uint32_t>& warmup_mm_block_ht,
+    const std::optional<uint32_t>& warmup_mm_ht) {
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "strided_all_gather_async op is only supported for Fast Dispatch");
@@ -106,12 +108,13 @@ StridedAllGatherAsync::invoke(
             ccl_topology,
             multi_device_global_semaphore,
             cluster_axis,
-            tiles_per_chunk,
             num_workers_per_link,
             num_buffers_per_channel,
             mm_cores_y,
             mm_block_ht,
-            mm_block_wt},
+            mm_block_wt,
+            warmup_mm_block_ht,
+            warmup_mm_ht},
         tensor_args_t{input_tensor, persistent_output_buffer}};
 }
 }  // namespace ttnn::operations::experimental::ccl::strided_all_gather_async

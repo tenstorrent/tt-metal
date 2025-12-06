@@ -235,12 +235,13 @@ StridedAllGatherAsyncProgramFactory::create_at(
             attributes.semaphore,
             empty_fused_op_signaler,
             false,
-            attributes.tiles_per_chunk,
             attributes.num_workers_per_link,
             attributes.num_buffers_per_channel,
             attributes.mm_cores_y,
             attributes.mm_block_ht,
             attributes.mm_block_wt,
+            attributes.warmup_mm_block_ht,
+            attributes.warmup_mm_ht,
             CoreCoord(0, 0))};
 }
 
@@ -260,12 +261,13 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     const std::vector<GlobalSemaphore>& semaphore,
     std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler>& fused_op_signaler,
     bool read_local_slice_from_input,
-    std::optional<uint32_t> tiles_per_chunk,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     std::optional<uint32_t> mm_cores_y,
     std::optional<uint32_t> mm_block_ht,
     std::optional<uint32_t> mm_block_wt,
+    std::optional<uint32_t> warmup_mm_block_ht,
+    std::optional<uint32_t> warmup_mm_ht,
     const CoreCoord core_grid_offset) {
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
@@ -384,16 +386,14 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     uint32_t output_tensor_Wt = output_tensor_shape[3] / TILE_WIDTH;
     uint32_t output_tensor_Ht = output_tensor_shape[2] / TILE_WIDTH;
 
-    uint32_t tiles_per_chunk_val = tiles_per_chunk.value_or(0);
     uint32_t mm_cores_y_val = mm_cores_y.value_or(0);
     uint32_t mm_block_ht_val = mm_block_ht.value_or(0);
     uint32_t mm_block_wt_val = mm_block_wt.value_or(0);
-    if (fuse_op) {
-        tiles_per_chunk_val = mm_cores_y_val * mm_block_ht_val * mm_block_wt_val;
-    }
 
     std::map<std::string, std::string> reader_compute_defines;
     std::map<std::string, std::string> writer_compute_defines;
+    uint32_t warmup_mm_block_ht_val = warmup_mm_block_ht.value_or(1);
+    uint32_t warmup_mm_ht_val = warmup_mm_ht.value_or(0);
 
     // KERNEL CREATION
     /* All gather fusion */
@@ -515,7 +515,6 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                     static_cast<uint32_t>(topology),  // topology
                     dir,                              // direction
                     fuse_op,                          // fused op
-                    tiles_per_chunk_val,
                     global_worker_count,
                     global_worker_id,
                 };
@@ -542,7 +541,9 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                     semaphore.at(dir).address(),        // out_ready_semaphore_forward
                     mm_block_wt_val,
                     mm_block_ht_val,
-                    mm_cores_y_val};
+                    mm_cores_y_val,
+                    warmup_mm_block_ht_val,
+                    warmup_mm_ht_val};
                 reader_rt_args.push_back(device_max_chunks);
                 for (uint32_t d = 0; d < ring_size; d++) {
                     reader_rt_args.push_back(device_k_block_counts[d]);
@@ -585,7 +586,6 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                     fuse_op,                          // fused op
                     static_cast<uint32_t>(topology),  // topology
                     dir,                              // direction
-                    tiles_per_chunk_val,
                     global_worker_count,
                     global_worker_id,
                 };
@@ -630,6 +630,8 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                     mm_block_wt_val,
                     mm_block_ht_val,
                     mm_cores_y_val,
+                    warmup_mm_block_ht_val,
+                    warmup_mm_ht_val,
                     read_local_slice_from_input};
                 writer_rt_args.push_back(device_max_chunks);
                 for (uint32_t d = 0; d < ring_size; d++) {

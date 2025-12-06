@@ -77,12 +77,24 @@ get_sender_id(uint32_t direction, uint32_t my_chip_id, uint32_t slices_received,
 }
 
 FORCE_INLINE uint32_t next_mm_aligned_chunk_height(
-    uint32_t input_chunk_start_tile, uint32_t M_tiles_per_core, uint32_t input_tensor_Wt, uint32_t mm_block_h) {
+    uint32_t input_chunk_start_tile,
+    uint32_t M_tiles_per_core,
+    uint32_t input_tensor_Wt,
+    uint32_t mm_block_h,
+    uint32_t warmup_mm_block_h,
+    uint32_t warmup_mm_Ht) {
     uint32_t input_row = input_chunk_start_tile / input_tensor_Wt;
-    if ((input_row + mm_block_h) > M_tiles_per_core) {
+    uint32_t next_mm_block_h;
+    if (input_row >= warmup_mm_Ht) {
+        next_mm_block_h = mm_block_h;
+    } else {
+        next_mm_block_h = warmup_mm_block_h;
+    }
+
+    if ((input_row + next_mm_block_h) > M_tiles_per_core) {
         return M_tiles_per_core - input_row;
     } else {
-        return mm_block_h;
+        return next_mm_block_h;
     }
 }
 

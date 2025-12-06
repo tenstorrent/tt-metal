@@ -35,6 +35,8 @@ def run_strided_all_gather_impl(
     mm_cores_y,
     mm_block_h,
     mm_block_w,
+    warmup_mm_block_h,
+    warmup_mm_h,
     num_iters=1,
     enable_trace=True,
     cluster_axis=1,
@@ -131,12 +133,13 @@ def run_strided_all_gather_impl(
             memory_config=mem_config_ag,
             topology=all_gather_topology,
             cluster_axis=cluster_axis,
-            tiles_per_chunk=tiles_per_chunk,
             num_workers_per_link=num_workers_per_link,
             num_buffers_per_channel=num_buffers_per_channel,
             mm_cores_y=mm_cores_y,
             mm_block_ht=mm_block_h // 32,
             mm_block_wt=mm_block_w // 32,
+            warmup_mm_block_ht=warmup_mm_block_h // 32,
+            warmup_mm_ht=warmup_mm_h // 32,
         )
 
         return tt_all_gather_out_tensor
@@ -202,7 +205,7 @@ def run_strided_all_gather_impl(
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, other_dim, num_workers_per_link, tiles_per_chunk, layout, ag_input_dtype, mm_cores_y, mm_block_h, mm_block_w",
+    "ag_output_shape, dim, other_dim, num_workers_per_link, tiles_per_chunk, layout, ag_input_dtype, mm_cores_y, mm_block_h, mm_block_w, warmup_mm_block_h, warmup_mm_h",
     [
         # ([1, 1, 32, 256], 3, 2, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
         # ([1, 1, 32, 512], 3, 2, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
@@ -220,7 +223,8 @@ def run_strided_all_gather_impl(
         # ([1, 1, 128, 256], 3, 2, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 2, 32, 32),
         # ([1, 1, 128, 256], 3, 2, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 2, 32, 32),
         # Full tests
-        ([1, 1, 4096, 2560], 3, 2, 2, 1024, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 4096, 320),
+        # ([1, 1, 4096, 2560], 3, 2, 2, 1024, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 4096, 320, 32, 0),
+        ([1, 1, 4096, 2560], 3, 2, 2, 1024, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 4096, 320, 32, 32),
     ],
     ids=[
         # "1tile1chunk1worker1row",
@@ -239,7 +243,8 @@ def run_strided_all_gather_impl(
         # "2tile2chunk1worker4row2ycores",
         # "2tile2chunk2worker4row2ycores",
         # Full tests
-        "4k4k",
+        # "4k4k",
+        "warmup4k4k",
     ],
 )
 @pytest.mark.parametrize(
@@ -284,6 +289,8 @@ def test_strided_all_gather_async(
     mm_cores_y,
     mm_block_h,
     mm_block_w,
+    warmup_mm_block_h,
+    warmup_mm_h,
 ):
     run_strided_all_gather_impl(
         mesh_device,
@@ -304,4 +311,6 @@ def test_strided_all_gather_async(
         mm_cores_y=mm_cores_y,
         mm_block_h=mm_block_h,
         mm_block_w=mm_block_w,
+        warmup_mm_block_h=warmup_mm_block_h,
+        warmup_mm_h=warmup_mm_h,
     )

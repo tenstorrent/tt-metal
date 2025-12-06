@@ -74,6 +74,8 @@ tt::tt_metal::operation::Hash StridedAllGatherMinimalMatmulAsync::compute_progra
         attributes.strided_all_gather_async_struct.cluster_axis,
         attributes.strided_all_gather_async_struct.num_workers_per_link,
         attributes.strided_all_gather_async_struct.num_buffers_per_channel,
+        attributes.strided_all_gather_async_struct.warmup_mm_block_ht,
+        attributes.strided_all_gather_async_struct.warmup_mm_ht,
         attributes.all_gather_core_grid_offset,
         tensor_args.input_tensor.logical_shape(),
         tensor_args.input_tensor.layout(),
@@ -101,7 +103,9 @@ std::
         std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
         std::optional<uint32_t> num_workers_per_link,
         std::optional<uint32_t> num_buffers_per_channel,
-        std::optional<bool> read_local_slice_from_input) {
+        std::optional<bool> read_local_slice_from_input,
+        const std::optional<uint32_t>& warmup_mm_block_ht,
+        const std::optional<uint32_t>& warmup_mm_ht) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
     if (bias.has_value()) {
@@ -122,12 +126,13 @@ std::
             topology,
             multi_device_global_semaphore,
             cluster_axis,
-            /*tiles_per_chunk=*/std::nullopt,
             num_workers_per_link,
             num_buffers_per_channel,
             config->compute_with_storage_grid_size.y,
             config->M_block_size,
-            config->K_block_size);
+            config->K_block_size,
+            warmup_mm_block_ht,
+            warmup_mm_ht);
 
     /* Matmul setup */
     minimal_matmul::MinimalMatmulOp matmul_struct = minimal_matmul::MinimalMatmulOp{

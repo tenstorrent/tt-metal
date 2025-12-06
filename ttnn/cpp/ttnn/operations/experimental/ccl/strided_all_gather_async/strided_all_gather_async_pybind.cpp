@@ -35,12 +35,13 @@ void bind_strided_all_gather_async(pybind11::module& module, const ccl_operation
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const ttnn::ccl::Topology topology,
                std::optional<uint32_t> cluster_axis,
-               std::optional<uint32_t> tiles_per_chunk,
                std::optional<uint32_t> num_workers_per_link,
                std::optional<uint32_t> num_buffers_per_channel,
                std::optional<uint32_t> mm_cores_y,
                std::optional<uint32_t> mm_block_ht,
-               std::optional<uint32_t> mm_block_wt) -> ttnn::Tensor {
+               std::optional<uint32_t> mm_block_wt,
+               std::optional<uint32_t> warmup_mm_block_ht,
+               std::optional<uint32_t> warmup_mm_ht) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     persistent_output_buffer,
@@ -50,12 +51,13 @@ void bind_strided_all_gather_async(pybind11::module& module, const ccl_operation
                     memory_config,
                     topology,
                     cluster_axis,
-                    tiles_per_chunk,
                     num_workers_per_link,
                     num_buffers_per_channel,
                     mm_cores_y,
                     mm_block_ht,
-                    mm_block_wt);
+                    mm_block_wt,
+                    warmup_mm_block_ht,
+                    warmup_mm_ht);
             },
             py::arg("input_tensor"),
             py::arg("persistent_output_buffer"),
@@ -66,12 +68,13 @@ void bind_strided_all_gather_async(pybind11::module& module, const ccl_operation
             py::arg("memory_config") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Ring,
             py::arg("cluster_axis") = std::nullopt,
-            py::arg("tiles_per_chunk") = std::nullopt,
             py::arg("num_workers_per_link") = std::nullopt,
             py::arg("num_buffers_per_channel") = std::nullopt,
             py::arg("mm_cores_y") = std::nullopt,
             py::arg("mm_block_ht") = std::nullopt,
-            py::arg("mm_block_wt") = std::nullopt});
+            py::arg("mm_block_wt") = std::nullopt,
+            py::arg("warmup_mm_block_ht") = std::nullopt,
+            py::arg("warmup_mm_ht") = std::nullopt});
 }
 
 }  // namespace

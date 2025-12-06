@@ -87,6 +87,8 @@ strided_all_gather_minimal_matmul_async_program(
     const std::vector<GlobalSemaphore>& semaphore,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
+    std::optional<uint32_t> warmup_mm_block_ht,
+    std::optional<uint32_t> warmup_mm_ht,
     const CoreCoord core_grid_offset,
 
     /* Matmul Params */
@@ -146,12 +148,13 @@ strided_all_gather_minimal_matmul_async_program(
                 semaphore,
                 all_gather_fused_op_signaler,
                 read_local_slice_from_input,
-                std::nullopt,
                 num_workers_per_direction_opt,
                 num_buffers_per_channel,
                 matmul_fused_op_signaler->num_fused_op_cores_to_signal,
                 config.M_block_size,
                 config.K_block_size,
+                warmup_mm_block_ht,
+                warmup_mm_ht,
                 core_grid_offset);
 
     return {std::move(program), {ag_shared_variables, mm_shared_variables}};
@@ -204,6 +207,8 @@ StridedAllGatherMinimalMatmulAsyncProgramFactory::create_at(
         attributes.strided_all_gather_async_struct.semaphore,
         attributes.strided_all_gather_async_struct.num_workers_per_link,
         attributes.strided_all_gather_async_struct.num_buffers_per_channel,
+        attributes.strided_all_gather_async_struct.warmup_mm_block_ht,
+        attributes.strided_all_gather_async_struct.warmup_mm_ht,
         attributes.all_gather_core_grid_offset,
 
         /* Matmul Params */

@@ -26,9 +26,8 @@ constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(5);
 constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(6));
 constexpr bool direction = get_compile_time_arg_val(7);  // 1 is forward, 0 is backward
 constexpr bool fuse_op = get_compile_time_arg_val(8);
-constexpr uint32_t tiles_per_chunk = get_compile_time_arg_val(9);
-constexpr uint32_t ag_worker_cores = get_compile_time_arg_val(10);
-constexpr uint32_t ag_worker_id = get_compile_time_arg_val(11);
+constexpr uint32_t ag_worker_cores = get_compile_time_arg_val(9);
+constexpr uint32_t ag_worker_id = get_compile_time_arg_val(10);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -49,6 +48,8 @@ void kernel_main() {
     uint32_t mm_block_wt = get_arg_val<uint32_t>(arg_idx++);
     uint32_t mm_block_ht = get_arg_val<uint32_t>(arg_idx++);
     uint32_t mm_cores_y = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t warmup_mm_block_ht = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t warmup_mm_Ht = get_arg_val<uint32_t>(arg_idx++);
 
     uint32_t device_k_block_counts[ring_size];
     uint32_t device_max_chunks = get_arg_val<uint32_t>(arg_idx++);
@@ -61,7 +62,7 @@ void kernel_main() {
         }
     }
 
-    constexpr uint32_t ct_idx = 12;
+    constexpr uint32_t ct_idx = 11;
 
     constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
     constexpr uint32_t ct_offset = input_tensor_args.num_compile_time_args();
@@ -102,7 +103,9 @@ void kernel_main() {
 
     uint32_t padded_M_tiles = round_up(input_tensor_Ht, mm_cores_y);
     uint32_t M_tiles_per_core = padded_M_tiles / mm_cores_y;
-    uint32_t M_blocks_per_core = div_up(M_tiles_per_core, mm_block_ht);
+    uint32_t M_warmup_blocks_per_core = warmup_mm_Ht / warmup_mm_block_ht;
+    uint32_t M_normal_blocks_per_core = div_up(M_tiles_per_core - warmup_mm_Ht, mm_block_ht);
+    uint32_t M_blocks_per_core = M_warmup_blocks_per_core + M_normal_blocks_per_core;
 
     for (uint32_t b_idx = 0; b_idx < num_batches; b_idx++) {
         for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
@@ -111,7 +114,12 @@ void kernel_main() {
             for (uint32_t chunk_idx = 0; chunk_idx < device_k_block_counts[my_chip_id]; chunk_idx++) {
                 uint32_t actual_chunk_w = device_chunk_widths[my_chip_id][chunk_idx];
                 uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
-                    input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
+                    input_chunk_start_tile,
+                    M_tiles_per_core,
+                    input_tensor_Wt,
+                    mm_block_ht,
+                    warmup_mm_block_ht,
+                    M_warmup_blocks_per_core);
                 uint32_t tiles_in_current_chunk = actual_chunk_w * actual_chunk_h * mm_cores_y;
                 read_chunk(
                     input_chunk_start_tile,
@@ -151,7 +159,12 @@ void kernel_main() {
                         (topology == Topology::Ring && ((slices_received + 1) < (writes_expected + 1)))) {
                         uint32_t actual_chunk_w = device_chunk_widths[actual_sender_chip_id][chunk_idx];
                         uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
-                            input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
+                            input_chunk_start_tile,
+                            M_tiles_per_core,
+                            input_tensor_Wt,
+                            mm_block_ht,
+                            warmup_mm_block_ht,
+                            M_warmup_blocks_per_core);
                         uint32_t tiles_in_current_chunk = actual_chunk_w * actual_chunk_h * mm_cores_y;
                         read_chunk(
                             input_chunk_start_tile,

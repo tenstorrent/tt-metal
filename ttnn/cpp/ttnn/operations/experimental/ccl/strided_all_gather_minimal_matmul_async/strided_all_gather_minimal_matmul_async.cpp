@@ -26,7 +26,9 @@ std::vector<ttnn::Tensor> ExecuteStridedAllGatherMinimalMatmulAsync::invoke(
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    std::optional<bool> read_local_slice_from_input) {
+    std::optional<bool> read_local_slice_from_input,
+    std::optional<uint32_t> warmup_mm_block_ht,
+    std::optional<uint32_t> warmup_mm_ht) {
     return ttnn::prim::strided_all_gather_minimal_matmul_async(
         input_tensor,
         weight_tensor,
@@ -46,7 +48,9 @@ std::vector<ttnn::Tensor> ExecuteStridedAllGatherMinimalMatmulAsync::invoke(
         num_workers_per_link.value_or(
             1),  // Conservatively 1 right now since the all gather core grid is hardcoded from the outside
         num_buffers_per_channel,
-        read_local_slice_from_input);
+        read_local_slice_from_input,
+        warmup_mm_block_ht,
+        warmup_mm_ht);
 }
 
 }  // namespace operations::experimental::ccl

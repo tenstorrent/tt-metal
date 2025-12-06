@@ -68,7 +68,9 @@ struct StridedAllGatherMinimalMatmulAsync {
         std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
         std::optional<uint32_t> num_workers_per_link,
         std::optional<uint32_t> num_buffers_per_channel,
-        std::optional<bool> read_local_slice_from_input);
+        std::optional<bool> read_local_slice_from_input,
+        const std::optional<uint32_t>& warmup_mm_block_ht,
+        const std::optional<uint32_t>& warmup_mm_ht);
 };
 }  // namespace strided_all_gather_minimal_matmul_async
 }  // namespace ttnn::operations::experimental::ccl

@@ -50,12 +50,13 @@ struct StridedAllGatherAsyncProgramFactory {
         const std::vector<GlobalSemaphore>& semaphore,
         std::optional<ttnn::experimental::ccl::StridedAllGatherFusedOpSignaler>& fused_op_signaler,
         bool read_local_slice_from_input,
-        std::optional<uint32_t> tiles_per_chunk,
         std::optional<uint32_t> num_workers_per_link,
         std::optional<uint32_t> num_buffers_per_channel,
         std::optional<uint32_t> mm_cores_y,
         std::optional<uint32_t> mm_block_ht,
         std::optional<uint32_t> mm_block_wt,
+        std::optional<uint32_t> warmup_mm_block_ht,
+        std::optional<uint32_t> warmup_mm_ht,
         CoreCoord core_grid_offset = CoreCoord(0, 0));
 
     static void override_runtime_arguments_per_program(

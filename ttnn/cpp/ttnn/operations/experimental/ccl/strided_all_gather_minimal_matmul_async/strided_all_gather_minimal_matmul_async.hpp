@@ -33,7 +33,9 @@ struct ExecuteStridedAllGatherMinimalMatmulAsync {
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         std::optional<uint32_t> num_workers_per_link = std::nullopt,
         std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
-        std::optional<bool> read_local_slice_from_input = std::nullopt);
+        std::optional<bool> read_local_slice_from_input = std::nullopt,
+        std::optional<uint32_t> warmup_mm_block_ht = std::nullopt,
+        std::optional<uint32_t> warmup_mm_ht = std::nullopt);
 };
 
 }  // namespace operations::experimental::ccl

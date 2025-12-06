@@ -22,12 +22,13 @@ ttnn::Tensor ExecuteStridedAllGatherAsync::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<uint32_t> cluster_axis,
-    std::optional<uint32_t> tiles_per_chunk,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     std::optional<uint32_t> mm_cores_y,
     std::optional<uint32_t> mm_block_ht,
-    std::optional<uint32_t> mm_block_wt) {
+    std::optional<uint32_t> mm_block_wt,
+    std::optional<uint32_t> warmup_mm_block_ht,
+    std::optional<uint32_t> warmup_mm_ht) {
     return ttnn::prim::strided_all_gather_async(
         input_tensor,
         persistent_output_buffer,
@@ -37,11 +38,12 @@ ttnn::Tensor ExecuteStridedAllGatherAsync::invoke(
         memory_config,
         topology,
         cluster_axis,
-        tiles_per_chunk,
         num_workers_per_link,
         num_buffers_per_channel,
         mm_cores_y,
         mm_block_ht,
-        mm_block_wt);
+        mm_block_wt,
+        warmup_mm_block_ht,
+        warmup_mm_ht);
 }
 }  // namespace ttnn::operations::experimental::ccl
