@@ -5,18 +5,18 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    uint32_t src_addr           = get_arg_val<uint32_t>(0);
-    uint32_t bank_id            = get_arg_val<uint32_t>(1);
-    uint32_t src_buffer_size    = get_arg_val<uint32_t>(2);
+    uint32_t src_addr = get_arg_val<uint32_t>(0);
+    uint32_t bank_id = get_arg_val<uint32_t>(1);
+    uint32_t src_buffer_size = get_arg_val<uint32_t>(2);
 
-    uint32_t local_addr         = get_arg_val<uint32_t>(3);
+    uint32_t local_addr = get_arg_val<uint32_t>(3);
 
-    uint32_t dst_addr           = get_arg_val<uint32_t>(4);
-    uint32_t dst_noc_x_start    = get_arg_val<uint32_t>(5);
-    uint32_t dst_noc_y_start    = get_arg_val<uint32_t>(6);
-    uint32_t dst_noc_x_end      = get_arg_val<uint32_t>(7);
-    uint32_t dst_noc_y_end      = get_arg_val<uint32_t>(8);
-    uint32_t num_dests          = get_arg_val<uint32_t>(9);
+    uint32_t dst_addr = get_arg_val<uint32_t>(4);
+    uint32_t dst_noc_x_start = get_arg_val<uint32_t>(5);
+    uint32_t dst_noc_y_start = get_arg_val<uint32_t>(6);
+    uint32_t dst_noc_x_end = get_arg_val<uint32_t>(7);
+    uint32_t dst_noc_y_end = get_arg_val<uint32_t>(8);
+    uint32_t num_dests = get_arg_val<uint32_t>(9);
 
     constexpr bool use_loopback = get_compile_time_arg_val(0);
 

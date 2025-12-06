@@ -564,7 +564,7 @@ void RunTestMulticast(
     };
     auto mcast_kernel = tt_metal::CreateKernel(
         program_,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_multicast.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/multicast_sanitize_test.cpp",
         sender_core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
