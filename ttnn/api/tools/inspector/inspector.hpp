@@ -8,7 +8,7 @@
 
 namespace ttnn {
 
-namespace debug_event {
+namespace inspector {
 
 // Log relation between workflow and operation information
 void log_operation_info(uint32_t workflow_id, std::string_view operation_name, std::string_view operation_attributes);
@@ -16,5 +16,5 @@ void log_operation_info(uint32_t workflow_id, std::string_view operation_name, s
 // Log relation between workflow and particular excetution of operation
 void log_runtime_id(uint32_t workflow_id, uint32_t runtime_id);
 
-}  // namespace debug_event
+}  // namespace inspector
 }  // namespace ttnn
