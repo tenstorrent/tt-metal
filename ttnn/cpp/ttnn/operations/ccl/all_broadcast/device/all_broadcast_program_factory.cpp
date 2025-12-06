@@ -98,7 +98,7 @@ AllBroadcastProgramFactory::cached_program_t AllBroadcastProgramFactory::create_
     // Get OP Config, topology config
     auto [num_targets_forward, num_targets_backward] = ::ttnn::ccl::get_forward_backward_line_mcast_distance(
         ring_size, ring_index, operation_attributes.topology, true);
-
+    // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
     const auto [sender_worker_core_range, sender_worker_cores] = ::ttnn::ccl::choose_worker_cores(
         operation_attributes.num_links,
@@ -334,7 +334,7 @@ void AllBroadcastProgramFactory::override_runtime_arguments(
 
         log_trace(tt::LogOp, "DEBUG: semaphore: {}", shared_vars.semaphore.address());
         log_trace(tt::LogOp, "DEBUG: barrier_semaphore: {}", shared_vars.barrier_semaphore.address());
-
+        // update senders
         auto& worker_reader_sender_runtime_args_by_core =
             GetRuntimeArgs(program, shared_vars.worker_sender_reader_kernel_id);
         auto& worker_writer_sender_runtime_args_by_core =
