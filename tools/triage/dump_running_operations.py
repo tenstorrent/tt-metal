@@ -50,13 +50,12 @@ class RunningOperationSummary:
     host_assigned_id: int = triage_field("Host Assigned ID", hex_serializer)
     operations: list[str] = triage_field("Operations", collection_serializer("\n"))
     previous_operations: list[str] = triage_field("Previous Operations", collection_serializer("\n"))
-    num_devices: int = triage_field("Devices")
-    num_cores: int = triage_field("Cores")
     devices: list[str] = triage_field("Device List", collection_serializer(", "))
     cores: list[str] = triage_field("Core List", collection_serializer("\n"))
 
 
 MAX_CORES_DISPLAYED = 5
+MAX_DEVICES_DISPLAYED = 5
 
 
 class RunningOperationAggregation:
@@ -89,6 +88,9 @@ class RunningOperationAggregation:
 
     def to_summary(self) -> RunningOperationSummary:
         devices = sorted(self.device_labels)
+        devices_to_display = (
+            devices if len(devices) <= MAX_DEVICES_DISPLAYED else devices[:MAX_DEVICES_DISPLAYED] + ["..."]
+        )
         operations = sorted(self.operations) if self.operations else ["N/A"]
         previous_operations = sorted(self.previous_operations) if self.previous_operations else ["N/A"]
         unique_cores = sorted(self.core_locations)
@@ -99,25 +101,47 @@ class RunningOperationAggregation:
             host_assigned_id=self.host_assigned_id,
             operations=operations,
             previous_operations=previous_operations,
-            num_devices=len(devices),
-            num_cores=len(unique_cores),
-            devices=devices,
+            devices=devices_to_display,
             cores=cores_to_display,
         )
 
 
 def _format_operation(kernel_name: str | None, watcher_kernel_id: int | None) -> str | None:
     if kernel_name:
-        return kernel_name
+        return f"Kernel: {kernel_name}"
     if watcher_kernel_id is not None and watcher_kernel_id >= 0:
-        return f"Kernel ID {watcher_kernel_id}"
+        return f"Kernel ID: {watcher_kernel_id}"
     return None
 
 
-def _format_core_location(device_label: str, location: OnChipCoordinate) -> str:
-    user_str = location.to_user_str()
-    location_token = user_str.split()[0] if user_str else user_str
-    return f"{device_label}:{location_token}" if location_token else device_label
+def _format_core_location(device_label: str | None, location: OnChipCoordinate | None) -> str:
+    if location is None:
+        return "N/A"
+    if device_label is None:
+        return location.to_str("noc0")
+    return f"{device_label}:{location.to_str('noc0')}"
+
+
+def _collect_dispatcher_data(
+    dispatcher_data: DispatcherData, location: OnChipCoordinate, risc_name: str, show_all_cores: bool = False
+) -> DispatcherCoreData | None:
+    try:
+        dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
+    except Exception as exc:
+        log_check_risc(
+            risc_name,
+            location,
+            False,
+            f"Failed to read dispatcher data for running operations aggregation: {exc}",
+        )
+        return None
+    if not show_all_cores and dispatcher_core_data.go_message == "DONE":
+        return None
+
+    host_assigned_id = dispatcher_core_data.host_assigned_id
+    if host_assigned_id in (None, 0):
+        return None
+    return dispatcher_core_data
 
 
 def _collect_running_operations(
@@ -127,38 +151,36 @@ def _collect_running_operations(
         device.unique_id: DeviceDescription(device, run_checks.metal_device_id_mapping) for device in run_checks.devices
     }
 
+    # Use run_checks infrastructure to iterate over all cores
+    collected_results = run_checks.run_per_core_check(
+        lambda location, risc_name: _collect_dispatcher_data(
+            dispatcher_data,
+            location,
+            risc_name,
+            show_all_cores,
+        ),
+        block_filter=BLOCK_TYPES_TO_CHECK,
+    )
+
+    if not collected_results:
+        return None
+
     aggregations: dict[int, RunningOperationAggregation] = {}
 
-    for device in run_checks.devices:
-        device_label = device_description_serializer(device_descriptions[device.unique_id])
-        for block_type in BLOCK_TYPES_TO_CHECK:
-            locations = run_checks.block_locations[device].get(block_type, [])
-            for location in locations:
-                block = device.get_block(location)
-                for risc_name in block.risc_names:
-                    try:
-                        dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
-                    except Exception as exc:
-                        log_check_risc(
-                            risc_name,
-                            location,
-                            False,
-                            f"Failed to read dispatcher data for running operations aggregation: {exc}",
-                        )
-                        continue
-
-                    # Skip DONE cores unless --include-done is specified
-                    if not show_all_cores and dispatcher_core_data.go_message == "DONE":
-                        continue
-
-                    host_assigned_id = dispatcher_core_data.host_assigned_id
-                    if host_assigned_id in (None, 0):
-                        continue
-
-                    aggregation = aggregations.setdefault(
-                        host_assigned_id, RunningOperationAggregation(host_assigned_id)
-                    )
-                    aggregation.add_core(device_label, location, risc_name, dispatcher_core_data)
+    # Process results
+    for check_result in collected_results:
+        if check_result.result is None:
+            continue
+        dispatcher_core_data = check_result.result
+        aggregation = aggregations.setdefault(
+            dispatcher_core_data.host_assigned_id, RunningOperationAggregation(dispatcher_core_data.host_assigned_id)
+        )
+        aggregation.add_core(
+            device_description_serializer(check_result.device_description),
+            check_result.location,
+            check_result.risc_name,
+            dispatcher_core_data,
+        )
 
     if not aggregations:
         return None
