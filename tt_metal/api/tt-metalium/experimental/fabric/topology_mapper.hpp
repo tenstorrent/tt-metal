@@ -313,32 +313,6 @@ private:
     std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> build_fabric_node_id_to_mesh_rank_mapping() const;
 
     /**
-     * @brief Build logical adjacency maps from mesh graph connectivity
-     *
-     * Creates adjacency maps for each mesh based on the logical connectivity defined in the mesh graph.
-     * For each fabric node in a mesh, this function identifies its logical neighbors by examining
-     * the intra-mesh connectivity from the mesh graph and creates a mapping of FabricNodeId to
-     * its vector of adjacent FabricNodeIds.
-     *
-     * @return std::map<MeshId, LogicalAdjacencyMap> Map from mesh ID to logical adjacency map
-     */
-    std::map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical() const;
-
-    /**
-     * @brief Build physical adjacency maps from system descriptor connectivity
-     *
-     * Creates adjacency maps for each mesh based on the physical connectivity defined in the physical system
-     * descriptor. For each ASIC in a mesh, this function identifies its physical neighbors by examining the ASIC
-     * neighbors from the physical system descriptor and filters them to only include neighbors that are also part of
-     * the same mesh. The resulting map contains ASIC IDs mapped to their vectors of adjacent ASIC IDs within the mesh.
-     *
-     * @param asic_id_to_mesh_rank Mapping of mesh IDs to ASIC IDs to mesh host ranks
-     * @return std::map<MeshId, PhysicalAdjacencyMap> Map from mesh ID to physical adjacency map
-     */
-    std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
-        const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) const;
-
-    /**
      * @brief Create bidirectional mappings between logical fabric nodes and physical ASIC IDs
      *
      * This function performs the core topology mapping by creating bidirectional mappings between logical fabric nodes
