@@ -732,7 +732,7 @@ async function enrichRegressions(regressedDetails, filteredGrouped, errorSnippet
     first_failed_head_short: '0000000',
     first_failed_author_name: 'Test User',
     owners: [],
-    failing_jobs: ['mock-failing-job'],
+    failing_jobs: ['tt-train-cpp-unit-tests (wormhole_b0, N150) / tt-train wormhole_b0 N150'],
     error_snippets: []
   });
 }
