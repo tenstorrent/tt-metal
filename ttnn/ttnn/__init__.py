@@ -310,6 +310,10 @@ import ttnn.experimental_loader.golden_functions
 
 import ttnn.operations
 
+# Set up divide as an alias for div after importing operations
+# This ensures both share the same golden function
+divide = ttnn.div
+
 sub = ttnn.subtract
 sub_ = ttnn.subtract_
 mul = ttnn.multiply

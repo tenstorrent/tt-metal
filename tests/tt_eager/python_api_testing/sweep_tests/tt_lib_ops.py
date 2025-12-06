@@ -757,7 +757,7 @@ def eltwise_div(
     x,
     y,
     *args,
-    accurate_mode,
+    approx_mode,
     round_mode,
     device,
     dtype,
@@ -768,7 +768,7 @@ def eltwise_div(
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = ttnn.div(t0, t1, accurate_mode=accurate_mode, round_mode=round_mode, memory_config=output_mem_config)
+    t2 = ttnn.div(t0, t1, approx_mode=approx_mode, round_mode=round_mode, memory_config=output_mem_config)
 
     return tt2torch_tensor(t2)
 
@@ -1345,7 +1345,7 @@ def eltwise_unary_div(
     x,
     *args,
     scalar,
-    accurate_mode,
+    approx_mode,
     round_mode,
     device,
     dtype,
@@ -1355,7 +1355,7 @@ def eltwise_unary_div(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.div(t0, scalar, accurate_mode=accurate_mode, round_mode=round_mode, memory_config=output_mem_config)
+    t1 = ttnn.div(t0, scalar, approx_mode=approx_mode, round_mode=round_mode, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
