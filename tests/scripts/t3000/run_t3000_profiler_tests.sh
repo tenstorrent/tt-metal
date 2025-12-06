@@ -136,7 +136,7 @@ run_profiling_test() {
 
     TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py --noconftest --timeout 360
 
-    pytest tests/ttnn/tracy/test_perf_op_report.py --noconftest
+    TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_perf_op_report.py --noconftest
 
     remove_default_log_locations
 }

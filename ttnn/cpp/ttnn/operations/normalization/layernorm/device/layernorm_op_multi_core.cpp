@@ -91,8 +91,6 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    const uint32_t no_weights_max_size = 120;
-    const uint32_t with_weights_max_size = 60;
 
     // Extract from operation_attributes and tensor_args
     const auto& a = tensor_args.input;
@@ -216,7 +214,6 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     // TODO(AP): this will not work for all Wts possibly, but should work for Wt=8, 12, 16, 32
     // TODO(AP): can also add support for block_size=7 -> 63, 28
     uint32_t WtB = tt::div_up(Wt, block_size) * block_size;  // Wt padded to be divisible by block size
-    bool large_tensor_needed = false;
     auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
                                 (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
     uint32_t in0_t = WtB;  // cb_x for no pre-add variant, x=a+b for fused pre-add, extra space for some buffering
@@ -238,6 +235,10 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     uint32_t in2_t = 2;  // scaler for reduce coming from reader
     uint32_t in3_t = 2;  // epsilon coming from reader
     uint32_t im2_t = 2;  //
+
+    bool large_tensor_needed = false;
+    constexpr uint32_t no_weights_max_size = 120;
+    constexpr uint32_t with_weights_max_size = 60;
     bool cb_fits_in_L1 = CB_can_fit_in_L1(
         in0_t * in_single_tile_size,
         in1_t * inb_single_tile_size,
@@ -376,6 +377,11 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
+    union {
+        float f;
+        uint32_t u;
+    } winv{};
+    winv.f = 1.0f / W;
     bool float32_reduction = fp32_dest_acc_en && !legacy_reduction;
     std::vector<uint32_t> compute_args = {Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en};
     if (use_welford_and_not_rms_norm) {
@@ -386,8 +392,17 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     } else {
         compute_args.push_back(float32_reduction);
         compute_args.push_back(legacy_rsqrt);
+        compute_args.push_back(winv.u);
     }
 
+    // The large-tensor non-Welford reduce kernel needs
+    // an intermediate Float32 CB that can be unpacked
+    // directly to dest (if doing a Float32 reduction)
+    constexpr auto large_tensor_acc_cb = tt::CBIndex::c_26;
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (float32_reduction) {
+        unpack_to_dest_mode[large_tensor_acc_cb] = UnpackToDestMode::UnpackToDestFp32;
+    }
     auto compute_kernels_id = CreateKernel(
         program,
         large_tensor_needed and !use_row_major_kernel
@@ -402,6 +417,7 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_args,
             .defines = compute_defines});
@@ -451,6 +467,14 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
         CircularBufferConfig(im4_t * single_tile_size, {{tt::CBIndex::c_21, cb_data_format}})
             .set_page_size(tt::CBIndex::c_21, single_tile_size);
     CreateCircularBuffer(program, all_cores, c_intermed4_config);
+    if (large_tensor_needed && !use_welford) {
+        const auto large_tensor_acc_data_format = float32_reduction ? tt::DataFormat::Float32 : cb_data_format;
+        const auto large_tensor_acc_tile_size = tt::tile_size(large_tensor_acc_data_format);
+        CircularBufferConfig cb_large_tensor_acc_config =
+            CircularBufferConfig(large_tensor_acc_tile_size, {{large_tensor_acc_cb, large_tensor_acc_data_format}})
+                .set_page_size(large_tensor_acc_cb, large_tensor_acc_tile_size);
+        CreateCircularBuffer(program, all_cores, cb_large_tensor_acc_config);
+    }
     if (gamma.has_value() || beta.has_value()) {
         CircularBufferConfig c_intermed5_config =
             CircularBufferConfig(im5_t * single_tile_size, {{tt::CBIndex::c_22, cb_data_format}})
@@ -496,14 +520,15 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
     }
 
     uint32_t curr_row = 0;
-    float winv = 1.0f / W;
-    auto bfloat_winv_value = bfloat16(winv);
-    uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
     union {
         float f;
         uint32_t u;
-    } e{};
-    e.f = eps;  // epsilon
+    } e{}, one{};
+    e.f = eps;
+    one.f = 1.0f;
+    auto bfloat_one_value = bfloat16(one.f);
+    uint32_t packed_one_value = pack_two_bfloat16_into_uint32({bfloat_one_value, bfloat_one_value});
+
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
@@ -526,7 +551,7 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
              num_tile_rows_per_core,
              Wt,
              tile_offset,
-             packed_winv_value,
+             packed_one_value,
              e.u,  // 0-5
              gamma_dram_addr,
              beta_dram_addr,

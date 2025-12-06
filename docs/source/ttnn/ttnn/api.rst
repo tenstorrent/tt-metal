@@ -50,6 +50,7 @@ Core
    ttnn.deallocate
    ttnn.reallocate
    ttnn.to_memory_config
+   ttnn.split_work_to_cores
 
 
 Tensor Creation
@@ -487,17 +488,6 @@ Normalization Program Configs
    ttnn.SoftmaxProgramConfig
    ttnn.SoftmaxDefaultProgramConfig
    ttnn.SoftmaxShardedMultiCoreProgramConfig
-
-
-Moreh Operations
-================
-
-.. autosummary::
-   :toctree: api
-   :nosignatures:
-   :template: function.rst
-
-   ttnn.moreh_sum
 
 Transformer
 ===========
