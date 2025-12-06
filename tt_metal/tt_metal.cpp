@@ -39,9 +39,9 @@
 #include "device/device_impl.hpp"
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
-#include "lightmetal/host_api_capture_helpers.hpp"
-#include "lightmetal/lightmetal_capture.hpp"
-#include "lightmetal_binary.hpp"
+#include "impl/lightmetal/host_api_capture_helpers.hpp"
+#include "impl/lightmetal/lightmetal_capture.hpp"
+#include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>

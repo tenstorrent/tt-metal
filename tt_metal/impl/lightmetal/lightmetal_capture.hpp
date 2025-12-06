@@ -7,7 +7,7 @@
 #include <vector>
 #include <memory>
 #include <flatbuffers/flatbuffers.h>
-#include <lightmetal_binary.hpp>
+#include <tt-metalium/experimental/lightmetal/lightmetal_replay.hpp>
 
 // Forward decl for command_generated.h
 namespace tt::tt_metal::flatbuffer {

@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/lightmetal_replay.hpp>
+#include <tt-metalium/experimental/lightmetal/lightmetal_replay.hpp>
+#include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
 #include <utility>
 
-#include "lightmetal_binary.hpp"
-#include "tt_metal/impl/lightmetal/lightmetal_replay_impl.hpp"
+#include "impl/lightmetal/lightmetal_replay_impl.hpp"
 
 namespace tt::tt_metal {
 

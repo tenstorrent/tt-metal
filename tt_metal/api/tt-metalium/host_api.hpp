@@ -16,7 +16,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/lightmetal_binary.hpp>
+#include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
 #include <tt-metalium/profiler_types.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
 
