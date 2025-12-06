@@ -12,7 +12,6 @@ on:
         required: true
         type: string
 
-
 jobs:
   auto-triage:
     runs-on: ubuntu-latest
