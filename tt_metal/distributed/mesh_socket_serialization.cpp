@@ -171,8 +171,8 @@ SocketPeerDescriptor deserialize_from_bytes(const std::vector<uint8_t>& data) {
     // Chip IDs)
     socket_peer_desc.config.socket_connection_config = from_flatbuffer(socket_config_fb->socket_connections());
     socket_peer_desc.config.socket_mem_config = from_flatbuffer(socket_config_fb->socket_mem_config());
-    socket_peer_desc.config.sender_rank = multihost::Rank{socket_config_fb->sender_rank()};
-    socket_peer_desc.config.receiver_rank = multihost::Rank{socket_config_fb->receiver_rank()};
+    socket_peer_desc.config.sender_rank = multihost::Rank{static_cast<int>(socket_config_fb->sender_rank())};
+    socket_peer_desc.config.receiver_rank = multihost::Rank{static_cast<int>(socket_config_fb->receiver_rank())};
     socket_peer_desc.config_buffer_address = socket_peer_desc_fb->config_buffer_address();
     socket_peer_desc.data_buffer_address = socket_peer_desc_fb->data_buffer_address();
     if (socket_peer_desc_fb->mesh_ids()) {
@@ -183,7 +183,7 @@ SocketPeerDescriptor deserialize_from_bytes(const std::vector<uint8_t>& data) {
         socket_peer_desc.chip_ids.assign(
             socket_peer_desc_fb->chip_ids()->begin(), socket_peer_desc_fb->chip_ids()->end());
     }
-    socket_peer_desc.exchange_tag = multihost::Tag{socket_peer_desc_fb->exchange_tag()};
+    socket_peer_desc.exchange_tag = multihost::Tag{static_cast<int>(socket_peer_desc_fb->exchange_tag())};
     return socket_peer_desc;
 }
 
