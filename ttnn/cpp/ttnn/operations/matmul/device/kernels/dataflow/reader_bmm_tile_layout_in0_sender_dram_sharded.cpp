@@ -144,6 +144,10 @@ void kernel_main() {
 #ifndef SKIP_MCAST
                 noc_async_write_multicast_loopback_src(
                     local_read_addr, in0_multicast_data_addr, in0_block_size_bytes, in0_mcast_num_cores, true);
+                // Flush to ensure data multicast is sent before semaphore multicast.
+                // Data and semaphore use different command buffers (write_cmd_buf vs write_reg_cmd_buf)
+                // which can race and cause out-of-order delivery without this synchronization.
+                noc_async_writes_flushed();
 #endif
                 noc_semaphore_set_multicast_loopback_src(
                     in0_mcast_sender_valid_semaphore, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_cores);

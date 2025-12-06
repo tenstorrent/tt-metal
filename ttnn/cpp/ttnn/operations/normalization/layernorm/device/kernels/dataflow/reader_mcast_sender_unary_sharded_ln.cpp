@@ -252,6 +252,10 @@ void kernel_main() {
                     num_tiles_scaler * num_tiles_bytes,
                     num_blocks - 1,
                     true);
+                // Flush to ensure data multicast is sent before semaphore multicast.
+                // Data and semaphore use different command buffers (write_cmd_buf vs write_reg_cmd_buf)
+                // which can race and cause out-of-order delivery without this synchronization.
+                noc_async_writes_flushed();
                 noc_semaphore_set_multicast(
                     reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks - 1);
 
