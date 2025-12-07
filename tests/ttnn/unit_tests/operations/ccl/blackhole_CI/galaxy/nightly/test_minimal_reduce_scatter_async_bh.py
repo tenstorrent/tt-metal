@@ -784,20 +784,20 @@ def test_reduce_scatter_async_sharded_to_interleaved(
 @skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "num_devices,cluster_axis, rs_input_shape, dim, layout, rs_input_dtype, uses_composite",
+    "num_devices,cluster_axis, rs_input_shape, dim, layout, rs_input_dtype",
     [
-        (4, 1, [1, 1, 13, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, 0),  # use batching when fused
-        (4, 1, [3, 1, 41, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, 0),  # use batching when fused
-        (4, 1, [8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, 0),  # use batching when fused
-        (4, 1, [4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, 0),  # use batching when fused
-        (4, 1, [1, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, 0),  # use batching when fused
-        (4, 1, [1, 1, 352, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, 0),  # use batching when fused
-        (4, 1, [2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, 0),  # use batching when fused
-        (4, 1, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, 0),  # use batching when fused
+        (4, 1, [1, 1, 13, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (4, 1, [3, 1, 41, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (4, 1, [8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (4, 1, [4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (4, 1, [1, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (4, 1, [1, 1, 352, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (4, 1, [2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (4, 1, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         # Composite-RS tests
-        (4, 1, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1),
-        (4, 1, [1, 1, 1, 16], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 1),
-        (4, 1, [1, 1, 32, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 1),
+        (4, 1, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, 1, [1, 1, 1, 16], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        (4, 1, [1, 1, 32, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
         "padded_dim_2_test_one",
@@ -867,10 +867,7 @@ def test_reduce_scatter_async_ring(
     use_persistent_buffers,
     cluster_axis,
     rs_topology,
-    uses_composite,
 ):
-    if uses_composite:
-        pytest.skip("Issue 33828")
     run_reduce_scatter_impl(
         bh_2d_mesh_device,
         num_devices,
