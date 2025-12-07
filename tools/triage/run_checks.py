@@ -77,29 +77,12 @@ class CheckResult:
 
 @dataclass
 class DeviceDescription:
-    """
-    Wrapper for Device that determines whether to use unique_id for display
-    based on Metal/Exalens ID mismatch.
-    """
-
     device: Device
-    use_unique_id: bool  # True if metal_device_id != exalens_device_id (mismatch detected)
-
-    def __init__(self, device: Device, metal_device_id_mapping: MetalDeviceIdMapping):
-        self.device = device
-        # Check if exalens device._id maps to the same unique_id as metal device id
-        if metal_device_id_mapping.has_metal_device_id(device._id):
-            inspector_unique_id = metal_device_id_mapping.get_unique_id(device._id)
-            self.use_unique_id = inspector_unique_id != device.unique_id
-        else:
-            self.use_unique_id = False
+    use_unique_id: bool
 
 
 def device_description_serializer(device_desc: DeviceDescription) -> str:
-    if device_desc.use_unique_id:
-        return str(device_desc.device.unique_id)
-    else:
-        return str(device_desc.device._id)
+    return hex(device_desc.device.unique_id) if device_desc.use_unique_id else str(device_desc.device._id)
 
 
 @dataclass
@@ -199,6 +182,12 @@ class RunChecks:
     def __init__(self, devices: list[Device], metal_device_id_mapping: MetalDeviceIdMapping):
         self.devices = devices
         self.metal_device_id_mapping = metal_device_id_mapping
+        # If any device has a metal<->exalens mismatch, show all devices as hex unique_id
+        self._use_unique_id = any(
+            metal_device_id_mapping.has_metal_device_id(device._id)
+            and metal_device_id_mapping.get_unique_id(device._id) != device.unique_id
+            for device in devices
+        )
         self.block_locations: dict[Device, dict[BlockType, list[OnChipCoordinate]]] = {
             device: {block_type: get_block_locations_to_check(block_type, device) for block_type in BLOCK_TYPES}
             for device in devices
@@ -238,7 +227,7 @@ class RunChecks:
                 result,
                 check_result,
                 PerDeviceCheckResult,
-                device_description=DeviceDescription(device, self.metal_device_id_mapping),
+                device_description=DeviceDescription(device, self._use_unique_id),
             )
         return result if len(result) > 0 else None
 
@@ -261,7 +250,7 @@ class RunChecks:
                         result,
                         check_result,
                         PerBlockCheckResult,
-                        device_description=DeviceDescription(device, self.metal_device_id_mapping),
+                        device_description=DeviceDescription(device, self._use_unique_id),
                         location=location,
                     )
             return result if len(result) > 0 else None
@@ -305,7 +294,7 @@ class RunChecks:
                     result,
                     check_result,
                     PerCoreCheckResult,
-                    device_description=DeviceDescription(location._device, self.metal_device_id_mapping),
+                    device_description=DeviceDescription(location._device, self._use_unique_id),
                     location=location,
                     risc_name=risc_name,
                 )
