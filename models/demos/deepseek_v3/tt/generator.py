@@ -483,6 +483,7 @@ class DeepseekGenerator:
         teacher_forcing=None,
         early_print_first_user: bool = True,
         repeat_batches: int = 1,
+        pre_tokenized: List[List[int]] | None = None,
     ) -> Tuple[List[List[int]], dict]:
         """Generate tokens for the given prompts using greedy decode by default.
 
@@ -491,6 +492,9 @@ class DeepseekGenerator:
 
         repeat_batches: Number of times to repeat the prefill+decode pass. Only the
                         last pass's tokens are returned; timings aggregate.
+
+        pre_tokenized: Optional list of pre-tokenized prompts (bypasses chat template encoding).
+                       If provided, prompts parameter is ignored for tokenization.
 
         Returns: (list of generated token id lists for the provided prompts (order preserved), statistics dictionary)
         """
@@ -511,9 +515,13 @@ class DeepseekGenerator:
         self._prepare_run_configs("decode")
         profiler.end("preparing_decode_config")
 
-        # Tokenize using HF chat template
+        # Tokenize: use pre_tokenized if provided, otherwise encode with chat template
         profiler.start("tokenizing")
-        encoded: List[List[int]] = [self._encode_prompt(p) for p in prompts]
+        if pre_tokenized is not None:
+            encoded = pre_tokenized
+            logger.info(f"Using {len(encoded)} pre-tokenized prompt(s) (bypassing chat template)")
+        else:
+            encoded: List[List[int]] = [self._encode_prompt(p) for p in prompts]
         tokens_batched, lengths = self._pad_batch(encoded, self.batch_size)  # [batch_size, seq_len]
         profiler.end("tokenizing")
 
