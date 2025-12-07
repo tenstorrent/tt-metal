@@ -63,7 +63,7 @@ target_sources(
             reshape_view/reshape_common.hpp
             sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
             sharded/interleaved_to_sharded/interleaved_to_sharded.hpp
-            sharded/reshard/device/reshard_op.hpp
+            sharded/reshard/reshard.hpp
             sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.hpp
             slice/slice.hpp
             tilize_with_val_padding/tilize_with_val_padding.hpp
@@ -109,6 +109,10 @@ target_sources(
         concat/concat.cpp
         concat/device/concat_device_operation.cpp
         concat/device/concat_program_factory.cpp
+        concat/device/concat_s2s_tiled_program_factory.cpp
+        concat/device/concat_s2s_rm_program_factory.cpp
+        concat/device/concat_s2s_multi_program_factory.cpp
+        concat/device/concat_s2i_program_factory.cpp
         copy/copy.cpp
         copy/device/copy_device_operation.cpp
         copy/device/copy_program_factory.cpp
@@ -166,9 +170,12 @@ target_sources(
         sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.cpp
         sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.cpp
         sharded/interleaved_to_sharded/interleaved_to_sharded.cpp
-        sharded/reshard/device/reshard_op.cpp
-        sharded/reshard/device/reshard_program_factory.cpp
-        sharded/reshard/device/nd_reshard_program_factory.cpp
+        sharded/reshard/device/reshard_device_operation.cpp
+        sharded/reshard/device/reshard_program_factory_same_width.cpp
+        sharded/reshard/device/reshard_program_factory_same_height.cpp
+        sharded/reshard/device/reshard_program_factory_generic.cpp
+        sharded/reshard/device/nd_reshard_program_factory_copy_pages.cpp
+        sharded/reshard/device/nd_reshard_program_factory_copy_local.cpp
         sharded/reshard/reshard.cpp
         sharded/sharded_common.cpp
         sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.cpp

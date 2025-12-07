@@ -153,7 +153,7 @@ ttnn/cpp/ttnn/operations/sliding_window/ @tenstorrent/metalium-developers-convol
 ttnn/cpp/ttnn/operations/sliding_window/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/data_movement/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/data_movement/**/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/**/nd_reshard* @philei-tt @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/**/nd_reshard* @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/data_movement/fold/ @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/data_movement/sort/ @aczajkowskiTT @sjameelTT @bbradelTT @mgajewskiTT @nmauriceTT @nsorabaTT @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/data_movement/gather/ @aczajkowskiTT @sjameelTT @bbradelTT @mgajewskiTT @nsorabaTT @tenstorrent/codeowner-bypass
