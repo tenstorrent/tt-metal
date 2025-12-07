@@ -207,14 +207,14 @@ class DispatcherData:
             value = self._core_data_cache.get(key)
         if value is None:
             with self.lock:
-                mailboxes = self._mailboxes_cache.get(location)
-            if mailboxes is None:
-                mailboxes = self.read_mailboxes(location, risc_name)
-                with self.lock:
-                    self._mailboxes_cache[location] = mailboxes
-            value = self.get_core_data(location, risc_name, mailboxes=mailboxes)
-            with self.lock:
-                self._core_data_cache[key] = value
+                value = self._core_data_cache.get(key)
+                if value is None:
+                    mailboxes = self._mailboxes_cache.get(location)
+                    if mailboxes is None:
+                        mailboxes = self.read_mailboxes(location, risc_name)
+                        self._mailboxes_cache[location] = mailboxes
+                    value = self.get_core_data(location, risc_name, mailboxes=mailboxes)
+                    self._core_data_cache[key] = value
         return value
 
     def read_mailboxes(self, location: OnChipCoordinate, risc_name: str) -> ElfVariable:
