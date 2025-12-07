@@ -167,23 +167,30 @@ def filter_params_with_constraints(all_params):
             face_r_dim,
         ) = params
 
-        # remove me - if broadcast_type is not ROW, skip the test
-        if broadcast_type != BroadcastType.Row:
+        # # remove me - if broadcast_type is not ROW, skip the test
+        # if broadcast_type != BroadcastType.Row and broadcast_type != BroadcastType.Scalar and broadcast_type != BroadcastType.None_:
+        #     continue
+
+        if (
+            formats.input_format != DataFormat.UInt16
+            or broadcast_type != BroadcastType.Column
+        ):
             continue
 
         # remove me - if formats.input_format is not Float32, Int32, UInt32, UInt16, skip the test, if output format is not Float32, Int32, UInt32, UInt16, skip the test
-        if formats.input_format not in (
-            DataFormat.Float32,
-            DataFormat.Int32,
-            DataFormat.UInt32,
-            DataFormat.UInt16,
-        ) or formats.output_format not in (
-            DataFormat.Float32,
-            DataFormat.Int32,
-            DataFormat.UInt32,
-            DataFormat.UInt16,
-        ):
-            continue
+        # if formats.input_format not in (
+        #     DataFormat.Float32,
+        #     DataFormat.Int32,
+        #     DataFormat.UInt32,
+        #     DataFormat.UInt16,
+        # ) or formats.output_format not in (
+        #     DataFormat.Float32,
+        #     DataFormat.Int32,
+        #     DataFormat.UInt32,
+        #     DataFormat.UInt16,
+        # ):
+        #     if dest_acc == DestAccumulation.Yes:
+        #         continue
 
         # remove me - should skip if disable_src_zero is true, if acc_to_dest is true, if stochastic_rnd is not StochasticRounding.No, if reuse_dest is not EltwiseBinaryReuseDestType.NONE, if transpose_of_faces is not Transpose.No, if within_face_16x16_transpose is not Transpose.No, if num_faces is not 2, if face_r_dim is less than 16
         if (

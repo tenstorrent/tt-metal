@@ -239,8 +239,8 @@ inline void configure_unpack_AB(
                                                                                                  : 1;
     uint unpA_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpA_ch1_x_stride;
     uint unpB_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpB_ch1_x_stride;
-    uint unpA_ch1_y_stride = FACE_C_DIM * unpA_ch1_x_stride;
-    uint exp_width         = ((uint)unpA_dst_format_masked >> 2) & 0x1; // 0=5-bit, 1=8-bit
+    // uint unpA_ch1_y_stride = FACE_C_DIM * unpA_ch1_x_stride;
+    uint exp_width = ((uint)unpA_dst_format_masked >> 2) & 0x1; // 0=5-bit, 1=8-bit
 
     // Strides for incrementing ch1 address to srcA and srcB
     cfg[UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] =
@@ -251,7 +251,7 @@ inline void configure_unpack_AB(
         (0 << UNP1_ADDR_CTRL_ZW_REG_1_Wstride_SHAMT) |
         (unpB_ch1_z_stride << UNP1_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT); // Z and W(not used) stride for dest address (ch1)
 
-    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(unpA_ch1_y_stride);
+    // cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(unpA_ch1_y_stride);
 
     // Math ALU_FORMAT_REG
     t6_mutex_acquire(mutex::REG_RMW);
