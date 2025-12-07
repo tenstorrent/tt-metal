@@ -25,11 +25,13 @@ class SD35MediumSelfAttention:
         eps=1e-6,
         mesh_device=None,
         added_proj_dim=None,
+        context_pre_only=False,  # If True, skip to_add_out (for final block)
     ):
         self.dim = dim
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
         self.pre_only = pre_only
+        self.context_pre_only = context_pre_only
         self.inner_dim = num_heads * self.head_dim
         self.scale = self.head_dim**-0.5
         self.mesh_device = mesh_device
@@ -44,7 +46,9 @@ class SD35MediumSelfAttention:
         self.add_q_proj = Linear(self.added_proj_dim, dim, bias=qkv_bias, mesh_device=mesh_device)
         self.add_k_proj = Linear(self.added_proj_dim, dim, bias=qkv_bias, mesh_device=mesh_device)
         self.add_v_proj = Linear(self.added_proj_dim, dim, bias=qkv_bias, mesh_device=mesh_device)
-        self.to_add_out = Linear(dim, self.added_proj_dim, mesh_device=mesh_device)
+        # to_add_out only needed when context_pre_only=False
+        if not context_pre_only:
+            self.to_add_out = Linear(dim, self.added_proj_dim, mesh_device=mesh_device)
 
         # Output projection - dropout handled in forward pass for inference
         if not pre_only:
@@ -207,8 +211,9 @@ class SD35MediumSelfAttention:
                         attn_out, probability=self.dropout_prob, scale=1.0 / (1.0 - self.dropout_prob)
                     )
 
-            # Project added attention output back to added dimension
-            added_attn_out = self.to_add_out(added_attn_out)
+            # Project added attention output back to added dimension (skip for final block)
+            if not self.context_pre_only:
+                added_attn_out = self.to_add_out(added_attn_out)
 
             return attn_out, added_attn_out
 
@@ -252,7 +257,11 @@ class SD35MediumSelfAttention:
             self.add_q_proj.load_torch_state_dict(add_q_state)
             self.add_k_proj.load_torch_state_dict(substate(state_dict, "add_k_proj"))
             self.add_v_proj.load_torch_state_dict(substate(state_dict, "add_v_proj"))
-            self.to_add_out.load_torch_state_dict(substate(state_dict, "to_add_out"))
+            # to_add_out only exists in early/middle blocks, not final block
+            if not self.context_pre_only:
+                to_add_out_state = substate(state_dict, "to_add_out")
+                if to_add_out_state:
+                    self.to_add_out.load_torch_state_dict(to_add_out_state)
 
         # Load output projection weights
         if not self.pre_only:
