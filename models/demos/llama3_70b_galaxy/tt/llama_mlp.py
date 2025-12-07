@@ -48,37 +48,101 @@ class TtLlamaMLP(LightweightModule):
         self.model_config = model_config
         self.prefetcher_setup = prefetcher_setup
         self.tt_ccl = tt_ccl
+
+        # Allow passing in the full prefix, e.g. "midlayer.mlp"
+        # If not passed, use default naming from model args
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
-        torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
+
+        # Determine weight string mapping for HF and Meta-style keys
+        # Try HF-style, fallback to Meta-style if not found
+        def _get_w_names(prefix):
+            # strip trailing "." if exists
+            if prefix.endswith("."):
+                prefix = prefix[:-1]
+            # Heuristically detect HF vs Meta
+            is_hf = any((f"{prefix}.gate_proj.weight" in state_dict) or (f"{prefix}.up_proj.weight" in state_dict))
+            if is_hf or f"{prefix}.gate_proj.weight" in state_dict:
+                # HuggingFace Llama (gate_proj, up_proj, down_proj)
+                w1 = f"{prefix}.gate_proj.weight"
+                w2 = f"{prefix}.down_proj.weight"
+                w3 = f"{prefix}.up_proj.weight"
+            else:
+                # Meta/research repo (w1, w2, w3)
+                w1 = f"{prefix}.w1.weight"
+                w2 = f"{prefix}.w2.weight"
+                w3 = f"{prefix}.w3.weight"
+            return w1, w2, w3
+
+        # Sharded/Interleaved naming convention
+        def _grouped_name(short, variant=None):
+            # Returns name like "w1_sharded" or "up_proj_interleaved"
+            if variant is None:
+                return short
+            if "proj" in short or "w" in short:
+                return f"{short}_{variant}"
+            return f"{short}_{variant}"
+
+        # Get correct names from state dict (actual tensor keys)
+        w1_name, w2_name, w3_name = _get_w_names(state_dict_prefix)
+
+        def torch_weight(name):
+            # Finds corresponding key in state dict,
+            # using resolved w1_name, w2_name, w3_name
+            # Name is one of: "w1", "w2", "w3", "gate_proj", "up_proj", "down_proj"
+            lookup = {
+                "w1": w1_name,
+                "gate_proj": w1_name,
+                "w2": w2_name,
+                "down_proj": w2_name,
+                "w3": w3_name,
+                "up_proj": w3_name,
+            }
+            key = lookup.get(name, f"{state_dict_prefix}.{name}.weight")
+            return torch.transpose(self.state_dict[key], -2, -1)
+
         if args.dummy_weights:
             cache_name = lambda _: None
         else:
-            cache_name = lambda name: weight_cache_path / (state_dict_prefix + f".{name}" + "prefetcher")
 
-        w1_w3_mem_config = self.model_config[
-            "W1W3_RING_MEMCFG"
-        ]  # args.create_dram_sharded_mem_config(args.dim, args.hidden_dim // args.num_devices)
-        w2_mem_config = self.model_config[
-            "W2_RING_MEMCFG"
-        ]  # args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
-        as_sharded_tensor = lambda name, type, dim: ttnn.as_tensor(
-            torch_weight(name[:2]).unsqueeze(0).unsqueeze(0),  # Grab only the wX part of the name
-            dtype=type if not args.is_qwen else ttnn.bfloat16,
+            def cache_name(weight_short_name):
+                # weight_short_name: "w1_sharded", "w1_interleaved", "gate_proj_sharded", etc.
+                # Use prefix as passed (e.g. "midlayer.mlp") and preserve uniqueness
+                return weight_cache_path / (state_dict_prefix + f".{weight_short_name}" + "prefetcher")
+
+        w1_w3_mem_config = self.model_config["W1W3_RING_MEMCFG"]
+        w2_mem_config = self.model_config["W2_RING_MEMCFG"]
+
+        # Locate names for sharded/interleaved
+        #
+        # Naming convention for internal keys:
+        #   "w1_sharded", "w1_interleaved" or "gate_proj_sharded", etc.
+        if "proj" in w1_name:
+            w1_short = "gate_proj"
+            w2_short = "down_proj"
+            w3_short = "up_proj"
+        else:
+            w1_short = "w1"
+            w2_short = "w2"
+            w3_short = "w3"
+
+        as_sharded_tensor = lambda name, dtype_, dim: ttnn.as_tensor(
+            torch_weight(name).unsqueeze(0).unsqueeze(0),
+            dtype=dtype_,
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dim, mesh_shape=args.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
-            memory_config=w2_mem_config if "w2" in name else w1_w3_mem_config,
-            cache_file_name=cache_name(name),
+            memory_config=w2_mem_config if name == w2_short else w1_w3_mem_config,
+            cache_file_name=cache_name(f"{name}_sharded"),
         )
 
-        as_interleaved_tensor = lambda name, type, dim: ttnn.as_tensor(
-            torch_weight(name[:2]).unsqueeze(0).unsqueeze(0),  # Grab only the wX part of the name
-            dtype=type,
+        as_interleaved_tensor = lambda name, dtype_, dim: ttnn.as_tensor(
+            torch_weight(name).unsqueeze(0).unsqueeze(0),
+            dtype=dtype_,
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dim, mesh_shape=args.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name(name),
+            cache_file_name=cache_name(f"{name}_interleaved"),
         )
 
         self.four_bit_mlp = args.optimizations.bfp4_mlp
@@ -87,19 +151,17 @@ class TtLlamaMLP(LightweightModule):
         w1_dim = (-1, -2)
         w2_dim = (-2, -1)
 
-        # sharded
-        self.w1 = as_sharded_tensor(
-            "w1_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
-        )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        self.w2 = as_sharded_tensor("w2_sharded", ttnn.bfloat8_b, dim=w2_dim)
-        self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim)
+        # Create sharded tensors using resolved names for both HF and Meta formats
+        self.w1 = as_sharded_tensor(w1_short, ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim)
+        self.w2 = as_sharded_tensor(w2_short, ttnn.bfloat8_b, dim=w2_dim)
+        self.w3 = as_sharded_tensor(w3_short, ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim)
 
         self.w1_interleaved = as_interleaved_tensor(
-            "w1_interleaved", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
+            w1_short, ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
         )
-        self.w2_interleaved = as_interleaved_tensor("w2_interleaved", ttnn.bfloat8_b, dim=w2_dim)
+        self.w2_interleaved = as_interleaved_tensor(w2_short, ttnn.bfloat8_b, dim=w2_dim)
         self.w3_interleaved = as_interleaved_tensor(
-            "w3_interleaved", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
+            w3_short, ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
         )
 
         if tt_ccl.mode == "decode":

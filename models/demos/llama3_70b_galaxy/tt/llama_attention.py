@@ -13,6 +13,8 @@ class TtLlamaAttention(LightweightModule):
         self,
         mesh_device,
         state_dict,
+        state_dict_prefix,
+        weight_key,
         weight_cache_path,
         layer_num,
         dtype,
@@ -102,10 +104,44 @@ class TtLlamaAttention(LightweightModule):
         else:
             cache_name = lambda name: weight_cache_path / (f"{layer_name}.{name}")
 
-        wq_str = f"{layer_name}.wq.weight"
-        wk_str = f"{layer_name}.wk.weight"
-        wv_str = f"{layer_name}.wv.weight"
-        wo_str = f"{layer_name}.wo.weight"
+        def _weight_strings_from_prefix(prefix):
+            # Helper to detect if HuggingFace style or Meta style
+            # HuggingFace uses "...q_proj.weight", Meta uses "...wq.weight"
+            if prefix.endswith("."):
+                prefix = prefix[:-1]
+            # Heuristically detect by suffix (could be improved if needed)
+            hf_detect = any(
+                s in list(state_dict.keys())
+                for s in [
+                    f"{prefix}.q_proj.weight",
+                    f"{prefix}.k_proj.weight",
+                    f"{prefix}.v_proj.weight",
+                    f"{prefix}.o_proj.weight",
+                ]
+            )
+            if hf_detect:  # hf style
+                wq_str = f"{prefix}.q_proj.weight"
+                wk_str = f"{prefix}.k_proj.weight"
+                wv_str = f"{prefix}.v_proj.weight"
+                wo_str = f"{prefix}.o_proj.weight"
+            else:  # default/meta style
+                wq_str = f"{prefix}.wq.weight"
+                wk_str = f"{prefix}.wk.weight"
+                wv_str = f"{prefix}.wv.weight"
+                wo_str = f"{prefix}.wo.weight"
+            return wq_str, wk_str, wv_str, wo_str
+
+        if state_dict_prefix:
+            cleaned_prefix = state_dict_prefix
+            if cleaned_prefix.endswith("."):
+                cleaned_prefix = cleaned_prefix[:-1]
+            candidate_key = f"{cleaned_prefix}.{weight_key}"
+            wq_str, wk_str, wv_str, wo_str = _weight_strings_from_prefix(candidate_key)
+        else:
+            wq_str = f"{layer_name}.wq.weight"
+            wk_str = f"{layer_name}.wk.weight"
+            wv_str = f"{layer_name}.wv.weight"
+            wo_str = f"{layer_name}.wo.weight"
 
         # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
         assert self.n_heads % self.num_devices_per_group == 0

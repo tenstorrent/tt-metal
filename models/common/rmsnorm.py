@@ -61,7 +61,10 @@ class RMSNorm(LightweightModule):
         self.tt_ccl = tt_ccl
 
         if state_dict_prefix:
-            weight_name = f"{state_dict_prefix}{weight_key}.weight"
+            cleaned_prefix = state_dict_prefix
+            if cleaned_prefix.endswith("."):
+                cleaned_prefix = cleaned_prefix[:-1]
+            weight_name = f"{cleaned_prefix}.{weight_key}.weight"
         else:
             if layer_num is None:
                 weight_name = f"{weight_key}.weight"
