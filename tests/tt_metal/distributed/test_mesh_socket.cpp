@@ -275,7 +275,8 @@ void test_h2d_socket(
     std::size_t data_size) {
     std::vector<MeshCoreCoord> recv_cores = {{MeshCoordinate(0, 0), CoreCoord(0, 0)}};
 
-    auto input_socket = H2DSocket(mesh_device, recv_cores, BufferType::L1, socket_fifo_size, page_size);
+    auto input_socket = H2DSocket(mesh_device, recv_cores, BufferType::L1, socket_fifo_size);
+    input_socket.set_page_size(page_size);
 
     TT_FATAL(data_size % page_size == 0, "Data size must be a multiple of page size");
 
@@ -311,7 +312,7 @@ void test_h2d_socket(
     auto mesh_workload = MeshWorkload();
     MeshCoordinateRange devices = MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0));
     mesh_workload.add_program(devices, std::move(recv_program));
-
+    std::cout << "Device: " << mesh_device->get_device(MeshCoordinate(0, 0))->id() << std::endl;
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
 
     uint32_t num_writes = data_size / page_size;
@@ -2251,7 +2252,14 @@ void verify_socket_configs_match(const SocketConfig& config_a, const SocketConfi
 
 // ========= Single Device Data Movement Tests =========
 
-TEST_F(MeshSocketTest, H2DSocket) { test_h2d_socket(mesh_device_, 1024, 1024, 2048); }
+TEST_F(MeshSocketTest, H2DSocket) {
+    // No wrap
+    test_h2d_socket(mesh_device_, 1024, 64, 1024);
+    // Even wrap
+    test_h2d_socket(mesh_device_, 1024, 64, 8192);
+    // Uneven wrap
+    test_h2d_socket(mesh_device_, 4096, 1088, 39168);
+}
 
 TEST_F(MeshSocketTest, SingleConnectionSingleDeviceSocket) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));

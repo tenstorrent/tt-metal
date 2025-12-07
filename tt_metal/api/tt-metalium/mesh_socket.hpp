@@ -41,8 +41,7 @@ public:
         const std::shared_ptr<MeshDevice>& mesh_device,
         const std::vector<MeshCoreCoord>& recv_cores,
         BufferType buffer_type,
-        uint32_t fifo_size,
-        uint32_t page_size);
+        uint32_t fifo_size);
 
     void reserve_pages(uint32_t num_pages);
     void push_pages(uint32_t num_pages);
@@ -50,6 +49,7 @@ public:
     uint32_t get_page_size() const { return page_size_; }
     uint32_t get_write_ptr() const { return write_ptr_; }
     uint32_t get_config_buffer_address() const { return config_buffer_->address(); }
+    void set_page_size(uint32_t page_size);
 
 private:
     std::shared_ptr<MeshBuffer> config_buffer_ = nullptr;
@@ -61,6 +61,7 @@ private:
     std::size_t bytes_sent_ = 0;
     std::unordered_map<MeshCoreCoord, std::size_t> bytes_acked_ = {};
     std::size_t write_ptr_ = 0;
+    std::size_t fifo_curr_size_ = 0;
 };
 
 // Specifies how sender cores on a Virtual Mesh connect to receiver cores on the same or another Virtual Mesh.

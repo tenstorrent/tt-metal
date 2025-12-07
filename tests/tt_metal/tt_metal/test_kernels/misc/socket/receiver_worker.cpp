@@ -4,6 +4,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 #include "socket_api.h"
+#include "debug/dprint.h"
 
 void kernel_main() {
     // Get this value from MeshSocket struct on host
@@ -42,6 +43,7 @@ void kernel_main() {
         outstanding_data_size -= page_size;
         noc_async_write_barrier();
         socket_pop_pages(receiver_socket, 1);
+        // socket_notify_sender(receiver_socket);
     }
     update_socket_config(receiver_socket);
     noc_async_write_barrier();

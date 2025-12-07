@@ -11,7 +11,7 @@
 #include "risc_attribs.h"
 #include "socket.h"
 #include "utils/utils.h"
-
+#include "debug/dprint.h"
 #ifndef COMPILE_FOR_TRISC
 #include <type_traits>
 #include "dataflow_api.h"
@@ -235,6 +235,7 @@ void socket_wait_for_pages(const SocketReceiverInterface& socket, uint32_t num_p
         invalidate_l1_cache();
         bytes_recv = *bytes_sent_ptr - socket.bytes_acked;
     } while (bytes_recv < num_bytes);
+    for (volatile int i = 0; i < 1000000; i++);
 #endif
 }
 
@@ -242,6 +243,8 @@ void socket_pop_pages(SocketReceiverInterface& socket, uint32_t num_pages) {
 #if !(defined TRISC_PACK || defined TRISC_MATH)
     uint32_t num_bytes = num_pages * socket.page_size;
     ASSERT(num_bytes <= socket.fifo_curr_size);
+    volatile tt_l1_ptr receiver_socket_md* socket_config =
+        reinterpret_cast<volatile tt_l1_ptr receiver_socket_md*>(socket.config_addr);
     if (socket.read_ptr + num_bytes >= socket.fifo_curr_size + socket.fifo_addr) {
         socket.read_ptr = socket.read_ptr + num_bytes - socket.fifo_curr_size;
         socket.bytes_acked += num_bytes + socket.fifo_total_size - socket.fifo_curr_size;
@@ -249,6 +252,7 @@ void socket_pop_pages(SocketReceiverInterface& socket, uint32_t num_pages) {
         socket.read_ptr += num_bytes;
         socket.bytes_acked += num_bytes;
     }
+    socket_config->bytes_acked = socket.bytes_acked;
 #endif
 }
 

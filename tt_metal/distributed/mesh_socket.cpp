@@ -7,6 +7,7 @@
 #include <tt-metalium/distributed_context.hpp>
 #include "tt_metal/hw/inc/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
+#include <tt-metalium/tt_align.hpp>
 
 using namespace tt::tt_metal::distributed::multihost;
 
@@ -146,9 +147,8 @@ H2DSocket::H2DSocket(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const std::vector<MeshCoreCoord>& recv_cores,
     BufferType buffer_type,
-    uint32_t fifo_size,
-    uint32_t page_size) :
-    recv_cores_(recv_cores), buffer_type_(buffer_type), fifo_size_(fifo_size), page_size_(page_size) {
+    uint32_t fifo_size) :
+    recv_cores_(recv_cores), buffer_type_(buffer_type), fifo_size_(fifo_size), page_size_(0) {
     // Allocate memory for the config buffer
     uint32_t config_buffer_size = sizeof(receiver_socket_md);
     std::set<CoreRange> all_cores_set;
@@ -214,6 +214,7 @@ H2DSocket::H2DSocket(
             uint32_t idx = core_to_core_id.at(core_coord);
             auto& md = config_data[idx];
             md.bytes_sent = 0;
+            md.bytes_acked = 0;
             md.read_ptr = data_buffer_->address();
             md.fifo_addr = data_buffer_->address();
             md.fifo_total_size = fifo_size_;
@@ -229,6 +230,7 @@ H2DSocket::H2DSocket(
 }
 
 void H2DSocket::reserve_pages(uint32_t num_pages) {
+    TT_FATAL(page_size_ > 0, "Page size must be set before reserving pages.");
     const auto& cluster = MetalContext::instance().get_cluster();
     uint32_t num_bytes = num_pages * page_size_;
     TT_FATAL(num_bytes <= fifo_size_, "Cannot reserve more pages than the socket FIFO size.");
@@ -238,6 +240,7 @@ void H2DSocket::reserve_pages(uint32_t num_pages) {
 
     for (const auto& recv_core : recv_cores_) {
         uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_[recv_core]);
+        std::cout << "Bytes free: " << bytes_free << std::endl;
         auto recv_virtual_core = mesh_device->worker_core_from_logical_core(recv_core.core_coord);
         auto recv_device_id = mesh_device->get_device(recv_core.device_coord)->id();
         while (bytes_free < num_bytes) {
@@ -254,12 +257,13 @@ void H2DSocket::reserve_pages(uint32_t num_pages) {
 }
 
 void H2DSocket::push_pages(uint32_t num_pages) {
+    TT_FATAL(page_size_ > 0, "Page size must be set before pushing pages.");
     uint32_t num_bytes = num_pages * page_size_;
-    TT_FATAL(num_bytes <= fifo_size_, "Cannot push more pages than the socket FIFO size.");
+    TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot push more pages than the socket FIFO size.");
 
-    if (write_ptr_ + num_bytes >= data_buffer_->address() + fifo_size_) {
-        write_ptr_ = write_ptr_ + num_bytes - fifo_size_;
-        bytes_sent_ += num_bytes;
+    if (write_ptr_ + num_bytes >= data_buffer_->address() + fifo_curr_size_) {
+        write_ptr_ = write_ptr_ + num_bytes - fifo_curr_size_;
+        bytes_sent_ += num_bytes + fifo_size_ - fifo_curr_size_;
     } else {
         write_ptr_ += num_bytes;
         bytes_sent_ += num_bytes;
@@ -276,6 +280,23 @@ void H2DSocket::notify_receiver() {
         cluster.write_core(
             &bytes_sent_, sizeof(bytes_sent_), tt_cxy_pair(recv_device_id, recv_virtual_core), bytes_sent_addr);
     }
+}
+
+void H2DSocket::set_page_size(uint32_t page_size) {
+    const auto pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    TT_FATAL(page_size % pcie_alignment == 0, "Page size must be PCIE-aligned.");
+    TT_FATAL(page_size <= fifo_size_, "Page size must be less than or equal to the FIFO size.");
+    uint32_t fifo_start_addr = data_buffer_->address();
+    uint32_t next_fifo_wr_ptr = fifo_start_addr + align(write_ptr_ - fifo_start_addr, page_size);
+    uint32_t fifo_page_aligned_size = fifo_size_ - (fifo_size_ % page_size);
+    uint32_t fifo_page_aligned_limit = fifo_start_addr + fifo_page_aligned_size;
+    if (next_fifo_wr_ptr >= fifo_page_aligned_limit) {
+        bytes_sent_ += fifo_start_addr + fifo_size_ - next_fifo_wr_ptr;
+        next_fifo_wr_ptr = fifo_start_addr;
+    }
+    write_ptr_ = next_fifo_wr_ptr;
+    page_size_ = page_size;
+    fifo_curr_size_ = fifo_page_aligned_size;
 }
 
 }  // namespace tt::tt_metal::distributed
