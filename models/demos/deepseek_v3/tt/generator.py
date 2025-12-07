@@ -92,7 +92,7 @@ class DeepseekGenerator:
             hf_config if hf_config is not None else AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
         )
         # self._ensure_max_seq_len(self.hf_config)
-        self.hf_config.max_seq_len = 1024  # TODO: Change this when needed?
+        self.hf_config.max_seq_len = 8192  # TODO: Change this when needed?
         # Optional overrides for layer counts before building states
         if override_num_layers is not None:
             try:
@@ -556,11 +556,11 @@ class DeepseekGenerator:
             logger.info(f"First sampled token: {self.tokenizer.decode(token_value, skip_special_tokens=True)}")
 
             positions = torch.zeros(self.batch_size, dtype=torch.int32) + lengths
-            # If teacher forcing is enabled, collect the model's predicted token and force GT for next step (single prompt)
-            if teacher_forcing is not None:
-                # Only enforce for the first user to keep scope minimal
-                forced = teacher_forcing.collect_predicted_tokens(int(next_tokens[0].item()))
-                next_tokens[0] = int(forced)
+            # NOTE: Do NOT apply teacher forcing here after prefill.
+            # The model's natural first token (A') should be used as input to decode step 0.
+            # If the model is deterministic, A' = A (Phase 1's prefill output), so:
+            # - Decode 0 with input A' will predict B' ≈ B (Phase 1's decode 0 output)
+            # Teacher forcing starts in the decode loop below.
 
             generations: List[List[int]] = [[] for _ in range(num_of_prompts)]
             logger.info(f"Generating {max_new_tokens} tokens for {num_of_prompts} user(s)...")
