@@ -114,10 +114,7 @@ def test_demo_teacher_forcing_accuracy(max_new_tokens: int):
     #   - If prefill is deterministic: A' = A, so all predictions should match.
     #   - If prefill has some variance: only first prediction might differ.
     #   - All subsequent predictions use forced inputs, so they should match.
-    #
-    # With 5 layers there may be some numerical non-determinism, so we allow
-    # a threshold, but expect significantly better than the old ~68%.
-    min_expected_accuracy = 0.8  # Expect at least 80% accuracy
+    min_expected_accuracy = 1.0
     assert top1_acc >= min_expected_accuracy, (
         f"Top-1 accuracy {top1_acc:.4f} is below minimum expected "
         f"{min_expected_accuracy:.2f}. This may indicate a bug in teacher forcing "
