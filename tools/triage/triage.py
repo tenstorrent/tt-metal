@@ -33,7 +33,6 @@ Description:
 """
 
 # Check if tt-exalens is installed
-from ast import arg
 import inspect
 import os
 import threading
