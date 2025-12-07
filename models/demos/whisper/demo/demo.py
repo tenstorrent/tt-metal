@@ -687,7 +687,9 @@ def test_demo_for_audio_classification_dataset(
     [False],
 )
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
-@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE, "trace_region_size": 100000000}], indirect=True
+)
 def test_demo_for_conditional_generation(
     input_path,
     mesh_device,
@@ -767,7 +769,9 @@ def test_demo_for_conditional_generation(
     "model_repo",
     ("openai/whisper-large-v3", "distil-whisper/distil-large-v3"),
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE, "trace_region_size": 100000000}], indirect=True
+)
 @pytest.mark.parametrize(
     "batch_size_per_device",
     [(1)],
@@ -840,7 +844,9 @@ def test_demo_for_conditional_generation_dataset(
     "model_repo",
     ("openai/whisper-large-v3",),
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE, "trace_region_size": 100000000}], indirect=True
+)
 @pytest.mark.parametrize(
     "mesh_device",
     [available_devices]

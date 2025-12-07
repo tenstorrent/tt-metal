@@ -19,6 +19,7 @@ import ttnn
 from models.common.generation_utils import get_logits_processor
 
 from . import ttnn_optimized_functional_whisper
+from .whisper_executor import TracedWhisperDecoderExecutor
 
 
 @dataclass
@@ -32,6 +33,7 @@ class GenerationParams:
     return_timestamps: bool = False
     language: str = "en"
     task: str = "transcribe"
+    use_trace: bool = True  # Enable traced execution for decoder
 
 
 # Default values for quality metrics
@@ -81,6 +83,7 @@ def generate(
     return_timestamps = generation_params.return_timestamps
     language = generation_params.language
     task = generation_params.task
+    use_trace = generation_params.use_trace
 
     # Reset cross-attention cache for new generation
     # Explicitly deallocate tensors from previous generation to free DRAM
@@ -166,6 +169,7 @@ def generate(
             language=language,
             task=task,
             streaming=True,
+            use_trace=use_trace,
         )
 
     # Non-streaming mode: Try generation with different temperatures
@@ -200,6 +204,7 @@ def generate(
                 language=language,
                 task=task,
                 streaming=False,  # Non-streaming mode for quality checks
+                use_trace=use_trace,
             )
 
             # Non-streaming generation - consume the generator to get the single result
@@ -321,6 +326,7 @@ def _generate_with_temperature(
     language="en",
     task="transcribe",
     streaming=False,
+    use_trace=True,
 ):
     """
     Generate text with a specific temperature.
@@ -383,6 +389,12 @@ def _generate_with_temperature(
     ttft = 0.0
     avg_decode_throughput = 0.0
 
+    # Trace executor setup (only used when use_trace=True and kv_cache is enabled)
+    trace_executor = None
+    trace_compiled = False
+    if use_trace and kv_cache:
+        logger.info("Trace mode enabled for decoder execution")
+
     # Generation loop
     for i in tqdm(range(MAX_GEN_LEN), desc=f"Decode inference iterations (temp={temperature})"):
         start_iter = time.time()
@@ -398,16 +410,49 @@ def _generate_with_temperature(
             input_mesh_mapper=input_mesh_mapper,
         )
 
-        decoder_output = ttnn_optimized_functional_whisper.decoder(
-            config,
-            decoder_hidden_states,
-            decoder_attention_mask=decoder_attention_mask,
-            encoder_hidden_states=encoder_hidden_states,
-            kv_cache=kv_cache,
-            current_decode_pos=current_decode_pos,
-            cross_attn_cache=cross_attn_cache,
-            parameters=parameters.decoder,
-        )
+        # Use traced execution if enabled and trace is compiled
+        if use_trace and kv_cache and trace_compiled and trace_executor is not None:
+            # Execute trace for subsequent iterations (pass device tensor directly)
+            decoder_output = trace_executor.execute(decoder_hidden_states)
+        else:
+            # Regular decoder execution (first iteration or trace disabled)
+            decoder_output = ttnn_optimized_functional_whisper.decoder(
+                config,
+                decoder_hidden_states,
+                decoder_attention_mask=decoder_attention_mask,
+                encoder_hidden_states=encoder_hidden_states,
+                kv_cache=kv_cache,
+                current_decode_pos=current_decode_pos,
+                cross_attn_cache=cross_attn_cache,
+                parameters=parameters.decoder,
+            )
+
+            # After first iteration, compile the trace (cross-attention cache is now populated)
+            if use_trace and kv_cache and i == 0 and not trace_compiled:
+                logger.info("Compiling decoder trace after first iteration (cross-attention cache populated)")
+
+                # Create a decoder function that captures the required parameters
+                def traced_decoder_fn(hidden_states):
+                    return ttnn_optimized_functional_whisper.decoder(
+                        config,
+                        hidden_states,
+                        decoder_attention_mask=None,  # Not used with KV cache
+                        encoder_hidden_states=encoder_hidden_states,
+                        kv_cache=kv_cache,
+                        current_decode_pos=current_decode_pos,
+                        cross_attn_cache=cross_attn_cache,
+                        parameters=parameters.decoder,
+                    )
+
+                # Create and compile the trace executor (pass device tensor directly, no host roundtrip)
+                trace_executor = TracedWhisperDecoderExecutor(
+                    model_fn=traced_decoder_fn,
+                    device=mesh_device,
+                    l1_input_memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+                trace_executor.compile(decoder_hidden_states)
+                trace_compiled = True
+                logger.info("Decoder trace compilation complete")
 
         if not kv_cache:
             # Note: if not using a kv cache, the entire sequence is recomputed at each step
@@ -497,6 +542,11 @@ def _generate_with_temperature(
 
         if all(prompt_is_done):
             break
+
+    # Cleanup trace executor if it was used
+    if trace_executor is not None:
+        trace_executor.cleanup()
+        logger.info("Decoder trace executor cleaned up")
 
     total_generate_time = time.time() - start_encode
     logger.info(f"Time to first token: {(ttft*1000):.3f}ms")
