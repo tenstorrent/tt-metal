@@ -49,7 +49,7 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
         acquire_dst();
         copy_tile(in0, i, dst_reg_0);
         copy_tile(in1, i, dst_reg_1);
-        max_tile(dst_reg_0, dst_reg_1, static_cast<int>(VectorMode::C));
+        max_tile(dst_reg_0, dst_reg_1, static_cast<int>(VectorMode::R));
         pack_tile(dst_reg_0, in0);
         release_dst();
     }
@@ -995,6 +995,100 @@ void matmul_blocks(
     // cb_pop_front(in1_cb, K * N);
     cb_push_back(out_cb, output_num_tiles);
 >>>>>>> 08c23c6494 (First pass at transposed SDPA complete. Good correctness. Reduce on FPU)
+}
+
+void matmul_reduce_blocks(
+    const uint32_t& in0_cb,
+    const uint32_t& in1_cb,
+    const uint32_t& matmul_out_cb,
+    const uint32_t& reduce_out_cb,
+    const uint32_t& M,
+    const uint32_t& N,
+    const uint32_t& K,
+    const uint32_t& in0_num_subblocks,
+    const uint32_t& in1_num_subblocks,
+    const uint32_t& in0_block_w,
+    const uint32_t& subblock_h,
+    const uint32_t& subblock_w) {
+    DeviceZoneScopedN("matmul_blocks");
+    // precondition: in0_cb has M*K produced
+    // preconditino: in1_cb has K*N produced
+    // postcondition: in0_cb is full, in1_cb is empty
+    // postcondition: out_cb has M*N produced
+    mm_block_init_short(
+        in0_cb, in1_cb, 1 /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
+
+    uint32_t output_num_tiles = M * N;
+    uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
+
+    reconfig_data_format(in1_cb, in0_cb);
+    // pack_reconfig_data_format(matmul_out_cb);
+    cb_reserve_back(matmul_out_cb, output_num_tiles);
+    // Reserve space for reduced outputs: one tile per output column (final result)
+    const uint32_t total_reduce_tiles = N;
+    cb_reserve_back(reduce_out_cb, total_reduce_tiles);
+
+    sfpu_reduce_max_sdpa_init();
+
+    // Width-first traversal: iterate column subblocks outer, row subblocks inner
+    for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
+        // Initialize reduce once per column (before processing any row blocks)
+        // sfpu_reduce_max_load_initial_values();
+        sfpu_reduce_max_prologue();
+
+        for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
+            tile_regs_acquire();
+
+            uint32_t dst_index = 0;
+            uint32_t in0_index = in0_subblock * subblock_h * in0_block_w;
+            uint32_t in1_index = in1_subblock * subblock_w;
+
+            for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
+                matmul_block(
+                    in0_cb,
+                    in1_cb,
+                    in0_index,
+                    in1_index,
+                    dst_index,
+                    1 /*transpose*/,
+                    subblock_w,
+                    subblock_h,
+                    in0_block_w);
+                in0_index++;
+                in1_index += N;
+            }
+
+            tile_regs_commit();
+
+            tile_regs_wait();
+
+            uint32_t pack_dst_idx = dst_index;
+            uint32_t out_col_offset = in1_subblock * subblock_w;
+            for (uint32_t r = 0; r < subblock_h; r++) {
+                uint32_t global_r = r + subblock_h * in0_subblock;
+                for (uint32_t c = 0; c < subblock_w; c++) {
+                    uint32_t global_c = c + out_col_offset;
+                    uint32_t global_idx = global_c * M + global_r;
+                    pack_tile<true>(pack_dst_idx, matmul_out_cb, global_idx);
+                    pack_dst_idx++;
+                }
+            }
+
+            sfpu_reduce_max_sdpa(dst_index, subblock_h, (int)VectorMode::RC_custom);
+
+            // Only finalize and pack after processing all row blocks for this column
+            if (in0_subblock == (in0_num_subblocks - 1)) {
+                sfpu_reduce_max_col_epilogue();
+                // Epilogue always writes result to dst[0], so pack from dst[0]
+                pack_tile<true>(0, reduce_out_cb, out_col_offset++);
+                pack_tile<true>(1, reduce_out_cb, out_col_offset);
+            }
+
+            tile_regs_release();
+        }
+    }
+    cb_push_back(matmul_out_cb, output_num_tiles);
+    cb_push_back(reduce_out_cb, total_reduce_tiles);
 }
 
 template <uint32_t M>

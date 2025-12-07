@@ -9,6 +9,8 @@
 
 #include "compute_kernel_api.h"
 #include "compute_common.hpp"
+#include "debug/dprint.h"
+#include "debug/dprint_pages.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -153,22 +155,52 @@ void MAIN {
                     cb_wait_front(cb_k_in, k_chunk_tiles);
 >>>>>>> 08c23c6494 (First pass at transposed SDPA complete. Good correctness. Reduce on FPU)
                     pack_reconfig_data_format(cb_qk_im);
-                    matmul_blocks(
+                    // matmul_blocks(
+                    //     cb_k_in,
+                    //     cb_q_in,
+                    //     cb_qk_im,
+                    //     Sk_chunk_t,
+                    //     Sq_chunk_t,
+                    //     DHt,
+                    //     qk_num_blocks,
+                    //     qk_in0_num_subblocks,
+                    //     qk_in1_num_subblocks,
+                    //     qk_in0_block_w,
+                    //     qk_subblock_h,
+                    //     qk_subblock_w,
+                    //     true /*transpose*/,
+                    //     true);
+
+                    matmul_reduce_blocks(
                         cb_k_in,
                         cb_q_in,
                         cb_qk_im,
+                        alias_cur_max,
                         Sk_chunk_t,
                         Sq_chunk_t,
                         DHt,
-                        qk_num_blocks,
                         qk_in0_num_subblocks,
                         qk_in1_num_subblocks,
                         qk_in0_block_w,
                         qk_subblock_h,
-                        qk_subblock_w,
-                        true /*transpose*/,
-                        true);
+                        qk_subblock_w);
+
                     cb_pop_front(cb_k_in, k_chunk_tiles);
+
+                    reconfig_data_format(alias_cur_max, alias_prev_max);
+
+                    cb_wait_front(alias_cur_max, Sq_chunk_t);
+                    UNPACK(DPRINT << "alias_cur_max: " << ENDL();)
+                    UNPACK(tt::compute::common::print_tile_rows(alias_cur_max, 1, 0, true);)
+
+                    if (k_chunk > 0) {
+                        UNPACK(DPRINT << "alias_prev_max: " << ENDL();)
+                        UNPACK(tt::compute::common::print_tile_rows(alias_prev_max, 1, 0, true);)
+                        max_block_inplace<Sq_chunk_t>(alias_cur_max, alias_prev_max);
+                        cb_wait_front(alias_cur_max, Sq_chunk_t);
+                        UNPACK(DPRINT << "alias_cur_max after max_block_inplace: " << ENDL();)
+                        UNPACK(tt::compute::common::print_tile_rows(alias_cur_max, 1, 0, true);)
+                    }
 
                     /**
                      * Note
@@ -210,14 +242,14 @@ void MAIN {
                      * else:
                      *  cur_max = max(qk, dim=-1)
                      */
-                    reconfig_data_format(cb_qk_im, cb_identity_scale_in);
-                    reduce_c_transposed_tiles<
-                        PoolType::MAX,
-                        ReduceDim::REDUCE_COL,
-                        cb_qk_im,
-                        cb_identity_scale_in,
-                        Sq_chunk_t,
-                        Sk_chunk_t>(alias_cur_max, alias_prev_max, k_chunk > 0);
+                    // reconfig_data_format(cb_qk_im, cb_identity_scale_in);
+                    // reduce_c_transposed_tiles<
+                    //     PoolType::MAX,
+                    //     ReduceDim::REDUCE_COL,
+                    //     cb_qk_im,
+                    //     cb_identity_scale_in,
+                    //     Sq_chunk_t,
+                    //     Sk_chunk_t>(alias_cur_max, alias_prev_max, k_chunk > 0);
                     /**
                      * sub_exp fuses a few operations.
                      * In-place it performs `QK = exp((QK - cur_max) * scale)`
