@@ -338,4 +338,5 @@ void kernel_main() {
             start_reader_idx = reader_idx + static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1;
         }
     }  // out_num_blocks_h
+    noc_async_write_barrier();
 }
