@@ -334,6 +334,8 @@ class Flux1Pipeline:
         num_inference_steps: int,
         seed: int,
         traced: bool = True,
+        timer: BenchmarkProfiler = None,
+        timer_iteration: int = 0,
     ):
         return self(
             width=width,
@@ -345,6 +347,8 @@ class Flux1Pipeline:
             num_inference_steps=num_inference_steps,
             seed=seed,
             traced=traced,
+            timer=timer,
+            timer_iteration=timer_iteration,
         )
 
     def __call__(

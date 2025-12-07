@@ -313,7 +313,15 @@ class MotifPipeline:
         self.synchronize_devices()
 
     def run_single_prompt(
-        self, prompt, negative_prompt=None, num_inference_steps=40, cfg_scale=5.0, seed=None, traced=True
+        self,
+        prompt,
+        negative_prompt=None,
+        num_inference_steps=40,
+        cfg_scale=5.0,
+        seed=None,
+        traced=True,
+        timer=None,
+        timer_iteration=0,
     ):
         return self.__call__(
             prompt_1=[prompt],
@@ -326,6 +334,8 @@ class MotifPipeline:
             cfg_scale=cfg_scale,
             seed=seed,
             traced=traced,
+            timer=timer,
+            timer_iteration=timer_iteration,
         )
 
     def __call__(
