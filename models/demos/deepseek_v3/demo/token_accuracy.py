@@ -58,6 +58,10 @@ class TokenAccuracy:
         """Decode the prompt token ids to a string prompt."""
         return tokenizer.decode(self.input_prompt.tolist())
 
+    def get_prompt_token_ids(self) -> list[int]:
+        """Return the prompt token IDs directly (bypasses text decoding/encoding)."""
+        return self.input_prompt.tolist()
+
     def num_gt_tokens(self) -> int:
         return len(self.gt_tokens)
 
