@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <map>
 #include <optional>
