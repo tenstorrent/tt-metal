@@ -133,7 +133,7 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 inline void calculate_div_int32_floor(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -142,7 +142,7 @@ inline void calculate_div_int32_floor(const uint dst_index_in0, const uint dst_i
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 inline void calculate_div_int32_trunc(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -151,14 +151,14 @@ inline void calculate_div_int32_trunc(const uint dst_index_in0, const uint dst_i
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 inline void div_trunc_init() {
     sfpi::vConstFloatPrgm0 = 8589934592.0f;
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 inline void div_floor_init() {
-    div_trunc_init<APPROXIMATION_MODE>();
+    div_trunc_init<APPROX_MODE>();
 }
 
 }  // namespace ckernel::sfpu

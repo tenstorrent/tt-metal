@@ -206,7 +206,7 @@ inline void log_init() {
         sfpi::vConstFloatPrgm1 = -2.0069785118103027;
         sfpi::vConstFloatPrgm2 = 3.767500400543213;
     } else {
-        _init_reciprocal_</*approximation_mode*/ ApproximationMode::Precise, /*legacy_compat*/ false>();
+        _init_reciprocal_</*approx_mode*/ ApproximationMode::Precise, /*legacy_compat*/ false>();
     }
 }
 

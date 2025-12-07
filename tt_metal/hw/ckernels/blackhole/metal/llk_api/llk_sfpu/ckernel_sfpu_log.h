@@ -205,7 +205,7 @@ inline void log_init() {
         sfpi::vConstFloatPrgm2 = 3.767500400543213;
     } else {
         // _init_sfpu_reciprocal_ sets vConstFloatPrgm0 to 2.0f
-        _init_sfpu_reciprocal_</*approximation_mode*/ ApproximationMode::Precise>();
+        _init_sfpu_reciprocal_</*approx_mode*/ ApproximationMode::Precise>();
         // But we can use 2 other programmable constants:
         sfpi::vConstFloatPrgm1 = 1.4142135381698608f;   // sqrt(2)
         sfpi::vConstFloatPrgm2 = 0.69314718246459961f;  // log(2)
