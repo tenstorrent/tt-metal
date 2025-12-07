@@ -589,7 +589,6 @@ def test_simple_conv_t2d_weights_bias_match(
     logger.info("Weights and bias from conv_transpose2d match prepare functions exactly!")
 
 
-
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
 # fmt: off
 @pytest.mark.parametrize(
