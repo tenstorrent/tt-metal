@@ -762,14 +762,15 @@ def main():
                 total_time += end_time - start_time
                 execution_time = f" [{end_time - start_time:.2f}s]" if args["--print-script-times"] else ""
                 if script.config.data_provider:
-                    print()
                     if result is None:
+                        print()
                         utils.INFO(f"{script.name}{execution_time}:")
                         if script.failure_message is not None:
                             utils.ERROR(f"  Data provider script failed: {script.failure_message}")
                         else:
                             utils.ERROR(f"  Data provider script did not return any data.")
                     elif execution_time:
+                        print()
                         utils.INFO(f"{script.name}{execution_time}:")
                         utils.INFO("  pass")
                 else:

@@ -131,36 +131,36 @@ class DispatcherData:
         self._active_erisc_elf = elfs_cache[active_erisc_elf_path]
 
         # Access the value of enumerator for supported blocks
-        self._ProgrammableCoreTypes_TENSIX = self._brisc_elf.enumerators["ProgrammableCoreType::TENSIX"].value
-        self._ProgrammableCoreTypes_IDLE_ETH = self._brisc_elf.enumerators["ProgrammableCoreType::IDLE_ETH"].value
-        self._ProgrammableCoreTypes_ACTIVE_ETH = self._brisc_elf.enumerators["ProgrammableCoreType::ACTIVE_ETH"].value
+        self._ProgrammableCoreTypes_TENSIX = self._brisc_elf.get_enum_value("ProgrammableCoreType::TENSIX")
+        self._ProgrammableCoreTypes_IDLE_ETH = self._brisc_elf.get_enum_value("ProgrammableCoreType::IDLE_ETH")
+        self._ProgrammableCoreTypes_ACTIVE_ETH = self._brisc_elf.get_enum_value("ProgrammableCoreType::ACTIVE_ETH")
 
         # Enumerators for tensix block
         self._enum_values_tenisx = {
             "ProcessorTypes": {
-                "BRISC": self._brisc_elf.enumerators["TensixProcessorTypes::DM0"].value,
-                "NCRISC": self._brisc_elf.enumerators["TensixProcessorTypes::DM1"].value,
-                "TRISC0": self._brisc_elf.enumerators["TensixProcessorTypes::MATH0"].value,
-                "TRISC1": self._brisc_elf.enumerators["TensixProcessorTypes::MATH1"].value,
-                "TRISC2": self._brisc_elf.enumerators["TensixProcessorTypes::MATH2"].value,
+                "BRISC": self._brisc_elf.get_enum_value("TensixProcessorTypes::DM0"),
+                "NCRISC": self._brisc_elf.get_enum_value("TensixProcessorTypes::DM1"),
+                "TRISC0": self._brisc_elf.get_enum_value("TensixProcessorTypes::MATH0"),
+                "TRISC1": self._brisc_elf.get_enum_value("TensixProcessorTypes::MATH1"),
+                "TRISC2": self._brisc_elf.get_enum_value("TensixProcessorTypes::MATH2"),
             },
         }
 
         # Enumerators for eth block
         self._enum_values_eth = {
             "ProcessorTypes": {
-                "ERISC": self._idle_erisc_elf.enumerators["EthProcessorTypes::DM0"].value,
-                "ERISC0": self._idle_erisc_elf.enumerators["EthProcessorTypes::DM0"].value,
+                "ERISC": self._idle_erisc_elf.get_enum_value("EthProcessorTypes::DM0"),
+                "ERISC0": self._idle_erisc_elf.get_enum_value("EthProcessorTypes::DM0"),
             },
         }
 
         # EthProcessorTypes::DM1 is only available on blackhole
         # ERISC1 behaves like DM0 if 1 ERISC mode is used
-        if "EthProcessorTypes::DM1" in self._idle_erisc_elf.enumerators:
+        if self._idle_erisc_elf.get_enum_value("EthProcessorTypes::DM1") is not None:
             self._enum_values_eth["ProcessorTypes"]["ERISC1"] = (
-                self._idle_erisc_elf.enumerators["EthProcessorTypes::DM1"].value
+                self._idle_erisc_elf.get_enum_value("EthProcessorTypes::DM1")
                 if self._is_2_erisc_mode
-                else self._idle_erisc_elf.enumerators["EthProcessorTypes::DM0"].value
+                else self._idle_erisc_elf.get_enum_value("EthProcessorTypes::DM0")
             )
 
         # Go message states are constant values in the firmware elf, so we cache them
