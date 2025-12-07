@@ -135,13 +135,84 @@ class SD35MediumSelfAttention:
         k = ttnn.permute(k, (0, 2, 1, 3))
         v = ttnn.permute(v, (0, 2, 1, 3))
 
-        # Scaled dot-product attention for main input
+        # SDPA program config
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.core_grid,
             q_chunk_size=64,
             k_chunk_size=64,
         )
 
+        # Handle added context if provided - SD3 uses JOINT attention (concatenate, attend, split)
+        if added_input is not None:
+            added_B = added_input.shape[1]
+
+            # Added attention projections
+            added_q = self.add_q_proj(added_input)
+            added_k = self.add_k_proj(added_input)
+            added_v = self.add_v_proj(added_input)
+
+            # Reshape added tensors to [B, added_seq_len, num_heads, head_dim] BEFORE applying RMSNorm
+            added_q = ttnn.reshape(added_q, (added_B, added_seq_len, self.num_heads, self.head_dim))
+            added_k = ttnn.reshape(added_k, (added_B, added_seq_len, self.num_heads, self.head_dim))
+            added_v = ttnn.reshape(added_v, (added_B, added_seq_len, self.num_heads, self.head_dim))
+
+            # Apply RMSNorm to added Q and K AFTER reshaping (now head_dim=64 matches norm)
+            if self.norm_added_q is not None:
+                added_q = self.norm_added_q(added_q)
+                added_k = self.norm_added_k(added_k)
+
+            # Transpose added tensors to [B, num_heads, added_seq_len, head_dim]
+            added_q = ttnn.permute(added_q, (0, 2, 1, 3))
+            added_k = ttnn.permute(added_k, (0, 2, 1, 3))
+            added_v = ttnn.permute(added_v, (0, 2, 1, 3))
+
+            # JOINT ATTENTION: Concatenate x and context along sequence dimension
+            # q: [B, num_heads, seq_len, head_dim], added_q: [B, num_heads, added_seq_len, head_dim]
+            # Result: [B, num_heads, seq_len + added_seq_len, head_dim]
+            q_full = ttnn.concat([q, added_q], dim=2)
+            k_full = ttnn.concat([k, added_k], dim=2)
+            v_full = ttnn.concat([v, added_v], dim=2)
+
+            # Run unified self-attention on concatenated sequence
+            attn_out_full = ttnn.transformer.scaled_dot_product_attention(
+                q_full,
+                k_full,
+                v_full,
+                is_causal=False,
+                scale=self.scale,
+                program_config=program_config,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            # Output shape: [B, num_heads, seq_len + added_seq_len, head_dim]
+
+            # Split output back into x and context parts
+            # attn_out: [B, num_heads, seq_len, head_dim]
+            # added_attn_out: [B, num_heads, added_seq_len, head_dim]
+            attn_out = attn_out_full[:, :, :seq_len, :]
+            added_attn_out = attn_out_full[:, :, seq_len:, :]
+
+            # Transpose back: [B, num_heads, seq_len, head_dim] -> [B, seq_len, num_heads, head_dim]
+            attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))
+            added_attn_out = ttnn.permute(added_attn_out, (0, 2, 1, 3))
+
+            # Reshape to [1, B, seq_len, inner_dim]
+            attn_out = ttnn.reshape(attn_out, (1, B, seq_len, self.inner_dim))
+            added_attn_out = ttnn.reshape(added_attn_out, (1, added_B, added_seq_len, self.inner_dim))
+
+            # Output projections
+            if not self.pre_only:
+                attn_out = self.to_out(attn_out)
+                if self.dropout_prob > 0.0:
+                    attn_out = ttnn.experimental.dropout(
+                        attn_out, probability=self.dropout_prob, scale=1.0 / (1.0 - self.dropout_prob)
+                    )
+
+            # Project added attention output back to added dimension
+            added_attn_out = self.to_add_out(added_attn_out)
+
+            return attn_out, added_attn_out
+
+        # No added input - just self-attention on x
         attn_out = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
@@ -161,55 +232,10 @@ class SD35MediumSelfAttention:
         # Output projection
         if not self.pre_only:
             attn_out = self.to_out(attn_out)
-            # Apply dropout if needed (for inference with p=0.0, this is a no-op)
             if self.dropout_prob > 0.0:
                 attn_out = ttnn.experimental.dropout(
                     attn_out, probability=self.dropout_prob, scale=1.0 / (1.0 - self.dropout_prob)
                 )
-
-        # Handle added context if provided
-        if added_input is not None:
-            added_B = added_input.shape[1]
-
-            # Added attention projections
-            added_q = self.add_q_proj(added_input)
-            added_k = self.add_k_proj(added_input)
-            added_v = self.add_v_proj(added_input)
-
-            # Apply RMSNorm to added Q and K
-            if self.norm_added_q is not None:
-                added_q = self.norm_added_q(added_q)
-                added_k = self.norm_added_k(added_k)
-
-            # Reshape added tensors
-            added_q = ttnn.reshape(added_q, (added_B, added_seq_len, self.num_heads, self.head_dim))
-            added_k = ttnn.reshape(added_k, (added_B, added_seq_len, self.num_heads, self.head_dim))
-            added_v = ttnn.reshape(added_v, (added_B, added_seq_len, self.num_heads, self.head_dim))
-
-            # Transpose added tensors
-            added_q = ttnn.permute(added_q, (0, 2, 1, 3))
-            added_k = ttnn.permute(added_k, (0, 2, 1, 3))
-            added_v = ttnn.permute(added_v, (0, 2, 1, 3))
-
-            # Cross attention between main query and added key/value
-            added_attn_out = ttnn.transformer.scaled_dot_product_attention(
-                q,  # Use main query
-                added_k,  # Use added key
-                added_v,  # Use added value
-                is_causal=False,
-                scale=self.scale,
-                program_config=program_config,
-                compute_kernel_config=self.compute_kernel_config,
-            )
-
-            # Transpose and reshape added attention output
-            added_attn_out = ttnn.permute(added_attn_out, (0, 2, 1, 3))
-            added_attn_out = ttnn.reshape(added_attn_out, (1, added_B, added_seq_len, self.inner_dim))
-
-            # Project added attention output back to added dimension
-            added_attn_out = self.to_add_out(added_attn_out)
-
-            return attn_out, added_attn_out
 
         return attn_out
 
@@ -220,11 +246,13 @@ class SD35MediumSelfAttention:
         self.to_k.load_torch_state_dict(substate(state_dict, "to_k"))
         self.to_v.load_torch_state_dict(substate(state_dict, "to_v"))
 
-        # Load added context weights
-        self.add_q_proj.load_torch_state_dict(substate(state_dict, "add_q_proj"))
-        self.add_k_proj.load_torch_state_dict(substate(state_dict, "add_k_proj"))
-        self.add_v_proj.load_torch_state_dict(substate(state_dict, "add_v_proj"))
-        self.to_add_out.load_torch_state_dict(substate(state_dict, "to_add_out"))
+        # Load added context weights (only if present - attn2 doesn't have these)
+        add_q_state = substate(state_dict, "add_q_proj")
+        if add_q_state:
+            self.add_q_proj.load_torch_state_dict(add_q_state)
+            self.add_k_proj.load_torch_state_dict(substate(state_dict, "add_k_proj"))
+            self.add_v_proj.load_torch_state_dict(substate(state_dict, "add_v_proj"))
+            self.to_add_out.load_torch_state_dict(substate(state_dict, "to_add_out"))
 
         # Load output projection weights
         if not self.pre_only:
@@ -234,5 +262,8 @@ class SD35MediumSelfAttention:
         if self.norm_q is not None:
             self.norm_q.load_torch_state_dict(substate(state_dict, "norm_q"))
             self.norm_k.load_torch_state_dict(substate(state_dict, "norm_k"))
-            self.norm_added_q.load_torch_state_dict(substate(state_dict, "norm_added_q"))
-            self.norm_added_k.load_torch_state_dict(substate(state_dict, "norm_added_k"))
+            # Only load added norm weights if present (attn2 doesn't have these)
+            norm_added_q_state = substate(state_dict, "norm_added_q")
+            if norm_added_q_state:
+                self.norm_added_q.load_torch_state_dict(norm_added_q_state)
+                self.norm_added_k.load_torch_state_dict(substate(state_dict, "norm_added_k"))
