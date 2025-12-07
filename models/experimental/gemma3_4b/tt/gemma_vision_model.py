@@ -2,7 +2,7 @@
 This is the Vision Tower Model for Gemma-3-4b-it.
 """
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI
 
 # SPDX-License-Identifier: Apache-2.0
 

@@ -361,4 +361,4 @@ for (uint32_t wi = 0; wi < Wt_input; wi++) {
 
 ---
 
-© Tenstorrent AI ULC 2025
+© Tenstorrent AI 2025

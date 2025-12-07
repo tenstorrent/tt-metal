@@ -259,4 +259,4 @@ Result = 14 : Expected = 14
 
 ---
 
-© Tenstorrent AI ULC 2025
+© Tenstorrent AI 2025

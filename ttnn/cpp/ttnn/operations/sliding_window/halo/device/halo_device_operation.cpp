@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/sliding_window/halo/device/untilize_with_halo_program_factory.hpp"

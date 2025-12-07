@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI.
 //
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //===----------------------------------------------------------------------===//
@@ -9,7 +9,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // This file is a modified version of llvm/ADT/SmallVector.h.
-// Modifications were made by Tenstorrent AI ULC. in 2025 to adapt it for internal use.
+// Modifications were made by Tenstorrent AI. in 2025 to adapt it for internal use.
 //
 //===----------------------------------------------------------------------===//
 ///

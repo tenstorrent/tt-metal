@@ -288,4 +288,4 @@ This strategy implements a parallel Bitonic Sort for a single row of tiles using
 
 ---
 
-© Tenstorrent AI ULC 2025
+© Tenstorrent AI 2025

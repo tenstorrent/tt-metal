@@ -3,7 +3,7 @@ This is the implmentation of MultiModalprojector for Gemma-3-4b-it model.
 There is no Independent MultiModalprojector support in TT-Transformers.
 """
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI
 
 # SPDX-License-Identifier: Apache-2.0
 

@@ -296,4 +296,4 @@ For detailed information about DST register precision and configuration, refer t
 
 ---
 
-© Tenstorrent AI ULC 2025
+© Tenstorrent AI 2025

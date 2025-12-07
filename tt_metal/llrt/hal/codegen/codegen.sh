@@ -18,7 +18,7 @@ YEAR=$(date +%Y)
 
 mkdir -p "${OUT_DIR}"
 cat > ${OUT_INTF_FILE} <<EOF
-// SPDX-FileCopyrightText: © ${YEAR} Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © ${YEAR} Tenstorrent AI.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,7 +32,7 @@ cat > ${OUT_INTF_FILE} <<EOF
 EOF
 
 cat > ${OUT_IMPL_FILE} << EOF
-// SPDX-FileCopyrightText: © ${YEAR} Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © ${YEAR} Tenstorrent AI.
 //
 // SPDX-License-Identifier: Apache-2.0
 
