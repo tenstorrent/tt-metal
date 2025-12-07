@@ -74,55 +74,6 @@ struct AvgPool2DOp {
         Layout output_layout = Layout::ROW_MAJOR);
 };
 
-class Pool2dSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
-    uint32_t batch_size;
-    IOShape input_shape;
-    uint32_t channels;
-    std::array<uint32_t, 2> kernel_size;
-    std::array<uint32_t, 2> stride;
-    std::array<uint32_t, 4> padding_n4;
-    std::array<uint32_t, 2> dilation;
-    sliding_window::SlidingWindowConfig sliding_window_config;
-    IOShape output_shape;
-    bool ceil_mode;
-    bool count_include_pad;
-    std::optional<int32_t> divisor_override;
-    bool return_indices;
-    Pool2DType pool_type;
-    DataType dtype;
-    TensorMemoryLayout shard_layout;
-    Layout output_layout;
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config;
-    MeshDevice* device;
-
-public:
-    Pool2dSliceAttr(
-        uint32_t batch_size,
-        IOShape input_shape,
-        uint32_t channels,
-        std::array<uint32_t, 2> kernel_size,
-        std::array<uint32_t, 2> stride,
-        std::array<uint32_t, 4> padding_n4,
-        std::array<uint32_t, 2> dilation,
-        bool ceil_mode,
-        bool count_include_pad,
-        std::optional<int32_t> divisor_override,
-        std::optional<const TensorMemoryLayout> applied_shard_scheme,
-        bool return_indices,
-        Pool2DType pool_type,
-        DataType dtype,
-        Layout output_layout,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-        MeshDevice* device);
-
-    std::tuple<IOShape, IOShape> get_input_slice(IOShape output_slice_start, IOShape output_slice_end) override;
-    uint32_t get_L1_usage() override;
-    tt::tt_metal::MemoryConfig get_input_memory_config(IOShape output_slice_start, IOShape output_slice_end) override;
-    std::vector<ttnn::Tensor> run_L1_op(
-        const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) override;
-    std::string name() override;
-};
-
 }  // namespace operations::pool
 
 constexpr auto max_pool2d = ttnn::register_operation<"ttnn::max_pool2d", operations::pool::MaxPool2DOp>();
