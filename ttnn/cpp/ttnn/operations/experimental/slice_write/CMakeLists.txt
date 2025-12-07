@@ -1,7 +1,7 @@
 add_library(ttnn_op_experimental_slice_write ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::SliceWrite ALIAS ttnn_op_experimental_slice_write)
 
-target_precompile_headers(ttnn_op_experimental_slice_write REUSE_FROM TT::CommonPCH)
+target_precompile_headers(ttnn_op_experimental_slice_write REUSE_FROM TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_slice_write)
 set_target_properties(
     ttnn_op_experimental_slice_write
