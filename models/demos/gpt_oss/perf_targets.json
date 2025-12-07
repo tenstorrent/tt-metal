@@ -36,7 +36,7 @@
                 "decode_tok_s": 2200
             },
             "GLX_gpt-oss-20b": {
-                "TTFT": [600, 1.2],
+                "TTFT": [500, 1.2],
                 "decode_tok_s_u": 10,
                 "decode_tok_s": 2200
             },
