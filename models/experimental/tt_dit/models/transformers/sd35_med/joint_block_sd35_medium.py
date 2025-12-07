@@ -383,7 +383,10 @@ class JointTransformerBlockEarly(Module):
 
 
 class JointTransformerBlockMiddle(Module):
-    """JointTransformerBlock for blocks 13-22 (AdaLayerNormZero + AdaLayerNormZero)"""
+    """JointTransformerBlock for blocks 13-22 (AdaLayerNormZero + AdaLayerNormZero)
+
+    Middle blocks do NOT have attn2 - only joint attention (attn).
+    """
 
     def __init__(self, dim: int = 1536, num_heads: int = 24, mesh_device=None, eps: float = 1e-6):
         super().__init__()
@@ -399,7 +402,7 @@ class JointTransformerBlockMiddle(Module):
             hidden_size=dim, conditioning_size=9216, bias=True, mesh_device=mesh_device, eps=eps  # 6x scaling
         )
 
-        # Attention layers
+        # Only joint attention (no attn2 in middle blocks!)
         self.attn = SD35MediumSelfAttention(
             dim=dim,
             num_heads=num_heads,
@@ -411,17 +414,6 @@ class JointTransformerBlockMiddle(Module):
             added_proj_dim=dim,
         )
 
-        self.attn2 = SD35MediumSelfAttention(
-            dim=dim,
-            num_heads=num_heads,
-            qkv_bias=True,
-            pre_only=False,
-            qk_norm="rms",
-            eps=eps,
-            mesh_device=mesh_device,
-            added_proj_dim=None,
-        )
-
         # Post-attention normalization
         self.norm2 = LayerNorm(dim, norm_eps=eps, norm_elementwise_affine=False, mesh_device=mesh_device)
         self.norm2_context = LayerNorm(dim, norm_eps=eps, norm_elementwise_affine=False, mesh_device=mesh_device)
@@ -431,61 +423,62 @@ class JointTransformerBlockMiddle(Module):
         self.ff_context = FeedForward(dim=dim, hidden_dim=6144, mesh_device=mesh_device)
 
     def forward(self, x, context, conditioning, seq_len, context_seq_len):
-        """Forward pass for middle blocks"""
+        """Forward pass for middle blocks (13-22)
+
+        Middle blocks use AdaLayerNormZero (6 params) for both x and context.
+        Unlike early blocks, middle blocks do NOT use attn2 in forward pass.
+
+        AdaLayerNormZero outputs 6 modulation params:
+        - 0-2: shift_msa, scale_msa, gate_msa (for joint attn)
+        - 3-5: shift_mlp, scale_mlp, gate_mlp (for feedforward)
+        """
         # First normalization with conditioning
-        x_norm, scale = self.norm1(x, conditioning)
+        x_norm, x_scale = self.norm1(x, conditioning)
         context_norm, context_scale = self.norm1_context(context, conditioning)
 
-        # Extract scale shifts (6x for middle blocks)
-        shift_msa = scale[:, :, 0]
-        scale_msa = scale[:, :, 1]
-        gate_msa = scale[:, :, 2]
-        shift_mlp = scale[:, :, 3]
-        scale_mlp = scale[:, :, 4]
-        gate_mlp = scale[:, :, 5]
+        # Extract x modulation params (6 total for AdaLayerNormZero)
+        x_shift_msa = x_scale[:, :, 0:1, :]
+        x_scale_msa = x_scale[:, :, 1:2, :]
+        x_gate_msa = x_scale[:, :, 2:3, :]
+        x_shift_mlp = x_scale[:, :, 3:4, :]
+        x_scale_mlp = x_scale[:, :, 4:5, :]
+        x_gate_mlp = x_scale[:, :, 5:6, :]
 
-        # Context scales (6x)
-        context_shift_msa = context_scale[:, :, 0]
-        context_scale_msa = context_scale[:, :, 1]
-        context_gate_msa = context_scale[:, :, 2]
-        context_shift_mlp = context_scale[:, :, 3]
-        context_scale_mlp = context_scale[:, :, 4]
-        context_gate_mlp = context_scale[:, :, 5]
+        # Extract context modulation params (6 total for AdaLayerNormZero)
+        c_shift_msa = context_scale[:, :, 0:1, :]
+        c_scale_msa = context_scale[:, :, 1:2, :]
+        c_gate_msa = context_scale[:, :, 2:3, :]
+        c_shift_mlp = context_scale[:, :, 3:4, :]
+        c_scale_mlp = context_scale[:, :, 4:5, :]
+        c_gate_mlp = context_scale[:, :, 5:6, :]
 
-        # Apply modulation
-        x_modulated = x_norm * (1 + scale_msa) + shift_msa
-        context_modulated = context_norm * (1 + context_scale_msa) + context_shift_msa
+        # Apply modulation for joint attention
+        x_modulated = x_norm * (1 + x_scale_msa) + x_shift_msa
+        context_modulated = context_norm * (1 + c_scale_msa) + c_shift_msa
 
-        # First attention with context
+        # Joint attention (attn) - x and context attend together
         attn_out, context_attn_out = self.attn(
             x_modulated, seq_len, added_input=context_modulated, added_seq_len=context_seq_len
         )
 
-        # Apply gate modulation
-        attn_out = attn_out * ttnn.silu(gate_msa)
-        context_attn_out = context_attn_out * ttnn.silu(context_gate_msa)
+        # Apply gate and residual for joint attention (NO silu on gate!)
+        x = x + x_gate_msa * attn_out
+        context = context + c_gate_msa * context_attn_out
 
-        # Residual connections
-        x = x + attn_out
-        context = context + context_attn_out
-
-        # Second normalization
-        x_norm = self.norm2(x)
-        context_norm = self.norm2_context(context)
-
-        # Apply MLP modulation
-        x_modulated = x_norm * (1 + scale_mlp) + shift_mlp
-        context_modulated = context_norm * (1 + context_scale_mlp) + context_shift_mlp
+        # NOTE: Middle blocks do NOT use attn2 - only early blocks (0-12) use it
 
         # Feed forward
-        ff_out = self.ff(x_modulated)
-        ff_out = ff_out * ttnn.silu(gate_mlp)
-        context_ff_out = self.ff_context(context_modulated)
-        context_ff_out = context_ff_out * ttnn.silu(context_gate_mlp)
+        x_norm_ff = self.norm2(x)
+        context_norm_ff = self.norm2_context(context)
 
-        # Residual connection
-        x = x + ff_out
-        context = context + context_ff_out
+        x_modulated_ff = x_norm_ff * (1 + x_scale_mlp) + x_shift_mlp
+        context_modulated_ff = context_norm_ff * (1 + c_scale_mlp) + c_shift_mlp
+
+        ff_out = self.ff(x_modulated_ff)
+        context_ff_out = self.ff_context(context_modulated_ff)
+
+        x = x + x_gate_mlp * ff_out
+        context = context + c_gate_mlp * context_ff_out
 
         return x, context
 
@@ -495,7 +488,7 @@ class JointTransformerBlockMiddle(Module):
         self.norm1_context.load_torch_state_dict(substate(state_dict, "norm1_context"))
         # norm2 and norm2_context have norm_elementwise_affine=False, no weights to load
         self.attn.load_state_dict(substate(state_dict, "attn"))
-        self.attn2.load_state_dict(substate(state_dict, "attn2"))
+        # NOTE: Middle blocks do NOT have attn2
         self.ff.load_torch_state_dict(substate(state_dict, "ff"))
         self.ff_context.load_torch_state_dict(substate(state_dict, "ff_context"))
 

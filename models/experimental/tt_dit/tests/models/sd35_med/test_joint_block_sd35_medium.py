@@ -25,11 +25,11 @@ from diffusers.models.transformers.transformer_sd3 import SD3Transformer2DModel
 @pytest.mark.parametrize(
     "block_type,layer_idx,description",
     [
-        ("early", 0, "Blocks 0-12: SD35AdaLayerNormZeroX + AdaLayerNormZero"),
-        # ("middle", 13, "Blocks 13-22: AdaLayerNormZero + AdaLayerNormZero"),
+        # ("early", 0, "Blocks 0-12: SD35AdaLayerNormZeroX + AdaLayerNormZero"),
+        ("middle", 13, "Blocks 13-22: AdaLayerNormZero + AdaLayerNormZero"),
         # ("final", 23, "Block 23: AdaLayerNormZero + AdaLayerNormContinuous"),
     ],
-    ids=["early_block"]
+    ids=["middle_block"]
     # ids=["early_block", "middle_block", "final_block"]
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
