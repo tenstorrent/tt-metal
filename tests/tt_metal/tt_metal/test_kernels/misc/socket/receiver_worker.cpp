@@ -40,9 +40,8 @@ void kernel_main() {
         noc_async_write(receiver_socket.read_ptr, dst_noc_addr, page_size);
         dst_noc_addr += page_size;
         outstanding_data_size -= page_size;
-        socket_pop_pages(receiver_socket, 1);
         noc_async_write_barrier();
-        socket_notify_sender(receiver_socket);
+        socket_pop_pages(receiver_socket, 1);
     }
     update_socket_config(receiver_socket);
     noc_async_write_barrier();

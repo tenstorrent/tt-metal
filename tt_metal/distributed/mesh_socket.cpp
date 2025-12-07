@@ -6,6 +6,7 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/distributed_context.hpp>
 #include "tt_metal/hw/inc/socket.h"
+#include "tt_metal/llrt/tt_cluster.hpp"
 
 using namespace tt::tt_metal::distributed::multihost;
 
@@ -199,6 +200,7 @@ H2DSocket::H2DSocket(
         .size = total_data_buffer_size,
     };
     data_buffer_ = MeshBuffer::create(data_mesh_buffer_specs, data_buffer_specs, mesh_device.get());
+    write_ptr_ = data_buffer_->address();
 
     const auto& core_to_core_id = config_buffer_->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
 
@@ -227,11 +229,53 @@ H2DSocket::H2DSocket(
 }
 
 void H2DSocket::reserve_pages(uint32_t num_pages) {
+    const auto& cluster = MetalContext::instance().get_cluster();
     uint32_t num_bytes = num_pages * page_size_;
     TT_FATAL(num_bytes <= fifo_size_, "Cannot reserve more pages than the socket FIFO size.");
-    for (const auto& recv_core : recv_cores) {
-        uint32_t bytes_free = fifo_size_ - (bytes_sent - bytes_acked[recv_core]);
-        while (bytes_acked[recv_core]) }
+
+    uint32_t bytes_acked_addr = config_buffer_->address() + offsetof(receiver_socket_md, bytes_acked);
+    const auto& mesh_device = config_buffer_->device();
+
+    for (const auto& recv_core : recv_cores_) {
+        uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_[recv_core]);
+        auto recv_virtual_core = mesh_device->worker_core_from_logical_core(recv_core.core_coord);
+        auto recv_device_id = mesh_device->get_device(recv_core.device_coord)->id();
+        while (bytes_free < num_bytes) {
+            std::size_t bytes_acked_value = 0;
+            cluster.read_core(
+                &bytes_acked_value,
+                sizeof(bytes_acked_value),
+                tt_cxy_pair(recv_device_id, recv_virtual_core),
+                bytes_acked_addr);
+            bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_value);
+            bytes_acked_[recv_core] = bytes_acked_value;
+        }
+    }
+}
+
+void H2DSocket::push_pages(uint32_t num_pages) {
+    uint32_t num_bytes = num_pages * page_size_;
+    TT_FATAL(num_bytes <= fifo_size_, "Cannot push more pages than the socket FIFO size.");
+
+    if (write_ptr_ + num_bytes >= data_buffer_->address() + fifo_size_) {
+        write_ptr_ = write_ptr_ + num_bytes - fifo_size_;
+        bytes_sent_ += num_bytes;
+    } else {
+        write_ptr_ += num_bytes;
+        bytes_sent_ += num_bytes;
+    }
+}
+
+void H2DSocket::notify_receiver() {
+    const auto& cluster = MetalContext::instance().get_cluster();
+    const auto& mesh_device = config_buffer_->device();
+    uint32_t bytes_sent_addr = config_buffer_->address() + offsetof(receiver_socket_md, bytes_sent);
+    for (const auto& recv_core : recv_cores_) {
+        auto recv_virtual_core = mesh_device->worker_core_from_logical_core(recv_core.core_coord);
+        auto recv_device_id = mesh_device->get_device(recv_core.device_coord)->id();
+        cluster.write_core(
+            &bytes_sent_, sizeof(bytes_sent_), tt_cxy_pair(recv_device_id, recv_virtual_core), bytes_sent_addr);
+    }
 }
 
 }  // namespace tt::tt_metal::distributed

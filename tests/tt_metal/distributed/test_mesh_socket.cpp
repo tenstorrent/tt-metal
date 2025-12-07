@@ -22,6 +22,7 @@
 #include <tt-metalium/system_mesh.hpp>
 #include <cstring>
 #include <tt-metalium/tt_align.hpp>
+#include "tt_metal/llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -264,6 +265,78 @@ void test_single_connection_single_device_socket(
     EnqueueMeshWorkload(md0->mesh_command_queue(), mesh_workload, false);
     std::vector<uint32_t> recv_data_readback;
     ReadShard(md0->mesh_command_queue(), recv_data_readback, recv_data_buffer, MeshCoordinate(0, 0));
+    EXPECT_EQ(src_vec, recv_data_readback);
+}
+
+void test_h2d_socket(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    std::size_t socket_fifo_size,
+    std::size_t page_size,
+    std::size_t data_size) {
+    std::vector<MeshCoreCoord> recv_cores = {{MeshCoordinate(0, 0), CoreCoord(0, 0)}};
+
+    auto input_socket = H2DSocket(mesh_device, recv_cores, BufferType::L1, socket_fifo_size, page_size);
+
+    TT_FATAL(data_size % page_size == 0, "Data size must be a multiple of page size");
+
+    // Create recv data buffer to drain data into
+    const ReplicatedBufferConfig buffer_config{.size = data_size};
+    auto recv_data_shard_params =
+        ShardSpecBuffer(CoreRangeSet(CoreCoord(0, 0)), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+
+    const DeviceLocalBufferConfig recv_device_local_config{
+        .page_size = data_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(recv_data_shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false,
+    };
+    auto recv_data_buffer = MeshBuffer::create(buffer_config, recv_device_local_config, mesh_device.get());
+
+    // Create Recv MeshWorkload
+    auto recv_program = CreateProgram();
+    CreateKernel(
+        recv_program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/socket/receiver_worker.cpp",
+        CoreCoord(0, 0),
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {
+                static_cast<uint32_t>(input_socket.get_config_buffer_address()),
+                static_cast<uint32_t>(recv_data_buffer->address()),
+                static_cast<uint32_t>(page_size),
+                static_cast<uint32_t>(data_size),
+            }});
+
+    auto mesh_workload = MeshWorkload();
+    MeshCoordinateRange devices = MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0));
+    mesh_workload.add_program(devices, std::move(recv_program));
+
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+
+    uint32_t num_writes = data_size / page_size;
+    std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
+    std::iota(src_vec.begin(), src_vec.end(), 0);
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+    auto recv_core = mesh_device->worker_core_from_logical_core(CoreCoord(0, 0));
+    auto recv_device_id = mesh_device->get_device(MeshCoordinate(0, 0))->id();
+    uint32_t page_size_words = page_size / sizeof(uint32_t);
+    // Write a single page at a time
+    for (uint32_t i = 0; i < num_writes; i++) {
+        input_socket.reserve_pages(1);
+        // Write data to input socket at write ptr
+        cluster.write_core(
+            src_vec.data() + i * page_size_words,
+            page_size,
+            tt_cxy_pair(recv_device_id, recv_core),
+            input_socket.get_write_ptr());
+
+        input_socket.push_pages(1);
+        input_socket.notify_receiver();
+    }
+    std::vector<uint32_t> recv_data_readback = {};
+    ReadShard(mesh_device->mesh_command_queue(), recv_data_readback, recv_data_buffer, MeshCoordinate(0, 0));
     EXPECT_EQ(src_vec, recv_data_readback);
 }
 
@@ -2177,6 +2250,8 @@ void verify_socket_configs_match(const SocketConfig& config_a, const SocketConfi
 }
 
 // ========= Single Device Data Movement Tests =========
+
+TEST_F(MeshSocketTest, H2DSocket) { test_h2d_socket(mesh_device_, 1024, 1024, 2048); }
 
 TEST_F(MeshSocketTest, SingleConnectionSingleDeviceSocket) {
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));

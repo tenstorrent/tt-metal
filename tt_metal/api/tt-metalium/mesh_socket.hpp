@@ -22,6 +22,19 @@ struct MeshCoreCoord {
     }
 };
 
+}  // namespace tt::tt_metal::distributed
+
+namespace std {
+
+template <>
+struct hash<tt::tt_metal::distributed::MeshCoreCoord> {
+    size_t operator()(const tt::tt_metal::distributed::MeshCoreCoord& coord) const noexcept;
+};
+
+}  // namespace std
+
+namespace tt::tt_metal::distributed {
+
 class H2DSocket {
 public:
     H2DSocket(
@@ -35,6 +48,8 @@ public:
     void push_pages(uint32_t num_pages);
     void notify_receiver();
     uint32_t get_page_size() const { return page_size_; }
+    uint32_t get_write_ptr() const { return write_ptr_; }
+    uint32_t get_config_buffer_address() const { return config_buffer_->address(); }
 
 private:
     std::shared_ptr<MeshBuffer> config_buffer_ = nullptr;
@@ -43,9 +58,9 @@ private:
     BufferType buffer_type_ = BufferType::L1;
     uint32_t fifo_size_ = 0;
     uint32_t page_size_ = 0;
-    std::size_t bytes_sent = 0;
-    std::unordered_map<MeshCoreCoord, std::size_t> bytes_acked = 0;
-    std::size_t write_ptr = 0;
+    std::size_t bytes_sent_ = 0;
+    std::unordered_map<MeshCoreCoord, std::size_t> bytes_acked_ = {};
+    std::size_t write_ptr_ = 0;
 };
 
 // Specifies how sender cores on a Virtual Mesh connect to receiver cores on the same or another Virtual Mesh.
@@ -142,10 +157,6 @@ private:
 }  // namespace tt::tt_metal::distributed
 
 namespace std {
-template <>
-struct hash<tt::tt_metal::distributed::MeshCoreCoord> {
-    size_t operator()(const tt::tt_metal::distributed::MeshCoreCoord& coord) const noexcept;
-};
 template <>
 struct hash<tt::tt_metal::distributed::SocketConnection> {
     size_t operator()(const tt::tt_metal::distributed::SocketConnection& conn) const noexcept;
