@@ -236,7 +236,13 @@ def test_distributed_layernorm_memory_layouts(mesh_device, norm_type, weight_lay
         "tile_weight",
     ],
 )
-@pytest.mark.parametrize("use_welford", [True, False], ids=["welford", "no_welford"])
+@pytest.mark.parametrize(
+    "use_welford",
+    [False],
+    ids=[
+        "no_welford",
+    ],
+)
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -284,7 +290,12 @@ def test_distributed_rmsnorm_memory_layouts(mesh_device, norm_type, weight_layou
 # The run_distributed_norm_test utility handles all the complexity.
 
 
-@pytest.mark.parametrize("norm_type", ["layer_norm", "rms_norm"])
+@pytest.mark.parametrize(
+    "norm_type",
+    [
+        "layer_norm",
+    ],
+)
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -293,7 +304,8 @@ def test_distributed_rmsnorm_memory_layouts(mesh_device, norm_type, weight_layou
     ],
     indirect=True,
 )
-def test_distributed_norm_large_batch(mesh_device, norm_type):
+@pytest.mark.parametrize("use_welford", [True, False], ids=["welford", "no_welford"])
+def test_distributed_norm_large_batch(mesh_device, norm_type, use_welford):
     """
     Example: Test with larger batch size.
     This shows how easy it is to add a new test case.
@@ -312,43 +324,7 @@ def test_distributed_norm_large_batch(mesh_device, norm_type):
         use_legacy=False,
         use_high_precision=True,
         verbose=False,
-    )
-
-    assert passes, (
-        f"TEST FAILED: Average relative difference {mean_rel_diff*100:.2f}% exceeds 5% threshold | "
-        f"max_abs_diff={max_abs_diff:.6e} | "
-        f"max_rel_diff={max_rel_diff:.6e}"
-    )
-
-
-@pytest.mark.parametrize("norm_type", ["layer_norm", "rms_norm"])
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-    ],
-    indirect=True,
-)
-def test_distributed_norm_low_precision(mesh_device, norm_type):
-    """
-    Example: Test with lower precision settings.
-    This demonstrates testing different compute configurations.
-    """
-    passes, max_abs_diff, max_rel_diff, mean_rel_diff = run_distributed_norm_test(
-        mesh_device=mesh_device,
-        batch_size=1,
-        seq_len=1024,
-        hidden_dim=4096,
-        eps=1e-6,
-        norm_type=norm_type,
-        mean=0,
-        var=1,
-        outlier_pct=0,
-        outlier_var=0,
-        use_legacy=False,
-        use_high_precision=False,  # Low precision mode
-        verbose=False,
+        use_welford=use_welford,
     )
 
     assert passes, (

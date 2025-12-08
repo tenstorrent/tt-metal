@@ -364,11 +364,6 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         reader_defines["FUSE_BETA"] = "1";
     }
 
-    auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
-                                (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
-    TT_FATAL(
-        use_row_major_kernel || (!gamma.has_value() && !beta.has_value()),
-        "Only row major gamma and beta are supported");
     auto reader_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
@@ -392,7 +387,8 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         beta.has_value(),
         fp32_dest_acc_en,
         float32_reduction ? 1 : 0,
-        program_config.legacy_rsqrt ? 1 : 0};
+        program_config.legacy_rsqrt ? 1 : 0,
+        cb_length};
 
     const auto* compute_kernel_file =
         is_rmsnorm ? "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/"

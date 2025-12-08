@@ -38,7 +38,10 @@ void MAIN {
 
     constexpr uint32_t cb_x2 = tt::CBIndex::c_6;  // x**2
 
+    DPRINT << "pre_wait_front" << ENDL();
+    DPRINT << "reduc_tile" << ENDL();
     cb_wait_front(cb_reduce, 1);  // comes from the reader
+    DPRINT << "post_wait_front" << ENDL();
 
     binary_op_init_common(cb_inp, cb_reduce, cb_x2);
 
@@ -55,7 +58,9 @@ void MAIN {
         DPRINT << "mul_tile_step" << ENDL();
         DPRINT << "start" << ENDL();
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            DPRINT << "pre_wait_front" << ENDL();
             cb_wait_front(cb_inp, wt + blk);  // cumulative wait
+            DPRINT << "post_wait_front" << ENDL();
             cb_reserve_back(cb_x2, blk);
             ACQ();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {

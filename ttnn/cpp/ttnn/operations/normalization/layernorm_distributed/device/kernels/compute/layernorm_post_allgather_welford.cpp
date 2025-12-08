@@ -93,7 +93,7 @@ struct beta_optional_node {
     static constexpr LLK_Node node{
         .llk_init = add_bcast_rows_init_short,
         .llk = FN_compute(add_tiles_bcast_rows),
-        .CB_A = cb_times_gamma_out,
+        .CB_A = cb_in_beta,
         .CB_B = cb_beta,
         .CB_OUT = cb_out,
         .fixed_CB_B_index = 0xFFFF,
@@ -150,15 +150,15 @@ void MAIN {
             /*
              * x_normed * gamma
              */
-            chain_llk<Wt, Wt, true>(
+            chain_llk<Wt, cb_length, true>(
                 x_minus_mean_node{}, normed_output_node{}, gamma_optional_node{}, beta_optional_node{});
 
         } else if (do_gamma) {
-            chain_llk<Wt, Wt, true>(x_minus_mean_node{}, normed_output_node{}, gamma_optional_node{});
+            chain_llk<Wt, cb_length, true>(x_minus_mean_node{}, normed_output_node{}, gamma_optional_node{});
         } else if (do_beta) {
-            chain_llk<Wt, Wt, true>(x_minus_mean_node{}, normed_output_node{}, beta_optional_node{});
+            chain_llk<Wt, cb_length, true>(x_minus_mean_node{}, normed_output_node{}, beta_optional_node{});
         } else {
-            chain_llk<Wt, Wt, true>(x_minus_mean_node{}, normed_output_node{});
+            chain_llk<Wt, cb_length, true>(x_minus_mean_node{}, normed_output_node{});
         }
 
         // free up CBs

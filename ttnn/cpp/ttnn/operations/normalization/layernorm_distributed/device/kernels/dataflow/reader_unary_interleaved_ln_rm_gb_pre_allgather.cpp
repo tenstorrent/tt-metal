@@ -19,12 +19,15 @@ void kernel_main() {
     const uint32_t tile_offset = get_arg_val<uint32_t>(3);  // Tile offset for this core
 
     constexpr uint32_t cb_inp = tt::CBIndex::c_0;
+    constexpr uint32_t cb_reduce = tt::CBIndex::c_1;
 
     // ublocks size defined in tiles
     const uint32_t src0_tile_bytes = get_tile_size(cb_inp);
 
     constexpr uint32_t blk = get_compile_time_arg_val(0);
     constexpr auto src_args = TensorAccessorArgs<1>();
+    uint32_t scaler = get_arg_val<uint32_t>(4);
+    generate_reduce_scaler(cb_reduce, scaler);
 
     const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
 

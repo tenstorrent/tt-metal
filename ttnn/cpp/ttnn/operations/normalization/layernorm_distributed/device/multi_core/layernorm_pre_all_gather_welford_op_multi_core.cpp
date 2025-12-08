@@ -118,6 +118,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_welford_multi_core(
     uint32_t num_tile_rows = NC * Ht;
 
     log_debug(tt::LogOp, "is_rmsnorm: {}", is_rmsnorm);
+    TT_FATAL(!is_rmsnorm, "rms_norm is not compatiable with welford, please disable welford flag to use rms norm");
     log_debug(tt::LogOp, "W: {}", W);
     log_debug(tt::LogOp, "H: {}", H);
     log_debug(tt::LogOp, "num_tile_rows: {}", num_tile_rows);
