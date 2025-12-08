@@ -87,12 +87,8 @@ struct ToMemoryConfig {
         } else {
             // to_interleaved path
             if (tensor.is_sharded()) {
-                std::optional<Tensor> preallocated_output = std::nullopt;
-                if (!optional_output_tensors.empty() && optional_output_tensors[0].has_value()) {
-                    preallocated_output = optional_output_tensors[0].value();
-                }
                 return ttnn::prim::sharded_to_interleaved(
-                    tensor, memory_config, dtype.value_or(tensor.dtype()), preallocated_output);
+                    tensor, memory_config, dtype.value_or(tensor.dtype()), output_tensor);
             } else {
                 // L1 to DRAM or DRAM to L1
                 return tt::tt_metal::operation::run(
