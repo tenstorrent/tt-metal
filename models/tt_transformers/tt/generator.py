@@ -125,8 +125,13 @@ class Generator:
 
         # TODO: https://github.com/tenstorrent/tt-metal/issues/33722
         # other models works with this, but gpt-oss does not
-        if 6144 in sequence_lengths_to_warmup:
+        if "gpt" in self.model_args[0].base_model_name.lower() and 6144 in sequence_lengths_to_warmup:
             sequence_lengths_to_warmup.remove(6144)
+
+        # TODO: https://github.com/tenstorrent/tt-metal/issues/33991
+        if self.model_args[0].base_model_name == "Llama-3.1-8B":
+            if sequence_lengths_to_warmup[-1] > 1024:
+                sequence_lengths_to_warmup = sequence_lengths_to_warmup[: sequence_lengths_to_warmup.index(1024) + 1]
 
         for model_id in range(self.data_parallel):
             for supported_length in sequence_lengths_to_warmup:
