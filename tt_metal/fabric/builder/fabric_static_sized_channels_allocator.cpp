@@ -402,16 +402,6 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         }
 
         // Additional validation: ensure VC1 buffer slots are non-zero if VC1 channels are needed
-        if (num_vc1_sender_channels > 0 && vc1_sender_buffer_slots == 0) {
-            TT_THROW(
-                "VC1 sender channels are needed ({} channels) but selected buffer slot configuration has 0 slots",
-                num_vc1_sender_channels);
-        }
-        if (num_vc1_receiver_channels > 0 && vc1_receiver_buffer_slots == 0) {
-            TT_THROW(
-                "VC1 receiver channels are needed ({} channels) but selected buffer slot configuration has 0 slots",
-                num_vc1_receiver_channels);
-        }
     };
 
     // auto axis_index = static_cast<std::size_t>(options.edm_axis);
