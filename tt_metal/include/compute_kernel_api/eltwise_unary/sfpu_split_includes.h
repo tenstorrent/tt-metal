@@ -176,6 +176,10 @@
 #include "compute_kernel_api/eltwise_unary/hardmish.h"
 #endif
 
+#if SFPU_OP_HARDGELU_INCLUDE
+#include "compute_kernel_api/eltwise_unary/hardgelu.h"
+#endif
+
 #if SFPU_OP_COMPUTE_KERNEL_API_INCLUDE
 #include "compute_kernel_api.h"
 #endif
