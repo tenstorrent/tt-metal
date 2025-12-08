@@ -72,6 +72,8 @@ uint32_t default_workers(
                                        (topology == ccl::Topology::Ring ? 2 : 1);
     if (data_moved_per_link_bytes > double(0.25 * 1024 * 1024)) {
         candidate_worker_counts = {4, 2, 1};
+    } else if (data_moved_per_link_bytes < 4096) {
+        candidate_worker_counts = {1};
     } else {
         candidate_worker_counts = {2, 1};
     }
