@@ -67,7 +67,7 @@ inline std::vector<bfloat16> get_col_slice(
 }
 
 inline void print_faces(std::vector<bfloat16> data, const std::string& name) {
-    std::cout << name << ": " << '\n';
+    std::cout << name << ": \n";
 
     int tile_index = 0;
     int face_index = 0;

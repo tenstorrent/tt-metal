@@ -61,13 +61,13 @@ void print(const Tensor<T>& tensor) {
                                (tensor_shape[3] * tensor_shape[2] * tensor_shape[1] * w);
                     std::cout << tensor_data[idx] << ",";
                 }
-                std::cout << "]" << '\n';
+                std::cout << "]\n";
             }
-            std::cout << "]" << '\n';
+            std::cout << "]\n";
         }
-        std::cout << "]" << '\n';
+        std::cout << "]\n";
     }
-    std::cout << "]" << '\n';
+    std::cout << "]\n";
 }
 
 template <class T>

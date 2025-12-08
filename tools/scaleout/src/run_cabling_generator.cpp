@@ -48,19 +48,18 @@ InputConfig parse_arguments(int argc, char** argv) {
 
         if (result.count("help") || argc == 1) {
             std::cout << options.help() << '\n';
-            std::cout << "\nOutput files:" << '\n';
-            std::cout << "  - out/scaleout/factory_system_descriptor_<output_name>.textproto" << '\n';
-            std::cout << "  - out/scaleout/cabling_guide_<output_name>.csv" << '\n';
-            std::cout << "\nExamples:" << '\n';
-            std::cout << "  " << argv[0] << " --cabling cabling.textproto --deployment deployment.textproto" << '\n';
-            std::cout << "  # Generates files with default names (no suffix)" << '\n';
+            std::cout << "\nOutput files:\n";
+            std::cout << "  - out/scaleout/factory_system_descriptor_<output_name>.textproto\n";
+            std::cout << "  - out/scaleout/cabling_guide_<output_name>.csv\n";
+            std::cout << "\nExamples:\n";
+            std::cout << "  " << argv[0] << " --cabling cabling.textproto --deployment deployment.textproto\n";
+            std::cout << "  # Generates files with default names (no suffix)\n";
             std::cout << "  " << argv[0]
-                      << " --cabling cabling.textproto --deployment deployment.textproto --output test" << '\n';
-            std::cout << "  # Generates detailed CSV with rack/shelf information" << '\n';
+                      << " --cabling cabling.textproto --deployment deployment.textproto --output test\n";
+            std::cout << "  # Generates detailed CSV with rack/shelf information\n";
             std::cout << "  " << argv[0]
-                      << " --cabling cabling.textproto --deployment deployment.textproto --output test --simple"
-                      << '\n';
-            std::cout << "  # Generates simple CSV with hostname information only" << '\n';
+                      << " --cabling cabling.textproto --deployment deployment.textproto --output test --simple\n";
+            std::cout << "  # Generates simple CSV with hostname information only\n";
             exit(0);
         }
 
@@ -122,12 +121,12 @@ int main(int argc, char** argv) {
     try {
         InputConfig config = parse_arguments(argc, argv);
 
-        std::cout << "Generating cabling configuration..." << '\n';
+        std::cout << "Generating cabling configuration...\n";
         std::cout << "  Cabling descriptor: " << config.cabling_descriptor_path << '\n';
         std::cout << "  Deployment descriptor: " << config.deployment_descriptor_path << '\n';
         std::cout << "  Output name suffix: " << config.output_name << '\n';
 
-        std::cout << "Loading descriptors and initializing generator..." << '\n';
+        std::cout << "Loading descriptors and initializing generator...\n";
         CablingGenerator cabling_generator(config.cabling_descriptor_path, config.deployment_descriptor_path);
 
         std::string factory_output = "out/scaleout/factory_system_descriptor" + config.output_name + ".textproto";
@@ -136,15 +135,15 @@ int main(int argc, char** argv) {
         // Ensure output directory exists
         std::filesystem::create_directories("out/scaleout");
 
-        std::cout << "Generating factory system descriptor..." << '\n';
+        std::cout << "Generating factory system descriptor...\n";
         cabling_generator.emit_factory_system_descriptor(factory_output);
 
-        std::cout << "Generating cabling guide CSV..." << '\n';
+        std::cout << "Generating cabling guide CSV...\n";
         std::cout << "  CSV format: " << (config.loc_info ? "detailed (with location info)" : "simple (hostname-based)")
                   << '\n';
         cabling_generator.emit_cabling_guide_csv(cabling_output, config.loc_info);
 
-        std::cout << "Successfully generated:" << '\n';
+        std::cout << "Successfully generated:\n";
         std::cout << "  - " << factory_output << '\n';
         std::cout << "  - " << cabling_output << '\n';
 

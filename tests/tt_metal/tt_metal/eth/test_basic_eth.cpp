@@ -206,7 +206,7 @@ bool writer_kernel_no_receive(
     fixture->ReadBuffer(mesh_device, output_dram_buffer, readback_vec);
     pass &= (readback_vec == inputs);
     if (not pass) {
-        std::cout << "Mismatch" << '\n';
+        std::cout << "Mismatch\n";
     }
     return pass;
 }

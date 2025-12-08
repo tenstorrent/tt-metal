@@ -481,10 +481,10 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
         if (log_output) {
             if (strict_validation) {
                 std::cout << "All connections match between FSD and GSD (" << generated_connections.size()
-                          << " connections)" << '\n';
+                          << " connections)\n";
             } else {
                 std::cout << "All GSD connections found in FSD (" << discovered_connections.size()
-                          << " connections checked)" << '\n';
+                          << " connections checked)\n";
             }
         }
     }

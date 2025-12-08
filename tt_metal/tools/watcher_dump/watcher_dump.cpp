@@ -76,25 +76,25 @@ void dump_data(
 }
 
 void print_usage(const char* exec_name) {
-    cout << "Usage: " << exec_name << " [OPTION]" << '\n';
-    cout << "\t-h, --help: Display this message." << '\n';
+    cout << "Usage: " << exec_name << " [OPTION]\n";
+    cout << "\t-h, --help: Display this message.\n";
     cout << "\t-d=LIST, --devices=LIST: Device IDs of chips to dump, LIST is comma separated list (\"0,2,3\") or "
             "\"all\"."
          << '\n';
-    cout << "\t-n=INT, --num-hw-cqs=INT: Number of CQs, should match the original program." << '\n';
-    cout << "\t-c, --dump-cqs: Dump Command Queue data." << '\n';
-    cout << "\t--dump-cqs-data: Dump Command Queue raw data (bytes), this can take minutes per CQ." << '\n';
+    cout << "\t-n=INT, --num-hw-cqs=INT: Number of CQs, should match the original program.\n";
+    cout << "\t-c, --dump-cqs: Dump Command Queue data.\n";
+    cout << "\t--dump-cqs-data: Dump Command Queue raw data (bytes), this can take minutes per CQ.\n";
     cout << "\t-w, --dump-watcher: Dump watcher data, available data depends on whether watcher was enabled for "
             "original program."
          << '\n';
     cout << "\t--dump-noc-transfer-data: Dump NOC transfer data. Data is only available if previous run had "
             "TT_METAL_RECORD_NOC_TRANSFER_DATA defined."
          << '\n';
-    cout << "\t--eth-dispatch: Assume eth dispatch, should match previous run." << '\n';
+    cout << "\t--eth-dispatch: Assume eth dispatch, should match previous run.\n";
 }
 
 int main(int argc, char* argv[]) {
-    cout << "Running watcher dump tool..." << '\n';
+    cout << "Running watcher dump tool...\n";
     // Default devices is all of them.
     vector<ChipId> device_ids;
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
@@ -125,8 +125,7 @@ int main(int argc, char* argv[]) {
             string item;
             while (std::getline(iss, item, ',')) {
                 if (stoi(item) >= num_devices) {
-                    cout << "Error: illegal device (" << stoi(item) << "), allowed range is [0, " << num_devices << ")"
-                         << '\n';
+                    cout << "Error: illegal device (" << stoi(item) << "), allowed range is [0, " << num_devices << ")\n";
                     print_usage(argv[0]);
                     return 1;
                 }
@@ -138,10 +137,10 @@ int main(int argc, char* argv[]) {
         } else if (s == "-w" || s == "--dump-watcher") {
             dump_watcher = true;
         } else if (s == "-c" || s == "--dump-cqs") {
-            cout << "CQ dumping currently disabled" << '\n';
+            cout << "CQ dumping currently disabled\n";
             // dump_cqs = true;
         } else if (s == "--dump-cqs-data") {
-            cout << "CQ raw data dumping currently disabled" << '\n';
+            cout << "CQ raw data dumping currently disabled\n";
             // dump_cqs_raw_data = true;
         } else if (s == "--dump-noc-transfer-data") {
             tt::tt_metal::MetalContext::instance().rtoptions().set_record_noc_transfers(true);
@@ -157,5 +156,5 @@ int main(int argc, char* argv[]) {
 
     // Call dump function with user config.
     dump_data(device_ids, dump_watcher, dump_cqs, dump_cqs_raw_data, dump_noc_xfers, eth_dispatch, num_hw_cqs);
-    std::cout << "Watcher dump tool finished." << '\n';
+    std::cout << "Watcher dump tool finished.\n";
 }

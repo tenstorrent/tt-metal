@@ -601,9 +601,9 @@ const std::vector<std::unordered_map<port_id_t, ChipId, hash_pair>>& MeshGraph::
 
 void MeshGraph::print_connectivity() const {
     std::stringstream ss;
-    ss << " Mesh Graph:  Intra Mesh Connectivity: " << '\n';
+    ss << " Mesh Graph:  Intra Mesh Connectivity: \n";
     for (uint32_t mesh_id_val = 0; mesh_id_val < this->intra_mesh_connectivity_.size(); mesh_id_val++) {
-        ss << "M" << mesh_id_val << ":" << '\n';
+        ss << "M" << mesh_id_val << ":\n";
         for (uint32_t chip_id = 0; chip_id < this->intra_mesh_connectivity_[mesh_id_val].size(); chip_id++) {
             ss << "   D" << chip_id << ": ";
             for (auto [connected_chip_id, edge] : this->intra_mesh_connectivity_[mesh_id_val][chip_id]) {
@@ -617,9 +617,9 @@ void MeshGraph::print_connectivity() const {
     }
     log_debug(tt::LogFabric, "{}", ss.str());
     ss.str(std::string());
-    ss << " Mesh Graph:  Inter Mesh Connectivity: " << '\n';
+    ss << " Mesh Graph:  Inter Mesh Connectivity: \n";
     for (uint32_t mesh_id_val = 0; mesh_id_val < this->inter_mesh_connectivity_.size(); mesh_id_val++) {
-        ss << "M" << mesh_id_val << ":" << '\n';
+        ss << "M" << mesh_id_val << ":\n";
         for (uint32_t chip_id = 0; chip_id < this->inter_mesh_connectivity_[mesh_id_val].size(); chip_id++) {
             ss << "   D" << chip_id << ": ";
             for (auto [connected_mesh_id, edge] : this->inter_mesh_connectivity_[mesh_id_val][chip_id]) {

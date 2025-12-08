@@ -22,7 +22,7 @@ bool run_command(const std::string& cmd, const std::string& log_file, const bool
     if (getenv("TT_METAL_BACKEND_DUMP_RUN_CMD") or verbose) {
         {
             std::lock_guard<std::mutex> lk(io_mutex);
-            std::cout << "===== RUNNING SYSTEM COMMAND:" << '\n';
+            std::cout << "===== RUNNING SYSTEM COMMAND:\n";
             std::cout << cmd << '\n' << '\n';
         }
         ret = system(cmd.c_str());

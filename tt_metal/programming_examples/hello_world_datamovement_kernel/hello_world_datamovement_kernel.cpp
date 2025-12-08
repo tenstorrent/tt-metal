@@ -19,7 +19,7 @@ int main() {
         std::cerr << "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to 0,0 to see the output of "
                      "the Data Movement kernels."
                   << '\n';
-        std::cerr << "WARNING: For example, export TT_METAL_DPRINT_CORES=0,0" << '\n';
+        std::cerr << "WARNING: For example, export TT_METAL_DPRINT_CORES=0,0\n";
     }
 
     // Initialize mesh device (1x1), command queue, workload, device range, and program.
@@ -52,8 +52,7 @@ int main() {
     // Set Runtime Arguments for the Data Movement Kernels (none in this case and execute the program)
     SetRuntimeArgs(program, data_movement_kernel_0, core, {});
     SetRuntimeArgs(program, data_movement_kernel_1, core, {});
-    std::cout << "Hello, Core {0, 0} on Device 0, Please start execution. I will standby for your communication."
-              << '\n';
+    std::cout << "Hello, Core {0, 0} on Device 0, Please start execution. I will standby for your communication.\n";
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -72,7 +71,7 @@ int main() {
     // NC: - Data Movement core 1
     // BR: - Data Movement core 0
 
-    std::cout << "Thank you, Core {0, 0} on Device 0, for the completed task." << '\n';
+    std::cout << "Thank you, Core {0, 0} on Device 0, for the completed task.\n";
     mesh_device->close();
     return 0;
 }

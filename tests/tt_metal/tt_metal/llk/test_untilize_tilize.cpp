@@ -323,9 +323,9 @@ void run_single_core_tilize_program(
     }
 
     if (not pass) {
-        std::cout << "GOLDEN " << '\n';
+        std::cout << "GOLDEN \n";
         print_vector(unpack_vector<bfloat16, uint32_t>(golden));
-        std::cout << "RESULTS " << '\n';
+        std::cout << "RESULTS \n";
         print_vector(unpack_vector<bfloat16, uint32_t>(result_vec));
     }
     log_info(

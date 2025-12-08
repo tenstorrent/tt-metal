@@ -142,7 +142,7 @@ void try_creating_more_than_max_num_semaphores(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program = workload.get_programs().at(device_range);
     create_and_read_max_num_semaphores(std::move(mesh_device), workload, core_range);
-    std::cout << "created max num semaphores" << '\n';
+    std::cout << "created max num semaphores\n";
     constexpr static uint32_t val = 5;
     ASSERT_ANY_THROW(tt_metal::CreateSemaphore(program, core_range, val));
 }

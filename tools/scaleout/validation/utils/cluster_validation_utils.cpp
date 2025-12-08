@@ -658,11 +658,9 @@ void print_ethernet_connectivity(
         // Print connection type header
         std::cout << '\n';
         if (is_cross_host) {
-            std::cout << " ============================== CROSS-HOST CONNECTIONS =============================== "
-                      << '\n';
+            std::cout << " ============================== CROSS-HOST CONNECTIONS =============================== \n";
         } else {
-            std::cout << " ============================== HOST-LOCAL CONNECTIONS =============================== "
-                      << '\n';
+            std::cout << " ============================== HOST-LOCAL CONNECTIONS =============================== \n";
         }
 
         // Iterate through hostnames
@@ -674,7 +672,7 @@ void print_ethernet_connectivity(
             // Print hostname header
             std::cout << '\n'
                       << "  =============================== Hostname: " << hostname
-                      << " =============================== " << '\n';
+                      << " =============================== \n";
 
             // Iterate through port types
             for (const auto& [port_type, connections] : port_types_map) {
@@ -685,7 +683,7 @@ void print_ethernet_connectivity(
                 // Print port type header
                 std::cout << '\n'
                           << "             ---------------------- Port Type: " << port_type
-                          << " ---------------------- " << '\n'
+                          << " ---------------------- \n"
                           << '\n';
 
                 // Print all connections for this port type
@@ -800,19 +798,15 @@ void log_link_metrics(
 
     // Print console table
     std::cout << '\n';
-    std::cout << "╔═══════════════════════════════════════════════════════════════════════════════════════════════════╗"
-              << '\n';
+    std::cout << "╔═══════════════════════════════════════════════════════════════════════════════════════════════════╗\n";
     if (log_ethernet_metrics) {
         std::cout
-            << "║                          ETHERNET METRICS REPORT                                                  ║"
-            << '\n';
+            << "║                          ETHERNET METRICS REPORT                                                  ║\n";
     } else {
         std::cout
-            << "║                              FAULTY LINKS REPORT                                                  ║"
-            << '\n';
+            << "║                              FAULTY LINKS REPORT                                                  ║\n";
     }
-    std::cout << "╚═══════════════════════════════════════════════════════════════════════════════════════════════════╝"
-              << '\n';
+    std::cout << "╚═══════════════════════════════════════════════════════════════════════════════════════════════════╝\n";
     if (log_ethernet_metrics) {
         std::cout << "Total Links: " << link_metrics.size() << '\n';
         std::cout << "Total Metric Entries: " << metric_rows.size() << '\n' << '\n';
@@ -830,7 +824,7 @@ void log_link_metrics(
         std::cout << std::setw(40) << "Failure Type";
     }
 
-    std::cout << std::setw(12) << "Pkt Size" << std::setw(12) << "Data Size" << '\n';
+    std::cout << std::setw(12) << "Pkt Size" << std::setw(12) << "Data Size\n";
 
     std::cout << std::string(log_ethernet_metrics ? 177 : 217, '-') << '\n';
 
@@ -896,8 +890,7 @@ void log_link_metrics(
             csv_file << ",Failure_Type";
         }
         csv_file << ",Packet_Size_Bytes,Data_Size_Bytes,"
-                 << "Retrain_Count,CRC_Error_Count,Corrected_Codeword_Count,Uncorrected_Codeword_Count,Mismatched_Words"
-                 << '\n';
+                 << "Retrain_Count,CRC_Error_Count,Corrected_Codeword_Count,Uncorrected_Codeword_Count,Mismatched_Words\n";
 
         // CSV rows
         for (const auto& row : metric_rows) {

@@ -264,7 +264,7 @@ TEST(Cluster, ReportSystemHealth) {
             unique_chip_ids[chip_id] = chip_id;
         }
     }
-    ss << "Found " << unique_chip_ids.size() << " chips in cluster:" << '\n';
+    ss << "Found " << unique_chip_ids.size() << " chips in cluster:\n";
 
     auto cluster_type = cluster.get_cluster_type();
 

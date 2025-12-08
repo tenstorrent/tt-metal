@@ -28,7 +28,7 @@ TEST(VisibleDevicesMPTest, ValidateDeviceRatio) {
     const char* visible_devices_env = std::getenv("TT_VISIBLE_DEVICES");
     std::string visible_devices = visible_devices_env ? visible_devices_env : "<not set>";
 
-    std::cout << "Device configuration summary:" << '\n';
+    std::cout << "Device configuration summary:\n";
     std::cout << "  TT_VISIBLE_DEVICES: " << visible_devices << '\n';
     std::cout << "  PCIe devices: " << num_pcie << '\n';
     std::cout << "  Total available devices: " << num_available << '\n';

@@ -279,10 +279,10 @@ int main() {
     }
     mesh_device->release_mesh_trace(trace_id);
     if (pass) {
-        std::cout << "Running EltwiseBinary MeshTraces on 2 MeshCQs Passed!" << '\n';
+        std::cout << "Running EltwiseBinary MeshTraces on 2 MeshCQs Passed!\n";
         return 0;
     } else {
-        std::cout << "Running EltwiseBinary MeshTraces on 2 MeshCQs Failed with Incorrect Outputs!" << '\n';
+        std::cout << "Running EltwiseBinary MeshTraces on 2 MeshCQs Failed with Incorrect Outputs!\n";
         return 1;
     }
 }

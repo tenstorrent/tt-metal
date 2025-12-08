@@ -140,9 +140,9 @@ std::string create_formats_array_string(
     const std::string& array_type, const std::string& array_name, int array_size, const std::string& array_data) {
     stringstream str_stream;
 
-    str_stream << array_type << " " << array_name << "[" << array_size << "] = {" << '\n';
+    str_stream << array_type << " " << array_name << "[" << array_size << "] = {\n";
     str_stream << "    " << array_data << '\n';
-    str_stream << "};" << '\n';
+    str_stream << "};\n";
 
     return str_stream.str();
 }
@@ -359,9 +359,9 @@ void generate_dst_accum_mode_descriptor(JitBuildOptions& options) {
     file_stream.open(dst_accum_format_descriptor);
 
     if (options.fp32_dest_acc_en == 0) {
-        file_stream << "constexpr bool DST_ACCUM_MODE = false;" << '\n';
+        file_stream << "constexpr bool DST_ACCUM_MODE = false;\n";
     } else {
-        file_stream << "constexpr bool DST_ACCUM_MODE = true;" << '\n';
+        file_stream << "constexpr bool DST_ACCUM_MODE = true;\n";
     }
 
     file_stream.close();
@@ -375,9 +375,9 @@ void generate_dst_sync_mode_descriptor(JitBuildOptions& options) {
     file_stream.open(dst_sync_mode_descriptor);
 
     if (options.dst_full_sync_en) {
-        file_stream << "#define DST_SYNC_MODE DstSync::SyncFull" << '\n';
+        file_stream << "#define DST_SYNC_MODE DstSync::SyncFull\n";
     } else {
-        file_stream << "#define DST_SYNC_MODE DstSync::SyncHalf" << '\n';
+        file_stream << "#define DST_SYNC_MODE DstSync::SyncHalf\n";
     }
 
     file_stream.close();
@@ -391,7 +391,7 @@ void generate_math_fidelity_descriptor(JitBuildOptions& options) {
     ofstream file_stream;
 
     file_stream.open(math_fidelity_descriptor);
-    file_stream << "constexpr std::int32_t MATH_FIDELITY = " << (int)desc.get_hlk_math_fidelity() << ";" << '\n';
+    file_stream << "constexpr std::int32_t MATH_FIDELITY = " << (int)desc.get_hlk_math_fidelity() << ";\n";
     file_stream.close();
 }
 
@@ -404,7 +404,7 @@ void generate_math_approx_mode_descriptor(JitBuildOptions& options) {
     ofstream file_stream;
 
     file_stream.open(approx_descriptor);
-    file_stream << "constexpr bool APPROX = " << std::boolalpha << desc.get_hlk_math_approx_mode() << ";" << '\n';
+    file_stream << "constexpr bool APPROX = " << std::boolalpha << desc.get_hlk_math_approx_mode() << ";\n";
     file_stream.close();
 }
 
