@@ -90,8 +90,43 @@ def scan_galaxy_connections(
                         results.append(
                             {"device_id": str(device_id), "unique_id": unique_id, "tray": tray_num, "n_loc": n_loc}
                         )
+                        print(f"{device_id=} {unique_id=} {tray_num=} {n_loc=}")
 
     return results
+
+
+def get_device_pairs(results: List[Dict[str, str]]) -> List[Tuple[str, str]]:
+    """Extract device ID pairs from results.
+
+    Args:
+        results: List of device mapping information
+
+    Returns:
+        List of (device_id1, device_id2) tuples
+    """
+    # Group results by tray
+    tray_map = {}
+    for result in results:
+        tray = result["tray"]
+        if tray not in tray_map:
+            tray_map[tray] = {}
+        n_loc = result["n_loc"]
+        tray_map[tray][n_loc] = result["device_id"]
+
+    # Extract pairs
+    pairs_list = []
+    for tray in sorted(tray_map.keys(), key=int):
+        n_devices = tray_map[tray]
+
+        # Get pairs: N1-N2, N3-N4, N5-N6, N7-N8
+        pairs = [("1", "2"), ("3", "4"), ("5", "6"), ("7", "8")]
+        for n1, n2 in pairs:
+            dev1 = n_devices.get(n1)
+            dev2 = n_devices.get(n2)
+            if dev1 and dev2:
+                pairs_list.append((dev1, dev2))
+
+    return pairs_list
 
 
 def print_results(results: List[Dict[str, str]]):
@@ -156,6 +191,16 @@ def main():
                 writer.writeheader()
                 writer.writerows(results)
         print(f"\nResults saved to {args.output}")
+
+    # Always write pairs.csv
+    import csv
+
+    pairs = get_device_pairs(results)
+    with open("pairs.csv", "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["device_id1", "device_id2"])
+        writer.writerows(pairs)
+    print(f"Pairs saved to pairs.csv")
 
 
 if __name__ == "__main__":

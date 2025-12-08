@@ -1,0 +1,2 @@
+export TT_VISIBLE_DEVICES=1,4
+export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.textproto
