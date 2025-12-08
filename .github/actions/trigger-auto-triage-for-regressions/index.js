@@ -38,7 +38,7 @@ async function sendSlackMessage(channelId, botToken, message, threadTs) {
       res.on('end', () => {
         try {
           const response = JSON.parse(data);
-          if (res.statusCode >= 200 && res.statusCode < 300 && response.ok !== false) {
+          if (res.statusCode >= 200 && res.statusCode < 300 && response.ok === true) {
             core.info(`✓ Successfully sent Slack message`);
             resolve();
           } else {
