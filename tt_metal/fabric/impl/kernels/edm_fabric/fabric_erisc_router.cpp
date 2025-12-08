@@ -1911,18 +1911,16 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 
         if (state_manager_l1->command == RouterCommand::NONE) [[likely]] {
             if (state_manager_l1->state == RouterStateCommon::ACTIVE) {
-                {
-                    if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
-                        loop_start_cycles = get_timestamp();
-                    }
+                if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
+                    loop_start_cycles = get_timestamp();
+                }
 
-                    run_active_loop(tx_progress, rx_progress);
+                run_active_loop(tx_progress, rx_progress);
 
-                    if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
-                        uint64_t loop_end_cycles = get_timestamp();
-                        uint64_t loop_delta_cycles = loop_end_cycles - loop_start_cycles;
-                        update_bw_cycles(loop_delta_cycles, tx_progress, rx_progress, local_fabric_telemetry);
-                    }
+                if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
+                    uint64_t loop_end_cycles = get_timestamp();
+                    uint64_t loop_delta_cycles = loop_end_cycles - loop_start_cycles;
+                    update_bw_cycles(loop_delta_cycles, tx_progress, rx_progress, local_fabric_telemetry);
                 }
             }
         } else {
