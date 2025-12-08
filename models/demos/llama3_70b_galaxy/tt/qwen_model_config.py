@@ -19,6 +19,7 @@ from models.tt_transformers.tt.common import (
     encode_prompt_instruct,
     encode_prompt_hf,
     nearest_multiple,
+    rope_scaling_model_factory,
 )
 from models.demos.llama3_70b_galaxy.tt.llama_common import precompute_freqs_yarn
 from typing import Tuple
@@ -56,7 +57,6 @@ def set_tg_attention_config(model_config, dim):
         start_core, 10, sub_core_grids, row_wise=False
     )
 
-    #
     model_config["CREATE_HEAD_INPUT_MEMCFG"] = (
         None
         if dim < 4096
@@ -1694,10 +1694,16 @@ class TtQwenModelArgs(TtModelArgs):
                 self.yarn_beta_slow = rope_scaling_params.get("beta_slow", 1)
                 self.yarn_mscale = rope_scaling_params.get("mscale", 1.0)
                 self.yarn_mscale_all_dim = rope_scaling_params.get("mscale_all_dim", 0.0)
+
+            # Create RopeScaling object using the factory
+            self.rope_scaling = rope_scaling_model_factory(
+                rope_scaling_params, original_max_context_len=self.orig_context_len
+            )
         else:
             self.rope_scaling_factor = None
             self.orig_context_len = None
             self.rope_type = None
+            self.rope_scaling = None
 
     @property
     def use_scaled_rope(self):

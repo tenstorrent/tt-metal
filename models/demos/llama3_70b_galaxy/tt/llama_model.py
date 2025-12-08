@@ -214,7 +214,7 @@ class TtTransformer(LightweightModule):
                     device=self.mesh_device,
                     seq_len=self.args.max_seq_len,
                     theta=self.args.rope_theta,
-                    rope_scaling=self.args.rope_scaling_factor,
+                    rope_scaling=self.args.rope_scaling,
                 )
             else:
                 tt_rot_mats_prefill = get_prefill_rot_mat(
