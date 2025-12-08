@@ -68,8 +68,15 @@ from tests.ttnn.unit_tests.operations.fused.distributed_norm_test_utils import r
         "with_outliers",
     ],
 )
-@pytest.mark.parametrize("norm_type", ["layer_norm", "rms_norm"])
-@pytest.mark.parametrize("use_legacy", [False, True], ids=["new_reduction", "legacy_reduction"])
+@pytest.mark.parametrize(
+    "norm_type, use_legacy",
+    [
+        ("layer_norm", False),
+        ("layer_norm", True),
+        ("rms_norm", True),  # rms_norm only works with use_legacy=True (use_welford=False)
+    ],
+    ids=["layer_norm_new_reduction", "layer_norm_legacy_reduction", "rms_norm_legacy_reduction"],
+)
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -95,6 +102,7 @@ def test_distributed_norm_allclose(
     Test distributed layer norm and RMS norm.
 
     Test passes if average relative difference is under 5%.
+    Note: RMS norm is only compatible with use_legacy=True (which sets use_welford=False).
     """
     # Run the test using the utility function
     passes, max_abs_diff, max_rel_diff, mean_rel_diff = run_distributed_norm_test(
