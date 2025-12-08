@@ -140,20 +140,6 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_m
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
     auto dst_addr = output.buffer()->address();
 
-    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
-    uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
-
-    // For bert, tensor is packed as RM with width 32
-    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
-        num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_WIDTH : 0;
-    }
-    if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
-        num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_WIDTH : 0;
-    }
-
-    log_debug(tt::LogOp, "num_gamma_tiles: {}", num_gamma_tiles);
-    log_debug(tt::LogOp, "num_beta_tiles: {}", num_beta_tiles);
-
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     //////////////////////////////////////////////////////////////////////////
@@ -300,12 +286,12 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_m
         num_tile_rows_per_core_group_1 = num_tile_rows_per_core_group_1_result;
         num_tile_rows_per_core_group_2 = num_tile_rows_per_core_group_2_result;
 
-        // log_debug(tt::LogOp, "num_cores: {}", num_cores);
-        // log_debug(tt::LogOp, "grid_size: {}", grid_size);
-        // log_debug(tt::LogOp, "core_group_1: {}", core_group_1.str());
-        // log_debug(tt::LogOp, "num_tile_rows_per_core_group_1: {}", num_tile_rows_per_core_group_1);
-        // log_debug(tt::LogOp, "core_group_2: {}", core_group_2.str());
-        // log_debug(tt::LogOp, "num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
+        log_debug(tt::LogOp, "num_cores: {}", num_cores);
+        log_debug(tt::LogOp, "grid_size: {}", grid_size);
+        log_debug(tt::LogOp, "core_group_1: {}", core_group_1.str());
+        log_debug(tt::LogOp, "num_tile_rows_per_core_group_1: {}", num_tile_rows_per_core_group_1);
+        log_debug(tt::LogOp, "core_group_2: {}", core_group_2.str());
+        log_debug(tt::LogOp, "num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
     }
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
@@ -497,10 +483,10 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_m
 
     for (const auto& cb : program.circular_buffers()) {
         for ([[maybe_unused]] const auto index : cb->buffer_indices()) {
-            // log_debug(tt::LogOp, "cb_id {}", index);
-            // log_debug(tt::LogOp, "page_size: {}", cb->page_size(index));
-            // log_debug(tt::LogOp, "num_pages: {}", cb->num_pages(index));
-            // log_debug(tt::LogOp, "data_format: {}", cb->data_format(index));
+            log_debug(tt::LogOp, "cb_id {}", index);
+            log_debug(tt::LogOp, "page_size: {}", cb->page_size(index));
+            log_debug(tt::LogOp, "num_pages: {}", cb->num_pages(index));
+            log_debug(tt::LogOp, "data_format: {}", cb->data_format(index));
         }
     }
 
@@ -523,12 +509,12 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_m
                 uint32_t tile_offset = (x * Wt) + (y * tiles_per_core_y);
                 uint32_t stats_offset = x * stats_tiles_cols;
 
-                // // log_debug(
-                //     tt::LogOp,
-                //     "Setting reader runtime args for core: {}, tile_offset: {}, tiles_per_core_y: {}",
-                //     core.x,
-                //     tile_offset,
-                //     tiles_per_core_y);
+                log_debug(
+                    tt::LogOp,
+                    "Setting reader runtime args for core: {}, tile_offset: {}, tiles_per_core_y: {}",
+                    core.x,
+                    tile_offset,
+                    tiles_per_core_y);
                 SetRuntimeArgs(
                     program,
                     reader_kernels_id,

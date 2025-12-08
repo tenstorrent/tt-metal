@@ -7,7 +7,6 @@
 
 #include <tt-metalium/constants.hpp>
 #include <functional>
-#include "debug/dprint_pages.h"
 
 // #include "debug/dprint_pages.h"
 
@@ -92,12 +91,12 @@ void unroll_llk() {
     cur_llk.llk_init(cur_llk.CB_A, cur_llk.CB_B);
     for (uint32_t i = 0; i < cb_iterations; i++) {
         if constexpr (cur_llk.debug_mode == 1) {
-            UNPACK(DPRINT << "=============START NODE==============" << ENDL());
+            // UNPACK(DPRINT << "=============START NODE==============" << ENDL());
         }
         unroll_inner_loop<num_dst_regs, cur_llk_type>(i);
 
         if constexpr (cur_llk.debug_mode == 1) {
-            UNPACK(DPRINT << "=============END NODE==============" << ENDL());
+            // UNPACK(DPRINT << "=============END NODE==============" << ENDL());
         }
     }
     unroll_inner_loop<cb_leftovers, cur_llk_type>(cb_iterations);
@@ -106,10 +105,11 @@ void unroll_llk() {
 template <typename cur_llk_type>
 void print_input_CBs(uint32_t j, uint32_t wt) {
     constexpr auto cur_llk = cur_llk_type::node;
-    // UNPACK(DPRINT << "=============CB_A==============" << ENDL());
-    // UNPACK(tt::compute::common::print_full_tile(cur_llk.CB_A, j, true));
-    UNPACK(DPRINT << "=============CB_B==============" << ENDL());
-    UNPACK(tt::compute::common::print_full_tile(cur_llk.CB_B, cb_b_index_policy<cur_llk_type>(j, wt), true));
+    // Commented out so code will compile on non debug print moded. Uncomment out for debug purposes
+    //  UNPACK(DPRINT << "=============CB_A==============" << ENDL());
+    //  UNPACK(tt::compute::common::print_full_tile(cur_llk.CB_A, j, true));
+    //  UNPACK(DPRINT << "=============CB_B==============" << ENDL());
+    //  UNPACK(tt::compute::common::print_full_tile(cur_llk.CB_B, cb_b_index_policy<cur_llk_type>(j, wt), true));
 }
 template <uint32_t num_dst_regs, typename cur_llk_type>
 void unroll_inner_loop(uint32_t register_loops) {
@@ -128,8 +128,9 @@ void unroll_inner_loop(uint32_t register_loops) {
         }
         cur_llk.llk(cur_llk.CB_A, cur_llk.CB_B, j, cb_b_index_policy<cur_llk_type>(j, wt), j);
         if constexpr (cur_llk.debug_mode == 1) {
-            // MATH(DPRINT << "=============DEST_OUT==============" << ENDL());
-            // dprint_tensix_dest_reg(j);
+            // Commented out so code will compile on non debug print moded. Uncomment out for debug purposes
+            //  MATH(DPRINT << "=============DEST_OUT==============" << ENDL());
+            //  dprint_tensix_dest_reg(j);
         }
     }
     cb_pop_front(cur_llk.CB_A, num_dst_regs);

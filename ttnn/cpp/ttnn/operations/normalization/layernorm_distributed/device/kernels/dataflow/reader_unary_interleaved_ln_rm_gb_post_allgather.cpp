@@ -45,10 +45,6 @@ void kernel_main() {
     constexpr uint32_t beta_stick_size = get_compile_time_arg_val(3);
     constexpr uint32_t gamma_is_row_major = get_compile_time_arg_val(4);
     constexpr uint32_t beta_is_row_major = get_compile_time_arg_val(5);
-    DPRINT << "gamma_stick_size" << gamma_stick_size << ENDL();
-    DPRINT << "beta_stick_size" << beta_stick_size << ENDL();
-    DPRINT << "gamma_is_row_major" << gamma_is_row_major << ENDL();
-    DPRINT << "beta_is_row_major" << beta_is_row_major << ENDL();
     constexpr uint32_t cb_length = get_compile_time_arg_val(6);
     constexpr uint32_t Wt = get_compile_time_arg_val(7);  // Width in tiles
     constexpr auto src_args = TensorAccessorArgs<8>();
@@ -61,7 +57,6 @@ void kernel_main() {
 
 #ifdef FUSE_GAMMA
     const auto addrg = TensorAccessor(gamma_args, gamma_addr, gamma_stick_size);
-    DPRINT << "gamma_stick_size" << gamma_stick_size << ENDL();
     const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
 #endif
 #ifdef FUSE_BETA
