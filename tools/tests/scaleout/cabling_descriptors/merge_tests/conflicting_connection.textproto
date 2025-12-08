@@ -1,0 +1,53 @@
+# Conflicting connections - node1:port0:port0 connects to node4 instead of node2
+# This should FAIL to merge with base_intrapod.textproto
+graph_templates {
+  key: "test_pod"
+  value {
+    children {
+      name: "node1"
+      node_ref { node_descriptor: "BH_GALAXY" }
+    }
+    children {
+      name: "node2"
+      node_ref { node_descriptor: "BH_GALAXY" }
+    }
+    children {
+      name: "node3"
+      node_ref { node_descriptor: "BH_GALAXY" }
+    }
+    children {
+      name: "node4"
+      node_ref { node_descriptor: "BH_GALAXY" }
+    }
+    internal_connections {
+      key: "QSFP_DD"
+      value {
+        # CONFLICT: node1:tray0:port0 connects to node4 here, but to node2 in base
+        connections {
+          port_a { path: ["node1"] tray_id: 0 port_id: 0 }
+          port_b { path: ["node4"] tray_id: 0 port_id: 2 }
+        }
+      }
+    }
+  }
+}
+
+root_instance {
+  template_name: "test_pod"
+  child_mappings {
+    key: "node1"
+    value { host_id: 0 }
+  }
+  child_mappings {
+    key: "node2"
+    value { host_id: 1 }
+  }
+  child_mappings {
+    key: "node3"
+    value { host_id: 2 }
+  }
+  child_mappings {
+    key: "node4"
+    value { host_id: 3 }
+  }
+}
