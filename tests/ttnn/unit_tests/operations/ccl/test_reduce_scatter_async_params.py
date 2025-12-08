@@ -13,9 +13,10 @@ from models.tt_transformers.tt.generator import create_submeshes
 from tracy import signpost
 
 
-@pytest.mark.parametrize("num_workers_per_link", [1])  # 1
-@pytest.mark.parametrize("num_buffers_per_channel", [1])  # 2
-@pytest.mark.parametrize("chunks_per_sync", [5])  # 10
+@pytest.mark.parametrize("num_iters", [5])
+@pytest.mark.parametrize("num_workers_per_link", [1, 2, 3, 4])  # 1
+@pytest.mark.parametrize("num_buffers_per_channel", [1, 2, 4, 8, 16])  # 2
+@pytest.mark.parametrize("chunks_per_sync", [5, 10, 128, 256])  # 10
 @pytest.mark.parametrize(
     "input_shard_grid, input_shard_shape, output_shard_grid, output_shard_shape",
     [
@@ -52,6 +53,7 @@ def test_reduce_scatter_async_params(
     input_shard_shape,
     output_shard_grid,
     output_shard_shape,
+    num_iters,
 ):
     """Test reduce_scatter_minimal_async with different parameter combinations"""
 
@@ -71,6 +73,7 @@ def test_reduce_scatter_async_params(
         input_shard_shape,
         output_shard_grid,
         output_shard_shape,
+        num_iters,
     )
 
 
@@ -83,6 +86,7 @@ def run_reduce_scatter_async_test(
     input_shard_shape,
     output_shard_grid,
     output_shard_shape,
+    num_iters,
 ):
     """Test reduce_scatter_minimal_async with parameterized worker/buffer/sync configs"""
 
@@ -160,25 +164,24 @@ def run_reduce_scatter_async_test(
         signpost(f"========")
         signpost(f"rs_{num_workers_per_link}_{num_buffers_per_channel}_{chunks_per_sync}")
 
-        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
-
         # Run reduce_scatter_minimal_async - requires list of 3 semaphores
-        tt_out = ttnn.experimental.reduce_scatter_minimal_async(
-            input_tensor_mesh,
-            persistent_output_buffers=None,
-            dim=dim,
-            multi_device_global_semaphore=rs_semaphore_handles,
-            barrier_semaphore=barrier_semaphore_handle,
-            num_links=4,
-            memory_config=output_mem_cfg,
-            intermediate_memory_config=ttnn.L1_MEMORY_CONFIG,
-            topology=ttnn.Topology.Ring,
-            chunks_per_sync=chunks_per_sync,
-            num_workers_per_link=num_workers_per_link,
-            num_buffers_per_channel=num_buffers_per_channel,
-        )
-
-        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+        for _ in range(num_iters):
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+            tt_out = ttnn.experimental.reduce_scatter_minimal_async(
+                input_tensor_mesh,
+                persistent_output_buffers=None,
+                dim=dim,
+                multi_device_global_semaphore=rs_semaphore_handles,
+                barrier_semaphore=barrier_semaphore_handle,
+                num_links=4,
+                memory_config=output_mem_cfg,
+                intermediate_memory_config=ttnn.L1_MEMORY_CONFIG,
+                topology=ttnn.Topology.Ring,
+                chunks_per_sync=chunks_per_sync,
+                num_workers_per_link=num_workers_per_link,
+                num_buffers_per_channel=num_buffers_per_channel,
+            )
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
 
         # Verify output
         tt_out_torch = ttnn.from_device(tt_out)
