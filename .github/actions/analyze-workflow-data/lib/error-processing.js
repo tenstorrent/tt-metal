@@ -410,7 +410,7 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
                   // Remove .txt suffix if present (shouldn't happen with API names, but be safe)
                   let cleanedName = jobName.trim().replace(/\.txt$/i, '').trim();
                   // Replace " _ " (space-underscore-space) with " / " to match GitHub Actions job name format
-                  cleanedName = cleanedName.replace(/\s+_\s+/g, ' / ').trim();
+                  cleanedName = cleanedName.replace(/\s+_\s+/g, ' / ');
                   if (cleanedName) {
                     jobNamesSet.add(cleanedName);
                   }
