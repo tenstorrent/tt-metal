@@ -4,7 +4,6 @@
 
 #include <tt-metalium/experimental/fabric/fabric_switch_manager.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 #include <map>
@@ -12,7 +11,6 @@
 #include <vector>
 
 #include "impl/context/metal_context.hpp"
-#include "impl/device/device_pool.hpp"
 #include "hostdevcommon/common_values.hpp"
 
 namespace tt::tt_fabric {

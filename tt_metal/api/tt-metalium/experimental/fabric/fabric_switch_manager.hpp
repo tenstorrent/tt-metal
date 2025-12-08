@@ -33,7 +33,7 @@ public:
      * @brief Create devices for switch meshes.
      *
      * This method creates devices for all switch meshes using the switch mesh device IDs
-     * from the control plane. It initializes the device pool with appropriate configuration
+     * from the control plane. It initializes the device manager with appropriate configuration
      * for switch mesh devices.
      */
     void setup();
