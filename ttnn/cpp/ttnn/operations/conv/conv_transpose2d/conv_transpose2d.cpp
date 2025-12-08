@@ -9,7 +9,6 @@
 #include <tuple>
 #include <utility>
 
-#include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include "ttnn/operations/conv/conv_transpose2d/prepare_conv_transpose2d_weights.hpp"
@@ -18,7 +17,6 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 
 namespace ttnn::operations::conv::conv_transpose2d {
 
@@ -61,11 +59,6 @@ Result conv_transpose2d_L1(
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     const DataType output_dtype = dtype.value_or(input_tensor.dtype());
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
-
-    // Compute all transposed conv2d dimension transformations using the consolidated helper
-    // This is the single source of truth for dimension calculations
-    auto dims = compute_conv_transpose2d_dimensions(
-        input_height, input_width, kernel_size, stride, padding_, output_padding, dilation);
     auto padding = sliding_window::get_pair_n4_padding(padding_);
     // Inverse of sliding_window.get_output_shape()
     sliding_window::SlidingWindowConfig sliding_window_config = sliding_window::SlidingWindowConfig{
@@ -84,25 +77,51 @@ Result conv_transpose2d_L1(
     // The Conv2d u_op is then called with stride = 1, padding = 0.
     // SlidingWindowConfig has a is_transpose flag that is set to true to indicate that the Conv2d u_op & Halo u_op is
     // being called for ConvTranspose2d.
+    auto output_shape = sliding_window_config.get_output_shape();
+    uint32_t output_height = output_shape[1];
+    uint32_t output_width = output_shape[2];
+
+    // Dimensions of Input to Conv u_op
+    uint32_t full_input_height = output_height + (dilation[0] * (kernel_size[0] - 1));
+    uint32_t full_input_width = output_width + (dilation[1] * (kernel_size[1] - 1));
+
+    // Size of input after adding interleaved 0s.
+    uint32_t strided_input_height = ((input_height - 1) * stride[0]) + 1;
+    uint32_t strided_input_width = ((input_width - 1) * stride[1]) + 1;
+
+    uint32_t base_pad_height = dilation[0] * (kernel_size[0] - 1);
+    uint32_t base_pad_width = dilation[1] * (kernel_size[1] - 1);
+    uint32_t input_pad_top = base_pad_height - padding[0];
+    uint32_t input_pad_bottom = base_pad_height - padding[1];
+
+    uint32_t input_pad_left = base_pad_width - padding[2];
+    uint32_t input_pad_right = base_pad_width - padding[3];
 
     log_debug(tt::LogOp, "Input : {}x{}", input_height, input_width);
-    log_debug(tt::LogOp, "Output : {}x{}", dims.output_height, dims.output_width);
+    log_debug(tt::LogOp, "Output : {}x{}", output_height, output_width);
 
-    log_debug(tt::LogOp, "Conv Op Input : {}x{}", dims.full_input_height, dims.full_input_width);
-    log_debug(tt::LogOp, "Strided Input : {}x{}", dims.strided_input_height, dims.strided_input_width);
+    log_debug(tt::LogOp, "Conv Op Input : {}x{}", full_input_height, full_input_width);
+    log_debug(tt::LogOp, "Strided Input : {}x{}", strided_input_height, strided_input_width);
 
     log_debug(
         tt::LogOp,
-        "Padding : ({},{}) ({},{})",
-        dims.input_pad_top,
-        dims.input_pad_bottom,
-        dims.input_pad_left,
-        dims.input_pad_right);
+        "Actual Padding : ({},{}) ({},{})",
+        input_pad_top,
+        input_pad_bottom,
+        input_pad_left,
+        input_pad_right);
+
+    TT_FATAL(
+        full_input_height - strided_input_height == input_pad_top + input_pad_bottom + output_padding[0],
+        "Calculated input padding height does not match the expected value.");
+    TT_FATAL(
+        full_input_width - strided_input_width == input_pad_left + input_pad_right + output_padding[1],
+        "Calculated input padding width does not match the expected value.");
 
     const bool mm_conv = use_matmul_for_1x1_conv(
         kernel_size,
-        dims.CONV2D_STRIDE,
-        {dims.input_pad_top + dims.input_pad_bottom, dims.input_pad_left + dims.input_pad_right},
+        {1, 1},
+        {input_pad_top + input_pad_bottom, input_pad_left + input_pad_right},
         dilation,
         groups,
         conv_config);
@@ -115,19 +134,17 @@ Result conv_transpose2d_L1(
             conv_config.weights_dtype = weight_tensor.dtype();
         }
         // In this case we deduce the shard layout.
-        // For transposed conv2d, the conv2d micro-op always uses stride=1x1 and padding=0.
-        // We must pass these values to auto-shard to ensure correct halo and reader indices calculation.
         conv_config = determine_conv_config_for_auto_shard(
             conv_config,
             mm_conv,
             batch_size,
             in_channels,
             out_channels,
-            dims.output_height,
-            dims.output_width,
+            output_height,
+            output_width,
             weight_tensor.logical_shape()[3],
-            dims.full_input_height,
-            dims.full_input_width,
+            full_input_height,
+            full_input_width,
             compute_grid_size,
             input_tensor.layout(),
             input_tensor.dtype(),
@@ -135,15 +152,14 @@ Result conv_transpose2d_L1(
             tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
                                                          : std::nullopt,
             kernel_size,
-            ConvTranspose2dDimensions::CONV2D_STRIDE,
+            stride,
             dilation,
-            ConvTranspose2dDimensions::CONV2D_PADDING,
+            padding,
             groups,
             bias_tensor.has_value(),
             compute_config);
         auto_shard = true;
     }
-    const bool should_deallocate_act = conv_config.deallocate_activation && !input_tensor.memory_config().is_dram();
 
     // Call Halo Transpose
     auto [input_tensor_post_tm, parallel_config, output_parallel_config] = shard_or_reshard_tensor_if_required(
@@ -151,18 +167,47 @@ Result conv_transpose2d_L1(
         input_tensor,
         conv_config,
         batch_size,
-        dims.output_height,
-        dims.output_width,
+        output_height,
+        output_width,
         in_channels,
         out_channels,
         mm_conv,
         auto_shard);
 
+    uint32_t round_up_size = tt::constants::TILE_HEIGHT;
+
+    Tensor halo_output;
+    if (!mm_conv) {
+        sliding_window_config.num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
+        sliding_window_config.core_range_set = input_tensor_post_tm.memory_config().shard_spec().value().grid;
+        sliding_window_config.snap_to_tile = true;
+
+        halo_output = ttnn::halo(
+            input_tensor_post_tm,
+            sliding_window_config,
+            0,
+            false,
+            parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
+            input_tensor_post_tm.memory_config(),
+            /*is_out_tiled*/ true,
+            conv_config.config_tensors_in_dram);
+
+        if (conv_config.deallocate_activation) {
+            input_tensor_post_tm.deallocate(/*force*/ true);
+            log_debug(tt::LogOp, "Deallocate Input Tensor");
+        }
+
+        if (conv_config.reallocate_halo_output) {
+            halo_output = ttnn::move(halo_output);
+            log_debug(tt::LogOp, "Reallocate Halo Output");
+        }
+    }
+
     // Call Conv2d u_op with Stride = 1, Padding = 0.
     auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
-        ttnn::Shape({1, 1, batch_size * dims.output_height * dims.output_width, tt::round_up(out_channels, 32)}),
+        ttnn::Shape({1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, 32)}),
         output_parallel_config,
-        tt::constants::TILE_HEIGHT);
+        round_up_size);
 
     auto opt_conv_op_parallel_config = determine_conv_op_parallel_config_from_conv_output_mem_config(
         conv_out_memory_config,
@@ -178,18 +223,18 @@ Result conv_transpose2d_L1(
         input_tensor_post_tm.memory_config());
     uint32_t in_channels_padded = tt::round_up(
         in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
-    uint32_t nhw_out_padded_ntile_per_core =
-        conv_out_memory_config.shard_spec().value().shape[0] / tt::constants::TILE_HEIGHT;
+    uint32_t nhw_out_padded_ntile = get_num_cores_nhw_from_parallel_config(output_parallel_config) *
+                                    conv_out_memory_config.shard_spec().value().shape[0] / tt::constants::TILE_HEIGHT;
     auto opt_conv_op_block_config = determine_per_core_conv_block_config(
         parallel_config,
         opt_conv_op_parallel_config,
         in_channels_padded,
-        nhw_out_padded_ntile_per_core,
+        nhw_out_padded_ntile,
         conv_config.act_block_h_override,
         conv_config.act_block_w_div,
         kernel_size[0],
         kernel_size[1],
-        dims.output_width,
+        output_width,
         get_fp32_dest_acc_en(compute_config),
         conv_config.full_inner_dim);
 
@@ -213,12 +258,9 @@ Result conv_transpose2d_L1(
         tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
             transform_weights_for_conv_transpose2d(weight_tensor, mirror_kernel), bias_tensor, params, device);
     }
-    Tensor output;
     if (mm_conv) {
-        // Matmul expects inputs to be in Tile Layout
-        tilize_with_optional_deallocation(input_tensor_post_tm, should_deallocate_act);
-
-        // run conv as matmul
+        input_tensor_post_tm =
+            ttnn::to_layout(input_tensor_post_tm, Layout::TILE, output_dtype, input_tensor_post_tm.memory_config());
         std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
         std::optional<MemoryConfig> mm_output_memory_config = std::nullopt;
 
@@ -233,83 +275,53 @@ Result conv_transpose2d_L1(
                 num_cores_c);
             mm_output_memory_config = conv_out_memory_config;
         }
-        output = ttnn::linear(
+        Tensor matmul_output = ttnn::linear(
             input_tensor_post_tm,
             weight_tensor_on_device,
             bias_tensor_on_device,
             false,
             false,
             mm_output_memory_config,
-            output_dtype,
-            program_config,
-            // for sharded input, activation is set on program config
-            input_tensor_post_tm.is_sharded() ? std::nullopt : conv_config.activation,
-            compute_config);
+            std::nullopt,
+            program_config);
 
-        if (should_deallocate_act) {
-            input_tensor_post_tm.deallocate(/*force*/ true);
+        if (memory_config.has_value() && memory_config.value() != matmul_output.memory_config()) {
+            matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);
         }
-    } else {
-        // call conv micro op
-        sliding_window_config.num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
-        sliding_window_config.core_range_set = input_tensor_post_tm.memory_config().shard_spec().value().grid;
-        sliding_window_config.snap_to_tile = true;
-
-        Tensor halo_output = ttnn::halo(
-            input_tensor_post_tm,
-            sliding_window_config,
-            0,
-            false,
-            parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
-            input_tensor_post_tm.memory_config(),
-            /*is_out_tiled*/ true,
-            conv_config.config_tensors_in_dram);
-
-        if (conv_config.deallocate_activation && !input_tensor_post_tm.memory_config().is_dram()) {
-            input_tensor_post_tm.deallocate(/*force*/ true);
-            log_debug(tt::LogOp, "Deallocate Input Tensor");
-        }
-
-        if (conv_config.reallocate_halo_output) {
-            halo_output = ttnn::move(halo_output);
-            log_debug(tt::LogOp, "Reallocate Halo Output");
-        }
-
-        const std::array<std::uint32_t, 4> input_tensor_shape = {
-            batch_size,
-            input_height,
-            input_width,
-            in_channels,
-        };
-
-        output = ttnn::prim::conv2d(
-            halo_output,
-            weight_tensor_on_device,
-            bias_tensor_on_device,
-            sliding_window_config,
-            out_channels,
-            groups,
-            conv_config.output_layout == Layout::ROW_MAJOR,
-            conv_config.activation,
-            opt_conv_op_parallel_config,
-            opt_conv_op_block_config,
-            conv_out_memory_config,
-            output_dtype,
-            input_tensor_shape,
-            compute_config,
-            conv_config.enable_act_double_buffer,
-            conv_config.enable_weights_double_buffer,
-            false,  // full_inner_dim
-            false,  // enable_activation_reuse
-            conv_config.config_tensors_in_dram,
-            conv_config.force_split_reader);
+        return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     }
-
-    if (memory_config.has_value() && memory_config.value() != output.memory_config()) {
-        output = ttnn::to_memory_config(output, memory_config.value(), std::nullopt);
+    const std::array<std::uint32_t, 4> input_tensor_shape = {
+        batch_size,
+        input_height,
+        input_width,
+        in_channels,
+    };
+    // call conv micro op
+    auto conv_output = ttnn::prim::conv2d(
+        halo_output,
+        weight_tensor_on_device,
+        bias_tensor_on_device,
+        sliding_window_config,
+        out_channels,
+        groups,
+        conv_config.output_layout == Layout::ROW_MAJOR,
+        conv_config.activation,
+        opt_conv_op_parallel_config,
+        opt_conv_op_block_config,
+        conv_out_memory_config,
+        output_dtype,
+        input_tensor_shape,
+        compute_config,
+        conv_config.enable_act_double_buffer,
+        conv_config.enable_weights_double_buffer,
+        false,  // full_inner_dim
+        false,  // enable_activation_reuse
+        conv_config.config_tensors_in_dram,
+        conv_config.force_split_reader);
+    if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
+        conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
     }
-
-    return {output, dims.output_height, dims.output_width, weight_tensor_on_device, bias_tensor_on_device};
+    return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
 }
 
 class ConvT2DSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
@@ -401,31 +413,37 @@ Result conv_transpose2d_DRAM(
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     const DataType output_dtype = dtype.value_or(input_tensor.dtype());
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
-
-    // Compute all transposed conv2d dimension transformations using the consolidated helper
-    // This is the single source of truth for dimension calculations
-    auto dims = compute_conv_transpose2d_dimensions(
-        input_height, input_width, kernel_size, stride, padding, output_padding, dilation);
     auto padding_n4 = sliding_window::get_pair_n4_padding(padding);
 
+    auto [output_height, output_width] = calculate_ct2d_output_image_size(
+        {input_height, input_width}, kernel_size, stride, padding_n4, output_padding, dilation);
+
+    // Dimensions of Input to Conv u_op
+    uint32_t full_input_height = output_height + (dilation[0] * (kernel_size[0] - 1));
+    uint32_t full_input_width = output_width + (dilation[1] * (kernel_size[1] - 1));
+
+    // Size of input after adding interleaved 0s.
+    uint32_t strided_input_height = ((input_height - 1) * stride[0]) + 1;
+    uint32_t strided_input_width = ((input_width - 1) * stride[1]) + 1;
+
+    uint32_t input_pad_top = (full_input_height - strided_input_height) / 2;
+    uint32_t input_pad_bottom = full_input_height - strided_input_height - input_pad_top;
+
+    uint32_t input_pad_left = (full_input_width - strided_input_width) / 2;
+    uint32_t input_pad_right = full_input_width - strided_input_width - input_pad_left;
+
     log_debug(tt::LogOp, "Input : {}x{}", input_height, input_width);
-    log_debug(tt::LogOp, "Output : {}x{}", dims.output_height, dims.output_width);
+    log_debug(tt::LogOp, "Output : {}x{}", output_height, output_width);
 
-    log_debug(tt::LogOp, "Conv Op Input : {}x{}", dims.full_input_height, dims.full_input_width);
-    log_debug(tt::LogOp, "Strided Input : {}x{}", dims.strided_input_height, dims.strided_input_width);
+    log_debug(tt::LogOp, "Conv Op Input : {}x{}", full_input_height, full_input_width);
+    log_debug(tt::LogOp, "Strided Input : {}x{}", strided_input_height, strided_input_width);
 
-    log_debug(
-        tt::LogOp,
-        "Padding : ({},{}) ({},{})",
-        dims.input_pad_top,
-        dims.input_pad_bottom,
-        dims.input_pad_left,
-        dims.input_pad_right);
+    log_debug(tt::LogOp, "Padding : ({},{}) ({},{})", input_pad_top, input_pad_bottom, input_pad_left, input_pad_right);
 
     const bool mm_conv = use_matmul_for_1x1_conv(
         kernel_size,
         {1, 1},
-        {dims.input_pad_top + dims.input_pad_bottom, dims.input_pad_left + dims.input_pad_right},
+        {input_pad_top + input_pad_bottom, input_pad_left + input_pad_right},
         dilation,
         groups,
         conv_config);
@@ -478,9 +496,8 @@ Result conv_transpose2d_DRAM(
     log_debug(tt::LogOp, "Conv2D DRAM with Slice Config {}", dram_slice_config);
     TT_FATAL(dram_slice_config.num_slices > 0, " Number of slices should be greater than 0 for Conv2D DRAM Slicing");
 
-    const uint32_t output_sliced_dim = dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT
-                                           ? dims.output_height
-                                           : dims.output_width;
+    const uint32_t output_sliced_dim =
+        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
 
     if (output_sliced_dim == 1) {
         dram_slice_config.num_slices = 1;
@@ -523,7 +540,7 @@ Result conv_transpose2d_DRAM(
 
     Tensor dram_output_tensor = tt::tt_metal::create_device_tensor(
         TensorSpec(
-            ttnn::Shape({batch_size, dims.output_height, dims.output_width, out_channels}),
+            ttnn::Shape({batch_size, output_height, output_width, out_channels}),
             tt::tt_metal::TensorLayout(
                 output_dtype,
                 tt::tt_metal::PageConfig(conv_config.output_layout),
@@ -567,7 +584,7 @@ Result conv_transpose2d_DRAM(
 
     dram_output_tensor = ttnn::reshape(dram_output_tensor, flattened_output_shape, flattened_padded_output_shape);
 
-    return {dram_output_tensor, dims.output_height, dims.output_width, weight_tensor_on_device, bias_tensor_on_device};
+    return {dram_output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
 }
 
 // Enum to represent the execution path for conv2d operations
