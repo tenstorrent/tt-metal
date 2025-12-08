@@ -90,14 +90,14 @@ uint32_t default_workers(
     } else if (topology == ttnn::ccl::Topology::Linear) {
         // For linear, 4+MB is where 8 workers start scaling. 0.5-4MB is where 4 workers start scaling. 0-0.5MB is where
         // 2 workers start scaling.
-        constexpr double LINEAR_HIGH_DATA_THRESHOLD_MB = 4000000.0;
-        constexpr double LINEAR_LOW_DATA_THRESHOLD_MB = 500000.0;
+        constexpr double LINEAR_HIGH_DATA_THRESHOLD = 4000000.0;
+        constexpr double LINEAR_LOW_DATA_THRESHOLD = 500000.0;
         constexpr double SINGLE_PACKET_THRESHOLD = 4096.0;
-        if (data_moved_per_link_bytes > LINEAR_HIGH_DATA_THRESHOLD_MB) {
+        if (data_moved_per_link_bytes > LINEAR_HIGH_DATA_THRESHOLD) {
             candidate_worker_counts = {8, 4, 2, 1};
         } else if (data_moved_per_link_bytes < SINGLE_PACKET_THRESHOLD) {
             candidate_worker_counts = {1};
-        } else if (data_moved_per_link_bytes < LINEAR_LOW_DATA_THRESHOLD_MB) {
+        } else if (data_moved_per_link_bytes < LINEAR_LOW_DATA_THRESHOLD) {
             candidate_worker_counts = {2, 1};
         } else {
             candidate_worker_counts = {4, 2, 1};
