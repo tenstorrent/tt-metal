@@ -255,5 +255,4 @@ def run_short(
 
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
 
-    pcc_passed, pcc_message = check_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=0.998)
-    return [pcc_passed, pcc_message, e2e_perf, torch_output_tensor, torch_out_golden_tensor]
+    return [check_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=0.998), e2e_perf]
