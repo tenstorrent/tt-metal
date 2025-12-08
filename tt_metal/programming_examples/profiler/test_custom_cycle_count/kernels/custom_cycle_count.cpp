@@ -20,6 +20,7 @@
  */
 
 void kernel_main() {
+    DPRINT << "H" << ENDL();
     for (int i = 0; i < LOOP_COUNT; i++) {
 // Max unroll size
 #pragma GCC unroll 65534

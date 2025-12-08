@@ -254,10 +254,6 @@ RunTimeOptions::RunTimeOptions() :
         log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/mock target device");
         this->enable_2_erisc_mode = false;
     }
-
-    TT_FATAL(
-        !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_profiler_enabled()),
-        "Cannot enable both debug printing and profiling");
 }
 
 void RunTimeOptions::set_root_dir(const std::string& root_dir) {
