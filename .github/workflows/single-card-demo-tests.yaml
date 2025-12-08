@@ -25,6 +25,7 @@ jobs:
     with:
       build-wheel: true
       version: 22.04
+      tracy: true  # Enable Tracy profiler for ops recording tests
   single-card-demo-tests:
     needs: build-artifact
     secrets: inherit
