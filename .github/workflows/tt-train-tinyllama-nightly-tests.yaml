@@ -1,0 +1,27 @@
+name: "TT-Train TinyLlama nightly tests"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"  # Run at 3 AM UTC daily
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      version: 22.04
+      build-wheel: true
+      skip-tt-train: false
+
+  tt-train-tinyllama-nightly-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tt-train-tinyllama-nightly-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      topology: "topology-6u"  # Galaxy topology for multi-device tests
