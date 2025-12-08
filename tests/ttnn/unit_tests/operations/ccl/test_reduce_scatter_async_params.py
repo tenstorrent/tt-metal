@@ -98,9 +98,10 @@ def run_reduce_scatter_async_test(
     )
 
     # Output memory config - after reduce_scatter, width is divided by num_devices
-    # Input per device: (1, 1, 32, 4096) -> Output per device: (1, 1, 32, 512)
-    output_width = input_shape[dim] // num_devices  # 4096 / 8 = 512
-    output_shard_shape = (input_shard_shape[0], input_shard_shape[1] // num_devices)  # (32, 512 / 8 = 64)
+    # Input per device: (1, 1, 32, 4096) with shard (32, 512) on 8 cores
+    # Output per device: (1, 1, 32, 512) with shard (32, 64) on 8 cores
+    # Each core gets: output_width / num_cores = 512 / 8 = 64
+    output_shard_shape = (input_shard_shape[0], input_shard_shape[1] // num_devices)  # (32, 64)
     output_shard_spec = ttnn.ShardSpec(
         shard_grid,
         output_shard_shape,
