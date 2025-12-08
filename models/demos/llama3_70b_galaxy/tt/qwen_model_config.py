@@ -20,6 +20,7 @@ from models.tt_transformers.tt.common import (
     encode_prompt_hf,
     nearest_multiple,
 )
+from models.demos.llama3_70b_galaxy.tt.llama_common import precompute_freqs_yarn
 from typing import Tuple
 from models.common.utility_functions import nearest_32
 from pathlib import Path
@@ -283,9 +284,23 @@ class TtQwenModelArgs(TtModelArgs):
         # Update memory layouts (Tile, except MLP)
         self.model_config.update({f"{key}_TILE": ttnn.TILE_LAYOUT for key in self.OP_KEYS if "LAYOUT" in key})
 
-        self.cos, self.sin = precompute_freqs(
-            self.head_dim, self.max_seq_len * 2, self.rope_theta, self.rope_scaling_factor, self.orig_context_len
-        )  # for prefill
+        # Use Yarn RoPE if rope_type is "yarn", otherwise use standard precompute_freqs
+        if hasattr(self, "rope_type") and self.rope_type == "yarn":
+            self.cos, self.sin = precompute_freqs_yarn(
+                dim=self.head_dim,
+                end=self.max_seq_len * 2,
+                theta=self.rope_theta,
+                scaling_factor=self.rope_scaling_factor,
+                original_max_position_embeddings=self.orig_context_len,
+                beta_fast=self.yarn_beta_fast,
+                beta_slow=self.yarn_beta_slow,
+                mscale=self.yarn_mscale,
+                mscale_all_dim=self.yarn_mscale_all_dim,
+            )
+        else:
+            self.cos, self.sin = precompute_freqs(
+                self.head_dim, self.max_seq_len * 2, self.rope_theta, self.rope_scaling_factor, self.orig_context_len
+            )  # for prefill
         self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
 
         self.tokenizer = None if dummy_weights else self.create_tokenizer()
@@ -1652,12 +1667,37 @@ class TtQwenModelArgs(TtModelArgs):
         # If it is present and is set to false, do not use scaled rope
         # Setting self.rope_scaling_factor to None is our way of saying do not use scaled rope
         rope_scaling_params = params.get("rope_scaling", None)
+
+        # Hardcode Yarn RoPE parameters for Qwen models
+        if self.is_qwen:
+            # Default Yarn RoPE configuration for Qwen (matching generate_reference_hf.py)
+            default_qwen_rope_scaling = {
+                "rope_type": "yarn",
+                "factor": 4.0,
+                "original_max_position_embeddings": 32768,
+            }
+            # Use provided rope_scaling if available, otherwise use hardcoded defaults
+            if rope_scaling_params:
+                # Merge provided params with defaults (provided params take precedence)
+                rope_scaling_params = {**default_qwen_rope_scaling, **rope_scaling_params}
+            else:
+                rope_scaling_params = default_qwen_rope_scaling
+
         if rope_scaling_params:
             self.rope_scaling_factor = rope_scaling_params.get("factor", None)
             self.orig_context_len = rope_scaling_params.get("original_max_position_embeddings", None)
+            # Extract rope_type (defaults to None for backward compatibility)
+            self.rope_type = rope_scaling_params.get("type") or rope_scaling_params.get("rope_type")
+            # Yarn-specific parameters (with defaults from generate_reference_hf.py)
+            if self.rope_type == "yarn":
+                self.yarn_beta_fast = rope_scaling_params.get("beta_fast", 32)
+                self.yarn_beta_slow = rope_scaling_params.get("beta_slow", 1)
+                self.yarn_mscale = rope_scaling_params.get("mscale", 1.0)
+                self.yarn_mscale_all_dim = rope_scaling_params.get("mscale_all_dim", 0.0)
         else:
             self.rope_scaling_factor = None
             self.orig_context_len = None
+            self.rope_type = None
 
     @property
     def use_scaled_rope(self):

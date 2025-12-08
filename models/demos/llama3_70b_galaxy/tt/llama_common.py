@@ -67,6 +67,38 @@ def apply_scaling(freqs: torch.Tensor, scale_factor: float = 8):
     return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
 
 
+# Yarn RoPE helper functions (copied from models/tt_transformers/tt/rope.py)
+def yarn_find_correction_dim(num_rotations: float, dim: int, base: float, max_position_embeddings: int) -> float:
+    """Inverse dim formula to find dim based on number of rotations."""
+    return (dim * math.log(max_position_embeddings / (num_rotations * 2 * math.pi))) / (2 * math.log(base))
+
+
+def yarn_find_correction_range(
+    low_rot: float, high_rot: float, dim: int, base: float, max_position_embeddings: int
+) -> tuple:
+    """Find dim range bounds based on rotations."""
+    low = math.floor(yarn_find_correction_dim(low_rot, dim, base, max_position_embeddings))
+    high = math.ceil(yarn_find_correction_dim(high_rot, dim, base, max_position_embeddings))
+    return max(low, 0), min(high, dim - 1)  # Clamp values just in case
+
+
+def yarn_get_mscale(scale: float, mscale: float) -> float:
+    """Compute mscale for Yarn RoPE."""
+    if scale <= 1:
+        return 1.0
+    return 0.1 * mscale * math.log(scale) + 1.0
+
+
+def yarn_linear_ramp_mask(min: float, max: float, dim: int) -> torch.Tensor:
+    """Create linear ramp mask for Yarn RoPE."""
+    if min == max:
+        max += 0.001  # Prevent singularity
+
+    linear_func = (torch.arange(dim, dtype=torch.float32) - min) / (max - min)
+    ramp_func = torch.clamp(linear_func, 0, 1)
+    return ramp_func
+
+
 def precompute_freqs(dim: int, end: int, theta: float = 500000.0, use_scaled: bool = True, scale_factor: float = 8):
     """
     Precompute the frequency tensor for sine and cosine values with given dimensions.
@@ -85,6 +117,70 @@ def precompute_freqs(dim: int, end: int, theta: float = 500000.0, use_scaled: bo
         freqs = apply_scaling(freqs, scale_factor)
     freqs = torch.outer(t, freqs).float()
     return torch.cos(freqs), torch.sin(freqs)
+
+
+def precompute_freqs_yarn(
+    dim: int,
+    end: int,
+    theta: float,
+    scaling_factor: float,
+    original_max_position_embeddings: int,
+    beta_fast: float = 32,
+    beta_slow: float = 1,
+    mscale: float = 1.0,
+    mscale_all_dim: float = 0.0,
+    device: str = "cpu",
+):
+    """
+    Precompute the frequency tensor for sine and cosine values using Yarn RoPE scaling.
+
+    Args:
+        dim (int): Dimension of the frequency tensor (head_dim).
+        end (int): End index for precomputing frequencies (max_seq_len * 2).
+        theta (float): Base frequency scaling factor.
+        scaling_factor (float): Yarn scaling factor.
+        original_max_position_embeddings (int): Original context length.
+        beta_fast (float): Beta fast parameter for Yarn. Defaults to 32.
+        beta_slow (float): Beta slow parameter for Yarn. Defaults to 1.
+        mscale (float): Mscale parameter for Yarn. Defaults to 1.0.
+        mscale_all_dim (float): Mscale all dim parameter for Yarn. Defaults to 0.0.
+        device (str): Device to use. Defaults to "cpu".
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]: Tensors containing cosine and sine values in format [end, dim//2],
+        matching the format returned by precompute_freqs for compatibility with freqs_to_rotation_matrix.
+    """
+    # Compute base frequencies (only half dimension, will be duplicated)
+    freq_extra = 1.0 / (theta ** (torch.arange(0, dim, 2, dtype=torch.float32, device=device) / dim))
+    freq_inter = 1.0 / (scaling_factor * theta ** (torch.arange(0, dim, 2, dtype=torch.float32, device=device) / dim))
+
+    # Find correction range
+    low, high = yarn_find_correction_range(
+        beta_fast,
+        beta_slow,
+        dim,
+        theta,
+        original_max_position_embeddings,
+    )
+
+    # Create frequency mask
+    inv_freq_mask = 1.0 - yarn_linear_ramp_mask(low, high, dim // 2).to(device=device, dtype=torch.float32)
+    inv_freq = freq_inter * (1 - inv_freq_mask) + freq_extra * inv_freq_mask
+
+    # Compute frequencies for all positions
+    t = torch.arange(end, device=device, dtype=torch.float32)
+    freqs = torch.outer(t, inv_freq)  # Shape: [end, dim//2]
+
+    # Compute mscale
+    _mscale = float(yarn_get_mscale(scaling_factor, mscale) / yarn_get_mscale(scaling_factor, mscale_all_dim))
+
+    # Compute cos and sin with mscale
+    # Return in format [end, dim//2] to match precompute_freqs output format
+    # This is compatible with freqs_to_rotation_matrix which expects [emb_size, emb_dim] where emb_dim = dim//2
+    cos = freqs.cos() * _mscale
+    sin = freqs.sin() * _mscale
+
+    return cos, sin
 
 
 def freqs_to_rotation_matrix(cos_freqs, sin_freqs):
