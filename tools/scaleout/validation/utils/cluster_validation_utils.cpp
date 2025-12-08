@@ -1522,18 +1522,23 @@ fsd::proto::FactorySystemDescriptor get_factory_system_descriptor(
     }
 
     if (cabling_descriptor_path.has_value()) {
+        if (fsd_path.has_value()) {
+            log_warning(
+                tt::LogDistributed,
+                "Both cabling_descriptor_path and fsd_path provided; using cabling_descriptor_path to generate FSD");
+        }
         log_output_rank0("Creating Factory System Descriptor (Golden Representation)");
-        tt::scaleout_tools::CablingGenerator cabling_generator;
         if (!deployment_descriptor_path.has_value()) {
             TT_FATAL(
                 hostnames.size() == 1,
                 "Expected exactly one host in the cluster when no deployment descriptor is provided");
-            cabling_generator = tt::scaleout_tools::CablingGenerator(cabling_descriptor_path.value(), hostnames);
+            return tt::scaleout_tools::CablingGenerator(cabling_descriptor_path.value(), hostnames)
+                .generate_factory_system_descriptor();
         } else {
-            cabling_generator = tt::scaleout_tools::CablingGenerator(
-                cabling_descriptor_path.value(), deployment_descriptor_path.value());
+            return tt::scaleout_tools::CablingGenerator(
+                       cabling_descriptor_path.value(), deployment_descriptor_path.value())
+                .generate_factory_system_descriptor();
         }
-        return cabling_generator.generate_factory_system_descriptor();
     } else {
         // Load FSD from file
         fsd::proto::FactorySystemDescriptor fsd_proto;
