@@ -843,21 +843,8 @@ std::vector<ttnn::Tensor> Pool2dSliceAttr::run_L1_op(
     auto [input_slice_height_start, input_slice_width_start] = input_slice_start;
     auto [input_slice_height_end, input_slice_width_end] = input_slice_end;
 
-    auto [output_slice_height_start, output_slice_width_start] = output_slice_start;
-    auto [output_slice_height_end, output_slice_width_end] = output_slice_end;
     int input_slice_height = input_slice_height_end - input_slice_height_start;
     int input_slice_width = input_slice_width_end - input_slice_width_start;
-
-    log_debug(
-        tt::LogOp,
-        "Pool input {}, padding {}, dilation {}, kernel {}, stride {}, output slice {}x{}",
-        sliced_input_tensor.logical_shape(),
-        this_slice_padding,
-        dilation,
-        kernel_size,
-        stride,
-        output_slice_height_end - output_slice_height_start,
-        output_slice_width_end - output_slice_width_start);
 
     return pool2d_L1(
         sliced_input_tensor,
