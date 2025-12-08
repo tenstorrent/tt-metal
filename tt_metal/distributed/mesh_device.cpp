@@ -147,7 +147,8 @@ MeshDevice::ScopedDevices::ScopedDevices(
         dispatch_core_config,
         {},
         worker_l1_size,
-        /*init_profiler*/ false,
+        /* init_profiler */ false,
+        /* ignored */ true,
         /* initialize_fabric_and_dispatch_fw */ false);
 
     for (auto device_id : device_ids) {

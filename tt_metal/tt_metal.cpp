@@ -372,6 +372,8 @@ std::map<ChipId, IDevice*> CreateDevices(
     const std::vector<uint32_t>& /*l1_bank_remap*/,
     const size_t worker_l1_size,
     bool init_profiler,
+    // NOLINTNEXTLINE
+    [[maybe_unused]] bool use_max_eth_core_count_on_all_devices,
     bool initialize_fabric_and_dispatch_fw) {
     ZoneScoped;
     bool is_galaxy = MetalContext::instance().get_cluster().is_galaxy_cluster();

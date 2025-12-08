@@ -45,6 +45,7 @@ std::map<ChipId, IDevice*> CreateDevices(
     const std::vector<uint32_t>& l1_bank_remap = {},
     size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
     bool init_profiler = true,
+    [[deprecated]] bool ignored = false,  // This argument was not used
     bool initialize_fabric_and_dispatch_fw = true);
 
 void CloseDevices(const std::map<ChipId, IDevice*>& devices);

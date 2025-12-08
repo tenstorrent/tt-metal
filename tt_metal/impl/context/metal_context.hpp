@@ -68,7 +68,7 @@ public:
 
     std::unique_ptr<ProfilerStateManager>& profiler_state_manager() { return profiler_state_manager_; }
     std::unique_ptr<DataCollector>& data_collector() { return data_collector_; }
-    std::unique_ptr<DeviceManager>& device_manager() { return device_manager_; }
+    DeviceManager* device_manager();
 
     void initialize_device_manager(
         const std::vector<ChipId>& device_ids,
@@ -203,7 +203,6 @@ private:
     std::unique_ptr<WatcherServer> watcher_server_;
     std::unique_ptr<ProfilerStateManager> profiler_state_manager_;
     std::unique_ptr<DataCollector> data_collector_;
-    std::unique_ptr<DeviceManager> device_manager_;
 
     std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
