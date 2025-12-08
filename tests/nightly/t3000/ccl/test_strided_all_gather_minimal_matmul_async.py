@@ -218,8 +218,6 @@ def run_strided_all_gather_minimal_matmul_impl(
                 mm_cores_y=mm_core_grid.y,
                 mm_block_ht=mm_block_m // 32,
                 mm_block_wt=mm_block_k // 32,
-                warmup_mm_block_ht=warmup_mm_block_h // 32,
-                warmup_mm_ht=warmup_mm_h // 32,
             )
 
             tt_matmul_out_tensor = ttnn.experimental.minimal_matmul(
@@ -250,6 +248,8 @@ def run_strided_all_gather_minimal_matmul_impl(
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
                 read_local_slice_from_input=read_local_slice_from_input,
+                warmup_mm_block_ht=warmup_mm_block_h // 32,
+                warmup_mm_ht=warmup_mm_h // 32,
             )
         return tt_all_gather_out_tensor, tt_matmul_out_tensor
 
