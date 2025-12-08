@@ -10,8 +10,7 @@ import torch
 from torchvision import transforms as TF
 from PIL import Image
 from loguru import logger
-from inception import InceptionV3
-from threadpoolctl import threadpool_limits
+from models.experimental.tt_dit.tests.dataset_eval.utils.inception import InceptionV3
 
 COCO_STATISTICS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/text_to_image/tools/val2014.npz"
 
@@ -132,40 +131,20 @@ def calculate_frechet_distance(mu1, sigma1, mu2, sigma2, eps=1e-6):
 
     diff = mu1 - mu2
 
-    # save sigma matrices in case of hangs
-    np.save("sigma1.npy", sigma1.astype(np.float32))
-    np.save("sigma2.npy", sigma2.astype(np.float32))
-    logger.info("Saved sigma1.npy and sigma2.npy for manual continuation.")
-
-    # ensure float32 to avoid massive slowdowns
-    sigma1 = sigma1.astype(np.float32)
-    sigma2 = sigma2.astype(np.float32)
-
-    # compute dot product
-    logger.info("calculating dot")
-    s_dot_s = sigma1 @ sigma2
-
-    # compute matrix square root with threadpool limit
-    logger.info("calculating sqrtm...")
-    with threadpool_limits(limits=1):  # limit mkl/openblas threads only here
-        covmean, _ = linalg.sqrtm(s_dot_s, disp=False)
-    logger.info("done sqrtm")
-
-    # handle numerical issues
+    # Product might be almost singular
+    covmean, _ = linalg.sqrtm(sigma1.dot(sigma2), disp=False)
     if not np.isfinite(covmean).all():
         logger.info(f"fid calculation produces singular product; adding {eps} to diagonal of cov estimates")
-        offset = np.eye(sigma1.shape[0], dtype=np.float32) * eps
-        with threadpool_limits(limits=1):
-            covmean, _ = linalg.sqrtm((sigma1 + offset) @ (sigma2 + offset), disp=False)
+        offset = np.eye(sigma1.shape[0]) * eps
+        covmean = linalg.sqrtm((sigma1 + offset).dot(sigma2 + offset))
 
-    # handle imaginary parts due to sqrtm precision issues
+    # Numerical error might give slight imaginary component
     if np.iscomplexobj(covmean):
         if not np.allclose(np.diagonal(covmean).imag, 0, atol=1e-3):
             m = np.max(np.abs(covmean.imag))
-            raise ValueError(f"Imaginary component {m}")
+            raise ValueError("Imaginary component {}".format(m))
         covmean = covmean.real
 
-    covmean = covmean.astype(np.float64)
     tr_covmean = np.trace(covmean)
 
     return diff.dot(diff) + np.trace(sigma1) + np.trace(sigma2) - 2 * tr_covmean
