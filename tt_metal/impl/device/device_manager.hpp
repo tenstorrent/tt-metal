@@ -5,39 +5,26 @@
 #pragma once
 
 #include <tt_stl/span.hpp>
-#include <cstddef>
-#include <cstdint>
-#include <functional>
-#include <map>
-#include <memory>
-#include <mutex>
-#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-
+#include <hostdevcommon/common_values.hpp>
+#include "umd/device/types/cluster_descriptor_types.hpp"
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
 
-namespace tt {
-
-class DevicePool {
-    friend void tt_metal::detail::CloseDevices(const std::map<ChipId, tt_metal::IDevice*>& devices);
-
+namespace tt::tt_metal {
+class IDevice;
+class DeviceManager {
 public:
-    DevicePool& operator=(const DevicePool&) = delete;
-    DevicePool& operator=(DevicePool&& other) noexcept = delete;
-    DevicePool(const DevicePool&) = delete;
-    DevicePool(DevicePool&& other) noexcept = delete;
+    DeviceManager& operator=(const DeviceManager&) = delete;
+    DeviceManager& operator=(DeviceManager&& other) noexcept = delete;
+    DeviceManager(const DeviceManager&) = delete;
+    DeviceManager(DeviceManager&& other) noexcept = delete;
 
     static bool is_initialized() { return _inst != nullptr; }
 
-    static DevicePool& instance() noexcept {
-        TT_ASSERT(DevicePool::is_initialized(), "Trying to get DevicePool without initializing it");
+    static DeviceManager& instance() noexcept {
+        TT_ASSERT(DeviceManager::is_initialized(), "Trying to get DeviceManager without initializing it");
         return *_inst;
     }
 
@@ -46,11 +33,9 @@ public:
         uint8_t num_hw_cqs,
         size_t l1_small_size,
         size_t trace_region_size,
-        const tt_metal::DispatchCoreConfig& dispatch_core_config,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
         bool init_profiler = true,
-        bool use_max_eth_core_count_on_all_devices = false,
         bool initialize_fabric_and_dispatch_fw = true);
 
     tt_metal::IDevice* get_active_device(ChipId device_id) const;
@@ -68,8 +53,8 @@ public:
     std::size_t get_max_num_eth_cores_across_all_devices() const;
 
 private:
-    ~DevicePool();
-    DevicePool();
+    ~DeviceManager();
+    DeviceManager();
     uint8_t num_hw_cqs{};
     size_t l1_small_size{};
     size_t trace_region_size{};
@@ -87,9 +72,6 @@ private:
     std::vector<std::unique_ptr<tt_metal::IDevice>> devices;
 
     bool skip_remote_devices{};
-    // Issue #19729: use_max_eth_core_count_on_all_devices_ is a workaround
-    // to allow TT-Mesh Workload dispatch to target active ethernet cores.
-    bool use_max_eth_core_count_on_all_devices_{};
     std::unordered_set<uint32_t> firmware_built_keys;
 
     // Determine which CPU cores the worker threads need to be placed on for each device
@@ -112,7 +94,7 @@ private:
     // Retrieves the fabric router sync timeout value from configuration or returns a default
     static uint32_t get_fabric_router_sync_timeout_ms();
 
-    static DevicePool* _inst;
+    static DeviceManager* _inst;
 };
 
-}  // namespace tt
+}  // namespace tt::tt_metal

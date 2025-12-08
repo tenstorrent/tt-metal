@@ -4,13 +4,12 @@
 
 #include "data.hpp"
 #include <stdexcept>
-#include "impl/debug/inspector/rpc_server_controller.hpp"
-#include "impl/debug/inspector/logger.hpp"
-#include "impl/dispatch/system_memory_manager.hpp"
-#include "impl/context/metal_context.hpp"
+#include "rpc_server_controller.hpp"
+#include "logger.hpp"
+#include "context/metal_context.hpp"
 #include "distributed/mesh_workload_impl.hpp"
 #include "jit_build/build_env_manager.hpp"
-#include "tt_metal/impl/device/device_pool.hpp"
+#include "device/device_manager.hpp"
 #include <tt_stl/reflection.hpp>
 #include <llrt/tt_cluster.hpp>
 
@@ -159,7 +158,7 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
 
 void Data::rpc_get_devices_in_use(rpc::Inspector::GetDevicesInUseResults::Builder& results) {
     // Get all active device ids
-    auto device_ids = DevicePool::instance().get_all_active_device_ids();
+    auto device_ids = tt_metal::MetalContext::instance().device_manager()->get_all_active_device_ids();
 
     // Write result
     auto result_device_ids = results.initMetalDeviceIds(device_ids.size());
@@ -224,7 +223,8 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
 // Populate the results with the dispatch core info and corresponding cq_id event info
 void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInfosResults::Builder results) {
     // This returns a map of command queue id to event id for all active devices
-    auto cq_to_event_by_device = DevicePool::instance().get_all_command_queue_event_infos();
+    auto cq_to_event_by_device =
+        tt_metal::MetalContext::instance().device_manager()->get_all_command_queue_event_infos();
     // In a single lock, get the number of non-empty categories and initialize the results
     std::scoped_lock locks(dispatch_core_info_mutex, dispatch_s_core_info_mutex, prefetcher_core_info_mutex);
 
