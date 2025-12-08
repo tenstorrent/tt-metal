@@ -681,10 +681,8 @@ void print_ethernet_connectivity(
                 }
 
                 // Print port type header
-                std::cout << '\n'
-                          << "             ---------------------- Port Type: " << port_type
-                          << " ---------------------- \n"
-                          << '\n';
+                std::cout << "\n             ---------------------- Port Type: " << port_type
+                          << " ---------------------- \n\n";
 
                 // Print all connections for this port type
                 for (const auto& conn : connections) {
