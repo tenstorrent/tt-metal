@@ -69,13 +69,13 @@ from tests.ttnn.unit_tests.operations.fused.distributed_norm_test_utils import r
     ],
 )
 @pytest.mark.parametrize(
-    "norm_type, use_legacy",
+    "norm_type, use_legacy, use_welford",
     [
-        ("layer_norm", False),
-        ("layer_norm", True),
-        ("rms_norm", True),  # rms_norm only works with use_legacy=True (use_welford=False)
+        ("layer_norm", False, False),  # LayerNorm with new reduction (non-Welford)
+        ("layer_norm", False, True),  # LayerNorm with Welford
+        ("rms_norm", False, False),  # RMSNorm with new reduction (non-Welford)
     ],
-    ids=["layer_norm_new_reduction", "layer_norm_legacy_reduction", "rms_norm_legacy_reduction"],
+    ids=["layer_norm_new_reduction", "layer_norm_welford", "rms_norm_new_reduction"],
 )
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
@@ -97,12 +97,17 @@ def test_distributed_norm_allclose(
     outlier_var,
     norm_type,
     use_legacy,
+    use_welford,
 ):
     """
     Test distributed layer norm and RMS norm.
 
     Test passes if average relative difference is under 5%.
-    Note: RMS norm is only compatible with use_legacy=True (which sets use_welford=False).
+
+    Tests 3 configurations:
+    1. LayerNorm with new reduction (non-Welford)
+    2. LayerNorm with Welford algorithm
+    3. RMSNorm with new reduction (non-Welford)
     """
     # Run the test using the utility function
     passes, max_abs_diff, max_rel_diff, mean_rel_diff = run_distributed_norm_test(
@@ -119,6 +124,7 @@ def test_distributed_norm_allclose(
         use_legacy=use_legacy,
         use_high_precision=True,
         verbose=False,
+        use_welford=use_welford,
     )
 
     # Assert - test passes only if average relative diff < 5%
@@ -133,7 +139,14 @@ def test_distributed_norm_allclose(
 @pytest.mark.parametrize("seq_len", [1024])
 @pytest.mark.parametrize("hidden_dim", [4096])
 @pytest.mark.parametrize("eps", [1e-6])
-@pytest.mark.parametrize("norm_type", ["layer_norm", "rms_norm"])
+@pytest.mark.parametrize(
+    "norm_type, use_welford",
+    [
+        ("layer_norm", True),  # LayerNorm with Welford
+        ("rms_norm", False),  # RMSNorm without Welford
+    ],
+    ids=["layer_norm_welford", "rms_norm_no_welford"],
+)
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -142,9 +155,10 @@ def test_distributed_norm_allclose(
     ],
     indirect=True,
 )
-def test_distributed_norm_allclose_smoke(mesh_device, batch_size, seq_len, hidden_dim, eps, norm_type):
+def test_distributed_norm_allclose_smoke(mesh_device, batch_size, seq_len, hidden_dim, eps, norm_type, use_welford):
     """
     Smoke test for distributed layer norm and RMS norm with standard parameters.
+    Note: RMS norm only runs with use_welford=False.
     """
     # Run the test using the utility function
     passes, max_abs_diff, max_rel_diff, mean_rel_diff = run_distributed_norm_test(
@@ -161,6 +175,7 @@ def test_distributed_norm_allclose_smoke(mesh_device, batch_size, seq_len, hidde
         use_legacy=False,
         use_high_precision=True,
         verbose=False,
+        use_welford=use_welford,
     )
 
     assert passes, (

@@ -48,6 +48,7 @@ Import and call run_distributed_norm_test() from your test file:
 NOTE: Test passes only if average relative difference is under 5%
 """
 
+import pytest
 import torch
 import ttnn
 from loguru import logger
@@ -216,11 +217,6 @@ def compute_ttnn_distributed_norm(
         # Reshape and shard bias based on layout
         if bias_layout == ttnn.ROW_MAJOR_LAYOUT:
             # ROW_MAJOR: Reshape to (num_mesh_devices, 1, -1, 32) and shard over dim 0
-            print("tyyooooooooooooo================")
-            print("tyyooooooooooooo================")
-            print("tyyooooooooooooo================")
-            print("num_mesh_devices")
-            print(num_mesh_devices)
             bias_shape = (num_mesh_devices, 1, -1, 32)
             bias_shard_dim = 0
         else:
@@ -402,6 +398,13 @@ def run_distributed_norm_test(
         Tuple of (passes, max_abs_diff, max_rel_diff, mean_rel_diff)
         where passes is True only if average relative difference < 5%
     """
+    # Validate that RMS norm is not called with Welford
+    if norm_type == "rms_norm" and use_welford:
+        pytest.skip(
+            "INVALID TEST CONFIGURATION: RMS norm cannot be used with use_welford=True. "
+            "This test should be removed or fixed. RMS norm only supports use_welford=False."
+        )
+
     # Generate test data
     torch_input, torch_weight, torch_bias = generate_test_data(
         batch_size, seq_len, hidden_dim, mean, var, outlier_pct, outlier_var
