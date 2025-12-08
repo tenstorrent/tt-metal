@@ -121,32 +121,6 @@ async function run() {
       }
     }
 
-    // Add fake regression runs to a real workflow (for testing Slack messaging when no failing jobs are found)
-    // This ensures it appears in both current and previous data, making it detectable as a regression
-    // Using a real workflow name so the workflow itself is valid, but with fake runs
-    const testWorkflowNameCached = '.github/workflows/all-post-commit-workflows.yaml';
-    const yesterdayCached = new Date(Date.now() - 24 * 60 * 60 * 1000);
-
-    // Ensure cached data has a successful run as the latest (for regression detection)
-    const existingCachedRuns = cachedGrouped.get(testWorkflowNameCached) || [];
-    const fakeSuccessfulRun = {
-      id: 999999997,
-      name: 'All Post-Commit Workflows',
-      head_branch: 'main',
-      head_sha: '0000000000000000000000000000000000000000',
-      path: testWorkflowNameCached,
-      conclusion: 'success',
-      status: 'completed',
-      created_at: yesterdayCached.toISOString(),
-      updated_at: yesterdayCached.toISOString(),
-      run_attempt: 1
-    };
-
-    // Prepend fake successful run to ensure it's the latest (newest date)
-    // This ensures previous state shows as 'success' for regression detection
-    const updatedCachedRuns = [fakeSuccessfulRun, ...existingCachedRuns];
-    cachedGrouped.set(testWorkflowNameCached, updatedCachedRuns);
-    core.info(`[TEST] Added fake successful run to cached data for workflow: '${testWorkflowNameCached}' (prepended to ${existingCachedRuns.length} existing runs)`);
 
     // Convert cached grouped map to array of runs for merging
     for (const runs of cachedGrouped.values()) {
@@ -204,51 +178,6 @@ async function run() {
       fs.mkdirSync(outputDir, { recursive: true });
     }
 
-    // Add fake regression runs to a real workflow (for testing Slack messaging when no failing jobs are found)
-    // Using a real workflow name so the workflow itself is valid, but injecting fake runs to create a regression
-    const testWorkflowNameCurrent = '.github/workflows/all-post-commit-workflows.yaml';
-    const now = new Date();
-    const yesterdayCurrent = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    // Use a date slightly in the future to ensure fake failing run is always the most recent
-    const fakeFailingRunDate = new Date(now.getTime() + 60 * 1000); // 1 minute in the future
-
-    // Get existing runs for this workflow, or create empty array
-    const existingRuns = grouped.get(testWorkflowNameCurrent) || [];
-
-    // Add fake runs: one successful (yesterday) and one failing (slightly in future to ensure it's newest)
-    // Use high IDs to avoid conflicts with real runs
-    const fakeRuns = [
-      {
-        id: 999999998,
-        name: 'All Post-Commit Workflows',
-        head_branch: 'main',
-        head_sha: '0000000000000000000000000000000000000000',
-        path: testWorkflowNameCurrent,
-        conclusion: 'success',
-        status: 'completed',
-        created_at: yesterdayCurrent.toISOString(),
-        updated_at: yesterdayCurrent.toISOString(),
-        run_attempt: 1
-      },
-      {
-        id: 999999999,
-        name: 'All Post-Commit Workflows',
-        head_branch: 'main',
-        head_sha: '1111111111111111111111111111111111111111',
-        path: testWorkflowNameCurrent,
-        conclusion: 'failure',
-        status: 'completed',
-        created_at: fakeFailingRunDate.toISOString(),
-        updated_at: fakeFailingRunDate.toISOString(),
-        run_attempt: 1
-      }
-    ];
-
-    // Merge fake runs with existing runs (fake runs first, then existing)
-    // The fake failing run will be sorted to the top by computeLatestConclusion since it has the newest date
-    const testMergedRuns = [...fakeRuns, ...existingRuns];
-    grouped.set(testWorkflowNameCurrent, testMergedRuns);
-    core.info(`[TEST] Added fake regression runs to real workflow '${testWorkflowNameCurrent}' (${fakeRuns.length} fake runs + ${existingRuns.length} existing runs, failing run date: ${fakeFailingRunDate.toISOString()})`);
 
     // Save grouped runs to artifact file
     fs.writeFileSync(outputPath, JSON.stringify(Array.from(grouped.entries())));
