@@ -76,7 +76,6 @@ autograd::TensorPtr LlamaBlock::operator()(const autograd::TensorPtr& input, con
     auto x = (*m_mlp_norm)(h);
     x = (*m_mlp)(x);
     x = ops::add(x, residual);
-    ttml::autograd::ctx().get_profiler().read_results(&ttml::autograd::ctx().get_device(), "llama_block");
 
     return x;
 }
@@ -97,7 +96,6 @@ autograd::TensorPtr LlamaBlock::operator()(
     auto x = (*m_mlp_norm)(h);
     x = (*m_mlp)(x);
     x = ops::add(x, residual);
-    ttml::autograd::ctx().get_profiler().read_results(&ttml::autograd::ctx().get_device(), "llama_block");
 
     return x;
 }
