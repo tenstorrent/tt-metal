@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+
 #include <utility>
 
-#include "ttnn/operations/transformer/sdpa/sdpa.hpp"
 #include "ttnn/operations/transformer/sdpa/sdpa.hpp"
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"

@@ -139,6 +139,7 @@ void SDPAOperation::validate_on_program_cache_miss(const operation_attributes_t&
         }
 
         if (use_mla) {
+            // Head dim v validation
             TT_FATAL(
                 attrs.head_dim_v.value() <= q_shape[3],
                 "Head dimension of V must be less than or equal to head dim of Q, got {} and {}",
@@ -289,6 +290,8 @@ void SDPAOperation::validate_on_program_cache_miss(const operation_attributes_t&
             const auto& sink_shape = attention_sink.logical_shape();
             const auto q_shape = q.logical_shape();
 
+            // Attention sink must have shape [1, NH, 1, 1] - single value per head, broadcast across batch and tile
+            // dims
             TT_FATAL(sink_shape[0] == 1, "Attention sink batch dimension must be 1. Got {}", sink_shape[0]);
             TT_FATAL(
                 sink_shape[1] == q_shape[1],
