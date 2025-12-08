@@ -31,7 +31,6 @@ target_link_libraries(
     PRIVATE
         tt_metal
         test_common_libs
-        generate_mgd_lib
 )
 
 target_include_directories(

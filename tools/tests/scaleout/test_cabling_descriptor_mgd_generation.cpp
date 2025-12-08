@@ -16,7 +16,7 @@
 #include <google/protobuf/text_format.h>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt_stl/cleanup.hpp>
-#include "generate_mgd.hpp"
+#include <generate_mgd/generate_mgd.hpp>
 
 namespace fs = std::filesystem;
 using namespace tt::tt_fabric;
@@ -166,7 +166,7 @@ void verify_dual_t3k_connections(const MeshGraphDescriptor& desc) {
 
 }  // namespace
 
-namespace tt::tt_fabric::mgd_generation_tests {
+namespace tt::scaleout_tools::mgd_generation_tests {
 
 TEST(CablingDescriptorMGDGenerationTests, Generate16NodeClosetBox) {
     const auto mgd_proto = generate_mgd_from_cabling(std::string(k16NodeClosetBoxConfig.cabling_path), false);
@@ -245,4 +245,4 @@ TEST(CablingDescriptorMGDGenerationTests, EndToEndConvenienceAPI) {
     verify_16node_closetbox_connections(desc);
 }
 
-}  // namespace tt::tt_fabric::mgd_generation_tests
+}  // namespace tt::scaleout_tools::mgd_generation_tests
