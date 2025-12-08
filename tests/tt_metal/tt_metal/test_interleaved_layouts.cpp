@@ -229,10 +229,10 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
         pass &= (src_vec == result_vec);
 
         if (not pass) {
-            std::cout << "GOLDEN" << '\n';
+            std::cout << "GOLDEN\n";
             print_vec_of_uint32_as_packed_bfloat16(src_vec, num_output_tiles);
 
-            std::cout << "RESULT" << '\n';
+            std::cout << "RESULT\n";
             print_vec_of_uint32_as_packed_bfloat16(result_vec, num_output_tiles);
         }
 
@@ -395,10 +395,10 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
         pass &= (src_vec == result_vec);
 
         if (not pass) {
-            std::cout << "GOLDEN" << '\n';
+            std::cout << "GOLDEN\n";
             print_vec_of_uint32_as_packed_bfloat16(src_vec, num_output_tiles);
 
-            std::cout << "RESULT" << '\n';
+            std::cout << "RESULT\n";
             print_vec_of_uint32_as_packed_bfloat16(result_vec, num_output_tiles);
         }
 

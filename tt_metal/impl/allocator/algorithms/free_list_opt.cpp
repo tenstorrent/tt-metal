@@ -435,8 +435,8 @@ Statistics FreeListOpt::get_statistics() const {
 }
 
 void FreeListOpt::dump_blocks(std::ostream& out) const {
-    out << "FreeListOpt allocator info:" << '\n';
-    out << "segregated free blocks by size:" << '\n';
+    out << "FreeListOpt allocator info:\n";
+    out << "segregated free blocks by size:\n";
     for (size_t i = 0; i < free_blocks_segregated_by_size_.size(); i++) {
         if (i != free_blocks_segregated_by_size_.size() - 1) {
             out << "  Size class " << i << ": (" << size_t(size_segregated_base * (size_t{1} << i)) << " - "
@@ -458,7 +458,7 @@ void FreeListOpt::dump_blocks(std::ostream& out) const {
     }
     out << '\n';
 
-    out << "Block table:" << '\n';
+    out << "Block table:\n";
     auto leftpad = [](std::string str, size_t width) {
         if (str.size() >= width) {
             return str;

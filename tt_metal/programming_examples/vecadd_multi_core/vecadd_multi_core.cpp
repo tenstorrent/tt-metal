@@ -247,7 +247,7 @@ int main(int argc, char** argv) {
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
-    std::cout << "Kernel execution finished" << '\n';
+    std::cout << "Kernel execution finished\n";
 
     // Read the output buffer.
     std::vector<bfloat16> c_data;

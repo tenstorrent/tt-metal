@@ -1857,9 +1857,9 @@ void ControlPlane::print_routing_tables() const {
     this->print_ethernet_channels();
 
     std::stringstream ss;
-    ss << "Control Plane: IntraMesh Routing Tables" << '\n';
+    ss << "Control Plane: IntraMesh Routing Tables\n";
     for (const auto& [fabric_node_id, chip_routing_table] : this->intra_mesh_routing_tables_) {
-        ss << fabric_node_id << ":" << '\n';
+        ss << fabric_node_id << ":\n";
         for (int eth_chan = 0; eth_chan < chip_routing_table.size(); eth_chan++) {
             ss << "   Eth Chan " << eth_chan << ": ";
             for (const auto& dst_chan_id : chip_routing_table[eth_chan]) {
@@ -1871,10 +1871,10 @@ void ControlPlane::print_routing_tables() const {
 
     log_debug(tt::LogFabric, "{}", ss.str());
     ss.str(std::string());
-    ss << "Control Plane: InterMesh Routing Tables" << '\n';
+    ss << "Control Plane: InterMesh Routing Tables\n";
 
     for (const auto& [fabric_node_id, chip_routing_table] : this->inter_mesh_routing_tables_) {
-        ss << fabric_node_id << ":" << '\n';
+        ss << fabric_node_id << ":\n";
         for (int eth_chan = 0; eth_chan < chip_routing_table.size(); eth_chan++) {
             ss << "   Eth Chan " << eth_chan << ": ";
             for (const auto& dst_chan_id : chip_routing_table[eth_chan]) {
@@ -1888,9 +1888,9 @@ void ControlPlane::print_routing_tables() const {
 
 void ControlPlane::print_ethernet_channels() const {
     std::stringstream ss;
-    ss << "Control Plane: Physical eth channels in each direction" << '\n';
+    ss << "Control Plane: Physical eth channels in each direction\n";
     for (const auto& [fabric_node_id, fabric_eth_channels] : this->router_port_directions_to_physical_eth_chan_map_) {
-        ss << fabric_node_id << ": " << '\n';
+        ss << fabric_node_id << ": \n";
         for (const auto& [direction, eth_chans] : fabric_eth_channels) {
             ss << "   " << enchantum::to_string(direction) << ":";
             for (const auto& eth_chan : eth_chans) {

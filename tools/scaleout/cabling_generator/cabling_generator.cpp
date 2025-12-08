@@ -516,13 +516,13 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
     CablingGenerator::get_all_connections_of_type(root_instance_, {PortType::QSFP_DD}, conn_list);
     output_file.fill('0');
     if (loc_info) {
-        output_file << "Source,,,,,,,,,Destination,,,,,,,,,Cable Length,Cable Type" << '\n';
+        output_file << "Source,,,,,,,,,Destination,,,,,,,,,Cable Length,Cable Type\n";
         output_file << "Hostname,Hall,Aisle,Rack,Shelf U,Tray,Port,Label,Node Type,Hostname,Hall,Aisle,Rack,Shelf "
                        "U,Tray,Port,Label,Node Type,,"
                     << '\n';
     } else {
-        output_file << "Source,,,,Destination,,," << '\n';
-        output_file << "Hostname,Tray,Port,Node Type,Hostname,Tray,Port,Node Type" << '\n';
+        output_file << "Source,,,,Destination,,,\n";
+        output_file << "Hostname,Tray,Port,Node Type,Hostname,Tray,Port,Node Type\n";
     }
     for (const auto& [start, end] : conn_list) {
         auto host_id1 = std::get<0>(start).get();

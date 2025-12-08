@@ -365,7 +365,7 @@ bool packed_uint32_t_vector_comparison(
     const std::function<bool(float, float)>& comparison_function,
     int* argfail) {
     if (vec_a.size() != vec_b.size()) {
-        std::cout << "Sizes don't match, returning false" << '\n';
+        std::cout << "Sizes don't match, returning false\n";
         return false;
     }
 

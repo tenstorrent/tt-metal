@@ -121,13 +121,13 @@ TEST_F(GalaxyFixture, DISABLED_ActiveEthValidateLinksBetweenMMIOAndGalaxyChips) 
             }
             ASSERT_TRUE(num_mmio_chips_that_curr_chip_is_linked_to <= 1)
                 << "Detected " << num_mmio_chips_that_curr_chip_is_linked_to << " MMIO chips that chip " << device_id
-                << " is linked to" << '\n';
+                << " is linked to\n";
         } else {
             const uint32_t num_chips_that_curr_chip_is_linked_to = connected_device_ids.size();
             const bool do_both_links_go_to_separate_devices = num_chips_that_curr_chip_is_linked_to == 2;
             ASSERT_TRUE(do_both_links_go_to_separate_devices)
                 << "Detected " << num_chips_that_curr_chip_is_linked_to << " chips that chip " << device_id
-                << " is linked to" << '\n';
+                << " is linked to\n";
 
             bool do_both_links_go_to_galaxy_devices = true;
             for (const ChipId connected_device_id : connected_device_ids) {
@@ -176,12 +176,12 @@ TEST_F(GalaxyFixture, DISABLED_ValidateAllMMIOChipsHaveSingleRowHarvested) {
 
 TEST_F(TGFixture, ValidateNumMMIOChips) {
     const size_t num_mmio_chips = tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices();
-    ASSERT_TRUE(num_mmio_chips == 4) << "Detected " << num_mmio_chips << " MMIO chips" << '\n';
+    ASSERT_TRUE(num_mmio_chips == 4) << "Detected " << num_mmio_chips << " MMIO chips\n";
 }
 
 TEST_F(TGFixture, ValidateNumGalaxyChips) {
     const size_t num_galaxy_chips = tt::tt_metal::MetalContext::instance().get_cluster().number_of_user_devices();
-    ASSERT_TRUE(num_galaxy_chips == 32) << "Detected " << num_galaxy_chips << " Galaxy chips" << '\n';
+    ASSERT_TRUE(num_galaxy_chips == 32) << "Detected " << num_galaxy_chips << " Galaxy chips\n";
 }
 
 // Validate that there are 4 N150 chips and 32 Galaxy chips
@@ -197,8 +197,8 @@ TEST_F(TGFixture, ValidateChipBoardTypes) {
             num_n150_chips++;
         }
     }
-    ASSERT_TRUE(num_galaxy_chips == 32) << "Detected " << num_galaxy_chips << " Galaxy chips" << '\n';
-    ASSERT_TRUE(num_n150_chips == 4) << "Detected " << num_n150_chips << " N150 chips" << '\n';
+    ASSERT_TRUE(num_galaxy_chips == 32) << "Detected " << num_galaxy_chips << " Galaxy chips\n";
+    ASSERT_TRUE(num_n150_chips == 4) << "Detected " << num_n150_chips << " N150 chips\n";
 }
 
 }  // namespace tt::tt_metal

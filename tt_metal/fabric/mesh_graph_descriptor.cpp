@@ -1415,7 +1415,7 @@ void MeshGraphDescriptor::print_node(GlobalNodeId id, int indent_level) {
 
     const InstanceData & inst = it->second;
     if (inst.kind == NodeKind::Mesh) {
-        ss << indent << "=== MESH INSTANCE ===" << '\n';
+        ss << indent << "=== MESH INSTANCE ===\n";
         ss << indent << "Global ID: " << id << '\n';
         ss << indent << "Local ID: " << inst.local_id << '\n';
         ss << indent << "Name: " << inst.name << '\n';
@@ -1427,7 +1427,7 @@ void MeshGraphDescriptor::print_node(GlobalNodeId id, int indent_level) {
             }
             ss << mesh_desc->device_topology().dims(i);
         }
-        ss << "]" << '\n';
+        ss << "]\n";
         ss << indent << "Host Topology Dimensions: [";
         for (int i = 0; i < mesh_desc->host_topology().dims_size(); ++i) {
             if (i > 0) {
@@ -1435,11 +1435,11 @@ void MeshGraphDescriptor::print_node(GlobalNodeId id, int indent_level) {
             }
             ss << mesh_desc->host_topology().dims(i);
         }
-        ss << "]" << '\n';
+        ss << "]\n";
         ss << indent << "Channel Count: " << mesh_desc->channels().count() << '\n';
         ss << indent << "Express Connections: " << mesh_desc->express_connections_size() << '\n';
         if (!inst.sub_instances.empty()) {
-            ss << indent << "Devices:" << '\n';
+            ss << indent << "Devices:\n";
             log_debug(tt::LogFabric, "{}", ss.str());
             ss.str(std::string());
             // Print devices in ascending local_id order
@@ -1455,7 +1455,7 @@ void MeshGraphDescriptor::print_node(GlobalNodeId id, int indent_level) {
             return; // children already printed with their own trailing separators
         }
     } else if (inst.kind == NodeKind::Graph) {
-        ss << indent << "=== GRAPH INSTANCE ===" << '\n';
+        ss << indent << "=== GRAPH INSTANCE ===\n";
         ss << indent << "Global ID: " << id << '\n';
         ss << indent << "Local ID: " << inst.local_id << '\n';
         ss << indent << "Name: " << inst.name << '\n';
@@ -1464,10 +1464,10 @@ void MeshGraphDescriptor::print_node(GlobalNodeId id, int indent_level) {
         ss << indent << "Total Instances in Descriptor: " << graph_desc->instances_size() << '\n';
         ss << indent << "Connections: " << graph_desc->connections_size() << '\n';
         if (graph_desc->has_graph_topology()) {
-            ss << indent << "Has Graph Topology: Yes" << '\n';
+            ss << indent << "Has Graph Topology: Yes\n";
         }
         if (!inst.sub_instances.empty()) {
-            ss << indent << "Sub-instances:" << '\n';
+            ss << indent << "Sub-instances:\n";
             log_debug(tt::LogFabric, "{}", ss.str());
             ss.str(std::string());
             // Print children in ascending local_id order
@@ -1483,25 +1483,25 @@ void MeshGraphDescriptor::print_node(GlobalNodeId id, int indent_level) {
             return; // children already printed with their own trailing separators
         }
     } else if (inst.kind == NodeKind::Device) {
-        ss << indent << "=== DEVICE INSTANCE ===" << '\n';
+        ss << indent << "=== DEVICE INSTANCE ===\n";
         ss << indent << "Global ID: " << id << '\n';
         ss << indent << "Local ID: " << inst.local_id << '\n';
         ss << indent << "Name: " << inst.name << '\n';
         ss << indent << "Hierarchy Depth: " << inst.hierarchy.size() << '\n';
     } else {
-        ss << indent << "=== UNKNOWN NODE TYPE ===" << '\n';
+        ss << indent << "=== UNKNOWN NODE TYPE ===\n";
         ss << indent << "Global ID: " << id << '\n';
     }
 
-    ss << indent << "---" << '\n';
+    ss << indent << "---\n";
     log_debug(tt::LogFabric, "{}", ss.str());
 }
 
 void MeshGraphDescriptor::print_all_nodes() {
     std::stringstream ss;
-    ss << "\n=== PRINTING ALL NODE INSTANCES (recursive from top-level) ===" << '\n';
+    ss << "\n=== PRINTING ALL NODE INSTANCES (recursive from top-level) ===\n";
     ss << "Total instances: " << instances_.size() << '\n';
-    ss << "=====================================" << '\n';
+    ss << "=====================================\n";
     log_debug(tt::LogFabric, "{}", ss.str());
 
     // Start from top-level and recursively print in local-id order

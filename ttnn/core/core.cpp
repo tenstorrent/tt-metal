@@ -34,7 +34,7 @@ void segfault_handler(int sig) {
 
 void dump_stack_trace_on_segfault() {
     if (std::signal(SIGSEGV, segfault_handler) == SIG_ERR) {
-        std::cerr << "Error: cannot handle SIGSEGV" << '\n';
+        std::cerr << "Error: cannot handle SIGSEGV\n";
         exit(EXIT_FAILURE);
     }
 }

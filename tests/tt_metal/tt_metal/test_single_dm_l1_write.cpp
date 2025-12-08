@@ -28,14 +28,13 @@ int main() {
         std::cerr << "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to 0,0 to see the output of "
                      "the Data Movement kernels."
                   << '\n';
-        std::cerr << "WARNING: For example, export TT_METAL_DPRINT_CORES=0,0" << '\n';
+        std::cerr << "WARNING: For example, export TT_METAL_DPRINT_CORES=0,0\n";
     }
     env_var = std::getenv("TT_METAL_SIMULATOR");
     if (env_var == nullptr) {
         std::cerr
-            << "ERROR: This test can only be run using a simulator. Please set Environment Variable TT_METAL_SIMULATOR"
-            << '\n';
-        std::cerr << "ERROR: with a valid simulator path" << '\n';
+            << "ERROR: This test can only be run using a simulator. Please set Environment Variable TT_METAL_SIMULATOR\n";
+        std::cerr << "ERROR: with a valid simulator path\n";
         return 1;
     }
     env_var = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -43,7 +42,7 @@ int main() {
         std::cerr << "ERROR: This test can only be run in slow dispatch mode. Please set Environment Variable "
                      "TT_METAL_SLOW_DISPATCH_MODE"
                   << '\n';
-        std::cerr << "ERROR: using export TT_METAL_SLOW_DISPATCH_MODE=1" << '\n';
+        std::cerr << "ERROR: using export TT_METAL_SLOW_DISPATCH_MODE=1\n";
         return 1;
     }
 
@@ -73,8 +72,7 @@ int main() {
     // Set Runtime Arguments for the Data Movement Kernel (memory address to write to)
     SetRuntimeArgs(program, data_movement_kernel_0, core, {address});
     SetCommonRuntimeArgs(program, data_movement_kernel_0, {value});
-    std::cout << "Hello, Core {0, 0} on Device 0, Please start execution. I will standby for your communication."
-              << '\n';
+    std::cout << "Hello, Core {0, 0} on Device 0, Please start execution. I will standby for your communication.\n";
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -82,7 +80,7 @@ int main() {
     mesh_device->close();
 
     if (outputs[0] == value) {
-        std::cout << "Test passed!" << '\n';
+        std::cout << "Test passed!\n";
         return 0;
     } else {
         std::cout << "Test failed! Got the value " << std::hex << outputs[0] << " instead of " << value << '\n';

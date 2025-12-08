@@ -325,8 +325,8 @@ void print_usage_info(CommandMode mode = CommandMode::VALIDATE) {
     } else {
         auto options = create_validation_options();
         std::cout << options.help() << '\n';
-        std::cout << "link_reset Subcommand:" << '\n';
-        std::cout << "  Use 'run_cluster_validation link_reset --help' for link_reset options." << '\n';
+        std::cout << "link_reset Subcommand:\n";
+        std::cout << "  Use 'run_cluster_validation link_reset --help' for link_reset options.\n";
     }
 }
 
