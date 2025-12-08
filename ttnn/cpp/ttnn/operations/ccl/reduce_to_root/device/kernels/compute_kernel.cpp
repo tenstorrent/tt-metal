@@ -13,12 +13,6 @@
 // for last round of device 1 add extra compute:
 // out = l / s
 
-// shoud do something similar to sdpa_flash_decode kernel (where out is the l)
-
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
-//
-// SPDX-License-Identifier: Apache-2.0
-
 #include <cstdint>
 
 #define REDUCE_OP (PoolType::MAX)
@@ -112,11 +106,11 @@ inline OutputCBs reduce_fct(
 namespace NAMESPACE {
 
 constexpr uint32_t cb_out_o = get_compile_time_arg_val(0);                // l (output)
-constexpr uint32_t cb_out_accumulate_im_2 = get_compile_time_arg_val(1);  // l2 (input)  this
+constexpr uint32_t cb_out_accumulate_im_2 = get_compile_time_arg_val(1);  // l2 (input)
 constexpr uint32_t cb_out_accumulate_im = get_compile_time_arg_val(2);    // l1 (input)
-constexpr uint32_t cb_prev_sum_2 = get_compile_time_arg_val(3);           // s2 (input)  this
+constexpr uint32_t cb_prev_sum_2 = get_compile_time_arg_val(3);           // s2 (input)
 constexpr uint32_t cb_m_in = get_compile_time_arg_val(4);                 // m1 (input)
-constexpr uint32_t cb_prev_max = get_compile_time_arg_val(5);             // m2 (input)  this
+constexpr uint32_t cb_prev_max = get_compile_time_arg_val(5);             // m2 (input)
 constexpr uint32_t cb_cur_max = get_compile_time_arg_val(6);              // m (output)
 constexpr uint32_t cb_exp_max_diff_2 = get_compile_time_arg_val(7);       // exp((m1-m)*scale) (P1)
 constexpr uint32_t cb_prev_sum = get_compile_time_arg_val(8);             // s1 (input)
@@ -132,8 +126,8 @@ constexpr uint32_t scale_fp32 = get_compile_time_arg_val(17);
 constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(18);
 constexpr uint32_t vDHt = get_compile_time_arg_val(19);
 constexpr uint32_t loop_size = get_compile_time_arg_val(20);
-constexpr uint32_t int_l_cb = get_compile_time_arg_val(21);  // intermediate l cb
-constexpr uint32_t int_s_cb = get_compile_time_arg_val(22);  // intermediate m cb
+constexpr uint32_t int_l_cb = get_compile_time_arg_val(21);
+constexpr uint32_t int_s_cb = get_compile_time_arg_val(22);
 constexpr uint32_t int_m_cb = get_compile_time_arg_val(23);
 
 void MAIN {
@@ -225,47 +219,6 @@ void MAIN {
         cb_pop_front(cb_prev_sum, Sq_chunk_t);
         cb_pop_front(int_s_cb, Sq_chunk_t);
     }
-
-    /*
-    //ONLy manage cbs to check how much time compute is taking
-    //wait fron on input cbs
-    for (uint32_t loop_idx = 0; loop_idx < loop_size; loop_idx++) {
-        cb_wait_front(cb_m_in, Sq_chunk_t);
-        cb_wait_front(cb_prev_sum, Sq_chunk_t);
-
-        cb_wait_front(cb_out_accumulate_im, out_chunk_tiles);
-
-
-        //pop front on input cbs
-        cb_pop_front(cb_m_in, Sq_chunk_t);
-
-        cb_pop_front(cb_prev_sum, Sq_chunk_t);
-
-        cb_pop_front(cb_out_accumulate_im, out_chunk_tiles);
-
-
-        if (loop_idx == 0) {
-            cb_wait_front(cb_prev_max, Sq_chunk_t);
-            cb_wait_front(cb_prev_sum_2, Sq_chunk_t);
-            cb_wait_front(cb_out_accumulate_im_2, out_chunk_tiles);
-            cb_pop_front(cb_prev_max, Sq_chunk_t);
-            cb_pop_front(cb_prev_sum_2, Sq_chunk_t);
-            cb_pop_front(cb_out_accumulate_im_2, out_chunk_tiles);
-        }
-
-        if (loop_size == 1 || (loop_size == 2 && loop_idx == 1)) {
-            //reserve back on output cbs
-            cb_reserve_back(cb_out_o, out_chunk_tiles);
-            cb_reserve_back(cb_cur_max, Sq_chunk_t);
-            cb_reserve_back(cb_cur_sum, Sq_chunk_t);
-
-            //push back on output cbs
-            cb_push_back(cb_out_o, out_chunk_tiles);
-            cb_push_back(cb_cur_max, Sq_chunk_t);
-            cb_push_back(cb_cur_sum, Sq_chunk_t);
-        }
-    }
-        */
 }
 
 }  // namespace NAMESPACE

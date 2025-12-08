@@ -32,40 +32,25 @@ inline void read_from_local(
     uint32_t cb_id_in_m,  // compute cb for m
     uint32_t onetile,
     uint32_t input_num_tiles) {
-    // DPRINT << "pushing first set of inputs for compute to cbs " << (uint32_t)cb_id_in_l << ", " <<
-    // (uint32_t)cb_id_in_s
-    //        << ", " << (uint32_t)cb_id_in_m << "\n";
-    //  for tensor l
     cb_reserve_back(cb_id_in_l, input_num_tiles);
     uint32_t l1_write_addr = get_write_ptr(cb_id_in_l);
     uint64_t read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_l);
-    // //DPRINT << "read addr l: " << (uint64_t)read_addr << "\n";
     noc_async_read(read_addr, l1_write_addr, input_num_tiles * page_bytes);
-    // noc_async_read_barrier();
-    // DPRINT << "printing local l from compute cb l\n";
-    // print_full_tile(cb_id_in_l, 3, false);
     cb_push_back(cb_id_in_l, input_num_tiles);
 
     // for tensor s
     cb_reserve_back(cb_id_in_s, onetile);
     l1_write_addr = get_write_ptr(cb_id_in_s);
     read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_s);
-    // //DPRINT << "read addr s: " << (uint64_t)read_addr << "\n";
     noc_async_read(read_addr, l1_write_addr, onetile * page_bytes);
-    // noc_async_read_barrier();
-    // DPRINT << "printing local s from compute cb s\n";
-    // print_full_tile(cb_id_in_s, 0, false);
     cb_push_back(cb_id_in_s, onetile);
 
     // for tensor m
     cb_reserve_back(cb_id_in_m, onetile);
     l1_write_addr = get_write_ptr(cb_id_in_m);
     read_addr = get_noc_addr(core_noc_x, core_noc_y, src_addr_m);
-    // //DPRINT << "read addr m: " << (uint64_t)read_addr << "\n";
     noc_async_read(read_addr, l1_write_addr, onetile * page_bytes);
     noc_async_read_barrier();
-    // DPRINT << "printing local m from compute cb m\n";
-    // print_full_tile(cb_id_in_m, 0, false);
     cb_push_back(cb_id_in_m, onetile);
 }
 
@@ -96,7 +81,6 @@ void kernel_main() {
 
     const uint8_t sender_num_hops = 1;
 
-    // reusing the last arg for fabric setup, therefore index overlaps.
     size_t arg_idx = 7;
 
     const uint32_t new_packet_size_bytes = packet_size_bytes + 2 * align(page_size_bytes, alignment);
@@ -177,8 +161,6 @@ void kernel_main() {
         1,
         input_num_tiles);
 
-    // device 3 is sending data to device 2
-    //  receive l, s and m data from sender
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
     noc_semaphore_wait(local_semaphore_ptr, 1);
     noc_semaphore_set(local_semaphore_ptr, 0);

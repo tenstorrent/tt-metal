@@ -16,90 +16,6 @@
 using namespace tt::tt_metal;
 namespace ttnn::operations::ccl {
 
-namespace detail {
-
-AlignedPacketDims compute_aligned_packet_dims(
-    const DataType& dtype, const uint32_t page_size_bytes, const uint32_t num_pages, const uint32_t alignment) {
-    const uint32_t fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-
-    const uint32_t max_packet_size_bytes =
-        dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
-
-    const uint32_t aligned_page_size_bytes = tt::round_up(page_size_bytes, alignment);
-
-    uint32_t num_page_segments, max_num_pages_per_packet, packet_size_bytes, total_packets;
-    if (aligned_page_size_bytes <= max_packet_size_bytes) {
-        num_page_segments = 1;
-        max_num_pages_per_packet = std::min(max_packet_size_bytes / aligned_page_size_bytes, num_pages);
-        packet_size_bytes = aligned_page_size_bytes * max_num_pages_per_packet;
-        total_packets = tt::div_up(num_pages, max_num_pages_per_packet);
-    } else {
-        max_num_pages_per_packet = 1;
-        num_page_segments = tt::div_up(aligned_page_size_bytes, max_packet_size_bytes);
-        packet_size_bytes = max_packet_size_bytes;
-        total_packets = num_page_segments * num_pages;
-    }
-
-    return {packet_size_bytes, max_num_pages_per_packet, num_page_segments, total_packets};
-}
-
-auto fabric_routing_vector(const MeshCoordinate& sender_coord, const MeshCoordinate& receiver_coord) {
-    // transmit along row
-    if (sender_coord[0] == receiver_coord[0]) {
-        constexpr auto dim = 1;
-        const int hops = receiver_coord[dim] - sender_coord[dim];
-        bool is_fwd = (hops > 0);
-
-        return std::make_tuple(std::abs(hops), is_fwd, dim);
-    }
-    // transmit along col
-    else if (sender_coord[1] == receiver_coord[1]) {
-        constexpr auto dim = 0;
-        const int hops = receiver_coord[dim] - sender_coord[dim];
-        bool is_fwd = (hops > 0);
-
-        return std::make_tuple(std::abs(hops), is_fwd, dim);
-    } else {
-        TT_THROW("Routing coordinates {} and {} invalid for 1D fabric", sender_coord, receiver_coord);
-        return std::make_tuple(0, false, 0);
-    }
-}
-
-FabricRoute fabric_routing(
-    const MeshDevice* mesh_device,
-    const MeshCoordinate& sender_coord,
-    const MeshCoordinate& receiver_coord,
-    const tt::tt_fabric::Topology topology) {
-    const auto& mesh_shape = mesh_device->get_view().shape();
-
-    // sign indicates direction, however fabrics' forward/backward concept is reversed
-    const auto [line_hops, line_is_forward, dim] = fabric_routing_vector(sender_coord, receiver_coord);
-
-    TT_FATAL(line_hops != 0, "Should not be send/receiving to the same device");
-
-    auto get_neighbor_id = [&sender_coord, &mesh_device, &mesh_shape, dim](
-                               bool is_forward, MeshCoordinate::BoundaryMode boundary_mode) {
-        const auto neighbor_coord = sender_coord.get_neighbor(mesh_shape, (is_forward ? 1 : -1), dim, boundary_mode);
-
-        TT_FATAL(neighbor_coord.has_value(), "Can't find neighbor for {}", sender_coord);
-        return mesh_device->get_fabric_node_id(*neighbor_coord);
-    };
-
-    if (topology == tt::tt_fabric::Topology::Ring) {
-        int ring_hops = line_hops + ((line_hops < 0 ? -1 : 1) * mesh_shape[dim]);
-
-        if (std::abs(ring_hops) < std::abs(line_hops)) {
-            bool ring_is_forward = (ring_hops > 0);
-
-            const auto next_fabric_id = get_neighbor_id(ring_is_forward, MeshCoordinate::BoundaryMode::WRAP);
-            return {std::abs(ring_hops), !ring_is_forward, next_fabric_id};
-        }
-    }
-    const auto next_fabric_id = get_neighbor_id(line_is_forward, MeshCoordinate::BoundaryMode::NONE);
-    return {line_hops, !line_is_forward, next_fabric_id};
-}
-}  // namespace detail
-
 using cached_workload_t = device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_variables_t>;
 
 void ReduceToRootOp::validate(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -115,7 +31,7 @@ void ReduceToRootOp::validate(const operation_attributes_t& operation_attributes
 
         TT_FATAL(
             output_spec[0] == optional_output_tensor_l.value().tensor_spec(),
-            "Optional sparse output token tensor spec {} does not match computed output spec {}",
+            "Optional output tensor spec {} does not match computed output spec {}",
             optional_output_tensor_l.value().tensor_spec(),
             output_spec[0]);
 
@@ -127,7 +43,7 @@ void ReduceToRootOp::validate(const operation_attributes_t& operation_attributes
         const auto output_spec = compute_output_specs(operation_attributes, tensor_args).at(1);
         TT_FATAL(
             output_spec[1] == optional_output_tensor_s.value().tensor_spec(),
-            "Optional sparse output token tensor spec {} does not match computed output spec {}",
+            "Optional output tensor spec {} does not match computed output spec {}",
             optional_output_tensor_s.value().tensor_spec(),
             output_spec[1]);
 
@@ -152,7 +68,7 @@ void ReduceToRootOp::validate(const operation_attributes_t& operation_attributes
 
     TT_FATAL(
         input_page_size_bytes % l1_alignment == 0 || input_page_size_bytes == l1_alignment,
-        "Tensor page size must be 16 byte aligned");
+        "Tensor page size must be aligned");
     // input mux cores should be 4
     if (operation_attributes.input_mux_cores.has_value()) {
         TT_FATAL(
@@ -164,8 +80,6 @@ void ReduceToRootOp::validate(const operation_attributes_t& operation_attributes
 
 ReduceToRootOp::spec_return_value_t ReduceToRootOp::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // !Maybe todo. Support output with different config/layout than input
-
     const auto& input_tensor_l = tensor_args.input_tensor_l;
     const auto& input_tensor_s = tensor_args.input_tensor_s;
     const auto& input_tensor_m = tensor_args.input_tensor_m;
@@ -178,6 +92,7 @@ ReduceToRootOp::spec_return_value_t ReduceToRootOp::compute_output_specs(
         intermediate_specs.push_back(tensor_args.optional_intermediate_tensor.value().tensor_spec());
         return {intermediate_specs, final_output_spec};
     }
+    // intermediate shape is the shape of the 3 tenssors combined so that we can send them all in a single packet
     uint32_t shape_0 = final_output_spec[0].memory_config().shard_spec()->shape[0];
     uint32_t shape_1 = final_output_spec[0].memory_config().shard_spec()->shape[1] +
                        2 * final_output_spec[1].memory_config().shard_spec()->shape[1];

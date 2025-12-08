@@ -95,7 +95,6 @@ void kernel_main() {
 
     tt::tt_fabric::fabric_client_connect(*mux_connection_handle);
 
-    //  set up packet header buffer
     cb_reserve_back(packet_header_cb_id, 1);
     uint32_t packet_header_addr = get_read_ptr(packet_header_cb_id);
     cb_push_back(packet_header_cb_id, 1);
@@ -117,12 +116,7 @@ void kernel_main() {
 
     // Use fused packet API to send data + semaphore increment in a single packet
     packet_header_ptr->to_noc_fused_unicast_write_atomic_inc(
-        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-            dst_noc_addr,          // where to write the data
-            receive_sem_noc_addr,  // semaphore address to increment
-            1,                     // increment value
-            true                   // flush after write
-        },
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst_noc_addr, receive_sem_noc_addr, 1, true},
         align(new_payload_size_bytes, alignment));
 
     mux_connection.wait_for_empty_write_slot();

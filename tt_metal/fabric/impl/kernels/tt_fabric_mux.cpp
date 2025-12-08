@@ -215,6 +215,7 @@ void kernel_main() {
             fabric_router_status_address,
             local_fabric_router_status_address);
     }
+
     constexpr bool use_worker_allocated_credit_address = CORE_TYPE == ProgrammableCoreType::IDLE_ETH;
     fabric_connection.open<use_worker_allocated_credit_address>();
 

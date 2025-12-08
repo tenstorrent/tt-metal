@@ -203,7 +203,6 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     uint32_t packet_size_bytes = input_num_tiles * input_page_size_bytes;
 
-    // program!
     tt::tt_metal::Program program{};
 
     // sdpa compute values
@@ -223,9 +222,6 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     const uint32_t Sq_chunk_t = PNHt;
 
-    // uint32_t statistics_tiles = PNHt;
-    // tt::DataFormat stats_df = tt::DataFormat::Float16_b;
-    // uint32_t stats_tile_size = stats_tile.get_tile_size(stats_df);
     const auto tiny_tile = tt::tt_metal::Tile({8, 32});
     auto stats_tile = tiny_tile;
 
@@ -271,9 +267,8 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             .set_page_size(compute_cb_2_m, aligned_input_page_size_bytes)
             .set_tile_dims(compute_cb_2_m, stats_tile);
 
-    // allocate space for packet headers for payload sempahore
     constexpr auto packet_header_cb_id = tt::CBIndex::c_6;
-    constexpr auto buffering_factor = 2;  // this is in other fabric kernels
+    constexpr auto buffering_factor = 2;
     constexpr auto num_packet_headers_storable = 2;
     const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     tt::tt_metal::CircularBufferConfig cb_header_config =
@@ -353,7 +348,6 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             .set_page_size(cb_m_temp, aligned_input_page_size_bytes)
             .set_tile_dims(cb_m_temp, stats_tile);
 
-    // allocate buffers for packet headers and packets for root2
     constexpr auto packet_header_cb_id_2 = tt::CBIndex::c_17;
     tt::tt_metal::CircularBufferConfig cb_header_config_2 =
         tt::tt_metal::CircularBufferConfig(
@@ -456,7 +450,6 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
         CreateCircularBuffer(program, all_cores, cb_l2_temp_config);
     }
 
-    // Create different kernels
     tt::tt_metal::KernelHandle reader_kernel = 0;
     tt::tt_metal::KernelHandle writer_kernel = 0;
     std::vector<uint32_t> reader_ct_args;
@@ -532,12 +525,12 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             0,
             packet_header_cb_id,
             packet_cb_id,
-            compute_cb_2_l,  // Round 2: intermediate data (l1) -> compute_cb_2_l
-            compute_cb_2_s,  // Round 2: intermediate data (s1) -> compute_cb_2_s
-            compute_cb_2_m,  // Round 2: intermediate data (m1) -> compute_cb_2_m
+            compute_cb_2_l,
+            compute_cb_2_s,
+            compute_cb_2_m,
             l1_alignment,
-            compute_cb_l,  // Round 1: network data (l2) -> compute_cb_l
-            compute_cb_s,  // Round 1: network data (s2) -> compute_cb_s
+            compute_cb_l,
+            compute_cb_s,
             compute_cb_m,
             input_num_tiles,
             input_page_size_bytes,
@@ -679,7 +672,6 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
         uint32_t start_idx = link_idx == 0 ? 0 : 2;
         termination_master = termination_masters[link_idx];
         for (uint32_t dir = 0; dir < 2; dir++) {
-            // CoreCoord mux_logical_core = dir == 0 ? CoreCoord(2, start_idx) : CoreCoord(2, start_idx + 1);
             CoreCoord mux_logical_core = dir == 0 ? all_mux_cores[start_idx] : all_mux_cores[start_idx + 1];
             if (is_sender_device) {
                 mux_logical_core = link_idx == 0 ? all_mux_cores[0] : all_mux_cores[2];
@@ -729,7 +721,6 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                     core_noc_x,
                     core_noc_y,
                 };
-                // CoreCoord mux_virtual_core = mesh_device->worker_core_from_logical_core(CoreCoord(2, start_ix));
                 CoreCoord mux_virtual_core = mesh_device->worker_core_from_logical_core(all_mux_cores[start_idx]);
                 fabric_mux_rt_args(
                     c == termination_master,
@@ -744,10 +735,6 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                 tt::tt_metal::SetRuntimeArgs(program, writer_kernel, c, writer_runtime_args);
 
             } else if (is_root_device) {
-                // CoreCoord mux_virtual_core_fwd = mesh_device->worker_core_from_logical_core(CoreCoord(2, start_ix));
-                // CoreCoord mux_virtual_core_bwd = mesh_device->worker_core_from_logical_core(CoreCoord(2, start_ix +
-                // 1));
-
                 CoreCoord mux_virtual_core_fwd = mesh_device->worker_core_from_logical_core(all_mux_cores[start_idx]);
                 CoreCoord mux_virtual_core_bwd =
                     mesh_device->worker_core_from_logical_core(all_mux_cores[start_idx + 1]);
@@ -797,9 +784,6 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                     core_noc_y};
                 tt::tt_metal::SetRuntimeArgs(program, writer_kernel, c, writer_runtime_args);
             } else if (is_root2_device) {
-                // CoreCoord mux_virtual_core_fwd = mesh_device->worker_core_from_logical_core(CoreCoord(2, start_ix));
-                // CoreCoord mux_virtual_core_bwd = mesh_device->worker_core_from_logical_core(CoreCoord(2, start_ix +
-                // 1));
                 CoreCoord mux_virtual_core_fwd = mesh_device->worker_core_from_logical_core(all_mux_cores[start_idx]);
                 CoreCoord mux_virtual_core_bwd =
                     mesh_device->worker_core_from_logical_core(all_mux_cores[start_idx + 1]);
@@ -862,7 +846,6 @@ void ReduceToRootOp::ReduceToRoot::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    // Iterate over all device programs in the cached workload
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
 
@@ -872,8 +855,8 @@ void ReduceToRootOp::ReduceToRoot::override_runtime_arguments(
         const auto& input_tensor_m = tensor_args.input_tensor_m;
 
         // Get output tensors
-        const auto& output_tensors_l = tensor_return_value[1];        // Final outputs
-        const auto& intermediate_tensors_l = tensor_return_value[0];  // Intermediate tensors
+        const auto& output_tensors_l = tensor_return_value[1];
+        const auto& intermediate_tensors_l = tensor_return_value[0];
 
         // Determine device type based on which kernels are present
         bool is_sender_device = shared_variables.send_unary_reader_kernel_id != 0;

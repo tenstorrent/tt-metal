@@ -5,8 +5,6 @@
 #include "dataflow_api.h"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
-// receives l, m, s tensors from the compute kernel and writes to the final output buffers
-
 inline void write_data(
     uint32_t dst_addr_l,
     uint32_t dst_addr_s,
@@ -53,6 +51,7 @@ void kernel_main() {
     constexpr uint32_t input_num_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(4);
 
+    // receives l, m, s tensors from the compute kernel and writes to the final output buffers
     constexpr uint32_t onetile = 1;
     write_data(
         final_dst_addr_l,

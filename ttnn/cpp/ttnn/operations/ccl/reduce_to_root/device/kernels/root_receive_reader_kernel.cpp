@@ -90,7 +90,6 @@ void kernel_main() {
 
     const uint8_t sender_num_hops = 1;
 
-    // reusing the last arg for fabric setup, therefore index overlaps.
     size_t arg_idx = 9;
 
     const uint32_t new_packet_size_bytes = packet_size_bytes + 2 * align(page_size_bytes, alignment);
@@ -191,13 +190,13 @@ void kernel_main() {
     cb_reserve_back(receiver_cb_id_l, input_num_tiles);
     uint32_t dest_page_base_addr = get_write_ptr(receiver_cb_id_l);
 
-    // read the single packet
     uint64_t packet_noc_addr = get_noc_addr(core_noc_x, core_noc_y, intermediate_base_addr);
     noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
 
+    // moving l tensor
     tt_memmove<true, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
     cb_push_back(receiver_cb_id_l, input_num_tiles);
-    //  now receiving s and m
+    //  now s and m
     cb_reserve_back(receiver_cb_id_s, 1);
     cb_reserve_back(receiver_cb_id_m, 1);
 

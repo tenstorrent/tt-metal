@@ -21,7 +21,6 @@
 using tt::data_movement::common::round_up;
 using tt::data_movement::common::tt_memmove;
 
-// device 2 writer receives data from compute kernel and sends it to device 1
 void kernel_main() {
     constexpr uint32_t fabric_ct_idx = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_l = get_compile_time_arg_val(1);
@@ -49,7 +48,6 @@ void kernel_main() {
     const uint8_t dst_num_hops = 1;
     const uint32_t aligned_page_size_bytes = round_up(page_size_bytes, alignment);
 
-    // reusing the last arg for fabric setup, therefore index overlaps.
     size_t arg_idx = 4;
 
     const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
@@ -70,6 +68,8 @@ void kernel_main() {
 
     uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
+
+    // device 2 writer receives data from compute kernel and sends it to device 1
 
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
@@ -92,7 +92,6 @@ void kernel_main() {
     tt::tt_fabric::wait_for_fabric_endpoint_ready(
         fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
 
-    // DPRINT << "after waiting for fabric endpoint ready\n";
     tt::tt_fabric::fabric_client_connect(*mux_connection_handle);
 
     // set up packet header buffer
@@ -137,12 +136,7 @@ void kernel_main() {
 
     // Use fused packet API to send data + semaphore increment in a single packet
     packet_header_ptr->to_noc_fused_unicast_write_atomic_inc(
-        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-            dst_noc_addr,          // where to write the data
-            receive_sem_noc_addr,  // semaphore address to increment
-            1,                     // increment value
-            true                   // flush after write
-        },
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst_noc_addr, receive_sem_noc_addr, 1, true},
         align(new_payload_size_bytes, alignment));
 
     mux_connection.wait_for_empty_write_slot();

@@ -20,7 +20,6 @@ struct ReduceToRootOp {
         const tt::tt_fabric::Topology topology;
         const std::optional<std::vector<ttnn::CoreCoord>> input_mux_cores;
 
-        // put this in here to hash on tensor spec
         const std::vector<ttnn::TensorSpec> _input_tensor_spec;
 
         static constexpr auto attribute_names = std::forward_as_tuple("root_coord", "topology");
@@ -37,7 +36,6 @@ struct ReduceToRootOp {
         const std::optional<Tensor> optional_intermediate_tensor;
     };
 
-    // entry 0 is the intermediate. Entry 1 is the final output
     using spec_return_value_t = std::array<std::vector<ttnn::TensorSpec>, 2>;
     using tensor_return_value_t = std::array<std::vector<ttnn::Tensor>, 2>;
 
@@ -58,8 +56,6 @@ struct ReduceToRootOp {
             std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
         };
 
-        // AdaptedCachedMeshWorkload this maps device coordinates to sets of shared variables.
-        // CachedMeshWorkload has a common set for all devices.
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
         static cached_mesh_workload_t create_mesh_workload(
@@ -86,30 +82,23 @@ struct ReduceToRootOp {
 
     using program_factory_t = std::variant<ReduceToRoot>;
 
-    // Mandatory methods
-
-    // Select the program factory based on the operation attributes and tensor args
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
         return ReduceToRoot{};
     };
 
-    // Validate the operation when it creates a program.
     static void validate_on_program_cache_miss(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
         validate(operation_attributes, tensor_args);
     };
 
-    // Probably the same as on cache miss
     static void validate_on_program_cache_hit(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
         ;
         validate(operation_attributes, tensor_args);
     };
 
-    // Compute the output shapes based on the operation attributes and tensor args
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
@@ -142,32 +131,6 @@ struct ReduceToRootOp {
 private:
     static void validate(const operation_attributes_t&, const tensor_args_t&);
 };
-
-namespace detail {
-
-struct AlignedPacketDims {
-    const uint32_t packet_size_bytes;
-    const uint32_t max_num_pages_per_packet;
-    const uint32_t num_page_segments;
-    const uint32_t total_packets;
-};
-
-AlignedPacketDims compute_aligned_packet_dims(
-    const DataType& dtype, uint32_t page_size_bytes, uint32_t num_pages, uint32_t alignment);
-
-struct FabricRoute {
-    const uint32_t num_hops;
-    const bool is_forward;
-    const tt::tt_fabric::FabricNodeId neighbor_id;
-};
-
-FabricRoute fabric_routing(
-    const MeshDevice* mesh_device,
-    const MeshCoordinate& sender_coord,
-    const MeshCoordinate& receiver_coord,
-    tt::tt_fabric::Topology topology);
-
-}  // namespace detail
 
 device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_variables_t> reduce_to_root_program_factory(
     const ReduceToRootOp::tensor_args_t& tensor_args,
