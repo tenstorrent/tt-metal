@@ -170,7 +170,11 @@ target_link_libraries(
 # Generate MGD library
 add_library(generate_mgd_lib OBJECT generate_mgd/generate_mgd.cpp)
 
-add_dependencies(generate_mgd_lib scaleout_generated_protos)
+add_dependencies(
+    generate_mgd_lib
+    scaleout_generated_protos
+    tt_metal
+)
 
 target_include_directories(
     generate_mgd_lib
@@ -200,7 +204,11 @@ add_executable(
     ${CMAKE_BINARY_DIR}/tt_metal/fabric/protobuf/mesh_graph_descriptor.pb.cc
 )
 
-add_dependencies(generate_mgd scaleout_generated_protos)
+add_dependencies(
+    generate_mgd
+    scaleout_generated_protos
+    tt_metal
+)
 
 set_target_properties(
     generate_mgd
@@ -221,13 +229,13 @@ target_link_libraries(
 )
 
 # Generate Traffic Tests library
-add_library(
-    generate_traffic_tests_lib
-    OBJECT
-    generate_traffic_tests/generate_traffic_tests.cpp
-)
+add_library(generate_traffic_tests_lib OBJECT generate_traffic_tests/generate_traffic_tests.cpp)
 
-add_dependencies(generate_traffic_tests_lib scaleout_generated_protos)
+add_dependencies(
+    generate_traffic_tests_lib
+    scaleout_generated_protos
+    tt_metal
+)
 
 target_include_directories(
     generate_traffic_tests_lib
@@ -254,6 +262,8 @@ target_link_libraries(
 
 # Generate Traffic Tests CLI tool
 add_executable(generate_traffic_tests generate_traffic_tests/generate_traffic_tests_main.cpp)
+
+add_dependencies(generate_traffic_tests scaleout_generated_protos)
 
 set_target_properties(
     generate_traffic_tests
