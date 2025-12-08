@@ -94,7 +94,7 @@ public:
         uint8_t num_mcast_dests,
         uint32_t noc_xy_addr,
         DeviceAddr addr,
-        uint32_t data_sizeB,
+        DeviceAddr data_sizeB,
         const void* data = nullptr,
         uint32_t write_offset_index = 0);
 

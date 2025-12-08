@@ -364,7 +364,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_linear_h(
     uint8_t num_mcast_dests,
     uint32_t noc_xy_addr,
     DeviceAddr addr,
-    uint32_t data_sizeB,
+    DeviceAddr data_sizeB,
     const void* data,
     uint32_t write_offset_index) {
     uint32_t payload_sizeB = sizeof(CQDispatchCmdLarge) + (flush_prefetch ? data_sizeB : 0);
@@ -400,7 +400,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_linear_h(
 
 // Explicit template instantiations for add_dispatch_write_linear_h
 template void DeviceCommand<true>::add_dispatch_write_linear_h<false, false>(
-    uint8_t, uint32_t, DeviceAddr, uint32_t, const void*, uint32_t);
+    uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t);
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(

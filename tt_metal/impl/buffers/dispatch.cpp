@@ -826,7 +826,7 @@ void issue_read_buffer_dispatch_command_sequence(
     // Precompute whether pinned direct write is feasible, and derive dst noc params
     const bool is_unpadded = (buffer.page_size() == dispatch_params.padded_page_size);
     const bool has_pinned_inputs = (dispatch_params.dst != nullptr && dispatch_params.pinned_memory != nullptr);
-    const uint32_t xfer_bytes = dispatch_params.pages_per_txn * dispatch_params.padded_page_size;
+    const uint64_t xfer_bytes = static_cast<uint64_t>(dispatch_params.pages_per_txn) * dispatch_params.padded_page_size;
     bool use_pinned_transfer = false;
     uint32_t pinned_dst_noc_xy = 0;
     uint64_t pinned_dst_addr = 0;
