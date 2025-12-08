@@ -9,23 +9,24 @@ Tests:
   # ======================================================================================
   - name: InterMeshCrossTraffic
     sync: true
-    benchmark_mode: true
     fabric_setup:
       topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2, 3, 4]
+      size: [1024, 2048, 4096]
     defaults:
       ftype: unicast
-      ntype: unicast_write
-      size: 4096
-      num_packets: 50000
+      num_packets: 500000
     senders:
-      - device: [0, 14]
+      - device: [0, [3, 2]]
         patterns:
           - destination:
-              device: [1, 0]
-      - device: [1, 1]
+              device: [1, [0, 0]]
+      - device: [1, [0, 1]]
         patterns:
           - destination:
-              device: [0, 15]
+              device: [0, [3, 3]]
 
   - name: InterMeshCrossTrafficCyclic
     fabric_setup:
@@ -52,6 +53,20 @@ Tests:
         patterns:
           - destination:
               device: [0, 15]
+
+  - name: "FlowControlMultiMesh"
+    sync: true
+    fabric_setup:
+      topology: Mesh
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10000
+
+    patterns:
+      - type: all_to_all
 
   # - name: "FlowControlMultiMesh"
   #   sync: true
@@ -93,20 +108,3 @@ Tests:
   #       patterns:
   #         - destination:
   #             device: [0, 15]
-
-  # - name: "FlowControlMultiMesh"
-  #   benchmark_mode: true
-  #   sync: true
-  #   fabric_setup:
-  #     topology: Mesh
-
-  #   parametrization_params:
-  #     ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
-  #     size: [1024, 2048, 4096]
-
-  #   defaults:
-  #     ftype: unicast
-  #     num_packets: 10000
-
-  #   patterns:
-  #     - type: sequential_all_to_all

@@ -1,0 +1,336 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+# Run this with the following command:
+# tt-run --rank-binding tests/tt_metal/distributed/config/galaxy_2x8_rank_bindings.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_dual_2x8.yaml
+Tests:
+  # ======================================================================================
+  # Test 1: Inter-Mesh Directed Traffic
+  # ======================================================================================
+  - name: InterMeshCrossTrafficIdeal
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [1024, 2048, 4096]
+    defaults:
+      ftype: unicast
+      num_packets: 500000
+    senders:
+      - device: [0, 8]
+        patterns:
+          - destination:
+              device: [1, 12]
+          - destination:
+              device: [1, 13]
+          - destination:
+              device: [1, 14]
+          - destination:
+              device: [1, 15]
+      - device: [0, 9]
+        patterns:
+          - destination:
+              device: [1, 12]
+          - destination:
+              device: [1, 13]
+          - destination:
+              device: [1, 14]
+          - destination:
+              device: [1, 15]
+      - device: [0, 10]
+        patterns:
+          - destination:
+              device: [1, 12]
+          - destination:
+              device: [1, 13]
+          - destination:
+              device: [1, 14]
+          - destination:
+              device: [1, 15]
+      - device: [0, 11]
+        patterns:
+          - destination:
+              device: [1, 12]
+          - destination:
+              device: [1, 13]
+          - destination:
+              device: [1, 14]
+          - destination:
+              device: [1, 15]
+      - device: [1, 12]
+        patterns:
+          - destination:
+              device: [0, 8]
+          - destination:
+              device: [0, 9]
+          - destination:
+              device: [0, 10]
+          - destination:
+              device: [0, 11]
+      - device: [1, 13]
+        patterns:
+          - destination:
+              device: [0, 8]
+          - destination:
+              device: [0, 9]
+          - destination:
+              device: [0, 10]
+          - destination:
+              device: [0, 11]
+      - device: [1, 14]
+        patterns:
+          - destination:
+              device: [0, 8]
+          - destination:
+              device: [0, 9]
+          - destination:
+              device: [0, 10]
+          - destination:
+              device: [0, 11]
+      - device: [1, 15]
+        patterns:
+          - destination:
+              device: [0, 8]
+          - destination:
+              device: [0, 9]
+          - destination:
+              device: [0, 10]
+          - destination:
+              device: [0, 11]
+
+  - name: InterMeshCrossTrafficReal
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [1024, 2048, 4096]
+    defaults:
+      ftype: unicast
+      num_packets: 500000
+    senders:
+      - device: [0, 9]
+        patterns:
+          - destination:
+              device: [1, 13]
+          - destination:
+              device: [1, 14]
+          - destination:
+              device: [1, 15]
+          - destination:
+              device: [1, 8]
+      - device: [0, 10]
+        patterns:
+          - destination:
+              device: [1, 13]
+          - destination:
+              device: [1, 14]
+          - destination:
+              device: [1, 15]
+          - destination:
+              device: [1, 8]
+      - device: [0, 11]
+        patterns:
+          - destination:
+              device: [1, 13]
+          - destination:
+              device: [1, 14]
+          - destination:
+              device: [1, 15]
+          - destination:
+              device: [1, 8]
+      - device: [0, 12]
+        patterns:
+          - destination:
+              device: [1, 13]
+          - destination:
+              device: [1, 14]
+          - destination:
+              device: [1, 15]
+          - destination:
+              device: [1, 8]
+      - device: [1, 13]
+        patterns:
+          - destination:
+              device: [0, 9]
+          - destination:
+              device: [0, 10]
+          - destination:
+              device: [0, 11]
+          - destination:
+              device: [0, 12]
+      - device: [1, 14]
+        patterns:
+          - destination:
+              device: [0, 9]
+          - destination:
+              device: [0, 10]
+          - destination:
+              device: [0, 11]
+          - destination:
+              device: [0, 12]
+      - device: [1, 15]
+        patterns:
+          - destination:
+              device: [0, 9]
+          - destination:
+              device: [0, 10]
+          - destination:
+              device: [0, 11]
+          - destination:
+              device: [0, 12]
+      - device: [1, 8]
+        patterns:
+          - destination:
+              device: [0, 9]
+          - destination:
+              device: [0, 10]
+          - destination:
+              device: [0, 11]
+          - destination:
+              device: [0, 12]
+
+  # - name: InterMeshCrossTrafficIdeal
+  #   sync: true
+  #   fabric_setup:
+  #     topology: Mesh
+  #   parametrization_params:
+  #     ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+  #     num_links: [1, 2, 3, 4]
+  #     size: [1024, 2048, 4096]
+  #   defaults:
+  #     ftype: unicast
+  #     num_packets: 500000
+  #   senders:
+  #     - device: [0, 11]
+  #       patterns:
+  #         - destination:
+  #             device: [1, 14]
+  #     - device: [1, 12]
+  #       patterns:
+  #         - destination:
+  #             device: [0, 9]
+
+  # - name: InterMeshCrossTrafficReal
+  #   sync: true
+  #   fabric_setup:
+  #     topology: Mesh
+  #   parametrization_params:
+  #     ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+  #     num_links: [1, 2, 3, 4]
+  #     size: [1024, 2048, 4096]
+  #   defaults:
+  #     ftype: unicast
+  #     num_packets: 500000
+  #   senders:
+  #     - device: [0, 12]
+  #       patterns:
+  #         - destination:
+  #             device: [1, 15]
+  #     - device: [1, 13]
+  #       patterns:
+  #         - destination:
+  #             device: [0, 10]
+
+  # - name: InterMeshCrossTrafficMeshCoord
+  #   sync: true
+  #   fabric_setup:
+  #     topology: Mesh
+  #   parametrization_params:
+  #     ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+  #     num_links: [1, 2, 3, 4]
+  #     size: [1024, 2048, 4096]
+  #   defaults:
+  #     ftype: unicast
+  #     num_packets: 500000
+  #   senders:
+  #     - device: [0, [3, 1]]
+  #       patterns:
+  #         - destination:
+  #             device: [1, [7, 0]]
+  #     - device: [1, [4, 0]]
+  #       patterns:
+  #         - destination:
+  #             device: [0, [1, 1]]
+
+  # - name: InterMeshCrossTrafficCyclic
+  #   fabric_setup:
+  #     topology: Mesh
+  #   defaults:
+  #     ftype: unicast
+  #     ntype: unicast_write
+  #     size: 1024
+  #     num_packets: 10000
+  #   senders:
+  #     - device: [0, 14]
+  #       patterns:
+  #         - destination:
+  #             device: [1, 2]
+  #     - device: [1, 1]
+  #       patterns:
+  #         - destination:
+  #             device: [0, 13]
+  #     - device: [1, 3]
+  #       patterns:
+  #         - destination:
+  #             device: [1, 0]
+  #     - device: [0, 12]
+  #       patterns:
+  #         - destination:
+  #             device: [0, 15]
+
+  # - name: "FlowControlMultiMesh"
+  #   sync: true
+  #   fabric_setup:
+  #     topology: Mesh
+
+  #   defaults:
+  #     ftype: unicast
+  #     ntype: unicast_write
+  #     size: 1024
+  #     num_packets: 10000
+
+  #   patterns:
+  #     - type: all_to_all
+
+  # - name: "FlowControlMultiMesh"
+  #   sync: true
+  #   benchmark_mode: true
+  #   fabric_setup:
+  #     topology: Mesh
+
+  #   defaults:
+  #     ftype: unicast
+  #     ntype: unicast_write
+  #     size: 4096
+  #     num_packets: 50000
+
+  #   patterns:
+  #     - type: all_to_all
+
+  # - name: InterMeshCrossTrafficCyclic
+  #   fabric_setup:
+  #     topology: Mesh
+  #   defaults:
+  #     ftype: unicast
+  #     ntype: unicast_write
+  #     size: 1024
+  #     num_packets: 10000
+  #   senders:
+  #     - device: [0, 14]
+  #       patterns:
+  #         - destination:
+  #             device: [1, 2]
+  #     - device: [1, 1]
+  #       patterns:
+  #         - destination:
+  #             device: [0, 13]
+  #     - device: [1, 3]
+  #       patterns:
+  #         - destination:
+  #             device: [1, 0]
+  #     - device: [0, 12]
+  #       patterns:
+  #         - destination:
+  #             device: [0, 15]
