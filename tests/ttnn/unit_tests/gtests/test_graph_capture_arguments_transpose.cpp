@@ -67,7 +67,7 @@ TEST_F(TestGraphCaptureArgumentsTranspose, Transpose) {
         "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,"
         "nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)");
     EXPECT_EQ(operation1.arguments[3], "[ unsupported type , std::reference_wrapper<std::nullopt_t const>]");
-    EXPECT_EQ(operation1.arguments[4], "0");
+    EXPECT_EQ(operation1.arguments[4], "nullopt");
 
     const auto& operation2 = operations[2];
     EXPECT_EQ(operation2.operation_name, "PermuteDeviceOperation");
