@@ -188,7 +188,10 @@ sfpi_inline sfpi::vFloat _sfpu_exp_f32_accurate_(sfpi::vFloat val) {
         result = sfpi::vConst0;
     }
     v_elseif(exp_bits == 255) {
-        // infinity (exp = 255 && man != 0) already taken care of by previous conditionals
+        // infinity (exp = 255 && man != 0) already taken care of by previous conditionals:
+        // if input is infinity or -infinity, then either z >= OVERFLOW_THRESHOLD or z <= UNDERFLOW_THRESHOLD
+        // would have been true and their cases have already been handled.
+        // Thus, we know that if exp == 0 here, then man != 0 as well.
         result = std::numeric_limits<float>::quiet_NaN();
     }
     v_else {
@@ -207,10 +210,13 @@ sfpi_inline sfpi::vFloat _sfpu_exp_f32_accurate_(sfpi::vFloat val) {
         // We want to do:
         // 1) r_hi = val - k * LN2_HI
         // 2) r = r_hi - k * LN2_LO
-        // Since SFPMAD can only do VD = VA * VB + VC we transform the expressions to:
+        // Since SFPMAD on Wormhole can only do VD = VA * VB + VC,
+        // this expression would require additional instructions,
+        // To avoid this, we transform the expressions to:
         // 1) r_hi = val + k * (-LN2_HI)
         // 2) r = r_hi + k * (-LN2_LO)
-        // Where LN2_HI and LN2_LO are negated
+        // Where LN2_HI and LN2_LO are negated.
+        // This way, compiler can more easily optimize this expression to a single SFPMAD instruction.
         constexpr float LN2_HI = -0.6931152343750000f;  // High bits of ln(2)
         constexpr float LN2_LO = -3.19461832987e-05f;   // Low bits of ln(2)
 

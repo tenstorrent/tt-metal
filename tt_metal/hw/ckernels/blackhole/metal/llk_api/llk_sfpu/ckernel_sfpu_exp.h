@@ -178,7 +178,6 @@ sfpi_inline sfpi::vFloat _sfpu_exp_f32_accurate_(sfpi::vFloat val) {
 
     // Check for special cases
     sfpi::vInt exp_bits = sfpi::exexp(z);
-    sfpi::vInt man_bits = sfpi::exman9(z);
 
     v_if(z >= OVERFLOW_THRESHOLD) {
         // Overflow
@@ -189,7 +188,10 @@ sfpi_inline sfpi::vFloat _sfpu_exp_f32_accurate_(sfpi::vFloat val) {
         result = sfpi::vConst0;
     }
     v_elseif(exp_bits == 255) {
-        // infinity (exp = 255 && man != 0) already taken care of by previous conditionals
+        // infinity (exp = 255 && man != 0) already taken care of by previous conditionals:
+        // if input is infinity or -infinity, then either z >= OVERFLOW_THRESHOLD or z <= UNDERFLOW_THRESHOLD
+        // would have been true and their cases have already been handled.
+        // Thus, we know that if exp == 0 here, then man != 0 as well.
         result = std::numeric_limits<float>::quiet_NaN();
     }
     v_else {
@@ -208,10 +210,16 @@ sfpi_inline sfpi::vFloat _sfpu_exp_f32_accurate_(sfpi::vFloat val) {
         // We want to do:
         // 1) r_hi = val - k * LN2_HI
         // 2) r = r_hi - k * LN2_LO
-        // Since SFPMAD can only do VD = VA * VB + VC we transform the expressions to:
+        // On Wormhole, we can only do VD = VA * VB + VC, so we need to transform the expressions to
+        // ensure optimization to a single SFPMAD instruction.
+        // On Blackhole, SFFPMAD has SFPMAD_MOD1_NEGATE_VA and SFPMAD_MOD1_NEGATE_VC for this purpose.
+        // However, negating constants maintains consistency with Wormhole, and ensures higher chance
+        // of optimization to a single SFPMAD instruction.
+        // The transformation is as follows:
         // 1) r_hi = val + k * (-LN2_HI)
         // 2) r = r_hi + k * (-LN2_LO)
-        // Where LN2_HI and LN2_LO are negated
+        // Where LN2_HI and LN2_LO are negated.
+        // This way, compiler can more easily optimize this expression to a single SFPMAD instruction.
         constexpr float LN2_HI = -0.6931152343750000f;  // High bits of ln(2)
         constexpr float LN2_LO = -3.19461832987e-05f;   // Low bits of ln(2)
 
