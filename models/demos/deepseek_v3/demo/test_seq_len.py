@@ -40,6 +40,8 @@ def create_prompt_of_length(target_token_length: int, tokenizer) -> str:
     # Calculate how many repetitions we need
     # Subtract template overhead from target
     content_tokens_needed = target_token_length - template_overhead
+    if tokens_per_repetition <= 0:
+        tokens_per_repetition = 1
     num_repetitions = max(1, content_tokens_needed // tokens_per_repetition)
 
     # Create the prompt
@@ -124,6 +126,7 @@ def test_long_context_input_sequences(target_prompt_tokens):
     print(f"Prefill time: {prefill_time_ms:.2f}ms")
 
     # Verify prompt length is reasonable (within 20% of target)
+    assert target_prompt_tokens > 0, "Target prompt tokens must be greater than 0"
     assert (
         abs(actual_prompt_length - target_prompt_tokens) / target_prompt_tokens < 0.2
     ), f"Prompt length {actual_prompt_length} is not close to target {target_prompt_tokens}"
