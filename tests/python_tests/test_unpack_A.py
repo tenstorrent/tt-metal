@@ -167,50 +167,50 @@ def filter_params_with_constraints(all_params):
             face_r_dim,
         ) = params
 
-        # # remove me - if broadcast_type is not ROW, skip the test
-        # if broadcast_type != BroadcastType.Row and broadcast_type != BroadcastType.Scalar and broadcast_type != BroadcastType.None_:
-        #     continue
-
+        # Adding new unary_broadcast tests for Fp32, Int32, UInt32, UInt16 input/output formats, with ROW COL and SCALAR broadcast types
         if (
-            formats.input_format != DataFormat.UInt16
-            or broadcast_type != BroadcastType.Column
+            not disable_src_zero
+            and not acc_to_dest
+            and stochastic_rnd == StochasticRounding.No
+            and reuse_dest == EltwiseBinaryReuseDestType.NONE
+            and transpose_of_faces == Transpose.No
+            and within_face_16x16_transpose == Transpose.No
+            and num_faces == 4
+            and face_r_dim == 16
+        ):
+            # Should skip if input format is not equal to output format
+            if formats.input_format == formats.output_format:
+                # Should skip if input format is not in
+                if formats.input_format in (
+                    DataFormat.Float32,
+                    DataFormat.Int32,
+                    DataFormat.UInt32,
+                    DataFormat.UInt16,
+                ):
+                    # Should skip if dest_acc and 32 bit input format
+                    if (
+                        dest_acc == DestAccumulation.Yes
+                        or not formats.input_format.is_32_bit()
+                    ):
+                        valid_params.append(params)
+                        continue
+
+        # Other tests for the new unary_broadcast datatypes have not been implemented yet
+        if formats.input_format in (
+            DataFormat.Int32,
+            DataFormat.UInt32,
+            DataFormat.UInt16,
+        ) or formats.output_format in (
+            DataFormat.Int32,
+            DataFormat.UInt32,
+            DataFormat.UInt16,
         ):
             continue
 
-        # remove me - if formats.input_format is not Float32, Int32, UInt32, UInt16, skip the test, if output format is not Float32, Int32, UInt32, UInt16, skip the test
-        # if formats.input_format not in (
-        #     DataFormat.Float32,
-        #     DataFormat.Int32,
-        #     DataFormat.UInt32,
-        #     DataFormat.UInt16,
-        # ) or formats.output_format not in (
-        #     DataFormat.Float32,
-        #     DataFormat.Int32,
-        #     DataFormat.UInt32,
-        #     DataFormat.UInt16,
-        # ):
-        #     if dest_acc == DestAccumulation.Yes:
-        #         continue
-
-        # remove me - should skip if disable_src_zero is true, if acc_to_dest is true, if stochastic_rnd is not StochasticRounding.No, if reuse_dest is not EltwiseBinaryReuseDestType.NONE, if transpose_of_faces is not Transpose.No, if within_face_16x16_transpose is not Transpose.No, if num_faces is not 2, if face_r_dim is less than 16
-        if (
-            disable_src_zero
-            or acc_to_dest
-            or stochastic_rnd != StochasticRounding.No
-            or reuse_dest != EltwiseBinaryReuseDestType.NONE
-            or transpose_of_faces != Transpose.No
-            or within_face_16x16_transpose != Transpose.No
-            or num_faces != 4
-            or face_r_dim < 16
+        # Should skip if dest_acc != acc_to_dest
+        if (dest_acc == DestAccumulation.Yes and acc_to_dest == False) or (
+            dest_acc == DestAccumulation.No and acc_to_dest == True
         ):
-            continue
-
-        # remove me - should skip if input format is not equal to output format
-        if formats.input_format != formats.output_format:
-            continue
-
-        # remove me - should skip if dest_acc is DestAccumulation.Yes and acc_to_dest is True
-        if dest_acc == DestAccumulation.No and formats.input_format.is_32_bit():
             continue
 
         # Fast checks first: simple integer/enum comparisons
