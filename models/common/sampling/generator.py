@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class _TraceKey:
     penalties_on: bool
+    log_probs_on: bool
 
 
 class SamplingGenerator:
@@ -63,8 +64,8 @@ class SamplingGenerator:
     def _new_trace_state(self):
         return {"id": None, "input": None, "output": None, "kwargs": {}}
 
-    def _trace_slot(self, penalties_on: bool):
-        key = _TraceKey(penalties_on=penalties_on)
+    def _trace_slot(self, penalties_on: bool, log_probs_on: bool):
+        key = _TraceKey(penalties_on=penalties_on, log_probs_on=log_probs_on)
         slot = self._trace_states.get(key)
         if slot is None:
             slot = self._new_trace_state()
@@ -73,13 +74,14 @@ class SamplingGenerator:
 
     def reset_trace(self):
         """
-        Drop any cached trace metadata for both penalties/no-penalties paths.
+        Drop any cached trace metadata for both penalties/no-penalties and log-probs/no-log-probs paths.
         """
         for key, slot in self._trace_states.items():
             if slot["id"] is not None:
                 logger.debug(
-                    "Resetting sampling trace (penalties=%s, trace_id=%s)",
+                    "Resetting sampling trace (penalties=%s, log_probs=%s, trace_id=%s)",
                     key.penalties_on,
+                    key.log_probs_on,
                     slot["id"],
                 )
         self._trace_states.clear()
@@ -119,6 +121,7 @@ class SamplingGenerator:
             and self._is_default_penalty(sampling_params.frequency_penalty, self._DEFAULT_PENALTIES["frequency"])
             and self._is_default_penalty(sampling_params.repetition_penalty, self._DEFAULT_PENALTIES["repetition"])
         )
+        self._log_probs_active = self.tt_sampling.log_probs_calculator.enable_log_probs
 
     def _validate_trace_inputs(self, slot, logits: ttnn.Tensor, tt_out_tok: Optional[ttnn.Tensor]):
         if slot["input"] is None or slot["output"] is None:
@@ -164,8 +167,9 @@ class SamplingGenerator:
         Capture a trace of the sampling pipeline for the given configuration.
         """
         penalties_on = self._penalties_active
+        log_probs_on = self._log_probs_active
 
-        key, slot = self._trace_slot(penalties_on)
+        key, slot = self._trace_slot(penalties_on, log_probs_on)
 
         logger.debug("Pre-compiling sampling path before trace capture (penalties=%s)", penalties_on)
         self._run_sampling(
@@ -222,6 +226,7 @@ class SamplingGenerator:
         """
 
         penalties_on = self._penalties_active
+        log_probs_on = self._log_probs_active
         use_internal_trace = enable_trace and self.enable_internal_trace
 
         if not use_internal_trace:
@@ -231,7 +236,7 @@ class SamplingGenerator:
                 tt_out_tok=tt_out_tok,
             )
         else:
-            key, slot = self._trace_slot(penalties_on)
+            key, slot = self._trace_slot(penalties_on, log_probs_on)
             if slot["id"] is None:
                 return self.capture_trace(
                     logits,
