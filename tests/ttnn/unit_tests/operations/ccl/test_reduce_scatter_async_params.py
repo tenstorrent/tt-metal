@@ -132,13 +132,11 @@ def run_reduce_scatter_async_test(
     barrier_semaphore_handle = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
 
     try:
-        # Generate golden input - full tensor replicated across all devices
+        # Generate golden input - each device gets same input (replicated)
         torch.manual_seed(0)
-        full_tensor_shape = list(input_shape)
-        full_tensor_shape[dim] = input_shape[dim] * num_devices
-        input_tensor_golden = torch.rand(full_tensor_shape).bfloat16()
+        input_tensor_golden = torch.rand(input_shape).bfloat16()
 
-        # Create input tensor - replicate full tensor to all devices
+        # Create input tensor - replicate to all devices with WIDTH_SHARDED config
         input_tensor_mesh = ttnn.from_torch(
             input_tensor_golden,
             device=mesh_device,
@@ -181,14 +179,16 @@ def run_reduce_scatter_async_test(
         tt_out_torch = ttnn.from_device(tt_out)
         tt_out_torch = ttnn.to_torch(tt_out_torch, mesh_composer=ConcatMeshToTensor(mesh_device, dim=dim))
 
-        # Expected output: sum reduction across all devices, then split by devices
-        # Each device gets a slice of the reduced result
+        # Expected output: reduce_scatter does sum reduction + scatter
+        # Input: each device has (1, 1, 32, 4096)
+        # After reduce: sum of all inputs = input * num_devices
+        # After scatter: split reduced result along dim=3
+        # Each device gets (1, 1, 32, 512) slice
+        # Concatenating all outputs gives the full reduced tensor
         expected_reduced = input_tensor_golden * num_devices  # sum reduction
-        expected_output_shape = list(input_shape)
-        expected_output_shape[dim] = input_shape[dim] * num_devices  # concatenated from all devices
 
         # Compare - after reduce_scatter, concatenating all device outputs should give full reduced tensor
-        eq, output = comp_pcc(tt_out_torch[:, :, :, : expected_reduced.shape[3]], expected_reduced, 0.9999)
+        eq, output = comp_pcc(tt_out_torch, expected_reduced, 0.9999)
         logger.info(f"PCC check: {output}")
         assert eq, f"FAILED: {output}"
 
