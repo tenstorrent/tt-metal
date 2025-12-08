@@ -203,7 +203,7 @@ inline void FabricStaticSizedChannelsAllocator::print(std::ostream& os) const {
             os << "    Receiver Channels:\n";
             for (size_t i = 0; i < num_used_receiver_channels_per_vc[vc]; ++i) {
                 os << "      Channel " << i << ":\n";
-                os << "      base_address: 0x" << std::hex << receiver_channels_base_address[vc][i] << std::dec << "\n";
+                os << "        base_address: 0x" << std::hex << receiver_channels_base_address[vc][i] << std::dec << "\n";
                 os << "        num_buffers: " << receiver_channels_num_buffers[vc][i] << "\n";
                 os << "        size_bytes: " << receiver_channels_size_bytes[vc][i] << " B\n";
                 if (remote_receiver_channels_num_buffers[vc][i] > 0) {
