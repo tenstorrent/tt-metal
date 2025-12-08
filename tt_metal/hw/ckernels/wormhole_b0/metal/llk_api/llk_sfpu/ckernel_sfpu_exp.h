@@ -10,7 +10,6 @@
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "ckernel_sfpu_conversions.h"
 #include "sfpi.h"
-#include "third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_polyval.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -179,19 +178,18 @@ sfpi_inline sfpi::vFloat _sfpu_exp_f32_accurate_(sfpi::vFloat val) {
 
     // Check for special cases
     sfpi::vInt exp_bits = sfpi::exexp(z);
-    sfpi::vInt man_bits = sfpi::exman9(z);
 
-    v_if(exp_bits == 255 && man_bits != 0) {
-        // NaN: exponent = 255 (all 1s) and mantissa != 0
-        result = std::numeric_limits<float>::quiet_NaN();
-    }
-    v_elseif(z >= OVERFLOW_THRESHOLD) {
+    v_if(z >= OVERFLOW_THRESHOLD) {
         // Overflow
         result = std::numeric_limits<float>::infinity();
     }
     v_elseif(z <= UNDERFLOW_THRESHOLD) {
         // Underflow
         result = sfpi::vConst0;
+    }
+    v_elseif(exp_bits == 255) {
+        // infinity (exp = 255 && man != 0) already taken care of by previous conditionals
+        result = std::numeric_limits<float>::quiet_NaN();
     }
     v_else {
         // Round z to nearest integer using round-to-nearest-even
@@ -272,10 +270,10 @@ sfpi_inline sfpi::vFloat _sfpu_exp_improved_<true>(sfpi::vFloat val) {
 template <
     bool APPROXIMATION_MODE,
     bool FAST_APPROX,
+    bool is_fp32_dest_acc_en,
     bool SCALE_EN = false,
     int ITERATIONS = 8,
-    bool SKIP_POSITIVE_CHECK = false,
-    bool is_fp32_dest_acc_en = false>
+    bool SKIP_POSITIVE_CHECK = false>
 void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
     if constexpr (APPROXIMATION_MODE) {
         _calculate_exponential_<APPROXIMATION_MODE, SCALE_EN, ITERATIONS, FAST_APPROX, SKIP_POSITIVE_CHECK>(
