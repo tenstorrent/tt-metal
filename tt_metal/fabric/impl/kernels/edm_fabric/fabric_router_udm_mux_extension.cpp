@@ -180,7 +180,7 @@ void wait_for_static_connection_to_ready(
         invalidate_l1_cache();
     }
 
-    worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE>();
+    worker_interface.template cache_producer_noc_addr<true>();
 }
 
 FORCE_INLINE void wait_for_mux_endpoint_ready(
@@ -273,7 +273,7 @@ void forward_data(
     }
 
     if (!is_persistent_channel) {
-        tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR>(
+        tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR, true>(
             worker_interface, channel_connection_established, my_channel_free_slots_stream_id.get());
     }
 }
