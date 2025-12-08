@@ -8,14 +8,12 @@ import pytest
 import ttnn
 import numpy as np
 from loguru import logger
-from models.common.utils import LogProbsCalculator
 from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
     get_lib_dtype,
 )
-from models.common.utility_functions import comp_pcc
 
 
 def check_determinism(input_values_tensor, input_indices_tensor, k, p, seed, sub_core_grids, device):
