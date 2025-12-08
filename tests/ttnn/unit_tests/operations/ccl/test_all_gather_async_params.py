@@ -13,22 +13,25 @@ from models.tt_transformers.tt.generator import create_submeshes
 from tracy import signpost
 
 
-# @pytest.mark.parametrize("chunks_per_sync", [5, 10, 20, 40, 80, 1000])
-@pytest.mark.parametrize("num_workers_per_link", [1, 2, 3, 4])
-@pytest.mark.parametrize("num_buffers_per_channel", [1, 2, 3, 4])
-@pytest.mark.parametrize("chunks_per_sync", [5, 10, 20])
+# @pytest.mark.parametrize("num_workers_per_link", [1, 2, 3, 4])
+# @pytest.mark.parametrize("num_buffers_per_channel", [1, 2, 3, 4])
+# @pytest.mark.parametrize("chunks_per_sync", [5, 10, 20])
+@pytest.mark.parametrize("num_iters", [5])
+@pytest.mark.parametrize("num_workers_per_link", [1])
+@pytest.mark.parametrize("num_buffers_per_channel", [1, 2, 4, 8, 16])
+@pytest.mark.parametrize("chunks_per_sync", [5, 10, 20, 40, 80, 1000])
 @pytest.mark.parametrize(
     "shard_grid, input_shard_shape",
     [
         # First norm config
         (
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
-            (32, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+            (32, 128),
         ),
         # Second norm config
         (
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-            (32, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+            (32, 32),
         ),
     ],
     ids=["first_norm", "second_norm"],
@@ -54,6 +57,7 @@ def test_all_gather_async_params(
     chunks_per_sync,
     shard_grid,
     input_shard_shape,
+    num_iters,
 ):
     """Test all_gather_async with different parameter combinations"""
 
@@ -71,6 +75,7 @@ def test_all_gather_async_params(
         chunks_per_sync,
         shard_grid,
         input_shard_shape,
+        num_iters,
     )
 
 
@@ -81,6 +86,7 @@ def run_all_gather_async_test(
     chunks_per_sync,
     shard_grid,
     input_shard_shape,
+    num_iters,
 ):
     """Test all_gather_async with parameterized worker/buffer/sync configs"""
 
@@ -155,29 +161,28 @@ def run_all_gather_async_test(
         )
 
         # Determine grid type for signpost
-        grid_type = "first" if input_shard_shape == (32, 32) else "second"
+        grid_type = "first" if input_shard_shape == (32, 128) else "second"
         signpost(f"========")
         signpost(f"{grid_type}_{num_workers_per_link}_{num_buffers_per_channel}_{chunks_per_sync}")
 
-        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
-
         # Run all_gather_async - requires list of 2 semaphores
-        tt_out = ttnn.experimental.all_gather_async(
-            input_tensor_mesh,
-            persistent_output_buffer=None,
-            dim=dim,
-            multi_device_global_semaphore=ccl_semaphore_handles,
-            num_links=num_links,
-            topology=ttnn.Topology.Ring,
-            memory_config=output_mem_cfg,
-            barrier_semaphore=barrier_semaphore_handle,
-            chunks_per_sync=chunks_per_sync,
-            num_workers_per_link=num_workers_per_link,
-            num_buffers_per_channel=num_buffers_per_channel,
-            subdevice_id=worker_sub_device_id,
-        )
-
-        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+        for _ in range(num_iters):
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+            tt_out = ttnn.experimental.all_gather_async(
+                input_tensor_mesh,
+                persistent_output_buffer=None,
+                dim=dim,
+                multi_device_global_semaphore=ccl_semaphore_handles,
+                num_links=num_links,
+                topology=ttnn.Topology.Ring,
+                memory_config=output_mem_cfg,
+                barrier_semaphore=barrier_semaphore_handle,
+                chunks_per_sync=chunks_per_sync,
+                num_workers_per_link=num_workers_per_link,
+                num_buffers_per_channel=num_buffers_per_channel,
+                subdevice_id=worker_sub_device_id,
+            )
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
 
         # Verify output
         tt_out_torch = ttnn.from_device(tt_out)
