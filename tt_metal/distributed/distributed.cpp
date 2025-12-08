@@ -29,7 +29,7 @@ void EventSynchronize(const MeshEvent& event) {
     }
     for (const auto& coord : event.device_range()) {
         auto* physical_device = event.device()->get_device(coord);
-        while (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id()) {
+        while (physical_device->impl()->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id()) {
             ;
         }
     }
@@ -42,7 +42,8 @@ bool EventQuery(const MeshEvent& event) {
     bool event_completed = true;
     for (const auto& coord : event.device_range()) {
         auto* physical_device = event.device()->get_device(coord);
-        event_completed &= physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) >= event.id();
+        event_completed &=
+            physical_device->impl()->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) >= event.id();
     }
     return event_completed;
 }

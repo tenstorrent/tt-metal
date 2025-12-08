@@ -152,7 +152,7 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
     // ZoneName((tracyPrefix + build_options.name).c_str(), build_options.name.length() + tracyPrefix.length());
     try {
         jit_build_genfiles_descriptors(
-            BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, build_options);
+            BuildEnvManager::get_instance().get_device_build_env(device->impl()->build_id()).build_env, build_options);
         kernel->generate_binaries(device, build_options);
     } catch (std::runtime_error& ex) {
         TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
@@ -890,7 +890,7 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
 
     // TODO: Circular buffer allocation and validation could be better optimized by determining usage per sub-device
     std::optional<DeviceAddr> lowest_address =
-        device->lowest_occupied_compute_l1_address(this->determine_sub_device_ids(device));
+        device->impl()->lowest_occupied_compute_l1_address(this->determine_sub_device_ids(device));
     uint32_t max_l1_size = device->l1_size_per_core();
 
     for (const CircularBufferAllocator& cb_allocator : this->cb_allocators_) {
@@ -1079,8 +1079,8 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     // This is generic for workers and eth cores
     for (const auto& kernels : this->kernels_) {
         for (const auto& [kernel_id, kernel] : kernels) {
-            const auto& binaries =
-                kernel->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
+            const auto& binaries = kernel->binaries(
+                BuildEnvManager::get_instance().get_device_build_env(device->impl()->build_id()).build_key());
             std::vector<uint32_t> dst_base_addrs;
             std::vector<uint32_t> page_offsets;
             std::vector<uint32_t> lengths;
@@ -1296,7 +1296,7 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
 void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
 
-    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key();
+    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->impl()->build_id()).build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
         // When coordinate virtualization is not enabled, explicitly encode the device
         // id into the device hash, to always assert on programs being reused across devices.
@@ -1338,7 +1338,7 @@ void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetche
 void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
 
-    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key();
+    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->impl()->build_id()).build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
         // When coordinate virtualization is not enabled, explicitly encode the device
         // id into the device hash, to always assert on programs being reused across devices.
@@ -1377,7 +1377,7 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
 
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     // ZoneScoped;
-    const auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->build_id());
+    const auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->impl()->build_id());
 
     if (compiled_.contains(build_env.build_key())) {
         Inspector::program_compile_already_exists(this, device, build_env.build_key());
@@ -1392,7 +1392,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     Inspector::program_compile_started(this, device, build_env.build_key());
 
     TT_FATAL(
-        device->is_initialized(),
+        device->impl()->is_initialized(),
         "Device needs to be initialized before program {} compilation! Generating headers for banking information is "
         "dependent on information that is set during device initialization.",
         this->get_id());

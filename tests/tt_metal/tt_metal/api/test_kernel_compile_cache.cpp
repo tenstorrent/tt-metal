@@ -52,7 +52,7 @@ TEST_F(MeshDeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
         const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
         const int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(config.processor);
         const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-            device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
+            device->impl()->build_id(), tensix_core_type, dm_class_idx, riscv_id);
 
         const auto& kernels = program.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
         const std::string full_kernel_name = kernels.at(kernel_handle)->get_full_kernel_name();
@@ -108,9 +108,9 @@ TEST_F(MeshDeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentPr
         const int riscv_0_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(config_riscv_0.processor);
         const int riscv_1_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(config_riscv_1.processor);
         const JitBuildState& build_state_riscv_0 = BuildEnvManager::get_instance().get_kernel_build_state(
-            device->build_id(), tensix_core_type, dm_class_idx, riscv_0_id);
+            device->impl()->build_id(), tensix_core_type, dm_class_idx, riscv_0_id);
         const JitBuildState& build_state_riscv_1 = BuildEnvManager::get_instance().get_kernel_build_state(
-            device->build_id(), tensix_core_type, dm_class_idx, riscv_1_id);
+            device->impl()->build_id(), tensix_core_type, dm_class_idx, riscv_1_id);
 
         const auto& kernels = program.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
         const std::string full_kernel_name_riscv_0 = kernels.at(kernel_handle_riscv_0)->get_full_kernel_name();

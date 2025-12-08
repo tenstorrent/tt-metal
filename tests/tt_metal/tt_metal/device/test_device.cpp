@@ -402,7 +402,7 @@ TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
-    auto logical_grid_size = device->logical_grid_size();
+    auto logical_grid_size = device->impl()->logical_grid_size();
     for (int r = 0; r < logical_grid_size.y; r++) {
         for (int c = 0; c < logical_grid_size.x; c++) {
             CoreCoord logical_coord(c, r);

@@ -103,7 +103,7 @@ bool eth_direct_sender_receiver_kernels(
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         sender_device->id(),
-        sender_device->ethernet_core_from_logical_core(eth_sender_core),
+        sender_device->impl()->ethernet_core_from_logical_core(eth_sender_core),
         inputs,
         src_eth_l1_byte_address);
 
@@ -111,7 +111,7 @@ bool eth_direct_sender_receiver_kernels(
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         receiver_device->id(),
-        receiver_device->ethernet_core_from_logical_core(eth_receiver_core),
+        receiver_device->impl()->ethernet_core_from_logical_core(eth_receiver_core),
         all_zeros,
         dst_eth_l1_byte_address);
 
@@ -192,7 +192,7 @@ bool eth_direct_sender_receiver_kernels(
 
     auto readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         receiver_device->id(),
-        receiver_device->ethernet_core_from_logical_core(eth_receiver_core),
+        receiver_device->impl()->ethernet_core_from_logical_core(eth_receiver_core),
         dst_eth_l1_byte_address,
         byte_size);
     pass &= (readback_vec == inputs);
@@ -285,11 +285,12 @@ bool send_over_eth(
     uint32_t active_eth_index = tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
         tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
     auto sender_firmware_path = tt_metal::BuildEnvManager::get_instance()
-                                    .get_firmware_build_state(sender_device->build_id(), active_eth_index, 0, 0)
+                                    .get_firmware_build_state(sender_device->impl()->build_id(), active_eth_index, 0, 0)
                                     .get_target_out_path("");
-    auto receiver_firmware_path = tt_metal::BuildEnvManager::get_instance()
-                                      .get_firmware_build_state(receiver_device->build_id(), active_eth_index, 0, 0)
-                                      .get_target_out_path("");
+    auto receiver_firmware_path =
+        tt_metal::BuildEnvManager::get_instance()
+            .get_firmware_build_state(receiver_device->impl()->build_id(), active_eth_index, 0, 0)
+            .get_target_out_path("");
     const ll_api::memory& binary_mem_send = llrt::get_risc_binary(sender_firmware_path);
     const ll_api::memory& binary_mem_receive = llrt::get_risc_binary(receiver_firmware_path);
 
@@ -520,7 +521,7 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsDirectSendChip0ToChip1) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), sender_core)) {
             continue;
         }
-        auto [device_id, receiver_core] = device_0->get_connected_ethernet_core(sender_core);
+        auto [device_id, receiver_core] = device_0->impl()->get_connected_ethernet_core(sender_core);
         if (device_1->id() != device_id) {
             continue;
         }
@@ -579,7 +580,7 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsDirectSendChip1ToChip0) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_1->id(), sender_core)) {
             continue;
         }
-        auto [device_id, receiver_core] = device_1->get_connected_ethernet_core(sender_core);
+        auto [device_id, receiver_core] = device_1->impl()->get_connected_ethernet_core(sender_core);
         if (device_0->id() != device_id) {
             continue;
         }
@@ -640,7 +641,7 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsDirectSendAllConnectedChips) {
                         sender_device->id(), sender_core)) {
                     continue;
                 }
-                auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);
+                auto [device_id, receiver_core] = sender_device->impl()->get_connected_ethernet_core(sender_core);
                 if (receiver_device->id() != device_id) {
                     continue;
                 }
@@ -704,7 +705,7 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), sender_core)) {
             continue;
         }
-        CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
+        CoreCoord receiver_core = std::get<1>(device_0->impl()->get_connected_ethernet_core(sender_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
             static_cast<MeshDispatchFixture*>(this),
             mesh_device_0,
@@ -728,7 +729,7 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), sender_core)) {
             continue;
         }
-        CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
+        CoreCoord receiver_core = std::get<1>(device_0->impl()->get_connected_ethernet_core(sender_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
             static_cast<MeshDispatchFixture*>(this),
             mesh_device_0,
@@ -752,7 +753,7 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), sender_core)) {
             continue;
         }
-        CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
+        CoreCoord receiver_core = std::get<1>(device_0->impl()->get_connected_ethernet_core(sender_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
             static_cast<MeshDispatchFixture*>(this),
             mesh_device_0,
@@ -776,7 +777,7 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), sender_core)) {
             continue;
         }
-        CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
+        CoreCoord receiver_core = std::get<1>(device_0->impl()->get_connected_ethernet_core(sender_core));
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
             static_cast<MeshDispatchFixture*>(this),
             mesh_device_0,
@@ -813,7 +814,7 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRepeatedDirectSends) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), sender_core)) {
             continue;
         }
-        CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
+        CoreCoord receiver_core = std::get<1>(device_0->impl()->get_connected_ethernet_core(sender_core));
         for (int i = 0; i < 10; i++) {
             ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
                 static_cast<MeshDispatchFixture*>(this),
@@ -852,14 +853,14 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), sender_core)) {
             continue;
         }
-        const auto& receiver_core = device_0->get_connected_ethernet_core(sender_core);
+        const auto& receiver_core = device_0->impl()->get_connected_ethernet_core(sender_core);
         connectivity.insert({{0, sender_core}, receiver_core});
     }
     for (const auto& sender_core : device_1->get_active_ethernet_cores(true)) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_1->id(), sender_core)) {
             continue;
         }
-        const auto& receiver_core = device_1->get_connected_ethernet_core(sender_core);
+        const auto& receiver_core = device_1->impl()->get_connected_ethernet_core(sender_core);
         connectivity.insert({{1, sender_core}, receiver_core});
     }
     for (int i = 0; i < 1000; i++) {
@@ -917,14 +918,14 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRandomEthPacketSizeDirectSendTests)
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), sender_core)) {
             continue;
         }
-        const auto& receiver_core = device_0->get_connected_ethernet_core(sender_core);
+        const auto& receiver_core = device_0->impl()->get_connected_ethernet_core(sender_core);
         connectivity.insert({{0, sender_core}, receiver_core});
     }
     for (const auto& sender_core : device_1->get_active_ethernet_cores(true)) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_1->id(), sender_core)) {
             continue;
         }
-        const auto& receiver_core = device_1->get_connected_ethernet_core(sender_core);
+        const auto& receiver_core = device_1->impl()->get_connected_ethernet_core(sender_core);
         connectivity.insert({{1, sender_core}, receiver_core});
     }
     std::vector<uint32_t> num_bytes_per_send_test_vals = {
@@ -991,7 +992,7 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConnect
                         sender_device->id(), sender_core)) {
                     continue;
                 }
-                auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);
+                auto [device_id, receiver_core] = sender_device->impl()->get_connected_ethernet_core(sender_core);
                 if (receiver_device->id() != device_id) {
                     continue;
                 }

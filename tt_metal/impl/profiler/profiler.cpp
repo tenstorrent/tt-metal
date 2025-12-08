@@ -291,7 +291,7 @@ std::set<experimental::ProgramAnalysisData> translateProgramsPerfResults(
 bool doAllDispatchCoresComeAfterNonDispatchCores(const IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
     const auto& dispatch_core_config = get_dispatch_core_config();
     const std::vector<CoreCoord> logical_dispatch_cores =
-        get_logical_dispatch_cores(device->id(), device->num_hw_cqs(), dispatch_core_config);
+        get_logical_dispatch_cores(device->id(), device->impl()->num_hw_cqs(), dispatch_core_config);
 
     std::vector<CoreCoord> virtual_dispatch_cores;
     for (const CoreCoord& core : logical_dispatch_cores) {
@@ -1052,7 +1052,7 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
     const DeviceAddr profiler_addr = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::PROFILER);
     uint32_t profile_buffer_idx = 0;
 
-    const CoreCoord dram_grid_size = device->dram_grid_size();
+    const CoreCoord dram_grid_size = device->impl()->dram_grid_size();
     for (uint32_t x = 0; x < dram_grid_size.x; ++x) {
         for (uint32_t y = 0; y < dram_grid_size.y; ++y) {
             const CoreCoord dram_core = device->virtual_core_from_logical_core({x, y}, CoreType::DRAM);
@@ -1776,7 +1776,7 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs [[mayb
     device_arch(device->arch()),
     device_id(device->id()),
     device_core_frequency(tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(this->device_id)),
-    max_compute_cores(device->logical_grid_size().x * device->logical_grid_size().y) {
+    max_compute_cores(device->impl()->logical_grid_size().x * device->impl()->logical_grid_size().y) {
 #if defined(TRACY_ENABLE)
     ZoneScopedC(tracy::Color::Green);
     if (!getDeviceProfilerState()) {

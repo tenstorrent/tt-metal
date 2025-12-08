@@ -78,7 +78,7 @@ TEST(SOC, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
         std::unordered_set<int> harvested_rows = unit_tests::basic::soc_desc::get_harvested_rows(device_id);
         auto tensix_harvest_axis = tt::tt_metal::MetalContext::instance().hal().get_tensix_harvest_axis();
 
-        CoreCoord logical_grid_size = device->logical_grid_size();
+        CoreCoord logical_grid_size = device->impl()->logical_grid_size();
         for (int x = 0; x < logical_grid_size.x; x++) {
             for (int y = 0; y < logical_grid_size.y; y++) {
                 CoreCoord logical_core_coord(x, y);

@@ -197,7 +197,7 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
             event.id(),
             id_,
             mesh_device_->num_hw_cqs(),
-            device->sysmem_manager(),
+            device->impl()->sysmem_manager(),
             sub_device_ids,
             expected_num_workers_completed_,
             true, /* notify_host */
@@ -670,7 +670,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
             event.id(),
             id_,
             mesh_device_->num_hw_cqs(),
-            mesh_device_->get_device(coord)->sysmem_manager(),
+            mesh_device_->get_device(coord)->impl()->sysmem_manager(),
             sub_device_ids,
             expected_num_workers_completed_,
             notify_host);
@@ -723,7 +723,7 @@ void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
     TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
     for_each_local(mesh_device_, sync_event.device_range(), [&](const auto& coord) {
         event_dispatch::issue_wait_for_event_commands(
-            id_, sync_event.mesh_cq_id(), mesh_device_->get_device(coord)->sysmem_manager(), sync_event.id());
+            id_, sync_event.mesh_cq_id(), mesh_device_->get_device(coord)->impl()->sysmem_manager(), sync_event.id());
     });
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (auto& sub_device_entry : sub_device_cq_owner) {
@@ -804,7 +804,7 @@ void FDMeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor
                 mmio_device_id,
                 channel,
                 id_,
-                device->sysmem_manager(),
+                device->impl()->sysmem_manager(),
                 exit_condition_);
         }
     };
@@ -837,7 +837,7 @@ void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& re
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
         uint16_t channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
-        device->sysmem_manager().completion_queue_wait_front(id_, exit_condition_);
+        device->impl()->sysmem_manager().completion_queue_wait_front(id_, exit_condition_);
 
         event_dispatch::read_events_from_completion_queue(
             read_event_descriptor.single_device_descriptor,
@@ -845,7 +845,7 @@ void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& re
             device->id(),
             channel,
             id_,
-            device->sysmem_manager());
+            device->impl()->sysmem_manager());
     });
 }
 
@@ -863,7 +863,7 @@ void FDMeshCommandQueue::read_l1_data_from_completion_queue(MeshCoreDataReadDesc
         mmio_device_id,
         channel,
         id_,
-        device->sysmem_manager(),
+        device->impl()->sysmem_manager(),
         exit_condition_);
 }
 
@@ -873,7 +873,7 @@ void FDMeshCommandQueue::reset_worker_state(
     const vector_aligned<uint32_t>& go_signal_noc_data,
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) {
     for (auto* device : mesh_device_->get_devices()) {
-        TT_FATAL(!device->sysmem_manager().get_bypass_mode(), "Cannot reset worker state during trace capture");
+        TT_FATAL(!device->impl()->sysmem_manager().get_bypass_mode(), "Cannot reset worker state during trace capture");
     }
     cq_shared_state_->sub_device_cq_owner.clear();
     cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
@@ -881,17 +881,18 @@ void FDMeshCommandQueue::reset_worker_state(
     for (auto* device : mesh_device_->get_devices()) {
         program_dispatch::reset_worker_dispatch_state_on_device(
             mesh_device_,
-            device->sysmem_manager(),
+            device->impl()->sysmem_manager(),
             id_,
             this->virtual_program_dispatch_core(),
             expected_num_workers_completed_,
             reset_launch_msg_state);
-        program_dispatch::set_num_worker_sems_on_dispatch(mesh_device_, device->sysmem_manager(), id_, num_sub_devices);
+        program_dispatch::set_num_worker_sems_on_dispatch(
+            mesh_device_, device->impl()->sysmem_manager(), id_, num_sub_devices);
         program_dispatch::set_go_signal_noc_data_on_dispatch(
-            mesh_device_, go_signal_noc_data, device->sysmem_manager(), id_);
+            mesh_device_, go_signal_noc_data, device->impl()->sysmem_manager(), id_);
         if (reset_launch_msg_state) {
             program_dispatch::set_core_go_message_mapping_on_device(
-                device, core_go_message_mapping, device->sysmem_manager(), id_);
+                device, core_go_message_mapping, device->impl()->sysmem_manager(), id_);
         }
     }
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
@@ -920,7 +921,12 @@ void FDMeshCommandQueue::write_program_cmds_to_subgrid(
         auto device = mesh_device_->get_device(coord);
         this->update_launch_messages_for_device_profiler(program_cmd_seq, program_runtime_id, device);
         program_dispatch::write_program_command_sequence(
-            program_cmd_seq, device->sysmem_manager(), id_, dispatch_core_type, stall_first, stall_before_program);
+            program_cmd_seq,
+            device->impl()->sysmem_manager(),
+            id_,
+            dispatch_core_type,
+            stall_first,
+            stall_before_program);
         chip_ids_in_workload.insert(device->id());
     });
 }
@@ -938,7 +944,7 @@ void FDMeshCommandQueue::write_go_signal_to_unused_sub_grids(
                 id_,
                 mesh_device_,
                 sub_device_id,
-                device->sysmem_manager(),
+                device->impl()->sysmem_manager(),
                 expected_num_workers_completed,
                 this->virtual_program_dispatch_core(),
                 mcast_go_signals,
@@ -962,7 +968,7 @@ void FDMeshCommandQueue::capture_program_trace_on_subgrid(
         // the host_assigned_field in the launch_msg contains the physical device id (required by the performance
         // profiler). Hence the trace per device must be uniquely captured.
         for_each_local(mesh_device_, sub_grid, [&](const auto& coord) {
-            auto& sysmem_manager_for_trace = mesh_device_->get_device(coord)->sysmem_manager();
+            auto& sysmem_manager_for_trace = mesh_device_->get_device(coord)->impl()->sysmem_manager();
             uint32_t sysmem_manager_offset = sysmem_manager_for_trace.get_issue_queue_write_ptr(id_);
 
             auto device = mesh_device_->get_device(coord);
@@ -980,7 +986,7 @@ void FDMeshCommandQueue::capture_program_trace_on_subgrid(
         // Optimized Path (generic use-cases): Program dispatch commands across the entire sub-grid are identical.
         // Capture once.
         auto local_start_coord = get_local_start_coord(mesh_device_, sub_grid);
-        auto& sysmem_manager_for_trace = mesh_device_->get_device(local_start_coord)->sysmem_manager();
+        auto& sysmem_manager_for_trace = mesh_device_->get_device(local_start_coord)->impl()->sysmem_manager();
         uint32_t sysmem_manager_offset = sysmem_manager_for_trace.get_issue_queue_write_ptr(id_);
 
         program_dispatch::write_program_command_sequence(
@@ -1013,7 +1019,7 @@ void FDMeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
         if (!mesh_device_->is_local(unused_grid.start_coord())) {
             continue;
         }
-        auto& sysmem_manager_for_trace = mesh_device_->get_device(unused_grid.start_coord())->sysmem_manager();
+        auto& sysmem_manager_for_trace = mesh_device_->get_device(unused_grid.start_coord())->impl()->sysmem_manager();
         uint32_t sysmem_manager_offset = sysmem_manager_for_trace.get_issue_queue_write_ptr(id_);
         write_go_signal(
             id_,
@@ -1059,7 +1065,12 @@ void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blockin
 
     for (auto* device : mesh_device_->get_devices()) {
         trace_dispatch::issue_trace_commands(
-            mesh_device_, device->sysmem_manager(), dispatch_md, id_, expected_num_workers_completed_, dispatch_core_);
+            mesh_device_,
+            device->impl()->sysmem_manager(),
+            dispatch_md,
+            id_,
+            expected_num_workers_completed_,
+            dispatch_core_);
     }
 
     // Reset the prefetcher cache manager, since trace capture modifies the state on host for subsequent non-trace
@@ -1091,7 +1102,7 @@ void FDMeshCommandQueue::record_begin(const MeshTraceId& trace_id, const std::sh
     trace_id_ = trace_id;
     trace_ctx_ = ctx;
     for (auto* device : mesh_device_->get_devices()) {
-        device->sysmem_manager().set_bypass_mode(/*enable*/ true, /*clear*/ true);
+        device->impl()->sysmem_manager().set_bypass_mode(/*enable*/ true, /*clear*/ true);
     }
 
     swap(this->dummy_prefetcher_cache_manager_, this->prefetcher_cache_manager_);
@@ -1113,7 +1124,7 @@ void FDMeshCommandQueue::record_end() {
 
     ordered_mesh_trace_md_.clear();
     for (auto* device : mesh_device_->get_devices()) {
-        device->sysmem_manager().set_bypass_mode(/*enable*/ false, /*clear*/ true);
+        device->impl()->sysmem_manager().set_bypass_mode(/*enable*/ false, /*clear*/ true);
     }
 
     // Trace has modified the prefetcher cache manager so reset it first and then swap to restore the state as before
@@ -1124,7 +1135,7 @@ void FDMeshCommandQueue::record_end() {
 
 SystemMemoryManager& FDMeshCommandQueue::reference_sysmem_manager() {
     auto local_devices = mesh_device_->get_devices();
-    return local_devices.at(0)->sysmem_manager();
+    return local_devices.at(0)->impl()->sysmem_manager();
 }
 
 void FDMeshCommandQueue::update_launch_messages_for_device_profiler(
@@ -1156,7 +1167,7 @@ int FDMeshCommandQueue::get_prefetcher_cache_sizeB() const {
 void FDMeshCommandQueue::capture_expected_worker_count_reset_cmd(
     uint32_t previous_expected_workers, SubDeviceId sub_device) {
     for (auto* device : mesh_device_->get_devices()) {
-        auto& sysmem_manager = device->sysmem_manager();
+        auto& sysmem_manager = device->impl()->sysmem_manager();
         uint32_t sysmem_manager_offset = sysmem_manager.get_issue_queue_write_ptr(id_);
         program_dispatch::reset_expected_num_workers_completed_on_device(
             device, sub_device, previous_expected_workers, id());
@@ -1183,14 +1194,15 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
     if (in_use_) {
         size_t num_sub_devices = mesh_device_->num_sub_devices();
         for (auto* device : mesh_device_->get_devices()) {
-            TT_FATAL(!device->sysmem_manager().get_bypass_mode(), "Cannot reset worker state during trace capture");
+            TT_FATAL(
+                !device->impl()->sysmem_manager().get_bypass_mode(), "Cannot reset worker state during trace capture");
         }
         cq_shared_state_->sub_device_cq_owner.clear();
         cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
         for (auto* device : mesh_device_->get_devices()) {
             program_dispatch::reset_worker_dispatch_state_on_device(
                 mesh_device_,
-                device->sysmem_manager(),
+                device->impl()->sysmem_manager(),
                 id_,
                 this->virtual_program_dispatch_core(),
                 expected_num_workers_completed_,
@@ -1217,11 +1229,11 @@ void FDMeshCommandQueue::finish_and_reset_in_use() {
         uint32_t current_event = reference_sysmem_manager().get_current_event(id_);
         for (auto* device : mesh_device_->get_devices()) {
             TT_ASSERT(
-                device->sysmem_manager().get_last_completed_event(id_) == current_event,
+                device->impl()->sysmem_manager().get_last_completed_event(id_) == current_event,
                 "Current event must be equal to last completed event");
-            bool is_reference_cq = &device->sysmem_manager() == &reference_sysmem_manager();
+            bool is_reference_cq = &device->impl()->sysmem_manager() == &reference_sysmem_manager();
             // Ensure the next command will be recorded as event 0
-            device->sysmem_manager().set_current_and_last_completed_event(
+            device->impl()->sysmem_manager().set_current_and_last_completed_event(
                 id_, is_reference_cq ? UINT32_MAX : 0, UINT32_MAX);
         }
         finish_nolock({});

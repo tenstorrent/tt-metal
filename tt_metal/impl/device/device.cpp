@@ -108,12 +108,6 @@ std::unordered_set<CoreCoord> Device::get_inactive_ethernet_cores() const {
     return tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(this->id_);
 }
 
-bool Device::is_inactive_ethernet_core(CoreCoord logical_core) const {
-    auto inactive_ethernet_cores =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(this->id_);
-    return inactive_ethernet_cores.find(logical_core) != inactive_ethernet_cores.end();
-}
-
 uint32_t Device::num_virtual_eth_cores(SubDeviceId sub_device_id) {
     return this->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
 }

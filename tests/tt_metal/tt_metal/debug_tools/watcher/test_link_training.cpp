@@ -52,7 +52,7 @@ static void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distribut
         }
     }
 
-    virtual_core = device->ethernet_core_from_logical_core(logical_core);
+    virtual_core = device->impl()->ethernet_core_from_logical_core(logical_core);
     log_info(LogTest, "Running test on device {} core {}...", device->id(), virtual_core.str());
 
     CreateKernel(
@@ -97,7 +97,7 @@ TEST_F(MeshWatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
         }
         // Only force a retrain on odd-numbered eth cores
         if (eth_core.y % 2) {
-            CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);
+            CoreCoord virtual_core = device->impl()->ethernet_core_from_logical_core(eth_core);
             tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                 device->id(), virtual_core, reset_val, retrain_force_addr);
         }
@@ -110,7 +110,7 @@ TEST_F(MeshWatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device->id(), eth_core)) {
             continue;
         }
-        CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);
+        CoreCoord virtual_core = device->impl()->ethernet_core_from_logical_core(eth_core);
         expected_strings.push_back(fmt::format(
             "\tDevice {} Ethernet Core {} retraining events: {}",
             device->id(),

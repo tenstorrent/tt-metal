@@ -91,7 +91,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     }
     // Also run on ethernet cores if they're present
     bool has_eth_cores = !device->get_active_ethernet_cores(true).empty();
-    bool has_idle_eth_cores = !device->get_inactive_ethernet_cores().empty();
+    bool has_idle_eth_cores = !device->impl()->get_inactive_ethernet_cores().empty();
 
     // TODO: Enable this when FD-on-idle-eth is supported.
     if (!fixture->IsSlowDispatch()) {
@@ -117,7 +117,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     if (has_idle_eth_cores) {
         KernelHandle ierisc_kid0{}, ierisc_kid1{};
         std::set<CoreRange> eth_core_ranges;
-        for (const auto& core : device->get_inactive_ethernet_cores()) {
+        for (const auto& core : device->impl()->get_inactive_ethernet_cores()) {
             eth_core_ranges.insert(CoreRange(core, core));
         }
         ierisc_kid0 = CreateKernel(
@@ -136,7 +136,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
                     .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = DataMovementProcessor::RISCV_1});
         }
 
-        for (const auto& core : device->get_inactive_ethernet_cores()) {
+        for (const auto& core : device->impl()->get_inactive_ethernet_cores()) {
             SetRuntimeArgs(program_, ierisc_kid0, core, args);
             if (device->arch() == ARCH::BLACKHOLE) {
                 SetRuntimeArgs(program_, ierisc_kid1, core, args);
@@ -237,13 +237,13 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     }
     if (has_eth_cores) {
         for (const auto& core : device->get_active_ethernet_cores(true)) {
-            CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
+            CoreCoord virtual_core = device->impl()->ethernet_core_from_logical_core(core);
             check_core(core, virtual_core, true, true);
         }
     }
     if (has_idle_eth_cores) {
-        for (const auto& core : device->get_inactive_ethernet_cores()) {
-            CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
+        for (const auto& core : device->impl()->get_inactive_ethernet_cores()) {
+            CoreCoord virtual_core = device->impl()->ethernet_core_from_logical_core(core);
             check_core(core, virtual_core, true, false);
         }
     }

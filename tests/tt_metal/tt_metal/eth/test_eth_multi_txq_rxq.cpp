@@ -144,7 +144,7 @@ static void run_multi_txq_rxq_test(
     for (const auto& eth_core : active_eth_cores) {
         ChipId connected_device_id;
         CoreCoord connected_eth_core;
-        std::tie(connected_device_id, connected_eth_core) = device_0->get_connected_ethernet_core(eth_core);
+        std::tie(connected_device_id, connected_eth_core) = device_0->impl()->get_connected_ethernet_core(eth_core);
 
         if (connected_device_id == device_1->id()) {
             sender_core_0 = eth_core;

@@ -142,7 +142,7 @@ inline DeviceData::DeviceData(
     auto num_banks = device->allocator()->get_num_banks(BufferType::DRAM);
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
         auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(bank_id);
-        CoreCoord phys_core = device->logical_core_from_dram_channel(dram_channel);
+        CoreCoord phys_core = device->impl()->logical_core_from_dram_channel(dram_channel);
         int32_t bank_offset = device->allocator()->get_bank_offset(BufferType::DRAM, bank_id);
         this->all_data[phys_core][bank_id] = one_core_data_t();
         this->all_data[phys_core][bank_id].logical_core = phys_core;
@@ -191,7 +191,7 @@ inline void DeviceData::prepopulate_dram(IDevice* device, uint32_t size_words) {
     for (int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
         [[maybe_unused]] auto offset = device->allocator()->get_bank_offset(BufferType::DRAM, bank_id);
         auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(bank_id);
-        auto bank_core = device->logical_core_from_dram_channel(dram_channel);
+        auto bank_core = device->impl()->logical_core_from_dram_channel(dram_channel);
         one_core_data_t& data = this->all_data[bank_core][bank_id];
 
         // Generate random or coherent data per bank of specific size.
@@ -540,9 +540,10 @@ KernelHandle configure_kernel_variant(
     NOC my_noc_index,
     NOC upstream_noc_index,
     NOC downstream_noc_index) {
-    auto my_virtual_noc_coords = device->virtual_noc0_coordinate(my_noc_index, phys_my_core);
-    auto upstream_virtual_noc_coords = device->virtual_noc0_coordinate(upstream_noc_index, phys_upstream_core);
-    auto downstream_virtual_noc_coords = device->virtual_noc0_coordinate(downstream_noc_index, phys_downstream_core);
+    auto my_virtual_noc_coords = device->impl()->virtual_noc0_coordinate(my_noc_index, phys_my_core);
+    auto upstream_virtual_noc_coords = device->impl()->virtual_noc0_coordinate(upstream_noc_index, phys_upstream_core);
+    auto downstream_virtual_noc_coords =
+        device->impl()->virtual_noc0_coordinate(downstream_noc_index, phys_downstream_core);
 
     std::map<std::string, std::string> defines = {
         {"DISPATCH_KERNEL", "1"},
@@ -678,7 +679,7 @@ inline void generate_random_paged_payload(
 
         if (is_dram) {
             auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(bank_id);
-            bank_core = device->logical_core_from_dram_channel(dram_channel);
+            bank_core = device->impl()->logical_core_from_dram_channel(dram_channel);
         } else {
             bank_core = device->allocator()->get_logical_core_from_bank_id(bank_id);
         }

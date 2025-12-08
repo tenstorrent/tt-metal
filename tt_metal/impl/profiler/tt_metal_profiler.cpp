@@ -377,7 +377,7 @@ void syncDeviceDevice(ChipId device_id_sender, ChipId device_id_receiver) {
                 continue;
             }
             std::tie(device_id_receiver_curr, eth_receiver_core) =
-                device_sender->get_connected_ethernet_core(eth_sender_core);
+                device_sender->impl()->get_connected_ethernet_core(eth_sender_core);
             eth_sender_core_iter++;
         }
 
@@ -636,7 +636,7 @@ void ProfilerSync(ProfilerSyncState state) {
                     }
 
                     std::tie(receiver_device_id, receiver_eth_core) =
-                        sender_device->get_connected_ethernet_core(sender_eth_core);
+                        sender_device->impl()->get_connected_ethernet_core(sender_eth_core);
 
                     if (visited.find(receiver_device_id) != visited.end() && !visited[receiver_device_id]) {
                         visited[receiver_device_id] = true;
@@ -738,7 +738,7 @@ void InitDeviceProfiler(IDevice* device) {
 
 bool areAllCoresDispatchCores(IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
     const ChipId device_id = device->id();
-    const uint8_t device_num_hw_cqs = device->num_hw_cqs();
+    const uint8_t device_num_hw_cqs = device->impl()->num_hw_cqs();
     const auto& dispatch_core_config = get_dispatch_core_config();
     std::vector<CoreCoord> dispatch_cores;
     for (const CoreCoord& core : tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs, dispatch_core_config)) {
@@ -896,7 +896,7 @@ std::vector<CoreCoord> getVirtualCoresForProfiling(const IDevice* device, const 
     std::vector<CoreCoord> virtual_cores;
 
     const ChipId device_id = device->id();
-    const uint8_t device_num_hw_cqs = device->num_hw_cqs();
+    const uint8_t device_num_hw_cqs = device->impl()->num_hw_cqs();
     const auto& dispatch_core_config = get_dispatch_core_config();
 
     if (!onlyProfileDispatchCores(state)) {
@@ -932,7 +932,7 @@ void ReadDeviceProfilerResults(
         return;
     }
 
-    TT_ASSERT(device->is_initialized());
+    TT_ASSERT(device->impl()->is_initialized());
 
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
         tt::tt_metal::MetalContext::instance().profiler_state_manager();

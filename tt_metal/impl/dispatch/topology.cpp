@@ -740,7 +740,7 @@ void configure_dispatch_cores(IDevice* device) {
     CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
     const auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map();
     uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-    uint32_t cq_size = device->sysmem_manager().get_cq_size();
+    uint32_t cq_size = device->impl()->sysmem_manager().get_cq_size();
     std::vector<uint32_t> zero = {0x0};
 
     // Need to set up for all devices serviced by an mmio chip
@@ -749,7 +749,7 @@ void configure_dispatch_cores(IDevice* device) {
              tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(device->id())) {
             uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
                 serviced_device_id);
-            for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); cq_id++) {
+            for (uint8_t cq_id = 0; cq_id < device->impl()->num_hw_cqs(); cq_id++) {
                 tt_cxy_pair completion_q_writer_location =
                     MetalContext::instance().get_dispatch_core_manager().completion_queue_writer_core(
                         serviced_device_id, channel, cq_id);
@@ -763,7 +763,7 @@ void configure_dispatch_cores(IDevice* device) {
                 uint32_t completion_q1_last_event_ptr = my_dispatch_constants.get_device_command_queue_addr(
                     CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
                 // Initialize completion queue write pointer and read pointer copy
-                uint32_t issue_queue_size = device->sysmem_manager().get_issue_queue_size(cq_id);
+                uint32_t issue_queue_size = device->impl()->sysmem_manager().get_issue_queue_size(cq_id);
                 uint32_t completion_queue_start_addr =
                     cq_start + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
                 uint32_t completion_queue_start_addr_16B = completion_queue_start_addr >> 4;

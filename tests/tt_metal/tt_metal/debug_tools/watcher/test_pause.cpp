@@ -81,7 +81,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     // Also run on ethernet cores if they're present
     bool has_eth_cores = !device->get_active_ethernet_cores(true).empty();
     //bool has_eth_cores = false;
-    bool has_ieth_cores = !device->get_inactive_ethernet_cores().empty();
+    bool has_ieth_cores = !device->impl()->get_inactive_ethernet_cores().empty();
 
     // TODO: Enable this when FD-on-idle-eth is supported.
     if (!fixture->IsSlowDispatch()) {
@@ -93,7 +93,10 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         std::set<CoreRange> eth_core_ranges;
         for (const auto& core : device->get_active_ethernet_cores(true)) {
             log_info(
-                LogTest, "Running on eth core {}({})", core.str(), device->ethernet_core_from_logical_core(core).str());
+                LogTest,
+                "Running on eth core {}({})",
+                core.str(),
+                device->impl()->ethernet_core_from_logical_core(core).str());
             eth_core_ranges.insert(CoreRange(core, core));
         }
         erisc_kid = CreateKernel(
@@ -109,12 +112,12 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     if (has_ieth_cores) {
         KernelHandle ierisc_kid;
         std::set<CoreRange> eth_core_ranges;
-        for (const auto& core : device->get_inactive_ethernet_cores()) {
+        for (const auto& core : device->impl()->get_inactive_ethernet_cores()) {
             log_info(
                 LogTest,
                 "Running on inactive eth core {}({})",
                 core.str(),
-                device->ethernet_core_from_logical_core(core).str());
+                device->impl()->ethernet_core_from_logical_core(core).str());
             eth_core_ranges.insert(CoreRange(core, core));
         }
         ierisc_kid = CreateKernel(
@@ -123,7 +126,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             eth_core_ranges,
             tt_metal::EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0});
 
-        for (const auto& core : device->get_inactive_ethernet_cores()) {
+        for (const auto& core : device->impl()->get_inactive_ethernet_cores()) {
             SetRuntimeArgs(program_, ierisc_kid, core, args);
         }
     }
@@ -144,14 +147,14 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     }
     if (has_eth_cores) {
         for (const auto& core : device->get_active_ethernet_cores(true)) {
-            CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
+            CoreCoord virtual_core = device->impl()->ethernet_core_from_logical_core(core);
             std::string expected = fmt::format("{}:erisc", virtual_core.str());
             expected_strings.push_back(expected);
         }
     }
     if (has_ieth_cores) {
-        for (const auto& core : device->get_inactive_ethernet_cores()) {
-            CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
+        for (const auto& core : device->impl()->get_inactive_ethernet_cores()) {
+            CoreCoord virtual_core = device->impl()->ethernet_core_from_logical_core(core);
             std::string expected = fmt::format("{}:ierisc", virtual_core.str());
             expected_strings.push_back(expected);
         }

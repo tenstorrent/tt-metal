@@ -451,7 +451,7 @@ public:
         auto* device = mesh_device_->get_device(device_coord);
         auto num_elements = tt::align(size_bytes, sizeof(uint32_t));
         for (const auto& logical_core : cores) {
-            auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
+            auto virtual_core = device->impl()->ethernet_core_from_logical_core(logical_core);
             if (!blocking) {
                 TT_FATAL(results_out.contains(logical_core), "read_buffer_from_ethernet_cores was called in non-blocking mode without pre-allocating the results_out container. Non-blocking mode requires preallocating the results entries for each core.");
                 results_out.at(logical_core).resize(num_elements, 0);
@@ -477,7 +477,7 @@ public:
         const std::vector<uint8_t>& data) const {
         auto* device = mesh_device_->get_device(device_coord);
         for (const auto& logical_core : cores) {
-            auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
+            auto virtual_core = device->impl()->ethernet_core_from_logical_core(logical_core);
 
             dynamic_cast<tt::tt_metal::distributed::FDMeshCommandQueue&>(mesh_device_->mesh_command_queue())
                     .enqueue_write_shard_to_core(

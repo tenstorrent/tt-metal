@@ -74,7 +74,7 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
                 sub_device_manager->get_core_go_message_mapping());
         }
     } else {
-        for (uint8_t cq_id = 0; cq_id < device_->num_hw_cqs(); ++cq_id) {
+        for (uint8_t cq_id = 0; cq_id < device_->impl()->num_hw_cqs(); ++cq_id) {
             auto& hw_cq = device_->command_queue(cq_id);
             // Only need to reset launch messages once, so reset on cq 0
             hw_cq.reset_worker_state(

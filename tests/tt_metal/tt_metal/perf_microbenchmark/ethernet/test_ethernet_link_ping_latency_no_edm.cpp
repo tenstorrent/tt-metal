@@ -251,7 +251,7 @@ int main(int argc, char** argv) {
         TT_FATAL(eth_sender_core_iter != eth_sender_core_iter_end, "No active ethernet core found for device 0");
         if (cluster.is_ethernet_link_up(device_0->get_devices()[0]->id(), *eth_sender_core_iter)) {
             std::tie(device_id, eth_receiver_core) =
-                device_0->get_devices()[0]->get_connected_ethernet_core(*eth_sender_core_iter);
+                device_0->get_devices()[0]->impl()->get_connected_ethernet_core(*eth_sender_core_iter);
             eth_sender_core = *eth_sender_core_iter;
         }
         eth_sender_core_iter++;

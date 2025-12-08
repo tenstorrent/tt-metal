@@ -124,13 +124,14 @@ void DispatchSKernel::CreateKernel() {
         device_->virtual_core_from_logical_core(dependent_config_.downstream_logical_core.value(), GetCoreType());
     auto downstream_s_virtual_core = device_->virtual_core_from_logical_core(UNUSED_LOGICAL_CORE, GetCoreType());
 
-    auto my_virtual_noc_coords = device_->virtual_noc0_coordinate(noc_selection_.non_dispatch_noc, my_virtual_core);
+    auto my_virtual_noc_coords =
+        device_->impl()->virtual_noc0_coordinate(noc_selection_.non_dispatch_noc, my_virtual_core);
     auto upstream_virtual_noc_coords =
-        device_->virtual_noc0_coordinate(noc_selection_.upstream_noc, upstream_virtual_core);
+        device_->impl()->virtual_noc0_coordinate(noc_selection_.upstream_noc, upstream_virtual_core);
     auto downstream_virtual_noc_coords =
-        device_->virtual_noc0_coordinate(noc_selection_.downstream_noc, downstream_virtual_core);
+        device_->impl()->virtual_noc0_coordinate(noc_selection_.downstream_noc, downstream_virtual_core);
     auto downstream_s_virtual_noc_coords =
-        device_->virtual_noc0_coordinate(noc_selection_.downstream_noc, downstream_s_virtual_core);
+        device_->impl()->virtual_noc0_coordinate(noc_selection_.downstream_noc, downstream_s_virtual_core);
 
     std::map<std::string, std::string> defines = {
         {"MY_NOC_X", std::to_string(my_virtual_noc_coords.x)},
@@ -159,7 +160,8 @@ void DispatchSKernel::CreateKernel() {
         {"NUM_VIRTUAL_UNICAST_CORES", std::to_string(num_virtual_active_eth_cores)},
         {"NUM_PHYSICAL_UNICAST_CORES", std::to_string(num_physical_active_eth_cores)},
         {"WORKER_MCAST_GRID",
-         std::to_string(device_->get_noc_multicast_encoding(noc_selection_.downstream_noc, virtual_core_range))},
+         std::to_string(
+             device_->impl()->get_noc_multicast_encoding(noc_selection_.downstream_noc, virtual_core_range))},
         {"NUM_WORKER_CORES_TO_MCAST", std::to_string(device_worker_cores.size())},
     };
     configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], {}, defines, false, false, false);

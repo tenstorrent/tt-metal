@@ -94,7 +94,7 @@ void RunTest(
                 GTEST_SKIP();
             }
             logical_core = *(device->get_active_ethernet_cores(true).begin());
-            virtual_core = device->ethernet_core_from_logical_core(logical_core);
+            virtual_core = device->impl()->ethernet_core_from_logical_core(logical_core);
             CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
@@ -102,12 +102,12 @@ void RunTest(
                 EthernetConfig{.noc = tt_metal::NOC::NOC_0});
             break;
         case HalProgrammableCoreType::IDLE_ETH:
-            if (device->get_inactive_ethernet_cores().empty()) {
+            if (device->impl()->get_inactive_ethernet_cores().empty()) {
                 log_info(LogTest, "Skipping this test since device has no inactive ethernet cores.");
                 GTEST_SKIP();
             }
-            logical_core = *(device->get_inactive_ethernet_cores().begin());
-            virtual_core = device->ethernet_core_from_logical_core(logical_core);
+            logical_core = *(device->impl()->get_inactive_ethernet_cores().begin());
+            virtual_core = device->impl()->ethernet_core_from_logical_core(logical_core);
             CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",

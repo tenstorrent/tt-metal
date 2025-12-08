@@ -663,12 +663,12 @@ TEST_F(MeshDeviceFixture, IdleEthTestNocStreamRegs) {
     auto* device = mesh_device->get_devices()[0];
 
     // Skip if no idle ethernet cores on this device
-    if (device->get_inactive_ethernet_cores().empty()) {
+    if (device->impl()->get_inactive_ethernet_cores().empty()) {
         GTEST_SKIP() << "Skipping device due to no idle ethernet cores...";
     }
 
     // Get first idle ethernet core
-    CoreCoord eth_core = *(device->get_inactive_ethernet_cores().begin());
+    CoreCoord eth_core = *(device->impl()->get_inactive_ethernet_cores().begin());
 
     run_local_noc_stream_reg_inc(this, mesh_device, eth_core, HalProgrammableCoreType::IDLE_ETH);
 }

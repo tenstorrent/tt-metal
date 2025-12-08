@@ -337,7 +337,7 @@ TEST_F(MeshDispatchFixture, IdleEthDRAMLoopbackSingleCore) {
 
     for (const auto& mesh_device : devices_) {
         auto* device = mesh_device->get_devices()[0];
-        for (auto idle_eth_core : device->get_inactive_ethernet_cores()) {
+        for (auto idle_eth_core : device->impl()->get_inactive_ethernet_cores()) {
             log_info(tt::LogTest, "Single Idle Eth Loopback. Logical core {}", idle_eth_core.str());
             dram_test_config.core_range = {idle_eth_core, idle_eth_core};
             const auto erisc_count =

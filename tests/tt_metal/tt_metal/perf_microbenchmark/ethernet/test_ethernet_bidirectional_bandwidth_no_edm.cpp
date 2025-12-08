@@ -234,7 +234,8 @@ int main(int argc, char** argv) {
     TT_ASSERT(eth_sender_core_iter != active_eth_cores.end());
     auto eth_sender_core = *eth_sender_core_iter;
 
-    auto [device_id, eth_receiver_core] = device_0->get_devices()[0]->get_connected_ethernet_core(eth_sender_core);
+    auto [device_id, eth_receiver_core] =
+        device_0->get_devices()[0]->impl()->get_connected_ethernet_core(eth_sender_core);
     const auto& device_1 = test_fixture.devices_.at(device_id);
     bool success = false;
     success = true;

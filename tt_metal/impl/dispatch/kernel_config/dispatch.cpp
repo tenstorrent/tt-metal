@@ -89,12 +89,12 @@ void DispatchKernel::GenerateStaticConfigs() {
 
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-        uint32_t cq_size = device_->sysmem_manager().get_cq_size();
+        uint32_t cq_size = device_->impl()->sysmem_manager().get_cq_size();
         uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id_, cq_size);
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
-        uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
+        uint32_t issue_queue_size = device_->impl()->sysmem_manager().get_issue_queue_size(cq_id_);
         uint32_t completion_queue_start_addr = issue_queue_start_addr + issue_queue_size;
-        uint32_t completion_queue_size = device_->sysmem_manager().get_completion_queue_size(cq_id_);
+        uint32_t completion_queue_size = device_->impl()->sysmem_manager().get_completion_queue_size(cq_id_);
 
         static_config_.dispatch_cb_base = my_dispatch_constants.dispatch_buffer_base();
         static_config_.dispatch_cb_log_page_size = DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
@@ -140,12 +140,12 @@ void DispatchKernel::GenerateStaticConfigs() {
         channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(servicing_device_id_);
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-        uint32_t cq_size = device_->sysmem_manager().get_cq_size();
+        uint32_t cq_size = device_->impl()->sysmem_manager().get_cq_size();
         uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id_, cq_size);
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
-        uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
+        uint32_t issue_queue_size = device_->impl()->sysmem_manager().get_issue_queue_size(cq_id_);
         uint32_t completion_queue_start_addr = issue_queue_start_addr + issue_queue_size;
-        uint32_t completion_queue_size = device_->sysmem_manager().get_completion_queue_size(cq_id_);
+        uint32_t completion_queue_size = device_->impl()->sysmem_manager().get_completion_queue_size(cq_id_);
 
         static_config_.dispatch_cb_base = my_dispatch_constants.dispatch_buffer_base();
         static_config_.dispatch_cb_log_page_size = DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
@@ -439,13 +439,14 @@ void DispatchKernel::CreateKernel() {
     auto downstream_s_virtual_core =
         get_virtual_core_coord(dependent_config_.downstream_s_logical_core.value(), GetCoreType());
 
-    auto my_virtual_noc_coords = device_->virtual_noc0_coordinate(noc_selection_.non_dispatch_noc, my_virtual_core);
+    auto my_virtual_noc_coords =
+        device_->impl()->virtual_noc0_coordinate(noc_selection_.non_dispatch_noc, my_virtual_core);
     auto upstream_virtual_noc_coords =
-        device_->virtual_noc0_coordinate(noc_selection_.upstream_noc, upstream_virtual_core);
+        device_->impl()->virtual_noc0_coordinate(noc_selection_.upstream_noc, upstream_virtual_core);
     auto downstream_virtual_noc_coords =
-        device_->virtual_noc0_coordinate(noc_selection_.downstream_noc, downstream_virtual_core);
+        device_->impl()->virtual_noc0_coordinate(noc_selection_.downstream_noc, downstream_virtual_core);
     auto downstream_s_virtual_noc_coords =
-        device_->virtual_noc0_coordinate(noc_selection_.downstream_noc, downstream_s_virtual_core);
+        device_->impl()->virtual_noc0_coordinate(noc_selection_.downstream_noc, downstream_s_virtual_core);
 
     std::map<std::string, std::string> defines = {
         {"MY_NOC_X", std::to_string(my_virtual_noc_coords.x)},
@@ -526,7 +527,8 @@ void DispatchKernel::CreateKernel() {
         {"EW_DIM", std::to_string(dependent_config_.ew_dim.value_or(0))},
         {"TO_MESH_ID", std::to_string(dependent_config_.to_mesh_id.value_or(0))},
         {"WORKER_MCAST_GRID",
-         std::to_string(device_->get_noc_multicast_encoding(noc_selection_.downstream_noc, virtual_core_range))},
+         std::to_string(
+             device_->impl()->get_noc_multicast_encoding(noc_selection_.downstream_noc, virtual_core_range))},
         {"NUM_WORKER_CORES_TO_MCAST", std::to_string(device_worker_cores.size())},
         {"IS_D_VARIANT", std::to_string(static_config_.is_d_variant.value())},
         {"IS_H_VARIANT", std::to_string(static_config_.is_h_variant.value())},

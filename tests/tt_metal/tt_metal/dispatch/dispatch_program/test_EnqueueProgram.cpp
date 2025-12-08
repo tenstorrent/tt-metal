@@ -239,7 +239,7 @@ void test_dummy_EnqueueProgram_with_runtime_args(
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program;
     auto* device = mesh_device->get_devices()[0];
-    auto eth_noc_xy = mesh_device->ethernet_core_from_logical_core(eth_core_coord);
+    auto eth_noc_xy = mesh_device->impl()->ethernet_core_from_logical_core(eth_core_coord);
 
     constexpr uint32_t num_runtime_args0 = 9;
     uint32_t rta_base0 = MetalContext::instance().hal().get_dev_addr(
@@ -810,7 +810,7 @@ bool verify_rt_args(
     // Same idea as ReadFromDeviceL1() but with ETH support.
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
     auto noc_xy = (core_type == HalProgrammableCoreType::ACTIVE_ETH || core_type == HalProgrammableCoreType::IDLE_ETH)
-                      ? device->ethernet_core_from_logical_core(logical_core)
+                      ? device->impl()->ethernet_core_from_logical_core(logical_core)
                       : device->worker_core_from_logical_core(logical_core);
     std::vector<uint32_t> args_readback = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         device->id(), noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));
@@ -1436,7 +1436,7 @@ TEST_F(UnitMeshCQFixture, DISABLED_ActiveEthIncrementRuntimeArgsSanitySingleCore
 // FIXME - Re-enable when FD-on-idle-eth is supported
 TEST_F(UnitMeshCQFixture, DISABLED_IdleEthIncrementRuntimeArgsSanitySingleCoreDataMovementEriscInactive) {
     for (const auto& device : devices_) {
-        for (const auto& eth_core : device->get_devices()[0]->get_inactive_ethernet_cores()) {
+        for (const auto& eth_core : device->get_devices()[0]->impl()->get_inactive_ethernet_cores()) {
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};

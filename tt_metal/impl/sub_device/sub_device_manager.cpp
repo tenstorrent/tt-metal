@@ -334,7 +334,7 @@ void SubDeviceManager::populate_noc_data() {
             noc_mcast_unicast_data_.resize(idx + core_range.size());
             for (const auto& core : core_range) {
                 auto virtual_core = device_->virtual_core_from_logical_core(core, CoreType::ETH);
-                noc_mcast_unicast_data_[idx++] = device_->get_noc_unicast_encoding(noc_index, virtual_core);
+                noc_mcast_unicast_data_[idx++] = device_->impl()->get_noc_unicast_encoding(noc_index, virtual_core);
             }
         }
         num_noc_unicast_txns_[i] = idx - noc_unicast_data_start_index_[i];

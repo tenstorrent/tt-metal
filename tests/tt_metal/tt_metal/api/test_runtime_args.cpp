@@ -702,7 +702,7 @@ TEST_F(MeshDeviceFixture, IdleEthIllegalTooManyRuntimeArgs) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto mesh_device = this->devices_.at(id);
         auto* device = mesh_device->get_devices()[0];
-        auto idle_eth_cores = device->get_inactive_ethernet_cores();
+        auto idle_eth_cores = device->impl()->get_inactive_ethernet_cores();
 
         // Skip test if no idle ethernet cores available
         if (idle_eth_cores.empty()) {

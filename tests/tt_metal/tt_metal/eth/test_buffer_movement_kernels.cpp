@@ -383,7 +383,7 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
                 sender_device->id(), sender_eth_core)) {
             continue;
         }
-        CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
+        CoreCoord receiver_eth_core = std::get<1>(sender_device->impl()->get_connected_ethernet_core(sender_eth_core));
 
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
             static_cast<MeshDispatchFixture*>(this),
@@ -433,7 +433,7 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
                 sender_device->id(), sender_eth_core)) {
             continue;
         }
-        CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
+        CoreCoord receiver_eth_core = std::get<1>(sender_device->impl()->get_connected_ethernet_core(sender_eth_core));
 
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_dram_buffer_transfer(
             static_cast<MeshDispatchFixture*>(this),
@@ -488,7 +488,7 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1)
                 sender_device->id(), sender_eth_core)) {
             continue;
         }
-        CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
+        CoreCoord receiver_eth_core = std::get<1>(sender_device->impl()->get_connected_ethernet_core(sender_eth_core));
 
         log_info(
             tt::LogTest,
@@ -572,7 +572,8 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips
                         sender_device->id(), sender_eth_core)) {
                     continue;
                 }
-                auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
+                auto [device_id, receiver_eth_core] =
+                    sender_device->impl()->get_connected_ethernet_core(sender_eth_core);
                 if (receiver_device->id() != device_id) {
                     continue;
                 }
@@ -662,7 +663,8 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllCon
                         sender_device->id(), sender_eth_core)) {
                     continue;
                 }
-                auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
+                auto [device_id, receiver_eth_core] =
+                    sender_device->impl()->get_connected_ethernet_core(sender_eth_core);
                 if (receiver_device->id() != device_id) {
                     continue;
                 }
@@ -738,7 +740,8 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuffe
                         sender_device->id(), sender_eth_core)) {
                     continue;
                 }
-                auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
+                auto [device_id, receiver_eth_core] =
+                    sender_device->impl()->get_connected_ethernet_core(sender_eth_core);
                 if (receiver_device->id() != device_id) {
                     continue;
                 }

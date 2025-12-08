@@ -182,7 +182,7 @@ const std::vector<MaybeRemote<IDevice*>>& MeshDevice::ScopedDevices::root_device
 
 uint8_t MeshDevice::num_hw_cqs() const {
     return validate_and_get_reference_value(
-        this->get_devices(), [](const auto* device) { return device->num_hw_cqs(); });
+        this->get_devices(), [](const auto* device) { return device->impl()->num_hw_cqs(); });
 }
 
 bool MeshDevice::is_initialized() const {
@@ -195,7 +195,7 @@ bool MeshDevice::is_initialized() const {
         return false;
     }
     return validate_and_get_reference_value(
-        this->get_devices(), [](const auto* device) { return device->is_initialized(); });
+        this->get_devices(), [](const auto* device) { return device->impl()->is_initialized(); });
 }
 
 uint32_t MeshDevice::l1_size_per_core() const {
@@ -205,7 +205,7 @@ uint32_t MeshDevice::l1_size_per_core() const {
 
 uint32_t MeshDevice::dram_size_per_channel() const {
     return validate_and_get_reference_value(
-        this->get_devices(), [](const auto* device) { return device->dram_size_per_channel(); });
+        this->get_devices(), [](const auto* device) { return device->impl()->dram_size_per_channel(); });
 }
 
 IDevice* MeshDevice::reference_device() const { return this->get_devices().at(0); }
@@ -739,7 +739,7 @@ void MeshDevice::clear_loaded_sub_device_manager() { sub_device_manager_tracker_
 
 CoreCoord MeshDevice::dram_grid_size() const {
     return validate_and_get_reference_value(
-        this->get_devices(), [](const auto* device) { return device->dram_grid_size(); });
+        this->get_devices(), [](const auto* device) { return device->impl()->dram_grid_size(); });
 }
 
 // Device property methods that can be delegated to reference device
@@ -749,15 +749,15 @@ CoreCoord MeshDevice::grid_size() const {
 }
 CoreCoord MeshDevice::logical_grid_size() const {
     return validate_and_get_reference_value(
-        this->get_devices(), [](const auto* device) { return device->logical_grid_size(); });
+        this->get_devices(), [](const auto* device) { return device->impl()->logical_grid_size(); });
 }
 CoreCoord MeshDevice::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {
     TT_FATAL(num_devices() == 1, "virtual_noc0_coordinate() is only supported on unit MeshDevice.");
-    return get_devices().front()->virtual_noc0_coordinate(noc_index, coord);
+    return get_devices().front()->impl()->virtual_noc0_coordinate(noc_index, coord);
 }
 std::vector<CoreCoord> MeshDevice::worker_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const {
     return validate_and_get_reference_value(this->get_devices(), [logical_cores](const auto* device) {
-        return device->worker_cores_from_logical_cores(logical_cores);
+        return device->impl()->worker_cores_from_logical_cores(logical_cores);
     });
 }
 std::vector<CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
@@ -775,7 +775,7 @@ CoreCoord MeshDevice::worker_core_from_logical_core(const CoreCoord& logical_cor
 }
 CoreCoord MeshDevice::logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const {
     return validate_and_get_reference_value(this->get_devices(), [ethernet_core](const auto* device) {
-        return device->logical_core_from_ethernet_core(ethernet_core);
+        return device->impl()->logical_core_from_ethernet_core(ethernet_core);
     });
 }
 
@@ -783,12 +783,12 @@ CoreCoord MeshDevice::logical_core_from_ethernet_core(const CoreCoord& ethernet_
 std::vector<CoreCoord> MeshDevice::ethernet_cores_from_logical_cores(
     const std::vector<CoreCoord>& logical_cores) const {
     return validate_and_get_reference_value(this->get_devices(), [logical_cores](const auto* device) {
-        return device->ethernet_cores_from_logical_cores(logical_cores);
+        return device->impl()->ethernet_cores_from_logical_cores(logical_cores);
     });
 }
 CoreCoord MeshDevice::ethernet_core_from_logical_core(const CoreCoord& logical_core) const {
     return validate_and_get_reference_value(this->get_devices(), [logical_core](const auto* device) {
-        return device->ethernet_core_from_logical_core(logical_core);
+        return device->impl()->ethernet_core_from_logical_core(logical_core);
     });
 }
 std::unordered_set<CoreCoord> MeshDevice::get_active_ethernet_cores(bool /*skip_reserved_tunnel_cores*/) const {
@@ -797,10 +797,6 @@ std::unordered_set<CoreCoord> MeshDevice::get_active_ethernet_cores(bool /*skip_
 
 std::unordered_set<CoreCoord> MeshDevice::get_inactive_ethernet_cores() const {
     TT_THROW("get_inactive_ethernet_cores() is not supported on MeshDevice - use individual devices instead");
-}
-
-bool MeshDevice::is_inactive_ethernet_core(CoreCoord /*logical_core*/) const {
-    TT_THROW("is_inactive_ethernet_core() is not supported on MeshDevice - use individual devices instead");
 }
 
 std::tuple<ChipId, CoreCoord> MeshDevice::get_connected_ethernet_core(CoreCoord /*eth_core*/) const {
@@ -834,24 +830,25 @@ int MeshDevice::num_dram_channels() const { return reference_device()->num_dram_
 
 CoreCoord MeshDevice::logical_core_from_dram_channel(uint32_t dram_channel) const {
     return validate_and_get_reference_value(this->get_devices(), [dram_channel](const auto* device) {
-        return device->logical_core_from_dram_channel(dram_channel);
+        return device->impl()->logical_core_from_dram_channel(dram_channel);
     });
 }
 uint32_t MeshDevice::dram_channel_from_logical_core(const CoreCoord& logical_core) const {
     return validate_and_get_reference_value(this->get_devices(), [logical_core](const auto* device) {
-        return device->dram_channel_from_logical_core(logical_core);
+        return device->impl()->dram_channel_from_logical_core(logical_core);
     });
 }
 uint32_t MeshDevice::dram_channel_from_virtual_core(const CoreCoord& virtual_core) const {
     return validate_and_get_reference_value(this->get_devices(), [virtual_core](const auto* device) {
-        return device->dram_channel_from_virtual_core(virtual_core);
+        return device->impl()->dram_channel_from_virtual_core(virtual_core);
     });
 }
 
 // Core management and network operations
 const std::set<CoreCoord>& MeshDevice::ethernet_cores() const {
-    return validate_and_get_reference_value(
-        this->get_devices(), [](const auto* device) -> const std::set<CoreCoord>& { return device->ethernet_cores(); });
+    return validate_and_get_reference_value(this->get_devices(), [](const auto* device) -> const std::set<CoreCoord>& {
+        return device->impl()->ethernet_cores();
+    });
 }
 const std::set<CoreCoord>& MeshDevice::storage_only_cores() const {
     return validate_and_get_reference_value(this->get_devices(), [](const auto* device) -> const std::set<CoreCoord>& {
@@ -860,19 +857,19 @@ const std::set<CoreCoord>& MeshDevice::storage_only_cores() const {
 }
 uint32_t MeshDevice::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const {
     return validate_and_get_reference_value(this->get_devices(), [noc_index, core](const auto* device) {
-        return device->get_noc_unicast_encoding(noc_index, core);
+        return device->impl()->get_noc_unicast_encoding(noc_index, core);
     });
 }
 uint32_t MeshDevice::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const {
     return validate_and_get_reference_value(this->get_devices(), [noc_index, cores](const auto* device) {
-        return device->get_noc_multicast_encoding(noc_index, cores);
+        return device->impl()->get_noc_multicast_encoding(noc_index, cores);
     });
 }
 
 // System memory and command queue management
 SystemMemoryManager& MeshDevice::sysmem_manager() {
     TT_THROW("sysmem_manager() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->sysmem_manager();
+    return reference_device()->impl()->sysmem_manager();
 }
 
 CommandQueue& MeshDevice::command_queue(std::optional<uint8_t> cq_id) {
@@ -1107,9 +1104,10 @@ void MeshDevice::quiesce_devices() {
     for (auto& command_queue : mesh_command_queues_) {
         for (auto& device : get_devices()) {
             TT_ASSERT(
-                device->sysmem_manager().get_last_completed_event(command_queue->id()) == 0,
+                device->impl()->sysmem_manager().get_last_completed_event(command_queue->id()) == 0,
                 "Last completed event is not 0");
-            TT_ASSERT(device->sysmem_manager().get_current_event(command_queue->id()) == 0, "Current event is not 0");
+            TT_ASSERT(
+                device->impl()->sysmem_manager().get_current_event(command_queue->id()) == 0, "Current event is not 0");
         }
     }
 }

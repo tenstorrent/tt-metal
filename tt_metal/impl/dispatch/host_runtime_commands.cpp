@@ -107,7 +107,8 @@ bool EventQuery(const std::shared_ptr<Event>& event) {
     }
     detail::DispatchStateCheck(true);
     event->wait_until_ready();  // Block until event populated. Parent thread.
-    bool event_completed = event->device->sysmem_manager().get_last_completed_event(event->cq_id) >= event->event_id;
+    bool event_completed =
+        event->device->impl()->sysmem_manager().get_last_completed_event(event->cq_id) >= event->event_id;
     log_trace(
         tt::LogMetal,
         "Returning event_completed: {} for host query on Event(device_id: {} cq_id: {} event_id: {})",

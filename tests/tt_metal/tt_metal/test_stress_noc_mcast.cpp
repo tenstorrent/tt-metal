@@ -119,7 +119,7 @@ int main(int argc, char** argv) {
     tt_metal::IDevice* device = tt_metal::CreateDevice(device_num_g);
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    const auto& eth_cores = device->get_inactive_ethernet_cores();
+    const auto& eth_cores = device->impl()->get_inactive_ethernet_cores();
 
     CoreRange workers_logical({tlx_g, tly_g}, {tlx_g + width_g - 1, tly_g + height_g - 1});
     CoreCoord mcast_logical(mcast_x_g, mcast_y_g);
@@ -183,7 +183,7 @@ int main(int argc, char** argv) {
         std::vector<uint32_t> runtime_args;
         // Not particularly random since all cores are getting the same data
         // N_RANDS in bytes
-        CoreCoord grid_size = device->logical_grid_size();
+        CoreCoord grid_size = device->impl()->logical_grid_size();
         for (int i = 0; i < N_RANDS / sizeof(uint32_t); i++) {
             uint32_t rnd = 0;
             for (int j = 0; j < sizeof(uint32_t); j++) {
@@ -236,7 +236,7 @@ int main(int argc, char** argv) {
         CoreCoord mcast_virtual;
         CoreCoord mcast_physical;
         if (mcast_from_eth_g) {
-            mcast_virtual = device->ethernet_core_from_logical_core(mcast_logical);
+            mcast_virtual = device->impl()->ethernet_core_from_logical_core(mcast_logical);
             mcast_physical = tt::tt_metal::MetalContext::instance()
                                  .get_cluster()
                                  .get_soc_desc(device_num_g)

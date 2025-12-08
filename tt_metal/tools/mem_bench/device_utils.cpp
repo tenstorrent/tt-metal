@@ -46,7 +46,7 @@ std::optional<CoreRange> configure_kernels(
     uint32_t pcie_size,
     uint32_t pcie_offset) {
     constexpr std::string_view k_PcieBenchKernel = "tt_metal/tools/mem_bench/kernels/mem_bench_kernel.cpp";
-    const auto grid_size = device->logical_grid_size();
+    const auto grid_size = device->impl()->logical_grid_size();
     const auto max_x = grid_size.x;
     uint32_t total_kernel_transfer = context.total_size;
     uint32_t kernel_transfer_size = context.page_size;

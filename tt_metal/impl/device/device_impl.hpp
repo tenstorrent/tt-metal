@@ -86,7 +86,6 @@ public:
     bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores = false) const override;
     std::tuple<ChipId, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
     std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const override;
-    bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
     uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) override;
 
     CoreCoord compute_with_storage_grid_size() const override;

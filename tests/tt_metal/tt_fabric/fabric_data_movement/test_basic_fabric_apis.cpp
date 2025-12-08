@@ -184,7 +184,7 @@ void RunSetUnicastRouteTest(
     for (size_t dev_idx = 0; dev_idx < NUM_DEVICES; dev_idx++) {
         if (core_type == HalProgrammableCoreType::IDLE_ETH) {
             // Use first available IDLE_ETH core for each device
-            auto idle_eth_cores = devices[dev_idx]->get_devices()[0]->get_inactive_ethernet_cores();
+            auto idle_eth_cores = devices[dev_idx]->get_devices()[0]->impl()->get_inactive_ethernet_cores();
             if (idle_eth_cores.empty()) {
                 GTEST_SKIP() << "No IDLE_ETH cores available on device " << dev_idx;
             }

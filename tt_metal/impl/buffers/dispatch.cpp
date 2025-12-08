@@ -296,7 +296,7 @@ public:
             this->buffer->address() + core_page_mapping.device_start_page * this->buffer->aligned_page_size();
         if (this->buffer->is_dram()) {
             this->address += this->buffer->device()->allocator()->get_bank_offset(
-                BufferType::DRAM, this->buffer->device()->dram_channel_from_logical_core(core));
+                BufferType::DRAM, this->buffer->device()->impl()->dram_channel_from_logical_core(core));
         }
         if (this->are_pages_large) {
             this->core_num_pages_remaining_to_write =
@@ -372,7 +372,7 @@ int32_t calculate_num_pages_available_in_cq(
     const BufferWriteDispatchParams& dispatch_params,
     const BufferDispatchConstants& dispatch_constants,
     uint32_t byte_offset_in_cq) {
-    SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
+    SystemMemoryManager& sysmem_manager = dispatch_params.device->impl()->sysmem_manager();
     uint32_t space_availableB = std::min(
         dispatch_constants.issue_queue_cmd_limit - sysmem_manager.get_issue_queue_write_ptr(dispatch_params.cq_id),
         dispatch_constants.max_prefetch_cmd_size);
@@ -526,7 +526,7 @@ void populate_sharded_buffer_write_dispatch_cmds(
         buffer.device()->virtual_core_from_logical_core(dispatch_params.core, buffer.core_type());
     command_sequence.add_dispatch_write_linear(
         0,
-        buffer.device()->get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_core),
+        buffer.device()->impl()->get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_core),
         dispatch_params.address,
         data_size_bytes);
 
@@ -602,7 +602,7 @@ void issue_buffer_dispatch_command_sequence(
         }
     }
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
-    SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
+    SystemMemoryManager& sysmem_manager = dispatch_params.device->impl()->sysmem_manager();
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
 
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
@@ -649,7 +649,7 @@ void write_interleaved_buffer_to_device(
         const int32_t num_pages_available_in_cq =
             calculate_num_pages_available_in_cq(dispatch_params, buf_dispatch_constants, byte_offset_in_cq);
         if (num_pages_available_in_cq <= 0) {
-            SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
+            SystemMemoryManager& sysmem_manager = dispatch_params.device->impl()->sysmem_manager();
             sysmem_manager.wrap_issue_queue_wr_ptr(dispatch_params.cq_id);
             continue;
         }
@@ -692,7 +692,7 @@ void write_sharded_buffer_to_core(
         const int32_t num_pages_available_in_cq =
             calculate_num_pages_available_in_cq(dispatch_params, buf_dispatch_constants, data_offset_bytes);
         if (num_pages_available_in_cq <= 0) {
-            SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
+            SystemMemoryManager& sysmem_manager = dispatch_params.device->impl()->sysmem_manager();
             sysmem_manager.wrap_issue_queue_wr_ptr(dispatch_params.cq_id);
             continue;
         }
@@ -713,7 +713,7 @@ void write_to_device_buffer(
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     CoreType dispatch_core_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    SystemMemoryManager& sysmem_manager = buffer.device()->sysmem_manager();
+    SystemMemoryManager& sysmem_manager = buffer.device()->impl()->sysmem_manager();
 
     if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
         return;
@@ -819,7 +819,7 @@ void issue_read_buffer_dispatch_command_sequence(
         return;
     }
 
-    SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
+    SystemMemoryManager& sysmem_manager = dispatch_params.device->impl()->sysmem_manager();
     uint32_t num_worker_counters = sub_device_ids.size();
     tt::tt_metal::DeviceCommandCalculator calculator;
     for (int i = 0; i < num_worker_counters; ++i) {
@@ -859,7 +859,7 @@ void issue_read_buffer_dispatch_command_sequence(
         const CoreCoord virtual_core =
             buffer.device()->virtual_core_from_logical_core(dispatch_params.core, buffer.core_type());
         command_sequence.add_prefetch_relay_linear(
-            dispatch_params.device->get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_core),
+            dispatch_params.device->impl()->get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_core),
             (DeviceAddr)dispatch_params.padded_page_size * dispatch_params.pages_per_txn,
             dispatch_params.address);
     } else {
@@ -889,7 +889,7 @@ void copy_sharded_buffer_from_core_to_completion_queue(
 
     if (buffer.is_dram()) {
         address += buffer.device()->allocator()->get_bank_offset(
-            BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(core));
+            BufferType::DRAM, buffer.device()->impl()->dram_channel_from_logical_core(core));
     }
     address += core_page_mapping.device_start_page * buffer.aligned_page_size();
 

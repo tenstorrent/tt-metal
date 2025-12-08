@@ -82,7 +82,7 @@ bool reader_kernel_no_send(
 
     auto input_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     uint32_t dram_byte_address = input_dram_buffer->address();
-    auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_reader_core);
+    auto eth_noc_xy = device->impl()->ethernet_core_from_logical_core(eth_reader_core);
     eth_test_common::set_arch_specific_eth_config(ethernet_config);
     log_info(
         tt::LogTest,
@@ -159,7 +159,7 @@ bool writer_kernel_no_receive(
 
     auto output_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     uint32_t dram_byte_address = output_dram_buffer->address();
-    auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_writer_core);
+    auto eth_noc_xy = device->impl()->ethernet_core_from_logical_core(eth_writer_core);
     eth_test_common::set_arch_specific_eth_config(ethernet_config);
     log_info(
         tt::LogTest,
@@ -254,7 +254,7 @@ bool noc_reader_and_writer_kernels(
         eth_src_l1_address,
         writer_dram_buffer->address());
 
-    auto eth_noc_xy = device->ethernet_core_from_logical_core(logical_eth_core);
+    auto eth_noc_xy = device->impl()->ethernet_core_from_logical_core(logical_eth_core);
 
     auto eth_reader_kernel = tt_metal::CreateKernel(
         program,
@@ -515,7 +515,7 @@ TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnIdleErisc0) {
     tt_metal::EthernetConfig noc1_ethernet_config{
         .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_1, .processor = tt_metal::DataMovementProcessor::RISCV_0};
 
-    for (const auto& eth_core : device->get_inactive_ethernet_cores()) {
+    for (const auto& eth_core : device->impl()->get_inactive_ethernet_cores()) {
         ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
             static_cast<BlackholeSingleCardFixture*>(this),
             mesh_device,
@@ -559,7 +559,7 @@ TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnIdleErisc1) {
     tt_metal::EthernetConfig noc1_ethernet_config{
         .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_1, .processor = tt_metal::DataMovementProcessor::RISCV_1};
 
-    for (const auto& eth_core : device->get_inactive_ethernet_cores()) {
+    for (const auto& eth_core : device->impl()->get_inactive_ethernet_cores()) {
         ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
             static_cast<BlackholeSingleCardFixture*>(this),
             mesh_device,
@@ -605,7 +605,7 @@ TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnBothIdleEriscs) {
     tt_metal::EthernetConfig erisc1_ethernet_config{
         .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_1, .processor = tt_metal::DataMovementProcessor::RISCV_1};
 
-    for (const auto& eth_core : device->get_inactive_ethernet_cores()) {
+    for (const auto& eth_core : device->impl()->get_inactive_ethernet_cores()) {
         ASSERT_TRUE(unit_tests::erisc::kernels::noc_reader_and_writer_kernels(
             mesh_device,
             read_write_size_bytes,

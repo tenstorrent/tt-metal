@@ -86,7 +86,7 @@ HWCommandQueue::HWCommandQueue(
     id_(id),
     size_B_(0),
     completion_queue_reader_core_(completion_queue_reader_core),
-    manager_(device->sysmem_manager()),
+    manager_(device->impl()->sysmem_manager()),
     cq_shared_state_(std::move(cq_shared_state)),
     num_entries_in_completion_q_(0),
     num_completed_completion_q_reads_(0),
@@ -109,7 +109,7 @@ HWCommandQueue::HWCommandQueue(
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
     this->size_B_ =
         tt::tt_metal::MetalContext::instance().get_cluster().get_host_channel_size(mmio_device_id, channel) /
-        device_->num_hw_cqs();
+        device_->impl()->num_hw_cqs();
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
         // Galaxy puts 4 devices per host channel until umd can provide one channel per device.
         this->size_B_ = this->size_B_ / 4;
@@ -117,7 +117,7 @@ HWCommandQueue::HWCommandQueue(
 
     CoreCoord enqueue_program_dispatch_core;
     CoreType core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-    if (this->device_->num_hw_cqs() == 1 or core_type == CoreType::WORKER) {
+    if (this->device_->impl()->num_hw_cqs() == 1 or core_type == CoreType::WORKER) {
         // dispatch_s exists with this configuration. Workers write to dispatch_s
         enqueue_program_dispatch_core =
             MetalContext::instance().get_dispatch_core_manager().dispatcher_s_core(device_->id(), channel, id);
@@ -427,7 +427,7 @@ void HWCommandQueue::enqueue_record_event(
         device_->id(),
         event->event_id,
         id_,
-        device_->num_hw_cqs(),
+        device_->impl()->num_hw_cqs(),
         this->manager_,
         sub_device_ids,
         this->expected_num_workers_completed_);

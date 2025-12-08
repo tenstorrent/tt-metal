@@ -49,7 +49,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
     for (const DataMovementMode data_movement_mode : {DataMovementMode::READ, DataMovementMode::WRITE}) {
         auto start = std::chrono::system_clock::now();
 
-        uint32_t completion_queue_base = device->sysmem_manager().get_completion_queue_read_ptr(0);
+        uint32_t completion_queue_base = device->impl()->sysmem_manager().get_completion_queue_read_ptr(0);
         ChipId mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
         uint16_t channel =
@@ -242,7 +242,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) 
 
     auto start = std::chrono::system_clock::now();
 
-    uint32_t completion_queue_base = device->sysmem_manager().get_completion_queue_read_ptr(0);
+    uint32_t completion_queue_base = device->impl()->sysmem_manager().get_completion_queue_read_ptr(0);
     ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
     uint16_t channel =

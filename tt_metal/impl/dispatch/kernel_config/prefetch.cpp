@@ -83,10 +83,10 @@ void PrefetchKernel::GenerateStaticConfigs() {
 
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-        uint32_t cq_size = device_->sysmem_manager().get_cq_size();
+        uint32_t cq_size = device_->impl()->sysmem_manager().get_cq_size();
         uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id_, cq_size);
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
-        uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
+        uint32_t issue_queue_size = device_->impl()->sysmem_manager().get_issue_queue_size(cq_id_);
 
         static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
             *program_, logical_core_, my_dispatch_constants.dispatch_buffer_pages(), GetCoreType());
@@ -140,10 +140,10 @@ void PrefetchKernel::GenerateStaticConfigs() {
         channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(servicing_device_id_);
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-        uint32_t cq_size = device_->sysmem_manager().get_cq_size();
+        uint32_t cq_size = device_->impl()->sysmem_manager().get_cq_size();
         uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id_, cq_size);
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
-        uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
+        uint32_t issue_queue_size = device_->impl()->sysmem_manager().get_issue_queue_size(cq_id_);
 
         static_config_.pcie_base = issue_queue_start_addr;
         static_config_.pcie_size = issue_queue_size;
@@ -427,13 +427,14 @@ void PrefetchKernel::CreateKernel() {
     auto downstream_s_virtual_core =
         get_virtual_core_coord(dependent_config_.downstream_s_logical_core.value(), GetCoreType());
 
-    auto my_virtual_noc_coords = device_->virtual_noc0_coordinate(noc_selection_.non_dispatch_noc, my_virtual_core);
+    auto my_virtual_noc_coords =
+        device_->impl()->virtual_noc0_coordinate(noc_selection_.non_dispatch_noc, my_virtual_core);
     auto upstream_virtual_noc_coords =
-        device_->virtual_noc0_coordinate(noc_selection_.upstream_noc, upstream_virtual_core);
+        device_->impl()->virtual_noc0_coordinate(noc_selection_.upstream_noc, upstream_virtual_core);
     auto downstream_virtual_noc_coords =
-        device_->virtual_noc0_coordinate(noc_selection_.downstream_noc, downstream_virtual_core);
+        device_->impl()->virtual_noc0_coordinate(noc_selection_.downstream_noc, downstream_virtual_core);
     auto downstream_s_virtual_noc_coords =
-        device_->virtual_noc0_coordinate(noc_selection_.downstream_noc, downstream_s_virtual_core);
+        device_->impl()->virtual_noc0_coordinate(noc_selection_.downstream_noc, downstream_s_virtual_core);
 
     std::map<std::string, std::string> defines = {
         {"MY_NOC_X", std::to_string(my_virtual_noc_coords.x)},
@@ -549,7 +550,7 @@ void PrefetchKernel::ConfigureCore() {
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
         const auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-        uint32_t cq_size = device_->sysmem_manager().get_cq_size();
+        uint32_t cq_size = device_->impl()->sysmem_manager().get_cq_size();
         std::vector<uint32_t> prefetch_q(my_dispatch_constants.prefetch_q_entries(), 0);
         uint32_t prefetch_q_base =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);

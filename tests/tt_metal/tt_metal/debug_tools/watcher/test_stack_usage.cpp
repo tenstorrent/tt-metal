@@ -66,7 +66,7 @@ void RunOneTest(
     }
 
     // Also run on idle ethernet, if present
-    auto const &inactive_eth_cores = device->get_inactive_ethernet_cores();
+    const auto& inactive_eth_cores = device->impl()->get_inactive_ethernet_cores();
     if (!inactive_eth_cores.empty() && fixture->IsSlowDispatch()) {
         // Just pick the first core
         CoreCoord idle_coord = CoreCoord(*inactive_eth_cores.begin());

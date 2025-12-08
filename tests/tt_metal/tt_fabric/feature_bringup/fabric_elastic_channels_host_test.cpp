@@ -306,7 +306,7 @@ void set_worker_runtime_args(
     DeviceTestResources& device_resources,
     std::vector<tt_metal::KernelHandle>& worker_kernels,
     const TestConfig& config) {
-    auto eth_core_virtual = device_resources.device->ethernet_core_from_logical_core(device_resources.eth_core);
+    auto eth_core_virtual = device_resources.device->impl()->ethernet_core_from_logical_core(device_resources.eth_core);
 
     for (size_t i = 0; i < device_resources.worker_cores_vec.size(); i++) {
         auto worker_core = device_resources.worker_cores_vec[i];
@@ -697,11 +697,12 @@ int run_test_case(const TestConfig& config, N300TestDevice& test_fixture) {
         TT_FATAL(eth_sender_core_iter != active_eth_cores.end(), "No active ethernet cores found");
         auto eth_sender_core = *eth_sender_core_iter;
         TT_FATAL(
-            device_0->get_devices()[0]->is_active_ethernet_core(eth_sender_core),
+            device_0->get_devices()[0]->impl()->is_active_ethernet_core(eth_sender_core),
             "Not an active ethernet core {}",
             eth_sender_core);
 
-        auto [device_id, eth_receiver_core] = device_0->get_devices()[0]->get_connected_ethernet_core(eth_sender_core);
+        auto [device_id, eth_receiver_core] =
+            device_0->get_devices()[0]->impl()->get_connected_ethernet_core(eth_sender_core);
         const auto& device_1 = test_fixture.devices_.at(device_id);
 
         log_info(tt::LogAlways, "Building programs...");

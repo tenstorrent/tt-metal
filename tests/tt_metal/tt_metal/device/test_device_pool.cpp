@@ -39,8 +39,8 @@ TEST(DevicePool, DevicePoolOpenClose) {
     auto devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {
         ASSERT_EQ((int)(dev->allocator()->get_config().l1_small_size), l1_small_size);
-        ASSERT_EQ((int)(dev->num_hw_cqs()), num_hw_cqs);
-        ASSERT_TRUE(dev->is_initialized());
+        ASSERT_EQ((int)(dev->impl()->num_hw_cqs()), num_hw_cqs);
+        ASSERT_TRUE(dev->impl()->is_initialized());
     }
 
     CloseDevicesInPool();
@@ -57,9 +57,9 @@ TEST(DevicePool, DevicePoolReconfigDevices) {
     for (const auto& dev : devices) {
         const auto& config = dev->allocator()->get_config();
         ASSERT_TRUE((int)(dev->allocator()->get_config().l1_small_size) == l1_small_size);
-        ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
+        ASSERT_TRUE((int)(dev->impl()->num_hw_cqs()) == num_hw_cqs);
         EXPECT_NE(config.l1_unreserved_base, config.worker_l1_size);
-        ASSERT_TRUE(dev->is_initialized());
+        ASSERT_TRUE(dev->impl()->is_initialized());
     }
 
     // Close then get devices with different configs
@@ -73,7 +73,7 @@ TEST(DevicePool, DevicePoolReconfigDevices) {
         const auto& config = dev->allocator()->get_config();
         ASSERT_TRUE((int)(config.l1_small_size) == l1_small_size);
         EXPECT_EQ(config.worker_l1_size - config.l1_unreserved_base, worker_l1_size);
-        ASSERT_TRUE(dev->is_initialized());
+        ASSERT_TRUE(dev->impl()->is_initialized());
     }
     CloseDevicesInPool();
 }
@@ -90,8 +90,8 @@ TEST(DevicePool, DevicePoolAddDevices) {
     auto devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {
         ASSERT_TRUE((int)(dev->allocator()->get_config().l1_small_size) == l1_small_size);
-        ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
-        ASSERT_TRUE(dev->is_initialized());
+        ASSERT_TRUE((int)(dev->impl()->num_hw_cqs()) == num_hw_cqs);
+        ASSERT_TRUE(dev->impl()->is_initialized());
     }
 
     // Close then get more devices
@@ -102,8 +102,8 @@ TEST(DevicePool, DevicePoolAddDevices) {
     ASSERT_TRUE(devices.size() >= 4);
     for (const auto& dev : devices) {
         ASSERT_TRUE((int)(dev->allocator()->get_config().l1_small_size) == l1_small_size);
-        ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
-        ASSERT_TRUE(dev->is_initialized());
+        ASSERT_TRUE((int)(dev->impl()->num_hw_cqs()) == num_hw_cqs);
+        ASSERT_TRUE(dev->impl()->is_initialized());
     }
     CloseDevicesInPool();
 }
@@ -120,8 +120,8 @@ TEST(DevicePool, DevicePoolReduceDevices) {
     const auto devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {
         ASSERT_TRUE((int)(dev->allocator()->get_config().l1_small_size) == l1_small_size);
-        ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
-        ASSERT_TRUE(dev->is_initialized());
+        ASSERT_TRUE((int)(dev->impl()->num_hw_cqs()) == num_hw_cqs);
+        ASSERT_TRUE(dev->impl()->is_initialized());
     }
 
     // Close then get less devices
@@ -131,8 +131,8 @@ TEST(DevicePool, DevicePoolReduceDevices) {
     auto* dev = DevicePool::instance().get_active_device(0);
     ASSERT_TRUE(dev->id() == 0);
     ASSERT_TRUE((int)(dev->allocator()->get_config().l1_small_size) == l1_small_size);
-    ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
-    ASSERT_TRUE(dev->is_initialized());
+    ASSERT_TRUE((int)(dev->impl()->num_hw_cqs()) == num_hw_cqs);
+    ASSERT_TRUE(dev->impl()->is_initialized());
     CloseDevicesInPool();
 }
 

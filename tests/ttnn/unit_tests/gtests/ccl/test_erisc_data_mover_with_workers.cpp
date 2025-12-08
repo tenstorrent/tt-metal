@@ -188,8 +188,8 @@ void generate_receiver_worker_kernels(
         num_pages_per_edm_buffer,
         num_pages,
         page_size,
-        (uint32_t)device->ethernet_core_from_logical_core(edm_core).x,
-        (uint32_t)device->ethernet_core_from_logical_core(edm_core).y,
+        (uint32_t)device->impl()->ethernet_core_from_logical_core(edm_core).x,
+        (uint32_t)device->impl()->ethernet_core_from_logical_core(edm_core).y,
         worker_semaphore_address,
         num_buffers_per_edm_channel};
     log_info(tt::LogTest, "\tReceiverReader CT Args");
@@ -263,8 +263,8 @@ void generate_sender_worker_kernels(
         edm_channel.eth_buffer_l1_address,
         edm_channel.eth_semaphore_l1_address,
         worker_semaphore_address,
-        (uint32_t)device->ethernet_core_from_logical_core(edm_core).x,
-        (uint32_t)device->ethernet_core_from_logical_core(edm_core).y,
+        (uint32_t)device->impl()->ethernet_core_from_logical_core(edm_core).x,
+        (uint32_t)device->impl()->ethernet_core_from_logical_core(edm_core).y,
         num_buffers_per_edm_channel};
     uint32_t src0_cb_index = CBIndex::c_0;
     log_info(tt::LogTest, "\tSenderWriter CT Args");
@@ -722,7 +722,7 @@ int TestEntrypoint(
     tt_xy_pair eth_sender_core;
     do {
         TT_FATAL(eth_sender_core_iter != eth_sender_core_iter_end, "Error");
-        std::tie(device_id, eth_receiver_core) = device_0->get_connected_ethernet_core(*eth_sender_core_iter);
+        std::tie(device_id, eth_receiver_core) = device_0->impl()->get_connected_ethernet_core(*eth_sender_core_iter);
         eth_sender_core = *eth_sender_core_iter;
         eth_sender_core_iter++;
     } while (device_id != 1);

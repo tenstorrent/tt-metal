@@ -378,7 +378,7 @@ void DevicePool::initialize_host(IDevice* dev) const {
         dev->init_command_queue_host();
     } else {
         detail::DispatchStateCheck(false);
-        TT_ASSERT(dev->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
+        TT_ASSERT(dev->impl()->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
     }
 }
 
@@ -535,7 +535,7 @@ void DevicePool::activate_device(ChipId id) {
         this->devices.emplace_back(std::unique_ptr<IDevice>(device));
     } else {
         log_debug(tt::LogMetal, "DevicePool re-initialize device {}", id);
-        if (not device->is_initialized()) {
+        if (not device->impl()->is_initialized()) {
             device->initialize(
                 num_hw_cqs, this->l1_small_size, this->trace_region_size, this->worker_l1_size, this->l1_bank_remap);
         } else {
@@ -550,7 +550,7 @@ bool DevicePool::is_device_active(ChipId id) const {
         return false;
     }
 
-    return device->is_initialized();
+    return device->impl()->is_initialized();
 }
 
 IDevice* DevicePool::get_device(ChipId id) const {
@@ -770,14 +770,14 @@ DevicePool::DevicePool() {
 IDevice* DevicePool::get_active_device(ChipId device_id) const {
     auto* device = get_device(device_id);
     TT_ASSERT(device != nullptr, "DevicePool does not contain device {}", device_id);
-    TT_ASSERT(device->is_initialized(), "Device {} is not initialized", device_id);
+    TT_ASSERT(device->impl()->is_initialized(), "Device {} is not initialized", device_id);
     return device;
 }
 
 std::vector<IDevice* > DevicePool::get_all_active_devices() const {
     std::vector<IDevice*> user_devices;
     for (const auto& device : this->devices) {
-        if (device && device->is_initialized()) {
+        if (device && device->impl()->is_initialized()) {
             user_devices.push_back(device.get());
         }
     }
@@ -791,7 +791,7 @@ std::vector<ChipId> DevicePool::get_all_active_device_ids() const {
     std::lock_guard<std::mutex> lock(this->lock);
     device_ids.reserve(this->devices.size());
     for (const auto& device : this->devices) {
-        if (device && device->is_initialized()) {
+        if (device && device->impl()->is_initialized()) {
             device_ids.emplace_back(device->id());
         }
     }
@@ -806,12 +806,12 @@ std::unordered_map<ChipId, std::vector<uint32_t>> DevicePool::get_all_command_qu
     std::lock_guard<std::mutex> lock(this->lock);
     cq_to_event_by_device.reserve(this->devices.size());
     for (const auto& device : this->devices) {
-        if (device && device->is_initialized()) {
+        if (device && device->impl()->is_initialized()) {
             auto& vec = cq_to_event_by_device[device->id()];
-            const auto num_hw_cqs = device->num_hw_cqs();
+            const auto num_hw_cqs = device->impl()->num_hw_cqs();
             vec.resize(num_hw_cqs);
             for (size_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-                const auto event_id = device->sysmem_manager().get_last_event(static_cast<uint8_t>(cq_id));
+                const auto event_id = device->impl()->sysmem_manager().get_last_event(static_cast<uint8_t>(cq_id));
                 vec[cq_id] = event_id;
             }
         }
@@ -827,7 +827,7 @@ void DevicePool::teardown_fd(const std::unordered_set<ChipId>& devices_to_close)
             continue;
         }
 
-        for (int cq_id = 0; cq_id < dev->num_hw_cqs(); cq_id++) {
+        for (int cq_id = 0; cq_id < dev->impl()->num_hw_cqs(); cq_id++) {
             auto& cq = dev->command_queue(cq_id);
             if (cq.sysmem_manager().get_bypass_mode()) {
                 cq.record_end();
@@ -850,7 +850,7 @@ bool DevicePool::close_device(ChipId device_id) {
     for (const auto& mmio_controlled_device_id :
          tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(mmio_device_id)) {
         auto* device = get_device(mmio_controlled_device_id);
-        if (device && device->is_initialized()) {
+        if (device && device->impl()->is_initialized()) {
             devices_to_close.push_back(device);
         }
     }
@@ -1000,7 +1000,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip
 
 DevicePool::~DevicePool() {
     for (const auto& dev : this->devices) {
-        if (dev != nullptr and dev->is_initialized()) {
+        if (dev != nullptr and dev->impl()->is_initialized()) {
             // TODO: #13876, Was encountering issues with the DispatchMemMap being destroyed before the DevicePool
             // destructor, which leads to device->close() hitting asserts. We need to move the ownership of
             // DispatchMemMap to the device, so it doesn't go out of scope before the device is closed.

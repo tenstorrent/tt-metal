@@ -28,7 +28,7 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, co
     enum BufferIndex { BUFFER_END_INDEX, DROPPED_MARKER_COUNTER, MARKER_DATA_START };
     enum TimerDataIndex { TIMER_ID, TIMER_VAL_L, TIMER_VAL_H, TIMER_DATA_UINT32_SIZE };
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    auto worker_cores_used_in_program = device->worker_cores_from_logical_cores(
+    auto worker_cores_used_in_program = device->impl()->worker_cores_from_logical_cores(
         program.impl()
             .logical_cores()[hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::TENSIX)]);
     auto device_id = device->id();

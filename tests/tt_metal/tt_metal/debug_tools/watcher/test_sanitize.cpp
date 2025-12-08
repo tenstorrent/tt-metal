@@ -117,7 +117,7 @@ void RunTestOnCore(
 
     CoreCoord virtual_core;
     if (is_eth_core) {
-        virtual_core = device->ethernet_core_from_logical_core(core);
+        virtual_core = device->impl()->ethernet_core_from_logical_core(core);
     } else {
         virtual_core = device->worker_core_from_logical_core(core);
     }
@@ -252,8 +252,8 @@ void RunTestOnCore(
 
     // We should be able to find the expected watcher error in the log as well.
     std::string expected;
-    CoreCoord input_core_virtual_coords = device->virtual_noc0_coordinate(noc, input_buf_noc_xy);
-    CoreCoord output_core_virtual_coords = device->virtual_noc0_coordinate(noc, output_buf_noc_xy);
+    CoreCoord input_core_virtual_coords = device->impl()->virtual_noc0_coordinate(noc, input_buf_noc_xy);
+    CoreCoord output_core_virtual_coords = device->impl()->virtual_noc0_coordinate(noc, output_buf_noc_xy);
     std::string risc_name = (is_eth_core) ? "erisc" : " brisc";
     if (use_ncrisc) {
         risc_name = "ncrisc";
@@ -439,11 +439,11 @@ void RunTestIEth(
         GTEST_SKIP();
     }
     // Run on the first ethernet core (if there are any).
-    if (device->get_inactive_ethernet_cores().empty()) {
+    if (device->impl()->get_inactive_ethernet_cores().empty()) {
         log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
         GTEST_SKIP();
     }
-    CoreCoord core = *(device->get_inactive_ethernet_cores().begin());
+    CoreCoord core = *(device->impl()->get_inactive_ethernet_cores().begin());
     RunTestOnCore(fixture, mesh_device, core, true, feature);
 }
 

@@ -74,7 +74,7 @@ static void test_sems_across_core_types(
             DataMovementProcessor dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
 
             const auto& eth_cores_unordered =
-                active_eth ? device->get_active_ethernet_cores(true) : device->get_inactive_ethernet_cores();
+                active_eth ? device->get_active_ethernet_cores(true) : device->impl()->get_inactive_ethernet_cores();
 
             std::set<CoreCoord> eth_cores(eth_cores_unordered.begin(), eth_cores_unordered.end());
             if (eth_cores.empty()) {
@@ -156,7 +156,7 @@ TEST_F(MeshDispatchFixture, EthTestBlank) {
 
     // TODO: tweak when FD supports idle eth
     const auto& eth_cores_unordered =
-        this->slow_dispatch_ ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores(true);
+        this->slow_dispatch_ ? device->impl()->get_inactive_ethernet_cores() : device->get_active_ethernet_cores(true);
 
     std::set<CoreCoord> eth_cores(eth_cores_unordered.begin(), eth_cores_unordered.end());
 
@@ -230,7 +230,8 @@ TEST_F(MeshDispatchFixture, EthTestInitLocalMemory) {
 
     // TODO: tweak when FD supports idle eth
     const bool is_idle_eth = this->slow_dispatch_;
-    const auto& eth_cores = is_idle_eth ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores(true);
+    const auto& eth_cores =
+        is_idle_eth ? device->impl()->get_inactive_ethernet_cores() : device->get_active_ethernet_cores(true);
 
     if (eth_cores.empty()) {
         log_info(

@@ -70,7 +70,7 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
         const auto& dispatch_core_config = get_dispatch_core_config();
         CoreType dispatch_core_type = dispatch_core_config.get_core_type();
         std::vector<CoreCoord> dispatch_cores =
-            tt::get_logical_dispatch_cores(device->id(), device->num_hw_cqs(), dispatch_core_config);
+            tt::get_logical_dispatch_cores(device->id(), device->impl()->num_hw_cqs(), dispatch_core_config);
         std::set<CoreRange> dispatch_core_ranges;
         for (CoreCoord core : dispatch_cores) {
             dispatch_core_ranges.emplace(core);

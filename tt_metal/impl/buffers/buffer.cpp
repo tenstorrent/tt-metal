@@ -268,7 +268,7 @@ Buffer::Buffer(
     if (this->sub_device_id_.has_value()) {
         validate_sub_device_id(this->sub_device_id_, this->device_, buffer_type, shard_spec_);
         this->sub_device_manager_id_ = this->device_->get_active_sub_device_manager_id();
-        this->allocator_ = device->allocator(*this->sub_device_id_).get();
+        this->allocator_ = device->impl()->allocator(*this->sub_device_id_).get();
     } else {
         this->allocator_ = device->allocator().get();
     }
@@ -423,7 +423,7 @@ void Buffer::deallocate_impl() {
         return;
     }
 
-    if (device_->is_initialized() && size_ != 0) {
+    if (device_->impl()->is_initialized() && size_ != 0) {
         // address_ is only modified from this thread, no sync required
         GraphTracker::instance().track_deallocate(this);
         if (!GraphTracker::instance().hook_deallocate(this) && !hooked_allocation_) {

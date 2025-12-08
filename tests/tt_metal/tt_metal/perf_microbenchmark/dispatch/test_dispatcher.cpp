@@ -739,7 +739,7 @@ class DispatchPagedWriteTestFixture : public BaseDispatchTestFixture,
         // If DRAM, get the logical core from the DRAM channel
         if (is_dram_) {
             const auto dram_channel = device_->allocator()->get_dram_channel_from_bank_id(bank_id);
-            return device_->logical_core_from_dram_channel(dram_channel);
+            return device_->impl()->logical_core_from_dram_channel(dram_channel);
         }
 
         // If L1, get logical core from the bank id
@@ -855,7 +855,7 @@ class DispatchPackedWriteTestFixture : public BaseDispatchTestFixture,
         for (const auto& core : worker_cores) {
             const CoreCoord virtual_core = device_->virtual_core_from_logical_core(core, CoreType::WORKER);
             CQDispatchWritePackedUnicastSubCmd sub_cmd{};
-            sub_cmd.noc_xy_addr = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_core);
+            sub_cmd.noc_xy_addr = device_->impl()->get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_core);
             sub_cmds.push_back(sub_cmd);
         }
         return sub_cmds;
@@ -1055,8 +1055,8 @@ class DispatchPackedWriteLargeTestFixture : public DispatchPackedWriteTestFixtur
         uint32_t num_mcast_dests) {
         // Build sub-command
         CQDispatchWritePackedLargeSubCmd sub_cmd{};
-        sub_cmd.noc_xy_addr =
-            device_->get_noc_multicast_encoding(k_dispatch_downstream_noc, CoreRange(virtual_start, virtual_end));
+        sub_cmd.noc_xy_addr = device_->impl()->get_noc_multicast_encoding(
+            k_dispatch_downstream_noc, CoreRange(virtual_start, virtual_end));
         sub_cmd.addr = addr;
         sub_cmd.length_minus1 = static_cast<uint16_t>(xfer_size_bytes) - 1;
         sub_cmd.num_mcast_dests = num_mcast_dests;
@@ -1186,10 +1186,10 @@ TEST_P(DispatchLinearWriteTestFixture, LinearWrite) {
     uint32_t noc_xy;
     if (is_mcast) {
         const CoreCoord last_virt_worker = device_->virtual_core_from_logical_core(last_worker, CoreType::WORKER);
-        noc_xy = device_->get_noc_multicast_encoding(
+        noc_xy = device_->impl()->get_noc_multicast_encoding(
             k_dispatch_downstream_noc, CoreRange(first_virt_worker, last_virt_worker));
     } else {
-        noc_xy = device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
+        noc_xy = device_->impl()->get_noc_unicast_encoding(k_dispatch_downstream_noc, first_virt_worker);
     }
 
     // PHASE 1: Generate random-sized linear write commands metadata
