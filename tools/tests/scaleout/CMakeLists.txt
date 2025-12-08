@@ -17,6 +17,7 @@ target_link_libraries(
         gmock_main
         enchantum::enchantum
         protobuf::libprotobuf
+        yaml-cpp::yaml-cpp
 )
 
 # Test for link retraining validation
