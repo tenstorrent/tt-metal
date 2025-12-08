@@ -139,7 +139,7 @@ MeshDevice::ScopedDevices::ScopedDevices(
     size_t worker_l1_size,
     const DispatchCoreConfig& dispatch_core_config) {
     auto local_devices = extract_locals(device_ids);
-    opened_local_devices_ = tt::tt_metal::detail::CreateDevices(
+    opened_local_devices_ = tt_metal::detail::CreateDevices(
         local_devices,
         num_command_queues,
         l1_small_size,
@@ -167,8 +167,7 @@ MeshDevice::ScopedDevices::~ScopedDevices() {
         for (auto& [id, device] : opened_local_devices_) {
             devices_to_close.push_back(device);
         }
-        tt::tt_metal::MetalContext::instance().device_manager()->close_devices(
-            devices_to_close, /*skip_synchronize=*/true);
+        tt_metal::MetalContext::instance().device_manager()->close_devices(devices_to_close, /*skip_synchronize=*/true);
     }
 }
 
@@ -284,8 +283,8 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
         dynamic_cast<Device*>(device)->set_mesh_device(mesh_device);
     }
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
-    tt::tt_metal::MetalContext::instance().device_manager()->init_profiler();
-    tt::tt_metal::MetalContext::instance().device_manager()->initialize_fabric_and_dispatch_fw();
+    tt_metal::MetalContext::instance().device_manager()->init_profiler();
+    tt_metal::MetalContext::instance().device_manager()->initialize_fabric_and_dispatch_fw();
     return mesh_device;
 }
 
@@ -333,8 +332,8 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
         result[device_ids[i]] = submeshes[i];
     }
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
-    tt::tt_metal::MetalContext::instance().device_manager()->init_profiler();
-    tt::tt_metal::MetalContext::instance().device_manager()->initialize_fabric_and_dispatch_fw();
+    tt_metal::MetalContext::instance().device_manager()->init_profiler();
+    tt_metal::MetalContext::instance().device_manager()->initialize_fabric_and_dispatch_fw();
     return result;
 }
 
@@ -512,7 +511,7 @@ CoreCoord MeshDevice::compute_with_storage_grid_size() const {
         this->get_devices(), [](const auto* device) { return device->compute_with_storage_grid_size(); });
 }
 
-tt::ARCH MeshDevice::arch() const { return tt::tt_metal::MetalContext::instance().get_cluster().arch(); }
+tt::ARCH MeshDevice::arch() const { return tt_metal::MetalContext::instance().get_cluster().arch(); }
 
 size_t MeshDevice::num_rows() const { return view_->num_rows(); }
 
@@ -978,7 +977,7 @@ bool MeshDevice::initialize(
     // Issue #19729: Store the maximum number of active ethernet cores across opened physical devices in the Mesh
     // as the number of virtual ethernet cores seen by the MeshDevice
     num_virtual_eth_cores_ =
-        tt::tt_metal::MetalContext::instance().device_manager()->get_max_num_eth_cores_across_all_devices();
+        tt_metal::MetalContext::instance().device_manager()->get_max_num_eth_cores_across_all_devices();
     mesh_command_queues_.reserve(this->num_hw_cqs());
     if (MetalContext::instance().rtoptions().get_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {

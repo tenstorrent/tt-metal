@@ -346,7 +346,7 @@ void MetalContext::teardown() {
     tt::tt_metal::reset_topology_state();
 
     // Clear dispatch, dispatch_s and prefetcher core info in inspector data
-    tt::tt_metal::Inspector::clear_all_core_info();
+    Inspector::clear_all_core_info();
     // Deinitialize inspector
     inspector_data_.reset();
 
@@ -496,8 +496,8 @@ void MetalContext::clear_l1_state(ChipId device_id) {
 
     // Clear erisc unreserved L1
     for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
-        static uint32_t zero_vec_size = tt::tt_metal::hal::get_erisc_l1_unreserved_size();
-        auto zero_vec_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+        static uint32_t zero_vec_size = hal::get_erisc_l1_unreserved_size();
+        auto zero_vec_addr = hal::get_erisc_l1_unreserved_base();
 
         static std::vector<uint32_t> zero_vec(zero_vec_size / sizeof(uint32_t), 0);
 
@@ -787,8 +787,7 @@ void MetalContext::reset_cores(ChipId device_id) {
             // Only send reset to subordinate cores
             // Assert all cores except ERISC0, which is running base firmware.
             tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
-            tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
-                tt_cxy_pair(device_id, virtual_core), reset_val);
+            cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), reset_val);
         }
     }
 
@@ -830,8 +829,8 @@ void MetalContext::reset_cores(ChipId device_id) {
 }
 
 void MetalContext::assert_cores(ChipId device_id) {
-    auto dispatch_cores = tt::tt_metal::get_virtual_dispatch_cores(device_id);
-    auto routing_cores = tt::tt_metal::get_virtual_dispatch_routing_cores(device_id);
+    auto dispatch_cores = get_virtual_dispatch_cores(device_id);
+    auto routing_cores = get_virtual_dispatch_routing_cores(device_id);
 
     // Assert riscs on Tensix
     CoreCoord grid_size = cluster_->get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
@@ -842,7 +841,7 @@ void MetalContext::assert_cores(ChipId device_id) {
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::WORKER);
 
             if (!dispatch_cores.contains(worker_core) && !routing_cores.contains(worker_core)) {
-                if (!tt::tt_metal::MetalContext::instance().hal().get_eth_fw_is_cooperative() &&
+                if (!hal_->get_eth_fw_is_cooperative() &&
                     this->get_control_plane().get_active_ethernet_cores(device_id, false).contains(logical_core)) {
                     // Cannot put these cores into reset because they are running base FW
                     // Below will return to base FW
@@ -1212,13 +1211,11 @@ void MetalContext::initialize_firmware(
             write_initial_go_launch_msg();
             if (core_type == HalProgrammableCoreType::ACTIVE_ETH) {
                 // Clear the ncrisc_halt message
-                tt::tt_metal::DeviceAddr mailbox_addr =
-                    hal_->get_dev_addr(core_type, tt::tt_metal::HalL1MemAddrType::MAILBOX);
+                DeviceAddr mailbox_addr = hal_->get_dev_addr(core_type, HalL1MemAddrType::MAILBOX);
                 auto factory = hal_->get_dev_msgs_factory(core_type);
-                tt::tt_metal::DeviceAddr ncrisc_halt_addr =
-                    mailbox_addr + factory.offset_of<tt::tt_metal::dev_msgs::mailboxes_t>(
-                                       tt::tt_metal::dev_msgs::mailboxes_t::Field::ncrisc_halt);
-                std::vector<uint8_t> data(factory.size_of<tt::tt_metal::dev_msgs::ncrisc_halt_msg_t>(), 0);
+                DeviceAddr ncrisc_halt_addr =
+                    mailbox_addr + factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::ncrisc_halt);
+                std::vector<uint8_t> data(factory.size_of<dev_msgs::ncrisc_halt_msg_t>(), 0);
                 cluster_->write_core(data.data(), data.size(), tt_cxy_pair(device_id, virtual_core), ncrisc_halt_addr);
             }
 
@@ -1227,7 +1224,7 @@ void MetalContext::initialize_firmware(
             if (hal_->get_eth_fw_is_cooperative() || core_type != HalProgrammableCoreType::ACTIVE_ETH ||
                 !rtoptions_.get_enable_2_erisc_mode()) {
                 // PC
-                tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                cluster_->write_core(
                     &jit_build_config.fw_launch_addr_value,
                     sizeof(uint32_t),
                     tt_cxy_pair(device_id, virtual_core),

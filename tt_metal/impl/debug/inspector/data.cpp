@@ -158,7 +158,7 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
 
 void Data::rpc_get_devices_in_use(rpc::Inspector::GetDevicesInUseResults::Builder& results) {
     // Get all active device ids
-    auto device_ids = tt::tt_metal::MetalContext::instance().device_manager()->get_all_active_device_ids();
+    auto device_ids = tt_metal::MetalContext::instance().device_manager()->get_all_active_device_ids();
 
     // Write result
     auto result_device_ids = results.initMetalDeviceIds(device_ids.size());
@@ -224,7 +224,7 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
 void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInfosResults::Builder results) {
     // This returns a map of command queue id to event id for all active devices
     auto cq_to_event_by_device =
-        tt::tt_metal::MetalContext::instance().device_manager()->get_all_command_queue_event_infos();
+        tt_metal::MetalContext::instance().device_manager()->get_all_command_queue_event_infos();
     // In a single lock, get the number of non-empty categories and initialize the results
     std::scoped_lock locks(dispatch_core_info_mutex, dispatch_s_core_info_mutex, prefetcher_core_info_mutex);
 
