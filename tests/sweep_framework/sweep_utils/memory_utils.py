@@ -60,4 +60,6 @@ def capture_peak_memory_with_cache_comparison(test_module, test_vector: dict, de
     # since it doesn't actually execute. We'll capture once and use for both.
     peak_memory = capture_peak_memory(test_module, test_vector, device, use_no_dispatch=True)
 
-    return {"uncached": peak_memory, "cached": peak_memory}  # Same value since NO_DISPATCH doesn't compile/cache
+    # In NO_DISPATCH mode, kernels are not executed and only memory allocation is simulated,
+    # so the distinction between 'uncached' and 'cached' is meaningless; both return the same value.
+    return {"uncached": peak_memory, "cached": peak_memory}
