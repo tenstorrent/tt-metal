@@ -59,7 +59,8 @@ from models.tt_transformers.tt.rope import RotarySetup
 def test_decoder_inference(
     max_seq_len, batch_size, paged_attention, page_params, mesh_device, reset_seeds, ensure_gc, generation_length
 ):
-    mesh_device = create_submeshes(mesh_device, 4)[0]
+    if os.environ.get("MESH_DEVICE") == "TG":
+        mesh_device = create_submeshes(mesh_device, 4)[0]
 
     dtype = ttnn.bfloat8_b
 
