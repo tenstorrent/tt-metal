@@ -7,8 +7,6 @@
 
 // receives l, m, s tensors from the compute kernel and writes to the final output buffers
 
-using tt::data_movement::common::tt_memmove;
-
 inline void write_data(
     uint32_t dst_addr_l,
     uint32_t dst_addr_s,

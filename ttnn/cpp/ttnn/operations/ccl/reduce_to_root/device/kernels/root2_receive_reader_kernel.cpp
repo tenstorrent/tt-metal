@@ -147,7 +147,6 @@ void kernel_main() {
         fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
 
     tt::tt_fabric::fabric_client_connect(*mux_connection_handle);
-
     cb_reserve_back(packet_header_cb_id, 1);
     const uint32_t sem_header_addr = get_write_ptr(packet_header_cb_id);
     cb_push_back(packet_header_cb_id, 1);
@@ -160,7 +159,6 @@ void kernel_main() {
 
     mux_connection.wait_for_empty_write_slot();
     mux_connection.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr, packet_header_size_bytes);
-
     cb_reserve_back(packet_cb_id, 1);
 
     const uint32_t packet_l1_addr = get_write_ptr(packet_cb_id);
@@ -207,7 +205,7 @@ void kernel_main() {
     noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
     noc_async_read_barrier();
 
-    tt_memmove<false, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
+    tt_memmove<true, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
     cb_push_back(receiver_cb_id_l, input_num_tiles);
 
     cb_reserve_back(receiver_cb_id_s, 1);
@@ -216,11 +214,10 @@ void kernel_main() {
     const uint32_t dest_page_base_addr_s = get_write_ptr(receiver_cb_id_s);
     const uint32_t dest_page_base_addr_m = get_write_ptr(receiver_cb_id_m);
 
-    tt_memmove<false, false, false, 0>(
+    tt_memmove<true, false, false, 0>(
         dest_page_base_addr_s, packet_l1_addr + packet_size_bytes, aligned_page_size_bytes);
-    tt_memmove<false, false, false, 0>(
+    tt_memmove<true, false, false, 0>(
         dest_page_base_addr_m, packet_l1_addr + packet_size_bytes + aligned_page_size_bytes, aligned_page_size_bytes);
-
     cb_push_back(receiver_cb_id_s, 1);
     cb_push_back(receiver_cb_id_m, 1);
     cb_push_back(packet_cb_id, 1);

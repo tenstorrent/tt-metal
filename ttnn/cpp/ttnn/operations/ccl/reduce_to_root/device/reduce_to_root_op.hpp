@@ -18,6 +18,7 @@ struct ReduceToRootOp {
     struct operation_attributes_t {
         const MeshCoordinate& root_coord;
         const tt::tt_fabric::Topology topology;
+        const std::optional<std::vector<ttnn::CoreCoord>> input_mux_cores;
 
         // put this in here to hash on tensor spec
         const std::vector<ttnn::TensorSpec> _input_tensor_spec;
@@ -33,8 +34,7 @@ struct ReduceToRootOp {
         const std::optional<Tensor> optional_output_tensor_l;
         const std::optional<Tensor> optional_output_tensor_s;
         const std::optional<Tensor> optional_output_tensor_m;
-        const std::optional<Tensor> optional_intermediate_tensor_l;
-        const std::optional<Tensor> optional_intermediate_tensor_s_m;
+        const std::optional<Tensor> optional_intermediate_tensor;
     };
 
     // entry 0 is the intermediate. Entry 1 is the final output
@@ -121,12 +121,13 @@ struct ReduceToRootOp {
         const std::optional<Tensor>& optional_output_tensor_l = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor_s = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor_m = std::nullopt,
-        const std::optional<Tensor>& optional_intermediate_tensor_l = std::nullopt,
-        const std::optional<Tensor>& optional_intermediate_tensor_s_m = std::nullopt) {
+        const std::optional<Tensor>& optional_intermediate_tensor = std::nullopt,
+        const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores = std::nullopt) {
         return std::make_tuple(
             operation_attributes_t{
                 root_coord,
                 topology,
+                input_mux_cores,
                 {input_tensor_l.tensor_spec(), input_tensor_s.tensor_spec(), input_tensor_m.tensor_spec()}},
             tensor_args_t{
                 input_tensor_l,
@@ -135,8 +136,7 @@ struct ReduceToRootOp {
                 optional_output_tensor_l,
                 optional_output_tensor_s,
                 optional_output_tensor_m,
-                optional_intermediate_tensor_l,
-                optional_intermediate_tensor_s_m});
+                optional_intermediate_tensor});
     };
 
 private:

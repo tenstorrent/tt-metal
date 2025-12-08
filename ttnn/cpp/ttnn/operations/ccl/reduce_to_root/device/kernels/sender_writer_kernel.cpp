@@ -19,7 +19,6 @@
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 
 using tt::data_movement::common::round_up;
-using tt::data_movement::common::tt_memmove;
 
 void kernel_main() {
     constexpr uint32_t fabric_ct_idx = get_compile_time_arg_val(0);
@@ -106,7 +105,6 @@ void kernel_main() {
 
     uint32_t packet_idx = 0;
 
-    // DPRINT << "before waiting on receiver semaphore\n";
     //  wait for receiver to signal it is ready
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr), 1);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr), 0);

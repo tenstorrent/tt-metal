@@ -17,7 +17,7 @@ namespace py = pybind11;
 void py_bind_reduce_to_root(py::module& module) {
     auto doc =
         R"doc(
-            Reduce-to-root operation. Performs tree reduction across 4 devices and stores the output on the root device only.
+            Reduce-to-root operation. Performs sdpa tree reduction across 4 devices and stores the output on the root device only.
 
             Args:
                 input_tensor (std::vector<ttnn.Tensor>): the input tensor is a vector of (l, s, m).
@@ -60,8 +60,8 @@ void py_bind_reduce_to_root(py::module& module) {
                const std::optional<ttnn::Tensor>& output_tensor_l,
                const std::optional<ttnn::Tensor>& output_tensor_s,
                const std::optional<ttnn::Tensor>& output_tensor_m,
-               const std::optional<ttnn::Tensor>& intermediate_tensor_l,
-               const std::optional<ttnn::Tensor>& intermediate_tensor_s_m,
+               const std::optional<ttnn::Tensor>& intermediate_tensor,
+               const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores,
                const tt::tt_fabric::Topology topology) {
                 return self(
                     input_tensor_l,
@@ -72,8 +72,8 @@ void py_bind_reduce_to_root(py::module& module) {
                     output_tensor_l,
                     output_tensor_s,
                     output_tensor_m,
-                    intermediate_tensor_l,
-                    intermediate_tensor_s_m);
+                    intermediate_tensor,
+                    input_mux_cores);
             },
             py::arg("input_tensor_l").noconvert(),
             py::arg("input_tensor_s").noconvert(),
@@ -83,8 +83,8 @@ void py_bind_reduce_to_root(py::module& module) {
             py::arg("output_tensor_l") = std::nullopt,
             py::arg("output_tensor_s") = std::nullopt,
             py::arg("output_tensor_m") = std::nullopt,
-            py::arg("intermediate_tensor_l") = std::nullopt,
-            py::arg("intermediate_tensor_s_m") = std::nullopt,
+            py::arg("intermediate_tensor") = std::nullopt,
+            py::arg("input_mux_cores") = std::nullopt,
             py::arg("topology").noconvert() = tt::tt_fabric::Topology::Linear});
     module.def(
         "reduce_to_root_compute_intermediate_tensor_spec",
@@ -93,6 +93,7 @@ void py_bind_reduce_to_root(py::module& module) {
         py::arg("input_tensor_s"),
         py::arg("input_tensor_m"),
         py::arg("root_coord"),
-        py::arg("topology"));
+        py::arg("topology"),
+        py::arg("input_mux_cores") = std::nullopt);
 }
 }  // namespace ttnn::operations::ccl

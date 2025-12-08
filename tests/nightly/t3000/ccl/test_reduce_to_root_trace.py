@@ -80,7 +80,7 @@ def compute_reference_reduce_to_root(
 @pytest.mark.parametrize(
     "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 207872}),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 217872}),
     ],
     indirect=["device_params"],
     ids=["fabric_1d_linear_trace"],
@@ -99,13 +99,13 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
     l_shape = [8, 128 * num_cores]
     s_shape = [8, 32 * num_cores]
     m_shape = [8, 32 * num_cores]
-    intermediate_shapes = [
-        [8, 192 * num_cores],
-        [2, 8, 32 * num_cores],
-    ]
+    intermediate_shapes = [[8, 192 * num_cores]]
     dtype = ttnn.bfloat16
     layout = ttnn.TILE_LAYOUT
     tile = ttnn.Tile((8, 32))
+
+    # mux cores
+    mux_cores = [ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 1), ttnn.CoreCoord(2, 2), ttnn.CoreCoord(2, 3)]
 
     # Shard config
     shard_grid = ttnn.CoreRangeSet(
@@ -159,22 +159,13 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
     mesh_mapper2 = ttnn.create_mesh_mapper(submesh_device, mesh_mapper_config2)
 
     # Create intermediate tensors
-    intermediate_l = ttnn.from_torch(
+    intermediate = ttnn.from_torch(
         torch.zeros(intermediate_shapes[0], dtype=torch.bfloat16),
         device=submesh_device,
         layout=layout,
         tile=tile,
         dtype=dtype,
         memory_config=mesh_config_int_l,
-        mesh_mapper=mesh_mapper2,
-    )
-    intermediate_sm = ttnn.from_torch(
-        torch.zeros(intermediate_shapes[1], dtype=torch.bfloat16),
-        device=submesh_device,
-        layout=layout,
-        tile=tile,
-        dtype=dtype,
-        memory_config=mem_config_sm,
         mesh_mapper=mesh_mapper2,
     )
 
@@ -240,9 +231,9 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
         s_tensor,
         m_tensor,
         root_coord=ttnn.MeshCoordinate(root_coord),
-        intermediate_tensor_l=intermediate_l,
-        intermediate_tensor_s_m=intermediate_sm,
+        intermediate_tensor=intermediate,
         topology=ttnn.Topology.Linear,
+        input_mux_cores=mux_cores,
     )
     ttnn.synchronize_device(submesh_device)
 
@@ -255,9 +246,9 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
             s_tensor,
             m_tensor,
             root_coord=ttnn.MeshCoordinate(root_coord),
-            intermediate_tensor_l=intermediate_l,
-            intermediate_tensor_s_m=intermediate_sm,
+            intermediate_tensor=intermediate,
             topology=ttnn.Topology.Linear,
+            input_mux_cores=mux_cores,
         )
     ttnn.end_trace_capture(submesh_device, trace_id_warmup, cq_id=0)
     ttnn.synchronize_device(submesh_device)
@@ -271,9 +262,9 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
             s_tensor,
             m_tensor,
             root_coord=ttnn.MeshCoordinate(root_coord),
-            intermediate_tensor_l=intermediate_l,
-            intermediate_tensor_s_m=intermediate_sm,
+            intermediate_tensor=intermediate,
             topology=ttnn.Topology.Linear,
+            input_mux_cores=mux_cores,
         )
 
     logger.info("Starting Trace perf test...")
@@ -315,7 +306,6 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
     # Check L tensor
     l_match = torch.allclose(out_l_root, l_ref, rtol=rtol, atol=atol)
     assert l_match, "L tensor output does not match reference after trace execution"
-    print("✓ L tensor matches reference")
 
     # Check S tensor (only column 0)
     s_cols_to_check = [i * 32 for i in range(8)]
@@ -323,7 +313,6 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
     s_ref_col0 = s_ref[:, s_cols_to_check]
     s_match = torch.allclose(s_output_col0, s_ref_col0, rtol=rtol, atol=atol)
     assert s_match, "S tensor output does not match reference after trace execution"
-    print("✓ S tensor matches reference")
 
     # Check M tensor (only column 0)
     m_cols_to_check = [i * 32 for i in range(8)]
@@ -331,6 +320,3 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
     m_ref_col0 = m_ref[:, m_cols_to_check]
     m_match = torch.allclose(m_output_col0, m_ref_col0, rtol=rtol, atol=atol)
     assert m_match, "M tensor output does not match reference after trace execution"
-    print("✓ M tensor matches reference")
-
-    print(f"\n✅ Trace test passed! All trace executions produced correct results!")

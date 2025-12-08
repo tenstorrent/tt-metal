@@ -139,7 +139,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     const auto& input_tensor_l = tensor_args.input_tensor_l;
     const auto& input_tensor_s = tensor_args.input_tensor_s;
     const auto& input_tensor_m = tensor_args.input_tensor_m;
-    const auto& intermediate_tensor_l = output_tensors.at(0)[0];
+    const auto& intermediate_tensor = output_tensors.at(0)[0];
 
     const auto& output_tensor_l = output_tensors.at(1)[0];
     const auto& output_tensor_s = output_tensors.at(1)[1];
@@ -201,14 +201,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     const uint32_t input_page_size_bytes = input_tensor_l.tensor_spec().compute_page_size_bytes();
     const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
-    // figure out packets
-    const auto [packet_size_bytes_initial, num_pages_per_packet, num_page_segments, total_packets] =
-        detail::compute_aligned_packet_dims(
-            input_tensor_l.dtype(), input_page_size_bytes, input_l_num_pages, l1_alignment);
-    printf("packet size initial : %u\n", packet_size_bytes_initial);
-
-    // HERE TODO TO DO MAKE SURE THIS IS CORRECT FOR BLACKHOLE CHANGE IT TO 8192
-    uint32_t packet_size_bytes = 2048;
+    uint32_t packet_size_bytes = input_num_tiles * input_page_size_bytes;
 
     // program!
     tt::tt_metal::Program program{};
@@ -219,23 +212,16 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     bool use_mla = true;
     uint32_t q_heads_parallel_factor = 1;
-    uint32_t head_dim_v = 128;
-    // auto q_shape = {1, 1, 8, 512} ; //{1, B, PNH, DH};  //PNH being number of heads = 8
-    // auto k_shape = {1, 8, 256, 512}; //{B, NKV, S, DH};  //NKV being number of experts. also assuming S = 256
-    // uint32_t B = 1;    // q_shape[1];
+    uint32_t head_dim_v = input_num_tiles * tile_width;
+    // auto q_shape = {1, 1, 8, 512} ; //{1, B, PNH, DH};
+    // auto k_shape = {1, 8, 256, 512}; //{B, NKV, S, DH};
     uint32_t PNH = 8;  // q_shape[2],
-    uint32_t S = 256;  // k_shape[2],
-    uint32_t DH = 128;  // k_shape[3];
-
-    uint32_t Bkv = 1;  // k_shape[0];
-    uint32_t St = S / tile_height;
+    uint32_t DH = input_num_tiles * tile_width;  // k_shape[3];
     uint32_t DHt = DH / tile_width;
     uint32_t vDHt = use_mla ? head_dim_v / tile_width : DHt;
     uint32_t PNHt = PNH / q_heads_parallel_factor / tile_height;
 
     const uint32_t Sq_chunk_t = PNHt;
-
-    printf("Bkv: %u, St: %u, DHt: %u, vDHt: %u, PNHt: %u, Sq_chunk_t: %u\n", Bkv, St, DHt, vDHt, PNHt, Sq_chunk_t);
 
     // uint32_t statistics_tiles = PNHt;
     // tt::DataFormat stats_df = tt::DataFormat::Float16_b;
@@ -297,7 +283,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             .set_page_size(packet_header_cb_id, packet_header_size_bytes)
             .set_tile_dims(packet_header_cb_id, stats_tile);
 
-    auto total_pkt_size = packet_size_bytes + 1024;  /// HEREE TO DO TODO FIX THIS
+    auto total_pkt_size = packet_size_bytes + 1024;
     constexpr auto packet_cb_id = tt::CBIndex::c_7;
     tt::tt_metal::CircularBufferConfig cb_packet_config =
         tt::tt_metal::CircularBufferConfig(2 * total_pkt_size, {{packet_cb_id, input_dataformat}})
@@ -486,8 +472,13 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     std::vector<CoreCoord> mux_cores = {
         CoreCoord(2, 0), CoreCoord(2, 1), CoreCoord(2, 2), CoreCoord(2, 3)};  // to be modified based on device type
+
+    if (operation_attributes.input_mux_cores.has_value()) {
+        mux_cores = operation_attributes.input_mux_cores.value();
+    }
+    auto all_mux_cores = mux_cores;
     if (is_sender_device) {
-        mux_cores = {CoreCoord(2, 0), CoreCoord(2, 2)};
+        mux_cores = {mux_cores[0], mux_cores[2]};
     }
 
     CoreRangeSet mux_core_range_set = CoreRangeSet(mux_cores);
@@ -685,12 +676,13 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     CoreCoord termination_master = termination_masters[0];
 
     for (uint32_t link_idx = 0; link_idx < num_links; link_idx++) {
-        uint32_t start_ix = link_idx == 0 ? 0 : 2;
+        uint32_t start_idx = link_idx == 0 ? 0 : 2;
         termination_master = termination_masters[link_idx];
         for (uint32_t dir = 0; dir < 2; dir++) {
-            CoreCoord mux_logical_core = dir == 0 ? CoreCoord(2, start_ix) : CoreCoord(2, start_ix + 1);
+            // CoreCoord mux_logical_core = dir == 0 ? CoreCoord(2, start_idx) : CoreCoord(2, start_idx + 1);
+            CoreCoord mux_logical_core = dir == 0 ? all_mux_cores[start_idx] : all_mux_cores[start_idx + 1];
             if (is_sender_device) {
-                mux_logical_core = link_idx == 0 ? CoreCoord(2, 0) : CoreCoord(2, 2);
+                mux_logical_core = link_idx == 0 ? all_mux_cores[0] : all_mux_cores[2];
             }
             if (mux_connection_valid(dir, is_leftmost, is_sender_device)) {
                 std::vector<uint32_t> mux_rt_args = {};
@@ -732,13 +724,13 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel, c, reader_runtime_args);
 
                 writer_runtime_args = {
-                    intermediate_tensor_l.buffer()->address(),
+                    intermediate_tensor.buffer()->address(),
                     semaphore_round1.address(),
                     core_noc_x,
                     core_noc_y,
                 };
-                CoreCoord mux_virtual_core = mesh_device->worker_core_from_logical_core(CoreCoord(2, start_ix));
-
+                // CoreCoord mux_virtual_core = mesh_device->worker_core_from_logical_core(CoreCoord(2, start_ix));
+                CoreCoord mux_virtual_core = mesh_device->worker_core_from_logical_core(all_mux_cores[start_idx]);
                 fabric_mux_rt_args(
                     c == termination_master,
                     tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
@@ -752,15 +744,19 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                 tt::tt_metal::SetRuntimeArgs(program, writer_kernel, c, writer_runtime_args);
 
             } else if (is_root_device) {
-                CoreCoord mux_virtual_core_fwd = mesh_device->worker_core_from_logical_core(CoreCoord(2, start_ix));
-                CoreCoord mux_virtual_core_bwd = mesh_device->worker_core_from_logical_core(CoreCoord(2, start_ix + 1));
+                // CoreCoord mux_virtual_core_fwd = mesh_device->worker_core_from_logical_core(CoreCoord(2, start_ix));
+                // CoreCoord mux_virtual_core_bwd = mesh_device->worker_core_from_logical_core(CoreCoord(2, start_ix +
+                // 1));
 
+                CoreCoord mux_virtual_core_fwd = mesh_device->worker_core_from_logical_core(all_mux_cores[start_idx]);
+                CoreCoord mux_virtual_core_bwd =
+                    mesh_device->worker_core_from_logical_core(all_mux_cores[start_idx + 1]);
                 reader_runtime_args = {
                     0,  // fabric_2_idx,
                     input_tensor_l.buffer()->address(),
                     input_tensor_s.buffer()->address(),
                     input_tensor_m.buffer()->address(),
-                    intermediate_tensor_l.buffer()->address(),
+                    intermediate_tensor.buffer()->address(),
                     semaphore_round1.address(),
                     semaphore_round2.address(),
                     core_noc_x,
@@ -801,14 +797,17 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                     core_noc_y};
                 tt::tt_metal::SetRuntimeArgs(program, writer_kernel, c, writer_runtime_args);
             } else if (is_root2_device) {
-                CoreCoord mux_virtual_core_fwd = mesh_device->worker_core_from_logical_core(CoreCoord(2, start_ix));
-                CoreCoord mux_virtual_core_bwd = mesh_device->worker_core_from_logical_core(CoreCoord(2, start_ix + 1));
-
+                // CoreCoord mux_virtual_core_fwd = mesh_device->worker_core_from_logical_core(CoreCoord(2, start_ix));
+                // CoreCoord mux_virtual_core_bwd = mesh_device->worker_core_from_logical_core(CoreCoord(2, start_ix +
+                // 1));
+                CoreCoord mux_virtual_core_fwd = mesh_device->worker_core_from_logical_core(all_mux_cores[start_idx]);
+                CoreCoord mux_virtual_core_bwd =
+                    mesh_device->worker_core_from_logical_core(all_mux_cores[start_idx + 1]);
                 reader_runtime_args = {
                     input_tensor_l.buffer()->address(),
                     input_tensor_s.buffer()->address(),
                     input_tensor_m.buffer()->address(),
-                    intermediate_tensor_l.buffer()->address(),
+                    intermediate_tensor.buffer()->address(),
                     semaphore_round1.address(),
                     core_noc_x,
                     core_noc_y};
@@ -826,7 +825,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel, c, reader_runtime_args);
                 writer_runtime_args = {
-                    intermediate_tensor_l.buffer()->address(), semaphore_round2.address(), core_noc_x, core_noc_y};
+                    intermediate_tensor.buffer()->address(), semaphore_round2.address(), core_noc_x, core_noc_y};
                 fabric_mux_rt_args(
                     c == termination_master,
                     tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,

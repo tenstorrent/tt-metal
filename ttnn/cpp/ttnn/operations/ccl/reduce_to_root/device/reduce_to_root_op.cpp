@@ -153,6 +153,13 @@ void ReduceToRootOp::validate(const operation_attributes_t& operation_attributes
     TT_FATAL(
         input_page_size_bytes % l1_alignment == 0 || input_page_size_bytes == l1_alignment,
         "Tensor page size must be 16 byte aligned");
+    // input mux cores should be 4
+    if (operation_attributes.input_mux_cores.has_value()) {
+        TT_FATAL(
+            operation_attributes.input_mux_cores.value().size() == 4,
+            "Input mux cores size must be 4, got {}",
+            operation_attributes.input_mux_cores.value().size());
+    }
 };
 
 ReduceToRootOp::spec_return_value_t ReduceToRootOp::compute_output_specs(
@@ -167,67 +174,16 @@ ReduceToRootOp::spec_return_value_t ReduceToRootOp::compute_output_specs(
         input_tensor_l.tensor_spec(), input_tensor_s.tensor_spec(), input_tensor_m.tensor_spec()};
 
     std::vector<TensorSpec> intermediate_specs;
-    // TODO:fix that to have only two intermediate tensors: one for l and one for sm
-    uint32_t input_num_pages_l = data_movement::get_num_pages(tensor_args.input_tensor_l);
-    uint32_t input_num_pages_sm = data_movement::get_num_pages(tensor_args.input_tensor_s) * 2;
-    printf("before intermediate specs calculation\n");
-    if (tensor_args.optional_intermediate_tensor_l.has_value()) {
-        printf(
-            "shape of optional intermediate tensor l: %u %u \n",
-            tensor_args.optional_intermediate_tensor_l.value().logical_shape()[0],
-            tensor_args.optional_intermediate_tensor_l.value().logical_shape()[1]);
-    }
-    if (tensor_args.optional_intermediate_tensor_s_m.has_value()) {
-        printf(
-            "shape of optional intermediate tensor s_m: %u %u %u\n",
-            tensor_args.optional_intermediate_tensor_s_m.value().logical_shape()[0],
-            tensor_args.optional_intermediate_tensor_s_m.value().logical_shape()[1],
-            tensor_args.optional_intermediate_tensor_s_m.value().logical_shape()[2]);
-    }
-    if (tensor_args.optional_intermediate_tensor_l.has_value() &&
-        tensor_args.optional_intermediate_tensor_s_m.has_value()) {
-        intermediate_specs.push_back(tensor_args.optional_intermediate_tensor_l.value().tensor_spec());
-        intermediate_specs.push_back(tensor_args.optional_intermediate_tensor_s_m.value().tensor_spec());
+    if (tensor_args.optional_intermediate_tensor.has_value()) {
+        intermediate_specs.push_back(tensor_args.optional_intermediate_tensor.value().tensor_spec());
         return {intermediate_specs, final_output_spec};
     }
-    for (uint32_t i = 0; i < 2; i++) {
-        uint32_t input_num_pages = (i == 0) ? input_num_pages_l : input_num_pages_sm;
-        printf("input num pages: %u for i %d \n", input_num_pages, i);
-        auto [packet_size_bytes, num_pages_per_packet, num_page_segments, total_packets] =
-            detail::compute_aligned_packet_dims(
-                input_tensor_l.dtype(),
-                final_output_spec[i].compute_page_size_bytes(),
-                input_num_pages,
-                ::hal::get_l1_alignment());
-
-        uint32_t packet_page_dim =
-            packet_size_bytes / tt::datum_size(datatype_to_dataformat_converter(input_tensor_l.dtype()));
-
-        printf(
-            "packet size bytes: %u, num pages per packet: %u, num page segments: %u, total packets: %u, packet page "
-            "dim: %u for i %d \n",
-            packet_size_bytes,
-            num_pages_per_packet,
-            num_page_segments,
-            total_packets,
-            packet_page_dim,
-            i);
-        Shape intermediate_shape{total_packets, packet_page_dim};
-        if (i == 0) {
-            intermediate_shape = Shape{
-                final_output_spec[i].memory_config().shard_spec()->shape[0],
-                final_output_spec[i].memory_config().shard_spec()->shape[1]};
-        } else {
-            intermediate_shape = Shape{
-                2 * final_output_spec[i].memory_config().shard_spec()->shape[0],
-                final_output_spec[i].memory_config().shard_spec()->shape[1]};
-        }
-        printf("intermediate shape: [%u, %u] for i %d \n", intermediate_shape[0], intermediate_shape[1], i);
-
-        TensorSpec intermediate_spec(intermediate_shape, final_output_spec[i].tensor_layout());
-        intermediate_specs.push_back(intermediate_spec);
-    }
-    printf("after intermediate specs calculation\n");
+    uint32_t shape_0 = final_output_spec[0].memory_config().shard_spec()->shape[0];
+    uint32_t shape_1 = final_output_spec[0].memory_config().shard_spec()->shape[1] +
+                       2 * final_output_spec[1].memory_config().shard_spec()->shape[1];
+    Shape intermediate_shape = Shape{shape_0, shape_1};
+    TensorSpec intermediate_spec(intermediate_shape, final_output_spec[0].tensor_layout());
+    intermediate_specs.push_back(intermediate_spec);
 
     return {intermediate_specs, final_output_spec};
 }
@@ -242,12 +198,8 @@ ReduceToRootOp::tensor_return_value_t ReduceToRootOp::create_output_tensors(
     std::vector<ttnn::Tensor> final_output_tensors;
 
     auto intermediate_output_tensor_l = create_device_tensor(output_specs.at(0)[0], mesh_device);
-    if (tensor_args.optional_intermediate_tensor_l.has_value()) {
-        intermediate_output_tensor_l = tensor_args.optional_intermediate_tensor_l.value();
-    }
-    auto intermediate_output_tensor_s_m = create_device_tensor(output_specs.at(0)[1], mesh_device);
-    if (tensor_args.optional_intermediate_tensor_s_m.has_value()) {
-        intermediate_output_tensor_s_m = tensor_args.optional_intermediate_tensor_s_m.value();
+    if (tensor_args.optional_intermediate_tensor.has_value()) {
+        intermediate_output_tensor_l = tensor_args.optional_intermediate_tensor.value();
     }
 
     auto final_output_tensor_l = create_device_tensor(output_specs.at(1)[0], mesh_device);
@@ -265,7 +217,7 @@ ReduceToRootOp::tensor_return_value_t ReduceToRootOp::create_output_tensors(
         final_output_tensor_m = tensor_args.optional_output_tensor_m.value();
     }
 
-    intermediate_output_tensors = {intermediate_output_tensor_l, intermediate_output_tensor_s_m};
+    intermediate_output_tensors = {intermediate_output_tensor_l};
     final_output_tensors = {final_output_tensor_l, final_output_tensor_s, final_output_tensor_m};
 
     return {intermediate_output_tensors, final_output_tensors};
@@ -283,8 +235,8 @@ ReduceToRootOp::ReduceToRoot::cached_mesh_workload_t ReduceToRootOp::ReduceToRoo
     auto sd_id = mesh_device->get_sub_device_ids().at(0);
     auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
-    // 3 semaphores: first for devices 0,1, second for devices 2,3, third for devices 1 and 2
-    for (size_t i = 0; i < 3; ++i) {
+    // 2 semaphores: one for each round
+    for (size_t i = 0; i < 2; ++i) {
         semaphores.push_back(ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0));
     }
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready in reduce_to_root op");

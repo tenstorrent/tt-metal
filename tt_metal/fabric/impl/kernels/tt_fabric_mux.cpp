@@ -108,7 +108,6 @@ void forward_data(
     uint8_t channel_id) {
     bool has_unsent_payload = get_ptr_val(my_channel_free_slots_stream_id.get()) != NUM_BUFFERS;
     if (has_unsent_payload) {
-        DPRINT << "channel id: " << (uint32_t)channel_id << " has unsent payload\n";
         size_t buffer_address = channel.get_buffer_address(worker_interface.local_write_counter.get_buffer_index());
         invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
@@ -128,7 +127,6 @@ void forward_data(
         if (channel_connection_established) {
             worker_interface.notify_worker_of_read_counter_update();
         }
-        DPRINT << "end of forwarding data for channel id: " << (uint32_t)channel_id << "\n";
     }
 
     tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR, true>(
@@ -178,7 +176,6 @@ void kernel_main() {
     size_t connection_handshake_address = connection_handshake_base_address;
     size_t sender_flow_control_address = sender_flow_control_base_address;
 
-    DPRINT << "setting up channels WITH NUM: " << (uint32_t)NUM_FULL_SIZE_CHANNELS << "\n";
     for (uint8_t i = 0; i < NUM_FULL_SIZE_CHANNELS; i++) {
         setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
             &full_size_channels[i],
@@ -193,7 +190,6 @@ void kernel_main() {
             StreamId{channel_stream_ids[i]});
     }
 
-    DPRINT << "AFTER setting up channels\n";
     for (uint8_t i = 0; i < NUM_HEADER_ONLY_CHANNELS; i++) {
         setup_channel<NUM_BUFFERS_HEADER_ONLY_CHANNEL>(
             &header_only_channels[i],
@@ -212,21 +208,15 @@ void kernel_main() {
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_address);
 
     // wait for fabric router to be ready before setting up the connection
-    DPRINT << "waiting for fabric router to be ready " << (uint32_t)wait_for_fabric_endpoint << "\n";
     if constexpr (wait_for_fabric_endpoint) {
-        DPRINT << "waiting for fabric endpoint ready\n";
         tt::tt_fabric::wait_for_fabric_endpoint_ready(
             fabric_connection.edm_noc_x,
             fabric_connection.edm_noc_y,
             fabric_router_status_address,
             local_fabric_router_status_address);
-        DPRINT << "after waiting for fabric endpoint ready\n";
     }
-
-    DPRINT << "opening fabric connection\n";
     constexpr bool use_worker_allocated_credit_address = CORE_TYPE == ProgrammableCoreType::IDLE_ETH;
     fabric_connection.open<use_worker_allocated_credit_address>();
-    DPRINT << "after opening fabric connection\n";
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
 
@@ -284,5 +274,4 @@ void kernel_main() {
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
     set_l1_data_cache<false>();
-    DPRINT << "fabric mux terminated normally\n";
 }

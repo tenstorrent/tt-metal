@@ -18,8 +18,8 @@ std::vector<ttnn::Tensor> ExecuteReduceToRoot::invoke(
     const std::optional<ttnn::Tensor>& optional_output_tensor_l,
     const std::optional<ttnn::Tensor>& optional_output_tensor_s,
     const std::optional<ttnn::Tensor>& optional_output_tensor_m,
-    const std::optional<ttnn::Tensor>& optional_intermediate_tensor_l,
-    const std::optional<ttnn::Tensor>& optional_intermediate_tensor_s_m) {
+    const std::optional<ttnn::Tensor>& optional_intermediate_tensor,
+    const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores) {
     // first output tensor in list is intermediate and is discarded
     return ttnn::prim::reduce_to_root(
                input_tensor_l,
@@ -30,8 +30,8 @@ std::vector<ttnn::Tensor> ExecuteReduceToRoot::invoke(
                optional_output_tensor_l,
                optional_output_tensor_s,
                optional_output_tensor_m,
-               optional_intermediate_tensor_l,
-               optional_intermediate_tensor_s_m)
+               optional_intermediate_tensor,
+               input_mux_cores)
         .at(1);
 }
 
@@ -40,12 +40,14 @@ std::vector<ttnn::TensorSpec> reduce_to_root_compute_intermediate_tensor_spec(
     const ttnn::Tensor& input_tensor_s,
     const ttnn::Tensor& input_tensor_m,
     const MeshCoordinate& root_coord,
-    const tt::tt_fabric::Topology topology) {
+    const tt::tt_fabric::Topology topology,
+    const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores) {
     ReduceToRootOp::operation_attributes_t attrs{
         root_coord,
         topology,
+        input_mux_cores,
         {input_tensor_l.tensor_spec(), input_tensor_s.tensor_spec(), input_tensor_m.tensor_spec()}};
-    ReduceToRootOp::tensor_args_t tensors{input_tensor_l, input_tensor_s, input_tensor_m, std::nullopt, std::nullopt};
+    ReduceToRootOp::tensor_args_t tensors{input_tensor_l, input_tensor_s, input_tensor_m, std::nullopt};
 
     return ReduceToRootOp::compute_output_specs(attrs, tensors).at(0);
 }

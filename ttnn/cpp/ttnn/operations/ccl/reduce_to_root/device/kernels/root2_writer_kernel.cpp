@@ -89,7 +89,6 @@ void kernel_main() {
         local_teardown_address,
         local_buffer_index_address);
     mux_connection_handle = &mux_connection;
-    // DPRINT << "after building connection to fabric endpoint\n";
     tt::tt_fabric::wait_for_fabric_endpoint_ready(
         fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
 
@@ -115,21 +114,20 @@ void kernel_main() {
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr);
     noc_semaphore_wait_min(local_semaphore_ptr, 1);
     noc_semaphore_set(local_semaphore_ptr, 0);
-
     cb_wait_front(cb_id_l, input_num_tiles);
     uint32_t src_page_base_addr = get_read_ptr(cb_id_l);
-    tt_memmove<false, false, false, 0>(packet_base_addr, src_page_base_addr, payload_size_bytes);
+    tt_memmove<true, false, false, 0>(packet_base_addr, src_page_base_addr, payload_size_bytes);
     cb_pop_front(cb_id_l, input_num_tiles);
 
     cb_wait_front(cb_id_s, 1);
     const uint32_t src_page_base_addr_s = get_read_ptr(cb_id_s);
-    tt_memmove<false, false, false, 0>(
+    tt_memmove<true, false, false, 0>(
         packet_base_addr + payload_size_bytes, src_page_base_addr_s, aligned_page_size_bytes);
     cb_pop_front(cb_id_s, 1);
 
     cb_wait_front(cb_id_m, 1);
     const uint32_t src_page_base_addr_m = get_read_ptr(cb_id_m);
-    tt_memmove<false, false, false, 0>(
+    tt_memmove<true, false, false, 0>(
         packet_base_addr + payload_size_bytes + aligned_page_size_bytes, src_page_base_addr_m, aligned_page_size_bytes);
     cb_pop_front(cb_id_m, 1);
     cb_push_back(packet_cb_id, 1);

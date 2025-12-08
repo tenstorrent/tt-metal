@@ -195,19 +195,19 @@ void kernel_main() {
     uint64_t packet_noc_addr = get_noc_addr(core_noc_x, core_noc_y, intermediate_base_addr);
     noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
 
-    tt_memmove<false, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
+    tt_memmove<true, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
     cb_push_back(receiver_cb_id_l, input_num_tiles);
     //  now receiving s and m
     cb_reserve_back(receiver_cb_id_s, 1);
     cb_reserve_back(receiver_cb_id_m, 1);
 
     uint32_t dest_page_base_addr_s = get_write_ptr(receiver_cb_id_s);
-    tt_memmove<false, false, false, 0>(
+    tt_memmove<true, false, false, 0>(
         dest_page_base_addr_s, packet_l1_addr + packet_size_bytes, aligned_page_size_bytes);
     cb_push_back(receiver_cb_id_s, 1);
 
     uint32_t dest_page_base_addr_m = get_write_ptr(receiver_cb_id_m);
-    tt_memmove<false, false, false, 0>(
+    tt_memmove<true, false, false, 0>(
         dest_page_base_addr_m, packet_l1_addr + packet_size_bytes + aligned_page_size_bytes, aligned_page_size_bytes);
     cb_push_back(receiver_cb_id_m, 1);
 
@@ -300,7 +300,7 @@ void kernel_main() {
     packet_noc_addr = get_noc_addr(core_noc_x, core_noc_y, intermediate_base_addr);
     noc_async_read(packet_noc_addr, packet_l1_addr, new_packet_size_bytes);
 
-    tt_memmove<false, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
+    tt_memmove<true, false, false, 0>(dest_page_base_addr, packet_l1_addr, packet_size_bytes);
     cb_push_back(receiver_cb_id_l, input_num_tiles);
 
     cb_reserve_back(receiver_cb_id_s, 1);
@@ -308,9 +308,9 @@ void kernel_main() {
     dest_page_base_addr_s = get_write_ptr(receiver_cb_id_s);
     dest_page_base_addr_m = get_write_ptr(receiver_cb_id_m);
 
-    tt_memmove<false, false, false, 0>(
+    tt_memmove<true, false, false, 0>(
         dest_page_base_addr_s, packet_l1_addr + packet_size_bytes, aligned_page_size_bytes);
-    tt_memmove<false, false, false, 0>(
+    tt_memmove<true, false, false, 0>(
         dest_page_base_addr_m, packet_l1_addr + packet_size_bytes + aligned_page_size_bytes, aligned_page_size_bytes);
     cb_push_back(receiver_cb_id_s, 1);
     cb_push_back(receiver_cb_id_m, 1);

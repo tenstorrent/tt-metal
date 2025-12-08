@@ -23,8 +23,8 @@ struct ExecuteReduceToRoot {
         const std::optional<ttnn::Tensor>& optional_output_tensor_l = std::nullopt,
         const std::optional<ttnn::Tensor>& optional_output_tensor_s = std::nullopt,
         const std::optional<ttnn::Tensor>& optional_output_tensor_m = std::nullopt,
-        const std::optional<ttnn::Tensor>& optional_intermediate_tensor_l = std::nullopt,
-        const std::optional<ttnn::Tensor>& optional_intermediate_tensor_s_m = std::nullopt);
+        const std::optional<ttnn::Tensor>& optional_intermediate_tensor = std::nullopt,
+        const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores = std::nullopt);
 };
 
 std::vector<ttnn::TensorSpec> reduce_to_root_compute_intermediate_tensor_spec(
@@ -32,7 +32,8 @@ std::vector<ttnn::TensorSpec> reduce_to_root_compute_intermediate_tensor_spec(
     const ttnn::Tensor& input_tensor_s,
     const ttnn::Tensor& input_tensor_m,
     const MeshCoordinate& root_coord,
-    tt::tt_fabric::Topology topology);
+    tt::tt_fabric::Topology topology,
+    const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores);
 
 }  // namespace operations::ccl
 
