@@ -14,6 +14,26 @@ import ttnn
 from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, tt_dtype_to_np_dtype
 
 
+def update_for_unsigned_widening(py_tensor, py_tensor_after_round_trip):
+    if py_tensor.dtype == torch.int16:
+        # TTNN does not have int16 type, so roundtrip with default parameters will
+        # convert types as `int16 -> uint16 -> int32`
+        return py_tensor_after_round_trip.to(torch.int16)
+
+    elif py_tensor.dtype == torch.int32:
+        # Same for `int32 -> uint32 -> int64` conversion sequence
+        return py_tensor_after_round_trip.to(torch.int32)
+
+    elif py_tensor.dtype == np.int16:
+        return py_tensor_after_round_trip.astype(np.int16)
+
+    elif py_tensor.dtype == np.int32:
+        return py_tensor_after_round_trip.astype(np.int32)
+
+    else:
+        return py_tensor_after_round_trip
+
+
 @pytest.mark.parametrize("convert_to_device", [True, False])
 @pytest.mark.parametrize(
     "tt_dtype",
@@ -70,23 +90,9 @@ def test_tensor_conversion_with_tt_dtype(python_lib, shape, tt_dtype, convert_to
     elif python_lib == np:
         py_tensor_after_round_trip = tt_tensor.to_numpy()
 
-    if py_tensor.dtype == torch.int16:
-        # TTNN does not have int16 type, so roundtrip with default parameters will
-        # convert types as `int16 -> uint16 -> int32`
-        py_tensor_after_round_trip = py_tensor_after_round_trip.to(torch.int16)
-
-    elif py_tensor.dtype == torch.int32:
-        # Same for `int32 -> uint32 -> int64` conversion sequence
-        py_tensor_after_round_trip = py_tensor_after_round_trip.to(torch.int32)
-
-    elif py_tensor.dtype == np.int16:
-        py_tensor_after_round_trip = py_tensor_after_round_trip.astype(np.int16)
-
-    elif py_tensor.dtype == np.int32:
-        py_tensor_after_round_trip = py_tensor_after_round_trip.astype(np.int32)
+    py_tensor_after_round_trip = update_for_unsigned_widening(py_tensor, py_tensor_after_round_trip)
 
     assert py_tensor.dtype == py_tensor_after_round_trip.dtype
-
     assert py_tensor.shape == py_tensor_after_round_trip.shape
 
     allclose_kwargs = {}
@@ -169,6 +175,8 @@ def test_tensor_conversion_with_python_dtype(python_lib, shape, python_dtype_str
         py_tensor_after_round_trip = tt_tensor.to_torch()
     elif python_lib == np:
         py_tensor_after_round_trip = tt_tensor.to_numpy()
+
+    py_tensor_after_round_trip = update_for_unsigned_widening(py_tensor, py_tensor_after_round_trip)
 
     if python_dtype_str in ("int64", "float16"):
         pytest.xfail(
