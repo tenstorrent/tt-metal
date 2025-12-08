@@ -107,14 +107,21 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor;
 
+    bool use_single_core = (operation_attributes.use_low_perf) || (!operation_attributes.use_multicore) ||
+                           (operation_attributes.sub_core_grids.has_value() &&
+                            (operation_attributes.sub_core_grids.value().num_cores() < 2));
+    if (use_single_core) {
+        return program::TilizeSingleCoreProgramFactory{};
+    }
+
     if (input_tensor_a.memory_config().is_sharded()) {
+        TT_FATAL(
+            !operation_attributes.sub_core_grids.has_value(),
+            "Sharded tilize does not support sub core grid specification");
         return program::TilizeMultiCoreShardedProgramFactory{};
     }
     if (!operation_attributes.enough_space_height) {
         return program::TilizeMultiCoreBlockProgramFactory{};
-    }
-    if (!operation_attributes.use_multicore) {
-        return program::TilizeSingleCoreProgramFactory{};
     }
 
     return program::TilizeMultiCoreInterleavedProgramFactory{};
@@ -133,7 +140,9 @@ TilizeDeviceOperation::invoke(
     const std::optional<DataType>& output_dtype,
     const bool use_multicore,
     const bool enough_space_width,
-    const bool enough_space_height) {
+    const bool enough_space_height,
+    const bool use_low_perf,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     return {
         TilizeDeviceOperation::operation_attributes_t{
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
@@ -141,6 +150,8 @@ TilizeDeviceOperation::invoke(
             .use_multicore = use_multicore,
             .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,
+            .use_low_perf = use_low_perf,
+            .sub_core_grids = sub_core_grids,
         },
         TilizeDeviceOperation::tensor_args_t{.input_tensor = input_tensor}};
 }

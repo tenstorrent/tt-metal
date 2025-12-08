@@ -14,6 +14,8 @@ struct operation_attributes_t {
     bool use_multicore = false;
     bool enough_space_width = false;
     bool enough_space_height = false;
+    const bool use_low_perf;
+    const std::optional<CoreRangeSet> sub_core_grids;
 };
 
 struct tensor_args_t {

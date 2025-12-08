@@ -17,6 +17,7 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "common/tt_backend_api_types.hpp"
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
@@ -25,7 +26,7 @@ class ControlPlaneFixture : public ::testing::Test {
    protected:
        tt::ARCH arch_{tt::ARCH::Invalid};
        void SetUp() override {
-           auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+           auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
            if (not slow_dispatch) {
                log_info(
                    tt::LogTest,
@@ -156,7 +157,12 @@ protected:
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
-class Fabric1DTensixFixture : public BaseFabricFixture {
+// Template base class for Tensix fixtures with Galaxy skip logic
+template <
+    tt::tt_fabric::FabricConfig FabricConfigValue,
+    tt::tt_fabric::FabricTensixConfig TensixConfigValue,
+    tt::tt_fabric::FabricUDMMode UDMModeValue = tt::tt_fabric::FabricUDMMode::DISABLED>
+class FabricTensixFixtureTemplate : public BaseFabricFixture {
 private:
     inline static bool should_skip_ = false;
 
@@ -167,21 +173,32 @@ protected:
             should_skip_ = true;
             return;
         }
-        BaseFabricFixture::DoSetUpTestSuite(
-            tt::tt_fabric::FabricConfig::FABRIC_1D, std::nullopt, tt::tt_fabric::FabricTensixConfig::MUX);
+        BaseFabricFixture::DoSetUpTestSuite(FabricConfigValue, std::nullopt, TensixConfigValue, UDMModeValue);
     }
+
     static void TearDownTestSuite() {
         if (!should_skip_) {
             BaseFabricFixture::DoTearDownTestSuite();
         }
     }
+
     void SetUp() override {
         if (should_skip_) {
-            GTEST_SKIP() << "Fabric1DTensixFixture tests are not supported on Galaxy systems";
+            GTEST_SKIP() << "Tensix fixture tests are not supported on Galaxy systems";
         }
         BaseFabricFixture::SetUp();
     }
 };
+
+// Concrete fixture types using the template
+using Fabric1DTensixFixture =
+    FabricTensixFixtureTemplate<tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricTensixConfig::MUX>;
+
+using NightlyFabric1DTensixFixture =
+    FabricTensixFixtureTemplate<tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricTensixConfig::MUX>;
+
+using NightlyFabric2DTensixFixture =
+    FabricTensixFixtureTemplate<tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricTensixConfig::MUX>;
 
 class NightlyFabric1DFixture : public BaseFabricFixture {
 protected:
@@ -201,7 +218,7 @@ protected:
         BaseFabricFixture::DoSetUpTestSuite(
             tt::tt_fabric::FabricConfig::FABRIC_2D,
             std::nullopt,
-            tt_fabric::FabricTensixConfig::DISABLED,
+            tt_fabric::FabricTensixConfig::UDM,
             tt_fabric::FabricUDMMode::ENABLED);
     }
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
@@ -213,7 +230,7 @@ protected:
         BaseFabricFixture::DoSetUpTestSuite(
             tt::tt_fabric::FabricConfig::FABRIC_2D,
             std::nullopt,
-            tt_fabric::FabricTensixConfig::DISABLED,
+            tt_fabric::FabricTensixConfig::UDM,
             tt_fabric::FabricUDMMode::ENABLED);
     }
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
@@ -244,6 +261,50 @@ private:
     void TearDown() override {
         BaseFabricFixture::DoTearDownTestSuite();
         tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    }
+};
+
+class Galaxy1x32Fabric1DFixture : public BaseFabricFixture {
+public:
+    static constexpr std::string_view kMeshGraphDescriptorRelativePath =
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.textproto";
+
+protected:
+    inline static bool should_skip_ = false;
+
+    static void SetUpTestSuite() {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        if (cluster.get_cluster_type() != tt::tt_metal::ClusterType::GALAXY ||
+            tt::tt_metal::GetNumAvailableDevices() < 32) {
+            should_skip_ = true;
+            return;
+        }
+
+        std::filesystem::path mesh_graph_desc_path =
+            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+            kMeshGraphDescriptorRelativePath;
+        TT_FATAL(
+            std::filesystem::exists(mesh_graph_desc_path),
+            "Galaxy1x32Fabric1DFixture requires mesh graph descriptor {} but it was not found",
+            mesh_graph_desc_path.string());
+
+        tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(mesh_graph_desc_path.string(), {});
+        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_1D);
+    }
+
+    static void TearDownTestSuite() {
+        if (should_skip_) {
+            return;
+        }
+        BaseFabricFixture::DoTearDownTestSuite();
+        tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    }
+
+    void SetUp() override {
+        if (should_skip_) {
+            GTEST_SKIP() << "Galaxy1x32Fabric1DFixture requires a Galaxy system with at least 32 chips.";
+        }
+        BaseFabricFixture::SetUp();
     }
 };
 
@@ -309,7 +370,10 @@ void FabricUnicastCommon(
 void UDMFabricUnicastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
-    const std::tuple<RoutingDirection, uint32_t /*num_hops*/>& pair_ordered_dir);
+    const std::variant<
+        std::tuple<RoutingDirection, uint32_t /*num_hops*/>,
+        std::tuple<uint32_t /*src_node*/, uint32_t /*dest_node*/>>& routing_info,
+    std::optional<RoutingDirection> override_initial_direction = std::nullopt);
 
 void FabricMulticastCommon(
     BaseFabricFixture* fixture,

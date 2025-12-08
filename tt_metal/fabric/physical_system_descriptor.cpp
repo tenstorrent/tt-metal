@@ -66,7 +66,7 @@ TrayID get_tray_id_for_chip(
 
 std::pair<TrayID, ASICLocation> get_asic_position(
     tt::umd::Cluster& cluster, ChipId chip_id, bool using_mock_cluster_desc) {
-    auto cluster_desc = cluster.get_cluster_description();
+    auto* cluster_desc = cluster.get_cluster_description();
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB_WORMHOLE ||
         cluster_desc->get_board_type(chip_id) == BoardType::UBB_BLACKHOLE) {
         constexpr std::string_view ubb_mobo_name = "S7T-MB";
@@ -210,6 +210,10 @@ void PhysicalSystemDescriptor::resolve_hostname_uniqueness() {
 }
 
 void PhysicalSystemDescriptor::run_discovery(bool run_global_discovery, bool run_live_discovery) {
+    // Barrier to ensure all MPI ranks are synchronized and ready to communicate.
+    // This is especially important when using rankfiles with hostnames that may require DNS resolution,
+    // as MPI connections may not be fully established when discovery starts.
+    distributed_context_->barrier();
     this->resolve_hostname_uniqueness();
     this->run_local_discovery(run_live_discovery);
     if (run_global_discovery) {
@@ -277,7 +281,7 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
         add_local_asic_descriptor(src_unique_id, src);
         std::unordered_map<ChipId, size_t> visited_dst;
         // Populate ASIC Graph for Current Host
-        for (auto& [chan, dst] : conn) {
+        for (const auto& [chan, dst] : conn) {
             auto dst_chip = std::get<0>(dst);
             auto dst_chan = std::get<1>(dst);
             if (visited_dst.find(dst_chip) == visited_dst.end()) {

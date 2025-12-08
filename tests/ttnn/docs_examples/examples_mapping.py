@@ -45,7 +45,6 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     # Matrix Multiplication
     "ttnn.matmul": matrix_multiplication.test_matmul,
     "ttnn.linear": matrix_multiplication.test_linear,
-    # "ttnn.matmul_batched_weights": matrix_multiplication.test_matmul_batched_weights, # Lack of example
     "ttnn.addmm": matrix_multiplication.test_addmm,
     "ttnn.sparse_matmul": matrix_multiplication.test_sparse_matmul,
     # Pointwise Unary
@@ -56,6 +55,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.asinh": eltwise_unary.test_asinh,
     "ttnn.atan": eltwise_unary.test_atan,
     "ttnn.atanh": eltwise_unary.test_atanh,
+    "ttnn.bitcast": eltwise_unary.test_bitcast,
     "ttnn.bitwise_not": eltwise_unary.test_bitwise_not,
     "ttnn.bitwise_left_shift": eltwise_unary.test_bitwise_left_shift,
     "ttnn.bitwise_right_shift": eltwise_unary.test_bitwise_right_shift,
@@ -339,6 +339,9 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.prod": reduction.test_prod,
     "ttnn.topk": reduction.test_topk,
     "ttnn.cumsum": reduction.test_cumsum,
+    "ttnn.ema": reduction.test_ema,
+    "ttnn.moe": reduction.test_moe,
+    "ttnn.manual_seed": reduction.test_manual_seed,
     # Data movement
     "ttnn.concat": data_movement.test_concat,
     "ttnn.nonzero": data_movement.test_nonzero,
@@ -360,7 +363,11 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     # Normalization
     "ttnn.group_norm": normalization.test_group_norm,
     "ttnn.layer_norm": normalization.test_layer_norm,
+    "ttnn.layer_norm_pre_all_gather": normalization.test_layernorm_distributed,
+    "ttnn.layer_norm_post_all_gather": normalization.test_layernorm_distributed,
     "ttnn.rms_norm": normalization.test_rms_norm,
+    "ttnn.rms_norm_pre_all_gather": normalization.test_rms_norm_distributed,
+    "ttnn.rms_norm_post_all_gather": normalization.test_rms_norm_distributed,
     "ttnn.batch_norm": normalization.test_batch_norm,
     "ttnn.softmax": normalization.test_softmax,
     "ttnn.scale_mask_softmax": normalization.test_scale_mask_softmax,
@@ -368,11 +375,8 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.scale_mask_softmax_in_place": normalization.test_scale_mask_softmax_in_place,
     "ttnn.scale_causal_mask_hw_dims_softmax_in_place": normalization.test_scale_causal_mask_hw_dims_softmax_in_place,
     # Normalization Program Configs
-    # "ttnn.SoftmaxProgramConfig": normalization.test_softmax_program_config, # Lack of example
     "ttnn.SoftmaxDefaultProgramConfig": normalization.test_softmax_default_program_config,
-    "ttnn.SoftmaxShardedMultiCoreProgramConfig": normalization.test_softmax_sharded_multi_core_program_config,
-    # Moreh Operations
-    # "ttnn.moreh_sum": moreh.test_moreh_sum, # Lack of example
+    "ttnn.SoftmaxShardedMultiCoreProgramConfig": normalization.test_scale_mask_softmax_in_place,
     # Transformers
     # "ttnn.transformer.split_query_key_value_and_split_heads": transformer.test_split_query_key_value_and_split_heads, # Lack of example
     # "ttnn.transformer.concatenate_heads": transformer.test_concatenate_heads, # Lack of example

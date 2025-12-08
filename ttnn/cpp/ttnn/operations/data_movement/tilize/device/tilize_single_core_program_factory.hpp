@@ -12,6 +12,7 @@ struct TilizeSingleCoreProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle unary_reader_kernel_id{};
         tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+        CoreRange* core;
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<TilizeSingleCoreProgramFactory::shared_variables_t>;
 

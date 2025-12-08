@@ -44,7 +44,9 @@ struct TilizeDeviceOperation {
         const std::optional<tt::tt_metal::DataType>& output_dtype,
         const bool use_multicore,
         const bool enough_space_width,
-        const bool enough_space_height);
+        const bool enough_space_height,
+        const bool use_low_perf,
+        const std::optional<CoreRangeSet>& sub_core_grids);
 };
 
 }  // namespace ttnn::operations::data_movement

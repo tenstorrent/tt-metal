@@ -26,7 +26,7 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
     auto a = tensor_args.input_tensor;
     auto output = tensor_return_value;
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-
+    auto sub_core_grids = operation_attributes.sub_core_grids;
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
@@ -44,8 +44,12 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
 
     IDevice* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
+    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRangeSet default_grid(default_cores);
+    CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
+
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
-        ttnn::split_blocks_for_tilize(grid_size, nblocks);
+        ttnn::split_blocks_for_tilize(available_grid, nblocks);
 
     constexpr uint32_t threshold_row_block = 32;
     if (num_tiles_per_row > threshold_row_block) {
@@ -67,7 +71,8 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
                  has_cliff_col,
                  full_cores_per_row,
                  full_cores_per_col] =
-                    ttnn::split_blocks_for_tilize_wh(grid_size, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
+                    ttnn::split_blocks_for_tilize_wh(
+                        available_grid, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
             if (ncores < ncores_block) {
                 return TilizeMultiCoreBlockProgramFactory::create(
                     operation_attributes, tensor_args, tensor_return_value);
@@ -137,7 +142,7 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
     uint32_t ncores_full = ncores - has_cliff;
     uint32_t tile_start_id = 0;
     uint32_t row_start_id = 0;
-    const auto& cores = grid_to_cores(ncores, grid_size.x, grid_size.y, true);
+    const auto& cores = corerange_to_cores(available_grid);
     for (uint32_t i = 0; i < ncores_full; ++i) {
         const CoreCoord& core = cores[i];
 
@@ -168,7 +173,7 @@ TilizeMultiCoreInterleavedProgramFactory::cached_program_t TilizeMultiCoreInterl
     }
     if (has_cliff) {
         // the last core is a cliff core with nblocks_per_core_cliff blocks
-        const CoreCoord& core = cores.back();
+        const CoreCoord& core = cores[ncores_full];
 
         // reader runtime args
         const std::array reader_rt_args = {
@@ -204,12 +209,16 @@ void TilizeMultiCoreInterleavedProgramFactory::override_runtime_arguments(
     const tilize::tensor_return_value_t& tensor_return_value) {
     auto src_buffer = tensor_args.input_tensor.buffer();
     auto dst_buffer = tensor_return_value.buffer();
+    auto& program = cached_program.program;
+    auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
+    auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    auto& cores = cached_program.shared_variables.cores;
+    auto ncores = cores.size();
 
-    auto& reader_runtime_args_by_core =
-        tt::tt_metal::GetRuntimeArgs(cached_program.program, cached_program.shared_variables.unary_reader_kernel_id);
-    auto& writer_runtime_args_by_core =
-        tt::tt_metal::GetRuntimeArgs(cached_program.program, cached_program.shared_variables.unary_writer_kernel_id);
-    for (const auto& core : cached_program.shared_variables.cores) {
+    auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+    auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+    for (uint32_t i = 0; i < ncores; ++i) {
+        const CoreCoord& core = cores[i];
         {
             auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
             runtime_args[0] = src_buffer->address();

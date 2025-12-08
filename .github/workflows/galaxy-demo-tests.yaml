@@ -17,12 +17,15 @@ on:
           - llama3_70b_dp
           - falcon7b
           - sentence_bert
+          - whisper
           - sd35
           - flux1
           - motif
           - gpt-oss
           - wan22
           - mochi
+          - qwen3_32b
+          - qwen3_32b_long_context
   schedule:
     - cron: "0 0 * * *" # This cron schedule runs demo tests every day at 12am UTC
 jobs:

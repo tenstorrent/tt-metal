@@ -24,7 +24,7 @@ TilizeMultiCoreBlockProgramFactory::cached_program_t TilizeMultiCoreBlockProgram
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     auto a = tensor_args.input_tensor;
     auto output = tensor_return_value;
-
+    auto sub_core_grids = operation_attributes.sub_core_grids;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -34,6 +34,9 @@ TilizeMultiCoreBlockProgramFactory::cached_program_t TilizeMultiCoreBlockProgram
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
+    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRangeSet default_grid(default_cores);
+    CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
 
     uint32_t num_tiles_per_col = output.padded_shape()[-2] / TILE_HEIGHT;
     uint32_t num_tiles_per_row = output.padded_shape()[-1] / TILE_WIDTH;
@@ -55,7 +58,7 @@ TilizeMultiCoreBlockProgramFactory::cached_program_t TilizeMultiCoreBlockProgram
          has_cliff_col,
          full_cores_per_row,
          full_cores_per_col] =
-            ttnn::split_blocks_for_tilize_wh(grid_size, num_blocks, num_tiles_per_row, num_tiles_per_col);
+            ttnn::split_blocks_for_tilize_wh(available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col);
 
     uint32_t total_tiles_per_row =
         (full_cores_per_row * single_block_size) + (has_cliff_row * single_block_size_cliff_row);
@@ -211,7 +214,7 @@ TilizeMultiCoreBlockProgramFactory::cached_program_t TilizeMultiCoreBlockProgram
     }
 
     // RUNTIME ARGS
-    const auto& cores = grid_to_cores(ncores, grid_size.x, grid_size.y, true);
+    const auto& cores = corerange_to_cores(available_grid);
     uint32_t start_row_id = 0;
     uint32_t start_column_id = 0;
     uint32_t tile_start_id = 0;
@@ -287,10 +290,12 @@ void TilizeMultiCoreBlockProgramFactory::override_runtime_arguments(
     auto& cores = cached_program.shared_variables.cores;
     auto src_buffer = tensor_args.input_tensor.buffer();
     auto dst_buffer = tensor_return_value.buffer();
-
-    auto& reader_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(cached_program.program, reader_kernel_id);
-    auto& writer_runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(cached_program.program, writer_kernel_id);
-    for (const auto& core : cores) {
+    auto& program = cached_program.program;
+    auto ncores = cores.size();
+    auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+    auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+    for (uint32_t i = 0; i < ncores; ++i) {
+        const auto& core = cores[i];
         {
             auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
             runtime_args[0] = src_buffer->address();
