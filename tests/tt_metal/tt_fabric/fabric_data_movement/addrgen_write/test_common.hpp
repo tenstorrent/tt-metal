@@ -61,7 +61,10 @@ enum class AddrgenApiVariant {
     // Linear (1D) API variants
     LinearUnicastWrite,           // linear fabric_unicast_noc_unicast_write with addrgen
     LinearUnicastWriteWithState,  // linear fabric_unicast_noc_unicast_write_with_state with addrgen
-    LinearUnicastWriteSetState    // linear fabric_unicast_noc_unicast_write_set_state with addrgen
+    LinearUnicastWriteSetState,   // linear fabric_unicast_noc_unicast_write_set_state with addrgen
+    LinearScatterWrite,           // linear fabric_unicast_noc_scatter_write with addrgen
+    LinearScatterWriteWithState,  // linear fabric_unicast_noc_scatter_write_with_state with addrgen
+    LinearScatterWriteSetState    // linear fabric_unicast_noc_scatter_write_set_state with addrgen
 };
 
 // ---- Reusable defaults for addrgen tests ----

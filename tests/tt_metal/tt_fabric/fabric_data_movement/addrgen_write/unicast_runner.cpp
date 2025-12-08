@@ -564,26 +564,6 @@ void run_linear_unicast_write_test(HelpersFixture* fixture, const AddrgenTestPar
                       .set_page_size(CB_ID, src_aligned_page_size);
     (void)tt::tt_metal::CreateCircularBuffer(sender_prog, p.sender_core, cb_cfg);
 
-    // Reader kernel - simplified for BasicWrite only (no OPERATION_TYPE needed)
-    std::vector<uint32_t> reader_cta;
-    tt::tt_metal::TensorAccessorArgs(*src_buf).append_to(reader_cta);
-    reader_cta.push_back(static_cast<uint32_t>(OperationType::BasicWrite));  // OPERATION_TYPE
-    reader_cta.push_back(1u);                                                // SRC_IS_DRAM
-    reader_cta.push_back(NUM_PAGES);
-    reader_cta.push_back(p.page_size);
-    reader_cta.push_back(src_aligned_page_size);
-
-    auto reader_k = tt::tt_metal::CreateKernel(
-        sender_prog,
-        KDIR + "tx_reader_to_cb_addrgen.cpp",
-        p.sender_core,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = reader_cta,
-            .defines = defines});
-    tt::tt_metal::SetRuntimeArgs(sender_prog, reader_k, p.sender_core, {(uint32_t)src_buf->address()});
-
     // Helper to map linear API variant to OPERATION_TYPE and API_VARIANT compile-time parameters
     auto get_linear_operation_and_api_variant = [](AddrgenApiVariant variant) -> std::pair<OperationType, ApiVariant> {
         switch (variant) {
@@ -592,6 +572,9 @@ void run_linear_unicast_write_test(HelpersFixture* fixture, const AddrgenTestPar
                 return {OperationType::BasicWrite, ApiVariant::WithState};
             case AddrgenApiVariant::LinearUnicastWriteSetState:
                 return {OperationType::BasicWrite, ApiVariant::SetState};
+            case AddrgenApiVariant::LinearScatterWrite: return {OperationType::Scatter, ApiVariant::Basic};
+            case AddrgenApiVariant::LinearScatterWriteWithState: return {OperationType::Scatter, ApiVariant::WithState};
+            case AddrgenApiVariant::LinearScatterWriteSetState: return {OperationType::Scatter, ApiVariant::SetState};
             default:
                 TT_FATAL(false, "Unknown linear API variant");
                 return {OperationType::BasicWrite, ApiVariant::Basic};
@@ -599,6 +582,26 @@ void run_linear_unicast_write_test(HelpersFixture* fixture, const AddrgenTestPar
     };
 
     auto [operation_type, api_variant] = get_linear_operation_and_api_variant(p.api_variant);
+
+    // Reader kernel (DRAM->CB) - uses unified kernel with OPERATION_TYPE compile-time arg
+    std::vector<uint32_t> reader_cta;
+    tt::tt_metal::TensorAccessorArgs(*src_buf).append_to(reader_cta);
+    reader_cta.push_back(static_cast<uint32_t>(operation_type));  // OPERATION_TYPE
+    reader_cta.push_back(1u);                                     // SRC_IS_DRAM
+    reader_cta.push_back(NUM_PAGES);
+    reader_cta.push_back(p.page_size);            // Raw page size (actual data size to transfer)
+    reader_cta.push_back(src_aligned_page_size);  // Aligned page size (source buffer spacing)
+
+    auto reader_k = tt::tt_metal::CreateKernel(
+        sender_prog,
+        KDIR + "tx_reader_to_cb_addrgen.cpp",  // Unified reader kernel
+        p.sender_core,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .compile_args = reader_cta,
+            .defines = defines});
+    tt::tt_metal::SetRuntimeArgs(sender_prog, reader_k, p.sender_core, {(uint32_t)src_buf->address()});
 
     // Writer kernel (linear addrgen)
     std::vector<uint32_t> writer_cta;
@@ -608,6 +611,7 @@ void run_linear_unicast_write_test(HelpersFixture* fixture, const AddrgenTestPar
     writer_cta.push_back(NUM_PAGES);                              // TOTAL_PAGES
     writer_cta.push_back(p.page_size);                            // Raw page size (actual data size to transfer)
     writer_cta.push_back(dst_aligned_page_size);                  // Aligned page size (dest buffer addressing)
+    writer_cta.push_back(src_aligned_page_size);                  // Source aligned page size (CB stride for scatter)
 
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,
