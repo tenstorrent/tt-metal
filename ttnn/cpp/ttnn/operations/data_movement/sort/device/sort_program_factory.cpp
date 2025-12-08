@@ -656,7 +656,9 @@ uint32_t SortProgramFactoryCrossCoreDataExchange::get_number_of_tiles_per_core(
     switch (slicing_strategy) {
         case CrossCoreDataExchangeSortSlicingStrategy::USE_AS_MANY_CORES: {
             constexpr uint32_t MIN_TILES_PER_CORE = 2;
-            return std::max(Wt / total_number_of_cores, MIN_TILES_PER_CORE);
+            constexpr uint32_t MAX_TILES_PER_CORE = 128;
+            const auto max_val = std::max(Wt / total_number_of_cores, MIN_TILES_PER_CORE);
+            return std::min(MAX_TILES_PER_CORE, max_val);
         }
         case CrossCoreDataExchangeSortSlicingStrategy::FILL_CORES_FIRST:
         default: {
