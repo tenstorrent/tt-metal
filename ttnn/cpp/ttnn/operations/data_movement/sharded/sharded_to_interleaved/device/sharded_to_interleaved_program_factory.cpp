@@ -25,7 +25,7 @@ ShardedToInterleavedProgramFactory::cached_program_t ShardedToInterleavedProgram
     const auto& input = tensor_args.input_tensor;
     const uint32_t num_slices = operation_attributes.num_slices;
     const uint32_t slice_index = operation_attributes.slice_index;
-    const bool is_l1_aligned = operation_attributes.is_l1_aligned;
+    const bool is_l1_aligned = true;
 
     tt_metal::Program program{};
     uint32_t num_units_per_shard, input_unit_size, output_unit_size, num_units_per_shard_width,
