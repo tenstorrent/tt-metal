@@ -97,6 +97,80 @@ FORCE_INLINE void copy_input_to_output(
     }
 }
 
+FORCE_INLINE static float bfloat16_to_float(uint16_t bfloat_val) {
+    uint32_t uint32_data = ((uint32_t)bfloat_val) << 16;
+    float f;
+    std::memcpy(&f, &uint32_data, sizeof(f));
+    return f;
+}
+
+FORCE_INLINE static uint16_t float_to_bfloat16(float val) {
+    union {
+        float f;
+        uint32_t u;
+    } ret;
+    ret.f = val;
+    return uint16_t(ret.u >> 16);
+}
+
+template <typename number_type>
+FORCE_INLINE number_type perform_reduction(
+    number_type input, number_type source_value, ScatterReductionType scatter_reduction_type, DataFormat data_format) {
+    if (data_format == DataFormat::Float16_b) {
+        float a = bfloat16_to_float(input);
+        float b = bfloat16_to_float(source_value);
+        float c;
+        switch (scatter_reduction_type) {
+            case ScatterReductionType::ADD: {
+                c = a + b;
+                break;
+            }
+            case ScatterReductionType::MULTIPLY: {
+                c = a * b;
+                break;
+            }
+            case ScatterReductionType::AMAX: {
+                c = std::max(a, b);
+                break;
+            }
+            case ScatterReductionType::AMIN: {
+                c = std::min(a, b);
+                break;
+            }
+            case ScatterReductionType::INVALID: {
+                c = b;
+                break;
+            }
+            default: {
+                c = b;
+                break;
+            }
+        }
+        return float_to_bfloat16(c);
+    } else {
+        switch (scatter_reduction_type) {
+            case ScatterReductionType::ADD: {
+                return input + source_value;
+            }
+            case ScatterReductionType::MULTIPLY: {
+                return input * source_value;
+            }
+            case ScatterReductionType::AMAX: {
+                return std::max(input, source_value);
+            }
+            case ScatterReductionType::AMIN: {
+                return std::min(input, source_value);
+            }
+            case ScatterReductionType::INVALID: {
+                return source_value;
+            }
+            default: {
+                return source_value;
+            }
+        }
+    }
+}
+
 // performs scatter on data loaded to cb with load_to_cb
 template <typename number_type, typename index_type>
 FORCE_INLINE void scatter_along_chunk(
@@ -130,47 +204,13 @@ FORCE_INLINE void scatter_along_chunk(
         if (index_value < input_offset || index_value >= input_offset + input_chunk_size) {
             continue;
         }
-        ASSERT(
-            index_value < input_stick_size,
-            "Index value {} is bigger than input's dimension size {}.",
-            index_value,
-            input_stick_size);
         if (index_value >= input_stick_size) {
             continue;
         }
         volatile number_type& source_value = source_l1_read_ptr[index_in_index_chunk];
         const uint32_t& output_index = index_value - input_offset;
-        switch (scatter_reduction_type) {
-            case ScatterReductionType::INVALID: {
-                output_l1_write_ptr[output_index] = source_value;
-                break;
-            }
-
-            case ScatterReductionType::ADD: {
-                output_l1_write_ptr[output_index] += source_value;
-                break;
-            }
-
-            case ScatterReductionType::MULTIPLY: {
-                output_l1_write_ptr[output_index] *= source_value;
-                break;
-            }
-
-            case ScatterReductionType::AMIN: {
-                output_l1_write_ptr[output_index] = std::min(output_l1_write_ptr[output_index], source_value);
-                break;
-            }
-
-            case ScatterReductionType::AMAX: {
-                output_l1_write_ptr[output_index] = std::max(output_l1_write_ptr[output_index], source_value);
-                break;
-            }
-
-            default: {
-                output_l1_write_ptr[output_index] = source_value;
-                break;
-            }
-        }
+        output_l1_write_ptr[output_index] = perform_reduction<number_type>(
+            output_l1_write_ptr[output_index], source_value, scatter_reduction_type, get_dataformat(input_cb));
     }
 }
 
@@ -190,6 +230,7 @@ void kernel_main() {
     // 76800)
     const uint32_t index_chunk_size = get_arg_val<uint32_t>(6);
     const uint32_t source_chunk_size = get_arg_val<uint32_t>(7);
+    const auto scatter_reduction_type = static_cast<ScatterReductionType>(get_arg_val<uint32_t>(8));
 
     const auto input_addr_gtor = TensorAccessor(ctas.input_args, input_buffer_address, ctas.input_stick_size_bytes);
     const auto index_addr_gtor = TensorAccessor(ctas.index_args, index_buffer_address, ctas.index_stick_size_bytes);
@@ -200,8 +241,8 @@ void kernel_main() {
 
     constexpr uint32_t N = ctas.input_rank - 1;
     // generate 2 stick shape counters
-    const auto input_dims{make_shape_array_from_runtime_args<N>(8)};
-    const auto index_dims{make_shape_array_from_runtime_args<N>(8 + N)};
+    const auto input_dims{make_shape_array_from_runtime_args<N>(9)};
+    const auto index_dims{make_shape_array_from_runtime_args<N>(9 + N)};
 
     const auto index_strides = make_strides<N>(index_dims);
 
@@ -263,7 +304,8 @@ void kernel_main() {
                         ctas.input_stick_size,
                         input_offset,
                         input_chunk_length,
-                        index_chunk_length);
+                        index_chunk_length,
+                        scatter_reduction_type);
                     cb_pop_front(ctas.source_cb, ONE_PAGE);
                     cb_pop_front(ctas.index_cb, ONE_PAGE);
                 }

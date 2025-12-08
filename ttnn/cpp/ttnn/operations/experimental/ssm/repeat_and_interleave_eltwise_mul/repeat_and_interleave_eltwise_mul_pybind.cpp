@@ -17,7 +17,7 @@ namespace py = pybind11;
 void bind_repeat_and_interleave_eltwise_mul(py::module& module) {
     using OperationType = decltype(ttnn::experimental::repeat_and_interleave_eltwise_mul);
 
-    const auto doc = R"doc(
+    const auto* const doc = R"doc(
         Performs a special eltwise multiply for SSM models. Given tensor A with shape [1, 1, 32, 32] and tensor B with shape [1, 1, 32, W] where W is some multiple of 32, perform the following PyTorch equivalent:
             A.repeat(1, 1, 1, W) * B.repeat_interleave(32, dim=-1))doc";
 

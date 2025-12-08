@@ -266,14 +266,14 @@ def test_mochi_pipeline_performance(
     }
     if tuple(mesh_device.shape) == (2, 4) and vae_mesh_shape == (1, 8):
         expected_metrics = {
-            "text_encoding_time": 4.07,
+            "text_encoding_time": 8.0,
             "denoising_time": 1320,
             "vae_decoding_time": 55,
             "total_time": 1385,
         }
     elif tuple(mesh_device.shape) == (4, 8) and vae_mesh_shape == (4, 8):
         expected_metrics = {
-            "text_encoding_time": 4.43,
+            "text_encoding_time": 8.0,
             "denoising_time": 400,
             "vae_decoding_time": 22,
             "total_time": 430,

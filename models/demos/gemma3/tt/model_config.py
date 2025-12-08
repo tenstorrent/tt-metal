@@ -13,35 +13,24 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
-from models.demos.gemma3.tt.load_checkpoints import (
-    convert_hf_to_meta,
-    convert_meta_to_hf,
-    convert_vision_hf_to_meta,
-    convert_vision_meta_to_hf,
-    load_hf_state_dict,
-    load_meta_state_dict,
-    reverse_permute,
-    standardize_hf_keys,
-    standardize_hf_keys_multimodal,
-)
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
+from models.demos.gemma3.tt.load_checkpoints import convert_vision_hf_to_meta, convert_vision_meta_to_hf
 from models.tt_transformers.tt.common import (
     calculate_hidden_dim,
     encode_prompt_hf,
-    encode_prompt_instruct,
     get_base_model_name,
     get_out_subblock_w,
     nearest_multiple,
     num_to_core_range_set,
     rope_scaling_model_factory,
 )
-from models.tt_transformers.tt.model_config import (
-    CheckpointType,
-    MathFidelitySetting,
-    OpGroup,
-    PrecisionSetting,
-    TensorGroup,
+from models.tt_transformers.tt.load_checkpoints import (
+    convert_hf_to_meta,
+    convert_meta_to_hf,
+    reverse_permute,
+    standardize_hf_keys,
+    standardize_hf_keys_multimodal,
 )
+from models.tt_transformers.tt.model_config import MathFidelitySetting, OpGroup, PrecisionSetting, TensorGroup
 
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
@@ -411,7 +400,6 @@ class ModelArgs:
         self.tile_size = 32
         self.is_70b = False
         self.is_90b = False
-        self.from_hf_url = False  # updated below if true
         self.prefill_len_cutoff = 512 if is_blackhole() else 1024
         self.dummy_weights = dummy_weights
         self.cache_hf_flag = cache_hf  # Whether to cache HF model to avoid multiple loads (uses extra memory)
@@ -425,19 +413,9 @@ class ModelArgs:
         ), "FAKE_DEVICE has been renamed to MESH_DEVICE for consistency with vLLM, please update your environment variables and run again."
 
         # Remove trailing slashes so basename gets the right model name
-        LLAMA_DIR = os.getenv("LLAMA_DIR")
         HF_MODEL = os.getenv("HF_MODEL")
         self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
-        assert not (LLAMA_DIR and HF_MODEL), "Only one of LLAMA_DIR or HF_MODEL should be set"
-        if LLAMA_DIR:
-            if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH")]):
-                logger.warning("LLAMA_DIR will override LLAMA_CKPT_DIR and LLAMA_TOKENIZER_PATH")
-            self.CKPT_DIR = LLAMA_DIR
-            self.TOKENIZER_PATH = LLAMA_DIR
-            if not self.CACHE_PATH:
-                self.CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
-            self.model_name = os.path.basename(LLAMA_DIR.strip("/"))  # May be overridden by config
-        elif HF_MODEL:
+        if HF_MODEL:
             self.CKPT_DIR = HF_MODEL
             self.TOKENIZER_PATH = HF_MODEL
             if not self.CACHE_PATH:
@@ -447,11 +425,8 @@ class ModelArgs:
             self.model_name = HF_MODEL.strip("/").split("/")[
                 -1
             ]  # HF model names use / even on windows. May be overridden by config.
-            self.from_hf_url = True
         else:
-            assert (
-                False
-            ), "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct or LLAMA_DIR to a Meta-style checkpoint directory"
+            assert False, "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct"
 
         if not dummy_weights and not HF_MODEL:
             # Assert if all folders and files exist
@@ -484,31 +459,7 @@ class ModelArgs:
             raise ValueError(f"Batch size {self.max_batch_size} not supported")
 
         # Load model params
-        if HF_MODEL:
-            self.checkpoint_type = CheckpointType.HuggingFace
-            self._set_hf_params(self.CKPT_DIR)
-        elif not dummy_weights:
-            self.checkpoint_type = self.detect_checkpoint_type()
-            self._set_model_params(self.CKPT_DIR)
-        else:  # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
-            self.checkpoint_type = CheckpointType.Meta
-            if "3.2-1B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_1B_PARAMS"
-            elif "3.2-3B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_3B_PARAMS"
-            elif "3.1-8B" in self.CKPT_DIR:
-                local_params = "LLAMA3_1_8B_PARAMS"
-            elif "3.2-11B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_11B_PARAMS"
-            elif "3.1-70B" in self.CKPT_DIR:
-                local_params = "LLAMA3_1_70B_PARAMS"
-            elif "3.2-90B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_90B_PARAMS"
-            else:
-                raise ValueError(
-                    f"No local params found for {self.CKPT_DIR}, dummy weights are not supported for this model"
-                )
-            self._set_model_params(self.LOCAL_LLAMA_PARAMS[local_params])
+        self._set_hf_params(self.CKPT_DIR)
 
         # Set the max number of tokens for each prefill chunk based on the model and device
         max_prefill_chunk_size_div1024 = os.getenv("MAX_PREFILL_CHUNK_SIZE")
@@ -1255,27 +1206,56 @@ class ModelArgs:
             )
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
+        self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
+
+    def get_trace_prefill_supported_seq_lens(self):
+        default_supported_seq_lens = {
+            # for gemma we have different default supported seq lens than in tt_transformers
+            # TODO: should be empty until https://github.com/tenstorrent/tt-metal/issues/33041 is fixed
+            "N150": [],
+            "N300": [],
+            "T3K": [],
+            "TG": [],
+        }
+
+        # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
+        # TODO: should be empty until https://github.com/tenstorrent/tt-metal/issues/33041 is fixed
+        model_specific_supported_seq_lens = {
+            # EXAMPLE: "gemma-3-4b": {
+            #     "N150": [128, 256, 512, 1024, 2048],
+            # }
+        }
+
+        model_name = self.base_model_name
+        device_name = self.device_name
+
+        # Try model-specific sequence lengths first
+        result = model_specific_supported_seq_lens.get(model_name, {}).get(device_name)
+        if result:
+            return result
+
+        # Fall back to default sequence lengths
+        result = default_supported_seq_lens.get(device_name)
+        if result:
+            return result
+
+        # No supported sequence lengths found, return empty list
+        return []
+
     def can_enable_trace(self, prefill_seq_len):
         """
         This function is used to determine if trace should be enabled for the prefill.
         Tracing is used only for certain sequence lengths, because for bigger sequence lengths, op2op gaps are already small, so we don't need tracing.
-        If we have chunked prefill, we disable tracing because there is no support to pass parameters such as chunk_start and chunk_end to trace.
-        There is no support to pass them as a tensor, and then inside the trace read it as a number.
-        # TODO: Support sliding window attention - This PR disabled tracing if a model uses sliding window attention, because this PR mainly covers models without sliding window attention. (for example,Llama-8B).
+        # TODO: Support chunked prefill with tracing - https://github.com/tenstorrent/tt-metal/issues/32056
         """
-        # Trace in prefill is currently supported only for Llama-3.1-8B
-        # TODO: (https://github.com/tenstorrent/tt-metal/issues/25722) Support all other models that use tt_transformers
-        if self.base_model_name != "Llama-3.1-8B":
-            return False
-        if hasattr(self, "sliding_window") and getattr(self, "sliding_window") != None:
-            return False
 
-        if self.device_name == "N150":
-            allowed_seq_lens = [128, 256, 512, 1024]
-        else:
-            allowed_seq_lens = [128, 256, 512, 1024, 2048, 4096, 8192]
+        allowed_seq_lens = self.trace_prefill_supported_seq_lens
 
-        return prefill_seq_len in allowed_seq_lens and prefill_seq_len <= self.max_prefill_chunk_size
+        return (
+            prefill_seq_len in allowed_seq_lens
+            and prefill_seq_len <= self.max_prefill_chunk_size
+            and prefill_seq_len <= self.max_seq_len
+        )
 
     def get_xqkv_prefill_mem_cfg(self, seq_len):
         return ttnn.create_sharded_memory_config(
@@ -1410,7 +1390,7 @@ class ModelArgs:
             self.rms_norm_add_unit_offset = True
             self.embed_scale = self.dim**0.5
 
-    def _set_params_from_dict(self, config, is_hf=False):
+    def _set_params_from_dict(self, config):
         eos_token_id = config.get("eos_token_id", None)
         self.image_token_index = config.get("image_token_index", 262144)
 
@@ -1435,12 +1415,7 @@ class ModelArgs:
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
         self.rope_local_theta = text_config.get("rope_local_base_freq", None)
-        if is_hf:
-            self.max_context_len = text_config.get("max_position_embeddings")
-        else:
-            self.max_context_len = (
-                128 * 1024
-            )  # For Llama3 Meta weights TODO: Remove this when we move to HF weights only
+        self.max_context_len = text_config.get("max_position_embeddings")
 
         # Handle different MLP dimension specifications
         if "intermediate_size" in text_config:
@@ -1453,16 +1428,13 @@ class ModelArgs:
             self.hidden_dim = calculate_hidden_dim(self.dim, self.ffn_dim_multiplier, self.multiple_of)
 
         if "_name_or_path" in config:
-            if is_hf:
-                normalized_path = os.path.normpath(config["_name_or_path"])
-                # For HF paths, they might end with `<model_name>/snapshots/<snapshot_id>/`
-                if "snapshots" in normalized_path:
-                    full_model_name = normalized_path.split(os.path.sep)[-3]
-                    self.model_name = full_model_name.split("--")[-1]
-                else:
-                    self.model_name = os.path.basename(normalized_path)
+            normalized_path = os.path.normpath(config["_name_or_path"])
+            # For HF paths, they might end with `<model_name>/snapshots/<snapshot_id>/`
+            if "snapshots" in normalized_path:
+                full_model_name = normalized_path.split(os.path.sep)[-3]
+                self.model_name = full_model_name.split("--")[-1]
             else:
-                self.model_name = os.path.basename(config["_name_or_path"])
+                self.model_name = os.path.basename(normalized_path)
             logger.info(f"Model name from config: {self.model_name}")
 
         if self.base_model_name == "Qwen2.5-7B" and self.num_devices not in [0, 2, 4]:
@@ -1556,60 +1528,6 @@ class ModelArgs:
     def is_gemma(self):
         return any(x in self.base_model_name.lower() for x in ["gemma-3", "medgemma"])
 
-    def _set_model_params(self, checkpoint_dir):
-        if self.checkpoint_type == CheckpointType.Meta:
-            self._set_params(checkpoint_dir)
-        elif self.checkpoint_type == CheckpointType.HuggingFace:
-            self._set_hf_params(checkpoint_dir)
-        else:
-            raise ValueError(f"Unsupported checkpoint type: {self.checkpoint_type}")
-
-    def _set_params(self, checkpoint_dir):
-        params_file = os.path.join(checkpoint_dir, "params.json")
-        assert os.path.exists(params_file), f"params.json file not found at {params_file}"
-        with open(params_file, "r") as f:
-            params = json.load(f)
-        self._set_params_from_dict(params)
-
-        # Meta-style config dicts don't specify model name or rope_scaling_factor so hard-code these
-        # Set the model name based on the checkpoint directory being loaded
-        self.orig_context_len = 8192
-        if "3.2-1B" in checkpoint_dir:
-            self.model_name = "Llama-3.2-1B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 32
-        elif "3.2-3B" in checkpoint_dir:
-            self.model_name = "Llama-3.2-3B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 32
-        elif "3.1-8B" in checkpoint_dir:
-            self.model_name = "Llama-3.1-8B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 8
-        elif "3.2-11B" in checkpoint_dir:
-            self.model_name = "Llama-3.2-11B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 8  # shared with 3.1-8B
-        elif "3.1-70B" in checkpoint_dir:
-            self.model_name = "Llama-3.1-70B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 8
-            self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
-        elif "3.2-90B" in checkpoint_dir:
-            self.model_name = "Llama-3.2-90B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 8
-            self.is_90b = True
-        else:
-            self.rope_scaling_factor = None
-            self.orig_context_len = None
-            logger.warning(f"Unknown Meta-style model: {checkpoint_dir}")
-        self.rope_scaling = (
-            rope_scaling_model_factory(
-                {
-                    "rope_type": "llama3",
-                    "factor": self.rope_scaling_factor,
-                    "original_max_position_embeddings": self.orig_context_len,
-                }
-            )
-            if self.rope_scaling_factor is not None
-            else None
-        )
-
     # def _set_vision_params(self, vision_config):
     #     self.vision_dim = vision_config.get("hidden_size", 1280)
     #     self.vision_mlp_ratio = vision_config.get("intermediate_size", self.vision_dim * 4) // self.vision_dim
@@ -1672,41 +1590,32 @@ class ModelArgs:
             vision_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
             return vision_config
 
-        if self.from_hf_url:
-            # Special case Qwen2.5-VL models until they are fully integrated into a HF release
-            if "Qwen/Qwen2.5-VL" in self.model_name:
-                from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
-            else:
-                from transformers import AutoConfig
-
-            if self.dummy_weights:
-                logger.info(
-                    f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}"
-                )
-                self.hf_config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name]).to_dict()
-            else:
-                self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR).to_dict()
-
-            if "text_config" in self.hf_config or "vision_config" in self.hf_config:
-                if self.is_gemma:
-                    self._set_params_from_dict(self.hf_config, is_hf=True)
-                    if "vision_config" in self.hf_config:
-                        merged_vision_config = merge_vision_config(self.hf_config)
-                        self._set_vision_params(merged_vision_config)
-                else:
-                    merged_text_config = merge_text_config(self.hf_config)
-                    self._set_params_from_dict(merged_text_config, is_hf=True)
-                    if "vision_config" in self.hf_config:
-                        merged_vision_config = merge_vision_config(self.hf_config)
-                        self._set_vision_params(merged_vision_config)
-            else:
-                self._set_params_from_dict(self.hf_config, is_hf=True)
+        # Special case Qwen2.5-VL models until they are fully integrated into a HF release
+        if "Qwen/Qwen2.5-VL" in self.model_name:
+            from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
         else:
-            config_file = os.path.join(checkpoint_dir, "config.json")
-            assert os.path.exists(config_file), f"config.json file not found at {config_file}"
-            with open(config_file, "r") as f:
-                config = json.load(f)
-            self._set_params_from_dict(config, is_hf=True)
+            from transformers import AutoConfig
+
+        if self.dummy_weights:
+            logger.info(f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}")
+            self.hf_config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name]).to_dict()
+        else:
+            self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR).to_dict()
+
+        if "text_config" in self.hf_config or "vision_config" in self.hf_config:
+            if self.is_gemma:
+                self._set_params_from_dict(self.hf_config)
+                if "vision_config" in self.hf_config:
+                    merged_vision_config = merge_vision_config(self.hf_config)
+                    self._set_vision_params(merged_vision_config)
+            else:
+                merged_text_config = merge_text_config(self.hf_config)
+                self._set_params_from_dict(merged_text_config)
+                if "vision_config" in self.hf_config:
+                    merged_vision_config = merge_vision_config(self.hf_config)
+                    self._set_vision_params(merged_vision_config)
+        else:
+            self._set_params_from_dict(self.hf_config)
 
     def __repr__(self):
         return f"""ModelArgs(
@@ -1781,67 +1690,54 @@ class ModelArgs:
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
         if self.dummy_weights:
-            if self.checkpoint_type == CheckpointType.HuggingFace:
-                from transformers import AutoConfig, AutoModelForCausalLM
+            from transformers import AutoConfig, AutoModelForCausalLM
 
-                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
-                config.num_layers = self.n_layers
-                config.num_hidden_layers = self.n_layers
+            config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
+            config.num_layers = self.n_layers
+            config.num_hidden_layers = self.n_layers
 
-                try:
-                    # .from_pretrained + _init_weights works faster than .from_config
-                    model = AutoModelForCausalLM.from_pretrained(
-                        self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
-                    )
-                    model.apply(model._init_weights)
-                except Exception as e:
-                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
-                    model = AutoModelForCausalLM.from_config(config)
-
-                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
-                state_dict = model.state_dict()
-            else:
-                reference_model = Transformer(self)
-                state_dict = reference_model.state_dict()
-                state_dict_prefix = self.get_state_dict_prefix("", None)
-                state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
-        elif self.checkpoint_type == CheckpointType.Meta:
-            state_dict = load_meta_state_dict(self.CKPT_DIR, self.n_layers)
-        else:
-            assert self.checkpoint_type == CheckpointType.HuggingFace
-            if self.from_hf_url:
-                # Special case Qwen2.5-VL models until they are fully integrated into a HF release
-                if "Qwen2.5-VL" in self.model_name:
-                    from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
-                        Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
-                    )
-
-                    print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
-                else:
-                    from transformers import AutoModelForCausalLM
-
+            try:
+                # .from_pretrained + _init_weights works faster than .from_config
                 model = AutoModelForCausalLM.from_pretrained(
-                    self.CKPT_DIR,
-                    torch_dtype="auto"
-                    # Note that the default setting is torch.dtype.float32, but model weights are
-                    # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
-                    # unnecessary cast.
+                    self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
                 )
-                if self.cache_hf_flag:
-                    self.cached_hf_model = model
-                state_dict = model.state_dict()
-            else:
-                state_dict = load_hf_state_dict(self.CKPT_DIR)
+                model.apply(model._init_weights)
+            except Exception as e:
+                logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                model = AutoModelForCausalLM.from_config(config)
 
-        if self.checkpoint_type == CheckpointType.HuggingFace:
-            if self.is_multimodal:
-                if self.is_gemma:
-                    state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
-                else:
-                    state_dict = standardize_hf_keys_multimodal(state_dict)
+            # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
+            state_dict = model.state_dict()
+        else:
+            # Special case Qwen2.5-VL models until they are fully integrated into a HF release
+            if "Qwen2.5-VL" in self.model_name:
+                from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
+                    Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
+                )
+
+                print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
             else:
-                state_dict = standardize_hf_keys(state_dict)
-                state_dict = convert_hf_to_meta(state_dict, self.head_dim)
+                from transformers import AutoModelForCausalLM
+
+            model = AutoModelForCausalLM.from_pretrained(
+                self.CKPT_DIR,
+                torch_dtype="auto"
+                # Note that the default setting is torch.dtype.float32, but model weights are
+                # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
+                # unnecessary cast.
+            )
+            if self.cache_hf_flag:
+                self.cached_hf_model = model
+            state_dict = model.state_dict()
+
+        if self.is_multimodal:
+            if self.is_gemma:
+                state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
+            else:
+                state_dict = standardize_hf_keys_multimodal(state_dict)
+        else:
+            state_dict = standardize_hf_keys(state_dict)
+            state_dict = convert_hf_to_meta(state_dict, self.head_dim)
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
@@ -2140,204 +2036,149 @@ class ModelArgs:
             inplace=False,
         )
 
-    def detect_checkpoint_type(self) -> CheckpointType:
-        """Detect if checkpoint directory contains Meta or HuggingFace format weights.
-
-        Returns:
-            CheckpointType: Meta or HuggingFace enum value
-
-        Raises:
-            ValueError: If neither Meta nor HuggingFace checkpoint format is detected
-        """
-        config_path = os.path.join(self.CKPT_DIR, "config.json")
-        params_path = os.path.join(self.CKPT_DIR, "params.json")
-
-        if os.path.exists(config_path):
-            with open(config_path) as f:
-                config = json.load(f)
-                if "transformers_version" in config:
-                    return CheckpointType.HuggingFace
-
-        if os.path.exists(params_path):
-            return CheckpointType.Meta
-
-        raise ValueError(
-            f"Could not detect Meta or HuggingFace checkpoint format in {self.CKPT_DIR}. "
-            "Directory should contain either config.json (HuggingFace) or params.json (Meta)."
-        )
-
     def create_tokenizer(self):
-        """Create and return a Tokenizer instance based on the checkpoint type."""
-        if self.checkpoint_type == CheckpointType.Meta:
-            # Use the Meta Tokenizer
-            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
+        from transformers import AutoTokenizer
 
-            return Tokenizer(self.tokenizer_path)
-        else:
-            # Create a HuggingFace AutoTokenizer
-            from transformers import AutoTokenizer
+        # Mapping of base model names to their known tokenizer paths
+        # These are the original models that have proper tokenizers
+        base_model_tokenizer_mapping = {
+            "Qwen2.5-0.5B": "Qwen/Qwen2.5-Coder-0.5B-Instruct",
+            "Qwen2.5-1.5B": "Qwen/Qwen2.5-1.5B-Instruct",
+            "Qwen2.5-3B": "Qwen/Qwen2.5-3B-Instruct",
+            "Qwen2.5-7B": "Qwen/Qwen2.5-7B-Instruct",
+            "Qwen2.5-14B": "Qwen/Qwen2.5-14B-Instruct",
+            "Qwen2.5-32B": "Qwen/Qwen2.5-32B-Instruct",
+            "Qwen2.5-72B": "Qwen/Qwen2.5-72B-Instruct",
+            "Llama-3.1-8B": "meta-llama/Llama-3.1-8B-Instruct",
+            "Llama-3.1-70B": "meta-llama/Llama-3.1-70B-Instruct",
+            "Llama-3.2-1B": "meta-llama/Llama-3.2-1B-Instruct",
+            "Llama-3.2-3B": "meta-llama/Llama-3.2-3B-Instruct",
+            "Llama-3.2-11B": "meta-llama/Llama-3.2-11B-Vision-Instruct",
+            "Llama-3.2-90B": "meta-llama/Llama-3.2-90B-Vision-Instruct",
+            "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
+        }
 
-            # Mapping of base model names to their known tokenizer paths
-            # These are the original models that have proper tokenizers
-            base_model_tokenizer_mapping = {
-                "Qwen2.5-0.5B": "Qwen/Qwen2.5-Coder-0.5B-Instruct",
-                "Qwen2.5-1.5B": "Qwen/Qwen2.5-1.5B-Instruct",
-                "Qwen2.5-3B": "Qwen/Qwen2.5-3B-Instruct",
-                "Qwen2.5-7B": "Qwen/Qwen2.5-7B-Instruct",
-                "Qwen2.5-14B": "Qwen/Qwen2.5-14B-Instruct",
-                "Qwen2.5-32B": "Qwen/Qwen2.5-32B-Instruct",
-                "Qwen2.5-72B": "Qwen/Qwen2.5-72B-Instruct",
-                "Llama-3.1-8B": "meta-llama/Llama-3.1-8B-Instruct",
-                "Llama-3.1-70B": "meta-llama/Llama-3.1-70B-Instruct",
-                "Llama-3.2-1B": "meta-llama/Llama-3.2-1B-Instruct",
-                "Llama-3.2-3B": "meta-llama/Llama-3.2-3B-Instruct",
-                "Llama-3.2-11B": "meta-llama/Llama-3.2-11B-Vision-Instruct",
-                "Llama-3.2-90B": "meta-llama/Llama-3.2-90B-Vision-Instruct",
-                "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
-            }
+        logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
+        logger.info(f"Model name: {self.model_name}")
+        logger.info(f"Base model name: {self.base_model_name}")
 
-            logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
-            logger.info(f"Model name: {self.model_name}")
-            logger.info(f"Base model name: {self.base_model_name}")
+        try:
+            # Try to load tokenizer from the original model path
+            tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true")
+            logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
+        except Exception as e:
+            logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
 
-            try:
-                # Try to load tokenizer from the original model path
-                tokenizer = AutoTokenizer.from_pretrained(
-                    self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true"
-                )
-                logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
-            except Exception as e:
-                logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
+            # Try to use base model tokenizer as fallback
+            fallback_tokenizer_path = base_model_tokenizer_mapping.get(self.base_model_name)
 
-                # Try to use base model tokenizer as fallback
-                fallback_tokenizer_path = base_model_tokenizer_mapping.get(self.base_model_name)
+            # If no direct match, try to infer from model name patterns
+            if not fallback_tokenizer_path:
+                model_name_lower = self.model_name.lower()
+                if "qwen2.5" in model_name_lower and "0.5b" in model_name_lower:
+                    fallback_tokenizer_path = "Qwen/Qwen2.5-Coder-0.5B-Instruct"
+                elif "qwen2.5" in model_name_lower and "1.5b" in model_name_lower:
+                    fallback_tokenizer_path = "Qwen/Qwen2.5-1.5B-Instruct"
+                elif "qwen2.5" in model_name_lower and "3b" in model_name_lower:
+                    fallback_tokenizer_path = "Qwen/Qwen2.5-3B-Instruct"
+                elif "qwen2.5" in model_name_lower and "7b" in model_name_lower:
+                    fallback_tokenizer_path = "Qwen/Qwen2.5-7B-Instruct"
+                elif "qwen2.5" in model_name_lower and "14b" in model_name_lower:
+                    fallback_tokenizer_path = "Qwen/Qwen2.5-14B-Instruct"
+                elif "qwen2.5" in model_name_lower and "32b" in model_name_lower:
+                    fallback_tokenizer_path = "Qwen/Qwen2.5-32B-Instruct"
+                elif "qwen2.5" in model_name_lower and "72b" in model_name_lower:
+                    fallback_tokenizer_path = "Qwen/Qwen2.5-72B-Instruct"
+                elif "llama" in model_name_lower and "3.1" in model_name_lower and "8b" in model_name_lower:
+                    fallback_tokenizer_path = "meta-llama/Llama-3.1-8B-Instruct"
+                elif "llama" in model_name_lower and "3.1" in model_name_lower and "70b" in model_name_lower:
+                    fallback_tokenizer_path = "meta-llama/Llama-3.1-70B-Instruct"
+                elif "llama" in model_name_lower and "3.2" in model_name_lower and "1b" in model_name_lower:
+                    fallback_tokenizer_path = "meta-llama/Llama-3.2-1B-Instruct"
+                elif "llama" in model_name_lower and "3.2" in model_name_lower and "3b" in model_name_lower:
+                    fallback_tokenizer_path = "meta-llama/Llama-3.2-3B-Instruct"
+                elif "mistral" in model_name_lower and "7b" in model_name_lower:
+                    fallback_tokenizer_path = "mistralai/Mistral-7B-Instruct-v0.3"
 
-                # If no direct match, try to infer from model name patterns
-                if not fallback_tokenizer_path:
-                    model_name_lower = self.model_name.lower()
-                    if "qwen2.5" in model_name_lower and "0.5b" in model_name_lower:
-                        fallback_tokenizer_path = "Qwen/Qwen2.5-Coder-0.5B-Instruct"
-                    elif "qwen2.5" in model_name_lower and "1.5b" in model_name_lower:
-                        fallback_tokenizer_path = "Qwen/Qwen2.5-1.5B-Instruct"
-                    elif "qwen2.5" in model_name_lower and "3b" in model_name_lower:
-                        fallback_tokenizer_path = "Qwen/Qwen2.5-3B-Instruct"
-                    elif "qwen2.5" in model_name_lower and "7b" in model_name_lower:
-                        fallback_tokenizer_path = "Qwen/Qwen2.5-7B-Instruct"
-                    elif "qwen2.5" in model_name_lower and "14b" in model_name_lower:
-                        fallback_tokenizer_path = "Qwen/Qwen2.5-14B-Instruct"
-                    elif "qwen2.5" in model_name_lower and "32b" in model_name_lower:
-                        fallback_tokenizer_path = "Qwen/Qwen2.5-32B-Instruct"
-                    elif "qwen2.5" in model_name_lower and "72b" in model_name_lower:
-                        fallback_tokenizer_path = "Qwen/Qwen2.5-72B-Instruct"
-                    elif "llama" in model_name_lower and "3.1" in model_name_lower and "8b" in model_name_lower:
-                        fallback_tokenizer_path = "meta-llama/Llama-3.1-8B-Instruct"
-                    elif "llama" in model_name_lower and "3.1" in model_name_lower and "70b" in model_name_lower:
-                        fallback_tokenizer_path = "meta-llama/Llama-3.1-70B-Instruct"
-                    elif "llama" in model_name_lower and "3.2" in model_name_lower and "1b" in model_name_lower:
-                        fallback_tokenizer_path = "meta-llama/Llama-3.2-1B-Instruct"
-                    elif "llama" in model_name_lower and "3.2" in model_name_lower and "3b" in model_name_lower:
-                        fallback_tokenizer_path = "meta-llama/Llama-3.2-3B-Instruct"
-                    elif "mistral" in model_name_lower and "7b" in model_name_lower:
-                        fallback_tokenizer_path = "mistralai/Mistral-7B-Instruct-v0.3"
+            if fallback_tokenizer_path:
+                logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
+                try:
+                    tokenizer = AutoTokenizer.from_pretrained(
+                        fallback_tokenizer_path, local_files_only=os.getenv("CI") == "true"
+                    )
+                    logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
+                except Exception as fallback_e:
+                    logger.error(f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}")
+                    raise fallback_e
+            else:
+                logger.error(f"No fallback tokenizer found for base model: {self.base_model_name}")
+                raise e
 
-                if fallback_tokenizer_path:
-                    logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
-                    try:
-                        tokenizer = AutoTokenizer.from_pretrained(
-                            fallback_tokenizer_path, local_files_only=os.getenv("CI") == "true"
-                        )
-                        logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
-                    except Exception as fallback_e:
-                        logger.error(f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}")
-                        raise fallback_e
-                else:
-                    logger.error(f"No fallback tokenizer found for base model: {self.base_model_name}")
-                    raise e
-
-            # Add meta-compatible stop token list to the HF tokenizer
-            if not "stop_tokens" in tokenizer.__dict__:
-                tokenizer.stop_tokens = self.eos_token_id if self.eos_token_id is not None else [tokenizer.eos_token_id]
-            return tokenizer
+        # Add meta-compatible stop token list to the HF tokenizer
+        if not "stop_tokens" in tokenizer.__dict__:
+            tokenizer.stop_tokens = self.eos_token_id if self.eos_token_id is not None else [tokenizer.eos_token_id]
+        return tokenizer
 
     def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
-        if self.checkpoint_type == CheckpointType.Meta:
-            if instruct:
-                return encode_prompt_instruct(self.tokenizer, prompt_text, system_prompt_text)
-            else:
-                return self.tokenizer.encode(prompt_text, bos=True, eos=False)
-        else:
-            if instruct:
-                try:
-                    return encode_prompt_hf(self.tokenizer, prompt_text, system_prompt_text)
-                except ValueError as e:
-                    logger.warning(f"Failed to encode chat prompt, are you sure this is an instruct model? Error: {e}")
-                    logger.warning(f"Falling back to base model encoding with no chat template")
+        if instruct:
+            try:
+                return encode_prompt_hf(self.tokenizer, prompt_text, system_prompt_text)
+            except ValueError as e:
+                logger.warning(f"Failed to encode chat prompt, are you sure this is an instruct model? Error: {e}")
+                logger.warning(f"Falling back to base model encoding with no chat template")
 
-            return self.tokenizer.encode(prompt_text, add_special_tokens=False)
+        return self.tokenizer.encode(prompt_text, add_special_tokens=False)
 
     def reference_lm_head(self):
-        if self.checkpoint_type == CheckpointType.Meta:
-            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import ColumnParallelLinear
-
-            return ColumnParallelLinear(self.dim, self.vocab_size, bias=False, init_method=lambda x: x)
-        else:
-            model = self.reference_transformer(wrap=False)
-            layer = model.lm_head
-            layer._load_state_dict = layer.load_state_dict
-            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
-            return layer
+        model = self.reference_transformer(wrap=False)
+        layer = model.lm_head
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
 
     def reference_transformer(self, wrap=True, load_checkpoint=False):
-        if self.checkpoint_type == CheckpointType.Meta:
-            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
-
-            model = Transformer(self)
-            if load_checkpoint:
-                model.load_state_dict(self.load_state_dict())
-            return model
+        # Special case Qwen2.5-VL models until they are fully integrated into a HF release
+        if "Qwen/Qwen2.5-VL" in self.model_name:
+            from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
         else:
-            # Special case Qwen2.5-VL models until they are fully integrated into a HF release
-            if "Qwen/Qwen2.5-VL" in self.model_name:
-                from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
-            else:
-                from transformers import AutoConfig, AutoModel
+            from transformers import AutoConfig, AutoModel
 
-            # HF is much faster at loading from a checkpoint than generating from config
-            # so use that by preference unless we don't have a checkpoint
-            if self.dummy_weights and not load_checkpoint:
-                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
-                config.num_layers = self.n_layers
-                config.num_hidden_layers = self.n_layers
+        # HF is much faster at loading from a checkpoint than generating from config
+        # so use that by preference unless we don't have a checkpoint
+        if self.dummy_weights and not load_checkpoint:
+            config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
+            config.num_layers = self.n_layers
+            config.num_hidden_layers = self.n_layers
 
-                try:
-                    # .from_pretrained + _init_weights works faster than .from_config
-                    model = AutoModel.from_pretrained(
-                        self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
-                    )
-                    model.apply(model._init_weights)
-                except Exception as e:
-                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
-                    model = AutoModel.from_config(config)
-                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
+            try:
+                # .from_pretrained + _init_weights works faster than .from_config
+                model = AutoModel.from_pretrained(
+                    self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
+                )
+                model.apply(model._init_weights)
+            except Exception as e:
+                logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                model = AutoModel.from_config(config)
+            # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
+        else:
+            if self.cache_hf_flag and self.cached_hf_model is None:
+                model = AutoModel.from_pretrained(self.CKPT_DIR)
+                self.cached_hf_model = model
+            elif self.cache_hf_flag and self.cached_hf_model is not None:
+                model = self.cached_hf_model
             else:
-                if self.cache_hf_flag and self.cached_hf_model is None:
-                    model = AutoModel.from_pretrained(self.CKPT_DIR)
-                    self.cached_hf_model = model
-                elif self.cache_hf_flag and self.cached_hf_model is not None:
-                    model = self.cached_hf_model
-                else:
-                    # No caching - load fresh each time
-                    model = AutoModel.from_pretrained(self.CKPT_DIR)
-                # HACK: Assume that we want the language model layers only
-                if hasattr(model, "language_model"):
-                    model.model = model.language_model
-                    # We keep language_model because transformers don't let us change or delete it
-                model.model.layers = model.model.layers[: self.n_layers]
-            if wrap:
-                wrapper = HfModelWrapper(model, self.head_dim)
-                return wrapper
-            else:
-                return model
+                # No caching - load fresh each time
+                model = AutoModel.from_pretrained(self.CKPT_DIR)
+            # HACK: Assume that we want the language model layers only
+            if hasattr(model, "language_model"):
+                model.model = model.language_model
+                # We keep language_model because transformers don't let us change or delete it
+            model.model.layers = model.model.layers[: self.n_layers]
+        if wrap:
+            wrapper = HfModelWrapper(model, self.head_dim)
+            return wrapper
+        else:
+            return model
 
     def reference_vision_multi_modal(self):
         model = self.reference_vision_transformer(wrap=False)
@@ -2354,54 +2195,47 @@ class ModelArgs:
         return layer
 
     def reference_rms_norm(self, i=0):
-        if self.checkpoint_type == CheckpointType.Meta:
-            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import RMSNorm
-
-            return RMSNorm(self.dim, self.norm_eps)
-        else:
-            model = self.reference_transformer(wrap=False)
-            layer = model.model.layers[i].self_attn.q_norm
-            layer._load_state_dict = layer.load_state_dict
-            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
-            return layer
+        model = self.reference_transformer(wrap=False)
+        layer = model.model.layers[i].self_attn.q_norm
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
 
     def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
-        if self.checkpoint_type == CheckpointType.HuggingFace:
-            from transformers import AutoConfig, AutoModelForCausalLM
+        from transformers import AutoConfig, AutoModelForCausalLM
 
-            if self.dummy_weights and not load_checkpoint:
-                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
-                config.num_layers = self.n_layers
-                config.num_hidden_layers = self.n_layers
+        if self.dummy_weights and not load_checkpoint:
+            config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
+            config.num_layers = self.n_layers
+            config.num_hidden_layers = self.n_layers
 
-                try:
-                    # .from_pretrained + _init_weights works faster than .from_config
-                    model = AutoModelForCausalLM.from_pretrained(
-                        self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
-                    )
-                    model.apply(model._init_weights)
-                except Exception as e:
-                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
-                    model = AutoModelForCausalLM.from_config(config)
-                # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
+            try:
+                # .from_pretrained + _init_weights works faster than .from_config
+                model = AutoModelForCausalLM.from_pretrained(
+                    self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
+                )
+                model.apply(model._init_weights)
+            except Exception as e:
+                logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
+                model = AutoModelForCausalLM.from_config(config)
+            # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
+        else:
+            if self.is_gemma:
+                from transformers import Gemma3ForConditionalGeneration
+
+                model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
             else:
-                if self.is_gemma:
-                    from transformers import Gemma3ForConditionalGeneration
-
-                    model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
-                    model = model
+                if self.cached_hf_model is None:
+                    model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                    self.cached_hf_model = model
                 else:
-                    if self.cached_hf_model is None:
-                        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
-                        self.cached_hf_model = model
-                    else:
-                        model = self.cached_hf_model
-                    model.model.layers = model.model.layers[: self.n_layers]
-            if wrap:
-                wrapper = HfModelWrapper(model, self.head_dim)
-                return wrapper
-            else:
-                return model
+                    model = self.cached_hf_model
+                model.model.layers = model.model.layers[: self.n_layers]
+        if wrap:
+            wrapper = HfModelWrapper(model, self.head_dim)
+            return wrapper
+        else:
+            return model
 
     def reference_gemma_model(self):
         model = self.reference_vision_transformer(wrap=False)
@@ -2479,73 +2313,53 @@ class ModelArgs:
         return layer
 
     def reference_mlp(self):
-        if self.checkpoint_type == CheckpointType.Meta:
-            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import FeedForward
-
-            return FeedForward(self.dim, 4 * self.dim, self.multiple_of, self.ffn_dim_multiplier)
-        else:
-            model = self.reference_transformer(wrap=False)
-            layer = model.model.layers[0].mlp
-            layer._load_state_dict = layer.load_state_dict
-            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
-            return layer
+        model = self.reference_transformer(wrap=False)
+        layer = model.model.layers[0].mlp
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
 
     def reference_embedding(self, reference_model=None):
-        if self.checkpoint_type == CheckpointType.Meta:
-            from models.tt_transformers.tt.common import HostEmbedding, HostScaledEmbedding
-
-            return HostEmbedding(self) if self.embed_scale is None else HostScaledEmbedding(self)
+        if reference_model is None:
+            model = self.reference_transformer(wrap=False)
+            layer = model.model.embed_tokens
         else:
-            if reference_model is None:
-                model = self.reference_transformer(wrap=False)
-                layer = model.model.embed_tokens
-            else:
-                layer = reference_model.model.model.embed_tokens
+            layer = reference_model.model.model.embed_tokens
 
-            layer._load_state_dict = layer.load_state_dict
-            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
-            return layer
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
 
     def reference_decoder(self, i=0):
-        if self.checkpoint_type == CheckpointType.Meta:
-            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock
+        model = self.reference_transformer(wrap=False)
+        layer = model.model.layers[i]
+        rotary_emb = model.model.rotary_emb
 
-            return TransformerBlock(layer_id=i, args=self)
+        if self.is_gemma:
+            rotary_emb_local = model.model.rotary_emb_local
+            wrapper = HfGemmaDecoderWrapper(layer, self.head_dim, rotary_emb, rotary_emb_local)
         else:
-            model = self.reference_transformer(wrap=False)
-            layer = model.model.layers[i]
-            rotary_emb = model.model.rotary_emb
+            wrapper = HfDecoderWrapper(layer, self.head_dim, rotary_emb)
 
-            if self.is_gemma:
-                rotary_emb_local = model.model.rotary_emb_local
-                wrapper = HfGemmaDecoderWrapper(layer, self.head_dim, rotary_emb, rotary_emb_local)
-            else:
-                wrapper = HfDecoderWrapper(layer, self.head_dim, rotary_emb)
-
-            return wrapper
+        return wrapper
 
     def reference_attention(self, rope_embeddings="global"):
-        if self.checkpoint_type == CheckpointType.Meta:
-            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
-
-            return Attention(self)
-        else:
-            model = self.reference_transformer(wrap=False)
-            layer = model.model.layers[0].self_attn
-            use_position_embeddings = layer.__class__.__name__ in (
-                "Qwen3Attention",
-                "MistralAttention",
-                "Gemma3Attention",
-            )
-            if "gemma-3" in self.model_name:
-                if rope_embeddings == "local":
-                    rotary_emb = model.model.rotary_emb_local
-                else:
-                    rotary_emb = model.model.rotary_emb
+        model = self.reference_transformer(wrap=False)
+        layer = model.model.layers[0].self_attn
+        use_position_embeddings = layer.__class__.__name__ in (
+            "Qwen3Attention",
+            "MistralAttention",
+            "Gemma3Attention",
+        )
+        if "gemma-3" in self.model_name:
+            if rope_embeddings == "local":
+                rotary_emb = model.model.rotary_emb_local
             else:
                 rotary_emb = model.model.rotary_emb
-            wrapper = HfAttentionWrapper(layer, self.head_dim, rotary_emb if use_position_embeddings else None)
-            return wrapper
+        else:
+            rotary_emb = model.model.rotary_emb
+        wrapper = HfAttentionWrapper(layer, self.head_dim, rotary_emb if use_position_embeddings else None)
+        return wrapper
 
     def set_tg_attention_config(self):
         shard_spec_n_cores_grid = ttnn.CoreRangeSet({num_to_corerange(40)})

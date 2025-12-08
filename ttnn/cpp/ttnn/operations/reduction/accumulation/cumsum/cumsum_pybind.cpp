@@ -18,7 +18,7 @@ namespace ttnn::operations::reduction::accumulation::detail {
 namespace py = pybind11;
 
 void bind_reduction_cumsum_operation(py::module& module) {
-    auto docstring =
+    const auto* docstring =
         R"doc(
         Returns cumulative sum of :attr:`input` along dimension :attr:`dim`
         For a given :attr:`input` of size N, the :attr:`output` will also contain N elements and be such that:
@@ -60,21 +60,6 @@ void bind_reduction_cumsum_operation(py::module& module) {
 
         Limitations:
             - Preallocated output must have the same shape as the input
-
-        Example:
-            .. code-block:: python
-
-                # Create tensor
-                tensor_input = ttnn.rand((2, 3, 4), device=device)
-
-                # Apply ttnn.cumsum() on dim=0
-                tensor_output = ttnn.cumsum(tensor_input, dim=0)
-
-                # With preallocated output and dtype
-                preallocated_output = ttnn.rand([2, 3, 4], dtype=ttnn.bfloat16, device=device)
-
-                tensor_output = ttnn.cumsum(tensor_input, dim=0, dtype=ttnn.bfloat16, out=preallocated_output)
-
         )doc";
 
     using OperationType = decltype(ttnn::cumsum);

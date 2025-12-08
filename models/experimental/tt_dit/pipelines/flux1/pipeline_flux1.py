@@ -24,6 +24,7 @@ from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...utils.padding import PaddingConfig
 from ...utils import cache
+from models.common.utility_functions import is_blackhole
 import os
 
 
@@ -157,7 +158,7 @@ class Flux1Pipeline:
             model_name = os.path.basename(checkpoint_name)
             if not cache.initialize_from_cache(
                 tt_transformer,
-                torch_transformer,
+                torch_transformer.state_dict(),
                 model_name,
                 "transformer",
                 parallel_config,
@@ -238,7 +239,7 @@ class Flux1Pipeline:
 
                 if not cache.initialize_from_cache(
                     self._t5_text_encoder,
-                    torch_t5_text_encoder,
+                    torch_t5_text_encoder.state_dict(),
                     model_name,
                     "t5_text_encoder",
                     encoder_parallel_config,
@@ -279,12 +280,18 @@ class Flux1Pipeline:
         num_links=None,
         topology=ttnn.Topology.Linear,
     ):
-        default_config = {
+        wh_config = {
             (1, 4): {"sp": (1, 0), "tp": (4, 1), "encoder_tp": (4, 1), "vae_tp": (4, 1), "num_links": 1},
             (2, 4): {"sp": (2, 0), "tp": (4, 1), "encoder_tp": (4, 1), "vae_tp": (4, 1), "num_links": 1},
             (4, 4): {"sp": (4, 0), "tp": (4, 1), "encoder_tp": (4, 1), "vae_tp": (4, 1), "num_links": 1},
             (4, 8): {"sp": (4, 0), "tp": (8, 1), "encoder_tp": (4, 0), "vae_tp": (4, 0), "num_links": 4},
         }
+        bh_config = {
+            (1, 2): {"sp": (1, 0), "tp": (2, 1), "encoder_tp": (2, 1), "vae_tp": (2, 1), "num_links": 2},
+            (2, 2): {"sp": (2, 0), "tp": (2, 1), "encoder_tp": (2, 1), "vae_tp": (2, 1), "num_links": 2},
+        }
+
+        default_config = bh_config if is_blackhole() else wh_config
         sp_factor, sp_axis = dit_sp or default_config[tuple(mesh_device.shape)]["sp"]
         tp_factor, tp_axis = dit_tp or default_config[tuple(mesh_device.shape)]["tp"]
         encoder_tp_factor, encoder_tp_axis = encoder_tp or default_config[tuple(mesh_device.shape)]["encoder_tp"]

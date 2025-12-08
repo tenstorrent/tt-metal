@@ -516,7 +516,7 @@ void py_module(py::module& module) {
             memory_config(ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using ttnn.DRAM_MEMORY_CONFIG.
             dtype (ttnn.DataType): the data type of the output tensor. Defaults to `None`.
             program_config (ttnn.MatmulProgramConfig): the program configuration for the matmul operation. Defaults to `None`.
-            activation (str, optional): the activation function to be applied. Defaults to `None`.
+            activation (str or ttnn.UnaryWithParam, optional): the activation function to be applied. When using sharded tensors, the :attr:`fused_activation` parameter of the :attr:`program_config` should be used instead. Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig): the compute kernel configuration for the matmul operation. Defaults to `None`.
             core_grid (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
@@ -572,47 +572,7 @@ void py_module(py::module& module) {
                   - Interleaved (L1/DRAM), Height Sharded (L1)
                   - Interleaved (L1/DRAM)
 
-
-
             When sharded output tensors are provided, they should match :attr:`input_tensor_a`'s buffer type and memory layout.
-
-        Example:
-            >>> # matrix x matrix - no batch dimensions
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.randn((64, 32), dtype=torch.bfloat16)), device)
-            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.randn((32, 64), dtype=torch.bfloat16)), device)
-            >>> output = ttnn.matmul(tensor1, tensor2)
-            >>> print(output.shape)
-            [64, 64]
-            >>> # extended matrix x extended matrix - all batch dimensions of size 1
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.randn((1, 1, 64, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT), device=device)
-            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.randn((1, 1, 32, 64), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT), device=device)
-            >>> output = ttnn.matmul(tensor1, tensor2)
-            >>> print(output.shape)
-            [1, 1, 64, 64]
-            >>> # extended matrix x extended matrix - all batch dimensions of size 1
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.randn((1, 1, 64, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT), device=device)
-            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.randn((1, 32, 64), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT), device=device)
-            >>> output = ttnn.matmul(tensor1, tensor2)
-            >>> print(output.shape)
-            [1, 1, 64, 64]
-            >>> # batched matrix x broadcasted matrix - first input has batch dimensions not of size 1
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.randn((32, 64), dtype=torch.bfloat16)), device)
-            >>> output = ttnn.matmul(tensor1, tensor2)
-            >>> print(output.shape)
-            [10, 64, 64]
-            >>> # batched matrix x batched matrix - both inputs have batch dimensions
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.randn((10, 32, 128), dtype=torch.bfloat16)), device)
-            >>> output = tensor1 @ tensor2 # alternative to ttnn.matmul(tensor1, tensor2)
-            >>> print(output.shape)
-            [10, 64, 128]
-            >>> # batched matrix x broadcasted extended matrix - first input has batch dimensions not of size 1
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.randn((1, 1, 32, 128), dtype=torch.bfloat16)), device)
-            >>> output = tensor1 @ tensor2
-            >>> print(output.shape)
-            [1, 10, 64, 128]
         )doc",
         ttnn::pybind_overload_t{
             [](decltype(::ttnn::matmul)& self,
@@ -623,7 +583,7 @@ void py_module(py::module& module) {
                const std::optional<const ttnn::MemoryConfig>& memory_config,
                const std::optional<const DataType> dtype,
                const std::optional<const MatmulProgramConfig>& program_config,
-               const std::optional<const std::string>& activation,
+               const std::optional<const ::ttnn::Activation>& activation,
                const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<const ttnn::CoreGrid> core_grid,
                const std::optional<const tt::tt_metal::Tile>& output_tile,
@@ -709,7 +669,7 @@ void py_module(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using `ttnn.DRAM_MEMORY_CONFIG`.
             dtype (ttnn.DataType, optional): the data type of the output tensor. Defaults to `None`.
             program_config (MatmulProgramConfig, optional): the program configuration for the matmul operation. Defaults to `None`.
-            activation (str, optional): the activation function to be applied. Defaults to `None`.
+            activation (str or ttnn.UnaryWithParam, optional): the activation function to be applied. Defaults to `None`. When using sharded tensors, the :attr:`fused_activation` parameter of the :attr:`program_config` should be used instead.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration for the matmul operation. Defaults to `None`.
             core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
@@ -717,15 +677,6 @@ void py_module(py::module& module) {
 
         Returns:
             ttnn.Tensor: the output tensor.
-
-        Example:
-            >>> # batched matrix x broadcasted matrix
-            >>> activations = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-            >>> weight = ttnn.to_device(ttnn.from_torch(torch.randn((32, 128), dtype=torch.bfloat16)), device)
-            >>> bias = ttnn.to_device(ttnn.from_torch(torch.randn((128,), dtype=torch.bfloat16)), device)
-            >>> output = ttnn.linear(activations, weight, bias=bias)
-            >>> print(output.shape)
-            [10, 64, 128]
         )doc",
         ttnn::pybind_overload_t{
             [](decltype(::ttnn::linear)& self,
@@ -737,7 +688,7 @@ void py_module(py::module& module) {
                const std::optional<const ttnn::MemoryConfig>& memory_config,
                const std::optional<const DataType> dtype,
                const std::optional<const MatmulProgramConfig>& program_config,
-               const std::optional<const std::string>& activation,
+               const std::optional<const ::ttnn::Activation>& activation,
                const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<const ttnn::CoreGrid> core_grid,
                const std::optional<const tt::tt_metal::Tile>& output_tile,
@@ -783,11 +734,13 @@ void py_module(py::module& module) {
         module,
         ::ttnn::matmul_batched_weights,
         R"doc(
-        performs matrix multiplication for a single input tensor a with multiple tensors b, return a vector of output tensors.
+        DEPRECATED: This is for experimental internal use and is not supported.
+
+        Performs matrix multiplication for a single input tensor a with multiple tensors b, and returns a vector of output tensors.
 
         Args:
             input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.
-            input_tensors_b (ttnn.Tensor): the second tensor vector to be multiplied. Needs to be on the device.
+            input_tensors_b (List of ttnn.Tensor): the tensors to be multiplied. Needs to be on the device.
 
         Note:
             The tensors support the following data types and layouts:
@@ -815,14 +768,16 @@ void py_module(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using `ttnn.DRAM_MEMORY_CONFIG`.
             dtype (ttnn.DataType, optional): the data type of the output tensor. Defaults to `None`.
             program_config (MatmulProgramConfig, optional): the program configuration for the matmul operation. Defaults to `None`.
-            activation (str, optional): the activation function to be applied. Defaults to `None`.
+            activation (str or ttnn.UnaryWithParam, optional): the activation function to be applied. Defaults to `None`. When using sharded tensors, the :attr:`fused_activation` parameter of the :attr:`program_config` should be used instead.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration for the matmul operation. Defaults to `None`.
             core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of linear is to be written. Defaults to `None`.
+            global_cb (ttnn.GlobalCircularBuffer, optional): the global circular buffer to be used for the matmul operation. Defaults to `None`.
+            sub_device_id (ttnn.SubDeviceId, optional): the sub device id to be used for the matmul operation. Defaults to `None`.
 
         Returns:
-            ttnn.Tensor: the output tensor.
+            List of ttnn.Tensor: the output tensors.
         )doc",
         ttnn::pybind_overload_t{
             [](decltype(::ttnn::matmul_batched_weights)& self,
@@ -833,7 +788,7 @@ void py_module(py::module& module) {
                const std::optional<const ttnn::MemoryConfig>& memory_config,
                const std::optional<const DataType> dtype,
                const std::optional<const MatmulProgramConfig>& program_config,
-               const std::optional<const std::string>& activation,
+               const std::optional<const ::ttnn::Activation>& activation,
                const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<const ttnn::CoreGrid> core_grid,
                const std::optional<const tt::tt_metal::Tile>& output_tile,
@@ -1093,71 +1048,6 @@ void py_module(py::module& module) {
                 * - ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig with (mcast_in0=True)
                   - Interleaved (L1/DRAM)
                   - Interleaved (L1/DRAM)
-
-        Example:
-            >>> config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            >>>     compute_with_storage_grid_size=ttnn.CoreCoord(1, 2),
-            >>>     in0_block_w=1,
-            >>>     out_subblock_h=1,
-            >>>     out_subblock_w=1,
-            >>>     out_block_h=1,
-            >>>     out_block_w=1,
-            >>>     per_core_M=2,
-            >>>     per_core_N=1,
-            >>>     fuse_batch=False,
-            >>>     fused_activation=None,
-            >>>     mcast_in0=True)
-            >>> nnz = 4
-            # Case 1: When `is_input_a_sparse` is True and `is_input_b_sparse` is True
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.randn((1, 8, 64, 32), dtype=torch.bfloat16)), device)
-            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.randn((1, 8, 32, 64), dtype=torch.bfloat16)), device)
-            # Create a sparsity tensor
-            >>> sparsity_bitmask = torch.zeros((1, 1, 1, 8), dtype=torch.bfloat16)
-            >>> sparsity_bitmask.view(-1)[torch.randperm(sparsity_bitmask.numel())[:nnz]] = 1.0
-            >>> sparsity_bitmask = ttnn.to_device(ttnn.from_torch(sparsity_bitmask), device)
-            >>> output = ttnn.sparse_matmul(
-            >>>     tensor1, tensor2, sparsity=sparsity_bitmask, nnz=nnz, is_input_a_sparse=True, is_input_b_sparse=True, program_config=config)
-            >>> print(output.shape)
-            # [1, 8, 64, 64]
-            # When nnz is not provided, it will be inferred from the sparsity tensor at runtime
-            >>> output = ttnn.sparse_matmul(
-            >>>     tensor1, tensor2, sparsity=sparsity_bitmask, is_input_a_sparse=True, is_input_b_sparse=True, program_config=config)
-            >>> print(output.shape)
-            # [1, 8, 64, 64]
-            # Case 2: When `is_input_a_sparse` is False and `is_input_b_sparse` is True
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.randn((2, 16, 64, 32), dtype=torch.bfloat16)), device)
-            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.randn((1, 8, 32, 64), dtype=torch.bfloat16)), device)
-            # Create a sparsity tensor
-            >>> sparsity_bitmask = torch.zeros((2, 16, 1, 8), dtype=torch.bfloat16)
-            >>> sparsity_bitmask.view(-1)[torch.randperm(sparsity_bitmask.numel())[:nnz]] = 1.0
-            >>> sparsity_bitmask = ttnn.to_device(ttnn.from_torch(sparsity_bitmask), device)
-            >>> output = ttnn.sparse_matmul(
-            >>>     tensor1, tensor2, sparsity=sparsity_bitmask, nnz=nnz, is_input_a_sparse=False, is_input_b_sparse=True, program_config=config)
-            >>> print(output.shape)
-            # [2, 16, 1, 8, 64, 64]
-            # When nnz is not provided, it will be inferred from the sparsity tensor at runtime
-            >>> output = ttnn.sparse_matmul(
-            >>>     tensor1, tensor2, sparsity=sparsity_bitmask, is_input_a_sparse=False, is_input_b_sparse=True, program_config=config)
-            >>> print(output.shape)
-            # [2, 16, 1, 8, 64, 64]
-            # Case 3: When `is_input_a_sparse` is True and `is_input_b_sparse` is False
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.randn((4, 8, 64, 32), dtype=torch.bfloat16)), device)
-            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.randn((1, 8, 32, 64), dtype=torch.bfloat16)), device)
-            # Create a sparsity tensor
-            >>> sparsity_bitmask = torch.zeros((1, 1, 4, 8), dtype=torch.bfloat16)
-            >>> sparsity_bitmask.view(-1)[torch.randperm(sparsity_bitmask.numel())[:nnz]] = 1.0
-            >>> sparsity_bitmask = ttnn.to_device(ttnn.from_torch(sparsity_bitmask), device)
-            >>> output = ttnn.sparse_matmul(
-            >>>     tensor1, tensor2, sparsity=sparsity_bitmask, nnz=nnz, is_input_a_sparse=True, is_input_b_sparse=False, program_config=config)
-            >>> print(output.shape)
-            # [4, 8, 64, 64]
-            # When nnz is not provided, it will be inferred from the sparsity tensor at runtime
-            >>> output = ttnn.sparse_matmul(
-            >>>     tensor1, tensor2, sparsity=sparsity_bitmask, is_input_a_sparse=True, is_input_b_sparse=False, program_config=config)
-            >>> print(output.shape)
-            # [4, 8, 64, 64]
-            # Case 4: When `is_input_a_sparse` is False and `is_input_b_sparse` is False
-            # This is invalid
         )doc",
         ttnn::pybind_overload_t{
             [](decltype(::ttnn::sparse_matmul)& self,

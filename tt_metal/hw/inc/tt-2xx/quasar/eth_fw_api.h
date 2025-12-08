@@ -164,7 +164,7 @@ struct eth_live_status_t {
 struct eth_api_table_t {
     uint32_t* send_eth_msg_ptr;           // Pointer to the send eth msg function
     uint32_t* service_eth_msg_ptr;        // Pointer to the service eth msg function
-    uint32_t* eth_link_status_check_ptr;  // Pointer to the eth link status check function
+    uint32_t* eth_dynamic_noc_init_ptr;   // Pointer to the dynamic noc init function
     uint32_t spare[16 - 3];
 };
 
@@ -238,4 +238,7 @@ FORCE_INLINE bool is_link_up() {
         (volatile eth_live_status_t*)(MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_live_status));
     return link_status->rx_link_up == 1;
 }
+
+FORCE_INLINE void base_fw_dynamic_noc_local_state_init() {}
+
 #endif

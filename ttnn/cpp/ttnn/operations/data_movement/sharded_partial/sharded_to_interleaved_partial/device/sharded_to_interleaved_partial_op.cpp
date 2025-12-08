@@ -70,7 +70,7 @@ ShardedToInterleavedPartialDeviceOperation::create_op_performance_model(
 operation::ProgramWithCallbacks ShardedToInterleavedPartialDeviceOperation::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    auto& output_tensor = input_tensors[1];
+    const auto& output_tensor = input_tensors[1];
     // Will move with sharded ops
     return detail::sharded_to_interleaved_multi_core(
         input_tensor, output_tensor, false, this->num_slices, this->slice_index);

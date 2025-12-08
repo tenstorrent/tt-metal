@@ -10,8 +10,6 @@ import math
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
-
 
 def validate_indices(input_tensor, torch_indices, ttnn_indices, kernel_size, stride, padding, dilation, dtype):
     """

@@ -180,10 +180,10 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>&,
             const std::vector<Tensor>& output_tensors) {
-            auto src_dram_buffer_a = input_tensors.at(0).buffer();
-            auto src_dram_buffer_b = input_tensors.at(1).buffer();
+            auto* src_dram_buffer_a = input_tensors.at(0).buffer();
+            auto* src_dram_buffer_b = input_tensors.at(1).buffer();
 
-            auto dst_dram_buffer = output_tensors.at(0).buffer();
+            auto* dst_dram_buffer = output_tensors.at(0).buffer();
 
             for (uint32_t i = 0; i < num_cores; i++) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};

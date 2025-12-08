@@ -6,4 +6,4 @@ rank_bindings:
 
 global_env:
   TT_METAL_HOME: "/home/ttuser/git/tt-metal"
-mesh_graph_desc_path: "configurations/2loudboxes/mgd.yaml"
+mesh_graph_desc_path: "configurations/2loudboxes/mgd.textproto"

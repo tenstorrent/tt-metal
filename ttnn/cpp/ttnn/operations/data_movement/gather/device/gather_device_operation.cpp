@@ -142,9 +142,10 @@ GatherDeviceOperation::invoke(
     const Tensor& input_index_tensor,
     const bool sparse_grad,
     const MemoryConfig& output_memory_config,
-    const std::optional<Tensor>& output_tensors) {
+    const std::optional<Tensor>& output_tensors,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     return {
-        operation_attributes_t{dim, sparse_grad, output_memory_config},
+        operation_attributes_t{dim, sparse_grad, output_memory_config, sub_core_grids},
         tensor_args_t{input_tensor, input_index_tensor, output_tensors}};
 }
 }  // namespace ttnn::operations::data_movement::gather

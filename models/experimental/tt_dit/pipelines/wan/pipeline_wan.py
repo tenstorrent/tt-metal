@@ -25,6 +25,7 @@ from diffusers.pipelines.wan.pipeline_output import WanPipelineOutput
 import ttnn
 from loguru import logger
 from ...parallel.manager import CCLManager
+from ...parallel.config import DiTParallelConfig, VaeHWParallelConfig, ParallelFactor
 from ...models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
 from ...models.vae.vae_wan2_1 import WanDecoder
 from ...utils.cache import get_and_create_cache_path, cache_dict_exists, save_cache_dict, load_cache_dict
@@ -127,6 +128,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         expand_timesteps: bool = False,  # Wan2.2 ti2v
         dynamic_load=False,
         topology: ttnn.Topology = ttnn.Topology.Linear,
+        is_fsdp: bool = True,
     ):
         super().__init__()
 
@@ -159,6 +161,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             num_links=num_links,
             topology=ttnn.Topology.Linear,  # NOTE: VAE always uses Linear topology. TODO: enable ring if given.
         )
+
+        self.is_fsdp = is_fsdp
         self.parallel_config = parallel_config
         self.vae_parallel_config = vae_parallel_config
         self.use_cache = use_cache
@@ -193,6 +197,79 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         # Record time information for different steps.
         self.timing_data = None
 
+    @staticmethod
+    def create_pipeline(
+        mesh_device, sp_axis=None, tp_axis=None, num_links=None, dynamic_load=None, topology=None, is_fsdp=None
+    ):
+        device_configs = {}
+        if ttnn.device.is_blackhole():
+            device_configs[(1, 4)] = {
+                "sp_axis": 0,
+                "tp_axis": 1,
+                "num_links": 2,
+                "dynamic_load": False,
+                "topology": ttnn.Topology.Linear,
+                "is_fsdp": False,
+            }
+            device_configs[(4, 8)] = {
+                "sp_axis": 1,
+                "tp_axis": 0,
+                "num_links": 2,
+                "dynamic_load": False,
+                "topology": ttnn.Topology.Linear,
+                "is_fsdp": False,
+            }
+        else:
+            device_configs[(2, 4)] = {
+                "sp_axis": 0,
+                "tp_axis": 1,
+                "num_links": 1,
+                "dynamic_load": True,
+                "topology": ttnn.Topology.Linear,
+                "is_fsdp": True,
+            }
+            device_configs[(4, 8)] = {
+                "sp_axis": 1,
+                "tp_axis": 0,
+                "num_links": 4,
+                "dynamic_load": False,
+                "topology": ttnn.Topology.Ring,
+                "is_fsdp": True,
+            }
+
+        config = device_configs[tuple(mesh_device.shape)]
+
+        sp_axis = sp_axis or config["sp_axis"]
+        tp_axis = tp_axis or config["tp_axis"]
+
+        parallel_config = DiTParallelConfig(
+            tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tuple(mesh_device.shape)[tp_axis]),
+            sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=tuple(mesh_device.shape)[sp_axis]),
+            cfg_parallel=None,
+        )
+        vae_parallel_config = VaeHWParallelConfig(
+            height_parallel=ParallelFactor(
+                factor=tuple(mesh_device.shape)[sp_axis],
+                mesh_axis=sp_axis,
+            ),
+            width_parallel=ParallelFactor(
+                factor=tuple(mesh_device.shape)[tp_axis],
+                mesh_axis=tp_axis,
+            ),
+        )
+
+        return WanPipeline(
+            mesh_device=mesh_device,
+            parallel_config=parallel_config,
+            vae_parallel_config=vae_parallel_config,
+            num_links=num_links or config["num_links"],
+            use_cache=False,
+            boundary_ratio=0.875,
+            dynamic_load=dynamic_load if dynamic_load is not None else config["dynamic_load"],
+            topology=topology or config["topology"],
+            is_fsdp=is_fsdp if is_fsdp is not None else config["is_fsdp"],
+        )
+
     def _load_transformer1(self):
         self.transformer = WanTransformer3DModel(
             patch_size=self.torch_transformer.config.patch_size,
@@ -209,7 +286,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             mesh_device=self.mesh_device,
             ccl_manager=self.dit_ccl_manager,
             parallel_config=self.parallel_config,
-            is_fsdp=True,
+            is_fsdp=self.is_fsdp,
         )
 
         if self.use_cache:
@@ -251,7 +328,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             mesh_device=self.mesh_device,
             ccl_manager=self.dit_ccl_manager,
             parallel_config=self.parallel_config,
-            is_fsdp=True,
+            is_fsdp=self.is_fsdp,
         )
 
         if self.use_cache:

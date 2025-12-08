@@ -8,7 +8,7 @@
 #include "ttnn/run_operation.hpp"
 
 namespace ttnn {
-namespace operations::experimental::transformer {
+namespace operations::experimental::create_qkv_heads {
 
 struct CreateQKVHeadsOperation {
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
@@ -20,13 +20,13 @@ struct CreateQKVHeadsOperation {
         std::optional<std::array<Tensor, 3>> optional_output_tensors = std::nullopt);
 };
 
-}  // namespace operations::experimental::transformer
+}  // namespace operations::experimental::create_qkv_heads
 
 namespace experimental {
 
 constexpr auto create_qkv_heads = ttnn::register_operation<
     "ttnn::experimental::create_qkv_heads",
-    ttnn::operations::experimental::transformer::CreateQKVHeadsOperation>();
+    ttnn::operations::experimental::create_qkv_heads::CreateQKVHeadsOperation>();
 
 }  // namespace experimental
 

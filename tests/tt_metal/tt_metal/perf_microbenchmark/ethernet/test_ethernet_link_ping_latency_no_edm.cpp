@@ -39,6 +39,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "common/tt_backend_api_types.hpp"
+#include <llrt/tt_cluster.hpp>
 
 using namespace tt;
 using namespace tt::test_utils;

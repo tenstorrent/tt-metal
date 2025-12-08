@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn/operations/embedding/device/embedding_device_operation.hpp"
+#include "device/embedding_device_operation.hpp"
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {

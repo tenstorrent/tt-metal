@@ -4,7 +4,6 @@
 
 #include "fabric_fixture.hpp"
 #include "utils.hpp"
-#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"

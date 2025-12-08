@@ -4,12 +4,11 @@
 
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/device/fast_reduce_nc_program_factory.hpp"
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/run_operation.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::reduction::detail {
+namespace ttnn::operations::experimental::reduction::detail::program {
 
 using namespace tt;
 using namespace tt::constants;
@@ -50,32 +49,31 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dim
 
 }  // namespace
 
-operation::ProgramWithCallbacks reduce_nc_factory(
-    const ttnn::Tensor& input,
-    const ttnn::Tensor& output,
-    int64_t dim,
-    const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
+FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto* device = input.device();
+    auto* device = tensor_args.input.device();
     auto program = Program();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    const auto cb_data_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
     const auto single_tile_size = tt::tile_size(cb_data_format);
     const auto cb_1_data_format = datatype_to_dataformat_converter(DataType::BFLOAT16);
     const auto cb_1_tile_size = tt::tile_size(cb_1_data_format);
 
-    const auto& input_shape = input.padded_shape();
+    const auto& input_shape = tensor_args.input.padded_shape();
     const auto [Wt, Ht, inner_tile_size, reduce_tile_size] =
-        extract_and_scale_spatial_dims(input_shape, static_cast<uint32_t>(dim));
-    const auto num_reduce_input_tile = input_shape[dim];
-    const auto num_output_tiles = output.physical_volume() / TILE_HW;
+        extract_and_scale_spatial_dims(input_shape, static_cast<uint32_t>(operation_attributes.dim));
+    const auto num_reduce_input_tile = input_shape[operation_attributes.dim];
+    const auto num_output_tiles = tensor_return_value.physical_volume() / TILE_HW;
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(tensor_args.input.device()->arch(), operation_attributes.compute_kernel_config);
     // Choose granularity as the largest factor of num_reduce_input_tile that is less than or equal to 8.
     // Helps with locality and increases work unit for better performance.
     uint32_t input_granularity;
@@ -102,15 +100,15 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     // with the kernel accesses, tensor shape is divisible by shard shape, and
     // number of shards is larger than core count, divide the work by shards.
     uint32_t output_shard_size = 1;
-    auto input_tile = input.tensor_spec().tile().get_tile_shape();
-    auto output_tile = output.tensor_spec().tile().get_tile_shape();
-    bool nd_sharded = input.nd_shard_spec().has_value() && output.nd_shard_spec().has_value();
+    auto input_tile = tensor_args.input.tensor_spec().tile().get_tile_shape();
+    auto output_tile = tensor_return_value.tensor_spec().tile().get_tile_shape();
+    bool nd_sharded = tensor_args.input.nd_shard_spec().has_value() && tensor_return_value.nd_shard_spec().has_value();
     bool same_tiles = input_tile[0] == output_tile[0] && input_tile[1] == output_tile[1];
     bool divide_by_shards = false;
-    const auto& dspec = *output.buffer()->buffer_distribution_spec();
-    if (nd_sharded && same_tiles && dim == 0) {
-        const NdShardSpec& input_nd_shard_spec = input.nd_shard_spec().value();
-        const NdShardSpec& output_nd_shard_spec = output.nd_shard_spec().value();
+    const auto& dspec = *tensor_return_value.buffer()->buffer_distribution_spec();
+    if (nd_sharded && same_tiles && operation_attributes.dim == 0) {
+        const NdShardSpec& input_nd_shard_spec = tensor_args.input.nd_shard_spec().value();
+        const NdShardSpec& output_nd_shard_spec = tensor_return_value.nd_shard_spec().value();
         const Shape& input_shard_shape = input_nd_shard_spec.shard_shape;
         bool compatible_shards =
             input_nd_shard_spec.orientation == ShardOrientation::ROW_MAJOR &&
@@ -170,14 +168,14 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args = {input_granularity, shard_factor, num_cores_to_be_used};
-    TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*tensor_args.input.buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {shard_factor, num_cores_to_be_used};
-    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(*tensor_return_value.buffer()).append_to(writer_compile_time_args);
 
-    const auto reader_kernel_file =
+    const auto* const reader_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reader_reduce_nc.cpp";
-    const auto writer_kernel_file =
+    const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/writer_reduce_nc.cpp";
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
@@ -195,7 +193,7 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto compute_kernel_file =
+    const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reduce_nc.cpp";
     tt_metal::CreateKernel(
         program,
@@ -266,11 +264,11 @@ operation::ProgramWithCallbacks reduce_nc_factory(
             program,
             reader_kernel_id,
             core,
-            {input.buffer()->address(),
+            {tensor_args.input.buffer()->address(),
              num_reduce_input_tile,
              /*id_range_length=*/num_tiles_per_core * num_cores_to_be_used,
              tile_offset,
-             static_cast<uint32_t>(dim),
+             static_cast<uint32_t>(operation_attributes.dim),
              reduce_tile_size,
              inner_tile_size});
 
@@ -278,33 +276,43 @@ operation::ProgramWithCallbacks reduce_nc_factory(
             program,
             writer_kernel_id,
             core,
-            {output.buffer()->address(),
+            {tensor_return_value.buffer()->address(),
              /*id_range_length=*/num_tiles_per_core * num_cores_to_be_used,
              tile_offset});
 
         tile_offset += shard_factor;
     }
 
-    auto override_runtime_arguments_callback = [reader_kernel_id, writer_kernel_id, num_cores_to_be_used, num_cores_x](
-                                                   const void* operation,
-                                                   const Program& program,
-                                                   const std::vector<Tensor>& input_tensors,
-                                                   const std::vector<std::optional<const Tensor>>&,
-                                                   const std::vector<Tensor>& output_tensors) {
-        const auto* input_buffer = input_tensors.at(0).buffer();
-        const auto* output_buffer = output_tensors.at(0).buffer();
-        auto& reader_kernel_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-        auto& writer_kernel_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
-        for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
-            CoreCoord core = {i % num_cores_x, i / num_cores_x};
-            auto& reader_kernel_args = reader_kernel_args_by_core[core.x][core.y];
-            reader_kernel_args[0] = input_buffer->address();
-            auto& writer_kernel_args = writer_kernel_args_by_core[core.x][core.y];
-            writer_kernel_args[0] = output_buffer->address();
-        }
-    };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return cached_program_t{
+        std::move(program),
+        {/* reader_kernel_id = */ reader_kernel_id,
+         /* writer_kernel_id = */ writer_kernel_id,
+         /* num_cores_to_be_used = */ num_cores_to_be_used,
+         /* num_cores_x = */ num_cores_x}};
 }
 
-}  // namespace ttnn::operations::experimental::reduction::detail
+void FastReduceNCProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t&,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    const auto* input_buffer = tensor_args.input.buffer();
+    const auto* output_buffer = tensor_return_value.buffer();
+    auto& program = cached_program.program;
+    const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
+    const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
+    const auto& num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
+    const auto& num_cores_x = cached_program.shared_variables.num_cores_x;
+
+    auto& reader_kernel_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+    auto& writer_kernel_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+    for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
+        CoreCoord core = {i % num_cores_x, i / num_cores_x};
+        auto& reader_kernel_args = reader_kernel_args_by_core[core.x][core.y];
+        reader_kernel_args[0] = input_buffer->address();
+        auto& writer_kernel_args = writer_kernel_args_by_core[core.x][core.y];
+        writer_kernel_args[0] = output_buffer->address();
+    }
+}
+
+}  // namespace ttnn::operations::experimental::reduction::detail::program

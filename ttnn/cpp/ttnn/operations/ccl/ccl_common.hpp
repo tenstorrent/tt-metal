@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <numeric>
 
-#include <tt-metalium/constants.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -91,7 +90,9 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_workers_per_link,
     IDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    CoreCoord core_grid_offset = CoreCoord(0, 0));
+    CoreCoord core_grid_offset = CoreCoord(0, 0),
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt
+    );
 
 class EriscDatamoverBuilder;
 

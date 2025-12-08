@@ -1,0 +1,15 @@
+InheritParentConfig: true
+
+# Disable checks that conflict with protobuf-generated code
+# These checks are disabled for files that include protobuf headers
+Checks: >
+  -bugprone-reserved-identifier,
+  -cppcoreguidelines-missing-std-forward,
+  -cppcoreguidelines-prefer-member-initializer,
+  -misc-redundant-expression,
+  -modernize-use-using,
+  -performance-noexcept-swap,
+  -readability-braces-around-statements,
+  -readability-duplicate-include,
+  -readability-redundant-access-specifiers,
+  -readability-redundant-inline-specifier

@@ -9,7 +9,8 @@
 void kernel_main() {
     // Compile-time arguments
     constexpr uint32_t l1_local_addr = get_compile_time_arg_val(0);
-    constexpr uint32_t num_of_transactions = get_compile_time_arg_val(1);
+    constexpr uint32_t num_of_transactions =
+        get_compile_time_arg_val(1) < 16 ? get_compile_time_arg_val(1) : 15;  // to avoid trid 0
     constexpr uint32_t bytes_per_transaction = get_compile_time_arg_val(2);
     constexpr uint32_t test_id = get_compile_time_arg_val(3);
     constexpr uint32_t packed_sub0_core_coordinates = get_compile_time_arg_val(4);
@@ -30,7 +31,8 @@ void kernel_main() {
         uint32_t tmp_local_addr = l1_local_addr;
 
         // Send out writes with transaction ids
-        for (uint32_t i = 0; i < num_of_transactions; i++) {  // Using 0-(num_of_transactions-1) as the transaction ids
+        // Avoid using transaction id 0 in case fast dispatch breaks it in the future
+        for (uint32_t i = 1; i <= num_of_transactions; i++) {  // Using 1-(num_of_transactions) as the transaction ids
             noc_async_write_set_trid(i);
             noc_async_write(tmp_local_addr, sub0_dst_noc_addr, bytes_per_transaction);
             tmp_local_addr += bytes_per_transaction;
@@ -40,7 +42,7 @@ void kernel_main() {
         tmp_local_addr = l1_local_addr;
 
         // Wait for writes with transaction ids to depart
-        for (uint32_t i = 0; i < num_of_transactions; i++) {  // Using 0-(num_of_transactions-1) as the transaction ids
+        for (uint32_t i = 1; i <= num_of_transactions; i++) {  // Using 1-(num_of_transactions) as the transaction ids
             noc_async_write_flushed_with_trid(i);
             noc_async_read(sub1_src_noc_addr, tmp_local_addr, bytes_per_transaction);
             tmp_local_addr += bytes_per_transaction;

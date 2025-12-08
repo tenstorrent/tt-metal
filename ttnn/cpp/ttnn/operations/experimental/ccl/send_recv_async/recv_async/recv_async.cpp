@@ -7,16 +7,13 @@
 #include <vector>
 
 #include <tt-metalium/mesh_socket.hpp>
-#include "ttnn/operations/experimental/ccl/send_recv_async/recv_async/device/recv_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/send_recv_async/recv_async/device/recv_async_op_device_operation.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
 std::vector<ttnn::Tensor> ExecuteRecvAsync::invoke(
-    const Tensor& output_tensor,
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
-    const tt::tt_metal::distributed::SocketConfig& socket_config) {
-    auto mesh_socket = tt::tt_metal::distributed::MeshSocket(mesh_device, socket_config);
-    return recv_async(output_tensor, mesh_socket);
+    const Tensor& output_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
+    return ttnn::prim::recv_async(output_tensor, mesh_socket);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

@@ -5,7 +5,6 @@
 #include "gelu_backward_device_operation.hpp"
 #include "gelu_backward_program_factory.hpp"
 
-#include <tt-metalium/constants.hpp>
 #include "tt-metalium/host_api.hpp"
 
 using namespace tt::tt_metal;

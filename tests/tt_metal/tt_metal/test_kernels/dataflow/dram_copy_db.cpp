@@ -32,51 +32,62 @@ void kernel_main() {
 
     std::uint32_t dram_buffer_src_addr = dram_buffer_src_addr_base;
     std::uint32_t dram_buffer_dst_addr = dram_buffer_dst_addr_base;
-    std::uint64_t dram_buffer_src_noc_addr;
-    std::uint64_t dram_buffer_dst_noc_addr;
 
-    std::uint32_t l1_addr1 = l1_buffer_addr;
-    std::uint32_t l1_addr2 = l1_buffer_addr + rd_wr_l1_buffer_size_bytes;
-
-    // DRAM NOC src address
-    dram_buffer_src_noc_addr = get_noc_addr_from_bank_id<true>(dram_src_bank_id, dram_buffer_src_addr);
+    experimental::CoreLocalMem<uint32_t> l1_mem_1(l1_buffer_addr);
+    experimental::CoreLocalMem<uint32_t> l1_mem_2(l1_buffer_addr + rd_wr_l1_buffer_size_bytes);
+    experimental::Noc noc;
+    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_src_bank;
 
     // Copy data from DRAM into destination L1 buffer
-    noc_async_read(dram_buffer_src_noc_addr, l1_addr1, rd_wr_l1_buffer_size_bytes);
+    noc.async_read(
+        dram_src_bank,
+        l1_mem_1,
+        rd_wr_l1_buffer_size_bytes,
+        {.bank_id = dram_src_bank_id, .addr = dram_buffer_src_addr},
+        {});
+
     dram_buffer_src_addr += rd_wr_l1_buffer_size_bytes;
     num_tiles_read += rd_wr_l1_buffer_size_tiles;
 
     while (num_tiles_read < num_tiles) {
-        // DRAM NOC src address
-        dram_buffer_src_noc_addr = get_noc_addr_from_bank_id<true>(dram_src_bank_id, dram_buffer_src_addr);
-        // DRAM NOC dst address
-        dram_buffer_dst_noc_addr = get_noc_addr_from_bank_id<true>(dram_dst_bank_id, dram_buffer_dst_addr);
+        noc.async_read(
+            dram_src_bank,
+            l1_mem_2,
+            rd_wr_l1_buffer_size_bytes,
+            {.bank_id = dram_src_bank_id, .addr = dram_buffer_src_addr},
+            {});
 
-        noc_async_read(dram_buffer_src_noc_addr, l1_addr2, rd_wr_l1_buffer_size_bytes);
         dram_buffer_src_addr += rd_wr_l1_buffer_size_bytes;
         num_tiles_read += rd_wr_l1_buffer_size_tiles;
 
         // Wait all reads flushed (ie received)
-        noc_async_read_barrier();
+        noc.async_read_barrier();
 
-        noc_async_write(l1_addr1, dram_buffer_dst_noc_addr, rd_wr_l1_buffer_size_bytes);
+        noc.async_write(
+            l1_mem_1,
+            dram_src_bank,
+            rd_wr_l1_buffer_size_bytes,
+            {},
+            {.bank_id = dram_dst_bank_id, .addr = dram_buffer_dst_addr});
 
         dram_buffer_dst_addr += rd_wr_l1_buffer_size_bytes;
 
         // Wait for all the writes to complete (ie acked)
-        noc_async_write_barrier();
+        noc.async_write_barrier();
 
         // Swap L1 addr locations
         if (num_tiles_read < num_tiles) {
-            std::uint32_t temp_l1_addr = l1_addr1;
-            l1_addr1 = l1_addr2;
-            l1_addr2 = temp_l1_addr;
+            std::swap(l1_mem_1, l1_mem_2);
         }
     }
 
     // DRAM NOC dst address
-    dram_buffer_dst_noc_addr = get_noc_addr_from_bank_id<true>(dram_dst_bank_id, dram_buffer_dst_addr);
-    noc_async_write(l1_addr2, dram_buffer_dst_noc_addr, rd_wr_l1_buffer_size_bytes);
+    noc.async_write(
+        l1_mem_2,
+        dram_src_bank,
+        rd_wr_l1_buffer_size_bytes,
+        {},
+        {.bank_id = dram_dst_bank_id, .addr = dram_buffer_dst_addr});
     // Wait for all the writes to complete (ie acked)
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 }

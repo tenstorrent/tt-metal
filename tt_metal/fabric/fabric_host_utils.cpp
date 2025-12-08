@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "control_plane.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "fabric_host_utils.hpp"
 
-#include <tt-metalium/fabric.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_stl/assert.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include <tt-metalium/metal_soc_descriptor.h>
@@ -29,13 +29,12 @@ bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
 }
 
 FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config) {
-    auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
     switch (fabric_config) {
         // Issue: 32146, Special case for T3k WH devices to use Mesh fabric type instead of Torus_XY
         // WH T3K currently do not support Torus_XY fabric type, because they do not have wrapping connections.
         // If you want to use 1D Ring on t3k please use 1x8 MGD.
         case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: {
-            if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
+            if (tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
                 return FabricType::TORUS_XY;
             }
             return FabricType::MESH;
@@ -43,9 +42,6 @@ FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config) {
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X: return FabricType::TORUS_X;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y: return FabricType::TORUS_Y;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY: return FabricType::TORUS_XY;
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X: return FabricType::TORUS_X;
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y: return FabricType::TORUS_Y;
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY: return FabricType::TORUS_XY;
         default: return FabricType::MESH;
     }
 }
@@ -140,7 +136,7 @@ void set_routing_mode(uint16_t routing_mode) {
     control_plane.set_routing_mode(routing_mode);
 }
 
-void set_routing_mode(Topology topology, tt::tt_fabric::FabricConfig fabric_config, uint32_t dimension /*, take more*/) {
+void set_routing_mode(Topology topology, uint32_t dimension /*, take more*/) {
     // TODO: take more parameters to set detail routing mode
     TT_FATAL(
         dimension == 1 || dimension == 2 || dimension == 3,
@@ -158,11 +154,7 @@ void set_routing_mode(Topology topology, tt::tt_fabric::FabricConfig fabric_conf
         mode |= (ROUTING_MODE_2D | ROUTING_MODE_TORUS);
     }
 
-    if (tt::tt_fabric::FabricContext::is_dynamic_routing_config(fabric_config)) {
-        mode |= ROUTING_MODE_DYNAMIC;
-    } else {
-        mode |= ROUTING_MODE_LOW_LATENCY;
-    }
+    mode |= ROUTING_MODE_LOW_LATENCY;
     set_routing_mode(mode);
 }
 

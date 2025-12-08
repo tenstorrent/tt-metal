@@ -26,7 +26,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
 #if !DST_SHARDED
-    constexpr auto dst_args = TensorAccessorArgs<0>();
+    constexpr auto dst_args = TensorAccessorArgs<0, 0>();
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
     const auto dst = TensorAccessor(dst_args, dst_addr, dst_tile_bytes);
     constexpr bool has_sharding = get_compile_time_arg_val(dst_args.next_compile_time_args_offset()) == 1;

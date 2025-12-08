@@ -16,7 +16,7 @@ namespace ttnn::operations::experimental::reshape::detail {
 namespace py = pybind11;
 
 void py_bind_view(py::module& module) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
         Note:
         - It is recommended to use ttnn.reshape if you are not sure which operation to use
         - If this is the functionality required for your application, it will be called by ttnn.reshape

@@ -13,7 +13,7 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_assert.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_link_training.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_noc_sanitize_delays.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_noc_sanitize.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_sanitize.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_pause.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_ringbuf.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_stack_usage.cpp

@@ -60,8 +60,8 @@ class TtUpBlock2D(LightweightModule):
             hidden_states, [C, H, W] = resnet.forward(hidden_states, temb, [B, C, H, W])
 
         if self.upsamplers is not None:
-            hidden_states = ttnn.reshape(hidden_states, [B, H, W, C])
             hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+            hidden_states = ttnn.reshape(hidden_states, [B, H, W, C])
             hidden_states, [C, H, W] = self.upsamplers.forward(hidden_states)
 
         return hidden_states, [C, H, W]

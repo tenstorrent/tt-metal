@@ -27,7 +27,7 @@ using namespace tt::tt_metal;
 Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
     // Get device and create a new program
-    auto device = input_tensor.device();
+    auto* device = input_tensor.device();
     auto program = tt::tt_metal::CreateProgram();
 
     const uint32_t input_width = input_tensor.logical_shape()[2];
@@ -250,7 +250,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
 
 Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
     const Tensor& input_tensor, const Tensor& output, const uint32_t stride_h, const uint32_t stride_w) {
-    auto device = input_tensor.device();
+    auto* device = input_tensor.device();
     auto program = tt::tt_metal::CreateProgram();
 
     const uint32_t batch_size = input_tensor.logical_shape()[0];
@@ -414,10 +414,10 @@ void Fold::MultiCoreDRAMFold::override_runtime_arguments(
 
     auto& program = cached_program.program;
 
-    auto& input_tensor = tensor_args.input_tensor;
-    auto src_dram_buffer = input_tensor.buffer();
+    const auto& input_tensor = tensor_args.input_tensor;
+    auto* src_dram_buffer = input_tensor.buffer();
 
-    auto dst_dram_buffer = output_tensor.buffer();
+    auto* dst_dram_buffer = output_tensor.buffer();
 
     // Update runtime arguments for each core
     for (auto i = 0; i < cores_with_rtargs.size(); i++) {

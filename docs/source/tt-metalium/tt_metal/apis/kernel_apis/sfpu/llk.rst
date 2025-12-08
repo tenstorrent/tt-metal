@@ -18,21 +18,21 @@ The following flags must be specified to compile SFPI kernels:
 
 .. code-block:: c++
 
-  -m<arch> -fno-exceptions
+  -mcpu=<cpu> -fno-exceptions
 
-where ``arch`` is one of:
+where ``cpu`` is one of:
 
-  * wormhole
-  * blackhole
+  * tt-wh-tensix
+  * tt-bh-tensix
 
 Note that the arch specification above overrides any ``-march=<xyz>`` that comes after it on the command line.
 
 Further, the following options disable parts of the SFPI enabled compiler:
 
-  * ``-fno-rvtt-sfpu-warn``: disable sfpu specific warnings/errors
-  * ``-fno-rvtt-sfpu-combine``: disable sfpu instruction combining
-  * ``-fno-rvtt-sfpu-cc``: disable sfpu CC optimizations
-  * ``-fno-rvtt-sfpu-replay``: disable sfpu REPLAY optimizations
+  * ``-mno-tt-tensix-warn``: disable sfpu specific warnings/errors
+  * ``-mno-tt-tensix-optimize-combine``: disable sfpu instruction combining
+  * ``-mno-tt-tensix-optimize-cc``: disable sfpu CC optimizations
+  * ``-mno-tt-tensix-optimize-replay``: disable sfpu REPLAY optimizations
 
 Example
 -------
@@ -348,7 +348,7 @@ Returns the count of leading (left-most) zeros of ''v'' ignoring the sign bit.
 
 .. code-block:: c++
 
-    vFloat int_to_float(vInt in, int round_mode = 1)
+    vFloat int32_to_float(vInt in, int round_mode = 1)
     vUInt float_to_fp16a(vFloat in, int round_mode = 1)
     vUInt float_to_fp16b(vFloat in, int round_mode = 1)
     vUInt float_to_uint8(vFloat in, int round_mode = 1)

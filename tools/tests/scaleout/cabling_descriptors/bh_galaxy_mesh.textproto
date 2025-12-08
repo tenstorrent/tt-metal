@@ -1,0 +1,20 @@
+graph_templates {
+  key: "bh_galaxy"
+  value {
+    children {
+      name: "bh"
+      node_ref {
+        node_descriptor: "BH_GALAXY"
+      }
+    }
+  }
+}
+root_instance {
+  template_name: "bh_galaxy"
+  child_mappings {
+    key: "bh"
+    value {
+      host_id: 0
+    }
+  }
+}

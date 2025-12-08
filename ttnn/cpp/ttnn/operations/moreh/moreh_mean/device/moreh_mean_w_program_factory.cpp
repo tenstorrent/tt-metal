@@ -27,7 +27,7 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
         init_device_compute_kernel_config(input.device()->arch(), operation_attributes.compute_kernel_config);
     const auto& shape = input.padded_shape();
 
-    auto device = input.device();
+    auto* device = input.device();
 
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});

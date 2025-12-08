@@ -67,7 +67,7 @@ void RunDelayTestOnCore(
     tt_metal::Program program = tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
 
     const uint32_t SINGLE_TILE_SIZE = 2 * 1024;

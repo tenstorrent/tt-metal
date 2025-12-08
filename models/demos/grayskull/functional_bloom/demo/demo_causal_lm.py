@@ -13,7 +13,7 @@ from transformers import BloomConfig, BloomForCausalLM, BloomTokenizerFast
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.common import generation_utils
-from models.common.utility_functions import disable_persistent_kernel_cache, profiler
+from models.common.utility_functions import profiler
 from models.demos.grayskull.functional_bloom.dataset_utils import get_data
 from models.demos.grayskull.functional_bloom.tt import ttnn_functional_bloom, ttnn_optimized_functional_bloom
 
@@ -230,8 +230,6 @@ def test_demo(
     batch_size=8,
     num_tokens_to_decode=10,
 ):
-    disable_persistent_kernel_cache()
-
     return run_bloom_causal_LM_inference(
         model_version="bigscience/bloom-560m",
         functional_model=functional_model,
@@ -259,8 +257,6 @@ def test_demo_hellaswag(
     batch_size=8,
     num_tokens_to_decode=10,
 ):
-    disable_persistent_kernel_cache()
-
     return run_bloom_causal_LM_inference_hellaswag(
         model_version="bigscience/bloom-560m",
         functional_model=functional_model,

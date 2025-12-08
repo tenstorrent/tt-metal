@@ -4,7 +4,8 @@
 
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "conv2d/conv2d_utils.hpp"
-#include "conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include <tt_stl/assert.hpp>
 #include <cstdint>
 #include <tt-logger/tt-logger.hpp>
@@ -1039,8 +1040,10 @@ static Conv2dBlockConfig get_opt_block_config(
             true,
             conv_config.act_block_h_override);
     }
+
+    auto output_compute_grid_size = get_output_compute_grid_size(compute_grid_size, conv_config, parallel_config);
     ParallelConfig output_parallel_config = determine_output_parallel_config(
-        parallel_config, compute_grid_size, out_channels, parallel_config.shard_orientation, mm_conv);
+        parallel_config, output_compute_grid_size, out_channels, parallel_config.shard_orientation, mm_conv);
 
     MemoryConfig conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
         ttnn::Shape(
@@ -1323,12 +1326,10 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             conv_config.shard_layout.value(), input_layout, false, mm_conv, input_tensor_sharded_memory_config);
     }
 
+    auto output_compute_grid_size =
+        get_output_compute_grid_size(device->compute_with_storage_grid_size(), conv_config, parallel_config);
     ParallelConfig output_parallel_config = determine_output_parallel_config(
-        parallel_config,
-        device->compute_with_storage_grid_size(),
-        out_channels,
-        parallel_config.shard_orientation,
-        mm_conv);
+        parallel_config, output_compute_grid_size, out_channels, parallel_config.shard_orientation, mm_conv);
 
     const bool auto_shard = !input_memory_config.is_sharded() && !conv_config.shard_layout.has_value();
     return Conv2dWeightsBiasPrepConfig(

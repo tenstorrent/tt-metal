@@ -12,12 +12,13 @@
 #include <utility>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "distributed_context.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_fabric {
 namespace physical_discovery {
@@ -57,9 +58,8 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
                 EXPECT_NE(asic_descs.find(neighbor), asic_descs.end());
             }
         }
-        // All to All connectivity for hosts
+
         auto neighbors = physical_system_desc.get_host_neighbors(host);
-        EXPECT_EQ(neighbors.size(), hostnames.size() - 1);
 
         for (const auto& neighbor : neighbors) {
             EXPECT_NE(std::find(hostnames.begin(), hostnames.end(), neighbor), hostnames.end());

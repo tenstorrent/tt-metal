@@ -8,13 +8,13 @@
 #include <string>
 #include <vector>
 #include <optional>
-#include <tt-metalium/lightmetal_binary.hpp>
+#include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
 
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 
-#include "impl/kernels/kernel_impl.hpp"
+#include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {
 struct TraceDescriptor;
@@ -51,7 +51,7 @@ using FlatbufferRuntimeArgVector =
     const flatbuffers::Vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::RuntimeArg>>*;
 using RuntimeArgs = std::vector<std::variant<tt::tt_metal::Buffer*, uint32_t>>;
 
-namespace tt::tt_metal {
+namespace tt::tt_metal::experimental::lightmetal {
 
 namespace detail {
 class LightMetalReplayImpl {
@@ -138,4 +138,4 @@ private:
 };
 
 }  // namespace detail
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::experimental::lightmetal

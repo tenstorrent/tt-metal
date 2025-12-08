@@ -51,7 +51,6 @@ class MoEGate(AbstractModule):
         mesh_device: ttnn.Device,
         prefix: str = "",
     ) -> WeightConfig:
-        norm_eps = 1e-20  # no hf config for this
         (state_dict,) = state_dicts
         assert state_dict is not None
         return {
@@ -73,17 +72,6 @@ class MoEGate(AbstractModule):
                     shard_dims=(None, None),
                     mesh_device=mesh_device,
                     dtype=ttnn.float32,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                )
-            },
-            "add_norm_eps": {
-                "input_tensor_b": shard_and_save(
-                    output_path / f"add_norm_eps.input_tensor_b",
-                    torch.tensor([norm_eps]).repeat(1, hf_config.num_experts_per_tok).unsqueeze(0).unsqueeze(0),
-                    shard_dims=(None, None),
-                    mesh_device=mesh_device,
-                    dtype=ttnn.bfloat16,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
@@ -159,11 +147,6 @@ class MoEGate(AbstractModule):
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             ),
             "add_score_correction_bias": BinaryOpConfig(
-                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                memory_config=memory_config,
-                dtype=ttnn.bfloat16,
-            ),
-            "add_norm_eps": BinaryOpConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=memory_config,
                 dtype=ttnn.bfloat16,
@@ -351,23 +334,10 @@ class MoEGate(AbstractModule):
         ttnn.deallocate(scores)
 
         # normalize scores
-        topk_expert_scores_sum = ttnn.sum(topk_experts_scores, dim=3, keepdim=True)
+        topk_expert_scores_sum = ttnn.sum(topk_experts_scores, dim=3, keepdim=True) + 1e-20  # add norm eps
         topk_experts_scores_normalized = ttnn.div(topk_experts_scores, topk_expert_scores_sum)
         ttnn.deallocate(topk_expert_scores_sum)
         ttnn.deallocate(topk_experts_scores)
-
-        # add norm eps
-        norm_eps = cfg["add_norm_eps"]["input_tensor_b"]
-        # expand norm_eps to match topk_experts_scores_normalized shape(dynamic shape)
-        norm_eps = ttnn.repeat(norm_eps, ttnn.Shape((1, 1, topk_experts_scores_normalized.shape[2], 1)))
-        norm_eps = ttnn.to_layout(norm_eps, ttnn.TILE_LAYOUT)
-        topk_experts_scores_normalized = ttnn.add(
-            topk_experts_scores_normalized,
-            norm_eps,
-            memory_config=cfg["add_norm_eps"]["memory_config"],
-            dtype=cfg["add_norm_eps"]["dtype"],
-        )
-        ttnn.deallocate(norm_eps)
 
         # multiply by expert scale
         expert_scale = cfg["multiply_expert_scale"]["input_tensor_b"]

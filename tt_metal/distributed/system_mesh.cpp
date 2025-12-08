@@ -23,7 +23,7 @@
 #include "tt_metal/distributed/distributed_coordinate_translator.hpp"
 
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {

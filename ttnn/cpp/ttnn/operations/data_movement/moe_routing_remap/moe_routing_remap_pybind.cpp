@@ -10,7 +10,7 @@
 
 #include "ttnn-pybind/decorators.hpp"
 // #include <tt-metalium/sub_device_types.hpp>
-// #include <tt-metalium/fabric_edm_types.hpp>
+// #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 #include "moe_routing_remap.hpp"
 #include "moe_routing_remap_pybind.hpp"
@@ -18,7 +18,7 @@
 namespace ttnn::operations::data_movement::detail {
 
 void py_bind_moe_routing_remap(py::module& module) {
-    auto doc = R"doc(
+    const auto* doc = R"doc(
 
 Remap MoE routing weights to local device routing weights. Partitions groups of non-zero weights, which may be
 non-uniformly distributed, and maps them to devices along the specified cluster axis.

@@ -167,6 +167,11 @@ class default_setup(metaclass=MergeMetaclass):
             "start": {"core": "ANY", "risc": "NCRISC", "zone_name": "CQ_DISPATCH_CMD_SEND_GO_SIGNAL"},
             "end": {"core": "ANY", "risc": "NCRISC", "zone_name": "CQ_DISPATCH_CMD_SEND_GO_SIGNAL"},
         },
+        "perf_counter_data": {
+            "across": "device",
+            "type": "event",
+            "marker": {"risc": "TRISC_1"},
+        },
     }
 
     displayStats = ["Count", "Average", "Max", "Median", "Min", "Sum", "Range"]
@@ -203,6 +208,42 @@ class test_multi_op(default_setup):
             "type": "adjacent",
             "start": {"core": "ANY", "risc": "BRISC", "zone_name": "BRISC-KERNEL"},
             "end": {"core": "ANY", "risc": "BRISC", "zone_name": "BRISC-KERNEL"},
+        },
+    }
+    detectOps = False
+
+
+class test_multi_op_buffer_overflow(default_setup):
+    timerAnalysis = {
+        "BRISC KERNEL_START->KERNEL_END": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "BRISC", "zone_name": "BRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "BRISC", "zone_name": "BRISC-KERNEL"},
+        },
+        "NCRISC KERNEL_START->KERNEL_END": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
+        },
+        "TRISC_0 KERNEL_START->KERNEL_END": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
+        },
+        "TRISC_1 KERNEL_START->KERNEL_END": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_1", "zone_name": "TRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "TRISC_1", "zone_name": "TRISC-KERNEL"},
+        },
+        "TRISC_2 KERNEL_START->KERNEL_END": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_2", "zone_name": "TRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "TRISC_2", "zone_name": "TRISC-KERNEL"},
         },
     }
     detectOps = False

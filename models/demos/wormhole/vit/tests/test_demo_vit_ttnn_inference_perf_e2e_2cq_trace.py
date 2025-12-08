@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import disable_persistent_kernel_cache, is_blackhole, profiler
+from models.common.utility_functions import is_blackhole, profiler
 from models.demos.vit.tests.vit_test_infra import create_test_infra
 from models.perf.perf_utils import prep_perf_report
 
@@ -128,11 +128,10 @@ def test_vit(device, batch_size, is_single_card_n300):
     if is_single_card_n300:
         expected_samples_per_sec = 1323
     else:  # n150
-        expected_samples_per_sec = 1377
+        expected_samples_per_sec = 1470
     torch.manual_seed(0)
 
     profiler.clear()
-    disable_persistent_kernel_cache()
 
     first_key = f"first_iter_batchsize{batch_size}"
     second_key = f"second_iter_batchsize{batch_size}"

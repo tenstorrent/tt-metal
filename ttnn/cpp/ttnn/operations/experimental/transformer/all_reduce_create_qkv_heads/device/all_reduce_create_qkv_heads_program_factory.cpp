@@ -4,7 +4,7 @@
 ///
 #include "all_reduce_create_qkv_heads_program_factory.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 namespace ttnn {
 
 using namespace ccl;
@@ -39,7 +39,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     Tensor& k_output_tensor = output_tensors[2];
     Tensor& v_output_tensor = output_tensors[3];
 
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     // For qkv heads fuse
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(dtype);

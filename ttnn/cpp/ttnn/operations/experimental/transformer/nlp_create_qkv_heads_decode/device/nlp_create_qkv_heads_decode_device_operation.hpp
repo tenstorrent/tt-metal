@@ -1,89 +1,58 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#include <optional>
+
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include <tt-metalium/constants.hpp>
+#include "nlp_create_qkv_heads_decode_device_operation_types.hpp"
+#include "nlp_create_qkv_heads_decode_interleaved_program_factory.hpp"
+#include "nlp_create_qkv_heads_decode_sharded_program_factory.hpp"
+#include "nlp_create_qkv_heads_decode_sharded_subcoregrid_program_factory.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+#include "ttnn/device_operation.hpp"
+#include "ttnn/decorators.hpp"
 
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(
-    const Tensor& input_tensor,
-    uint32_t num_q_heads,
-    uint32_t num_kv_heads,
-    uint32_t head_dim,
-    bool overlap_qk_coregrid,
-    bool input_on_subcoregrids,
-    const std::optional<const Tensor>& batch_offset,
-    std::optional<const uint32_t> slice_size,
-    std::vector<Tensor>& output,
-    CoreCoord compute_with_storage_grid_size);
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_interleaved_input(
-    const Tensor& input_tensor,
-    uint32_t num_q_heads,
-    uint32_t num_kv_heads,
-    uint32_t head_dim,
-    std::vector<Tensor>& output,
-    CoreCoord compute_with_storage_grid_size);
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_input(
-    const Tensor& input_tensor,
-    uint32_t num_q_heads,
-    uint32_t num_kv_heads,
-    uint32_t head_dim,
-    bool overlap_qk_coregrid,
-    const std::optional<const Tensor>& batch_offset,
-    std::optional<const uint32_t> slice_size,
-    std::vector<Tensor>& output,
-    CoreCoord compute_with_storage_grid_size);
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_input_subcoregrid(
-    const Tensor& input_tensor,
-    uint32_t num_q_heads,
-    uint32_t num_kv_heads,
-    uint32_t head_dim,
-    bool overlap_qk_coregrid,
-    const std::optional<const Tensor>& batch_offset,
-    std::optional<const uint32_t> slice_size,
-    std::vector<Tensor>& output,
-    CoreCoord compute_with_storage_grid_size);
+namespace ttnn::operations::experimental::nlp_create_qkv_heads_decode {
 
-struct NLPCreateHeadsDecodeDeviceOperation {
-    const uint32_t num_q_heads;
-    const uint32_t num_kv_heads;
-    const uint32_t head_dim;
-    const bool overlap_qk_coregrid;
-    const bool input_on_subcoregrids;
-    std::optional<const uint32_t> slice_size;
-    MemoryConfig output_mem_config;
+struct NLPCreateQKVHeadsDecodeDeviceOperation {
+    using operation_attributes_t = nlp_create_qkv_heads_decode::operation_attributes_t;
+    using tensor_args_t = nlp_create_qkv_heads_decode::tensor_args_t;
+    using spec_return_value_t = nlp_create_qkv_heads_decode::spec_return_value_t;
+    using tensor_return_value_t = nlp_create_qkv_heads_decode::tensor_return_value_t;
+    using program_factory_t = std::variant<
+        program::NLPCreateQKVHeadsDecodeInterleavedProgramFactory,
+        program::NLPCreateQKVHeadsDecodeShardedProgramFactory,
+        program::NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory>;
 
-    void validate(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
-    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        std::vector<Tensor>& output_tensors) const;
-    static constexpr auto attribute_names = std::forward_as_tuple(
-        "num_q_heads",
-        "num_kv_heads",
-        "head_dim",
-        "overlap_qk_coregrid",
-        "input_on_subcoregrids",
-        "slice_size",
-        "output_mem_config");
-    auto attribute_values() const {
-        return std::forward_as_tuple(
-            this->num_q_heads,
-            this->num_kv_heads,
-            this->head_dim,
-            this->overlap_qk_coregrid,
-            this->input_on_subcoregrids,
-            this->slice_size,
-            this->output_mem_config);
-    }
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& operation_attributes, const tensor_args_t&);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input_tensor,
+        uint32_t num_q_heads,
+        uint32_t num_kv_heads,
+        uint32_t head_dim,
+        bool overlap_qk_coregrid,
+        bool input_on_subcoregrids,
+        const std::optional<const Tensor>& batch_offset,
+        std::optional<uint32_t> slice_size,
+        const tt::tt_metal::MemoryConfig& output_mem_config);
 };
-}  // namespace ttnn::operations::experimental::transformer
+
+}  // namespace ttnn::operations::experimental::nlp_create_qkv_heads_decode
+
+namespace ttnn::prim {
+constexpr auto nlp_create_qkv_heads_decode = ttnn::register_operation<
+    "ttnn::prim::nlp_create_qkv_heads_decode",
+    ttnn::operations::experimental::nlp_create_qkv_heads_decode::NLPCreateQKVHeadsDecodeDeviceOperation>();
+}  // namespace ttnn::prim

@@ -12,7 +12,7 @@ void MorehSumBackwardOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& output_grad = tensor_args.output_grad;
     const auto& input = tensor_args.input;
-    auto& input_grad = tensor_args.input_grad;
+    const auto& input_grad = tensor_args.input_grad;
 
     const auto keepdim = operation_attributes.keepdim;
     const auto dims = operation_attributes.dims;

@@ -2,15 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/data_movement/split/device/split_program_factory.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "ttnn/operation.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::data_movement::split::program {
+
+namespace {
 
 void setup_runtime(
     const Program& program,
@@ -83,9 +85,14 @@ void setup_runtime(
     }
 }
 
-operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
-    const Tensor& input_tensor, std::vector<Tensor>& output_tensors, const MemoryConfig& mem_config) {
-    uint32_t num_chunks = 2;
+}  // namespace
+
+SplitProgramFactory::cached_program_t SplitProgramFactory::create(
+    const split::operation_attributes_t& operation_attributes,
+    const split::tensor_args_t& tensor_args,
+    split::tensor_return_value_t& output_tensors) {
+    const auto& input_tensor = tensor_args.input;
+    const uint32_t num_chunks = operation_attributes.num_splits;
 
     auto input_shape = input_tensor.padded_shape();
 
@@ -210,37 +217,43 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
         reader_kernel_id,
         writer_kernel_id);
 
-    auto override_runtime_args_callback =
-        [reader_kernel_id, writer_kernel_id, num_cores_r, num_cores_c, start_core_x, start_core_y](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            auto src_dram_buffer = input_tensors.at(0).buffer();
-
-            auto dst_0_dram_buffer = output_tensors.at(0).buffer();
-            auto dst_1_dram_buffer = output_tensors.at(1).buffer();
-
-            for (int core_idx_y = 0; core_idx_y < num_cores_c; core_idx_y++) {
-                for (int core_idx_x = 0; core_idx_x < num_cores_r; core_idx_x++) {
-                    CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
-
-                    {
-                        auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                        runtime_args[1] = src_dram_buffer->address();
-                    }
-
-                    {
-                        auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                        runtime_args[1] = dst_0_dram_buffer->address();
-                        runtime_args[2] = dst_1_dram_buffer->address();
-                    }
-                }
-            }
-        };
-
-    return {std::move(program), override_runtime_args_callback};
+    return {
+        std::move(program), {reader_kernel_id, writer_kernel_id, num_cores_r, num_cores_c, start_core_x, start_core_y}};
 }
 
-}  // namespace ttnn::operations::data_movement::detail
+void SplitProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const split::operation_attributes_t& operation_attributes,
+    const split::tensor_args_t& tensor_args,
+    split::tensor_return_value_t& output_tensors) {
+    auto& program = cached_program.program;
+    const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
+    const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
+    const auto& num_cores_r = cached_program.shared_variables.num_cores_r;
+    const auto& num_cores_c = cached_program.shared_variables.num_cores_c;
+    const auto& start_core_x = cached_program.shared_variables.start_core_x;
+    const auto& start_core_y = cached_program.shared_variables.start_core_y;
+
+    auto* src_dram_buffer = tensor_args.input.buffer();
+    auto* dst_0_dram_buffer = output_tensors.at(0).buffer();
+    auto* dst_1_dram_buffer = output_tensors.at(1).buffer();
+
+    for (int core_idx_y = 0; core_idx_y < num_cores_c; core_idx_y++) {
+        for (int core_idx_x = 0; core_idx_x < num_cores_r; core_idx_x++) {
+            CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
+
+            {
+                auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                runtime_args[1] = src_dram_buffer->address();
+            }
+
+            {
+                auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                runtime_args[1] = dst_0_dram_buffer->address();
+                runtime_args[2] = dst_1_dram_buffer->address();
+            }
+        }
+    }
+}
+
+}  // namespace ttnn::operations::data_movement::split::program

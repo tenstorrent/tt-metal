@@ -52,8 +52,13 @@ jobs:
         shell: bash
         working-directory: /work
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -71,6 +76,3 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-        if: always()

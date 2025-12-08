@@ -28,23 +28,28 @@ def _golden_function(
 
     batch_size, sequence_size, hidden_size = input_tensor.shape
     # Subtract head sizes for key and value
-    head_size = (hidden_size) // (num_heads + num_kv_heads * 2)
-    tensor = torch.reshape(input_tensor, (batch_size, sequence_size, num_heads + num_kv_heads * 2, head_size))
-    query, key, value = (
-        tensor[..., :num_heads, :],
-        tensor[..., num_heads : num_heads + num_kv_heads, :],
-        tensor[..., num_heads + num_kv_heads :, :],
-    )
+    head_size = hidden_size // (num_heads + 2 * num_kv_heads)
 
-    query = torch.reshape(query, (batch_size, sequence_size, num_heads, head_size))
-    key = torch.reshape(key, (batch_size, sequence_size, num_kv_heads, head_size))
-    value = torch.reshape(value, (batch_size, sequence_size, num_kv_heads, head_size))
+    q_hidden = num_heads * head_size
+    kv_hidden = 2 * num_kv_heads * head_size
 
-    query = torch.permute(query, (0, 2, 1, 3)).contiguous().clone()
-    key = torch.permute(key, (0, 2, 1, 3)).contiguous().clone()
-    value = torch.permute(value, (0, 2, 1, 3)).contiguous().clone()
+    query_flat = input_tensor[..., :q_hidden]
+    kv_flat = input_tensor[..., q_hidden : q_hidden + kv_hidden]
+
+    # Reshape Q, K, V
+    query = query_flat.reshape(batch_size, sequence_size, num_heads, head_size)
+    kv = kv_flat.reshape(batch_size, sequence_size, 2 * num_kv_heads, head_size)
+
+    key = kv[..., :num_kv_heads, :]
+    value = kv[..., num_kv_heads:, :]
+
+    # Permute to (batch, num_heads, seq_len, head_size)
+    query = query.permute(0, 2, 1, 3).contiguous()
+    key = key.permute(0, 2, 1, 3).contiguous()
+    value = value.permute(0, 2, 1, 3).contiguous()
+
     if transpose_key:
-        key = torch.permute(key, (0, 1, 3, 2)).contiguous().clone()
+        key = key.permute(0, 1, 3, 2).contiguous()
 
     return query, key, value
 

@@ -102,8 +102,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
     }
 
-
-    auto dst_buffer = output.buffer();
+    auto* dst_buffer = output.buffer();
 
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index};
 
@@ -260,7 +259,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>&,
             const std::vector<Tensor>& output_tensors) {
-            auto src_buffer = input_tensors[0].buffer();
+            auto* src_buffer = input_tensors[0].buffer();
 
             Buffer* dst_buffer = nullptr;
             uint32_t starting_idx_h = 0;

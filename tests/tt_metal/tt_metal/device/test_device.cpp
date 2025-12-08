@@ -35,7 +35,12 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_cluster.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/experimental/pinned_memory.hpp>
+#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/vector_aligned.hpp>
 #include "math.hpp"
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace tt::tt_metal {
 
@@ -55,7 +60,7 @@ bool l1_ping(
     const size_t& byte_size,
     const size_t& l1_byte_address,
     const CoreCoord& grid_size) {
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     bool pass = true;
     auto inputs = generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
     for (int y = 0; y < grid_size.y; y++) {
@@ -90,7 +95,7 @@ bool dram_ping(
     const size_t& byte_size,
     const size_t& dram_byte_address,
     const unsigned int& num_channels) {
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     bool pass = true;
     auto inputs = generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
     for (unsigned int channel = 0; channel < num_channels; channel++) {
@@ -207,7 +212,7 @@ TEST_F(MeshDeviceFixture, TensixPingIllegalL1Cores) {
 TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto mesh_device = this->devices_.at(id);
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         uint32_t num_l1_banks = mesh_device->allocator()->get_num_banks(BufferType::L1);
         std::vector<uint32_t> host_input(1);
         std::map<uint32_t, uint32_t> bank_id_to_value;
@@ -283,7 +288,7 @@ TEST_F(MeshDeviceFixture, TestDeviceToHostMemChannelAssignment) {
 // Test to ensure writing from 16B aligned L1 address to 16B aligned PCIe address works
 TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     auto mesh_device = this->devices_.at(0);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -339,7 +344,7 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
 TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
     CoreCoord core{0, 0};
     const auto& mesh_device = devices_.at(0);
-    const auto device = mesh_device->get_devices()[0];
+    auto* const device = mesh_device->get_devices()[0];
 
     uint32_t l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
     std::vector<uint32_t> random_vec(1, 0xDEADBEEF);
@@ -388,7 +393,7 @@ TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
     std::map<CoreCoord, CoreCoord> logical_to_virtual_map;
 
     auto mesh_device = this->devices_.at(0);
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -465,6 +470,92 @@ TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
             }
         }
     }
+}
+
+// Test to ensure writing from 16B aligned L1 address to 16B aligned pinned memory works using MeshDevice
+TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
+    using tt::tt_metal::distributed::EnqueueMeshWorkload;
+    using tt::tt_metal::distributed::MeshCoordinate;
+    using tt::tt_metal::distributed::MeshCoordinateRange;
+    using tt::tt_metal::distributed::MeshCoordinateRangeSet;
+    using tt::tt_metal::distributed::MeshWorkload;
+    using tt::tt_metal::experimental::PinnedMemory;
+
+    auto mesh_device = devices_.at(0);
+
+    // Skip if mapping to NOC isn't supported on this system
+    if (!experimental::GetMemoryPinningParameters(*mesh_device).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+    }
+
+    // Use first device from the mesh for this test
+    MeshCoordinate target_coord(0, 0);
+    IDevice* device = mesh_device->get_device(target_coord);
+    EXPECT_TRUE(device->is_mmio_capable());
+
+    CoreCoord logical_core(0, 0);
+
+    uint32_t base_l1_src_address = device->allocator()->get_base_allocator_addr(HalMemType::L1) +
+                                   MetalContext::instance().hal().get_alignment(HalMemType::L1);
+
+    uint32_t size_bytes = 2048 * 128;
+    std::vector<uint32_t> src =
+        tt::test_utils::generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, size_bytes / sizeof(uint32_t));
+    EXPECT_EQ(MetalContext::instance().hal().get_alignment(HalMemType::L1), 16);
+    uint32_t num_16b_writes = size_bytes / MetalContext::instance().hal().get_write_alignment(HalMemType::HOST);
+
+    // Allocate and pin host memory
+    auto aligned_buf = std::make_shared<tt::tt_metal::vector_aligned<uint32_t>>(size_bytes / sizeof(uint32_t), 0);
+    tt::tt_metal::HostBuffer host_buffer_view(
+        tt::stl::Span<uint32_t>(aligned_buf->data(), aligned_buf->size()), tt::tt_metal::MemoryPin(aligned_buf));
+    auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(target_coord, target_coord));
+    auto pinned_memory = experimental::PinnedMemory::Create(
+        *mesh_device,
+        coordinate_range_set,
+        host_buffer_view,
+        true  // map_to_noc
+    );
+    ASSERT_EQ(
+        reinterpret_cast<uintptr_t>(aligned_buf->data()) %
+            MetalContext::instance().hal().get_write_alignment(HalMemType::HOST),
+        0);
+
+    // Write source data to L1
+    tt_metal::detail::WriteToDeviceL1(device, logical_core, base_l1_src_address, src);
+
+    // Create program and kernel for mesh workload
+    tt_metal::Program program = tt_metal::CreateProgram();
+
+    auto noc_addr = pinned_memory->get_noc_addr(device->id());
+    ASSERT_TRUE(noc_addr.has_value());
+    ASSERT_EQ(noc_addr.value().device_id, device->id());
+
+    uint32_t dst_lo = static_cast<uint32_t>(noc_addr.value().addr & 0xFFFFFFFFull);
+    uint32_t dst_hi = static_cast<uint32_t>(noc_addr.value().addr >> 32);
+    uint32_t pcie_xy_enc = noc_addr.value().pcie_xy_enc;
+
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/pcie_write_16b_wwrite.cpp",
+        logical_core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {base_l1_src_address, dst_lo, dst_hi, num_16b_writes, pcie_xy_enc}});
+
+    // Create mesh workload and add program
+    MeshWorkload mesh_workload;
+    MeshCoordinateRange device_range(target_coord, target_coord);
+    mesh_workload.add_program(device_range, std::move(program));
+
+    // Launch workload using mesh command queue
+    auto& mesh_cq = mesh_device->mesh_command_queue();
+    EnqueueMeshWorkload(mesh_cq, mesh_workload, true);  // blocking = true
+
+    // Verify the data was written correctly to pinned memory
+    // Compare with a std::vector copy to avoid allocator type mismatch in EXPECT_EQ
+    std::vector<uint32_t> aligned_copy(aligned_buf->begin(), aligned_buf->end());
+    EXPECT_EQ(src, aligned_copy);
 }
 
 }  // namespace tt::tt_metal

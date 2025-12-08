@@ -35,8 +35,8 @@
 
 // Access to internal API: ProgramImpl::num_kernel, get_kernel
 #include "impl/program/program_impl.hpp"
-#include "impl/kernels/kernel_impl.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/kernels/kernel.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -206,7 +206,7 @@ void verify_core_rt_args(
     const std::vector<uint32_t>& written_args,
     const uint32_t incr_val) {
     std::vector<uint32_t> observed_args;
-    auto device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->get_devices()[0];
     tt_metal::detail::ReadFromDeviceL1(device, core, base_addr, written_args.size() * sizeof(uint32_t), observed_args);
 
     for (size_t i = 0; i < written_args.size(); i++) {
@@ -236,8 +236,8 @@ void verify_results(
     uint32_t common_arg_incr_val = are_args_incremented ? 100 : 0;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    auto& program = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
+    const auto& program = workload.get_programs().at(device_range);
+    auto* device = mesh_device->get_devices()[0];
 
     for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
         const auto kernel = program.impl().get_kernel(kernel_id);
@@ -298,7 +298,7 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
         CoreRangeSet core_range_set(std::vector{first_core_range, second_core_range});
         auto mesh_device = this->devices_.at(id);
         auto& cq = mesh_device->mesh_command_queue();
-        auto device = this->devices_.at(id)->get_devices()[0];
+        auto* device = this->devices_.at(id)->get_devices()[0];
         auto workload =
             unit_tests::runtime_args::initialize_program_data_movement_rta(this->devices_.at(id), core_range_set, 2);
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -545,7 +545,7 @@ TEST_F(MeshDeviceFixture, TensixIllegallyModifyRTArgs) {
         auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         // First run the program with the initial runtime args
         CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
         CoreRange second_core_range(CoreCoord(3, 3), CoreCoord(5, 5));
@@ -615,12 +615,12 @@ TEST_F(MeshDeviceFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
 
 // Test that active ethernet cores correctly validate max runtime args
 TEST_F(MeshDeviceFixture, ActiveEthIllegalTooManyRuntimeArgs) {
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     uint32_t active_eth_max_runtime_args =
         hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t);
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto mesh_device = this->devices_.at(id);
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         auto active_eth_cores = device->get_active_ethernet_cores(true);
 
         // Skip test if no active ethernet cores available
@@ -696,12 +696,12 @@ TEST_F(MeshDeviceFixture, ActiveEthIllegalTooManyRuntimeArgs) {
 
 // Test that idle ethernet cores correctly validate max runtime args using IDLE_ETH kernel config size
 TEST_F(MeshDeviceFixture, IdleEthIllegalTooManyRuntimeArgs) {
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     uint32_t idle_eth_max_runtime_args =
         hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t);
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto mesh_device = this->devices_.at(id);
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         auto idle_eth_cores = device->get_inactive_ethernet_cores();
 
         // Skip test if no idle ethernet cores available

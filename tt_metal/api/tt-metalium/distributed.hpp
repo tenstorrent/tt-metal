@@ -62,12 +62,12 @@ void ReadShard(
     bool blocking = true) {
     // TODO: #26591 - `is_local` Handling should be done under `MeshCommandQueue`.
     // Tracking removal of free function APIs in this file in this issue.
-    auto mesh_device = mesh_cq.device();
+    auto* mesh_device = mesh_cq.device();
     if (!mesh_device->is_local(coord)) {
         return;
     }
 
-    auto shard = mesh_buffer->get_device_buffer(coord);
+    auto* shard = mesh_buffer->get_device_buffer(coord);
     dst.resize(shard->page_size() * shard->num_pages() / sizeof(DType));
     std::vector<MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
         .shard_coord = coord,

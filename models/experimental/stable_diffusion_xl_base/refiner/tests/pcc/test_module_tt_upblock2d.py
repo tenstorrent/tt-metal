@@ -92,6 +92,7 @@ def test_upblock(
         ttnn_residual_tensors = ttnn_residual_tensors + (ttnn_residual,)
 
     ttnn_temb_tensor = ttnn.from_torch(torch_temb_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    ttnn_temb_tensor = ttnn.silu(ttnn_temb_tensor)
     ttnn_output_tensor, output_shape = tt_crosattn.forward(
         ttnn_input_tensor,
         ttnn_residual_tensors,

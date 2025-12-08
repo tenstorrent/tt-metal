@@ -6,7 +6,6 @@
 
 #include <utility>
 
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 
@@ -27,15 +26,11 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case BinaryOpType::LOGICAL_AND:
         case BinaryOpType::LOGICAL_OR:
         case BinaryOpType::LOGICAL_XOR:
-            return a == b && (
-                a == DataType::FLOAT32 ||
-                a == DataType::INT32 ||
-                a == DataType::UINT32 ||
-                a == DataType::UINT16);
         case BinaryOpType::SQUARED_DIFFERENCE:
             return a == b && (
                 a == DataType::FLOAT32 ||
                 a == DataType::INT32 ||
+                a == DataType::UINT32 ||
                 a == DataType::UINT16);
         case BinaryOpType::LOGADDEXP:
         case BinaryOpType::LOGADDEXP2:
@@ -125,7 +120,7 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
 
 void BinaryDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    using namespace tt::constants;
+
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
 
@@ -440,7 +435,7 @@ BinaryDeviceOperation::invoke(
     // TODO #13655: Note that the current program ingfrastructure still only supports a single sub-device per program
     if (input_tensor_a_arg.is_sharded()) {
         const auto& input_grid = input_tensor_a_arg.shard_spec().value().grid;
-        auto device = input_tensor_a_arg.device();
+        auto* device = input_tensor_a_arg.device();
         for (const auto& sub_device_id : device->get_sub_device_ids()) {
             const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
             if (sub_device_workers.intersects(input_grid)) {
@@ -449,7 +444,7 @@ BinaryDeviceOperation::invoke(
         }
     } else if (input_tensor_b_arg.is_sharded()) {
         const auto& input_grid = input_tensor_b_arg.shard_spec().value().grid;
-        auto device = input_tensor_b_arg.device();
+        auto* device = input_tensor_b_arg.device();
         for (const auto& sub_device_id : device->get_sub_device_ids()) {
             const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
             if (sub_device_workers.intersects(input_grid)) {
@@ -458,7 +453,7 @@ BinaryDeviceOperation::invoke(
         }
     } else if (optional_output_tensor.has_value() && optional_output_tensor->is_sharded()) {
         const auto& output_grid = optional_output_tensor->shard_spec().value().grid;
-        auto device = optional_output_tensor->device();
+        auto* device = optional_output_tensor->device();
         for (const auto& sub_device_id : device->get_sub_device_ids()) {
             const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
             if (sub_device_workers.intersects(output_grid)) {
@@ -466,7 +461,7 @@ BinaryDeviceOperation::invoke(
             }
         }
     } else {
-        auto device = input_tensor_a_arg.device();
+        auto* device = input_tensor_a_arg.device();
         for (const auto& sub_device_id : device->get_sub_device_ids()) {
             const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
             worker_grid = worker_grid.merge(sub_device_workers);

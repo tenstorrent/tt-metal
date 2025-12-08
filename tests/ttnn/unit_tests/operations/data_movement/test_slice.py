@@ -1191,3 +1191,67 @@ def test_slice_tensor_args_device_path(input_shape, dim, start, end, step, layou
     ttnn_output_tensor = ttnn.to_torch(ttnn_output)
 
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim, start, end",
+    (([32, 131072], 1, [0, 0], [32, 1024]),),
+)
+@pytest.mark.parametrize("step", ([1, 1], [4, 4]))
+@pytest.mark.parametrize("layout", (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT))
+@pytest.mark.parametrize("args_as_tensor", (True, False))
+@pytest.mark.parametrize(
+    "sub_core_grids",
+    (
+        # single core
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        # multiple disjoint cores
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+            ]
+        ),
+    ),
+)
+def test_slice_subcores(input_shape, dim, start, end, step, layout, args_as_tensor, sub_core_grids, device):
+    # Create tensor where each tile has a unique value for easy tile debugging
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    torch_start_tensor = torch.tensor(start)
+    torch_end_tensor = torch.tensor(end)
+
+    slices = tuple(slice(start[i], end[i], step[i]) for i in range(len(start)))
+
+    # Slice the tensor using the slices for each dimension
+    torch_output_tensor = torch_input[slices]
+
+    ttnn_start_tensor = ttnn.from_torch(torch_start_tensor, device=device)
+    ttnn_end_tensor = ttnn.from_torch(torch_end_tensor, device=device)
+
+    ttnn_tensor = ttnn.from_torch(torch_input, layout=layout, dtype=ttnn.bfloat16, device=device)
+
+    if args_as_tensor:
+        # Calculate num_devices from the slice pattern
+        num_devices_calc = input_shape[dim] // (end[dim] - start[dim])
+        ttnn_output = ttnn.slice(
+            ttnn_tensor,
+            ttnn_start_tensor,
+            ttnn_end_tensor,
+            step,
+            slice_dim=dim,
+            num_devices=num_devices_calc,
+            sub_core_grids=sub_core_grids,
+        )
+    else:
+        ttnn_output = ttnn.slice(
+            ttnn_tensor,
+            start,
+            end,
+            step,
+            sub_core_grids=sub_core_grids,
+        )
+
+    ttnn_output_tensor = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)

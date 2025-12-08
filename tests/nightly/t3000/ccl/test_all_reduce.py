@@ -208,9 +208,9 @@ def test_nd(mesh_device, input_shape, cluster_axis, dtype, memory_config, topolo
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
-    ids=["fabric_linear", "fabric_2d_dynamic"],
+    ids=["fabric_linear", "fabric_2d"],
 )
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("input_shape", [[2, 2, 32, 32]])

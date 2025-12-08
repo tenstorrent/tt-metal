@@ -11,8 +11,8 @@
 namespace ttnn::operations::moreh::moreh_mean {
 void MorehMeanOperation::validate_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto& input = tensor_args.input;
-    auto& output = tensor_args.output;
+    const auto& input = tensor_args.input;
+    const auto& output = tensor_args.output;
 
     TT_FATAL(
         (operation_attributes.dim >= 0 && operation_attributes.dim <= 7),
@@ -31,7 +31,7 @@ void MorehMeanOperation::validate_tensors(
 }
 MorehMeanOperation::program_factory_t MorehMeanOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto& input = tensor_args.input;
+    const auto& input = tensor_args.input;
 
     auto rank = input.logical_shape().rank();
 
@@ -95,7 +95,7 @@ MorehMeanOperation::spec_return_value_t MorehMeanOperation::compute_output_specs
 
 MorehMeanOperation::tensor_return_value_t MorehMeanOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto& output = tensor_args.output;
+    const auto& output = tensor_args.output;
     if (output.has_value()) {
         return {output.value()};
     }

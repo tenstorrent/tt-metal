@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <nlohmann/json_fwd.hpp>
 #include <stdint.h>
 #include <cstddef>
 #include <filesystem>
@@ -20,7 +19,6 @@
 #include "buffer.hpp"
 #include "common/TracyTTDeviceData.hpp"
 #include "core_coord.hpp"
-#include "thread_pool.hpp"
 #include "profiler_optional_metadata.hpp"
 #include "profiler_types.hpp"
 #include "tracy/TracyTTDevice.hpp"
@@ -28,6 +26,7 @@
 namespace tt {
 namespace tt_metal {
 class IDevice;
+class ThreadPool;
 }  // namespace tt_metal
 }  // namespace tt
 
@@ -78,6 +77,9 @@ private:
     // Device frequency
     int device_core_frequency{};
 
+    // Device max compute cores
+    uint32_t max_compute_cores;
+
     // Thread pool used for processing data when dumping results
     std::shared_ptr<ThreadPool> thread_pool;
 
@@ -107,13 +109,6 @@ private:
 
     // Storage for all core's L1 data buffers
     std::unordered_map<CoreCoord, std::vector<uint32_t>> core_l1_data_buffers;
-
-    // Storage for all noc trace data
-    std::vector<std::unordered_map<RuntimeID, nlohmann::json::array_t>> noc_trace_data;
-
-    // Storage for all noc trace markers that have been converted to json to ensure that the same marker isn't processed
-    // twice
-    std::unordered_set<tracy::TTDeviceMarker> noc_trace_markers_processed;
 
     // Output directory for noc trace data
     std::filesystem::path noc_trace_data_output_dir;
@@ -182,6 +177,10 @@ private:
 
     // Track the smallest timestamp read
     void updateFirstTimestamp(uint64_t timestamp);
+
+    // Generate programs analysis results for device markers
+    void generateAnalysesForDeviceMarkers(
+        const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers) const;
 
     // Dump device results to files
     void writeDeviceResultsToFiles() const;

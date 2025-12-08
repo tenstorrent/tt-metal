@@ -103,7 +103,7 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, distributed::MeshDev
     TT_FATAL(
         ttnn::flatbuffer::VerifyTensorBuffer(verifier),
         "Cannot validate tensor data; this most likely indicates data corruption.");
-    auto fb_tensor = ttnn::flatbuffer::GetTensor(header_start);
+    const auto* fb_tensor = ttnn::flatbuffer::GetTensor(header_start);
 
     const uint64_t data_offset = sizeof(header_size) + header_size;
     const uint64_t data_size = file_size - data_offset;

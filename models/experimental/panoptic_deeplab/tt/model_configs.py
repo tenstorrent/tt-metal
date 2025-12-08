@@ -185,6 +185,7 @@ class ModelOptimisations:
         self._setup_res4_stage()
         self._setup_res5_stage()
         self._setup_resnet_activation_fusion()
+        self._setup_resnet_conv1_deallocation()
 
     def _setup_stem(self):
         """
@@ -229,6 +230,11 @@ class ModelOptimisations:
         - conv2: 3x3 convs with height sharding
         - shortcut: First block uses width slicing and block sharding
         """
+        # Conv1: First block takes res2 output as input, must not deallocate it
+        self.register_layer_override(
+            "res3.0.conv1",
+            deallocate_activation=False,
+        )
         # Conv2: First block downsamples with stride=2
         self.register_layer_override(
             "res3.0.conv2",
@@ -315,6 +321,32 @@ class ModelOptimisations:
                         deallocate_activation=False,
                     )
 
+    def _setup_resnet_conv1_deallocation(self):
+        """
+        Set deallocate_activation=False for conv1 in blocks that need to preserve
+        the input tensor for residual connections, allowing us to avoid ttnn.clone().
+
+        Blocks that need this:
+        - All blocks without shortcuts (i > 0 in each stage)
+        - All res4 blocks
+        - All res5 blocks
+
+        Exceptions:
+        - res3.3: Keep deallocate_activation=True to avoid L1 memory issues
+        """
+        stage_configs = [("res2", 3), ("res3", 4), ("res4", 6), ("res5", 3)]
+
+        for stage, num_blocks in stage_configs:
+            for i in range(num_blocks):
+                # Blocks without shortcuts (i > 0) need conv1 to not deallocate input
+                # Also, res4 and res5 blocks always need this (even block 0)
+                # Exception: res3.3 needs deallocate_activation=True to avoid L1 memory issues
+                if (i > 0 or stage in ["res4", "res5"]) and not (stage == "res3" and i == 3):
+                    self.register_layer_override(
+                        f"{stage}.{i}.conv1",
+                        deallocate_activation=False,
+                    )
+
     def _register_stage_blocks(self, stage: str, num_blocks: int, conv_name: str, start_idx: int = 0, **overrides):
         """Helper to register overrides for blocks starting from start_idx."""
         for i in range(start_idx, num_blocks):
@@ -333,6 +365,9 @@ class ModelOptimisations:
         - Branch 1-3: 3x3 dilated convs (dilation=6, 12, 18)
         - Branch 4: Global average pooling + 1x1 conv
         - Project: 1x1 conv to combine branches
+
+        ASPP is the direct consumer of res5 backbone features, so all branches
+        must have deallocate_activation=False to preserve the backbone output.
         """
         # Branches without slicing (1x1 convs and pooling)
         no_slice_branches = ["aspp.convs.0", "aspp.convs.4", "aspp.project"]
@@ -358,6 +393,28 @@ class ModelOptimisations:
                 enable_weights_double_buffer=True,
             )
 
+        # Also set per-head ASPP paths explicitly to ensure backbone features are preserved
+        # Each head has its own ASPP (as decoder.res5.project_conv)
+        for head_prefix in ["semantic_head", "instance_head"]:
+            # ASPP conv branches (0-4)
+            for i in range(5):
+                if i == 4:
+                    # Branch 4 has a pooling conv
+                    self.register_layer_override(
+                        f"{head_prefix}.decoder.res5.project_conv.convs.4.1",
+                        deallocate_activation=False,
+                    )
+                else:
+                    self.register_layer_override(
+                        f"{head_prefix}.decoder.res5.project_conv.convs.{i}",
+                        deallocate_activation=False,
+                    )
+            # ASPP project layer
+            self.register_layer_override(
+                f"{head_prefix}.decoder.res5.project_conv.project",
+                deallocate_activation=False,
+            )
+
     # -------------------------------------------------------------------------
     # DECODER CONFIGURATION
     # -------------------------------------------------------------------------
@@ -373,11 +430,20 @@ class ModelOptimisations:
             iteration_index: Decoder iteration (0 for first pass)
         """
         # Projection layers: No slicing, preserve backbone outputs for head sharing
+        # These are the direct consumers of backbone features, so they must not deallocate them
         projection_layers = [f"decoder.{stage}.project_conv" for stage in ["res5", "res4", "res3", "res2"]]
         self._register_multiple_layers(
             projection_layers,
             deallocate_activation=False,
         )
+
+        # Each head has its own decoder, so we need to configure both semantic and instance heads
+        for head_prefix in ["semantic_head", "instance_head"]:
+            for stage in ["res5", "res4", "res3", "res2"]:
+                self.register_layer_override(
+                    f"{head_prefix}.decoder.{stage}.project_conv",
+                    deallocate_activation=False,
+                )
 
         # Fusion layers: Two convs per stage (except res5 which only has projection)
         for stage in ["res4", "res3", "res2"]:

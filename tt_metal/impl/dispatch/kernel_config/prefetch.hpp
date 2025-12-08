@@ -9,7 +9,7 @@
 
 #include "core_coord.hpp"
 #include "fd_kernel.hpp"
-#include "mesh_graph.hpp"
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -54,10 +54,14 @@ struct prefetch_static_config_t {
     std::optional<uint32_t> my_fabric_sync_status_addr;
 
     std::optional<bool> is_2d_fabric;
-    std::optional<bool> is_2d_fabric_dynamic;
 
     std::optional<bool> is_d_variant;
     std::optional<bool> is_h_variant;
+
+    // Offsets of runtime args
+    std::optional<uint32_t> offsetof_my_dev_id;
+    std::optional<uint32_t> offsetof_to_dev_id;
+    std::optional<uint32_t> offsetof_router_direction;
 };
 
 struct prefetch_dependent_config_t {
@@ -101,6 +105,8 @@ public:
     void GenerateStaticConfigs() override;
 
     void GenerateDependentConfigs() override;
+
+    void InitializeRuntimeArgsValues() override;
 
     void ConfigureCore() override;
 

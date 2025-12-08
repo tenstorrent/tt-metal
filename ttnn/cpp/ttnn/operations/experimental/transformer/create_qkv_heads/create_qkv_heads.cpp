@@ -9,7 +9,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::create_qkv_heads {
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsOperation::invoke(
     const Tensor& input_tensor,
@@ -28,18 +28,15 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsOperation::in
         num_kv_heads_val,
         num_kv_heads_val);
     const uint32_t head_dim = input_tensor.padded_shape()[3] / (num_q_heads + (2 * num_kv_heads_val));
-    auto optional_outputs = std::vector<std::optional<Tensor>>{};
+
+    std::optional<std::tuple<Tensor, Tensor, Tensor>> preallocated_outputs = std::nullopt;
     if (optional_output_tensors.has_value()) {
-        optional_outputs = {optional_output_tensors.value().begin(), optional_output_tensors.value().end()};
-    } else {
-        optional_outputs = {};
+        const auto& arr = optional_output_tensors.value();
+        preallocated_outputs = std::make_tuple(arr[0], arr[1], arr[2]);
     }
-    auto output_tensors = tt::tt_metal::operation::run(
-        CreateQKVHeadsDeviceOperation{num_q_heads, num_kv_heads_val, head_dim, transpose_k_heads, output_mem_config},
-        {input_tensor},
-        {},
-        optional_outputs);
-    return {output_tensors.at(0), output_tensors.at(1), output_tensors.at(2)};
+
+    return ttnn::prim::create_qkv_heads(
+        input_tensor, num_q_heads, num_kv_heads_val, head_dim, transpose_k_heads, memory_config, preallocated_outputs);
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::create_qkv_heads

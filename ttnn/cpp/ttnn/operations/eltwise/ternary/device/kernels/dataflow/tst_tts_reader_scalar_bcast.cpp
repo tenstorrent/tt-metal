@@ -36,8 +36,9 @@ void kernel_main() {
 
     constexpr auto predicate_cb = get_compile_time_arg_val(0);
     constexpr auto src_b_cb = get_compile_time_arg_val(1);  // TTS: true_value is src_b; TST: false_value is src_b
-    constexpr auto src_args = TensorAccessorArgs<2>();
-    constexpr auto src_b_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
+    constexpr auto src_args = TensorAccessorArgs<2, 0>();
+    constexpr auto src_b_args =
+        TensorAccessorArgs<src_args.next_compile_time_args_offset(), src_args.next_common_runtime_args_offset()>();
 
     // #if !SRC_SHARDED_A
     const uint32_t src_tile_bytes = get_tile_size(predicate_cb);

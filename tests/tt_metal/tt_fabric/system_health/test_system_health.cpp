@@ -11,11 +11,12 @@
 #include <utility>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include <tt_stl/caseless_comparison.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_fabric {
 namespace system_health_tests {
@@ -404,6 +405,10 @@ TEST(Cluster, TestMeshFullConnectivity) {
     } else if (cluster_type == tt::tt_metal::ClusterType::P150_X8) {
         num_expected_chips = 8;
         num_expected_mmio_chips = 8;
+        num_connections_per_side = 2;
+    } else if (cluster_type == tt::tt_metal::ClusterType::P300_X2) {
+        num_expected_chips = 4;
+        num_expected_mmio_chips = 4;
         num_connections_per_side = 2;
     } else {
         GTEST_SKIP() << "Mesh check not supported for system type " << enchantum::to_string(cluster_type);

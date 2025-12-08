@@ -4,26 +4,37 @@
 
 #pragma once
 
-#include "ttnn/operation.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/operations/sliding_window/halo/device/halo_device_operation_types.hpp"
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::data_movement::program {
 
-tt::tt_metal::operation::ProgramWithCallbacks untilize_with_halo_multi_core(
-    tt::tt_metal::Program& program,
-    const Tensor& input_tensor,
-    uint32_t pad_val,
-    uint32_t ncores_nhw,
-    uint32_t max_out_nsticks_per_core,
-    const Tensor& padding_config0,
-    const Tensor& padding_config1,
-    const Tensor& gather_config0,
-    const Tensor& gather_config1,
-    const std::vector<uint16_t>& number_of_blocks_per_core,
-    bool remote_read,
-    bool transpose_mcast,
-    Tensor& output_tensor,
-    int block_size,
-    bool capture_buffers);  // Used by halo op to cache internally created config buffers with the program
-                            // Untilize with Halo takes them as inputs from the user, so doesn't capture
+struct UntilizeWithHaloProgramFactory {
+    struct shared_variables_t {
+        tt::tt_metal::CBHandle src_cb{};
+        tt::tt_metal::CBHandle out_cb{};
+        tt::tt_metal::CBHandle padding_config_cb0{};
+        tt::tt_metal::CBHandle padding_config_cb1{};
+        tt::tt_metal::CBHandle gather_config_cb0{};
+        tt::tt_metal::CBHandle gather_config_cb1{};
+        tt::tt_metal::DeviceStorage padding_config_storage0;
+        tt::tt_metal::DeviceStorage padding_config_storage1;
+        tt::tt_metal::DeviceStorage gather_config_storage0;
+        tt::tt_metal::DeviceStorage gather_config_storage1;
+    };
 
-}  // namespace ttnn::operations::data_movement::detail
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(
+        const sliding_window::halo::operation_attributes_t& operation_attributes,
+        const sliding_window::halo::tensor_args_t& tensor_args,
+        sliding_window::halo::tensor_return_value_t& output_tensor);
+
+    static void override_runtime_arguments(
+        cached_program_t& cached_program,
+        const sliding_window::halo::operation_attributes_t& operation_attributes,
+        const sliding_window::halo::tensor_args_t& tensor_args,
+        sliding_window::halo::tensor_return_value_t& output_tensor);
+};
+
+}  // namespace ttnn::operations::data_movement::program

@@ -34,6 +34,7 @@ def run_send_recv_test(
 
     socket_mem_config = ttnn.SocketMemoryConfig(socket_storage_type, socket_fifo_size)
     socket_config = ttnn.SocketConfig(socket_connections, socket_mem_config)
+    send_socket, recv_socket = ttnn.create_socket_pair(send_device, recv_device, socket_config)
     torch_input = torch.randn(tensor_shape)
     input_tensor = ttnn.from_torch(
         torch_input,
@@ -44,8 +45,8 @@ def run_send_recv_test(
         mesh_mapper=ttnn.ReplicateTensorToMesh(send_device),
     )
     output_tensor = ttnn.allocate_tensor_on_device(input_tensor.spec, recv_device)
-    ttnn.experimental.send_async(input_tensor, send_device, socket_config)
-    ttnn.experimental.recv_async(output_tensor, recv_device, socket_config)
+    ttnn.experimental.send_async(input_tensor, send_socket)
+    ttnn.experimental.recv_async(output_tensor, recv_socket)
     ttnn.synchronize_device(send_device)
     ttnn.synchronize_device(recv_device)
     input_data = ttnn.to_torch(input_tensor, mesh_composer=ttnn.ConcatMeshToTensor(send_device, dim=0))
@@ -95,7 +96,7 @@ def run_send_recv_test(
         10 * 1024,
     ],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}], indirect=True)
 def test_send_recv(
     t3k_mesh_device,
     per_chip_shape,

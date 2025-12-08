@@ -10,7 +10,7 @@
 #include <random>
 
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include "tests/tt_metal/multihost/fabric_tests/mesh_socket_yaml_parser.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"

@@ -1,9 +1,8 @@
 Tests:
-  - name: "FlowControlMeshDynamic"
+  - name: "FlowControlMultiMesh"
     enable_flow_control: true
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]

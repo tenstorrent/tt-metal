@@ -14,7 +14,7 @@
 namespace ttnn::operations::transformer {
 
 void py_bind_sdpa(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
         Causal scaled dot product attention. This API mimicks the PyTorch API of the same name.
         The implementation is FlashAttention-2."
@@ -86,7 +86,7 @@ void py_bind_sdpa(py::module& module) {
             py::arg("compute_kernel_config").noconvert() = std::nullopt,
             py::arg("attention_sink").noconvert() = std::nullopt});
 
-    auto chunked_doc =
+    const auto* chunked_doc =
         R"doc(
         Chunked causal scaled dot product attention for processing long sequences in chunks.
         This variant allows processing of sequences longer than the maximum supported length
@@ -149,7 +149,7 @@ void py_bind_sdpa(py::module& module) {
             py::arg("program_config").noconvert() = std::nullopt,
             py::arg("compute_kernel_config").noconvert() = std::nullopt});
 
-    auto joint_doc = R"doc(
+    const auto* joint_doc = R"doc(
         JointAttention operation that efficiently performs non-causal attention over two
         sets of query, key, and value tensors. Internally, these are concatenated in the sequence
         dimension (joint_strategy = "rear"), then attention is computed once. The
@@ -223,7 +223,7 @@ void py_bind_sdpa(py::module& module) {
             py::arg("scale").noconvert() = std::nullopt,
             py::arg("compute_kernel_config").noconvert() = std::nullopt});
 
-    auto ring_joint_doc = R"doc(
+    const auto* ring_joint_doc = R"doc(
         RingJointAttention operation that efficiently performs non-causal attention over two
         sets of query, key, and value tensors, where the first set is sharded across devices in the sequence dimension.
         Internally, these are concatenated in the sequence dimension (joint_strategy = "rear"),
@@ -344,7 +344,7 @@ void py_bind_sdpa(py::module& module) {
             py::arg("subdevice_id") = std::nullopt,
             py::arg("ccl_core_grid_offset")});
 
-    auto mla_doc =
+    const auto* mla_doc =
         R"doc(
         Causal MLA attention."
 
@@ -407,7 +407,7 @@ void py_bind_sdpa(py::module& module) {
             py::arg("program_config").noconvert() = std::nullopt,
             py::arg("compute_kernel_config").noconvert() = std::nullopt});
 
-    auto chunked_mla_doc =
+    const auto* chunked_mla_doc =
         R"doc(
         Chunked causal scaled dot product attention for processing long sequences in chunks.
         This variant allows processing of sequences longer than the maximum supported length
@@ -471,7 +471,7 @@ void py_bind_sdpa(py::module& module) {
             py::arg("compute_kernel_config").noconvert() = std::nullopt,
         });
 
-    auto ring_distributed_doc =
+    const auto* ring_distributed_doc =
         R"doc(
         Ring-distributed causal scaled dot product attention for multi-device execution.
         This optimization distributes query computation across multiple devices in a ring topology,

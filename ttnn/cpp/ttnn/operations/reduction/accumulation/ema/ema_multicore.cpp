@@ -9,7 +9,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include "ttnn/operation.hpp"
 
 namespace ttnn::operations::reduction::accumulation {

@@ -9,7 +9,7 @@ namespace ttnn::operations::experimental::ccl {
 namespace py = pybind11;
 
 void py_bind_llama_rs_create_heads(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Reduce_scatter after FF1/3 for Llama70B.
 

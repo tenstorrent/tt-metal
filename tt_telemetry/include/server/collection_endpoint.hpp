@@ -16,5 +16,4 @@
  * Collection endpoint server for broadcasting telemetry data using websocketpp.
  */
 
-std::pair<std::future<bool>, std::shared_ptr<TelemetrySubscriber>> run_collection_endpoint(
-    uint16_t port, const std::string& metal_home = "");
+std::pair<std::future<bool>, std::shared_ptr<TelemetrySubscriber>> run_collection_endpoint(uint16_t port);

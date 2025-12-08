@@ -5,6 +5,7 @@
 #include "layer_norm_module.hpp"
 
 #include "core/tt_tensor_utils.hpp"
+#include "ops/layernorm_op.hpp"
 
 namespace ttml::modules {
 

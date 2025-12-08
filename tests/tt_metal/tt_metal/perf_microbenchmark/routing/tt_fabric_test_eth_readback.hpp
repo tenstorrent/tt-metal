@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 // Include the test device and fixture headers
 #include "tt_fabric_test_device_setup.hpp"
@@ -63,9 +63,12 @@ public:
      * @brief Read buffer from all active ethernet cores
      * @param address The buffer address to read from
      * @param buffer_size The size of the buffer to read
+     * @param read_all_active If true, read from all active ethernet cores regardless of fabric connection
+     *                        registration. If false, only read from registered fabric connections.
+     *                        Use true for code profiling to capture intermediate forwarding hops.
      * @return Vector of results containing buffer data and location metadata for each core
      */
-    std::vector<EthCoreBufferResult> read_buffer(uint32_t address, size_t buffer_size);
+    std::vector<EthCoreBufferResult> read_buffer(uint32_t address, size_t buffer_size, bool read_all_active = false);
 
 private:
     const std::unordered_map<MeshCoordinate, TestDevice>& test_devices_;

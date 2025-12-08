@@ -44,6 +44,8 @@ extern uint32_t traceCount;
 extern uint32_t sums[SUM_COUNT];
 extern uint32_t sumIDs[SUM_COUNT];
 
+constexpr uint32_t PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC / sizeof(uint32_t);
+constexpr uint32_t NOC_ALIGNMENT_FACTOR = 4;
 constexpr uint32_t QUICK_PUSH_MARKER_COUNT = 2;
 constexpr uint32_t DISPATCH_META_DATA_COUNT = 2;
 constexpr uint32_t DISPATCH_META_DATA_UINT32_SIZE = 4;
@@ -53,6 +55,11 @@ constexpr uint32_t DISPATCH_PARENT_ZONE_MARKER_COUNT = 2;
 constexpr bool TRACE_ON_TENSIX = true;
 #else
 constexpr bool TRACE_ON_TENSIX = false;
+#endif
+#if (PROFILE_KERNEL & PROFILER_OPT_DO_SUM)
+constexpr bool DO_SUM = true;
+#else
+constexpr bool DO_SUM = false;
 #endif
 constexpr uint32_t TRACE_MARK_FW_START = (1 << 31);
 constexpr uint32_t TRACE_MARK_KERNEL_START = (1 << 30);
@@ -280,18 +287,19 @@ __attribute__((noinline)) void finish_profiler() {
     if (profiler_control_buffer[PROFILER_DONE] == 1) {
         return;
     }
-    bool do_noc = true;
-    if (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]) {
-        do_noc = false;
-    }
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
+    bool is_dram_set = profiler_control_buffer[DRAM_PROFILER_ADDRESS] != 0;
 
     uint32_t pageSize =
         PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * profiler_core_count_per_dram;
 
     NocRegisterStateSave noc_state;
     for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
+        bool do_noc = true;
+        if (!is_dram_set) {
+            do_noc = false;
+        }
 #if defined(COMPILE_FOR_IDLE_ERISC)
         profiler_data_buffer[riscID].data[ID_LH] = ((core_flat_id & 0xFF) << 3) | riscID;
 #else
@@ -533,11 +541,15 @@ struct profileScopeAccumulate {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
 
     inline __attribute__((always_inline)) profileScopeAccumulate() {
-        start_time = ((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX];
+        if constexpr (kernel_profiler::DO_SUM) {
+            start_time = ((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX];
+        }
     }
     inline __attribute__((always_inline)) ~profileScopeAccumulate() {
-        sumIDs[index] = timer_id;
-        sums[index] += (((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX]) - start_time;
+        if constexpr (kernel_profiler::DO_SUM) {
+            sumIDs[index] = timer_id;
+            sums[index] += (((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX]) - start_time;
+        }
     }
 };
 
@@ -591,6 +603,7 @@ __attribute__((noinline)) void trace_only_init() {
 }  // namespace kernel_profiler
 
 #include "noc_event_profiler.hpp"
+#include "perf_counters.hpp"
 
 // Not dispatch
 #if (!defined(DISPATCH_KERNEL))
@@ -713,5 +726,10 @@ __attribute__((noinline)) void trace_only_init() {
 #define RECORD_NOC_EVENT_WITH_ID(type, noc_id, addrgen, num_bytes, vc)
 #define RECORD_NOC_EVENT(type)
 #define NOC_TRACE_QUICK_PUSH_IF_LINKED(cmd_buf, linked)
+
+// null macros when perf counters are disabled
+#define StartPerfCounters()
+#define StopPerfCounters()
+#define RecordPerfCounters()
 
 #endif

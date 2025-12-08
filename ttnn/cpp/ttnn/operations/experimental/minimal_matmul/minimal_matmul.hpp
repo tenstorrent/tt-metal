@@ -24,6 +24,7 @@ struct ExecuteMinimalMatmul {
         std::optional<unary::UnaryWithParam> fused_activation,
         const std::optional<const MinimalMatmulConfig>& config,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<const DataType> dtype = std::nullopt,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 

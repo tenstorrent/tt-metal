@@ -40,7 +40,7 @@ FORCE_INLINE void fill_with_val(uint32_t start_addr, uint32_t n_bytes, uint32_t 
         auto* start_ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(start_addr);
         auto* end_ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(end_addr);
         auto* start_ptr_4B = reinterpret_cast<volatile tt_l1_ptr IntType*>(start_addr_4B);
-        auto* end_ptr_4B = reinterpret_cast<volatile tt_l1_ptr IntType*>(start_addr_4B);
+        auto* end_ptr_4B = reinterpret_cast<volatile tt_l1_ptr IntType*>(end_addr_4B);
         IntType val_ = static_cast<IntType>(val);
 
         // Write from start_addr to start_addr_4B, if start_addr is unaligned to 4Bytes

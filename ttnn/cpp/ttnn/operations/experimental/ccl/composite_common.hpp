@@ -41,6 +41,7 @@ ttnn::Tensor composite_reduce_scatter(
     ttnn::Tensor input_tensor,
     int32_t dim,
     uint32_t num_links,
+    tt::tt_fabric::Topology topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis);

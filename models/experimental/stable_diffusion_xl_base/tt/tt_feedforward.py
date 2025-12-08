@@ -42,6 +42,5 @@ class TtFeedForward(LightweightModule):
             memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG if self.ff2_model_config is not None else None,
             compute_kernel_config=self.default_compute_kernel_config,
         )
-        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
         return hidden_states
