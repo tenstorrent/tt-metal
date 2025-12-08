@@ -58,10 +58,10 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     for (const auto& region : memory_regions) {
         this->max_l1_loading_size = std::max(this->max_l1_loading_size, region.get_end_address());
     }
-    std::array<size_t, builder_config::num_sender_channels> num_sender_buffer_slots = {0};
-    std::array<size_t, builder_config::num_sender_channels> num_remote_sender_buffer_slots = {0};
-    std::array<size_t, builder_config::num_receiver_channels> num_receiver_buffer_slots = {0};
-    std::array<size_t, builder_config::num_receiver_channels> num_remote_receiver_buffer_slots = {0};
+    std::array<size_t, builder_config::num_max_sender_channels> num_sender_buffer_slots = {0};
+    std::array<size_t, builder_config::num_max_sender_channels> num_remote_sender_buffer_slots = {0};
+    std::array<size_t, builder_config::num_max_receiver_channels> num_receiver_buffer_slots = {0};
+    std::array<size_t, builder_config::num_max_receiver_channels> num_remote_receiver_buffer_slots = {0};
 
     bool has_tensix_extension = options.fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED;
 
@@ -183,10 +183,10 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
 void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     Topology topology,
     const FabricEriscDatamoverOptions& options,
-    std::array<size_t, builder_config::num_sender_channels>& num_sender_buffer_slots,
-    std::array<size_t, builder_config::num_sender_channels>& num_remote_sender_buffer_slots,
-    std::array<size_t, builder_config::num_receiver_channels>& num_receiver_buffer_slots,
-    std::array<size_t, builder_config::num_receiver_channels>& num_remote_receiver_buffer_slots) {
+    std::array<size_t, builder_config::num_max_sender_channels>& num_sender_buffer_slots,
+    std::array<size_t, builder_config::num_max_sender_channels>& num_remote_sender_buffer_slots,
+    std::array<size_t, builder_config::num_max_receiver_channels>& num_receiver_buffer_slots,
+    std::array<size_t, builder_config::num_max_receiver_channels>& num_remote_receiver_buffer_slots) {
     // fabric with tensix extension uses different buffer slots options, since only one or two sender channels are
     // used by fabric router, while other sender channels are skipped and have 0 buffer slots.
     static const std::vector<std::vector<std::pair<size_t, size_t>>> default_with_tensix_buffer_slot_options = {

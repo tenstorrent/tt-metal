@@ -99,6 +99,10 @@ public:
     // after GenerateStaticConfigs for all upstream/downstream kernels.
     virtual void GenerateDependentConfigs() = 0;
 
+    virtual void InitializeRuntimeArgsValues() {}
+    // Populate the runtime args for this kernel.
+    virtual void SetRuntimeArgs();
+
     // Use all configs and add this kernel to its Program. Called after GenerateStaticConfigs/GenerateDependentConfigs.
     virtual void CreateKernel() = 0;
 
@@ -182,10 +186,11 @@ protected:
     static uint32_t GetTunnelStop(ChipId device_id);
     // Create and populate semaphores for the EDM connection
     void create_edm_connection_sems(FDKernelEdmConnectionAttributes& attributes);
-    tt::tt_metal::IDevice* device_ = nullptr;  // Set at configuration time by AddDeviceAndProgram()
-    tt::tt_metal::Program* program_ = nullptr;
+    IDevice* device_ = nullptr;  // Set at configuration time by AddDeviceAndProgram()
+    Program* program_ = nullptr;
     tt_cxy_pair logical_core_;
     FDKernelType kernel_type_ = FDKernelType::UNSET;
+    KernelHandle kernel_handle_{std::numeric_limits<KernelHandle>::max()};  // Invalid handle
     ChipId device_id_;
     ChipId servicing_device_id_;  // Remote chip that this PREFETCH_H/DISPATCH_H is servicing
     int node_id_;
@@ -194,6 +199,8 @@ protected:
 
     std::vector<FDKernel*> upstream_kernels_;
     std::vector<FDKernel*> downstream_kernels_;
+
+    std::vector<uint32_t> runtime_args_;
 };
 
 }  // namespace tt_metal

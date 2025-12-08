@@ -13,9 +13,9 @@ namespace tt::tt_fabric {
 FabricRemoteChannelsAllocator::FabricRemoteChannelsAllocator(
     const FabricStaticSizedChannelsAllocator& static_allocator) :
     FabricChannelAllocator(static_allocator.topology_, static_allocator.options_, static_allocator.memory_regions_),
-    num_used_receiver_channels_(builder_config::num_receiver_channels) {
+    num_used_receiver_channels_(builder_config::num_max_receiver_channels) {
     // Extract remote receiver channel information from the static allocator
-    for (size_t i = 0; i < builder_config::num_receiver_channels; i++) {
+    for (size_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
         this->remote_receiver_channels_base_address_[i] = static_allocator.remote_receiver_channels_base_address[i];
         this->remote_receiver_channels_num_buffers_[i] = static_allocator.remote_receiver_channels_num_buffers[i];
     }
@@ -38,19 +38,19 @@ void FabricRemoteChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_args)
 
 size_t FabricRemoteChannelsAllocator::get_remote_receiver_channel_base_address(size_t channel_id) const {
     TT_FATAL(
-        channel_id < builder_config::num_receiver_channels,
+        channel_id < builder_config::num_max_receiver_channels,
         "Channel ID {} out of bounds (max {})",
         channel_id,
-        builder_config::num_receiver_channels - 1);
+        builder_config::num_max_receiver_channels - 1);
     return this->remote_receiver_channels_base_address_[channel_id];
 }
 
 size_t FabricRemoteChannelsAllocator::get_remote_receiver_channel_num_buffers(size_t channel_id) const {
     TT_FATAL(
-        channel_id < builder_config::num_receiver_channels,
+        channel_id < builder_config::num_max_receiver_channels,
         "Channel ID {} out of bounds (max {})",
         channel_id,
-        builder_config::num_receiver_channels - 1);
+        builder_config::num_max_receiver_channels - 1);
     return this->remote_receiver_channels_num_buffers_[channel_id];
 }
 

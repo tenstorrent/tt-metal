@@ -2496,3 +2496,59 @@ def test_linear_with_non_tile_aligned_bias(device, input_shape, weight_shape):
 
     # Verify correctness
     assert_with_pcc(torch_output, output, pcc=0.99)
+
+
+def test_matmul_block_sharded_input_with_padding(device):
+    """
+    Test matmul with block-sharded input where logical shape differs from physical shard shape due to padding.
+
+    This test verifies that matmul correctly handles block-sharded inputs with padding:
+    - Input 0: (4096, 16) block_sharded on 8x1 cores, logical shape (4096, 16) but physical padded to (512, 32) per shard
+    - Input 1: (16, 128) interleaved, DRAM
+    """
+    torch.manual_seed(0)
+
+    input_a_shape = (4096, 16)
+    input_b_shape = (16, 128)
+
+    torch_input_a = torch.randn(input_a_shape, dtype=torch.bfloat16)
+    torch_input_b = torch.randn(input_b_shape, dtype=torch.bfloat16)
+    torch_output = torch.matmul(torch_input_a, torch_input_b)
+
+    # Input 0: Create with TILE layout, pad width from 16 to 32, then block shard
+    ttnn_input_a = ttnn.from_torch(
+        torch_input_a,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((32, 32)),
+        device=device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn_input_a = ttnn.reshape(ttnn_input_a, input_a_shape, padded_shape=(4096, 32))
+
+    # Input 1: Interleaved, DRAM
+    ttnn_input_b = ttnn.from_torch(
+        torch_input_b,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((32, 32)),
+        device=device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Block shard input 0: 8x1 cores, shard shape [512, 32]
+    input_a_sharded_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))]),
+            [512, 32],
+            ttnn.ShardOrientation.COL_MAJOR,
+        ),
+    )
+    ttnn_input_a = ttnn.to_memory_config(ttnn_input_a, input_a_sharded_memory_config)
+
+    ttnn_output = ttnn.matmul(ttnn_input_a, ttnn_input_b, transpose_a=False, transpose_b=False)
+
+    output = ttnn.to_torch(ttnn_output)
+    assert_with_pcc(torch_output, output, pcc=0.99)

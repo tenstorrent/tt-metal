@@ -398,8 +398,7 @@ void LevelizedGraph::populate_output_shape(const nlohmann::json& trace) {
 
 // Seventh pass: Populate input_connections
 // For each vertex, find input tensor producers for each tensor argument
-// Match tensor arguments to input tensors by preserving the order in arguments array
-// This logic can later change if graph capture stores the input connections of each vertex.
+// Use the input_tensors field from graph capture if available
 void LevelizedGraph::populate_input_connections(const nlohmann::json& trace) {
     auto vertex_ids = std::views::iota(0u, graph.size());
     std::ranges::for_each(vertex_ids, [&](size_t vertex_id) {
@@ -428,54 +427,12 @@ void LevelizedGraph::populate_input_connections(const nlohmann::json& trace) {
             return;
         }
 
-        int function_start_counter = node_counter;
-
-        // First, collect all input tensors with their usage counts
-        std::unordered_map<int, size_t> tensor_usage_count;
-        auto tensor_nodes =
-            trace | std::views::filter([&](const auto& node) { return node[kNodeType] == kNodeTensor; });
-        std::ranges::for_each(tensor_nodes, [&](const auto& node) {
-            int tensor_counter = node[kCounter].template get<int>();
-            auto connections = get_connections(node);
-            // Count how many times this function_start appears in the tensor's connections
-            size_t count = std::ranges::count(connections, function_start_counter);
-            if (count > 0) {
-                tensor_usage_count[tensor_counter] = count;
-            }
-        });
-
-        // Build input_tensor_list by matching tensor arguments to input tensors
-        // The key: arguments array preserves call order, so we match sequentially
-        // For each tensor argument, we find the corresponding input tensor
-        // Since we can't directly match argument strings to tensor nodes,
-        // we use the order in which tensors appear in the trace (by counter)
-        // Handle multiply(a, a) by counting usage: if a tensor is used twice, it appears twice
-
-        // Build a list of input tensors, with each tensor appearing once per usage
-        // We iterate through the trace to preserve the order tensors were created
-        // This order should match the argument order since tensors are created before use
-        std::vector<int> input_tensor_list;
-        std::ranges::for_each(tensor_nodes, [&](const auto& node) {
-            int tensor_counter = node[kCounter].template get<int>();
-            auto it = tensor_usage_count.find(tensor_counter);
-            if (it != tensor_usage_count.end()) {
-                // Add this tensor once for each time it's used
-                std::ranges::fill_n(std::back_inserter(input_tensor_list), it->second, tensor_counter);
-                // Remove from map so we don't add it again
-                tensor_usage_count.erase(it);
-            }
-        });
-
-        // For each argument in order, if it's a Tensor, find its producer
-        // The arguments array preserves call order, so we match in that order
-        size_t tensor_list_index = 0;
-        auto tensor_args =
-            vertex.arguments | std::views::filter([](const std::string& arg) { return arg.find("Tensor(") == 0; });
-        std::ranges::for_each(tensor_args, [&](const std::string&) {
-            // This is a tensor argument - match it to the next input tensor in order
-            if (tensor_list_index < input_tensor_list.size()) {
-                int tensor_counter = input_tensor_list[tensor_list_index];
-                tensor_list_index++;
+        // Check if input_tensors field is available, use it to populate in_edges
+        if (node.contains(kInputTensors) && node[kInputTensors].is_array()) {
+            // New format: directly use input_tensors field which preserves order
+            auto input_tensors = node[kInputTensors];
+            for (const auto& tensor_counter_json : input_tensors) {
+                int tensor_counter = tensor_counter_json.template get<int>();
 
                 // Check if this tensor is a vertex in our graph (level 1 tensor)
                 auto tensor_vertex_it = id_map.find(tensor_counter);
@@ -497,13 +454,11 @@ void LevelizedGraph::populate_input_connections(const nlohmann::json& trace) {
                                 size_t producer_vertex_id = producer_id_it->second;
                                 vertex.in_edges.push_back(producer_vertex_id);
                             }
-                            // If producer is not in levelized graph (level > max_level), skip it
                         }
                     }
-                    // If tensor has no producer (input tensor from outside), skip it
                 }
             }
-        });
+        }
     });
 }
 

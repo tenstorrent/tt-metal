@@ -58,7 +58,9 @@ class TTSampling(LightweightModule):
         # Multi-step reduction is supported only on single device
         self.multi_step_reduction = list(mesh_device.shape) == [1, 1]
         self.tt_ccl = tt_ccl
-        self.padded_vocab_size = getattr(args, "padded_vocab_size", args.vocab_size)
+
+        padded_vocab_size = getattr(args, "padded_vocab_size", None)
+        self.padded_vocab_size = padded_vocab_size if padded_vocab_size is not None else args.vocab_size
         self.max_batch_size = 32
         self.max_top_k = getattr(args, "max_top_k", 32)
         self.cluster_shape = args.cluster_shape

@@ -9,8 +9,7 @@
 #include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/operations/data_movement/sharded/reshard/device/reshard_op.hpp"
-
+#include "ttnn/operations/data_movement/sharded/reshard/reshard.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.hpp"
 
@@ -59,14 +58,7 @@ struct ToMemoryConfig {
                         throw std::runtime_error(
                             "dtype cannot be specified when converting sharded tensor to sharded tensor");
                     }
-                    return tt::tt_metal::operation::run(
-                               data_movement::ReshardDeviceOperation{
-                                   .output_mem_config = memory_config,
-                               },
-                               {tensor},
-                               {},
-                               optional_output_tensors)
-                        .at(0);
+                    return ttnn::reshard(tensor, memory_config, output_tensor);
                 } else {
                     // for row-major tensors where shard-spec[1] is different for input shard and output shard
 

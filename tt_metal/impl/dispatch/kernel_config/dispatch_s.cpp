@@ -24,7 +24,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
-#include "tt_metal/api/tt-metalium/device_pool.hpp"
+#include "tt_metal/impl/device/device_pool.hpp"
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 

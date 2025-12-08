@@ -100,7 +100,8 @@ std::
         const std::optional<const minimal_matmul::MinimalMatmulConfig> config,
         std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
         std::optional<uint32_t> num_workers_per_link,
-        std::optional<uint32_t> num_buffers_per_channel) {
+        std::optional<uint32_t> num_buffers_per_channel,
+        std::optional<bool> read_local_slice_from_input) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
     if (bias.has_value()) {
@@ -136,9 +137,16 @@ std::
         .compute_kernel_config = compute_kernel_config.value()};
     strided_all_gather_async::StridedAllGatherAsync ag_op{};  // just need to call the static function on this
 
+    bool read_local_from_input = read_local_slice_from_input.value_or(false);
+
     return {
         operation_attributes_t{
-            strided_all_gather_async_struct, matmul_struct, strided_all_gather_core_grid_offset, devices, ag_op},
+            strided_all_gather_async_struct,
+            matmul_struct,
+            strided_all_gather_core_grid_offset,
+            read_local_from_input,
+            devices,
+            ag_op},
         tensor_args_t{input_tensor, weight_tensor, persistent_output_buffer, bias}};
 }
 }  // namespace ttnn::operations::experimental::ccl::strided_all_gather_minimal_matmul_async

@@ -68,7 +68,8 @@ void bind_reduction_topk_operation(py::module& module) {
                     * - UINT16, UINT32
                       - TILE
 
-                The :attr:`output_value_tensor` will have the same data type as :attr:`input_tensor` and :attr:`output_index_tensor` will have UINT16 data type.
+                The :attr:`output_value_tensor` will have the same data type as :attr:`input_tensor` and will be in TILE layout.
+                The :attr:`output_index_tensor` will be UINT16 and will be in TILE layout.
 
             Memory Support:
                 - Interleaved: DRAM and L1

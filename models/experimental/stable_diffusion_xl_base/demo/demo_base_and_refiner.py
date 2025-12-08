@@ -123,7 +123,6 @@ def run_demo_inference(
     logger.info("Starting ttnn inference...")
 
     for iter in range(len(prompts) // batch_size + (1 if len(prompts) % batch_size != 0 else 0)):
-        profiler.start("end_to_end_generation")
         logger.info(
             f"Running inference for prompts {iter * batch_size + 1}-{min((iter + 1) * batch_size, len(prompts))}/{len(prompts)}"
         )
@@ -143,6 +142,8 @@ def run_demo_inference(
             else negative_prompt_2
         )
 
+        profiler.start("end_to_end_generation")
+
         # Combined pipeline will pad the batch internally if needed
         imgs = tt_sdxl_combined.generate(
             prompts=prompts_batch,
@@ -159,11 +160,15 @@ def run_demo_inference(
             guidance_rescale=guidance_rescale,
         )
 
-        logger.info(
-            f"Combined generation for batch {iter + 1} completed in {profiler.times['combined_generation'][-1]:.2f} seconds"
-        )
-
         profiler.end("end_to_end_generation")
+        if iter == 0:
+            profiler.times["end_to_end_generation"][0] -= profiler.times["auto_compile_if_needed"][0]
+            for key in profiler.times.keys():
+                profiler.times[key] = [profiler.times[key][-1]]
+
+        logger.info(
+            f"Combined generation for batch {iter + 1} completed in {profiler.times['end_to_end_generation'][-1]:.2f} seconds"
+        )
 
         for idx, img in enumerate(imgs):
             if iter * batch_size + idx >= len(prompts):

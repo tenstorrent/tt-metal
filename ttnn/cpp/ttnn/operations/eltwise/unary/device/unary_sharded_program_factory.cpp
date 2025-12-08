@@ -74,8 +74,11 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
     uint32_t in_cb_pagesize = aligned_input_tile_nbytes;
     uint32_t in_cb_npages = num_tile_per_core * buffering_factor;
+    // For bitcast, use output format for input CB to avoid unpacker conversion
+    // This ensures raw bit copying without conversion
+    tt::DataFormat cb_data_format_for_input = (ops_chain[0].type() == UnaryOpType::BITCAST) ? out_df : act_df;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{in_cb_id, act_df}})
+        tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{in_cb_id, cb_data_format_for_input}})
             .set_page_size(in_cb_id, in_cb_pagesize)
             .set_globally_allocated_address(*input.buffer());
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
