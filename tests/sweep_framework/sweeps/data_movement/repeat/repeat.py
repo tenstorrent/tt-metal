@@ -19,67 +19,22 @@ dtypes = [ttnn.bfloat16]
 shapes = [(1, 2, 4, 4), (1, 1, 1, 1)] + [(1, 2, 2 * j, 4 * j) for j in range(2, 12)]
 repeat_specs = [(2, 2, 2, 2), (1, 2, 1, 1)] + [(1, 3, 2 * j, 4 * j) for j in range(2, 12)]
 
-# Valid combinations from the DeepSeek unit test
-# Each tuple is (shape, repeat_shape, dtype, mem_config)
-DEEPSEEK_UNIT_CONFIGS = [
-    ([1, 1, 1, 256], [1, 32, 1, 1], ttnn.float32, ttnn.DRAM_MEMORY_CONFIG),
-    ([1, 1, 1, 8], [1, 32, 1, 1], ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
-    ([1, 1, 1, 4], [1, 32, 1, 1], ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
-    ([1, 1, 256, 1], [1, 1, 1, 32], ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
-    ([1, 1, 1, 8], [1, 32, 1, 1], ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
-    ([1, 1, 128, 7168], [1, 8, 1, 1], ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG),
-    ([1, 1, 32, 8], [1, 7168, 1, 1], ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG),
-]
-
 parameters = {
     "nightly": {
         "shape": shapes,
         "repeat_shape": repeat_specs,
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "dtype": dtypes,
-    },
-    "deepseek_unit": {
-        "shape": [config[0] for config in DEEPSEEK_UNIT_CONFIGS],
-        "repeat_shape": [config[1] for config in DEEPSEEK_UNIT_CONFIGS],
-        "layout": [ttnn.ROW_MAJOR_LAYOUT],
-        "dtype": [ttnn.float32, ttnn.bfloat16],
-        "mem_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-    },
+    }
 }
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    # General invalidations for all suites
     if test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT:
         if test_vector["dtype"] == ttnn.bfloat8_b:
             return True, "bfloat8_b not supported with ROW_MAJOR_LAYOUT"
         if test_vector["dtype"] == ttnn.bfloat16 and len(test_vector["shape"]) > 1 and test_vector["shape"][-1] < 2:
             return True, "bfloat16 in ROW_MAJOR_LAYOUT not supported with inner dim < 2"
-
-    # For deepseek_unit suite, only allow exact combinations from pytest
-    # Check if we have mem_config in the vector (only deepseek_unit has this)
-    if "mem_config" in test_vector:
-        config_tuple = (
-            test_vector["shape"],
-            test_vector["repeat_shape"],
-            test_vector["dtype"],
-            test_vector["mem_config"],
-        )
-
-        # Check if this exact combination exists in DEEPSEEK_UNIT_CONFIGS
-        is_valid = any(
-            (
-                config[0] == config_tuple[0]
-                and config[1] == config_tuple[1]
-                and config[2] == config_tuple[2]
-                and config[3] == config_tuple[3]
-            )
-            for config in DEEPSEEK_UNIT_CONFIGS
-        )
-
-        if not is_valid:
-            return True, "Configuration not in deepseek_unit test matrix"
-
     return False, None
 
 
@@ -90,7 +45,6 @@ def run(
     dtype,
     *,
     device,
-    mem_config=None,
 ):
     torch_dtype = {
         ttnn.bfloat16: torch.bfloat16,
@@ -98,26 +52,12 @@ def run(
         ttnn.int32: torch.int32,
     }[dtype]
 
-    # Generate random input tensor (matching deepseek test pattern)
-    torch.manual_seed(1234)
-    if dtype == ttnn.float32:
-        torch_input_tensor = torch.rand(shape, dtype=torch.float32)
-    elif dtype == ttnn.bfloat16:
-        torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
-    elif dtype == ttnn.int32:
-        torch_input_tensor = torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
-    else:
-        # Fallback to sequential data for other dtypes
-        mul = lambda x, y: x * y
-        torch_input_tensor = torch.arange(0, reduce(mul, shape, 1), dtype=torch_dtype).reshape(shape)
+    mul = lambda x, y: x * y
+    torch_input_tensor = torch.arange(0, reduce(mul, shape, 1), dtype=torch_dtype).reshape(shape)
 
     torch_result = torch_input_tensor.repeat(repeat_shape)
 
-    # Use provided mem_config if available, otherwise default behavior
-    if mem_config is not None:
-        input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, memory_config=mem_config)
-    else:
-        input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
 
     start_time = start_measuring_time()
     tt_result = ttnn.repeat(input_tensor, ttnn.Shape(repeat_shape))
