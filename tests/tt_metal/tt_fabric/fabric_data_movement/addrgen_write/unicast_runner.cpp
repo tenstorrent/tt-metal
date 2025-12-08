@@ -554,8 +554,16 @@ void run_linear_unicast_write_test(HelpersFixture* fixture, const AddrgenTestPar
     uint32_t src_aligned_page_size = ((p.page_size + src_alignment - 1) / src_alignment) * src_alignment;
     uint32_t dst_aligned_page_size = ((p.page_size + dst_alignment - 1) / dst_alignment) * dst_alignment;
 
-    // Receiver waits for 1 semaphore increment (sent after all writes)
-    tt::tt_metal::SetRuntimeArgs(receiver_prog, rx_wait_k, p.receiver_core, {gsem_linear->address(), 1u});
+    // Determine if this is a fused atomic inc variant
+    const bool is_fused_atomic_inc =
+        (p.api_variant == AddrgenApiVariant::LinearFusedAtomicIncWrite ||
+         p.api_variant == AddrgenApiVariant::LinearFusedAtomicIncWriteWithState ||
+         p.api_variant == AddrgenApiVariant::LinearFusedAtomicIncWriteSetState);
+
+    // For fused atomic inc, each write increments the semaphore, so receiver waits for NUM_PAGES
+    // For regular unicast, a single atomic inc is sent after all writes, so receiver waits for 1
+    const uint32_t sem_wait_value = is_fused_atomic_inc ? NUM_PAGES : 1u;
+    tt::tt_metal::SetRuntimeArgs(receiver_prog, rx_wait_k, p.receiver_core, {gsem_linear->address(), sem_wait_value});
 
     // Sender program: READER (RISCV_0) + WRITER (RISCV_1)
     tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
@@ -575,6 +583,12 @@ void run_linear_unicast_write_test(HelpersFixture* fixture, const AddrgenTestPar
             case AddrgenApiVariant::LinearScatterWrite: return {OperationType::Scatter, ApiVariant::Basic};
             case AddrgenApiVariant::LinearScatterWriteWithState: return {OperationType::Scatter, ApiVariant::WithState};
             case AddrgenApiVariant::LinearScatterWriteSetState: return {OperationType::Scatter, ApiVariant::SetState};
+            case AddrgenApiVariant::LinearFusedAtomicIncWrite:
+                return {OperationType::FusedAtomicInc, ApiVariant::Basic};
+            case AddrgenApiVariant::LinearFusedAtomicIncWriteWithState:
+                return {OperationType::FusedAtomicInc, ApiVariant::WithState};
+            case AddrgenApiVariant::LinearFusedAtomicIncWriteSetState:
+                return {OperationType::FusedAtomicInc, ApiVariant::SetState};
             default:
                 TT_FATAL(false, "Unknown linear API variant");
                 return {OperationType::BasicWrite, ApiVariant::Basic};

@@ -2198,4 +2198,220 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
         payload_size);
 }
 
+// Fused Unicast Write + Atomic Inc Addrgen Overloads
+// clang-format off
+/**
+ * Fused unicast write with atomic increment (addrgen overload): sends payload and increments semaphore, with destination computed from address generator.
+ *
+ * Return value: None
+ *
+ * | Argument                              | Description                             | Type                                          | Required |
+ * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
+ * | client_interface                      | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*            | True     |
+ * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
+ * | src_addr                              | Source L1 address                       | uint32_t                                      | True     |
+ * | addrgen                               | Address generator (e.g. TensorAccessor) | const AddrGenType&                            | True     |
+ * | page_id                               | Page ID to compute NOC address          | uint32_t                                      | True     |
+ * | semaphore_noc_address                 | NOC address of semaphore to increment   | uint64_t                                      | True     |
+ * | val                                   | Increment value                         | uint16_t                                      | True     |
+ * | num_hops                              | Unicast hop count                       | uint8_t                                       | True     |
+ * | offset                                | Offset within page                      | uint32_t                                      | False    |
+ * | flush                                 | Flush data cache after write            | bool                                          | False    |
+ */
+// clang-format on
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint64_t semaphore_noc_address,
+    uint16_t val,
+    uint8_t num_hops,
+    uint32_t offset = 0,
+    bool flush = true) {
+    auto page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::linear::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    // Set route once
+    packet_header->to_chip_unicast(num_hops);
+
+    uint32_t remaining = page_size;
+    uint32_t current_src_addr = src_addr;
+    uint64_t current_noc_addr = noc_address;
+
+    // Send intermediate chunks as regular writes (loop skips for small pages)
+    while (remaining > FABRIC_MAX_PACKET_SIZE) {
+        // Ensure hardware has finished reading packet_header before modifying it
+        noc_async_writes_flushed();
+
+        // Call basic unicast write (route already set)
+        fabric_unicast_noc_unicast_write<FabricSenderType>(
+            client_interface,
+            packet_header,
+            current_src_addr,
+            FABRIC_MAX_PACKET_SIZE,
+            tt::tt_fabric::NocUnicastCommandHeader{current_noc_addr},
+            num_hops);
+
+        current_src_addr += FABRIC_MAX_PACKET_SIZE;
+        current_noc_addr += FABRIC_MAX_PACKET_SIZE;
+        remaining -= FABRIC_MAX_PACKET_SIZE;
+    }
+
+    // Ensure hardware has finished reading packet_header before modifying it
+    noc_async_writes_flushed();
+
+    // Final chunk: fused write+atomic inc (for small pages, this is the only packet)
+    fabric_unicast_noc_fused_unicast_with_atomic_inc<FabricSenderType>(
+        client_interface,
+        packet_header,
+        current_src_addr,
+        remaining,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{current_noc_addr, semaphore_noc_address, val, flush},
+        num_hops);
+}
+
+// clang-format off
+/**
+ * Fused unicast write with atomic increment (stateful, addrgen overload): updates only fields selected by UpdateMask on the packet header then submits the payload and increments semaphore, with destination computed from address generator.
+ *
+ * Return value: None
+ *
+ * | Argument                              | Description                             | Type                                          | Required |
+ * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
+ * | UpdateMask                            | Template parameter: which fields to update | UnicastFusedAtomicIncUpdateMask            | False    |
+ * | client_interface                      | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*            | True     |
+ * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
+ * | src_addr                              | Source L1 address                       | uint32_t                                      | True     |
+ * | addrgen                               | Address generator (e.g. TensorAccessor) | const AddrGenType&                            | True     |
+ * | page_id                               | Page ID to compute NOC address          | uint32_t                                      | True     |
+ * | semaphore_noc_address                 | NOC address of semaphore to increment   | uint64_t                                      | True     |
+ * | val                                   | Increment value                         | uint16_t                                      | True     |
+ * | num_hops                              | Unicast hop count                       | uint8_t                                       | True     |
+ * | offset                                | Offset within page                      | uint32_t                                      | False    |
+ * | flush                                 | Flush data cache after write            | bool                                          | False    |
+ */
+// clang-format on
+template <
+    UnicastFusedAtomicIncUpdateMask UpdateMask = UnicastFusedAtomicIncUpdateMask::WriteDstAddr |
+                                                 UnicastFusedAtomicIncUpdateMask::PayloadSize,
+    typename FabricSenderType,
+    typename AddrGenType,
+    typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
+FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint64_t semaphore_noc_address,
+    uint16_t val,
+    uint8_t num_hops,
+    uint32_t offset = 0,
+    bool flush = true) {
+    auto page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::linear::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    uint32_t remaining_size = page_size;
+    uint32_t current_offset = offset;
+    uint32_t packet_src_addr = src_addr;
+
+    // Set noc_send_type once before loop for intermediate unicast writes
+    if (remaining_size > FABRIC_MAX_PACKET_SIZE) {
+        packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
+    }
+
+    // Send intermediate chunks as regular writes (loop skips for small pages)
+    while (remaining_size > FABRIC_MAX_PACKET_SIZE) {
+        auto chunk_noc_address =
+            tt::tt_fabric::linear::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+        // Ensure hardware has finished reading packet_header before modifying it
+        noc_async_writes_flushed();
+
+        // Call basic unicast write _with_state for intermediate packets
+        fabric_unicast_noc_unicast_write_with_state<
+            UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
+            client_interface,
+            packet_header,
+            packet_src_addr,
+            tt::tt_fabric::NocUnicastCommandHeader{chunk_noc_address},
+            FABRIC_MAX_PACKET_SIZE);
+
+        packet_src_addr += FABRIC_MAX_PACKET_SIZE;
+        current_offset += FABRIC_MAX_PACKET_SIZE;
+        remaining_size -= FABRIC_MAX_PACKET_SIZE;
+    }
+
+    // Final chunk: fused write+atomic inc (for small pages, this is the only packet)
+    auto final_noc_address = tt::tt_fabric::linear::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+    // Ensure hardware has finished reading packet_header before modifying it
+    noc_async_writes_flushed();
+
+    // Set noc_send_type to fused for final chunk
+    packet_header->noc_send_type = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
+
+    // Call basic fused atomic inc _with_state for final packet
+    fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state<UpdateMask>(
+        client_interface,
+        packet_header,
+        packet_src_addr,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{final_noc_address, semaphore_noc_address, val, flush},
+        remaining_size);
+}
+
+// clang-format off
+/**
+ * Fused unicast write with atomic increment (set-state, addrgen overload): pre-configures headers for repeated use, with destination computed from address generator.
+ *
+ * Return value: None
+ *
+ * | Argument                              | Description                             | Type                                          | Required |
+ * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
+ * | UpdateMask                            | Template parameter: which fields to update | UnicastFusedAtomicIncUpdateMask            | False    |
+ * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
+ * | num_hops                              | Unicast hop count                       | uint8_t                                       | True     |
+ * | addrgen                               | Address generator (e.g. TensorAccessor) | const AddrGenType&                            | True     |
+ * | page_id                               | Page ID to compute NOC address          | uint32_t                                      | True     |
+ * | semaphore_noc_address                 | NOC address of semaphore to increment   | uint64_t                                      | True     |
+ * | val                                   | Increment value                         | uint16_t                                      | True     |
+ * | offset                                | Offset within page                      | uint32_t                                      | False    |
+ * | flush                                 | Flush data cache after write            | bool                                          | False    |
+ */
+// clang-format on
+template <
+    UnicastFusedAtomicIncUpdateMask UpdateMask =
+        UnicastFusedAtomicIncUpdateMask::WriteDstAddr | UnicastFusedAtomicIncUpdateMask::SemaphoreAddr |
+        UnicastFusedAtomicIncUpdateMask::Val | UnicastFusedAtomicIncUpdateMask::Flush |
+        UnicastFusedAtomicIncUpdateMask::PayloadSize,
+    typename AddrGenType,
+    typename = std::enable_if_t<is_addrgen<AddrGenType>::value>>
+FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t num_hops,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint64_t semaphore_noc_address,
+    uint16_t val,
+    uint32_t offset = 0,
+    bool flush = true) {
+    auto page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::linear::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    // Cap initial payload size to hardware limit for large pages
+    // The WithState calls in the loop will handle actual chunking
+    uint32_t init_payload_size = std::min(page_size, static_cast<uint32_t>(FABRIC_MAX_PACKET_SIZE));
+
+    // Call base _set_state to set up all header fields
+    // This is typically called once before a loop
+    fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state<UpdateMask>(
+        packet_header,
+        num_hops,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, flush},
+        init_payload_size);
+}
+
 }  // namespace tt::tt_fabric::linear::experimental
