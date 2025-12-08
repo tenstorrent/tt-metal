@@ -809,7 +809,7 @@ void log_link_metrics(
         std::cout << "Total Links: " << link_metrics.size() << '\n';
         std::cout << "Total Metric Entries: " << metric_rows.size() << '\n' << '\n';
     } else {
-        std::cout << "Total Faulty Links: " << link_metrics.size() << '\n' << '\n';
+        std::cout << "Total Faulty Links: " << link_metrics.size() << "\n\n";
     }
 
     // Table header
@@ -874,7 +874,7 @@ void log_link_metrics(
                   << (std::to_string(row.traffic_params.data_size) + " B") << '\n';
     }
 
-    std::cout << std::string(log_ethernet_metrics ? 177 : 217, '-') << '\n' << '\n';
+    std::cout << std::string(log_ethernet_metrics ? 177 : 217, '-') << "\n\n";
 
     // Write CSV file
     std::filesystem::path csv_path =
