@@ -48,41 +48,30 @@ TensorPtr create_causal_mask(ttnn::distributed::MeshDevice* device, uint32_t que
 }
 
 // Sample next token using greedy decoding (argmax)
-uint32_t sample_token(const TensorPtr& logits, int position) {
-    auto logits_tensor = logits->get_value();
-    auto logits_host = logits_tensor.to_vector<float>();
+const uint32_t sample_token(const TensorPtr& logits, int position) {
+    const auto logits_tensor = logits->get_value();
+    const auto logits_host = logits_tensor.to_vector<float>();
 
-    auto shape = logits_tensor.logical_shape();
-    uint32_t vocab_size = shape[-1];
-    size_t last_token_offset = (position - 1) * vocab_size;
+    const auto shape = logits_tensor.logical_shape();
+    const uint32_t vocab_size = shape[-1];
+    const size_t last_token_offset = (position - 1) * vocab_size;
+    const auto start_it = logits_host.begin() + last_token_offset;
+    const auto end_it = start_it + vocab_size;
+    const auto max_it = std::max_element(start_it, end_it);
 
-    // Find token with highest logit value
-    uint32_t max_idx = 0;
-    float max_val = logits_host[last_token_offset];
-
-    for (uint32_t i = 1; i < vocab_size; ++i) {
-        float val = logits_host[last_token_offset + i];
-        if (val > max_val) {
-            max_val = val;
-            max_idx = i;
-        }
-    }
-
-    return max_idx;
+    return static_cast<uint32_t>(std::distance(start_it, max_it));
 }
 
 // Create tensor from token IDs (no padding to max_seq_len)
 TensorPtr tokens_to_tensor(const std::vector<uint32_t>& tokens, ttnn::distributed::MeshDevice* device) {
-    uint32_t actual_len = tokens.size();
+    const uint32_t actual_len = tokens.size();
     // Pad to actual length to nearest tile boundary (32, 64, 96, ...)
-    uint32_t padded_len = ((actual_len + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
+    const uint32_t padded_len = ((actual_len + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
 
-    std::vector<uint32_t> padded_tokens(padded_len, 0);
-    for (size_t i = 0; i < actual_len; ++i) {
-        padded_tokens[i] = tokens[i];
-    }
+    std::vector<uint32_t> padded_tokens(tokens.begin(), tokens.end());
+    padded_tokens.resize(padded_len, 0U);
 
-    auto shape = ttnn::Shape({1, 1, 1, padded_len});
+    const auto shape = ttnn::Shape({1, 1, 1, padded_len});
     auto tokens_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
         padded_tokens, shape, device, ttnn::Layout::ROW_MAJOR);
 
@@ -93,8 +82,8 @@ void run_inference_with_kv_cache(
     std::shared_ptr<ttml::models::llama::Llama>& model,
     const std::vector<uint32_t>& prompt_tokens,
     const InferenceConfig& inference_config,
-    uint32_t vocab_size,
-    uint32_t max_seq_len,
+    const uint32_t vocab_size,
+    const uint32_t max_seq_len,
     ttnn::distributed::MeshDevice* device) {
     fmt::print("Running Inference with KV Cache\n");
 
@@ -102,20 +91,23 @@ void run_inference_with_kv_cache(
     model->reset_cache();
 
     std::vector<uint32_t> generated_tokens = prompt_tokens;
-    uint32_t prompt_len = prompt_tokens.size();
+    generated_tokens.reserve(
+        std::min(prompt_tokens.size() + inference_config.max_new_tokens + 10U, static_cast<size_t>(max_seq_len)));
+
+    const uint32_t prompt_len = prompt_tokens.size();
 
     fmt::print("Prompt tokens: [");
-    for (size_t i = 0; i < std::min(size_t(10), prompt_tokens.size()); ++i) {
-        fmt::print("{}", generated_tokens[i]);
-        if (i < std::min(size_t(10), prompt_tokens.size()) - 1)
+    for (uint32_t i = 0; i < std::min(10U, prompt_len); ++i) {
+        fmt::print("{}", prompt_tokens[i]);
+        if (i < std::min(10U, prompt_len) - 1)
             fmt::print(", ");
     }
-    if (prompt_tokens.size() > 10)
+    if (prompt_len > 10U)
         fmt::print(", ...");
     fmt::print("]\n");
     fmt::print("Prompt length: {}\n\n", prompt_len);
 
-    auto start_timer = std::chrono::high_resolution_clock::now();
+    const auto start_timer = std::chrono::high_resolution_clock::now();
 
     const uint32_t num_steps = std::min(uint32_t(inference_config.max_new_tokens), max_seq_len - prompt_len);
 
@@ -140,11 +132,11 @@ void run_inference_with_kv_cache(
         // Create causal mask
         // For prefill: query_len = prompt_len, key_len = prompt_len
         // For decode: query_len = 1, key_len = cache_position + 1
-        auto mask = create_causal_mask(device, input_tokens.size(), processed_tokens);
-        auto logits = (*model)(token_tensor, mask, /*use_cache=*/true);
+        const auto mask = create_causal_mask(device, input_tokens.size(), processed_tokens);
+        const auto logits = (*model)(token_tensor, mask, /*use_cache=*/true);
 
         // Sample next token from the last position
-        uint32_t next_token = sample_token(logits, input_tokens.size());
+        const uint32_t next_token = sample_token(logits, input_tokens.size());
         generated_tokens.push_back(next_token);
 
         if (step % 10 == 0) {
@@ -152,8 +144,8 @@ void run_inference_with_kv_cache(
         }
     }
 
-    auto end_timer = std::chrono::high_resolution_clock::now();
-    auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_timer - start_timer).count();
+    const auto end_timer = std::chrono::high_resolution_clock::now();
+    const auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_timer - start_timer).count();
 
     model->reset_cache();
     // ============================================================================
@@ -184,28 +176,30 @@ void run_inference_no_cache(
     std::shared_ptr<ttml::models::llama::Llama>& model,
     const std::vector<uint32_t>& prompt_tokens,
     const InferenceConfig& inference_config,
-    uint32_t vocab_size,
-    uint32_t max_seq_len,
+    const uint32_t vocab_size,
+    const uint32_t max_seq_len,
     ttnn::distributed::MeshDevice* device) {
     fmt::print("\n{}\n", std::string(80, '='));
     fmt::print("Running Inference WITHOUT KV Cache (Full Sequence Forward)\n");
     fmt::print("{}\n\n", std::string(80, '='));
 
     std::vector<uint32_t> generated_tokens = prompt_tokens;
-    uint32_t prompt_len = prompt_tokens.size();
+    generated_tokens.reserve(
+        std::min(prompt_tokens.size() + inference_config.max_new_tokens + 10U, static_cast<size_t>(max_seq_len)));
+    const uint32_t prompt_len = prompt_tokens.size();
 
     fmt::print("Prompt tokens: [");
-    for (size_t i = 0; i < std::min(size_t(10), prompt_tokens.size()); ++i) {
+    for (uint32_t i = 0; i < std::min(10U, prompt_len); ++i) {
         fmt::print("{}", prompt_tokens[i]);
-        if (i < std::min(size_t(10), prompt_tokens.size()) - 1)
+        if (i < std::min(10U, prompt_len) - 1)
             fmt::print(", ");
     }
-    if (prompt_tokens.size() > 10)
+    if (prompt_len > 10U)
         fmt::print(", ...");
     fmt::print("]\n");
     fmt::print("Prompt length: {}\n\n", prompt_len);
 
-    auto start_timer = std::chrono::high_resolution_clock::now();
+    const auto start_timer = std::chrono::high_resolution_clock::now();
 
     const uint32_t num_steps = std::min(uint32_t(inference_config.max_new_tokens), max_seq_len - prompt_len);
     // Generate tokens one by one, running full forward pass each time
@@ -214,11 +208,11 @@ void run_inference_no_cache(
         auto current_seq = tokens_to_tensor(generated_tokens, device);
 
         // Create causal mask for current sequence length
-        auto mask = create_causal_mask(device, generated_tokens.size(), 0);
-        auto logits = (*model)(current_seq, mask);
+        const auto mask = create_causal_mask(device, generated_tokens.size(), 0);
+        const auto logits = (*model)(current_seq, mask);
 
         // Sample next token from the last actual token position
-        uint32_t next_token = sample_token(logits, generated_tokens.size());
+        const uint32_t next_token = sample_token(logits, generated_tokens.size());
         generated_tokens.push_back(next_token);
 
         if (step % 10 == 0) {
@@ -226,8 +220,8 @@ void run_inference_no_cache(
         }
     }
 
-    auto end_timer = std::chrono::high_resolution_clock::now();
-    auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_timer - start_timer).count();
+    const auto end_timer = std::chrono::high_resolution_clock::now();
+    const auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_timer - start_timer).count();
 
     // ============================================================================
     // Summary
@@ -254,7 +248,7 @@ void run_inference_no_cache(
 }
 
 int main(int argc, char** argv) {
-    auto start_timer = std::chrono::high_resolution_clock::now();
+    const auto start_timer = std::chrono::high_resolution_clock::now();
 
     // Parse command line arguments
     CLI::App app{"LLaMA Inference"};
@@ -373,8 +367,8 @@ int main(int argc, char** argv) {
 
     // Cleanup
     fmt::print("\n6. Cleaning up...\n");
-    auto end_timer = std::chrono::high_resolution_clock::now();
-    auto total_duration = std::chrono::duration_cast<std::chrono::seconds>(end_timer - start_timer).count();
+    const auto end_timer = std::chrono::high_resolution_clock::now();
+    const auto total_duration = std::chrono::duration_cast<std::chrono::seconds>(end_timer - start_timer).count();
 
     fmt::print("   Total execution time: {} s\n", total_duration);
     fmt::print("   Closing device...\n");
