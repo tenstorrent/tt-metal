@@ -163,8 +163,15 @@ def preprocess_inputs_prefill(
 
     l = len(encoded_prompts)
     for i in range(l):
-        if len(encoded_prompts[i]) == 127:
-            encoded_prompts[i] = encoded_prompts[i] + [encoded_prompts[i][10]]  # ensures length of 128
+        if len(encoded_prompts[i]) < 128:
+            encoded_prompts[i] = encoded_prompts[i] + [encoded_prompts[i][10]] * (
+                128 - len(encoded_prompts[i])
+            )  # ensures length of 128
+            break
+        elif len(encoded_prompts[i]) > 128:
+            encoded_prompts[i] = encoded_prompts[i][:127] + [encoded_prompts[i][-1]]
+            break
+        else:
             break
 
     for j in range(l):

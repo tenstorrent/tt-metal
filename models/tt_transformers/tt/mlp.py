@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import copy
 
 import torch
 
@@ -126,7 +125,7 @@ class MLP(LightweightModule):
         memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
 
         # Deep copy compute kernel config and enable packer_l1_acc for w1
-        w1_compute_kernel_cfg = copy.deepcopy(li_ff1_3_compute_kernel_cfg)
+        w1_compute_kernel_cfg = li_ff1_3_compute_kernel_cfg
         w1_compute_kernel_cfg.packer_l1_acc = True
 
         w1_out = ttnn.linear(

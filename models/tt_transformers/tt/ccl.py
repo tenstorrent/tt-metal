@@ -80,6 +80,9 @@ def tt_all_reduce(
     sharded=False,
     dtype=ttnn.bfloat16,
     use_composite=False,
+    chunks_per_sync=10,
+    num_workers_per_link=2,
+    num_buffers_per_channel=2,
 ):
     # N150
     if list(mesh_device.shape) == [1, 1] or (cluster_axis == 1 and 1 in list(mesh_device.shape)):
@@ -109,9 +112,9 @@ def tt_all_reduce(
             memory_config=memory_config,
             intermediate_memory_config=ttnn.L1_MEMORY_CONFIG,
             topology=topology,
-            chunks_per_sync=10,
-            num_workers_per_link=1,
-            num_buffers_per_channel=2,
+            chunks_per_sync=chunks_per_sync,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=num_buffers_per_channel,
         )
         input_tensor.deallocate(True)
         return reduced
@@ -138,9 +141,9 @@ def tt_all_reduce(
             topology=topology,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=chunks_per_sync,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=num_buffers_per_channel,
         )
 
         if sharded:
@@ -184,9 +187,9 @@ def tt_all_reduce(
             topology=topology,
             memory_config=input_mem_cfg,
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=chunks_per_sync,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=num_buffers_per_channel,
         )
 
     # Reshape the reduced tensor to the original shape

@@ -1329,9 +1329,9 @@ class ModelArgs:
             # Model-specific MLP all reduce overrides
             model_specific_mlp_all_reduce_configs = {
                 "Llama-3.1-8B": {
-                    "chunks_per_sync": 69,
-                    "num_workers_per_link": 420,
-                    "num_buffers_per_channel": 69420,
+                    "chunks_per_sync": 128,
+                    "num_workers_per_link": 1,
+                    "num_buffers_per_channel": 2,
                 }
             }
 
@@ -1339,6 +1339,40 @@ class ModelArgs:
                 self.model_config["MLP_ALL_REDUCE_CONFIG"] = model_specific_mlp_all_reduce_configs[self.base_model_name]
             else:
                 self.model_config["MLP_ALL_REDUCE_CONFIG"] = default_mlp_all_reduce
+
+            # All gather configurations for norms
+            default_all_gather_norm = {
+                "chunks_per_sync": 10,
+                "num_workers_per_link": 2,
+                "num_buffers_per_channel": 2,
+            }
+
+            # Model-specific all gather norm overrides
+            model_specific_all_gather_norm_configs = {
+                "Llama-3.1-8B": {
+                    "attention_norm": {
+                        "chunks_per_sync": 10,
+                        "num_workers_per_link": 1,
+                        "num_buffers_per_channel": 8,
+                    },
+                    "ffn_norm": {
+                        "chunks_per_sync": 40,
+                        "num_workers_per_link": 1,
+                        "num_buffers_per_channel": 1,
+                    },
+                }
+            }
+
+            if self.base_model_name in model_specific_all_gather_norm_configs:
+                self.model_config["ALL_GATHER_ATTENTION_NORM"] = model_specific_all_gather_norm_configs[
+                    self.base_model_name
+                ]["attention_norm"]
+                self.model_config["ALL_GATHER_FFN_NORM"] = model_specific_all_gather_norm_configs[self.base_model_name][
+                    "ffn_norm"
+                ]
+            else:
+                self.model_config["ALL_GATHER_ATTENTION_NORM"] = default_all_gather_norm
+                self.model_config["ALL_GATHER_FFN_NORM"] = default_all_gather_norm
 
             logger.info(f"Attention grid: {attn_input_grid}")
             logger.info(f"MLP grid: {mlp_core_grid}")
