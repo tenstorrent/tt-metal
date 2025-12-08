@@ -206,7 +206,7 @@ class CallstackProvider:
         risc_name: str,
         rewind_pc_for_ebreak: bool = False,
     ) -> CallstacksData:
-        dispatcher_core_data = self.dispatcher_data.get_core_data(location, risc_name)
+        dispatcher_core_data = self.dispatcher_data.get_cached_core_data(location, risc_name)
         risc_debug = location.noc_block.get_risc_debug(risc_name)
         if risc_debug.is_in_reset():
             return CallstacksData(
