@@ -126,7 +126,13 @@ TEST_P(AddrgenLinear1DTest, LinearUnicastWrite) {
     bool is_linear_multicast =
         (api_variant == tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWrite ||
          api_variant == tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWriteWithState ||
-         api_variant == tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWriteSetState);
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWriteSetState ||
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastScatterWrite ||
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastScatterWriteWithState ||
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastScatterWriteSetState ||
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastFusedAtomicIncWrite ||
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastFusedAtomicIncWriteWithState ||
+         api_variant == tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastFusedAtomicIncWriteSetState);
 
     // Calculate tensor_bytes based on page_size (8 pages total)
     uint32_t num_pages = 8;
@@ -227,6 +233,17 @@ static std::string GetVariantName(tt::tt_fabric::test::AddrgenApiVariant variant
             return "LinearMulticastWriteWithState";
         case tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWriteSetState:
             return "LinearMulticastWriteSetState";
+        case tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastScatterWrite: return "LinearMulticastScatterWrite";
+        case tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastScatterWriteWithState:
+            return "LinearMulticastScatterWriteWithState";
+        case tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastScatterWriteSetState:
+            return "LinearMulticastScatterWriteSetState";
+        case tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastFusedAtomicIncWrite:
+            return "LinearMulticastFusedAtomicIncWrite";
+        case tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastFusedAtomicIncWriteWithState:
+            return "LinearMulticastFusedAtomicIncWriteWithState";
+        case tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastFusedAtomicIncWriteSetState:
+            return "LinearMulticastFusedAtomicIncWriteSetState";
         default: return "UnknownVariant";
     }
 }
@@ -304,7 +321,13 @@ INSTANTIATE_TEST_SUITE_P(
             tt::tt_fabric::test::AddrgenApiVariant::LinearFusedAtomicIncWriteSetState,
             tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWrite,
             tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWriteWithState,
-            tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWriteSetState),
+            tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastWriteSetState,
+            tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastScatterWrite,
+            tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastScatterWriteWithState,
+            tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastScatterWriteSetState,
+            tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastFusedAtomicIncWrite,
+            tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastFusedAtomicIncWriteWithState,
+            tt::tt_fabric::test::AddrgenApiVariant::LinearMulticastFusedAtomicIncWriteSetState),
         ::testing::Values(100, 112, 2048, 10000, 10100, 99999),  // Page sizes: Aligned and unaligned
         ::testing::Bool()                                        // Destination: false=L1, true=DRAM
         ),

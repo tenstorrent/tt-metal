@@ -64,12 +64,34 @@ inline void verify_payload_words(const std::vector<uint32_t>& rx, const std::vec
     }
 }
 
+// Map AddrgenApiVariant to kernel OperationType for linear multicast
+inline OperationType get_linear_multicast_operation_type(AddrgenApiVariant variant) {
+    switch (variant) {
+        case AddrgenApiVariant::LinearMulticastWrite:
+        case AddrgenApiVariant::LinearMulticastWriteWithState:
+        case AddrgenApiVariant::LinearMulticastWriteSetState: return OperationType::BasicWrite;
+        case AddrgenApiVariant::LinearMulticastScatterWrite:
+        case AddrgenApiVariant::LinearMulticastScatterWriteWithState:
+        case AddrgenApiVariant::LinearMulticastScatterWriteSetState: return OperationType::Scatter;
+        case AddrgenApiVariant::LinearMulticastFusedAtomicIncWrite:
+        case AddrgenApiVariant::LinearMulticastFusedAtomicIncWriteWithState:
+        case AddrgenApiVariant::LinearMulticastFusedAtomicIncWriteSetState: return OperationType::FusedAtomicInc;
+        default: return OperationType::BasicWrite;
+    }
+}
+
 // Map AddrgenApiVariant to kernel ApiVariant for linear multicast
 inline ApiVariant get_linear_multicast_api_variant(AddrgenApiVariant variant) {
     switch (variant) {
-        case AddrgenApiVariant::LinearMulticastWrite: return ApiVariant::Basic;
-        case AddrgenApiVariant::LinearMulticastWriteWithState: return ApiVariant::WithState;
-        case AddrgenApiVariant::LinearMulticastWriteSetState: return ApiVariant::SetState;
+        case AddrgenApiVariant::LinearMulticastWrite:
+        case AddrgenApiVariant::LinearMulticastScatterWrite:
+        case AddrgenApiVariant::LinearMulticastFusedAtomicIncWrite: return ApiVariant::Basic;
+        case AddrgenApiVariant::LinearMulticastWriteWithState:
+        case AddrgenApiVariant::LinearMulticastScatterWriteWithState:
+        case AddrgenApiVariant::LinearMulticastFusedAtomicIncWriteWithState: return ApiVariant::WithState;
+        case AddrgenApiVariant::LinearMulticastWriteSetState:
+        case AddrgenApiVariant::LinearMulticastScatterWriteSetState:
+        case AddrgenApiVariant::LinearMulticastFusedAtomicIncWriteSetState: return ApiVariant::SetState;
         default: return ApiVariant::Basic;
     }
 }
@@ -106,6 +128,11 @@ void run_linear_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixtur
     }
 
     tt::tt_metal::CoreCoord rx_xy = dst_dev->worker_core_from_logical_core(p.receiver_core);
+
+    // Determine operation type
+    OperationType operation_type = get_linear_multicast_operation_type(p.api_variant);
+    bool is_scatter = (operation_type == OperationType::Scatter);
+    bool is_fused = (operation_type == OperationType::FusedAtomicInc);
 
     // --- IO buffers & initialization ---
     namespace Dist = tt::tt_metal::distributed;
@@ -184,6 +211,8 @@ void run_linear_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixtur
         tt::tt_metal::CoreRangeSet rx_core_one(tt::tt_metal::CoreRange(p.receiver_core, p.receiver_core));
         gsem_linear_mcast = tt::tt_metal::CreateGlobalSemaphore(mesh.get(), rx_core_one, /*initial_value=*/0);
     }
+    // Reset semaphore value before each test
+    gsem_linear_mcast->reset_semaphore_value(0);
 
     constexpr const char* KDIR = "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/";
 
@@ -197,6 +226,11 @@ void run_linear_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixtur
     uint32_t src_aligned_page_size = ((p.page_size + src_alignment - 1) / src_alignment) * src_alignment;
     uint32_t dst_aligned_page_size = ((p.page_size + dst_alignment - 1) / dst_alignment) * dst_alignment;
 
+    // Compute expected wait count for receiver:
+    // - BasicWrite/Scatter: 1 (single atomic inc after all writes)
+    // - FusedAtomicInc: NUM_PAGES (atomic inc fused with each write)
+    uint32_t rx_wait_count = is_fused ? NUM_PAGES : 1;
+
     for (size_t i = 0; i < dst_coords.size(); ++i) {
         receiver_progs.emplace_back(tt::tt_metal::CreateProgram());
         auto rx_wait_k = tt::tt_metal::CreateKernel(
@@ -207,9 +241,8 @@ void run_linear_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixtur
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt::tt_metal::NOC::RISCV_0_default,
                 .defines = defines});
-        // For multicast, receiver waits for 1 (single atomic inc after all writes)
         tt::tt_metal::SetRuntimeArgs(
-            receiver_progs.back(), rx_wait_k, p.receiver_core, {gsem_linear_mcast->address(), 1u});
+            receiver_progs.back(), rx_wait_k, p.receiver_core, {gsem_linear_mcast->address(), rx_wait_count});
     }
 
     // Ensure the same logical worker maps to the same physical XY across all receiver chips
@@ -225,15 +258,20 @@ void run_linear_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixtur
     // Sender program: READER (RISCV_0) + WRITER (RISCV_1)
     tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
     const uint32_t CB_ID = tt::CBIndex::c_0;
-    auto cb_cfg = tt::tt_metal::CircularBufferConfig(8 * src_aligned_page_size, {{CB_ID, tt::DataFormat::Float16}})
-                      .set_page_size(CB_ID, src_aligned_page_size);
+
+    // For scatter operations, we need 2 pages per CB slot (read in pairs)
+    uint32_t cb_page_size = is_scatter ? src_aligned_page_size * 2 : src_aligned_page_size;
+    uint32_t num_cb_pages = is_scatter ? 4 : 8;  // Fewer but larger slots for scatter
+
+    auto cb_cfg = tt::tt_metal::CircularBufferConfig(num_cb_pages * cb_page_size, {{CB_ID, tt::DataFormat::Float16}})
+                      .set_page_size(CB_ID, cb_page_size);
     (void)tt::tt_metal::CreateCircularBuffer(sender_prog, p.sender_core, cb_cfg);
 
     // Reader kernel (DRAM->CB)
     std::vector<uint32_t> reader_cta;
     tt::tt_metal::TensorAccessorArgs(*src_buf).append_to(reader_cta);
-    reader_cta.push_back(static_cast<uint32_t>(OperationType::BasicWrite));  // OPERATION_TYPE
-    reader_cta.push_back(1u);                                                // SRC_IS_DRAM
+    reader_cta.push_back(static_cast<uint32_t>(operation_type));  // OPERATION_TYPE
+    reader_cta.push_back(1u);                                     // SRC_IS_DRAM
     reader_cta.push_back(NUM_PAGES);
     reader_cta.push_back(p.page_size);            // Raw page size
     reader_cta.push_back(src_aligned_page_size);  // Aligned page size
@@ -255,10 +293,12 @@ void run_linear_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixtur
     // Writer kernel (linear multicast addrgen)
     std::vector<uint32_t> writer_cta;
     tt::tt_metal::TensorAccessorArgs(*dst_buf).append_to(writer_cta);
-    writer_cta.push_back(static_cast<uint32_t>(api_variant));  // API_VARIANT
-    writer_cta.push_back(NUM_PAGES);                           // TOTAL_PAGES
-    writer_cta.push_back(p.page_size);                         // Raw page size
-    writer_cta.push_back(dst_aligned_page_size);               // Aligned page size
+    writer_cta.push_back(static_cast<uint32_t>(operation_type));  // OPERATION_TYPE
+    writer_cta.push_back(static_cast<uint32_t>(api_variant));     // API_VARIANT
+    writer_cta.push_back(NUM_PAGES);                              // TOTAL_PAGES
+    writer_cta.push_back(p.page_size);                            // Raw page size
+    writer_cta.push_back(dst_aligned_page_size);                  // Aligned page size (for dst addr calc)
+    writer_cta.push_back(src_aligned_page_size);                  // SRC_ALIGNED_PAGE_SIZE (for scatter CB stride)
 
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,
