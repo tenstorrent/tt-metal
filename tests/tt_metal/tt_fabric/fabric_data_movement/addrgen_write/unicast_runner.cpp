@@ -589,6 +589,8 @@ void run_linear_unicast_write_test(HelpersFixture* fixture, const AddrgenTestPar
                 return {OperationType::FusedAtomicInc, ApiVariant::WithState};
             case AddrgenApiVariant::LinearFusedAtomicIncWriteSetState:
                 return {OperationType::FusedAtomicInc, ApiVariant::SetState};
+            case AddrgenApiVariant::LinearUnicastWriteConnMgr:
+                return {OperationType::BasicWrite, ApiVariant::ConnMgrBasic};
             default:
                 TT_FATAL(false, "Unknown linear API variant");
                 return {OperationType::BasicWrite, ApiVariant::Basic};
@@ -627,9 +629,16 @@ void run_linear_unicast_write_test(HelpersFixture* fixture, const AddrgenTestPar
     writer_cta.push_back(dst_aligned_page_size);                  // Aligned page size (dest buffer addressing)
     writer_cta.push_back(src_aligned_page_size);                  // Source aligned page size (CB stride for scatter)
 
+    // Check if this is a connection manager variant
+    const bool is_linear_conn_mgr = (p.api_variant == AddrgenApiVariant::LinearUnicastWriteConnMgr);
+
+    // Select kernel based on connection manager variant
+    const std::string writer_kernel_name =
+        is_linear_conn_mgr ? "linear_unicast_tx_writer_addrgen_conn_mgr.cpp" : "linear_unicast_tx_writer_addrgen.cpp";
+
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,
-        KDIR + "linear_unicast_tx_writer_addrgen.cpp",
+        KDIR + writer_kernel_name,
         p.sender_core,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -650,15 +659,36 @@ void run_linear_unicast_write_test(HelpersFixture* fixture, const AddrgenTestPar
     uint32_t num_hops = 1;
 
     std::vector<uint32_t> writer_rt = {
-        (uint32_t)dst_buf->address(),      // 0: dst_base
-        (uint32_t)rx_xy.x,                 // 1: receiver_noc_x
-        (uint32_t)rx_xy.y,                 // 2: receiver_noc_y
-        (uint32_t)gsem_linear->address(),  // 3: receiver L1 semaphore addr
-        num_hops                           // 4: num_hops for linear unicast
+        (uint32_t)dst_buf->address(),     // 0: dst_base
+        (uint32_t)rx_xy.x,                // 1: receiver_noc_x
+        (uint32_t)rx_xy.y,                // 2: receiver_noc_y
+        (uint32_t)gsem_linear->address()  // 3: receiver L1 semaphore addr
     };
 
-    // Pack fabric connection runtime args
-    tt::tt_fabric::append_fabric_connection_rt_args(src, dst, link_idx, sender_prog, p.sender_core, writer_rt);
+    if (is_linear_conn_mgr) {
+        // Connection manager variant: pack num_connections and num_hops array
+        uint32_t num_connections = 1;          // Single destination for now
+        writer_rt.push_back(num_connections);  // 4: num_connections
+        writer_rt.push_back(num_hops);         // 5: num_hops[0]
+
+        // Use routing plane connection manager args
+        std::vector<tt::tt_fabric::FabricNodeId> dst_nodes = {dst};
+        std::vector<uint32_t> connection_link_indices = {};  // Empty means auto-select
+        tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+            src,
+            dst_nodes,
+            connection_link_indices,
+            sender_prog,
+            writer_k,
+            p.sender_core,
+            writer_rt,
+            tt::tt_fabric::FabricApiType::Linear,
+            CoreType::WORKER);
+    } else {
+        // Basic variant: use regular fabric connection args
+        writer_rt.push_back(num_hops);  // 4: num_hops for linear unicast
+        tt::tt_fabric::append_fabric_connection_rt_args(src, dst, link_idx, sender_prog, p.sender_core, writer_rt);
+    }
 
     tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
 
