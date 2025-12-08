@@ -36,6 +36,8 @@ namespace {
 template <typename T, typename... Ts>
 static constexpr bool is_one_of_v = (std::is_same_v<T, Ts> || ...);
 
+constexpr auto DOT_TENSORBIN = ".tensorbin";
+
 }  // namespace
 
 namespace ttml::serialization {
@@ -197,7 +199,7 @@ void FlatBufferFile::serialize(std::string_view file_path) {
         std::replace(sanitized_key.begin(), sanitized_key.end(), '/', '_');
         std::replace(sanitized_key.begin(), sanitized_key.end(), '\\', '_');
 
-        std::filesystem::path tensor_file = tensor_dir / (sanitized_key + ".tensorbin");
+        std::filesystem::path tensor_file = tensor_dir / (sanitized_key + DOT_TENSORBIN);
 
         // Convert tensor to CPU if needed
         tt::tt_metal::Tensor cpu_tensor = tensor.cpu();
@@ -290,7 +292,7 @@ void FlatBufferFile::serialize(std::string_view file_path) {
         std::replace(sanitized_key.begin(), sanitized_key.end(), '\\', '_');
 
         // Store relative path to tensor file
-        std::string tensor_file_path = sanitized_key + ".tensorbin";
+        std::string tensor_file_path = sanitized_key + DOT_TENSORBIN;
         auto tensor_path_offset = m_builder.CreateString(tensor_file_path);
         auto str_val = ttml::flatbuffer::CreateStringValue(m_builder, tensor_path_offset);
         auto kv_pair = ttml::flatbuffer::CreateKeyValuePair(
@@ -553,7 +555,7 @@ void FlatBufferFile::deserialize(std::string_view filename) {
                 if (str_val && str_val->value()) {
                     std::string file_path_str(str_val->value()->c_str());
                     // Check if it's a tensor file (ends with .tensorbin)
-                    if (file_path_str.ends_with(".tensorbin")) {
+                    if (file_path_str.ends_with(DOT_TENSORBIN)) {
                         // Resolve tensor file path relative to metadata file directory
                         std::filesystem::path tensor_file = tensor_dir / file_path_str;
 
