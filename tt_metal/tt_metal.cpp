@@ -41,7 +41,8 @@
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
-#include "lightmetal_binary.hpp"
+#include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
+#include <tt-metalium/experimental/lightmetal/lightmetal_api.hpp>
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
@@ -1403,6 +1404,8 @@ RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kerne
     return program.impl().get_kernel(kernel_id)->common_runtime_args_data();
 }
 
+namespace experimental::lightmetal {
+
 // This is nop if compile time define not set.
 void LightMetalBeginCapture() {
 #if defined(TT_ENABLE_LIGHT_METAL_TRACE) && (TT_ENABLE_LIGHT_METAL_TRACE == 1)
@@ -1428,6 +1431,8 @@ LightMetalBinary LightMetalEndCapture() {
     return {};
 #endif
 }
+
+}  // namespace experimental::lightmetal
 
 void PushCurrentCommandQueueIdForThread(uint8_t cq_id) {
     auto& cq_stack = MetalContext::instance().get_command_queue_id_stack_for_thread();

@@ -16,7 +16,6 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/lightmetal_binary.hpp>
 #include <tt-metalium/profiler_types.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
 
@@ -596,27 +595,6 @@ std::vector<std::vector<RuntimeArgsData>>& GetRuntimeArgs(const Program& program
  */
 // clang-format on
 RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id);
-
-// clang-format off
-/**
- * Begin Light Metal Binary capturing on host and all devices. This will trace host API calls and device (metal trace) workloads to a
- * binary blob returned to caller when tracing is finished, which can later be rerun directly from binary.
- * Note: This LightMetalBinary Trace/Replay feature is currently under active development and is not fully supported, use at own risk.
- *
- * Return value: void
- */
-// clang-format on
-void LightMetalBeginCapture();
-
-// clang-format off
-/**
- * Ends Light Metal Binary capturing on host and all devices returns the binary blob to the user.
- * Note: This LightMetalBinary Trace/Replay feature is currently under active development and is not fully supported, use at own risk.
- *
- * Return value: LightMetalBinary
- */
-// clang-format on
-LightMetalBinary LightMetalEndCapture();
 
 // clang-format off
 /**

@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 #include <optional>
-#include <tt-metalium/lightmetal_binary.hpp>
+#include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
 
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
@@ -51,7 +51,7 @@ using FlatbufferRuntimeArgVector =
     const flatbuffers::Vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::RuntimeArg>>*;
 using RuntimeArgs = std::vector<std::variant<tt::tt_metal::Buffer*, uint32_t>>;
 
-namespace tt::tt_metal::detail {
+namespace tt::tt_metal::experimental::lightmetal::detail {
 class LightMetalReplayImpl {
 public:
     // Constructor
@@ -135,4 +135,4 @@ private:
     std::unordered_map<uint32_t, tt::tt_metal::CBHandle> cb_handle_map_;
 };
 
-}  // namespace tt::tt_metal::detail
+}  // namespace tt::tt_metal::experimental::lightmetal::detail

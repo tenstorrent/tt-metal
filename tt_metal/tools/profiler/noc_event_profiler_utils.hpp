@@ -13,6 +13,7 @@
 #include <utility>
 #include <nlohmann/json.hpp>
 #include <enchantum/enchantum.hpp>
+#include <fstream>
 
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_cluster.hpp"
