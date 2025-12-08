@@ -1121,6 +1121,85 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
     });
 }
 
+// ============================================================================
+// Multicast Addrgen API Overloads
+// ============================================================================
+
+// clang-format off
+/**
+ * Multicast unicast write (addrgen overload): sends payload to destinations computed from address generator.
+ *
+ * Return value: None
+ *
+ * | Argument                              | Description                             | Type                                          | Required |
+ * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
+ * | client_interface                      | Fabric sender interface                 | tt_l1_ptr WorkerToFabricEdmSender*            | True     |
+ * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
+ * | src_addr                              | Source L1 address                       | uint32_t                                      | True     |
+ * | addrgen                               | Address generator (e.g. TensorAccessor) | const AddrGenType&                            | True     |
+ * | page_id                               | Page ID to compute NOC address          | uint32_t                                      | True     |
+ * | start_distance                        | Multicast start distance                | uint8_t                                       | True     |
+ * | range                                 | Multicast range                          | uint8_t                                       | True     |
+ * | offset                                | Offset within page                      | uint32_t                                      | False    |
+ */
+// clang-format on
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_multicast_noc_unicast_write(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint8_t start_distance,
+    uint8_t range,
+    uint32_t offset = 0) {
+    auto page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(addrgen);
+
+    // Set route once before sending packets
+    packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
+
+    uint32_t remaining_size = page_size;
+    uint32_t current_offset = offset;
+
+    // Send full-size packets (loop skips for small pages)
+    while (remaining_size > FABRIC_MAX_PACKET_SIZE) {
+        auto noc_address = tt::tt_fabric::linear::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+        // Ensure hardware has finished reading packet_header before modifying it
+        noc_async_writes_flushed();
+
+        // Call basic function (route already set)
+        fabric_multicast_noc_unicast_write(
+            client_interface,
+            packet_header,
+            src_addr,
+            FABRIC_MAX_PACKET_SIZE,
+            tt::tt_fabric::NocUnicastCommandHeader{noc_address},
+            start_distance,
+            range);
+
+        src_addr += FABRIC_MAX_PACKET_SIZE;
+        current_offset += FABRIC_MAX_PACKET_SIZE;
+        remaining_size -= FABRIC_MAX_PACKET_SIZE;
+    }
+
+    // Send remainder packet (for small pages, this is the only packet)
+    auto noc_address = tt::tt_fabric::linear::addrgen_detail::get_noc_address(addrgen, page_id, current_offset);
+
+    // Ensure hardware has finished reading packet_header before modifying it
+    noc_async_writes_flushed();
+
+    // Call basic function (route already set, no barrier needed after last packet)
+    fabric_multicast_noc_unicast_write(
+        client_interface,
+        packet_header,
+        src_addr,
+        remaining_size,
+        tt::tt_fabric::NocUnicastCommandHeader{noc_address},
+        start_distance,
+        range);
+}
+
 // clang-format off
 /**
  * Multicast unicast atomic increment: issues a unicast atomic inc with chip-level multicast routing metadata.
