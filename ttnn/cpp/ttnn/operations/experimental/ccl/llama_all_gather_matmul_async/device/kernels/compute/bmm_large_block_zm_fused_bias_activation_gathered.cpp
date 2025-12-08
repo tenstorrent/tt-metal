@@ -307,7 +307,7 @@ void MAIN {
                             in0_index,
                             in1_index,
                             dst_index,
-                            false,
+                            in1_transpose_tile,
                             out_subblock_w,
                             out_subblock_h,
                             in0_block_w);
