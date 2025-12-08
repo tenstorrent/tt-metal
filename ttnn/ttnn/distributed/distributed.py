@@ -399,9 +399,10 @@ def _get_rich_table(
             try:
                 coord = ttnn.MeshCoordinate(row_idx, col_idx)
                 if storage_type == ttnn.StorageType.DEVICE:
+                    # TODO(p1-0tr): is this info required?
                     locality = "Local\n" if view.is_local(coord) else "Remote\n"
                     device_id = mesh_device.get_chip_id(ttnn.MeshCoordinate(row_idx, col_idx))
-                    device_id_str = f"Dev. ID: {device_id}\n" if view.is_local(coord) else "Unknown\n"
+                    device_id_str = f"Chip ID: {device_id}\n"
                 else:
                     locality = "Local\n" if host_buffer.is_local(coord) else "Remote\n"
                     device_id = row_idx * cols + col_idx
