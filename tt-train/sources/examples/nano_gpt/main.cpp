@@ -302,9 +302,7 @@ int main(int argc, char **argv) {
     CLI::App app{"NanoGPT Example"};
     argv = app.ensure_utf8(argv);
 
-    const char *tt_metal_home = std::getenv("TT_METAL_HOME");
-    TT_FATAL(tt_metal_home != nullptr, "TT_METAL_HOME environment variable is not set");
-    std::string training_config_name = std::string(tt_metal_home) + "/tt-train/configs/training_configs/training_shakespeare_nanogpt.yaml";
+    std::string training_config_name = "./configs/training_configs/training_shakespeare_llama3_gpt2s_size.yaml";
     std::string multihost_config_name = "";
 
     std::string run_name = "";
