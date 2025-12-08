@@ -20,17 +20,17 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::transformer::sdpa {
 namespace ring_joint_sdpa {
 
-RingJointSdpaDeviceOperation::program_factory_t RingJointSdpaDeviceOperation::select_program_factory(
+RingJointSDPADeviceOperation::program_factory_t RingJointSDPADeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return program::RingJointSDPAProgramFactory{};
 }
 
-void RingJointSdpaDeviceOperation::validate_on_program_cache_hit(
+void RingJointSDPADeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(args, tensor_args);
 }
 
-void RingJointSdpaDeviceOperation::validate_on_program_cache_miss(
+void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor_q = tensor_args.input_q;
     const auto& input_tensor_k = tensor_args.input_k;
@@ -233,7 +233,7 @@ void RingJointSdpaDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t RingJointSdpaDeviceOperation::compute_output_specs(
+spec_return_value_t RingJointSDPADeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input_q;
     const auto& joint_input = tensor_args.joint_q;
@@ -251,7 +251,7 @@ spec_return_value_t RingJointSdpaDeviceOperation::compute_output_specs(
             TensorSpec(lse_shape, TensorLayout(input.dtype(), PageConfig(Layout::TILE), args.output_memory_config))};
 }
 
-tensor_return_value_t RingJointSdpaDeviceOperation::create_output_tensors(
+tensor_return_value_t RingJointSDPADeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto output_specs = compute_output_specs(args, tensor_args);
     return {
@@ -261,7 +261,7 @@ tensor_return_value_t RingJointSdpaDeviceOperation::create_output_tensors(
     };
 }
 
-tt::stl::hash::hash_t RingJointSdpaDeviceOperation::compute_program_hash(
+tt::stl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const std::vector<Tensor> input_tensors = {
         tensor_args.input_q,
@@ -273,7 +273,7 @@ tt::stl::hash::hash_t RingJointSdpaDeviceOperation::compute_program_hash(
         tensor_args.gathered_k,
         tensor_args.gathered_v,
     };
-    return tt::tt_metal::operation::hash_operation<RingJointSdpaDeviceOperation>(
+    return tt::tt_metal::operation::hash_operation<RingJointSDPADeviceOperation>(
         input_tensors,
         args.joint_strategy,
         args.scale,
@@ -287,8 +287,8 @@ tt::stl::hash::hash_t RingJointSdpaDeviceOperation::compute_program_hash(
     );
 }
 
-std::tuple<RingJointSdpaDeviceOperation::operation_attributes_t, RingJointSdpaDeviceOperation::tensor_args_t>
-RingJointSdpaDeviceOperation::invoke(
+std::tuple<RingJointSDPADeviceOperation::operation_attributes_t, RingJointSDPADeviceOperation::tensor_args_t>
+RingJointSDPADeviceOperation::invoke(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,

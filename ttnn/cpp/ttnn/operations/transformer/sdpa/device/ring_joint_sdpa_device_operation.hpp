@@ -16,7 +16,7 @@
 namespace ttnn::operations::transformer::sdpa {
 namespace ring_joint_sdpa {
 
-struct RingJointSdpaDeviceOperation {
+struct RingJointSDPADeviceOperation {
     using operation_attributes_t = ring_joint_sdpa::operation_attributes_t;
     using tensor_args_t = ring_joint_sdpa::tensor_args_t;
     using spec_return_value_t = ring_joint_sdpa::spec_return_value_t;
@@ -61,6 +61,6 @@ namespace ttnn::prim {
 
 constexpr auto ring_joint_scaled_dot_product_attention = ttnn::register_operation<
     "ttnn::prim::ring_joint_scaled_dot_product_attention",
-    ttnn::operations::transformer::sdpa::ring_joint_sdpa::RingJointSdpaDeviceOperation>();
+    ttnn::operations::transformer::sdpa::ring_joint_sdpa::RingJointSDPADeviceOperation>();
 
 }  // namespace ttnn::prim
