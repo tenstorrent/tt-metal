@@ -516,6 +516,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
 
                 result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
                 result["e2e_perf"] = None
+                result["peak_l1_memory"] = None
                 result["original_vector_data"] = original_vector_data
                 result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
                 result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
