@@ -73,8 +73,14 @@ public:
      */
     size_t get_receiver_channel_base_address(size_t vc_id, size_t channel_id) const;
 
-    size_t get_num_sender_channels(size_t vc_id) const { return num_used_sender_channels_per_vc[vc_id]; }
-    size_t get_num_receiver_channels(size_t vc_id) const { return num_used_receiver_channels_per_vc[vc_id]; }
+    size_t get_num_sender_channels(size_t vc_id) const {
+        TT_FATAL(vc_id < MAX_NUM_VCS, "VC ID {} out of bounds (max {})", vc_id, MAX_NUM_VCS);
+        return num_used_sender_channels_per_vc[vc_id];
+    }
+    size_t get_num_receiver_channels(size_t vc_id) const {
+        TT_FATAL(vc_id < MAX_NUM_VCS, "VC ID {} out of bounds (max {})", vc_id, MAX_NUM_VCS);
+        return num_used_receiver_channels_per_vc[vc_id];
+    }
 
     // Legacy getters (assume VC0 for backward compatibility)
     size_t get_sender_channel_number_of_slots(size_t channel_id) const {
