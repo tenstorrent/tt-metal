@@ -17,8 +17,7 @@ int main() {
     char* env_var = std::getenv("TT_METAL_DPRINT_CORES");
     if (env_var == nullptr) {
         std::cerr << "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to 0,0 to see the output of "
-                     "the Data Movement kernels."
-                  << '\n';
+                     "the Data Movement kernels.\n";
         std::cerr << "WARNING: For example, export TT_METAL_DPRINT_CORES=0,0\n";
     }
 
