@@ -281,28 +281,54 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         num_receiver_buffer_slots_per_vc,
     std::array<std::array<size_t, builder_config::num_max_receiver_channels>, MAX_NUM_VCS>&
         num_remote_receiver_buffer_slots_per_vc) {
-    // fabric with tensix extension uses different buffer slots options, since only one or two sender channels are
-    // used by fabric router, while other sender channels are skipped and have 0 buffer slots.
-    static const std::vector<std::vector<std::pair<size_t, size_t>>> default_with_tensix_buffer_slot_options = {
-        {{16, 16}, {8, 16}, {8, 8}},                     // WORMHOLE_B0: {sender_slots, receiver_slots}
-        {{32, 32}, {16, 32}, {16, 16}, {8, 16}, {8, 8}}  // BLACKHOLE: {sender_slots, receiver_slots}
+    // Per-VC buffer slot configuration: {vc0_sender, vc0_receiver, vc1_sender, vc1_receiver}
+    struct PerVcBufferSlots {
+        size_t vc0_sender_slots;
+        size_t vc0_receiver_slots;
+        size_t vc1_sender_slots;
+        size_t vc1_receiver_slots;
     };
 
-    auto get_num_buffer_slots = [](Topology topology,
-                                   size_t arch_index) -> const std::vector<std::pair<size_t, size_t>>& {
-        // Architecture-specific buffer slot configurations
-        static const std::vector<std::vector<std::pair<size_t, size_t>>> mesh_buffer_slot_options = {
-            {{7, 11}, {4, 8}},  // WORMHOLE_B0: {sender_slots, receiver_slots}
-            {{8, 16}, {8, 8}, {4, 8}}   // BLACKHOLE: {sender_slots, receiver_slots}
-        };
-        static const std::vector<std::vector<std::pair<size_t, size_t>>> other_buffer_slot_options = {
-            {{8, 16}},  // WORMHOLE_B0: {sender_slots, receiver_slots}
-            {{32, 32}, {16, 32}, {16, 16}, {8, 16}, {8, 8}, {4, 8}}  // BLACKHOLE: {sender_slots,
-        };
+    // fabric with tensix extension uses different buffer slots options, since only one or two sender channels are
+    // used by fabric router, while other sender channels are skipped and have 0 buffer slots.
+    // Format: {vc0_sender, vc0_receiver, vc1_sender, vc1_receiver}
+    static const std::vector<std::vector<PerVcBufferSlots>> default_with_tensix_buffer_slot_options = {
+        // WORMHOLE_B0
+        {
+            {16, 16, 0, 0},  // Option 1
+            {8, 16, 0, 0},   // Option 2
+            {8, 8, 0, 0}     // Option 3
+        },
+        // BLACKHOLE
+        {{32, 32, 0, 0}, {16, 32, 0, 0}, {16, 16, 0, 0}, {8, 16, 0, 0}, {8, 8, 0, 0}}};
 
-        static tt::stl::Indestructible<std::vector<std::vector<std::pair<size_t, size_t>>>> mesh_slots(
-            mesh_buffer_slot_options);
-        static tt::stl::Indestructible<std::vector<std::vector<std::pair<size_t, size_t>>>> other_slots(
+    auto get_num_buffer_slots = [](Topology topology, size_t arch_index) -> const std::vector<PerVcBufferSlots>& {
+        // Architecture-specific buffer slot configurations per VC
+        // Format: {vc0_sender, vc0_receiver, vc1_sender, vc1_receiver}
+        static const std::vector<std::vector<PerVcBufferSlots>> mesh_buffer_slot_options = {
+            // WORMHOLE_B0
+            {
+                {7, 11, 0, 0},  // Option 1: same for both VCs
+                {4, 8, 0, 0},   // Option 2: smaller, same for both VCs
+                {4, 8, 2, 4}    // Option 3: supports both VCs
+            },
+            // BLACKHOLE
+            {
+                {8, 16, 0, 0},  // Option 1: same for both VCs
+                {8, 8, 0, 0},   // Option 2
+                {4, 8, 0, 0},   // Option 3
+                {4, 8, 2, 4}    // Option 4: supports both VCs
+            }};
+        static const std::vector<std::vector<PerVcBufferSlots>> other_buffer_slot_options = {
+            // WORMHOLE_B0
+            {
+                {8, 16, 0, 0}  // Only VC0 for non-mesh topologies
+            },
+            // BLACKHOLE
+            {{32, 32, 0, 0}, {16, 32, 0, 0}, {16, 16, 0, 0}, {8, 16, 0, 0}, {8, 8, 0, 0}, {4, 8, 0, 0}}};
+
+        static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> mesh_slots(mesh_buffer_slot_options);
+        static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> other_slots(
             other_buffer_slot_options);
 
         if (topology == Topology::Mesh || topology == Topology::Torus) {
@@ -312,26 +338,39 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         }
     };
 
-    auto get_optimal_num_slots = [this](
-                                     auto& buffer_slot_options,
-                                     size_t num_sender_channels,
-                                     size_t num_receiver_channels,
-                                     size_t& num_sender_buffer_slots,
-                                     size_t& num_receiver_buffer_slots,
-                                     std::optional<size_t> worker_num_sender_buffer_slots = std::nullopt) {
+    auto get_optimal_num_slots_per_vc = [this](
+                                            auto& buffer_slot_options,
+                                            size_t num_vc0_sender_channels,
+                                            size_t num_vc0_receiver_channels,
+                                            size_t num_vc1_sender_channels,
+                                            size_t num_vc1_receiver_channels,
+                                            size_t& vc0_sender_buffer_slots,
+                                            size_t& vc0_receiver_buffer_slots,
+                                            size_t& vc1_sender_buffer_slots,
+                                            size_t& vc1_receiver_buffer_slots) {
         for (auto& option : buffer_slot_options) {
-            num_sender_buffer_slots = option.first;
-            num_receiver_buffer_slots = option.second;
-            auto num_total_sender_slots = num_sender_channels * num_sender_buffer_slots;
-            auto num_total_receiver_slots = num_receiver_channels * num_receiver_buffer_slots;
-            if (worker_num_sender_buffer_slots.has_value()) {
-                num_total_sender_slots =
-                    worker_num_sender_buffer_slots.value() + (num_sender_channels - 1) * num_sender_buffer_slots;
+            vc0_sender_buffer_slots = option.vc0_sender_slots;
+            vc0_receiver_buffer_slots = option.vc0_receiver_slots;
+            vc1_sender_buffer_slots = option.vc1_sender_slots;
+            vc1_receiver_buffer_slots = option.vc1_receiver_slots;
+
+            // skip the VC0 only options if VC1 is present
+            if (num_vc1_sender_channels > 0 && vc1_sender_buffer_slots == 0) {
+                continue;
             }
-            auto total_num_bytes =
-                (num_total_sender_slots + num_total_receiver_slots) * this->channel_buffer_size_bytes;
+
+            // Calculate total slots across both VCs
+            auto vc0_total_sender_slots = num_vc0_sender_channels * vc0_sender_buffer_slots;
+            auto vc0_total_receiver_slots = num_vc0_receiver_channels * vc0_receiver_buffer_slots;
+            auto vc1_total_sender_slots = num_vc1_sender_channels * vc1_sender_buffer_slots;
+            auto vc1_total_receiver_slots = num_vc1_receiver_channels * vc1_receiver_buffer_slots;
+
+            auto total_num_bytes = (vc0_total_sender_slots + vc0_total_receiver_slots + vc1_total_sender_slots +
+                                    vc1_total_receiver_slots) *
+                                   this->channel_buffer_size_bytes;
+
             if (total_num_bytes <= this->available_channel_buffering_space) {
-                break;
+                break;  // Found a configuration that fits
             }
         }
     };
@@ -350,54 +389,62 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     switch (options.fabric_tensix_config) {
         case tt::tt_fabric::FabricTensixConfig::MUX: {
             // MUX mode: Only VC0 channel 0 is used for worker
-            uint32_t num_sender_channels = this->num_sender_channels_with_tensix_config;
             uint32_t target_channel = get_worker_connected_sender_channel();
-            size_t default_num_sender_buffer_slots;
-            size_t default_num_receiver_buffer_slots;
+            size_t vc0_sender_buffer_slots, vc0_receiver_buffer_slots;
+            size_t vc1_sender_buffer_slots, vc1_receiver_buffer_slots;
 
-            // Calculate total channels across VCs for sizing
-            size_t total_receiver_channels =
-                num_used_receiver_channels_per_vc[0] + num_used_receiver_channels_per_vc[1];
-
-            // get the default buffer slots
-            get_optimal_num_slots(
+            // get the optimal buffer slots for MUX mode (per-VC)
+            get_optimal_num_slots_per_vc(
                 default_with_tensix_buffer_slot_options[arch_index],
-                num_sender_channels,
-                total_receiver_channels,
-                default_num_sender_buffer_slots,
-                default_num_receiver_buffer_slots);
+                num_used_sender_channels_per_vc[0],
+                num_used_receiver_channels_per_vc[0],
+                num_used_sender_channels_per_vc[1],
+                num_used_receiver_channels_per_vc[1],
+                vc0_sender_buffer_slots,
+                vc0_receiver_buffer_slots,
+                vc1_sender_buffer_slots,
+                vc1_receiver_buffer_slots);
 
-            // set default buffer slots for VC0 only (worker channel)
-            num_sender_buffer_slots_per_vc[0][target_channel] = default_num_sender_buffer_slots;
-            num_remote_sender_buffer_slots_per_vc[0][target_channel] = default_num_sender_buffer_slots;
+            // set buffer slots for VC0 worker channel only
+            num_sender_buffer_slots_per_vc[0][target_channel] = vc0_sender_buffer_slots;
+            num_remote_sender_buffer_slots_per_vc[0][target_channel] = vc0_sender_buffer_slots;
 
-            // Fill receiver buffer slots for all VCs
-            for (size_t vc = 0; vc < MAX_NUM_VCS; ++vc) {
-                num_receiver_buffer_slots_per_vc[vc].fill(default_num_receiver_buffer_slots);
-                num_remote_receiver_buffer_slots_per_vc[vc].fill(default_num_receiver_buffer_slots);
-            }
+            // Fill receiver buffer slots for both VCs
+            num_receiver_buffer_slots_per_vc[0].fill(vc0_receiver_buffer_slots);
+            num_remote_receiver_buffer_slots_per_vc[0].fill(vc0_receiver_buffer_slots);
+            num_receiver_buffer_slots_per_vc[1].fill(vc1_receiver_buffer_slots);
+            num_remote_receiver_buffer_slots_per_vc[1].fill(vc1_receiver_buffer_slots);
             return;
         }
         default: break;
     }
 
-    // Default case: Configure buffer slots for each VC independently
-    for (size_t vc = 0; vc < MAX_NUM_VCS; ++vc) {
-        size_t default_num_sender_buffer_slots;
-        size_t default_num_receiver_buffer_slots;
-        get_optimal_num_slots(
-            get_num_buffer_slots(topology, arch_index),
-            this->num_used_sender_channels_per_vc[vc],
-            this->num_used_receiver_channels_per_vc[vc],
-            default_num_sender_buffer_slots,
-            default_num_receiver_buffer_slots);
+    // Default case: Configure buffer slots with per-VC options
+    size_t vc0_sender_buffer_slots, vc0_receiver_buffer_slots;
+    size_t vc1_sender_buffer_slots, vc1_receiver_buffer_slots;
 
-        // set default buffer slots for this VC
-        num_sender_buffer_slots_per_vc[vc].fill(default_num_sender_buffer_slots);
-        num_remote_sender_buffer_slots_per_vc[vc].fill(default_num_sender_buffer_slots);
-        num_receiver_buffer_slots_per_vc[vc].fill(default_num_receiver_buffer_slots);
-        num_remote_receiver_buffer_slots_per_vc[vc].fill(default_num_receiver_buffer_slots);
-    }
+    // Get optimal buffer slots considering both VCs
+    get_optimal_num_slots_per_vc(
+        get_num_buffer_slots(topology, arch_index),
+        num_used_sender_channels_per_vc[0],
+        num_used_receiver_channels_per_vc[0],
+        num_used_sender_channels_per_vc[1],
+        num_used_receiver_channels_per_vc[1],
+        vc0_sender_buffer_slots,
+        vc0_receiver_buffer_slots,
+        vc1_sender_buffer_slots,
+        vc1_receiver_buffer_slots);
+
+    // Apply the buffer slot configuration to each VC
+    num_sender_buffer_slots_per_vc[0].fill(vc0_sender_buffer_slots);
+    num_remote_sender_buffer_slots_per_vc[0].fill(vc0_sender_buffer_slots);
+    num_receiver_buffer_slots_per_vc[0].fill(vc0_receiver_buffer_slots);
+    num_remote_receiver_buffer_slots_per_vc[0].fill(vc0_receiver_buffer_slots);
+
+    num_sender_buffer_slots_per_vc[1].fill(vc1_sender_buffer_slots);
+    num_remote_sender_buffer_slots_per_vc[1].fill(vc1_sender_buffer_slots);
+    num_receiver_buffer_slots_per_vc[1].fill(vc1_receiver_buffer_slots);
+    num_remote_receiver_buffer_slots_per_vc[1].fill(vc1_receiver_buffer_slots);
 }
 
 void FabricStaticSizedChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_args) const {

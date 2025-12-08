@@ -89,8 +89,13 @@ public:
     size_t get_receiver_channel_base_address(size_t channel_id) const {
         return get_receiver_channel_base_address(0, channel_id);
     }
-    size_t get_num_sender_channels() const { return get_num_sender_channels(0); }
-    size_t get_num_receiver_channels() const { return get_num_receiver_channels(0); }
+    // For total counts: return sum across all VCs
+    size_t get_num_sender_channels() const {
+        return num_used_sender_channels_per_vc[0] + num_used_sender_channels_per_vc[1];
+    }
+    size_t get_num_receiver_channels() const {
+        return num_used_receiver_channels_per_vc[0] + num_used_receiver_channels_per_vc[1];
+    }
 
     // Override virtual print method from base class
     void print(std::ostream& os) const override;
