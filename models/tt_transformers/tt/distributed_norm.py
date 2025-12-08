@@ -8,10 +8,11 @@ from models.tt_transformers.tt.ccl import tt_distributed_rmsnorm, tt_sharded_dis
 
 
 class DistributedNorm(LightweightModule):
-    def __init__(self, norm, args, tt_ccl, TG=False):
+    def __init__(self, norm, args, tt_ccl, TG=False, all_gather_config_key=None):
         self.norm = norm
         self.args = args
         self.tt_ccl = tt_ccl
+        self.all_gather_config_key = all_gather_config_key
 
         if TG:
             core_grid_ln = (
@@ -73,6 +74,11 @@ class DistributedNorm(LightweightModule):
 
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
+            # Get num_workers_per_link from config if available, otherwise use default
+            num_workers = 1  # Default
+            if self.all_gather_config_key and self.all_gather_config_key in self.args.model_config:
+                num_workers = self.args.model_config[self.all_gather_config_key].get("num_workers_per_link", 1)
+
             x = ttnn.experimental.all_gather_async(
                 x,
                 persistent_output_buffer=None,
@@ -83,7 +89,7 @@ class DistributedNorm(LightweightModule):
                 memory_config=input_mem_cfg,
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 chunks_per_sync=10,
-                num_workers_per_link=1,
+                num_workers_per_link=num_workers,
                 num_buffers_per_channel=2,
             )
             # 2 faktora

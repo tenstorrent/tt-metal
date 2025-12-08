@@ -1296,6 +1296,29 @@ class ModelArgs:
             )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
             self.ccl_dtype = ttnn.bfloat8_b
 
+            # All gather configuration for distributed norms (before and after norm)
+            default_all_gather_pre_norm = {"num_workers_per_link": 1}
+            default_all_gather_post_norm = {"num_workers_per_link": 2}
+
+            # Model-specific overrides
+            model_specific_all_gather_configs = {
+                "Llama-3.1-8B": {
+                    "pre_norm": {"num_workers_per_link": 3},
+                    "post_norm": {"num_workers_per_link": 4},
+                }
+            }
+
+            if self.base_model_name in model_specific_all_gather_configs:
+                self.model_config["ALL_GATHER_PRE_NORM_CONFIG"] = model_specific_all_gather_configs[
+                    self.base_model_name
+                ]["pre_norm"]
+                self.model_config["ALL_GATHER_POST_NORM_CONFIG"] = model_specific_all_gather_configs[
+                    self.base_model_name
+                ]["post_norm"]
+            else:
+                self.model_config["ALL_GATHER_PRE_NORM_CONFIG"] = default_all_gather_pre_norm
+                self.model_config["ALL_GATHER_POST_NORM_CONFIG"] = default_all_gather_post_norm
+
             logger.info(f"Attention grid: {attn_input_grid}")
             logger.info(f"MLP grid: {mlp_core_grid}")
             logger.info(f"MLP prefill grids @ 32: w1/w3: {mlp1_3_grid(32)}, w2: {mlp2_grid(32)}")

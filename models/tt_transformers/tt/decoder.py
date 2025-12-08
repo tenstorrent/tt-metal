@@ -114,6 +114,7 @@ class TransformerBlock(LightweightModule):
             args,
             tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
+            all_gather_config_key="ALL_GATHER_PRE_NORM_CONFIG",
         )
         self.ff_norm = DistributedNorm(
             RMSNorm(
@@ -135,6 +136,7 @@ class TransformerBlock(LightweightModule):
             args,
             tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
+            all_gather_config_key="ALL_GATHER_POST_NORM_CONFIG",
         )
         if f"layers.{layer_num}.pre_feedforward_layernorm.weight" in state_dict:
             self.pre_ff_norm = DistributedNorm(  # pre_feedforward_layernorm
@@ -157,6 +159,7 @@ class TransformerBlock(LightweightModule):
                 args,
                 tt_ccl=self.tt_ccl,
                 TG=args.is_galaxy,
+                all_gather_config_key="ALL_GATHER_PRE_NORM_CONFIG",
             )
         else:
             # If pre_feedforward_layernorm is not in state_dict, we do not use it
@@ -183,6 +186,7 @@ class TransformerBlock(LightweightModule):
                 args,
                 tt_ccl=self.tt_ccl,
                 TG=args.is_galaxy,
+                all_gather_config_key="ALL_GATHER_POST_NORM_CONFIG",
             )
         else:
             # If post_feedforward_layernorm is not in state_dict, we do not use it
