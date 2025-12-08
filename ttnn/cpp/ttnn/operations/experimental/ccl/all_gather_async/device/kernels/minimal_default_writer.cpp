@@ -281,12 +281,33 @@ void kernel_main() {
 
     // only initialize if we're actually going to send something over fabric
     if (detail::valid_targets(direction)) {
-        fabric_unicast_noc_scatter_write_set_state<
-            UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
-            pkt_scatter_hdr,
-            static_cast<uint8_t>(unicast_route_info.distance_in_hops),
-            NocUnicastScatterCommandHeader({0, 0, 0, 0}, {page_size, page_size, page_size}),
-            page_size * 4);
+        switch (num_tiles_to_write_per_packet) {
+            case 4:
+                fabric_unicast_noc_scatter_write_set_state<
+                    UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
+                    pkt_scatter_hdr,
+                    static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+                    NocUnicastScatterCommandHeader({0, 0, 0, 0}, {page_size, page_size, page_size}),
+                    page_size * num_tiles_to_write_per_packet);
+                break;
+            case 3:
+                fabric_unicast_noc_scatter_write_set_state<
+                    UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
+                    pkt_scatter_hdr,
+                    static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+                    NocUnicastScatterCommandHeader({0, 0, 0}, {page_size, page_size}),
+                    page_size * num_tiles_to_write_per_packet);
+                break;
+            case 2:
+            case 1:
+                fabric_unicast_noc_scatter_write_set_state<
+                    UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
+                    pkt_scatter_hdr,
+                    static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+                    NocUnicastScatterCommandHeader({0, 0}, {page_size}),
+                    page_size * num_tiles_to_write_per_packet);
+                break;
+        }
 
         fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
             pkt_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, page_size);
