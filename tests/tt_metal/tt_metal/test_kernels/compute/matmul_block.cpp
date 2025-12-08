@@ -53,7 +53,7 @@ void MAIN {
         cb_wait_front(tt::CBIndex::c_0, in0_block_tile_cnt);
         cb_wait_front(tt::CBIndex::c_1, in1_block_tile_cnt);
 
-        matmul_block(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0, dst_tile_cols, dst_tile_rows, block_tile_dim);
+        matmul_block(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
 
         cb_pop_front(tt::CBIndex::c_0, in0_block_tile_cnt);
         cb_pop_front(tt::CBIndex::c_1, in1_block_tile_cnt);

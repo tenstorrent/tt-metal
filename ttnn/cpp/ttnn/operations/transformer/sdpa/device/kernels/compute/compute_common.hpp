@@ -607,7 +607,7 @@ void matmul_blocks(
             uint32_t in1_index = in1_index_offset;
 
             for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, subblock_w, subblock_h, in0_block_w);
+                matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, in0_block_w);
                 in0_index++;
                 in1_index += N;
             }
@@ -667,7 +667,7 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
         uint32_t in0_index = 0;
         uint32_t in1_index = 0;
 
-        matmul_block(out_cb, in1_cb, in0_index, in1_index, dst_index, subblock_w, subblock_h, in0_block_w);
+        matmul_block(out_cb, in1_cb, in0_index, in1_index, dst_index, 0, subblock_w, subblock_h, in0_block_w);
 
         tile_regs_commit();
         cb_pop_front(out_cb, subblock_h);
