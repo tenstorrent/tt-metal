@@ -77,7 +77,6 @@ operation::ProgramWithCallbacks LayerNormPreAllGather::create_program(
             }
         },
         this->program_config);
-    // });
 }
 
 }  // namespace ttnn::operations::normalization
