@@ -926,8 +926,7 @@ void writeCSVHeader(
                  << ", CHIP_FREQ[MHz]: " << device_core_frequency << ", Max Compute Cores: " << max_compute_cores
                  << '\n';
     log_file_ofs << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, run "
-                    "host ID, trace id, trace id counter, zone name, type, source line, source file, meta data"
-                 << '\n';
+                    "host ID, trace id, trace id counter, zone name, type, source line, source file, meta data\n";
 }
 
 void dumpDeviceResultsToCSV(
