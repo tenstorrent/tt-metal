@@ -180,13 +180,20 @@ void read_optimizer(FlatBufferFile& file, std::string_view name, optimizers::Opt
 
 void write_module(FlatBufferFile& file, std::string_view name, const modules::ModuleBase* module) {
     assert(module);
-    assert(!name.empty() && "Model name must be non-empty when writing module");
+    assert(!name.empty());
+    if (name.empty()) {
+        throw std::runtime_error("Model name must be non-empty when writing module");
+    }
     auto named_parameters = module->parameters();
     write_named_parameters(file, name, named_parameters);
 }
 
 void read_module(FlatBufferFile& file, std::string_view name, modules::ModuleBase* module) {
     assert(module);
+    assert(!name.empty());
+    if (name.empty()) {
+        throw std::runtime_error("Model name must be non-empty when reading module");
+    }
     auto named_parameters = module->parameters();
     read_named_parameters(file, name, named_parameters);
 }
