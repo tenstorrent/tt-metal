@@ -83,7 +83,7 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat in, const uint log_base
  */
 template <bool HAS_BASE_SCALING>
 sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat val, const uint log_base_scale_factor) {
-    sfpi::vFloat result = sfpi::vConst0;
+    sfpi::vFloat result;
 
     // Check for special cases
     sfpi::vInt exp = sfpi::exexp(val);  // Get debiased exponent
@@ -95,7 +95,7 @@ sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat val, const uint log
     v_elseif(exp == 128 || val < 0.f) {                    // +inf or negative input -> NaN
         result = std::numeric_limits<float>::quiet_NaN();  // returns nan for fp32 and inf for bf16
     }
-    v_elseif(val == sfpi::vConst0) {
+    v_elseif(val == 0.0f) {
         // Zero input -> -inf
         result = -std::numeric_limits<float>::infinity();
     }
