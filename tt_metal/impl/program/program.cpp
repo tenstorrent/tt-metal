@@ -196,9 +196,13 @@ void EnablePersistentKernelCache() { enable_persistent_kernel_cache = true; }
 
 void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
 
-void ClearKernelCache() { HashLookup::inst().clear(); }
-
 }  // namespace detail
+
+namespace experimental {
+
+void ClearKernelCache() { detail::HashLookup::inst().clear(); }
+
+}  // namespace experimental
 
 std::atomic<uint64_t> detail::ProgramImpl::program_counter = 0;
 
