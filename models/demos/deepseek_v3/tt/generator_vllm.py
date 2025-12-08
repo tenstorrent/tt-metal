@@ -40,8 +40,18 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
     def initialize_vllm_model(
         cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, optimizations: str = None
     ):
-        model_path = os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/deepseek_v3/reference")
-        cache_dir = os.getenv("DEEPSEEK_V3_CACHE", "generated/deepseek_v3")
+        model_path = os.environ.get("DEEPSEEK_V3_HF_MODEL")
+        cache_dir = os.environ.get("DEEPSEEK_V3_CACHE")
+        if not model_path:
+            raise ValueError(
+                "DEEPSEEK_V3_HF_MODEL is not set. Set the environment variable or initialize via the demo "
+                "entrypoint with an explicit --model-path."
+            )
+        if not cache_dir:
+            raise ValueError(
+                "DEEPSEEK_V3_CACHE is not set. Set the environment variable or initialize via the demo "
+                "entrypoint with an explicit --cache-dir."
+            )
         tokenizer = load_tokenizer(model_path)
 
         model = cls(
