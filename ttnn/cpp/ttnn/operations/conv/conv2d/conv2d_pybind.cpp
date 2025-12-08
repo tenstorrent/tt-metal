@@ -37,7 +37,7 @@ void py_bind_conv2d(py::module& module) {
         Args:
             input_tensor (ttnn.Tensor): The input tensor in [N, H, W, C] format. The tensor can be on either the host or the device.
             weight_tensor (ttnn.Tensor): The convolution weights, typically in [out_channels, in_channels // groups, kernel_height, kernel_width] format.
-            device (ttnn.IDevice): This is a Tenstorrent-specific parameter. The device which will run the operation.
+            device (ttnn.MeshDevice): This is a Tenstorrent-specific parameter. The device which will run the operation.
             in_channels (int): Number of channels in the input tensor.
             out_channels (int): Number of channels produced by the convolution.
             batch_size (int): The batch size of the input tensor.
@@ -64,8 +64,6 @@ void py_bind_conv2d(py::module& module) {
 
             - ttnn.Tensor: Default. The output tensor, when return_output_dim = False and return_weights_and_bias = False
             - tuple[ttnn.Tensor, tuple[int, int]]: The output tensor, and its height and width, if return_output_dim = True
-            - tuple[ttnn.Tensor, tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, and preprocessed weight and bias tensors that are both on device, if return_weights_and_bias = True
-            - tuple[ttnn.Tensor, tuple[int, int], tuple[ttnn.Tensor, ttnn.Tensor]]: If true, the op also returns the preprocessed weight and bias on the device. Weight and bias should be used for the same convolution next time it is called to avoid preparing weights and bias multiple times. Default: false.
 
         Note:
             The :attr: `input_tensor` supports the following data type and layout:
