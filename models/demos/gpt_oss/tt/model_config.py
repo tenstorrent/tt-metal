@@ -16,6 +16,7 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.tt_transformers.tt.common import get_base_model_name
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
 
@@ -97,6 +98,10 @@ class ModelArgs:
             self.processor = None  # GPT-OSS doesn't use vision processor
 
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
+
+    @property
+    def base_model_name(self):
+        return get_base_model_name(self.model_name)
 
     def can_enable_trace(self, prefill_seq_len):
         """
