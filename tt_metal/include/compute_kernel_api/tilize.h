@@ -173,7 +173,7 @@ ALWI void tilize_init_short_with_dt_no_pack(uint32_t old_icb, uint32_t new_icb, 
 // while the *_no_pack variants do not configure the packer, testing has shown that this call is
 // still necessary to ensure the data type is properly updated
 #ifdef ARCH_BLACKHOLE
-    PACK((_llk_pack_init_<false, false, DstTileFaceLayout::RowMajor, false, true>(
+    PACK((_llk_pack_init_<false, false, false, true>(
         pack_dst_format[new_icb],
         get_output_face_r_dim(new_icb),
         get_output_tile_c_dim(new_icb),
