@@ -24,9 +24,10 @@ using namespace tt::tt_fabric::linear::experimental;
 //
 // CT args:
 //   TensorAccessorArgs at offset 0
-//   0: TOTAL_PAGES
-//   1: PAGE_SIZE (actual data size to transfer)
-//   2: ALIGNED_PAGE_SIZE (destination buffer spacing for address calculation)
+//   0: API_VARIANT (ApiVariant enum: Basic, WithState, SetState)
+//   1: TOTAL_PAGES
+//   2: PAGE_SIZE (actual data size to transfer)
+//   3: ALIGNED_PAGE_SIZE (destination buffer spacing for address calculation)
 //
 // RT args (must match host):
 //   0: dst_base       (u32)  // receiver buffer base (L1 offset or DRAM base)
@@ -40,10 +41,14 @@ using namespace tt::tt_fabric::linear::experimental;
 void kernel_main() {
     constexpr auto ta_args = TensorAccessorArgs<0>();
     constexpr uint32_t CTA_BASE = ta_args.next_compile_time_args_offset();
-    constexpr uint32_t TOTAL_PAGES = get_compile_time_arg_val(CTA_BASE + 0);
-    constexpr uint32_t PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 1);
-    constexpr uint32_t ALIGNED_PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 2);
+    constexpr uint32_t API_VARIANT = get_compile_time_arg_val(CTA_BASE + 0);
+    constexpr uint32_t TOTAL_PAGES = get_compile_time_arg_val(CTA_BASE + 1);
+    constexpr uint32_t PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 2);
+    constexpr uint32_t ALIGNED_PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 3);
     constexpr uint32_t CB_ID = tt::CBIndex::c_0;
+
+    // Cast to enum type for clearer comparisons
+    constexpr auto api_variant = static_cast<ApiVariant>(API_VARIANT);
 
     size_t idx = 0;
     const uint32_t dst_base = get_arg_val<uint32_t>(idx++);
@@ -59,27 +64,65 @@ void kernel_main() {
     // Allocate packet header
     volatile tt_l1_ptr PACKET_HEADER_TYPE* header = PacketHeaderPool::allocate_header();
 
+    // Route setup - required for Basic and WithState variants (SetState sets route internally)
+    if constexpr (api_variant == ApiVariant::Basic || api_variant == ApiVariant::WithState) {
+        header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
+    }
+
+    // WithState pattern: manually set send type
+    if constexpr (api_variant == ApiVariant::WithState) {
+        header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
+    }
+
     sender.open<true>();
 
     // Use ALIGNED_PAGE_SIZE for address calculation
     const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/ALIGNED_PAGE_SIZE);
+
+    // Pre-loop setup for WithState and SetState variants
+    if constexpr (api_variant == ApiVariant::WithState) {
+        // Set initial NOC address and payload size in header
+        auto initial_noc_addr = tt::tt_fabric::linear::addrgen_detail::get_noc_address(dst_acc, 0, 0);
+        header->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{initial_noc_addr}, PAGE_SIZE);
+    } else if constexpr (api_variant == ApiVariant::SetState) {
+        // Configure header state for repeated use
+        fabric_multicast_noc_unicast_write_set_state(
+            header,
+            start_distance,
+            range,
+            dst_acc,
+            0  // page_id for initial configuration
+        );
+    }
 
     // Main loop - process pages
     for (uint32_t i = 0; i < TOTAL_PAGES; ++i) {
         cb_wait_front(CB_ID, 1);
         const uint32_t src_l1_addr = get_read_ptr(CB_ID);
 
-        // Use the linear multicast addrgen overload
-        fabric_multicast_noc_unicast_write(
-            &sender,
-            header,
-            src_l1_addr,
-            dst_acc,
-            i,               // page_id
-            start_distance,  // multicast start distance
-            range,           // multicast range
-            0                // offset
-        );
+        if constexpr (api_variant == ApiVariant::Basic) {
+            // Use the linear multicast addrgen overload (Basic variant)
+            fabric_multicast_noc_unicast_write(
+                &sender,
+                header,
+                src_l1_addr,
+                dst_acc,
+                i,               // page_id
+                start_distance,  // multicast start distance
+                range,           // multicast range
+                0                // offset
+            );
+        } else {  // WithState or SetState
+            // Use the linear multicast addrgen overload with state
+            fabric_multicast_noc_unicast_write_with_state(
+                &sender,
+                header,
+                src_l1_addr,
+                dst_acc,
+                i,  // page_id
+                0   // offset
+            );
+        }
 
         noc_async_writes_flushed();
         cb_pop_front(CB_ID, 1);

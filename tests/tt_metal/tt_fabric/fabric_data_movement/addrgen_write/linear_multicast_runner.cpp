@@ -64,6 +64,16 @@ inline void verify_payload_words(const std::vector<uint32_t>& rx, const std::vec
     }
 }
 
+// Map AddrgenApiVariant to kernel ApiVariant for linear multicast
+inline ApiVariant get_linear_multicast_api_variant(AddrgenApiVariant variant) {
+    switch (variant) {
+        case AddrgenApiVariant::LinearMulticastWrite: return ApiVariant::Basic;
+        case AddrgenApiVariant::LinearMulticastWriteWithState: return ApiVariant::WithState;
+        case AddrgenApiVariant::LinearMulticastWriteSetState: return ApiVariant::SetState;
+        default: return ApiVariant::Basic;
+    }
+}
+
 }  // anonymous namespace
 
 // ----------------------------------- program -----------------------------------
@@ -116,7 +126,9 @@ void run_linear_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixtur
 
     // MeshBuffer-based IO
     Dist::DeviceLocalBufferConfig src_local{.page_size = p.page_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
-    Dist::DeviceLocalBufferConfig dst_local{.page_size = p.page_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
+    Dist::DeviceLocalBufferConfig dst_local{
+        .page_size = p.page_size,
+        .buffer_type = p.use_dram_dst ? tt::tt_metal::BufferType::DRAM : tt::tt_metal::BufferType::L1};
     Dist::ReplicatedBufferConfig rcfg{.size = p.tensor_bytes};
     auto src_buf = Dist::MeshBuffer::create(rcfg, src_local, mesh.get());
     auto dst_buf = Dist::MeshBuffer::create(rcfg, dst_local, mesh.get());
@@ -180,7 +192,8 @@ void run_linear_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixtur
     // Calculate aligned page sizes
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     uint32_t src_alignment = hal.get_alignment(tt::tt_metal::HalMemType::DRAM);
-    uint32_t dst_alignment = hal.get_alignment(tt::tt_metal::HalMemType::DRAM);
+    uint32_t dst_alignment = p.use_dram_dst ? hal.get_alignment(tt::tt_metal::HalMemType::DRAM)
+                                            : hal.get_alignment(tt::tt_metal::HalMemType::L1);
     uint32_t src_aligned_page_size = ((p.page_size + src_alignment - 1) / src_alignment) * src_alignment;
     uint32_t dst_aligned_page_size = ((p.page_size + dst_alignment - 1) / dst_alignment) * dst_alignment;
 
@@ -236,12 +249,16 @@ void run_linear_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixtur
             .defines = defines});
     tt::tt_metal::SetRuntimeArgs(sender_prog, reader_k, p.sender_core, {(uint32_t)src_buf->address()});
 
+    // Map API variant for linear multicast
+    auto api_variant = get_linear_multicast_api_variant(p.api_variant);
+
     // Writer kernel (linear multicast addrgen)
     std::vector<uint32_t> writer_cta;
     tt::tt_metal::TensorAccessorArgs(*dst_buf).append_to(writer_cta);
-    writer_cta.push_back(NUM_PAGES);              // TOTAL_PAGES
-    writer_cta.push_back(p.page_size);            // Raw page size
-    writer_cta.push_back(dst_aligned_page_size);  // Aligned page size
+    writer_cta.push_back(static_cast<uint32_t>(api_variant));  // API_VARIANT
+    writer_cta.push_back(NUM_PAGES);                           // TOTAL_PAGES
+    writer_cta.push_back(p.page_size);                         // Raw page size
+    writer_cta.push_back(dst_aligned_page_size);               // Aligned page size
 
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,
