@@ -171,10 +171,10 @@ FORCE_INLINE void generate_summed_experts_tiles(
     const uint32_t summed_experts_cb_index,
     const uint32_t topk_input_cb_index,
     uint32_t width_tiles,
-    uint32_t summed_experts_per_group) {
+    uint32_t summed_experts_per_group,
+    uint32_t tokens_per_tile) {
     // copy 0,...,summed_experts_per_group-1 rows from topk_input_cb_index to 0,...,summed_experts_per_group-1 tile in
     // summed_experts_cb_index for each width_tile
-    constexpr uint32_t tokens_per_tile = 32;  // only 1 for decode but let's just do this for now
     constexpr uint32_t face_line_bytes = 32;
     constexpr uint32_t tile_size_bytes = 2048;
     constexpr uint32_t face_size_bytes = 512;
@@ -198,7 +198,7 @@ FORCE_INLINE void generate_summed_experts_tiles(
                     group_sorted_tile_ptr + i * face_line_bytes,
                     get_write_ptr(summed_experts_cb_index) + i * tile_size_bytes + width_tile * face_line_bytes,
                     face_line_bytes);
-                if constexpr (tokens_per_tile > 16) {
+                if (tokens_per_tile > 16) {
                     noc_async_read(
                         group_sorted_tile_ptr + face_size_bytes + i * face_line_bytes,
                         get_write_ptr(summed_experts_cb_index) + face_size_bytes + i * tile_size_bytes,
@@ -214,7 +214,7 @@ FORCE_INLINE void generate_summed_experts_tiles(
                     group_sorted_tile_ptr + (15 - i) * face_line_bytes,
                     get_write_ptr(summed_experts_cb_index) + i * tile_size_bytes + width_tile * face_line_bytes,
                     face_line_bytes);
-                if constexpr (tokens_per_tile > 16) {
+                if (tokens_per_tile > 16) {
                     noc_async_read(
                         group_sorted_tile_ptr + face_size_bytes + (15 - i) * face_line_bytes,
                         get_write_ptr(summed_experts_cb_index) + face_size_bytes + i * tile_size_bytes,
@@ -236,9 +236,8 @@ template <
     uint32_t winning_group_indices_cb_index,
     uint32_t width_tiles,
     uint32_t topk_groups,
-    uint32_t num_group_tiles,
-    uint32_t tokens_per_tile>
-FORCE_INLINE void generate_winning_group_tiles() {
+    uint32_t num_group_tiles>
+FORCE_INLINE void generate_winning_group_tiles(uint32_t tokens_per_tile) {
     constexpr uint32_t tile_size_bytes = 2048;
     constexpr uint32_t face_size_bytes = 512;
     constexpr uint32_t face_line_bytes = 32;
@@ -277,7 +276,7 @@ FORCE_INLINE void generate_winning_group_tiles() {
         }
 
         // Part 1: t < 16
-        constexpr uint32_t limit_part1 = (tokens_per_tile < 16) ? tokens_per_tile : 16;
+        uint32_t limit_part1 = (tokens_per_tile < 16) ? tokens_per_tile : 16;
 
 #pragma GCC unroll 16
         for (uint32_t t = 0; t < limit_part1; t++) {
@@ -294,7 +293,7 @@ FORCE_INLINE void generate_winning_group_tiles() {
         }
 
         // Part 2: t >= 16
-        if constexpr (tokens_per_tile > 16) {
+        if (tokens_per_tile > 16) {
 #pragma GCC unroll 16
             for (uint32_t t = 16; t < tokens_per_tile; t++) {
                 uint16_t winning_group_idx = sorted_indices_ptr[k_indices_offset_16_31 + (t - 16)];
@@ -377,6 +376,7 @@ void kernel_main() {
     constexpr uint32_t packed_epsilon = get_named_compile_time_arg_val("packed_epsilon");
     constexpr uint32_t epsilon_cb_index = get_named_compile_time_arg_val("epsilon_cb_index");
     constexpr uint32_t scales_cb_index = get_named_compile_time_arg_val("scales_cb_index");
+    constexpr uint32_t remainder_tokens_per_tile = get_named_compile_time_arg_val("remainder_tokens_per_tile");
 
     const uint32_t weights_addr = get_arg_val<uint32_t>(0);
     const uint32_t indices_addr = get_arg_val<uint32_t>(1);
@@ -400,8 +400,9 @@ void kernel_main() {
     write_single_scalar(scales_cb_index, packed_route_scale);
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
+        uint32_t tokens_per_tile = height_tile == tokens - 1 ? remainder_tokens_per_tile : tokens_per_tile;
         generate_summed_experts_tiles(
-            summed_experts_cb_index, topk_input_cb_index, width_tiles, summed_experts_per_group);
+            summed_experts_cb_index, topk_input_cb_index, width_tiles, summed_experts_per_group, tokens_per_tile);
         generate_winning_group_tiles<
             sorted_group_indices_cb_index,
             sigmoid_input_cb_index,
@@ -410,8 +411,7 @@ void kernel_main() {
             winning_group_indices_cb_index,
             width_tiles,
             topk_groups,
-            num_group_tiles,
-            tokens_per_tile>();
+            num_group_tiles>(tokens_per_tile);
 
         cb_wait_front(indices_cb_index, 1);
         noc_async_write_page(height_tile, indices_accessor, get_write_ptr(indices_cb_index));

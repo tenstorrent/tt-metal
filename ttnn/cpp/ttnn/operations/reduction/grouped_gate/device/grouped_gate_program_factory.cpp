@@ -38,6 +38,7 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
     auto grid = CoreCoord(1, 1);
     auto num_tiles = scores.buffer()->num_pages();
     uint32_t tile_width = scores.tensor_spec().page_config().get_tile().get_width();
+    uint32_t tile_height = scores.tensor_spec().page_config().get_tile().get_height();
     auto width_tiles = scores.padded_shape()[-1] / scores.tensor_spec().page_config().get_tile().get_width();
     auto height_tiles = num_tiles / width_tiles;
     uint32_t experts = scores.logical_shape()[-1];
@@ -52,6 +53,8 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
          core_group_2,
          num_height_tiles_per_core_group_1,
          num_height_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, height_tiles);
+
+    uint32_t remainder_tokens_per_tile = tokens % tile_height == 0 ? tile_height : tokens % tile_height;
 
     auto scores_cb_index = tt::CBIndex::c_0;
     auto bias_cb_index = tt::CBIndex::c_1;
@@ -344,6 +347,7 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
          static_cast<uint32_t>(std::bit_cast<uint16_t>(bfloat16(operation_attributes.route_scale))) << 16},
         {"epsilon_cb_index", epsilon_cb_index},
         {"scales_cb_index", scales_cb_index},
+        {"remainder_tokens_per_tile", remainder_tokens_per_tile},
     };
 
     std::vector<uint32_t> writer_compile_time_args = {};

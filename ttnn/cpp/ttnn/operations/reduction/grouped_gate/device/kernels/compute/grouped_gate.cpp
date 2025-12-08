@@ -76,7 +76,7 @@ void sigmoid(uint32_t scores_cb_index, uint32_t sigmoid_input_cb_index, uint32_t
     }
 }
 
-void add_bias_and_pack(
+void add_bias(
     uint32_t sigmoid_input_cb_index, uint32_t bias_cb_index, uint32_t add_bias_cb_index, uint32_t width_tiles) {
     // Perform add bias on sigmoid input – should I do full or partial init here?
     add_tiles_init(sigmoid_input_cb_index, bias_cb_index, false);
@@ -466,7 +466,7 @@ void MAIN {
         blocks::sigmoid(scores_cb_index, sigmoid_input_cb_index, width_tiles);
 
         // Perform add bias on sigmoid input – should I do full or partial init here?
-        blocks::add_bias_and_pack(sigmoid_input_cb_index, bias_cb_index, add_bias_cb_index, width_tiles);
+        blocks::add_bias(sigmoid_input_cb_index, bias_cb_index, add_bias_cb_index, width_tiles);
 
         // Transpose tiles into dest and then perform topk_local_sort
         bool ascending = false;
