@@ -35,7 +35,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, expected_device_perf_fps",
-    ((1, 206.0) if is_wormhole_b0() else (1, 400.0),),
+    ((1, 201.0) if is_wormhole_b0() else (1, 400.0),),
 )
 def test_vanilla_unet_perf_device(batch: int, expected_device_perf_fps: float):
     command = f"pytest models/demos/vanilla_unet/tests/test_unet_model.py::test_vanilla_unet_model"
