@@ -28,6 +28,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/memory_reporter.hpp>
 #include <tt-metalium/persistent_kernel_cache.hpp>
+#include <tt-metalium/experimental/kernel_cache.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 namespace py = pybind11;
@@ -333,7 +334,7 @@ void device_module(py::module& m_device) {
     m_device.def("DisablePersistentKernelCache", &tt::tt_metal::detail::DisablePersistentKernelCache, R"doc(
         Disables kernel compilation cache from being persistent across runs
     )doc");
-    m_device.def("ClearKernelCache", &tt::tt_metal::detail::ClearKernelCache, R"doc(
+    m_device.def("ClearKernelCache", &tt::tt_metal::experimental::ClearKernelCache, R"doc(
         Clear the in-memory kernel compilation hash lookup cache.
 
         This forces kernels to be recompiled on next use, even if they were previously
