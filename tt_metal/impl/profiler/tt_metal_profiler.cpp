@@ -235,8 +235,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         log_file << fmt::format(
                         "device id,core_x, "
                         "core_y,device,host_tracy,host_real,write_overhead,host_start,delay,frequency,tracy_ratio,"
-                        "tracy_base_time,device_frequency_ratio,device_shift")
-                 << '\n';
+                        "tracy_base_time,device_frequency_ratio,device_shift\n");
     } else {
         log_file.open(log_path, std::ios_base::app);
     }
