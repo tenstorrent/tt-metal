@@ -36,6 +36,8 @@ uint32_t get_dram_alignment() { return tt::tt_metal::MetalContext::instance().ha
 
 uint32_t get_l1_alignment() { return tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::L1); }
 
+uint32_t get_pcie_alignment() { return tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::HOST); }
+
 uint32_t get_erisc_l1_unreserved_base() {
     const auto& hal_ref = tt::tt_metal::MetalContext::instance().hal();
     return hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
