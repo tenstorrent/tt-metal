@@ -6,10 +6,12 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/decorators.hpp"
@@ -81,7 +83,7 @@ void bind_all_gather_matmul_async(nb::module_& mod, const ccl_operation_t& opera
             },
             nb::arg("input_tensor"),
             nb::arg("weight_tensor"),
-            nb::arg("persistent_output_buffer"),
+            nb::arg("persistent_output_buffer") = nb::none(),
             nb::arg("dim"),
             nb::arg("multi_device_global_semaphore"),
             nb::arg("all_gather_core_grid_offset"),
@@ -89,7 +91,7 @@ void bind_all_gather_matmul_async(nb::module_& mod, const ccl_operation_t& opera
             nb::arg("bias") = nb::none(),
             nb::arg("num_links") = 1,
             nb::arg("memory_config_ag") = nb::none(),
-            nb::arg("topology") = ttnn::ccl::Topology::Ring,
+            nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
             nb::arg("barrier_semaphore") = nb::none(),
             nb::arg("subdevice_id") = nb::none(),
             nb::arg("memory_config_mm") = nb::none(),
