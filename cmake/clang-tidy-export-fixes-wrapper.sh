@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 # Wrapper script for clang-tidy that exports fixes to unique YAML files
 # Usage: clang-tidy-export-fixes-wrapper.sh <fixes-dir> <clang-tidy-args...>
 #
@@ -14,7 +15,7 @@ mkdir -p "$FIXES_DIR"
 # Find the source file from the arguments (last argument that's a file)
 SOURCE_FILE=""
 for arg in "$@"; do
-    if [[ -f "$arg" && "$arg" != -* ]]; then
+    if [[ "$arg" != -* ]]; then
         SOURCE_FILE="$arg"
     fi
 done
@@ -24,8 +25,9 @@ if [[ -z "$SOURCE_FILE" ]]; then
     exec clang-tidy-20 "$@"
 fi
 
-# Generate a unique filename based on the source file path
-HASH=$(echo "$SOURCE_FILE" | md5sum | cut -d' ' -f1)
+# Generate a unique filename based on the absolute source file path
+SOURCE_FILE_ABS=$(realpath "$SOURCE_FILE")
+HASH=$(echo "$SOURCE_FILE_ABS" | md5sum | cut -d' ' -f1)
 BASENAME=$(basename "$SOURCE_FILE")
 FIXES_FILE="${FIXES_DIR}/${BASENAME}-${HASH}.yaml"
 
