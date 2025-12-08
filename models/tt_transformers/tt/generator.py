@@ -88,6 +88,7 @@ class Generator:
         self.prefill_traces_warmup = False
         # By default, enable split sampling (break the decode trace into two parts: upto logits, then sampling step)
         self.enable_split_sampling = True
+        self.mode = None
 
     def _chunk_sampling_param(self, values):
         if isinstance(values, List):
@@ -241,6 +242,7 @@ class Generator:
         model_id_warmup=None,
         **kwargs,
     ):
+        self.mode = "prefill"
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
         else:
@@ -464,10 +466,14 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
-        reset_batch=True,
+        reset_batch=False,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
     ):
+        mode_switched = False
+        if self.mode != "decode":
+            self.mode = "decode"
+            mode_switched = True
         sampling_on_device = sampling_params is not None
         split_sampling_enabled = bool(self.enable_split_sampling and sampling_on_device)
         self._set_sampling_trace_mode(split_sampling_enabled)
@@ -524,14 +530,13 @@ class Generator:
             "sampling_on_device": sampling_on_device,
         }
         if enable_trace:
-            tt_decode_output = self._decode_forward_trace_text(**decode_kwargs)
+            tt_decode_output = self._decode_forward_trace_text(**decode_kwargs, reset_batch=mode_switched)
         else:
             tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
 
         if read_from_device:
             to_host = self.read_decode_output(tt_decode_output)
             return self.process_decode_output_host(to_host, is_tokens=(sampling_params is not None))
-
         return tt_decode_output
 
     def _decode_forward_no_trace_text(
@@ -635,17 +640,15 @@ class Generator:
                 )
             )
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
+
+            if split_enabled:
+                sampling_module.capture_trace(logits=tt_out_trace[i], tt_out_tok=device_inputs[i][0])
         logger.info("Done Capturing Decode Trace")
 
         return trace_ids, tt_out_trace, *device_inputs
 
     def _decode_forward_trace_text(
-        self,
-        tokens,
-        current_pos,
-        page_table=None,
-        kv_cache=None,
-        sampling_on_device=False,
+        self, tokens, current_pos, page_table=None, kv_cache=None, sampling_on_device=False, reset_batch=False
     ):
         """
         Run decode forward text with tracing
@@ -659,11 +662,12 @@ class Generator:
             self.trace_inputs_decode[sampling_on_device] = device_inputs
             self.trace_output_decode[sampling_on_device] = tt_out_trace
 
-        reset_inputs = not sampling_on_device
+        # reset inputs when mode switches from prefill to decode
+        reset_inputs = reset_batch or not sampling_on_device
         if self.prev_page_table is None or any(
             not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table)
         ):
-            # If the page table has changed, it means that the inputs have shuffled, so we need to copy them from host again
+            # If the page table has changed, it means additional pages have been added or inputs are shuffled
             reset_inputs = True
             if page_table is not None:
                 self.prev_page_table = tuple(pt.clone() for pt in page_table)
@@ -677,7 +681,6 @@ class Generator:
                     host_tensors=host_inputs_i,
                     device_tensors=self.trace_inputs_decode[sampling_on_device][i],
                 )
-
         for i, trace_id in self.trace_ids_decode[sampling_on_device].items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
         outputs = self.trace_output_decode[sampling_on_device]
