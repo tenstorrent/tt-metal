@@ -733,6 +733,8 @@ class MotifPipeline:
                 prompt_2,
                 prompt_3,
                 num_images_per_prompt=num_images_per_prompt,
+                timer=timer,
+                timer_iteration=timer_iteration,
             )
 
             neg_prompt_embeds, neg_pooled_prompt_embeds = self._text_encoder.encode(
@@ -740,6 +742,8 @@ class MotifPipeline:
                 negative_prompt_2,
                 negative_prompt_3,
                 num_images_per_prompt=num_images_per_prompt,
+                timer=timer,
+                timer_iteration=timer_iteration,
             )
 
         if not cfg_enabled:
