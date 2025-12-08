@@ -5,7 +5,8 @@
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/ProgramFactory/tilize_with_val_padding_factory_helper.hpp"
 
 #include <tt-metalium/host_api.hpp>
-
+#include <tt-metalium/bfloat16.hpp>
+#include "ttnn/tensor/types.hpp"
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::tilize_with_val_padding::detail {
