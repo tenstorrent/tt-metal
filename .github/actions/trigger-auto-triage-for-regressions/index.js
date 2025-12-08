@@ -36,13 +36,20 @@ async function sendSlackMessage(channelId, botToken, message, threadTs) {
         data += chunk;
       });
       res.on('end', () => {
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          core.info(`✓ Successfully sent Slack message`);
-          resolve();
-        } else {
-          const error = new Error(`Slack API error: ${res.statusCode} - ${data}`);
-          core.warning(`Failed to send Slack message: ${error.message}`);
-          reject(error);
+        try {
+          const response = JSON.parse(data);
+          if (res.statusCode >= 200 && res.statusCode < 300 && response.ok !== false) {
+            core.info(`✓ Successfully sent Slack message`);
+            resolve();
+          } else {
+            const errorMsg = response.error || data;
+            const error = new Error(`Slack API error: ${res.statusCode} - ${errorMsg}`);
+            core.warning(`Failed to send Slack message: ${error.message}`);
+            reject(error);
+          }
+        } catch (parseError) {
+          core.warning(`Failed to parse Slack response: ${parseError.message}`);
+          reject(parseError);
         }
       });
     });
