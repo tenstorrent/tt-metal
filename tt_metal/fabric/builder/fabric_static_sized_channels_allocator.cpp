@@ -17,7 +17,8 @@
 namespace tt::tt_fabric {
 
 size_t FabricStaticSizedChannelsAllocator::get_sender_channel_base_address(size_t vc_id, size_t channel_id) const {
-    TT_FATAL(vc_id < MAX_NUM_VCS, "VC ID {} out of bounds (max {})", vc_id, MAX_NUM_VCS);
+    TT_FATAL(
+        vc_id < builder_config::MAX_NUM_VCS, "VC ID {} out of bounds (max {})", vc_id, builder_config::MAX_NUM_VCS);
     TT_FATAL(
         channel_id < sender_channels_base_address[vc_id].size(),
         "Sender channel ID {} out of bounds for VC{}",
@@ -27,7 +28,8 @@ size_t FabricStaticSizedChannelsAllocator::get_sender_channel_base_address(size_
 }
 
 size_t FabricStaticSizedChannelsAllocator::get_sender_channel_number_of_slots(size_t vc_id, size_t channel_id) const {
-    TT_FATAL(vc_id < MAX_NUM_VCS, "VC ID {} out of bounds (max {})", vc_id, MAX_NUM_VCS);
+    TT_FATAL(
+        vc_id < builder_config::MAX_NUM_VCS, "VC ID {} out of bounds (max {})", vc_id, builder_config::MAX_NUM_VCS);
     TT_FATAL(
         channel_id < sender_channels_num_buffers[vc_id].size(),
         "Sender channel ID {} out of bounds for VC{}",
@@ -37,7 +39,8 @@ size_t FabricStaticSizedChannelsAllocator::get_sender_channel_number_of_slots(si
 }
 
 size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_number_of_slots(size_t vc_id, size_t channel_id) const {
-    TT_FATAL(vc_id < MAX_NUM_VCS, "VC ID {} out of bounds (max {})", vc_id, MAX_NUM_VCS);
+    TT_FATAL(
+        vc_id < builder_config::MAX_NUM_VCS, "VC ID {} out of bounds (max {})", vc_id, builder_config::MAX_NUM_VCS);
     TT_FATAL(
         channel_id < receiver_channels_num_buffers[vc_id].size(),
         "Receiver channel ID {} out of bounds for VC{}",
@@ -47,7 +50,8 @@ size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_number_of_slots(
 }
 
 size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_base_address(size_t vc_id, size_t channel_id) const {
-    TT_FATAL(vc_id < MAX_NUM_VCS, "VC ID {} out of bounds (max {})", vc_id, MAX_NUM_VCS);
+    TT_FATAL(
+        vc_id < builder_config::MAX_NUM_VCS, "VC ID {} out of bounds (max {})", vc_id, builder_config::MAX_NUM_VCS);
     TT_FATAL(
         channel_id < receiver_channels_base_address[vc_id].size(),
         "Receiver channel ID {} out of bounds for VC{}",
@@ -59,8 +63,8 @@ size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_base_address(siz
 FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     tt::tt_fabric::Topology topology,
     const FabricEriscDatamoverOptions& options,
-    const std::array<size_t, MAX_NUM_VCS>& num_used_sender_channels_per_vc,
-    const std::array<size_t, MAX_NUM_VCS>& num_used_receiver_channels_per_vc,
+    const std::array<size_t, builder_config::MAX_NUM_VCS>& num_used_sender_channels_per_vc,
+    const std::array<size_t, builder_config::MAX_NUM_VCS>& num_used_receiver_channels_per_vc,
     size_t channel_buffer_size_bytes,
     size_t available_channel_buffering_space,
     const std::vector<MemoryRegion>& memory_regions) :
@@ -80,13 +84,13 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     }
 
     // Per-VC buffer slot arrays
-    std::array<std::array<size_t, builder_config::num_max_sender_channels>, MAX_NUM_VCS>
+    std::array<std::array<size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>
         num_sender_buffer_slots_per_vc = {};
-    std::array<std::array<size_t, builder_config::num_max_sender_channels>, MAX_NUM_VCS>
+    std::array<std::array<size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>
         num_remote_sender_buffer_slots_per_vc = {};
-    std::array<std::array<size_t, builder_config::num_max_receiver_channels>, MAX_NUM_VCS>
+    std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>
         num_receiver_buffer_slots_per_vc = {};
-    std::array<std::array<size_t, builder_config::num_max_receiver_channels>, MAX_NUM_VCS>
+    std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>
         num_remote_receiver_buffer_slots_per_vc = {};
 
     bool has_tensix_extension = options.fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED;
@@ -101,7 +105,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
 
     // Calculate total slots across all VCs
     size_t total_slot_count = 0;
-    for (size_t vc = 0; vc < MAX_NUM_VCS; ++vc) {
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
         size_t vc_sender_slots = std::accumulate(
             num_sender_buffer_slots_per_vc[vc].begin(),
             num_sender_buffer_slots_per_vc[vc].begin() + num_used_sender_channels_per_vc[vc],
@@ -131,7 +135,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     log_trace(tt::LogFabric, "Available channel buffering space: {}", this->available_channel_buffering_space);
 
     // Set channel sizes and num buffers per VC
-    for (size_t vc = 0; vc < MAX_NUM_VCS; ++vc) {
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
         // set the sender channel sizes and num buffers
         for (uint32_t i = 0; i < num_used_sender_channels_per_vc[vc]; i++) {
             this->sender_channels_size_bytes[vc][i] = channel_buffer_size_bytes * num_sender_buffer_slots_per_vc[vc][i];
@@ -159,7 +163,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
 
     // set the base addresses for the local channels (allocate sequentially: VC0 channels, then VC1 channels)
     uint32_t sender_buffer_addr = buffer_region_start;
-    for (size_t vc = 0; vc < MAX_NUM_VCS; ++vc) {
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
         for (uint32_t i = 0; i < num_used_sender_channels_per_vc[vc]; i++) {
             this->sender_channels_base_address[vc][i] = sender_buffer_addr;
             sender_buffer_addr += this->sender_channels_size_bytes[vc][i];
@@ -169,7 +173,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     }
 
     uint32_t receiver_buffer_addr = sender_buffer_addr;
-    for (size_t vc = 0; vc < MAX_NUM_VCS; ++vc) {
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
         for (uint32_t i = 0; i < num_used_receiver_channels_per_vc[vc]; i++) {
             this->receiver_channels_base_address[vc][i] = receiver_buffer_addr;
             receiver_buffer_addr += this->receiver_channels_size_bytes[vc][i];
@@ -185,7 +189,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
 
     // set the base addresses for the remote channels
     uint32_t remote_sender_buffer_addr = buffer_region_start;
-    for (size_t vc = 0; vc < MAX_NUM_VCS; ++vc) {
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
         for (uint32_t i = 0; i < num_used_sender_channels_per_vc[vc]; i++) {
             this->remote_sender_channels_base_address[vc][i] = remote_sender_buffer_addr;
             remote_sender_buffer_addr += this->remote_sender_channels_size_bytes[vc][i];
@@ -199,7 +203,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     }
 
     uint32_t remote_receiver_buffer_addr = remote_sender_buffer_addr;
-    for (size_t vc = 0; vc < MAX_NUM_VCS; ++vc) {
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
         for (uint32_t i = 0; i < num_used_receiver_channels_per_vc[vc]; i++) {
             this->remote_receiver_channels_base_address[vc][i] = remote_receiver_buffer_addr;
             remote_receiver_buffer_addr += this->remote_receiver_channels_size_bytes[vc][i];
@@ -214,7 +218,6 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
 
     log_trace(tt::LogFabric, "Available channel buffering space: {}", this->available_channel_buffering_space);
 
-    // TODO: I dont understand this code. Review it.
     auto skip_current_sender_channel = [&](uint32_t vc_id, uint32_t idx) -> bool {
         // for fabric with tensix extension, only check the worker channel (VC0 channel 0), other channels are skipped
         uint32_t target_channel = get_worker_connected_sender_channel();
@@ -222,7 +225,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     };
 
     // Validate sender channels per VC
-    for (size_t vc = 0; vc < MAX_NUM_VCS; ++vc) {
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
         for (uint32_t i = 0; i < num_used_sender_channels_per_vc[vc]; i++) {
             if (!skip_current_sender_channel(vc, i)) {
                 TT_FATAL(
@@ -236,7 +239,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     }
 
     // Validate receiver channels per VC
-    for (size_t vc = 0; vc < MAX_NUM_VCS; ++vc) {
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
         for (uint32_t i = 0; i < num_used_receiver_channels_per_vc[vc]; i++) {
             TT_FATAL(
                 this->receiver_channels_size_bytes[vc][i] > 0,
@@ -249,7 +252,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
 
     // Validate total size across all VCs
     size_t total_size = 0;
-    for (size_t vc = 0; vc < MAX_NUM_VCS; ++vc) {
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
         total_size += std::accumulate(
             this->sender_channels_size_bytes[vc].begin(),
             this->sender_channels_size_bytes[vc].begin() + num_used_sender_channels_per_vc[vc],
@@ -273,13 +276,13 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
 void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     Topology topology,
     const FabricEriscDatamoverOptions& options,
-    std::array<std::array<size_t, builder_config::num_max_sender_channels>, MAX_NUM_VCS>&
+    std::array<std::array<size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>&
         num_sender_buffer_slots_per_vc,
-    std::array<std::array<size_t, builder_config::num_max_sender_channels>, MAX_NUM_VCS>&
+    std::array<std::array<size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>&
         num_remote_sender_buffer_slots_per_vc,
-    std::array<std::array<size_t, builder_config::num_max_receiver_channels>, MAX_NUM_VCS>&
+    std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>&
         num_receiver_buffer_slots_per_vc,
-    std::array<std::array<size_t, builder_config::num_max_receiver_channels>, MAX_NUM_VCS>&
+    std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>&
         num_remote_receiver_buffer_slots_per_vc) {
     // Per-VC buffer slot configuration: {vc0_sender, vc0_receiver, vc1_sender, vc1_receiver}
     struct PerVcBufferSlots {
@@ -478,7 +481,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
 
 void FabricStaticSizedChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_args) const {
     // Emit sender channel args for all VCs
-    for (size_t vc = 0; vc < MAX_NUM_VCS; ++vc) {
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
         for (size_t i = 0; i < this->num_used_sender_channels_per_vc[vc]; ++i) {
             ct_args.push_back(static_cast<uint32_t>(this->sender_channels_base_address[vc][i]));
             ct_args.push_back(this->sender_channels_num_buffers[vc][i]);
@@ -488,7 +491,7 @@ void FabricStaticSizedChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_
     }
 
     // Emit receiver channel args for all VCs
-    for (size_t vc = 0; vc < MAX_NUM_VCS; ++vc) {
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
         for (size_t i = 0; i < this->num_used_receiver_channels_per_vc[vc]; ++i) {
             ct_args.push_back(static_cast<uint32_t>(this->receiver_channels_base_address[vc][i]));
             ct_args.push_back(this->receiver_channels_num_buffers[vc][i]);

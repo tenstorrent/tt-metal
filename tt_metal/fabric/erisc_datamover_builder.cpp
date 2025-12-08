@@ -387,11 +387,12 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     // Determine if VC1 is needed based on mesh count
     // VC1 is required for inter-mesh routing (when mesh_count > 1)
+    // Note: is_2D_routing already checks for Mesh/Torus topology, so no need to check topology again
     // However, MUX mode always uses VC0 only (no VC1)
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto user_mesh_ids = control_plane.get_mesh_graph().get_mesh_ids();
     size_t mesh_count = user_mesh_ids.size();
-    bool needs_vc1 = (topology == Topology::Mesh || topology == Topology::Torus) && is_2D_routing && (mesh_count > 1);
+    bool needs_vc1 = is_2D_routing && (mesh_count > 1);
 
     // MUX mode always uses VC0 only, disable VC1
     if (options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX) {
