@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +20,7 @@ void bind_nlp_create_qkv_heads_vit(pybind11::module& module) {
             [](const decltype(ttnn::experimental::nlp_create_qkv_heads_vit)& self,
                const ttnn::Tensor& input_tensor_q,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<std::vector<std::optional<ttnn::Tensor>>>& optional_output_tensors) {
+               const std::optional<std::vector<std::optional<ttnn::Tensor>>>& optional_output_tensors) {
                 return self(input_tensor_q, memory_config, optional_output_tensors);
             },
             pybind11::arg("input").noconvert(),

@@ -1,19 +1,17 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <optional>
-#include <variant>
-
+#include "ttnn/operations/transformer/sdpa/device/sdpa_program_factory.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation_types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/device_operation.hpp"
-#include "sdpa_program_factory.hpp"
-#include "sdpa_device_operation_types.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include <optional>
+#include <variant>
+#include <tt-metalium/constants.hpp>
 
 namespace ttnn::operations::transformer::sdpa {
 

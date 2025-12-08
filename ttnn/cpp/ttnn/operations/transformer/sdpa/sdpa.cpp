@@ -1,17 +1,18 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-
-#include "ttnn/operations/transformer/sdpa/sdpa.hpp"
-
 #include <utility>
 
-#include "ttnn/device.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa.hpp"
+
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_op.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_distributed_sdpa_op.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.hpp"
+#include "ttnn/device.hpp"
 
 namespace ttnn::operations::transformer {
 
@@ -44,7 +45,7 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
         scale,
         sliding_window_size,
         std::nullopt,  // chunk_start_idx
-        /*use_mla=*/false,
+        false,         // use_mla
         std::nullopt,  // head_dim_v
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
@@ -78,7 +79,7 @@ ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
         scale,
         std::nullopt,  // sliding_window_size (not supported yet)
         chunk_start_idx,
-        /*use_mla=*/false,
+        false,         // use_mla
         std::nullopt,  // head_dim_v
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
@@ -190,7 +191,7 @@ ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
         scale,
         std::nullopt,  // sliding_window_size (not supported yet)
         std::nullopt,  // chunk_start_idx
-        /*use_mla=*/true,
+        true,          // use_mla
         head_dim_v,
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
@@ -224,7 +225,7 @@ ttnn::Tensor ExecuteChunkedFlashMLAPrefill::invoke(
         scale,
         std::nullopt,  // sliding_window_size (not supported yet)
         chunk_start_idx,
-        /*use_mla=*/true,
+        true,  // use_mla
         head_dim_v,
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
