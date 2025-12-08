@@ -251,7 +251,7 @@ ALWI void matmul_block(
     uint32_t in0_tile_index,
     uint32_t in1_tile_index,
     uint32_t idst,
-    const uint32_t transpose = 0,
+    const uint32_t transpose,
     uint32_t ct_dim,
     uint32_t rt_dim,
     uint32_t kt_dim) {
