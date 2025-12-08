@@ -1342,7 +1342,9 @@ def test_untilize_fp32(device, tensor_shape, input_buffer_type, output_buffer_ty
     assert torch.equal(result, torch_tensor), f"untilize lost FP32 precision"
 
 
-@pytest.mark.xfail("use_pack_untilize=False has bad precision for fp32 because kernel uses FP32 #30400, #33795")
+@pytest.mark.xfail(
+    reason="has bad precision with use_pack_untilize=False for fp32 because kernel uses FP32 #30400, #33795"
+)
 @pytest.mark.parametrize(
     "tensor_shape",
     [
