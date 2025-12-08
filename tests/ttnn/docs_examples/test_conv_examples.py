@@ -5,16 +5,15 @@
 import pytest
 import ttnn
 import torch
-from loguru import logger
 
 
-def test_conv1d():
-    device = ttnn.CreateDevice(0, l1_small_size=8192)
-    # Define input parameters
-    batch_size, in_channels, length = 1, 3, 80
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv1d(device):
+    # Input parameters
+    batch_size, in_channels, length = 1, 32, 80
     out_channels, kernel_size = 16, 3
 
-    # Create input tensor [N, L, C] format
+    # Create input tensor [N, L, C]
     torch_input = torch.randn(batch_size, length, in_channels, dtype=torch.bfloat16)
     tt_input = ttnn.from_torch(torch_input, device=device)
 
@@ -23,7 +22,7 @@ def test_conv1d():
     tt_weight = ttnn.from_torch(torch_weight)
 
     # Perform 1D convolution
-    output, _ = ttnn.conv1d(
+    output = ttnn.conv1d(
         input_tensor=tt_input,
         weight_tensor=tt_weight,
         device=device,
@@ -36,17 +35,17 @@ def test_conv1d():
         padding=1,
         groups=1,
     )
-    logger.info(f"Conv1d output: {output}")
-    ttnn.close_device(device)
+    output = ttnn.from_device(output)
+    print(f"Conv1d output shape: {output.shape}")
 
 
-def test_conv2d():
-    device = ttnn.CreateDevice(0, l1_small_size=8192)
-    # Define input parameters
-    batch_size, in_channels, height, width = 1, 3, 32, 32
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv2d(device):
+    # Input parameters
+    batch_size, in_channels, height, width = 1, 32, 32, 32
     out_channels, kernel_h, kernel_w = 16, 3, 3
 
-    # Create input tensor in NHWC format
+    # Create input tensor [N, H, W, C]
     torch_input = torch.randn(batch_size, height, width, in_channels, dtype=torch.bfloat16)
     tt_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT)
 
@@ -57,15 +56,8 @@ def test_conv2d():
     torch_bias = torch.randn(1, 1, 1, out_channels, dtype=torch.bfloat16)
     tt_bias = ttnn.from_torch(torch_bias)
 
-    # Configure conv2d
-    conv_config = ttnn.Conv2dConfig(
-        dtype=ttnn.bfloat16,
-        weights_dtype=ttnn.bfloat16,
-        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-    )
-
     # Perform 2D convolution
-    [output, _, [_, _]] = ttnn.conv2d(
+    output = ttnn.conv2d(
         input_tensor=tt_input,
         weight_tensor=tt_weight,
         bias_tensor=tt_bias,
@@ -78,38 +70,30 @@ def test_conv2d():
         batch_size=batch_size,
         input_height=height,
         input_width=width,
-        conv_config=conv_config,
     )
-    logger.info(f"Conv2d output: {output}")
-    ttnn.close_device(device)
+    output = ttnn.from_device(output)
+    print(f"Conv2d output shape: {output.shape}")
 
 
-def test_conv_transpose2d():
-    device = ttnn.CreateDevice(0, l1_small_size=8192)
-    # Define input parameters
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv_transpose2d(device):
+    # Input parameters
     batch_size, in_channels, height, width = 1, 32, 16, 16
     out_channels, kernel_h, kernel_w = 16, 2, 2
 
-    # Create input tensor in NHWC format
+    # Create input tensor [N, H, W, C]
     torch_input = torch.randn(batch_size, height, width, in_channels, dtype=torch.bfloat16)
     tt_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT)
 
-    # Create weight and bias tensors (note: weights shape is [C_in, C_out, K_h, K_w] for transpose)
+    # Create weight [C_in, C_out, K_h, K_w] and bias tensors
     torch_weight = torch.randn(in_channels, out_channels, kernel_h, kernel_w, dtype=torch.bfloat16)
     tt_weight = ttnn.from_torch(torch_weight)
 
     torch_bias = torch.randn(1, 1, 1, out_channels, dtype=torch.bfloat16)
     tt_bias = ttnn.from_torch(torch_bias)
 
-    # Configure conv_transpose2d
-    conv_config = ttnn.Conv2dConfig(
-        dtype=ttnn.bfloat16,
-        weights_dtype=ttnn.bfloat16,
-        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-    )
-
-    # Perform 2D transposed convolution
-    [output, _, [_, _]] = ttnn.conv_transpose2d(
+    # Perform transposed convolution
+    output = ttnn.conv_transpose2d(
         input_tensor=tt_input,
         weight_tensor=tt_weight,
         bias_tensor=tt_bias,
@@ -123,142 +107,184 @@ def test_conv_transpose2d():
         batch_size=batch_size,
         input_height=height,
         input_width=width,
-        conv_config=conv_config,
     )
-    logger.info(f"Conv_transpose2d output: {output}")
-    ttnn.close_device(device)
+    output = ttnn.from_device(output)
+    print(f"Conv_transpose2d output shape: {output.shape}")
 
 
-def test_conv3d():
-    device = ttnn.CreateDevice(0, l1_small_size=8192)
-    # Define input parameters
-    batch_size, in_channels, depth, height, width = 1, 3, 8, 8, 8
-    out_channels = 16
+def test_conv3d(device):
+    # Input parameters
+    batch_size, in_channels, depth, height, width = 1, 32, 8, 8, 8
+    out_channels = 32
     kernel_size = (3, 3, 3)
 
     # Create input tensor [N, C, D, H, W]
     torch_input = torch.randn(batch_size, in_channels, depth, height, width, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-    # Create weight and bias tensors
-    torch_weight = torch.randn(out_channels, in_channels, *kernel_size, dtype=torch.bfloat16)
-    torch_bias = torch.randn(out_channels, dtype=torch.bfloat16)
+    # Note: Conv3d requires weights in patchified format [patch_size, out_channels]
+    # where patch_size depends on input dimensions and kernel size
+    # This requires specialized preprocessing not shown in this minimal example
+    patch_size = 216  # Example value - actual calculation depends on config
+    torch_weight = torch.randn(patch_size, out_channels, dtype=torch.bfloat16)
+    torch_bias = torch.randn(1, out_channels, dtype=torch.bfloat16)
+    tt_weight = ttnn.from_torch(torch_weight, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_bias = ttnn.from_torch(torch_bias, device=device, layout=ttnn.TILE_LAYOUT)
 
-    # Convert to ttnn tensors
-    tt_input = ttnn.from_torch(torch_input, device=device)
-    tt_weight = ttnn.from_torch(torch_weight, device=device)
-    tt_bias = ttnn.from_torch(torch_bias, device=device)
-
-    # Configure conv3d
-    conv_config = ttnn.Conv3dConfig(
+    # Configure and perform 3D convolution
+    config = ttnn.Conv3dConfig(
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
+        output_channels=out_channels,
+        kernel_size=list(kernel_size),
+        stride=[1, 1, 1],
+        padding=[0, 1, 1],
     )
-
-    # Perform 3D convolution
     output = ttnn.experimental.conv3d(
         input_tensor=tt_input,
         weight_tensor=tt_weight,
         bias_tensor=tt_bias,
-        kernel_size=kernel_size,
-        stride=(1, 1, 1),
-        padding=(1, 1, 1),
-        conv_config=conv_config,
+        config=config,
     )
-    logger.info(f"Conv3d output: {output}")
-    ttnn.close_device(device)
+    output = ttnn.from_device(output)
+    print(f"Conv3d output shape: {output.shape}")
 
 
-def test_prepare_conv_weights():
-    device = ttnn.CreateDevice(0, l1_small_size=8192)
-    # Create a simple weight tensor
-    out_channels, in_channels, kernel_h, kernel_w = 16, 3, 3, 3
+def test_prepare_conv_weights(device):
+    # Create weight tensor
+    batch_size, in_channels, height, width = 1, 32, 32, 32
+    out_channels, kernel_h, kernel_w = 16, 3, 3
     torch_weight = torch.randn(out_channels, in_channels, kernel_h, kernel_w, dtype=torch.bfloat16)
     tt_weight = ttnn.from_torch(torch_weight)
 
-    # Create a dummy input tensor to provide memory config
-    torch_input = torch.randn(1, 32, 32, in_channels, dtype=torch.bfloat16)
+    # Create input tensor for memory config
+    torch_input = torch.randn(batch_size, height, width, in_channels, dtype=torch.bfloat16)
     tt_input = ttnn.from_torch(torch_input, device=device)
 
     # Prepare conv weights
     prepared_weight = ttnn.prepare_conv_weights(
         weight_tensor=tt_weight,
         input_memory_config=tt_input.memory_config(),
-        input_dtype=ttnn.bfloat16,
-        weights_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
+        weights_format="OIHW",
+        in_channels=in_channels,
+        out_channels=out_channels,
+        batch_size=batch_size,
+        input_height=height,
+        input_width=width,
+        kernel_size=[kernel_h, kernel_w],
+        stride=[1, 1],
+        padding=[1, 1],
+        dilation=[1, 1],
+        has_bias=False,
+        groups=1,
         device=device,
+        input_dtype=ttnn.bfloat16,
     )
-    logger.info(f"Prepared conv weights: {prepared_weight}")
-    ttnn.close_device(device)
+    prepared_weight = ttnn.from_device(prepared_weight)
+    print(f"Prepared conv weights shape: {prepared_weight.shape}")
 
 
-def test_prepare_conv_bias():
-    device = ttnn.CreateDevice(0, l1_small_size=8192)
-    # Create a simple bias tensor
-    out_channels = 16
+def test_prepare_conv_bias(device):
+    # Create bias tensor
+    batch_size, in_channels, height, width = 1, 32, 32, 32
+    out_channels, kernel_h, kernel_w = 16, 3, 3
     torch_bias = torch.randn(1, 1, 1, out_channels, dtype=torch.bfloat16)
     tt_bias = ttnn.from_torch(torch_bias)
 
-    # Create a dummy input tensor to provide memory config
-    torch_input = torch.randn(1, 32, 32, 3, dtype=torch.bfloat16)
+    # Create input tensor for memory config
+    torch_input = torch.randn(batch_size, height, width, in_channels, dtype=torch.bfloat16)
     tt_input = ttnn.from_torch(torch_input, device=device)
 
     # Prepare conv bias
+    conv_config = ttnn.Conv2dConfig(weights_dtype=ttnn.bfloat16)
     prepared_bias = ttnn.prepare_conv_bias(
         bias_tensor=tt_bias,
         input_memory_config=tt_input.memory_config(),
-        input_dtype=ttnn.bfloat16,
-        weights_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        batch_size=batch_size,
+        input_height=height,
+        input_width=width,
+        kernel_size=[kernel_h, kernel_w],
+        stride=[1, 1],
+        padding=[1, 1],
+        dilation=[1, 1],
+        groups=1,
         device=device,
+        input_dtype=ttnn.bfloat16,
+        conv_config=conv_config,
     )
-    logger.info(f"Prepared conv bias: {prepared_bias}")
-    ttnn.close_device(device)
+    prepared_bias = ttnn.from_device(prepared_bias)
+    print(f"Prepared conv bias shape: {prepared_bias.shape}")
 
 
-def test_prepare_conv_transpose2d_weights():
-    device = ttnn.CreateDevice(0, l1_small_size=8192)
-    # Create a simple weight tensor (note: shape is [C_in, C_out, K_h, K_w] for transpose)
-    in_channels, out_channels, kernel_h, kernel_w = 32, 16, 2, 2
+def test_prepare_conv_transpose2d_weights(device):
+    # Create weight tensor [C_in, C_out, K_h, K_w]
+    batch_size, in_channels, height, width = 1, 32, 16, 16
+    out_channels, kernel_h, kernel_w = 16, 2, 2
     torch_weight = torch.randn(in_channels, out_channels, kernel_h, kernel_w, dtype=torch.bfloat16)
     tt_weight = ttnn.from_torch(torch_weight)
 
-    # Create a dummy input tensor
-    torch_input = torch.randn(1, 16, 16, in_channels, dtype=torch.bfloat16)
+    # Create input tensor for memory config
+    torch_input = torch.randn(batch_size, height, width, in_channels, dtype=torch.bfloat16)
     tt_input = ttnn.from_torch(torch_input, device=device)
 
     # Prepare conv_transpose2d weights
     prepared_weight = ttnn.prepare_conv_transpose2d_weights(
         weight_tensor=tt_weight,
         input_memory_config=tt_input.memory_config(),
-        input_dtype=ttnn.bfloat16,
-        weights_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
+        weights_format="IOHW",
+        in_channels=in_channels,
+        out_channels=out_channels,
+        batch_size=batch_size,
+        input_height=height,
+        input_width=width,
+        kernel_size=[kernel_h, kernel_w],
+        stride=[2, 2],
+        padding=[0, 0],
+        dilation=[1, 1],
+        has_bias=False,
+        groups=1,
         device=device,
+        input_dtype=ttnn.bfloat16,
     )
-    logger.info(f"Prepared conv_transpose2d weights: {prepared_weight}")
-    ttnn.close_device(device)
+    prepared_weight = ttnn.from_device(prepared_weight)
+    print(f"Prepared conv_transpose2d weights shape: {prepared_weight.shape}")
 
 
-def test_prepare_conv_transpose2d_bias():
-    device = ttnn.CreateDevice(0, l1_small_size=8192)
-    # Create a simple bias tensor
-    out_channels = 16
+def test_prepare_conv_transpose2d_bias(device):
+    # Create bias tensor
+    batch_size, in_channels, height, width = 1, 32, 16, 16
+    out_channels, kernel_h, kernel_w = 16, 2, 2
     torch_bias = torch.randn(1, 1, 1, out_channels, dtype=torch.bfloat16)
     tt_bias = ttnn.from_torch(torch_bias)
 
-    # Create a dummy input tensor
-    torch_input = torch.randn(1, 16, 16, 32, dtype=torch.bfloat16)
+    # Create input tensor for memory config
+    torch_input = torch.randn(batch_size, height, width, in_channels, dtype=torch.bfloat16)
     tt_input = ttnn.from_torch(torch_input, device=device)
 
     # Prepare conv_transpose2d bias
+    conv_config = ttnn.Conv2dConfig(weights_dtype=ttnn.bfloat16)
     prepared_bias = ttnn.prepare_conv_transpose2d_bias(
         bias_tensor=tt_bias,
         input_memory_config=tt_input.memory_config(),
-        input_dtype=ttnn.bfloat16,
-        weights_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        batch_size=batch_size,
+        input_height=height,
+        input_width=width,
+        kernel_size=[kernel_h, kernel_w],
+        stride=[2, 2],
+        padding=[0, 0],
+        dilation=[1, 1],
+        groups=1,
         device=device,
+        input_dtype=ttnn.bfloat16,
+        conv_config=conv_config,
     )
-    logger.info(f"Prepared conv_transpose2d bias: {prepared_bias}")
-    ttnn.close_device(device)
+    prepared_bias = ttnn.from_device(prepared_bias)
+    print(f"Prepared conv_transpose2d bias shape: {prepared_bias.shape}")
