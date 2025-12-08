@@ -23,7 +23,7 @@ namespace tt::tt_metal {
 class SubDeviceManagerTracker;
 
 // A physical PCIexpress Tenstorrent device
-class Device : public IDevice {
+class Device : public IDevice, public IDeviceImpl {
 public:
     Device() = delete;
     Device(
@@ -177,6 +177,9 @@ public:
     void set_mesh_device(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
         this->mesh_device = mesh_device;
     };
+
+    IDeviceImpl* impl() override;
+    const IDeviceImpl* impl() const override;
 
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;

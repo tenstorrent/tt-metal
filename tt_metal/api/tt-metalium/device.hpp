@@ -57,6 +57,8 @@ namespace distributed {
 class MeshDevice;
 }
 
+class IDeviceImpl {};
+
 class IDevice {
 public:
     IDevice() = default;
@@ -222,6 +224,9 @@ public:
     // Allowing to get corresponding MeshDevice for a given device to properly schedule programs / create buffers for
     // it. This is currently used exclusively by profiler.
     virtual std::shared_ptr<distributed::MeshDevice> get_mesh_device() = 0;
+
+    virtual IDeviceImpl* impl() = 0;
+    virtual const IDeviceImpl* impl() const = 0;
 };
 
 }  // namespace tt_metal

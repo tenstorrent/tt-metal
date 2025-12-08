@@ -67,7 +67,7 @@ class MeshCommandQueueBase;
 
 using DeviceIds = std::vector<int>;
 
-class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevice> {
+class MeshDevice : public IDevice, public IDeviceImpl, public std::enable_shared_from_this<MeshDevice> {
 private:
     // Resource management class / RAII wrapper for *physical devices* of the mesh
     class ScopedDevices {
@@ -257,6 +257,9 @@ public:
     uint32_t num_sub_devices() const override;
     bool is_mmio_capable() const override;
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
+
+    IDeviceImpl* impl() override;
+    const IDeviceImpl* impl() const override;
 
     // A MeshDevice is a collection of devices arranged in a 2D grid.
     // The type parameter allows the caller to specify how to linearize the devices in the mesh.

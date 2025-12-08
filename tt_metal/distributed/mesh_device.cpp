@@ -1133,4 +1133,8 @@ const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_i
 
 std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }
 
+IDeviceImpl* MeshDevice::impl() { return this; }
+
+const IDeviceImpl* MeshDevice::impl() const { return this; }
+
 }  // namespace tt::tt_metal::distributed

@@ -831,6 +831,10 @@ HalMemType Device::get_mem_type_of_core(CoreCoord virtual_core) const {
 
 std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }
 
+IDeviceImpl* Device::impl() { return this; }
+
+const IDeviceImpl* Device::impl() const { return this; }
+
 }  // namespace tt_metal
 
 }  // namespace tt
