@@ -11,7 +11,7 @@
 #include <stdexcept>
 #include <iostream>
 
-namespace tt::tt_metal {
+namespace tt::tt_metal::experimental::lightmetal {
 
 // Public interface wrapper for serialized LightMetalBinary data
 class LightMetalBinary {
@@ -61,4 +61,4 @@ public:
     }
 };
 
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::experimental::lightmetal
