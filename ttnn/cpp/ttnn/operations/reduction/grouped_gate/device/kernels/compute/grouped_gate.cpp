@@ -291,6 +291,8 @@ void normalize_scores(
     const uint32_t reduce_scalar_cb_index,
     const uint32_t normalized_scores_cb_index) {
     // compute_kernel_hw_startup(unnormalized_scores_cb_index, reduce_scalar_cb_index, normalized_scores_cb_index);
+    // binary op init common  
+    // both bad result , without gets max not sum
     reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL>(
         unnormalized_scores_cb_index, reduce_scalar_cb_index, normalized_scores_cb_index);
     cb_wait_front(unnormalized_scores_cb_index, 1);
