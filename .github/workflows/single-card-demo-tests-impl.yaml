@@ -225,13 +225,13 @@ jobs:
         run: |
           source /work/tests/scripts/single_card/run_single_card_demo_tests.sh
           ${{ matrix.test-group.cmd }}
-      - name: Upload TTNN reports (operations recording)
+      - name: Upload Tracy profiler reports (operations recording)
         if: ${{ !cancelled() && contains(matrix.test-group.cmd, 'ops_recording') }}
         uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         with:
-          path: generated/ttnn/reports/
-          prefix: "ttnn_reports_"
+          path: generated/profiler/reports/
+          prefix: "tracy_ops_"
       - name: Save environment data
         id: save-environment-data
         if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !cancelled() }}
@@ -275,11 +275,11 @@ jobs:
     if: ${{ !cancelled() && contains(toJSON(needs.single-card-demo-tests), 'ops_recording') }}
     runs-on: ubuntu-latest
     steps:
-      - name: Download all TTNN reports artifacts
+      - name: Download all Tracy profiler reports
         uses: actions/download-artifact@v4
         with:
-          pattern: ttnn_reports_*
-          path: all_ttnn_reports
+          pattern: tracy_ops_*
+          path: all_tracy_reports
           merge-multiple: false
 
       - name: Aggregate operations from all models
@@ -292,78 +292,106 @@ jobs:
           # Create output directory
           mkdir -p aggregated_ops
           
-          # Find all operations_list.txt files and db.sqlite files
-          echo "Found reports:"
-          find all_ttnn_reports -name "operations_list.txt" -o -name "db.sqlite" | head -50
+          # Find all ops_perf_results CSV files
+          echo "Found Tracy reports:"
+          find all_tracy_reports -name "ops_perf_results_*.csv" | head -50
           
           # Aggregate using Python
           python3 << 'EOF'
-          import sqlite3
+          import csv
           import os
           import json
           from pathlib import Path
           from collections import defaultdict
           
-          all_ops = defaultdict(lambda: {"count": 0, "total_duration": 0, "models": set()})
+          all_ops = defaultdict(lambda: {"count": 0, "total_duration_ns": 0, "models": set()})
           model_ops = {}
           
-          # Find all db.sqlite files
-          for db_path in Path("all_ttnn_reports").rglob("db.sqlite"):
-              model_name = db_path.parent.name
-              print(f"\nProcessing: {db_path} (model: {model_name})")
+          # Find all ops_perf_results CSV files
+          for csv_path in Path("all_tracy_reports").rglob("ops_perf_results_*.csv"):
+              # Extract model name from artifact folder structure
+              parts = str(csv_path).split("/")
+              model_name = parts[1] if len(parts) > 1 else csv_path.parent.name
+              print(f"\nProcessing: {csv_path} (model: {model_name})")
               
               try:
-                  conn = sqlite3.connect(str(db_path))
-                  cursor = conn.cursor()
+                  with open(csv_path, 'r') as f:
+                      reader = csv.DictReader(f)
+                      ops_data = list(reader)
                   
-                  # Get operations
-                  cursor.execute("SELECT name, COUNT(*), SUM(duration) FROM operations GROUP BY name")
-                  ops = cursor.fetchall()
+                  # Aggregate by operation type
+                  op_counts = defaultdict(lambda: {"count": 0, "total_duration_ns": 0})
                   
-                  model_ops[model_name] = []
-                  for name, count, total_dur in ops:
-                      all_ops[name]["count"] += count
-                      all_ops[name]["total_duration"] += total_dur or 0
-                      all_ops[name]["models"].add(model_name)
-                      model_ops[model_name].append({"name": name, "count": count, "duration": total_dur})
+                  for op in ops_data:
+                      op_type = op.get("OP TYPE", op.get("op_type", "unknown"))
+                      
+                      # Get duration
+                      duration = 0
+                      for col in ["DEVICE FW DURATION [ns]", "device_fw_duration", "KERNEL DURATION [ns]"]:
+                          if col in op and op[col]:
+                              try:
+                                  duration = float(op[col])
+                                  break
+                              except:
+                                  pass
+                      
+                      op_counts[op_type]["count"] += 1
+                      op_counts[op_type]["total_duration_ns"] += duration
+                      
+                      all_ops[op_type]["count"] += 1
+                      all_ops[op_type]["total_duration_ns"] += duration
+                      all_ops[op_type]["models"].add(model_name)
                   
-                  conn.close()
-                  print(f"  Found {len(ops)} unique operations")
+                  model_ops[model_name] = [
+                      {"name": k, "count": v["count"], "duration_ns": v["total_duration_ns"]}
+                      for k, v in op_counts.items()
+                  ]
+                  
+                  print(f"  Found {len(op_counts)} unique operations from {len(ops_data)} total ops")
               except Exception as e:
                   print(f"  Error: {e}")
           
           # Write aggregated report
           with open("aggregated_ops/aggregated_operations.txt", "w") as f:
-              f.write("=" * 80 + "\n")
-              f.write("AGGREGATED TTNN OPERATIONS REPORT\n")
-              f.write("=" * 80 + "\n\n")
+              f.write("=" * 100 + "\n")
+              f.write("AGGREGATED TTNN OPERATIONS REPORT (via Tracy Profiler)\n")
+              f.write("=" * 100 + "\n\n")
               
               f.write(f"Total unique operations: {len(all_ops)}\n")
               f.write(f"Models processed: {len(model_ops)}\n\n")
               
-              f.write("=" * 80 + "\n")
+              f.write("=" * 100 + "\n")
               f.write("ALL OPERATIONS (sorted by frequency)\n")
-              f.write("=" * 80 + "\n")
-              f.write(f"{'Operation':<50} {'Count':<10} {'Total Dur':<15} {'Models'}\n")
+              f.write("=" * 100 + "\n")
+              f.write(f"{'Operation':<50} {'Count':<10} {'Total Duration (ms)':<20} {'Models'}\n")
               f.write("-" * 100 + "\n")
               
               for name, data in sorted(all_ops.items(), key=lambda x: x[1]["count"], reverse=True):
                   models_str = ", ".join(sorted(data["models"]))
-                  dur_str = f"{data['total_duration']:.4f}" if data['total_duration'] else "N/A"
-                  f.write(f"{name:<50} {data['count']:<10} {dur_str:<15} {models_str}\n")
+                  dur_ms = data["total_duration_ns"] / 1_000_000
+                  f.write(f"{name:<50} {data['count']:<10} {dur_ms:<20.4f} {models_str}\n")
               
-              f.write("\n" + "=" * 80 + "\n")
+              f.write("\n" + "=" * 100 + "\n")
               f.write("OPERATIONS BY MODEL\n")
-              f.write("=" * 80 + "\n")
+              f.write("=" * 100 + "\n")
               
               for model, ops in sorted(model_ops.items()):
                   f.write(f"\n--- {model} ({len(ops)} unique ops) ---\n")
                   for op in sorted(ops, key=lambda x: x["count"], reverse=True)[:20]:
-                      f.write(f"  {op['name']}: {op['count']}x\n")
+                      dur_ms = op["duration_ns"] / 1_000_000
+                      f.write(f"  {op['name']}: {op['count']}x ({dur_ms:.2f}ms)\n")
           
           # Write JSON for programmatic access
           json_data = {
-              "all_operations": {k: {"count": v["count"], "total_duration": v["total_duration"], "models": list(v["models"])} for k, v in all_ops.items()},
+              "all_operations": {
+                  k: {
+                      "count": v["count"],
+                      "total_duration_ns": v["total_duration_ns"],
+                      "total_duration_ms": v["total_duration_ns"] / 1_000_000,
+                      "models": list(v["models"])
+                  }
+                  for k, v in all_ops.items()
+              },
               "by_model": model_ops
           }
           with open("aggregated_ops/aggregated_operations.json", "w") as f:

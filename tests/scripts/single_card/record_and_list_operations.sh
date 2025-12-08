@@ -1,5 +1,5 @@
 #!/bin/bash
-# Script to record TTNN operations during model execution and extract them from the SQLite database
+# Script to record TTNN operations during model execution using Tracy profiler
 #
 # Usage:
 #   ./record_and_list_operations.sh <report_name> "<test_command>"
@@ -8,11 +8,11 @@
 #   ./record_and_list_operations.sh resnet_ops "pytest models/demos/wormhole/resnet50/demo/demo.py"
 #
 # This script:
-#   1. Sets TTNN_CONFIG_OVERRIDES to enable operation logging
-#   2. Runs the specified test command
-#   3. Finds the generated db.sqlite file
-#   4. Extracts and lists all operations from the database
+#   1. Runs the test with Tracy profiling enabled
+#   2. Finds the generated ops_perf_results CSV file
+#   3. Extracts and lists all operations from the CSV
 #
+# Tracy captures operations WITHOUT requiring code changes or disabling trace mode.
 # Reference: https://docs.tenstorrent.com/ttnn-visualizer/src/installing.html
 
 set -e
@@ -27,215 +27,194 @@ if [[ -z "$TEST_CMD" ]]; then
 fi
 
 echo "=========================================="
-echo "Recording TTNN Operations"
+echo "Recording TTNN Operations via Tracy"
 echo "=========================================="
 echo "Report name: $REPORT_NAME"
 echo "Test command: $TEST_CMD"
 echo ""
 
-# Export TT_DISABLE_TRACE if set (disables trace capture for ops recording compatibility)
-if [[ -n "$TT_DISABLE_TRACE" ]]; then
-    export TT_DISABLE_TRACE
-    echo "TT_DISABLE_TRACE=$TT_DISABLE_TRACE (trace capture disabled)"
+# Set up output directory
+PROFILER_OUTPUT_DIR="${TT_METAL_HOME:-$(pwd)}/generated/profiler"
+mkdir -p "$PROFILER_OUTPUT_DIR"
+
+# Run the test with Tracy profiling
+# -r: Generate ops report
+# -v: Verbose output
+echo "=========================================="
+echo "Running test with Tracy profiler..."
+echo "=========================================="
+
+# Modify pytest command to run under Tracy
+if [[ "$TEST_CMD" == pytest* ]]; then
+    # Replace 'pytest' with 'python -m tracy -r -v pytest'
+    TRACY_CMD="python -m tracy -r -v $TEST_CMD"
+else
+    # Wrap non-pytest commands
+    TRACY_CMD="python -m tracy -r -v $TEST_CMD"
 fi
 
-# Set TTNN_CONFIG_OVERRIDES to enable operation logging
-export TTNN_CONFIG_OVERRIDES='{
-    "enable_fast_runtime_mode": false,
-    "enable_logging": true,
-    "report_name": "'"$REPORT_NAME"'",
-    "enable_graph_report": false,
-    "enable_detailed_buffer_report": true,
-    "enable_detailed_tensor_report": false,
-    "enable_comparison_mode": false
-}'
-
-echo "TTNN_CONFIG_OVERRIDES set to:"
-echo "$TTNN_CONFIG_OVERRIDES"
+echo "Tracy command: $TRACY_CMD"
 echo ""
 
-# Run the test command
-echo "=========================================="
-echo "Running test command..."
-echo "=========================================="
-eval "$TEST_CMD"
+eval "$TRACY_CMD"
 TEST_EXIT_CODE=$?
 
 echo ""
 echo "Test command finished with exit code: $TEST_EXIT_CODE"
 echo ""
 
-# Find the generated db.sqlite file
-# Reports are generated at: generated/ttnn/reports/<report_name_hash>/db.sqlite
-REPORTS_DIR="${TT_METAL_HOME:-$(pwd)}/generated/ttnn/reports"
+# Find the generated ops_perf_results CSV file
+REPORTS_DIR="${TT_METAL_HOME:-$(pwd)}/generated/profiler/reports"
 
 echo "=========================================="
-echo "Searching for SQLite database..."
+echo "Searching for Tracy ops report..."
 echo "=========================================="
 echo "Looking in: $REPORTS_DIR"
 
 if [[ ! -d "$REPORTS_DIR" ]]; then
     echo "Error: Reports directory does not exist: $REPORTS_DIR"
+    echo "Tracy profiling may have failed."
     exit 1
 fi
 
-# Find the most recently modified db.sqlite file
-DB_FILE=$(find "$REPORTS_DIR" -name "db.sqlite" -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)
+# Find the most recent ops_perf_results CSV file
+OPS_CSV=$(find "$REPORTS_DIR" -name "ops_perf_results_*.csv" -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)
 
-if [[ -z "$DB_FILE" ]]; then
-    # Fallback for macOS (which doesn't support -printf)
-    DB_FILE=$(find "$REPORTS_DIR" -name "db.sqlite" -type f -exec stat -f "%m %N" {} \; 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)
+if [[ -z "$OPS_CSV" ]]; then
+    # Fallback for macOS
+    OPS_CSV=$(find "$REPORTS_DIR" -name "ops_perf_results_*.csv" -type f -exec stat -f "%m %N" {} \; 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)
 fi
 
-if [[ -z "$DB_FILE" ]]; then
-    echo "Error: No db.sqlite file found in $REPORTS_DIR"
+if [[ -z "$OPS_CSV" ]]; then
+    echo "Error: No ops_perf_results CSV file found in $REPORTS_DIR"
     echo "Contents of reports directory:"
     ls -la "$REPORTS_DIR" 2>/dev/null || echo "(directory is empty or doesn't exist)"
     exit 1
 fi
 
-echo "Found database: $DB_FILE"
+echo "Found ops CSV: $OPS_CSV"
 echo ""
 
-# Get the report directory (parent of db.sqlite)
-REPORT_DIR=$(dirname "$DB_FILE")
+# Get the report directory
+REPORT_DIR=$(dirname "$OPS_CSV")
 echo "Report directory: $REPORT_DIR"
-
-# Check if config.json exists alongside db.sqlite
-if [[ -f "$REPORT_DIR/config.json" ]]; then
-    echo "Config file found: $REPORT_DIR/config.json"
-else
-    echo "Warning: config.json not found in report directory"
-fi
 echo ""
 
-# Extract operations from the SQLite database using Python (sqlite3 module is built-in)
+# Extract and display operations using Python
 echo "=========================================="
-echo "Extracting operations from database..."
+echo "Extracting operations from Tracy report..."
 echo "=========================================="
 
-OUTPUT_FILE="${REPORT_DIR}/operations_list.txt"
+OUTPUT_FILE="${REPORT_DIR}/operations_list_${REPORT_NAME}.txt"
 
 python3 << EOF
-import sqlite3
+import csv
+from collections import defaultdict
 from datetime import datetime
 
-db_file = "$DB_FILE"
+ops_csv = "$OPS_CSV"
 report_name = "$REPORT_NAME"
 output_file = "$OUTPUT_FILE"
 
-conn = sqlite3.connect(db_file)
-cursor = conn.cursor()
+# Read the CSV file
+ops_data = []
+with open(ops_csv, 'r') as f:
+    reader = csv.DictReader(f)
+    ops_data = list(reader)
 
-# Get total count
-cursor.execute("SELECT COUNT(*) FROM operations")
-op_count = cursor.fetchone()[0]
-print(f"Total operations recorded: {op_count}")
+print(f"Total operations recorded: {len(ops_data)}")
 print()
 
-if op_count == 0:
-    print("Warning: No operations were recorded in the database.")
-    conn.close()
+if len(ops_data) == 0:
+    print("Warning: No operations were recorded.")
     exit(0)
 
-# List all operations
-print("=" * 50)
-print("Operations List (ID | Name | Duration)")
-print("=" * 50)
-cursor.execute("SELECT operation_id, name, duration FROM operations ORDER BY operation_id")
-print(f"{'ID':<10} {'Name':<50} {'Duration':<15}")
+# Aggregate by operation type
+op_summary = defaultdict(lambda: {"count": 0, "total_duration_ns": 0, "calls": []})
+
+for op in ops_data:
+    op_type = op.get("OP TYPE", op.get("op_type", "unknown"))
+    op_code = op.get("OP CODE", op.get("op_code", ""))
+    
+    # Get duration - try different possible column names
+    duration = 0
+    for col in ["DEVICE FW DURATION [ns]", "device_fw_duration", "KERNEL DURATION [ns]", "kernel_duration"]:
+        if col in op and op[col]:
+            try:
+                duration = float(op[col])
+                break
+            except:
+                pass
+    
+    op_summary[op_type]["count"] += 1
+    op_summary[op_type]["total_duration_ns"] += duration
+    op_summary[op_type]["calls"].append(op)
+
+# Print operations list
+print("=" * 70)
+print("Operations Summary by Type")
+print("=" * 70)
+print(f"{'Operation':<45} {'Count':<10} {'Total Duration (ms)':<20}")
 print("-" * 75)
-for row in cursor.fetchall():
-    op_id, name, duration = row
-    duration_str = f"{duration:.6f}" if duration else "N/A"
-    print(f"{op_id:<10} {name:<50} {duration_str:<15}")
 
-# Operations summary
-print()
-print("=" * 50)
-print("Operations Summary by Name")
-print("=" * 50)
-cursor.execute("""
-    SELECT 
-        name,
-        COUNT(*) as count,
-        ROUND(SUM(duration), 4) as total_duration,
-        ROUND(AVG(duration), 4) as avg_duration
-    FROM operations 
-    GROUP BY name 
-    ORDER BY count DESC
-""")
-print(f"{'Name':<50} {'Count':<10} {'Total':<15} {'Avg':<15}")
-print("-" * 90)
-for row in cursor.fetchall():
-    name, count, total_dur, avg_dur = row
-    total_str = f"{total_dur:.4f}" if total_dur else "N/A"
-    avg_str = f"{avg_dur:.4f}" if avg_dur else "N/A"
-    print(f"{name:<50} {count:<10} {total_str:<15} {avg_str:<15}")
+for op_type, data in sorted(op_summary.items(), key=lambda x: x[1]["count"], reverse=True):
+    duration_ms = data["total_duration_ns"] / 1_000_000
+    print(f"{op_type:<45} {data['count']:<10} {duration_ms:<20.4f}")
 
-# Unique operations
 print()
-print("=" * 50)
+print("=" * 70)
 print("Unique Operations (sorted alphabetically)")
-print("=" * 50)
-cursor.execute("SELECT DISTINCT name FROM operations ORDER BY name")
-for row in cursor.fetchall():
-    print(row[0])
+print("=" * 70)
+for op_type in sorted(op_summary.keys()):
+    print(op_type)
 
-# Save to file
+# Save detailed report
 print()
-print("=" * 50)
-print(f"Saving operations list to: {output_file}")
-print("=" * 50)
+print("=" * 70)
+print(f"Saving detailed report to: {output_file}")
+print("=" * 70)
 
 with open(output_file, 'w') as f:
-    f.write("TTNN Operations Report\n")
+    f.write("TTNN Operations Report (via Tracy Profiler)\n")
     f.write(f"Report Name: {report_name}\n")
     f.write(f"Generated: {datetime.now()}\n")
-    f.write(f"Database: {db_file}\n")
-    f.write(f"\nTotal Operations: {op_count}\n\n")
+    f.write(f"Source CSV: {ops_csv}\n")
+    f.write(f"\nTotal Operations: {len(ops_data)}\n")
+    f.write(f"Unique Operation Types: {len(op_summary)}\n\n")
     
-    f.write("=" * 50 + "\n")
-    f.write("All Operations (ID | Name | Duration)\n")
-    f.write("=" * 50 + "\n")
-    cursor.execute("SELECT operation_id, name, duration FROM operations ORDER BY operation_id")
-    for row in cursor.fetchall():
-        op_id, name, duration = row
-        duration_str = f"{duration:.6f}" if duration else "N/A"
-        f.write(f"{op_id}\t{name}\t{duration_str}\n")
+    f.write("=" * 70 + "\n")
+    f.write("Operations Summary by Type\n")
+    f.write("=" * 70 + "\n")
+    f.write(f"{'Operation':<45} {'Count':<10} {'Total Duration (ms)':<20}\n")
+    f.write("-" * 75 + "\n")
     
-    f.write("\n" + "=" * 50 + "\n")
-    f.write("Operations Summary by Name\n")
-    f.write("=" * 50 + "\n")
-    cursor.execute("""
-        SELECT name, COUNT(*) as count, ROUND(SUM(duration), 4), ROUND(AVG(duration), 4)
-        FROM operations GROUP BY name ORDER BY count DESC
-    """)
-    for row in cursor.fetchall():
-        name, count, total_dur, avg_dur = row
-        f.write(f"{name}\t{count}\t{total_dur}\t{avg_dur}\n")
+    for op_type, data in sorted(op_summary.items(), key=lambda x: x[1]["count"], reverse=True):
+        duration_ms = data["total_duration_ns"] / 1_000_000
+        f.write(f"{op_type:<45} {data['count']:<10} {duration_ms:<20.4f}\n")
     
-    f.write("\n" + "=" * 50 + "\n")
+    f.write("\n" + "=" * 70 + "\n")
     f.write("Unique Operations\n")
-    f.write("=" * 50 + "\n")
-    cursor.execute("SELECT DISTINCT name FROM operations ORDER BY name")
-    for row in cursor.fetchall():
-        f.write(f"{row[0]}\n")
+    f.write("=" * 70 + "\n")
+    for op_type in sorted(op_summary.keys()):
+        f.write(f"{op_type}\n")
+    
+    # Also save raw data reference
+    f.write("\n" + "=" * 70 + "\n")
+    f.write("Full CSV Data Available At\n")
+    f.write("=" * 70 + "\n")
+    f.write(f"{ops_csv}\n")
 
-conn.close()
-print(f"Operations list saved to: {output_file}")
+print(f"Report saved to: {output_file}")
 EOF
 
-echo "Operations list saved to: $OUTPUT_FILE"
 echo ""
 echo "=========================================="
 echo "Done!"
 echo "=========================================="
 echo "Report directory: $REPORT_DIR"
-echo "Database file: $DB_FILE"
+echo "Operations CSV: $OPS_CSV"
 echo "Operations list: $OUTPUT_FILE"
 echo ""
 
 # Exit with the same code as the test command
 exit $TEST_EXIT_CODE
-

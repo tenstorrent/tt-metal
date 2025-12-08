@@ -185,10 +185,9 @@ run_resnet_func() {
 }
 
 run_resnet_with_ops_recording() {
-  # Run resnet with operation recording enabled (non-trace test only)
-  # Using test_demo_sample which doesn't use trace capture (compatible with enable_fast_runtime_mode=false)
-  # This sets TTNN_CONFIG_OVERRIDES and extracts operations from db.sqlite
-  bash "$(dirname "${BASH_SOURCE[0]}")/record_and_list_operations.sh" "resnet_ops" "pytest models/demos/wormhole/resnet50/demo/demo.py::test_demo_sample"
+  # Run resnet with Tracy profiler to record operations
+  # Tracy works with trace mode - no code changes needed
+  bash "$(dirname "${BASH_SOURCE[0]}")/record_and_list_operations.sh" "resnet_ops" "pytest models/demos/wormhole/resnet50/demo/demo.py"
 }
 
 run_sdxl_func() {
@@ -218,23 +217,20 @@ run_mnist_func() {
 }
 
 run_mnist_with_ops_recording() {
-  # Run mnist with operation recording enabled (doesn't use trace capture)
-  # This sets TTNN_CONFIG_OVERRIDES and extracts operations from db.sqlite
+  # Run mnist with Tracy profiler to record operations
   bash "$(dirname "${BASH_SOURCE[0]}")/record_and_list_operations.sh" "mnist_ops" "pytest models/demos/mnist/demo/demo.py"
 }
 
 run_mobilenetv2_with_ops_recording() {
-  # Run mobilenetv2 with operation recording enabled
-  # TT_DISABLE_TRACE=1 disables trace capture for ops recording compatibility
-  # This sets TTNN_CONFIG_OVERRIDES and extracts operations from db.sqlite
-  TT_DISABLE_TRACE=1 bash "$(dirname "${BASH_SOURCE[0]}")/record_and_list_operations.sh" "mobilenetv2_ops" "pytest models/demos/mobilenetv2/demo/demo.py"
+  # Run mobilenetv2 with Tracy profiler to record operations
+  # Tracy works with trace mode - no code changes needed
+  bash "$(dirname "${BASH_SOURCE[0]}")/record_and_list_operations.sh" "mobilenetv2_ops" "pytest models/demos/mobilenetv2/demo/demo.py"
 }
 
 run_ufld_v2_with_ops_recording() {
-  # Run ufld_v2 with operation recording enabled
-  # TT_DISABLE_TRACE=1 disables trace capture for ops recording compatibility
-  # This sets TTNN_CONFIG_OVERRIDES and extracts operations from db.sqlite
-  TT_DISABLE_TRACE=1 bash "$(dirname "${BASH_SOURCE[0]}")/record_and_list_operations.sh" "ufld_v2_ops" "pytest models/demos/wormhole/ufld_v2/demo/demo.py"
+  # Run ufld_v2 with Tracy profiler to record operations
+  # Tracy works with trace mode - no code changes needed
+  bash "$(dirname "${BASH_SOURCE[0]}")/record_and_list_operations.sh" "ufld_v2_ops" "pytest models/demos/wormhole/ufld_v2/demo/demo.py"
 }
 
 run_squeezebert_func() {
