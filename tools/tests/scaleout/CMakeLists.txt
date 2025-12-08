@@ -89,9 +89,7 @@ target_link_libraries(
         tt_metal
         generate_mgd_lib
         protobuf::libprotobuf
-        gmock_main
 )
 
 # Make sure protobuf files are generated before compiling
 add_dependencies(test_cabling_descriptor_mgd_generation scaleout_generated_protos)
-add_dependencies(test_cabling_descriptor_mgd_generation tt_metal)
