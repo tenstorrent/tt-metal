@@ -647,6 +647,29 @@ void SortProgramFactoryCrossCoreDataExchange::override_runtime_arguments(
     }  // core_range loop
 }
 
+/**
+ * @brief Determines the number of tiles to process per core based on slicing strategy and data types.
+ *
+ * @param total_number_of_cores Total number of cores available for the operation
+ * @param Wt Total width in tiles to be processed
+ * @param input_dtype Data type of the input tensor
+ * @param index_dtype Data type of the index tensor
+ * @param slicing_strategy Strategy for distributing work across cores
+ *
+ * @return Number of tiles to be processed per core
+ *
+ * @details
+ * For USE_AS_MANY_CORES strategy:
+ * - Minimum of 2 tiles per core is required because the LLK (Low-Level Kernel) needs at least
+ *   two tiles per core to perform sorting operations
+ * - Maximum is capped at 128 tiles (power of 2) based on hardware memory constraints, ensuring
+ *   that tiles can fit into a single core's available memory
+ * - Returns the computed value clamped between these bounds
+ *
+ * For FILL_CORES_FIRST strategy:
+ * - Returns 64 tiles for 32-bit data types (FLOAT32, UINT32, INT32) to account for larger memory footprint
+ * - Returns 128 tiles for smaller data types (16-bit) as default
+ */
 uint32_t SortProgramFactoryCrossCoreDataExchange::get_number_of_tiles_per_core(
     uint32_t total_number_of_cores,
     uint32_t Wt,
@@ -655,6 +678,9 @@ uint32_t SortProgramFactoryCrossCoreDataExchange::get_number_of_tiles_per_core(
     CrossCoreDataExchangeSortSlicingStrategy slicing_strategy) {
     switch (slicing_strategy) {
         case CrossCoreDataExchangeSortSlicingStrategy::USE_AS_MANY_CORES: {
+            // Minimum of 2 tiles per core is required because the LLK (Low-Level Kernel) needs at least two tiles per
+            // core to perform sorting operations. Maximum is capped at 128 tiles (power of 2) based on hardware memory
+            // constraints, ensuring that tiles can fit into a single core's available memory.
             constexpr uint32_t MIN_TILES_PER_CORE = 2;
             constexpr uint32_t MAX_TILES_PER_CORE = 128;
             const auto max_val = std::max(Wt / total_number_of_cores, MIN_TILES_PER_CORE);
