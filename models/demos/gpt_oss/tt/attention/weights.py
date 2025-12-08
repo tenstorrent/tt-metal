@@ -83,6 +83,7 @@ def load_attention_weights(
     row_mesh_mapper = mesh_config.row_parallel(mesh_device)
 
     # Load QKV weight
+    breakpoint()
     wqkv = ttnn.as_tensor(
         qkv_cat,
         device=mesh_device,

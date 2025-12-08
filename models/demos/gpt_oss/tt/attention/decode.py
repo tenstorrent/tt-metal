@@ -52,6 +52,7 @@ def decode_forward(
         raise ValueError(f"Decode mode requires seq_len=1, got {seq_len}")
 
     # QKV projection
+    breakpoint()
     xqkv_fused = ttnn.matmul(
         hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
     )
@@ -68,6 +69,7 @@ def decode_forward(
         num_kv_heads=num_local_kv_heads,
         memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
     )
+    breakpoint()
 
     xqkv_fused.deallocate(True)
 
