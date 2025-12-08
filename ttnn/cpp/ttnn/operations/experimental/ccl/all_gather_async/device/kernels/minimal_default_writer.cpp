@@ -288,7 +288,7 @@ void kernel_main() {
                     pkt_scatter_hdr,
                     static_cast<uint8_t>(unicast_route_info.distance_in_hops),
                     NocUnicastScatterCommandHeader({0, 0, 0, 0}, {page_size, page_size, page_size}),
-                    page_size * num_tiles_to_write_per_packet);
+                    page_size * 4);
                 break;
             case 3:
                 fabric_unicast_noc_scatter_write_set_state<
@@ -296,16 +296,15 @@ void kernel_main() {
                     pkt_scatter_hdr,
                     static_cast<uint8_t>(unicast_route_info.distance_in_hops),
                     NocUnicastScatterCommandHeader({0, 0, 0}, {page_size, page_size}),
-                    page_size * num_tiles_to_write_per_packet);
+                    page_size * 3);
                 break;
-            case 2:
-            case 1:
+            default:
                 fabric_unicast_noc_scatter_write_set_state<
                     UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
                     pkt_scatter_hdr,
                     static_cast<uint8_t>(unicast_route_info.distance_in_hops),
                     NocUnicastScatterCommandHeader({0, 0}, {page_size}),
-                    page_size * num_tiles_to_write_per_packet);
+                    page_size * 2);
                 break;
         }
 
