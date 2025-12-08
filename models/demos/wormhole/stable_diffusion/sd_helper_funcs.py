@@ -288,8 +288,7 @@ def get_reference_vae(is_ci_env, is_ci_v2_env, model_location_generator):
         f"{STABLE_DIFFUSION_CIV2_MODEL_LOCATION}/vae", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
     )
     vae = AutoencoderKL.from_pretrained(
-        STABLE_DIFFUSION_V1_4_MODEL_LOCATION if not is_ci_v2_env else model_location,
-        subfolder="vae" if not is_ci_v2_env else None,
+        STABLE_DIFFUSION_V1_4_MODEL_LOCATION + "/vae" if not is_ci_v2_env else model_location,
         local_files_only=is_ci_env or is_ci_v2_env,
         use_safetensors=True,
     )
@@ -301,8 +300,7 @@ def get_reference_unet(is_ci_env, is_ci_v2_env, model_location_generator):
         f"{STABLE_DIFFUSION_CIV2_MODEL_LOCATION}/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
     )
     unet = UNet2DConditionModel.from_pretrained(
-        STABLE_DIFFUSION_V1_4_MODEL_LOCATION if not is_ci_v2_env else model_location,
-        subfolder="unet" if not is_ci_v2_env else None,
+        STABLE_DIFFUSION_V1_4_MODEL_LOCATION + "/unet" if not is_ci_v2_env else model_location,
         local_files_only=is_ci_env or is_ci_v2_env,
         use_safetensors=True,
     )
