@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Optional, Dict
+import ttnn
 from framework.sweeps_logger import sweeps_logger as logger
 
 
@@ -21,8 +22,6 @@ def capture_peak_memory(test_module, test_vector: dict, device, use_no_dispatch:
         Peak L1 memory in bytes, or None if capture fails
     """
     try:
-        import ttnn
-
         mode = ttnn.graph.RunMode.NO_DISPATCH if use_no_dispatch else ttnn.graph.RunMode.NORMAL
         ttnn.graph.begin_graph_capture(mode)
 
