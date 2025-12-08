@@ -215,21 +215,33 @@ struct tensix_fabric_connections_l1_info_t {
     fabric_aligned_connection_info_t read_write[MAX_FABRIC_ENDPOINTS];
 };
 
+enum RouterCommand : std::uint32_t {
+    NONE = 0,
+    ACTIVATE = 1,
+    PAUSE = 2,
+    STOP = 3,
+};
+
 // TODO: move to *_msgs.h definition
 enum RouterStateCommon : std::uint32_t {
     INITIALIZED = 0,
     ACTIVE = 1,
-    PAUSE = 2,
-    PAUSED = 3,
-    DRAINING = 4,
-    STOP = 5,
-    STOPPED = 6,
+    PAUSED = 2,
+    DRAINING = 3,
+    STOPPED = 4,
+};
+
+struct RouterStateManager {
+    RouterStateCommon state;  // 4B, written by device, read by host
+    uint8_t padding0[12];     //
+    RouterCommand command;    // 4B, written by host, read by device
+    uint8_t padding1[12];     //
 };
 
 struct routing_l1_info_t {
-    RouterStateCommon state;
-    uint16_t my_mesh_id = 0;    // Current mesh ID
-    uint16_t my_device_id = 0;  // Current chip ID
+    RouterStateManager state_manager;  // 32 bytes
+    uint16_t my_mesh_id = 0;           // Current mesh ID // 2 bytes
+    uint16_t my_device_id = 0;         // Current chip ID // 2 bytes
     // NOTE: Compressed version has additional overhead (2x slower) to read values,
     //       but raw data is too huge (2048 bytes) to fit in L1 memory.
     //       Need to evaluate once actual workloads are available
@@ -238,10 +250,10 @@ struct routing_l1_info_t {
     intra_mesh_routing_path_t<1, false> routing_path_table_1d{};            // 256 bytes
     intra_mesh_routing_path_t<2, true> routing_path_table_2d{};             // 512 bytes
     std::uint8_t exit_node_table[MAX_NUM_MESHES] = {};                      // 1024 bytes
-    uint8_t padding1[8] = {};                                               // pad to 16-byte alignment
+    uint8_t padding1[12] = {};                                              // pad to 16-byte alignment
 };
-static_assert(offsetof(routing_l1_info_t, routing_path_table_1d) == 488);
-static_assert(offsetof(routing_l1_info_t, state) % 16 == 0);
+static_assert(offsetof(routing_l1_info_t, routing_path_table_1d) == 516);
+static_assert(offsetof(routing_l1_info_t, state_manager) % 16 == 0);
 static_assert(sizeof(routing_l1_info_t) % 16 == 0);
 
 struct worker_routing_l1_info_t {

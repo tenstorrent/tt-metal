@@ -1246,8 +1246,8 @@ FORCE_INLINE void update_telemetry(
     if constexpr (FABRIC_TELEMETRY_ROUTER_STATE) {
         const auto* routing_table_l1 =
             reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
-        auto* router_state_l1 = const_cast<tt_l1_ptr RouterStateCommon*>(&routing_table_l1->state);
-        fabric_telemetry->dynamic_info.erisc[MY_ERISC_ID].router_state = *router_state_l1;
+        auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
+        fabric_telemetry->dynamic_info.erisc[MY_ERISC_ID].router_state = state_manager_l1->state;
     }
     if constexpr (FABRIC_TELEMETRY_HEARTBEAT_TX) {
         bool sender_idle = false;
@@ -1786,8 +1786,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
 
     const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
-    auto* router_state_l1 = const_cast<tt_l1_ptr RouterStateCommon*>(&routing_table_l1->state);
-    *router_state_l1 = RouterStateCommon::ACTIVE;
+    auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
+    state_manager_l1->state = RouterStateCommon::ACTIVE;
     tt::tt_fabric::routing_l1_info_t routing_table = *routing_table_l1;
 
     // May want to promote to part of the handshake but for now we just initialize in this standalone way
@@ -1899,24 +1899,38 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             open_perf_recording_window(inner_loop_perf_telemetry_collector);
         }
 
-        auto router_state = *router_state_l1;
-        if (router_state == RouterStateCommon::ACTIVE) {
-            if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
-                loop_start_cycles = get_timestamp();
-            }
+        if (state_manager_l1->command == RouterCommand::NONE) [[likely]] {
+            if (state_manager_l1->state == RouterStateCommon::ACTIVE) { ] {
+                    if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
+                        loop_start_cycles = get_timestamp();
+                    }
 
-            run_active_loop(tx_progress, rx_progress);
+                    run_active_loop(tx_progress, rx_progress);
 
-            if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
-                uint64_t loop_end_cycles = get_timestamp();
-                uint64_t loop_delta_cycles = loop_end_cycles - loop_start_cycles;
-                update_bw_cycles(loop_delta_cycles, tx_progress, rx_progress, local_fabric_telemetry);
+                    if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
+                        uint64_t loop_end_cycles = get_timestamp();
+                        uint64_t loop_delta_cycles = loop_end_cycles - loop_start_cycles;
+                        update_bw_cycles(loop_delta_cycles, tx_progress, rx_progress, local_fabric_telemetry);
+                    }
+                }
             }
-        } else if (router_state == RouterStateCommon::PAUSE) {
-            *router_state_l1 = RouterStateCommon::DRAINING;
-            // drain()
-            *router_state_l1 = RouterStateCommon::PAUSED;
         } else {
+            switch (state_manager_l1->command) {
+                case RouterCommand::ACTIVATE: state_manager_l1->state = RouterStateCommon::ACTIVE; break;
+                case RouterCommand::PAUSE:
+                    state_manager_l1->state = RouterStateCommon::DRAINING;
+                    // drain()
+                    state_manager_l1->state = RouterStateCommon::PAUSED;
+                    break;
+                case RouterCommand::STOP:
+                    state_manager_l1->state = RouterStateCommon::DRAINING;
+                    // drain()
+                    state_manager_l1->state = RouterStateCommon::STOPPED;
+                    break;
+                case RouterCommand::NONE:
+                default: break;
+            }
+            state_manager_l1->command = RouterCommand::NONE;
         }
 
         // Compute idle conditions and update heartbeats in one helper
