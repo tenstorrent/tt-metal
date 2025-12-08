@@ -293,7 +293,7 @@ def test_all_broadcast(
 @skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize(
-    "num_devices, num_links, output_shape, layout, input_dtype,cluster_axis",
+    "num_devices, num_links, output_shape, layout, input_dtype, cluster_axis",
     [
         (4, 1, [256, 3328], ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 1),
         (4, 1, [1, 69, 4000], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 1),
