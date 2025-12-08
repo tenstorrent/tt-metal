@@ -1319,6 +1319,27 @@ class ModelArgs:
                 self.model_config["ALL_GATHER_PRE_NORM_CONFIG"] = default_all_gather_pre_norm
                 self.model_config["ALL_GATHER_POST_NORM_CONFIG"] = default_all_gather_post_norm
 
+            # MLP all reduce configuration
+            default_mlp_all_reduce = {
+                "chunks_per_sync": 10,
+                "num_workers_per_link": 2,
+                "num_buffers_per_channel": 2,
+            }
+
+            # Model-specific MLP all reduce overrides
+            model_specific_mlp_all_reduce_configs = {
+                "Llama-3.1-8B": {
+                    "chunks_per_sync": 69,
+                    "num_workers_per_link": 420,
+                    "num_buffers_per_channel": 69420,
+                }
+            }
+
+            if self.base_model_name in model_specific_mlp_all_reduce_configs:
+                self.model_config["MLP_ALL_REDUCE_CONFIG"] = model_specific_mlp_all_reduce_configs[self.base_model_name]
+            else:
+                self.model_config["MLP_ALL_REDUCE_CONFIG"] = default_mlp_all_reduce
+
             logger.info(f"Attention grid: {attn_input_grid}")
             logger.info(f"MLP grid: {mlp_core_grid}")
             logger.info(f"MLP prefill grids @ 32: w1/w3: {mlp1_3_grid(32)}, w2: {mlp2_grid(32)}")

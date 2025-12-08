@@ -278,6 +278,9 @@ class MLP(LightweightModule):
             dtype=self.args.ccl_dtype,
             use_composite=True if self.dim == 8192 else False,
             topology=self.args.ccl_topology(),
+            chunks_per_sync=self.model_config["MLP_ALL_REDUCE_CONFIG"]["chunks_per_sync"],
+            num_workers_per_link=self.model_config["MLP_ALL_REDUCE_CONFIG"]["num_workers_per_link"],
+            num_buffers_per_channel=self.model_config["MLP_ALL_REDUCE_CONFIG"]["num_buffers_per_channel"],
         )
 
         # Ensure dim 0 and 1 are 1
