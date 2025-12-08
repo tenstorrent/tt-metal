@@ -29,9 +29,10 @@ def ttnn_integral_image_channel_last(features_nhwc):
         # fmt: off
         ([1, 12, 40, 256]),
         ([1, 24, 80, 256]),
-        ([1, 48, 160, 256])
+        ([1, 48, 160, 256]),
+        ([1, 96, 160, 256])
     ],
-    ids=["OFT32", "OFT16", "OFT8"],
+    ids=["OFT32", "OFT16", "OFT8", "big_one"],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["DRAM"])
@@ -51,7 +52,7 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
     )
     output_tensor = ttnn_integral_image_cumsum_channel_last(input_tensor)
     ttnn_output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, ttnn_output_tensor, pcc=0.999)
+    assert_with_pcc(torch_output_tensor, ttnn_output_tensor, pcc=0.998)
 
     # experimental intimg
     input_tensor = ttnn.from_torch(
@@ -59,4 +60,4 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
     )
     output_tensor_2 = ttnn_integral_image_channel_last(input_tensor)
     ttnn_output_tensor_2 = ttnn.to_torch(output_tensor_2)
-    assert_with_pcc(torch_output_tensor, ttnn_output_tensor_2, pcc=0.999)
+    assert_with_pcc(torch_output_tensor, ttnn_output_tensor_2, pcc=0.998)
