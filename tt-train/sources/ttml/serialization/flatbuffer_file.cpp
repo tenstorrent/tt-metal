@@ -467,12 +467,13 @@ void FlatBufferFile::deserialize_flatbuffer(std::span<const uint8_t> buffer) {
                 auto* val = kv_pair->value_as_VectorString();
                 if (val && val->values()) {
                     std::vector<std::string> result;
-                    result.reserve(val->values()->size());
-                    for (const auto* s : *val->values()) {
+                    const auto& values = val->values();
+                    result.reserve(values->size());
+                    std::for_each(values->begin(), values->end(), [&result](auto* s) {
                         if (s) {
                             result.push_back(s->str());
                         }
-                    }
+                    });
                     m_data[key] = result;
                 }
                 break;
