@@ -49,8 +49,7 @@ void py_bind_sharded_to_interleaved(pybind11::module& module) {
     detail::bind_sharded_to_interleaved(
         module,
         ttnn::sharded_to_interleaved,
-        R"doc(sharded_to_interleaved(input_tensor: ttnn.Tensor,  memory_config: ttnn.MemoryConfig, *) -> ttnn.Tensor
-
+        R"doc(
         Converts a tensor from sharded to interleaved memory layout
 
         Args:

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -41,8 +41,7 @@ void py_bind_reshard(pybind11::module& module) {
     detail::bind_reshard(
         module,
         ttnn::reshard,
-        R"doc(reshard(input_tensor: ttnn.Tensor,  output_memory_config: MemoryConfig *, output_tensor: Optional[ttnn.Tensor] = None) -> ttnn.Tensor
-
+        R"doc(
         Converts a tensor from one sharded layout to another sharded layout
 
         Args:

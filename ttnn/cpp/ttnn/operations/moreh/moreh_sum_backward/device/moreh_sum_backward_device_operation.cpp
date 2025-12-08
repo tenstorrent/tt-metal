@@ -12,7 +12,7 @@ void MorehSumBackwardOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& output_grad = tensor_args.output_grad;
     const auto& input = tensor_args.input;
-    auto& input_grad = tensor_args.input_grad;
+    const auto& input_grad = tensor_args.input_grad;
 
     const auto keepdim = operation_attributes.keepdim;
     const auto dims = operation_attributes.dims;
@@ -34,7 +34,13 @@ void MorehSumBackwardOperation::validate_inputs(
     // validate output_grad shape
     if (keepdim) {
         for (int i = 0; i < input_rank; ++i) {
-            TT_FATAL(input_shape_wo_padding[i] >= output_grad_shape_wo_padding[i], "Error");
+            TT_FATAL(
+                input_shape_wo_padding[i] >= output_grad_shape_wo_padding[i],
+                "Input shape without padding[{}] ({}) must be >= output grad shape without padding[{}] ({})",
+                i,
+                input_shape_wo_padding[i],
+                i,
+                output_grad_shape_wo_padding[i]);
         }
     } else {
         std::vector<uint32_t> expected_output_grad_shape;
@@ -64,7 +70,13 @@ void MorehSumBackwardOperation::validate_inputs(
         uint32_t rank = output_grad_shape_wo_padding.rank();
         TT_FATAL(expected_rank == rank, "expected_rank {} == rank {}", expected_rank, rank);
         for (int i = 0; i < rank; ++i) {
-            TT_FATAL(expected_output_grad_shape[i] >= output_grad_shape_wo_padding[i], "Error");
+            TT_FATAL(
+                expected_output_grad_shape[i] >= output_grad_shape_wo_padding[i],
+                "Expected output grad shape[{}] ({}) must be >= output grad shape without padding[{}] ({})",
+                i,
+                expected_output_grad_shape[i],
+                i,
+                output_grad_shape_wo_padding[i]);
             log_debug(
                 tt::LogOp,
                 "rank {} expected_output_grad_shape {}, output_grad_shape_wo_padding {}",

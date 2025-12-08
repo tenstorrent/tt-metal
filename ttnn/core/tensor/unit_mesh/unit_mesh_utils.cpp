@@ -8,9 +8,29 @@
 #include "ttnn/distributed/tensor_topology.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/allocator_state.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt_stl/assert.hpp>
 
-namespace ttnn::experimental::unit_mesh {
+namespace tt::tt_metal::experimental::unit_mesh {
+
+namespace {
+
+void synchronize_parent_allocator_with_submeshes(tt::tt_metal::distributed::MeshDevice* parent_mesh) {
+    auto* parent_allocator = parent_mesh->allocator().get();
+    TT_FATAL(parent_allocator != nullptr, "Parent mesh must have an allocator");
+
+    tt::tt_metal::AllocatorState merged_state;
+    for (const auto& submesh : parent_mesh->get_submeshes()) {
+        auto* submesh_allocator = submesh->allocator().get();
+        TT_FATAL(submesh_allocator != nullptr, "Submesh must have an allocator");
+        merged_state.merge(submesh_allocator->extract_state());
+    }
+
+    parent_allocator->override_state(merged_state);
+}
+
+}  // namespace
 
 Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
     TT_FATAL(!tensors.empty(), "Cannot aggregate empty tensor vector");
@@ -21,6 +41,9 @@ Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
     for (const auto& tensor : tensors) {
         auto* device = tensor.device();
         TT_FATAL(device != nullptr, "All tensors must be on device");
+        TT_FATAL(
+            device->get_active_sub_device_manager_id() == device->get_default_sub_device_manager_id(),
+            "Cannot aggregate tensors when unit mesh has non-default sub-device manager");
 
         const auto& shape = device->shape();
         TT_FATAL(shape.mesh_size() == 1, "Expected unit mesh (1x1), but got mesh of size {}", shape.mesh_size());
@@ -32,6 +55,9 @@ Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> parent_mesh = tensors[0].device()->get_parent_mesh();
     TT_FATAL(parent_mesh != nullptr, "First device must have a parent mesh");
     TT_FATAL(parent_mesh->shape().mesh_size() == tensors.size(), "Input tensors must span the entire parent mesh");
+    TT_FATAL(
+        parent_mesh->get_active_sub_device_manager_id() == parent_mesh->get_default_sub_device_manager_id(),
+        "Cannot aggregate tensors when parent mesh has non-default sub-device manager");
 
     for (size_t i = 1; i < devices.size(); i++) {
         TT_FATAL(
@@ -48,8 +74,9 @@ Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
             tensors[i].mesh_buffer()->address() == reference_address, "All mesh buffers must be at the same address");
     }
 
+    synchronize_parent_allocator_with_submeshes(parent_mesh.get());
+
     // Create a new mesh tensor for parent mesh.
-    // TODO: #30348 - synchronize the state of parent mesh allocator with all of submeshes.
     const auto& reference_buffer = tensors[0].mesh_buffer();
     auto mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
         reference_buffer->global_config(),
@@ -78,6 +105,9 @@ std::vector<tt::tt_metal::Tensor> disaggregate(const tt::tt_metal::Tensor& tenso
     // Validate the tensor is allocated on mesh device, that is parent mesh of unit meshes.
     auto* mesh_device = tensor.device();
     TT_FATAL(mesh_device != nullptr, "Tensor must be allocated on a mesh device");
+    TT_FATAL(
+        mesh_device->get_active_sub_device_manager_id() == mesh_device->get_default_sub_device_manager_id(),
+        "Cannot disaggregate tensor when parent mesh has non-default sub-device manager");
     const auto submeshes = mesh_device->get_submeshes();
     TT_FATAL(
         submeshes.size() == mesh_device->shape().mesh_size(),
@@ -100,6 +130,9 @@ std::vector<tt::tt_metal::Tensor> disaggregate(const tt::tt_metal::Tensor& tenso
     std::vector<Tensor> result;
     result.reserve(submeshes.size());
     for (const auto& submesh : submeshes) {
+        TT_FATAL(
+            submesh->get_active_sub_device_manager_id() == submesh->get_default_sub_device_manager_id(),
+            "Cannot disaggregate tensor when submesh has non-default sub-device manager");
         auto mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
             input_mesh_buffer->global_config(), input_mesh_buffer->device_local_config(), submesh.get(), input_address);
 
@@ -112,4 +145,4 @@ std::vector<tt::tt_metal::Tensor> disaggregate(const tt::tt_metal::Tensor& tenso
     return result;
 }
 
-}  // namespace ttnn::experimental::unit_mesh
+}  // namespace tt::tt_metal::experimental::unit_mesh

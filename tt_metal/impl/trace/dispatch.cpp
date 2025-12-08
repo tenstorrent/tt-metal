@@ -18,6 +18,8 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "dispatch/worker_config_buffer.hpp"
+#include <impl/dispatch/dispatch_query_manager.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace tt::tt_metal::trace_dispatch {
 
@@ -107,7 +109,7 @@ void issue_trace_commands(
         command_sequence.add_dispatch_go_signal_mcast(
             expected_num_workers_completed[index],
             MetalContext::instance().hal().make_go_msg_u32(
-                dev_msgs::RUN_MSG_RESET_READ_PTR,
+                dev_msgs::RUN_MSG_REPLAY_TRACE,
                 dispatch_core.x,
                 dispatch_core.y,
                 MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(index)),

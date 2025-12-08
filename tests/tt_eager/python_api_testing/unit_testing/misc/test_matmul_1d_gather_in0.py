@@ -5,7 +5,7 @@
 import pytest
 from loguru import logger
 import ttnn
-from models.common.utility_functions import is_wormhole_b0, is_grayskull, skip_for_wormhole_b0
+from models.common.utility_functions import is_wormhole_b0, is_blackhole
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 import torch
 import itertools
@@ -15,7 +15,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 )
 import random
 import math
-from models.common.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b0, is_blackhole
 from tracy import signpost
 
 from models.demos.llama3_70b_galaxy.tt.model_config import (
@@ -339,19 +338,14 @@ def run_multi_core_matmul_1d(
         untilize_out=untilize_out,
     )
 
-    if is_grayskull():
-        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=fidelity,
-            math_approx_mode=True,
-        )
-    else:
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=fidelity,
-            math_approx_mode=True,
-            fp32_dest_acc_en=fp32_acc_mode,
-            packer_l1_acc=packer_l1_acc,
-            dst_full_sync_en=True,
-        )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=fidelity,
+        math_approx_mode=True,
+        fp32_dest_acc_en=fp32_acc_mode,
+        packer_l1_acc=packer_l1_acc,
+        dst_full_sync_en=True,
+    )
 
     signpost("start")
     for _ in range(num_iters):
@@ -380,8 +374,7 @@ def run_multi_core_matmul_1d(
     assert device.num_program_cache_entries() == 1  # Only 1 op
 
 
-@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
-@pytest.mark.skipif(is_blackhole(), reason="Test suite for GS only")
+@pytest.mark.skipif(is_blackhole(), reason="Test suite for WH only")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
     "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
@@ -459,8 +452,7 @@ def test_multi_core_matmul_1d_in1_dram_wh(
     )
 
 
-@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
-@pytest.mark.skipif(is_blackhole(), reason="Test suite for GS only")
+@pytest.mark.skipif(is_blackhole(), reason="Test suite for WH only")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
     "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
@@ -531,8 +523,7 @@ def test_multi_core_matmul_1d_pad_wh(
     )
 
 
-@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
-@pytest.mark.skipif(is_blackhole(), reason="Test suite for GS only")
+@pytest.mark.skipif(is_blackhole(), reason="Test suite for WH only")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
     "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
@@ -626,8 +617,7 @@ def test_multi_core_matmul_1d_wh(
     )
 
 
-@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
-@pytest.mark.skipif(is_blackhole(), reason="Test suite for GS only")
+@pytest.mark.skipif(is_blackhole(), reason="Test suite for WH only")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
     "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
@@ -897,6 +887,174 @@ def test_multi_core_matmul_1d_gs(
     indirect=True,
 )
 def test_matmul_1d_ring_llama_perf(
+    device,
+    in0_dtype,
+    in1_dtype,
+    output_dtype,
+    fidelity,
+    has_bias,
+    fp32_acc_mode,
+    packer_l1_acc,
+    B,
+    M,
+    K,
+    N,
+    grid,
+    in1_is_dram_interleaved,
+    untilize_out,
+    num_iters,
+    function_level_defaults,
+):
+    # Only run these tests on unharvested TG
+    device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
+    if device_grid != (7, 10):
+        pytest.skip("Skipping test_run_prefetcher because it only works with a 7x10 grid")
+
+    if in1_is_dram_interleaved:
+        hop_grid = None
+    else:
+        hop_grid = [
+            (3, 6),
+        ]
+
+    run_multi_core_matmul_1d(
+        device,
+        in0_dtype,
+        in1_dtype,
+        fidelity,
+        has_bias,
+        fp32_acc_mode,
+        packer_l1_acc,
+        B,
+        M,
+        K,
+        N,
+        None,  # activation,
+        grid,
+        True,
+        num_iters,
+        output_dtype=output_dtype,
+        use_physical_to_logical_mapping=False,
+        hop_grid=hop_grid,
+        in1_is_dram_interleaved=in1_is_dram_interleaved,
+        untilize_out=untilize_out,
+    )
+
+
+@pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
+@pytest.mark.parametrize(
+    "B, M, K, N, in0_dtype, in1_dtype, output_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid, in1_is_dram_interleaved, untilize_out",
+    [
+        (
+            1,
+            32,
+            1280,
+            1280,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.bfloat16,
+            ttnn.MathFidelity.HiFi2,
+            True,
+            True,
+            PREFETCHER_NOC1_GRID,
+            False,
+            True,
+        ),
+        (
+            1,
+            32,
+            1280,
+            1280,
+            ttnn.bfloat16,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.MathFidelity.HiFi2,
+            True,
+            True,
+            PREFETCHER_NOC1_GRID,
+            False,
+            False,
+        ),
+        (
+            1,
+            32,
+            1024,
+            1280,
+            ttnn.bfloat16,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.MathFidelity.HiFi2,
+            True,
+            True,
+            PREFETCHER_NOC1_GRID,
+            False,
+            False,
+        ),
+        (
+            1,
+            32,
+            1280,
+            3200,
+            ttnn.bfloat16,
+            ttnn.bfloat4_b,
+            ttnn.bfloat8_b,
+            ttnn.MathFidelity.LoFi,
+            True,
+            False,
+            PREFETCHER_NOC1_GRID,
+            False,
+            False,
+        ),
+        (
+            1,
+            32,
+            3200,
+            1280,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.MathFidelity.HiFi2,
+            True,
+            True,
+            PREFETCHER_NOC1_GRID,
+            False,
+            False,
+        ),
+        (
+            1,
+            32,
+            2048,
+            19456,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.MathFidelity.HiFi2,
+            True,
+            True,
+            LM_HEAD_32_GRID,
+            True,
+            False,
+        ),
+    ],
+    ids=[
+        "qkv_rm",
+        "qkv",
+        "do",
+        "ff13",
+        "ff2",
+        "lm_head",
+    ],
+)
+@pytest.mark.parametrize(
+    "num_iters",
+    [50],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
+def test_matmul_1d_ring_qwen_perf(
     device,
     in0_dtype,
     in1_dtype,

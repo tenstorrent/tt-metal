@@ -27,18 +27,24 @@ parameters = {
 
 
 def run_argmax(device, height, width, dim, dtype, layout):
-    torch_input_tensor = torch.rand([height, width], dtype=torch.float32)
+    input_tensor = torch.rand([height, width], dtype=torch.float32)
+    ttnn_input_tensor = ttnn.from_torch(input_tensor, dtype=dtype, layout=layout, device=device)
+
+    if dtype == ttnn.bfloat16:
+        # Let torch input have same precision as the ttnn input
+        torch_input_tensor = ttnn.to_torch(ttnn_input_tensor)
+    else:
+        torch_input_tensor = input_tensor
+
     torch_output_tensor = torch.argmax(torch_input_tensor, dim)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=layout, device=device)
-
     start_time = start_measuring_time()
-    op_output_tensor = ttnn.argmax(input_tensor, dim=dim)
-    output_tensor = ttnn.to_torch(op_output_tensor)
+    op_output_tensor = ttnn.argmax(ttnn_input_tensor, dim=dim)
+    ttnn_output_tensor = ttnn.to_torch(op_output_tensor)
     e2e_perf = stop_measuring_time(start_time)
     expected_pcc = 0.999
-    tensors = [input_tensor, op_output_tensor]
-    return get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf)
+    tensors = [ttnn_input_tensor, op_output_tensor]
+    return get_run_return(torch_output_tensor, ttnn_output_tensor, expected_pcc, tensors, e2e_perf)
 
 
 @pytest.mark.parametrize("height", parameters["pytorch"]["height"])

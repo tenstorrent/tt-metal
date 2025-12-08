@@ -4,7 +4,7 @@
 
 #include <fmt/base.h>
 #include <stdlib.h>
-#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -325,7 +325,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixInstantiateTraceSanity) {
     vector<uint32_t> data_fd, data_bd;
 
     // Backdoor read the trace buffer - using the actual device buffer
-    auto device_buffer = trace_inst->mesh_buffer->get_device_buffer(distributed::MeshCoordinate{0, 0});
+    auto* device_buffer = trace_inst->mesh_buffer->get_device_buffer(distributed::MeshCoordinate{0, 0});
     detail::ReadFromBuffer(*device_buffer, data_bd);
 
     // Frontdoor read the trace buffer

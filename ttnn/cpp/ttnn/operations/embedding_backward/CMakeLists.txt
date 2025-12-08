@@ -4,6 +4,15 @@ add_library(TTNN::Ops::Embedding::Backward ALIAS ttnn_op_embedding_backward)
 target_precompile_headers(ttnn_op_embedding_backward REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_embedding_backward)
 
+set_target_properties(
+    ttnn_op_embedding_backward
+    PROPERTIES
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
+)
+
+file(GLOB_RECURSE kernels device/kernels/*)
+
 target_sources(
     ttnn_op_embedding_backward
     PUBLIC
@@ -11,6 +20,10 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES embedding_backward.hpp
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         embedding_backward.cpp
         device/embedding_backward_device_operation.cpp

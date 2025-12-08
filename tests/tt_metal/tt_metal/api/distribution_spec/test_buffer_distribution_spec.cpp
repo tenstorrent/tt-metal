@@ -11,10 +11,56 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace distribution_spec_tests {
 using tt::tt_metal::BufferDistributionSpec;  // NOLINT(misc-unused-using-decls)
 constexpr uint32_t PADDING = tt::tt_metal::UncompressedBufferPageMapping::PADDING;
+
+// Shared fixture that creates the MeshDevice once per test suite instead of per test case.
+// This significantly speeds up parameterized tests by avoiding repeated device setup/teardown.
+class BufferDistributionSpecFixture : public ::testing::Test {
+public:
+    inline static std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
+
+protected:
+    static void SetUpTestSuite() {
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (slow_dispatch) {
+            // Cannot skip in SetUpTestSuite, will be handled in SetUp
+            return;
+        }
+
+        const auto system_mesh_shape = tt::tt_metal::distributed::SystemMesh::instance().shape();
+        auto core_type = tt::tt_metal::DispatchCoreType::WORKER;
+
+        mesh_device_ = tt::tt_metal::distributed::MeshDevice::create(
+            tt::tt_metal::distributed::MeshDeviceConfig(system_mesh_shape, std::nullopt),
+            DEFAULT_L1_SMALL_SIZE,
+            DEFAULT_TRACE_REGION_SIZE,
+            /*num_command_queues=*/1,
+            core_type,
+            {},
+            DEFAULT_WORKER_L1_SIZE);
+    }
+
+    static void TearDownTestSuite() {
+        if (mesh_device_) {
+            mesh_device_->close();
+            mesh_device_.reset();
+        }
+    }
+
+    void SetUp() override {
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (slow_dispatch) {
+            GTEST_SKIP() << "Skipping test suite, since it can only be run in Fast Dispatch Mode.";
+        }
+        if (!mesh_device_) {
+            GTEST_SKIP() << "MeshDevice not initialized.";
+        }
+    }
+};
 
 struct BufferDistributionSpecInputs {
     tt::tt_metal::Shape physical_tensor_shape;
@@ -80,7 +126,7 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_replicated_mesh_bu
 using namespace distribution_spec_tests;
 using namespace tt::tt_metal;
 
-class MeshBufferAllocationTests : public GenericMeshDeviceFixture,
+class MeshBufferAllocationTests : public BufferDistributionSpecFixture,
                                   public ::testing::WithParamInterface<BufferAllocationParams> {};
 
 TEST_P(MeshBufferAllocationTests, Allocation) {
@@ -91,7 +137,7 @@ TEST_P(MeshBufferAllocationTests, Allocation) {
 
     // Extract local single-device buffer (ie. shard_view) concepts for testing
     const tt::tt_metal::distributed::MeshCoordinate mesh_coordinate{0, 0};
-    const auto shard_view = mesh_buffer->get_device_buffer(mesh_coordinate);
+    auto* const shard_view = mesh_buffer->get_device_buffer(mesh_coordinate);
 
     // Check that the stored cores in local device buffer matches expected cores to be used
     auto page_mapping = shard_view->buffer_distribution_spec()->compute_page_mapping();
@@ -202,7 +248,7 @@ INSTANTIATE_TEST_SUITE_P(
 );
 // clang-format on
 
-class MeshBufferReadWriteTests : public GenericMeshDeviceFixture,
+class MeshBufferReadWriteTests : public BufferDistributionSpecFixture,
                                  public ::testing::WithParamInterface<std::tuple<bool, bool, BufferReadWriteParams>> {};
 
 TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
@@ -213,8 +259,8 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
 
     // Extract local single-device buffer (ie. shard_view) concepts for testing
     const tt::tt_metal::distributed::MeshCoordinate mesh_coordinate{0, 0};
-    const auto shard_view = mesh_buffer->get_device_buffer(mesh_coordinate);
-    const auto local_device = shard_view->device();
+    auto* const shard_view = mesh_buffer->get_device_buffer(mesh_coordinate);
+    auto* const local_device = shard_view->device();
     const auto host_size_in_bytes = mesh_buffer->device_local_size();
     const auto bank_base_address = mesh_buffer->address();
     const auto page_size = mesh_buffer->page_size();
@@ -246,7 +292,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
     {
         uint16_t channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(local_device->id());
-        chip_id_t mmio_device_id =
+        ChipId mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(local_device->id());
         uint32_t cq_size = local_device->sysmem_manager().get_cq_size();
         uint32_t cq_start = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(

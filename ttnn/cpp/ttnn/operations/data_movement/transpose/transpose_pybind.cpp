@@ -15,10 +15,8 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_transpose(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
-            transpose(input_tensor: ttnn.Tensor, dim1: int, dim2: int, *, Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-
             Returns a tensor that is transposed along dims dim1 and dim2
 
             Equivalent pytorch code:

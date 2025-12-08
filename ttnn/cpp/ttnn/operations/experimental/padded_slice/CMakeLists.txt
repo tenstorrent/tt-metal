@@ -6,22 +6,28 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_padded_slice)
 set_target_properties(
     ttnn_op_experimental_padded_slice
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            false
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
 file(GLOB_RECURSE kernels device/kernels/*)
 target_sources(
     ttnn_op_experimental_padded_slice
     PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
         padded_slice.cpp
-        device/padded_slice_op.cpp
-        device/padded_slice_program_factory.cpp
+        device/padded_slice_device_operation.cpp
+        device/padded_slice_utils.cpp
+        device/padded_slice_rm_program_factory.cpp
+        device/padded_slice_tile_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_padded_slice PRIVATE ${FixmeOpIncDirs})

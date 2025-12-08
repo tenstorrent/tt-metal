@@ -6,7 +6,7 @@
 
 #include "ttnn-pybind/pybind_fwd.hpp"
 
-namespace ttnn::operations::experimental::transformer::detail {
+namespace ttnn::operations::experimental::create_qkv_heads::detail {
 
 void bind_create_qkv_heads(pybind11::module& module);
-}  // namespace ttnn::operations::experimental::transformer::detail
+}  // namespace ttnn::operations::experimental::create_qkv_heads::detail

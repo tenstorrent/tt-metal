@@ -22,7 +22,7 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 31000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -35,10 +35,9 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 @pytest.mark.parametrize(
     ("mesh_device", "sp", "tp", "encoder_tp", "vae_tp", "topology", "num_links", "mesh_test_id"),
     [
-        pytest.param((1, 4), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1, "1x4sp0tp1", id="1x4sp0tp1"),
+        pytest.param((1, 2), (1, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2, "1x2sp0tp1", id="1x2sp0tp1"),
+        pytest.param((2, 2), (2, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 2, "2x2sp0tp1", id="2x2sp0tp1"),
         pytest.param((2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1, "2x4sp0tp1", id="2x4sp0tp1"),
-        # pytest.param((2, 4), (4, 1), (2, 0), (4, 1), (4, 1), ttnn.Topology.Linear, 1, "2x4sp1tp0", id="2x4sp1tp0"), #Encoder OOM
-        # pytest.param((1, 8), (1, 0), (8, 1), (1, 0), (8, 1), ttnn.Topology.Linear, 1, "1x8sp0tp1", id="1x8sp0tp1"), # Encoder OOM
         pytest.param((4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 4, "4x8sp0tp1", id="4x8sp0tp1"),
         pytest.param((4, 8), (8, 1), (4, 0), (4, 0), (4, 0), ttnn.Topology.Linear, 4, "4x8sp1tp0", id="4x8sp1tp0"),
     ],
@@ -56,6 +55,13 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
     [
         pytest.param(True, id="traced"),
         pytest.param(False, id="not_traced"),
+    ],
+)
+@pytest.mark.parametrize(
+    "use_cache",
+    [
+        pytest.param(True, id="yes_use_cache"),
+        pytest.param(False, id="no_use_cache"),
     ],
 )
 def test_flux1_pipeline(
@@ -78,7 +84,19 @@ def test_flux1_pipeline(
     model_location_generator,
     traced: bool,
     mesh_test_id: str,
+    use_cache: bool,
+    is_ci_env: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Setup CI environment
+    if is_ci_env:
+        if use_cache:
+            monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
+        else:
+            pytest.skip("Skipping. No use cache is implicitly tested with the configured non persistent cache path.")
+        if traced:
+            pytest.skip("Skipping traced test in CI environment. Use Performance test for detailed timing analysis.")
+
     sp_factor, sp_axis = sp
     tp_factor, tp_axis = tp
 
@@ -146,7 +164,7 @@ def test_flux1_pipeline(
         )
 
         output_filename = f"{filename_prefix}_{number}.png"
-        images.save(output_filename)
+        images[0].save(output_filename)
         logger.info(f"Image saved as {output_filename}")
 
         timing_data = timing_collector.get_timing_data()

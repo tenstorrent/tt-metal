@@ -297,9 +297,9 @@ class RowPipelinedModel(SharedStateAddOn, AbstractModule):
         for src_coord, dst_coord in zip(src_row, dst_row):
             ttnn.point_to_point(
                 x,
-                dst_coord,
                 src_coord,
-                optional_output_tensor=x,
+                dst_coord,
+                output_tensor=x,
                 topology=topology,
             )
 

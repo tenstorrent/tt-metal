@@ -20,9 +20,10 @@ class TorchRMSNorm(torch.nn.Module):
         self.norm_eps = norm_eps
         self.norm_elementwise_affine = norm_elementwise_affine
         self.use_bias = bias
-        self.weight = torch.nn.Parameter(torch.randn(embedding_dim))
-        if bias:
-            self.bias = torch.nn.Parameter(torch.randn(embedding_dim))
+        if norm_elementwise_affine:
+            self.weight = torch.nn.Parameter(torch.randn(embedding_dim))
+            if bias:
+                self.bias = torch.nn.Parameter(torch.randn(embedding_dim))
 
     def forward(self, x):
         x = x / torch.sqrt(torch.mean(x**2, dim=-1, keepdim=True) + self.norm_eps)
@@ -39,9 +40,10 @@ class TorchLayerNorm(torch.nn.Module):
         self.norm_eps = norm_eps
         self.norm_elementwise_affine = norm_elementwise_affine
         self.use_bias = bias
-        self.weight = torch.nn.Parameter(torch.randn(embedding_dim))
-        if bias:
-            self.bias = torch.nn.Parameter(torch.randn(embedding_dim))
+        if norm_elementwise_affine:
+            self.weight = torch.nn.Parameter(torch.randn(embedding_dim))
+            if bias:
+                self.bias = torch.nn.Parameter(torch.randn(embedding_dim))
 
     def forward(self, x):
         mean = torch.mean(x, dim=-1, keepdim=True)
@@ -87,7 +89,7 @@ def test_rmsnorm(
     tt_model = RMSNorm(
         embedding_dim=input_shape[-1], norm_elementwise_affine=norm_eltwise_affine, bias=bias, mesh_device=mesh_device
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch_input_tensor = torch.randn(input_shape, dtype=torch_dtype) * 2 + 4
 
@@ -143,7 +145,7 @@ def test_layernorm(
         mesh_device=mesh_device,
         use_row_major_workaround=use_row_major_workaround,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch_input_tensor = torch.randn(input_shape, dtype=torch_dtype) * 2 + 4
 
@@ -171,6 +173,14 @@ def test_layernorm(
         [(2, 4), 0],
         [(4, 2), 1],
     ],
+    ids=[
+        "1x2_1",
+        "2x1_0",
+        "2x2_0",
+        "2x2_1",
+        "2x4_0",
+        "4x2_1",
+    ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
@@ -178,7 +188,9 @@ def test_layernorm(
     [
         (1, 1, 4096, 2432),  # spatial norm
         (1, 1, 333, 2432),  # prompt norm
+        (1, 1, 32768, 384),
     ],
+    ids=["shape1", "shape2", "shape3"],
 )
 @pytest.mark.parametrize(
     ("norm_eltwise_affine, bias"),
@@ -186,6 +198,7 @@ def test_layernorm(
         (True, False),
         (False, False),
     ],
+    ids=["yes_eltwise_no_bias", "no_eltwise_no_bias"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_distributed_rms_norm(
@@ -211,7 +224,7 @@ def test_distributed_rms_norm(
         mesh_axis=mesh_axis,
         ccl_manager=ccl_manager,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch_input_tensor = torch.randn(input_shape, dtype=torch_dtype) * 2 + 4
 
@@ -284,7 +297,7 @@ def test_distributed_layernorm(
         mesh_axis=mesh_axis,
         ccl_manager=ccl_manager,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch_input_tensor = torch.randn(input_shape, dtype=torch_dtype) * 2 + 4
 

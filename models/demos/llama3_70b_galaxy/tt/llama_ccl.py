@@ -29,6 +29,7 @@ class TT_CCL:
         worker_sub_device_id,
         mode="decode",
         allocate_prefill_buffers=True,
+        is_qwen=False,
     ):
         self.mode = mode
         all_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
@@ -50,6 +51,7 @@ class TT_CCL:
         self.max_top_k = model_args.max_top_k
         self.max_batch_size = model_args.max_batch_size
         self.cluster_shape = model_args.cluster_shape
+        self.is_qwen = is_qwen
 
         # Double buffered on each axis
         self.gather_semaphore_handles = [[], []]
@@ -244,24 +246,46 @@ class TT_CCL:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         persistent_buffers["SAMPLING_INDICES"] = tt_buffer
-        tt_buffer = ttnn.from_torch(
-            torch.zeros((1, 1, 32, 128 * 1024)),
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        tt_buffer = (
+            ttnn.from_torch(
+                torch.zeros((1, 1, 32, 128 * 1024)),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            if not self.is_qwen
+            else ttnn.from_torch(
+                torch.zeros((1, 1, 32, 155648)),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
         )
         persistent_buffers["SAMPLING"] = tt_buffer
 
         # Binary Mult + Silu
-        tt_buffer = ttnn.from_torch(
-            torch.zeros((1, 1, self.max_batch_size, 3584)),
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
-            memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        tt_buffer = (
+            ttnn.from_torch(
+                torch.zeros((1, 1, self.max_batch_size, 3584)),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            if not self.is_qwen
+            else ttnn.from_torch(
+                torch.zeros((1, 1, self.max_batch_size, 3200)),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
         )
         persistent_buffers["BINARY_MUL"] = tt_buffer
 
@@ -283,7 +307,9 @@ class TT_CCL:
 
         # Create persistent buffers for cluster axis 0
         cluster_axis = 0
-        N_per_shard = 2048 // 16 * cluster_shape[cluster_axis]  # FF2/DO
+        N_per_shard = (
+            2048 // 16 * cluster_shape[cluster_axis] if not self.is_qwen else 1280 // 10 * cluster_shape[cluster_axis]
+        )  # FF2/DO
         buffer_mem_cfg = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
@@ -328,7 +354,11 @@ class TT_CCL:
 
         # Create persistent buffer for lm_head
         num_cores_after_lm_head = 32  # Use 32 cores instead of 16 to reduce L1 memory usage per core
-        N_per_shard = (16 * 1024) // num_cores_after_lm_head * cluster_shape[cluster_axis]  # LM Head
+        N_per_shard = (
+            (16 * 1024) // num_cores_after_lm_head * cluster_shape[cluster_axis]
+            if not self.is_qwen
+            else (155648 // 8) // num_cores_after_lm_head * cluster_shape[cluster_axis]
+        )  # LM Head
         self.lm_head_buffer_mem_cfg = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
@@ -366,13 +396,16 @@ class TT_CCL:
         cluster_axis = 1
         buffer_mem_cfg = self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"]
         for _ in range(self.num_cbs):
-            tt_buffer = ttnn.from_torch(
-                torch.zeros((*cluster_shape, 32, 512 * buffer_mem_cfg.shard_spec.num_cores())),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
-                memory_config=buffer_mem_cfg,
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+            tt_buffer = (
+                # 512 = 4 devices * 4 pages per packet * 32 tile_width
+                ttnn.from_torch(
+                    torch.zeros((*cluster_shape, 32, 512 * buffer_mem_cfg.shard_spec.num_cores())),
+                    device=self.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=buffer_mem_cfg,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+                )
             )
             persistent_buffers[cluster_axis].append(tt_buffer)
 
@@ -426,13 +459,23 @@ class TT_CCL:
             if self.model_config is None:
                 return persistent_buffers
 
-            buffers_dict = {
-                "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
-                "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
-                "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
-                "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
-                "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
-            }
+            buffers_dict = (
+                {
+                    "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
+                    "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
+                    "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
+                    "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                }
+                if not self.is_qwen
+                else {
+                    "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
+                    "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
+                    "FF1": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
+                    "FF3": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
+                    "FF2": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
+                }
+            )
             for key, shape in buffers_dict.items():
                 tt_buffers = []
                 for i in range(1):
@@ -483,13 +526,23 @@ class TT_CCL:
             if self.model_config is None:
                 return persistent_buffers
 
-            buffers_dict = {
-                "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
-                "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
-                "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
-                "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
-                "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
-            }
+            buffers_dict = (
+                {
+                    "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
+                    "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
+                    "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
+                    "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                }
+                if not self.is_qwen
+                else {
+                    "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
+                    "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
+                    "FF1": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
+                    "FF3": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
+                    "FF2": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
+                }
+            )
             for key, shape in buffers_dict.items():
                 tt_intermediate_buffer = ttnn.as_tensor(
                     torch.zeros(shape[0]),
@@ -525,16 +578,29 @@ class TT_CCL:
         for seqlen in self.support_seqlens:
             ag_persistent_buffers = {}
 
-            buffers_dict = {
-                "QKV": [(1, 1, seqlen, 1280)],
-                "SDPA": [(1, 1, seqlen // 2, 1024)],
-                "SDPA_REVERSE": [(1, 1, seqlen // 2, 1024)],
-                "WO": [(1, 1, seqlen, 2048)],
-                "FF1": [(1, 1, seqlen, 3584)],
-                "FF3": [(1, 1, seqlen, 3584)],
-                "FF2": [(1, 1, seqlen, 2048)],
-                "LAYERNORM": [(1, 1, seqlen, 128)],
-            }
+            buffers_dict = (
+                {
+                    "QKV": [(1, 1, seqlen, 1280)],
+                    "SDPA": [(1, 1, seqlen // 2, 1024)],
+                    "SDPA_REVERSE": [(1, 1, seqlen // 2, 1024)],
+                    "WO": [(1, 1, seqlen, 2048)],
+                    "FF1": [(1, 1, seqlen, 3584)],
+                    "FF3": [(1, 1, seqlen, 3584)],
+                    "FF2": [(1, 1, seqlen, 2048)],
+                    "LAYERNORM": [(1, 1, seqlen, 128)],
+                }
+                if not self.is_qwen
+                else {
+                    "QKV": [(1, 1, seqlen, 1280)],
+                    "SDPA": [(1, 1, seqlen // 2, 1024)],
+                    "SDPA_REVERSE": [(1, 1, seqlen // 2, 1024)],
+                    "WO": [(1, 1, seqlen, 1280)],
+                    "FF1": [(1, 1, seqlen, 3200)],
+                    "FF3": [(1, 1, seqlen, 3200)],
+                    "FF2": [(1, 1, seqlen, 1280)],
+                    "LAYERNORM": [(1, 1, seqlen, 128)],
+                }
+            )
             for key, shape in buffers_dict.items():
                 tt_buffer = ttnn.as_tensor(
                     torch.zeros(shape[0]),
@@ -549,10 +615,17 @@ class TT_CCL:
             ag_persistent_buffers_all[seqlen] = ag_persistent_buffers
 
         # Additional buffers for fixed lengths (1 Tile = 32)
-        buffers_fixed_length = {
-            "LM_HEAD": [(4, 1, 32, 16384)],
-            "SAMPLING": [(1, 1, 32, 128 * 1024)],
-        }
+        buffers_fixed_length = (
+            {
+                "LM_HEAD": [(4, 1, 32, 16384)],
+                "SAMPLING": [(1, 1, 32, 128 * 1024)],
+            }
+            if not self.is_qwen
+            else {
+                "LM_HEAD": [(4, 1, 32, 19456)],
+                "SAMPLING": [(1, 1, 32, 19456 * 8)],
+            }
+        )
         for key, shape in buffers_fixed_length.items():
             tt_buffer = ttnn.as_tensor(
                 torch.zeros(shape[0]),
@@ -585,7 +658,6 @@ class TT_CCL:
                 persistent_buffer = self.tt_lm_head_buffer_l1
             else:
                 persistent_buffer = self.persistent_buffers[cluster_axis]
-
             output_tensor_mesh = ttnn.experimental.all_reduce_async(
                 input_tensor_mesh,
                 persistent_buffer,
@@ -858,23 +930,14 @@ class TT_CCL:
                 if seqlen not in self.persistent_buffers.keys()
                 else self.persistent_buffers[seqlen].get(buffer_key, None)
             )
-            ttnn_tensor_out = ttnn.experimental.reduce_scatter_async(
+            ttnn_tensor_out = ttnn.reduce_scatter(
                 input_tensor_mesh,
                 dim,
                 cluster_axis=cluster_axis,
-                mesh_device=self.mesh_device,
-                from_remote_multi_device_global_semaphore=self.from_semaphore_handles[cluster_axis][
-                    self.gather_idx[cluster_axis]
-                ],
-                to_remote_multi_device_global_semaphore=self.to_semaphore_handles[cluster_axis][
-                    self.gather_idx[cluster_axis]
-                ],
-                math_op=math_op,
                 memory_config=memory_config,
                 topology=ttnn.Topology.Linear,
                 num_links=num_links,
                 subdevice_id=self.worker_sub_device_id,
-                persistent_output_tensors=persistent_buffers,
             )
             # reshape input back
             ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
@@ -884,7 +947,6 @@ class TT_CCL:
             persistent_interim_buffer = self.reduce_scatter_buffers[cluster_axis][
                 self.reduce_scatter_buffer_idx[cluster_axis]
             ]
-
             ttnn_tensor_out = ttnn.experimental.llama_reduce_scatter(
                 input_tensor_mesh,
                 persistent_interim_buffer,
@@ -955,6 +1017,7 @@ class TT_CCL:
         use_optimal_ccl_for_llama=False,
     ):
         topology = ttnn.Topology.Linear
+
         if self.mode == "prefill":
             persistent_buffer = None
             if self.use_ring_ag_prefill and buffer_key is not None:
@@ -1163,7 +1226,8 @@ def tt_distributed_rmsnorm(
     compute_kernel_config,
     tt_ccl=None,
 ):
-    use_2d_grid = inp.shape[-2] == 128
+    use_2d_grid = inp.shape[-2] == 128 and not tt_ccl.is_qwen
+
     # Run distributed rmsnorm part 1
     tt_stats = ttnn.rms_norm_pre_all_gather(
         inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16, use_2d_core_grid=use_2d_grid
@@ -1172,7 +1236,6 @@ def tt_distributed_rmsnorm(
     tt_stats_gathered = tt_ccl.line_all_gather(
         tt_stats, dim=3, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="LAYERNORM"
     )
-
     tt_stats.deallocate(True)
 
     # Run distributed rmsnorm part 2
@@ -1184,7 +1247,6 @@ def tt_distributed_rmsnorm(
         compute_kernel_config=compute_kernel_config,
         use_2d_core_grid=use_2d_grid,
     )
-
     # tt_stats_gathered.deallocate(True)
     # inp.deallocate(True)
 

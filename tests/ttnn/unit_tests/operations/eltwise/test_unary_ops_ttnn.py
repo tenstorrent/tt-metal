@@ -699,26 +699,6 @@ def test_unary_log_sigmoid_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_rsqrt_ttnn(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, 0, 100, device)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-
-    cq_id = 0
-    ttnn.rsqrt(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = torch.rsqrt(in_data)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
 @pytest.mark.parametrize(
     "approx_mode",
     (False, True),
@@ -813,26 +793,6 @@ def test_unary_log10_ttnn(input_shapes, device):
     cq_id = 0
     ttnn.log10(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.log10(in_data)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_unary_sqrt_ttnn(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, 0, 100, device)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-
-    cq_id = 0
-    ttnn.sqrt(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = torch.sqrt(in_data)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
@@ -965,7 +925,7 @@ def test_unary_log_like_fast_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, 
         assert_with_pcc(output_tensor, torch_output_tensor, pcc=0.999)
 
 
-@pytest.mark.parametrize("scalar", [1, 2, -10, -25, 15.5, 28.5, -13.5, -29.5, 0, -0, -5, 8, 100, -100])
+@pytest.mark.parametrize("scalar", [1, -10, 15.5, -29.5, 0, -0, 100, -100, 2147483647, -2147483648])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize(
@@ -998,58 +958,6 @@ def test_fill(device, h, w, scalar, torch_dtype, ttnn_dtype):
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch_dtype)
 
     assert torch.equal(torch_output_tensor, output_tensor)
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    [
-        (torch.Size([])),
-        (torch.Size([1, 64])),
-        (torch.Size([1, 2, 32])),
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-        (torch.Size([1, 2, 32, 64, 125])),
-    ],
-)
-@pytest.mark.parametrize(
-    "low_a, high_a",
-    [
-        (0, 1000),
-        (1000, 1e5),
-        (1e5, 1e7),
-        (1e7, 1e9),
-        (4e9, 4294967295),  # large positive input
-        (0, 4294967295),  # full range
-    ],
-)
-@pytest.mark.parametrize("scalar", [1, 2, -10, 1e5, 1e7, 1e9, 0, -0, -5, 8, 100, -100])
-def test_unary_fill_uint32_edge_cases(input_shapes, low_a, high_a, scalar, device):
-    if len(input_shapes) == 0:
-        torch_input_tensor = torch.randint(low=0, high=2**32, size=(), dtype=torch.int64)
-    else:
-        num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
-        torch_input_tensor = torch.linspace(low_a, high_a, num_elements, dtype=torch.int64)
-        torch_input_tensor[::5] = 0  # every 5th element is zero
-        corner_case = torch.tensor([4294967295])
-        torch_input_tensor[-2:] = corner_case
-        torch_input_tensor = torch_input_tensor[:num_elements].reshape(input_shapes)
-
-    golden_function = ttnn.get_golden_function(ttnn.fill)
-    torch_output_tensor = golden_function(torch_input_tensor, scalar)
-
-    input_tensor = ttnn.from_torch(
-        torch_input_tensor,
-        dtype=ttnn.uint32,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    output_tensor = ttnn.fill(input_tensor, scalar)
-    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int64)
-
-    assert torch.equal(output_tensor, torch_output_tensor)
 
 
 @pytest.mark.parametrize(

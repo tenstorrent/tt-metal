@@ -11,7 +11,6 @@ sudo apt install pre-commit
 pre-commit install
 
 sudo apt-get install python3-dev python3-numpy cargo
-pip install wandb
 pip install numpy
 
 sudo apt-get install -y libopenmpi-dev openmpi-bin

@@ -30,15 +30,21 @@ void ShardedToInterleavedPartialDeviceOperation::validate(const std::vector<Tens
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
 
-    TT_FATAL(input_tensor.memory_config().is_sharded(), "Error");
+    TT_FATAL(input_tensor.memory_config().is_sharded(), "Input tensor must be sharded");
     if (input_tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
         if (input_tensor.padded_shape()[-1] % shard_spec.shape[1] != 0 ||
             ((input_tensor.physical_volume() / input_tensor.padded_shape()[-1]) % shard_spec.shape[0]) != 0) {
-            TT_FATAL(input_tensor.shard_spec().value().grid.ranges().size() == 1, "Error");
+            TT_FATAL(
+                input_tensor.shard_spec().value().grid.ranges().size() == 1,
+                "Input tensor shard spec must have exactly 1 grid range but got {}",
+                input_tensor.shard_spec().value().grid.ranges().size());
         }
     }
     if (input_tensor.dtype() != this->output_dtype) {
-        TT_FATAL(input_tensor.layout() == Layout::TILE, "Error");
+        TT_FATAL(
+            input_tensor.layout() == Layout::TILE,
+            "Input tensor layout must be TILE but got {}",
+            input_tensor.layout());
     }
     // Divisibility of num_cores and shard size with tensor shape is done in tensor creation, so no need to assert here
 }
@@ -64,7 +70,7 @@ ShardedToInterleavedPartialDeviceOperation::create_op_performance_model(
 operation::ProgramWithCallbacks ShardedToInterleavedPartialDeviceOperation::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    auto& output_tensor = input_tensors[1];
+    const auto& output_tensor = input_tensors[1];
     // Will move with sharded ops
     return detail::sharded_to_interleaved_multi_core(
         input_tensor, output_tensor, false, this->num_slices, this->slice_index);

@@ -158,23 +158,6 @@ profiler = Profiler()
 
 
 ### Turn flags on/off ###
-def enable_persistent_kernel_cache():
-    """
-    Enables persistent compiled kernel caching - disables recompiling the kernels for the duration of running process if built_kernels/.../hash directory with kernel binaries is present.
-    """
-    logger.warning(
-        "Persistent kernel cache is enabled. Cache invalidation may fail after a rebase and may require deleting the built directory."
-    )
-    ttnn.device.EnablePersistentKernelCache()
-
-
-def disable_persistent_kernel_cache():
-    """
-    Disables persistent compiled kernel caching. This is the default state.
-    """
-    ttnn.device.DisablePersistentKernelCache()
-
-
 def enable_memory_reports():
     """
     Enables generating reports of memory allocation statistics in .reports/tt_metal dir
@@ -660,9 +643,101 @@ def comp_ulp(golden, calculated, ulp_threshold, allow_nonfinite=False):
         calculated = calculated.type(golden.dtype)
         ulp_value = ulp_value.type(golden.dtype)  # Convert ULP to higher precision (for sub-1 ULP measurements)
 
-    ulp_delta = torch.max(torch.abs(calculated - golden) / ulp_value)
+    ulp_tensor = torch.abs(calculated - golden) / ulp_value
+    ulp_delta = torch.max(ulp_tensor)
+    within_threshold = ulp_delta <= ulp_threshold
+    message = f"Max ULP Delta: {ulp_delta}"
+    if not within_threshold:
+        ulp_index = torch.argmax(ulp_tensor)
+        ulp_index_tuple = tuple(int(idx) for idx in torch.unravel_index(ulp_index, golden.shape))
+        message += f" @ {list(ulp_index_tuple)} = |{calculated[ulp_index_tuple]} - {golden[ulp_index_tuple]}| / {ulp_value[ulp_index_tuple]}"
+    return (within_threshold, message)
 
-    return (ulp_delta <= ulp_threshold, f"Max ULP Delta: {ulp_delta}")
+
+def calculate_detailed_ulp_stats(expected, actual):
+    """
+    Calculate detailed ULP statistics for analysis.
+
+    Returns:
+        dict: Dictionary with ULP statistics including max, mean, std, and percentiles
+    """
+    if isinstance(actual, ttnn.Tensor):
+        actual = ttnn.to_torch(actual)
+    if isinstance(expected, ttnn.Tensor):
+        expected = ttnn.to_torch(expected)
+
+    # Convert to bfloat16 if not already
+    expected = expected.to(torch.bfloat16)
+    actual = actual.to(torch.bfloat16)
+
+    # Handle special cases
+    if torch.allclose(expected, actual, rtol=0, atol=0, equal_nan=True):
+        return {
+            "max_ulp": 0.0,
+            "mean_ulp": 0.0,
+            "median_ulp": 0.0,
+            "std_ulp": 0.0,
+            "p95_ulp": 0.0,
+            "p99_ulp": 0.0,
+            "perfect_matches": 1.0,
+        }
+
+    # Convert bfloat16 to uint16 representation for bit manipulation
+    expected_bits = expected.view(torch.int16).to(torch.int32)
+    actual_bits = actual.view(torch.int16).to(torch.int32)
+
+    # Handle sign differences
+    expected_sign = expected_bits < 0
+    actual_sign = actual_bits < 0
+    same_sign = expected_sign == actual_sign
+
+    # Calculate ULP differences
+    expected_abs_bits = torch.where(expected_sign, -expected_bits, expected_bits)
+    actual_abs_bits = torch.where(actual_sign, -actual_bits, actual_bits)
+
+    ulp_diff = torch.where(same_sign, torch.abs(expected_bits - actual_bits), expected_abs_bits + actual_abs_bits)
+
+    # Handle non-finite values
+    expected_finite = torch.isfinite(expected)
+    actual_finite = torch.isfinite(actual)
+    both_finite = expected_finite & actual_finite
+
+    ulp_diff = torch.where(both_finite, ulp_diff, torch.tensor(float("inf")))
+
+    # Handle same non-finite values
+    both_nan = torch.isnan(expected) & torch.isnan(actual)
+    both_posinf = torch.isposinf(expected) & torch.isposinf(actual)
+    both_neginf = torch.isneginf(expected) & torch.isneginf(actual)
+    same_nonfinite = both_nan | both_posinf | both_neginf
+
+    ulp_diff = torch.where(same_nonfinite, torch.tensor(0.0), ulp_diff)
+
+    # Calculate statistics only on finite ULP differences
+    finite_ulp = ulp_diff[torch.isfinite(ulp_diff)]
+
+    if len(finite_ulp) == 0:
+        return {
+            "max_ulp": float("inf"),
+            "mean_ulp": float("inf"),
+            "median_ulp": float("inf"),
+            "std_ulp": float("inf"),
+            "p95_ulp": float("inf"),
+            "p99_ulp": float("inf"),
+            "perfect_matches": 0.0,
+        }
+
+    finite_ulp_float = finite_ulp.float()
+    perfect_matches = (finite_ulp == 0).float().mean().item()
+
+    return {
+        "max_ulp": torch.max(finite_ulp).item(),
+        "mean_ulp": torch.mean(finite_ulp_float).item(),
+        "median_ulp": torch.median(finite_ulp_float).item(),
+        "std_ulp": torch.std(finite_ulp_float).item(),
+        "p95_ulp": torch.quantile(finite_ulp_float, 0.95).item(),
+        "p99_ulp": torch.quantile(finite_ulp_float, 0.99).item(),
+        "perfect_matches": perfect_matches,
+    }
 
 
 def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
@@ -1000,6 +1075,10 @@ def run_for_grayskull(reason_str="only runs for Grayskull"):
     return ti_skip(not is_grayskull(), reason=reason_str)
 
 
+def run_for_n_dev(n, reason_str="Test is not meant for this number of devices"):
+    return ti_skip(ttnn.get_num_devices() != n, reason=reason_str)
+
+
 def skip_for_n_dev(n, reason_str="Test is not meant for this number of devices"):
     return ti_skip(ttnn.get_num_devices() == n, reason=reason_str)
 
@@ -1010,18 +1089,6 @@ def skip_for_n_or_less_dev(n, reason_str="Test is not meant for this number of d
 
 def skip_for_slow_dispatch(reason_str="not working for slow dispatch"):
     return ti_skip(is_slow_dispatch(), reason=reason_str)
-
-
-def get_devices_for_t3000(all_devices, num_devices):
-    """
-    all_devices comes from fixture which devices in order from 0 to 7.
-    """
-    assert num_devices <= len(all_devices), "Not enough devices detected!"
-
-    if num_devices <= 4 or num_devices == 8:
-        return all_devices[:num_devices]
-    else:
-        raise NotImplementedError("Only supports 1, 2, 3, 4, and 8 chip configurations!")
 
 
 def ttl_complex_2_torch_complex(tt_tensor):

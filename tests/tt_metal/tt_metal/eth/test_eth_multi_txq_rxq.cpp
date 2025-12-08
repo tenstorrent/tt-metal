@@ -131,8 +131,8 @@ static void run_multi_txq_rxq_test(
     uint32_t data_txq_id,
     uint32_t ack_txq_id,
     uint32_t num_messages) {
-    auto device_0 = mesh_device_0->get_devices()[0];
-    auto device_1 = mesh_device_1->get_devices()[0];
+    auto* device_0 = mesh_device_0->get_devices()[0];
+    auto* device_1 = mesh_device_1->get_devices()[0];
     // Find ethernet cores that connect device_0 and device_1 using standard metal APIs
     std::optional<CoreCoord> sender_core_0;
     std::optional<CoreCoord> receiver_core_0;
@@ -142,7 +142,7 @@ static void run_multi_txq_rxq_test(
 
     // Find an ethernet core on device_0 that connects to device_1
     for (const auto& eth_core : active_eth_cores) {
-        chip_id_t connected_device_id;
+        ChipId connected_device_id;
         CoreCoord connected_eth_core;
         std::tie(connected_device_id, connected_eth_core) = device_0->get_connected_ethernet_core(eth_core);
 

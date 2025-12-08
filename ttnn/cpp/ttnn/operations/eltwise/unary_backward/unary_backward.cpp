@@ -5,14 +5,17 @@
 #include <utility>
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include <tt-metalium/constants.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/reduction/prod/prod.hpp"
-#include "ttnn/operations/eltwise/ternary/where/where.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
@@ -308,7 +311,7 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSqrt::invoke(
     float t_inf = std::numeric_limits<float>::infinity();
 
     input_grad = input_grad.value_or(ttnn::empty_like(input));
-    ttnn::sqrt(input, output_mem_config, input_grad);
+    ttnn::sqrt(input, false, output_mem_config, input_grad);
     ttnn::multiply(
         grad,
         ttnn::reciprocal(ttnn::multiply(input_grad.value(), 2.0, std::nullopt, output_mem_config), output_mem_config),
@@ -472,7 +475,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardRsqrt::invoke(
     float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");
 
-    ttnn::rsqrt(input, output_mem_config, input_grad);
+    ttnn::rsqrt(input, false, output_mem_config, input_grad);
     ttnn::power(input_grad.value(), 3, output_mem_config, input_grad);
     ttnn::multiply(
         ttnn::multiply(grad, input_grad.value(), std::nullopt, output_mem_config),
@@ -564,7 +567,8 @@ std::vector<Tensor> ExecuteUnaryBackwardAcosh::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor in_sq = ttnn::square(input, output_mem_config);
-    Tensor in_rsqrt = ttnn::rsqrt(ttnn::subtract(in_sq, 1.0, std::nullopt, output_mem_config), output_mem_config);
+    Tensor in_rsqrt =
+        ttnn::rsqrt(ttnn::subtract(in_sq, 1.0, std::nullopt, output_mem_config), false, output_mem_config);
     Tensor grad_a = ttnn::multiply(grad, in_rsqrt, std::nullopt, output_mem_config);
     float t_nan = tt::tt_metal::hal::get_nan();
     float t_inf = tt::tt_metal::hal::get_inf();
@@ -611,6 +615,7 @@ std::vector<Tensor> ExecuteUnaryBackwardAcos::invoke(
     Tensor in_rsqrt = ttnn::rsqrt(
         ttnn::add(
             ttnn::multiply(neg_in, input, std::nullopt, output_mem_config), 1.0f, std::nullopt, output_mem_config),
+        false,
         output_mem_config);
     in_rsqrt = ttnn::neg(in_rsqrt, output_mem_config);
     Tensor grad_a = ttnn::multiply(grad, in_rsqrt, std::nullopt, output_mem_config);
@@ -1635,8 +1640,8 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
         input.memory_config());  // TODO: Remove after ternary forward ops migration is completed
 
     auto shape_wh = input.padded_shape();
-    TT_FATAL(shape_wh[0] == 1 && "input shape[0] should be 1", "Error");
-    auto ttnn_device = input.device();
+    TT_FATAL(shape_wh[0] == 1, "Input shape[0] must be 1 but got {}", shape_wh[0]);
+    auto* ttnn_device = input.device();
     // input.padded_shape()[0]
     // If repeat shape has 0's, it returns zeros of given input
     if (shape[0] == 0 || shape[1] == 0 || shape[2] == 0 || shape[3] == 0) {
@@ -1679,11 +1684,11 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
 Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config) {
     auto formatted_input_tensor = temp;
     if (formatted_input_tensor.layout() == Layout::ROW_MAJOR) {
-        auto a_pad_shape =
-            ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(temp.padded_shape());
-        if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(temp, a_pad_shape)) {
-            formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
-                temp, temp.device(), a_pad_shape, 1.0, Layout::TILE);
+        auto a_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(temp.padded_shape());
+        auto need_format = temp.layout() != Layout::TILE || temp.padded_shape() != a_pad_shape;
+        if (need_format) {
+            formatted_input_tensor =
+                ttnn::tilize_with_val_padding(temp, a_pad_shape, PadValue(1.0f), temp.memory_config());
         }
     }
     return formatted_input_tensor;
@@ -1783,8 +1788,25 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
 
         // put the tensor back on device because permute throws it off device
         // See: Remove auto format within permute_op.cpp #9404
-        tensor_2 = ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_device_and_pad(
-            tensor_2, tensor_1.device(), tensor_1.layout(), tensor_1.memory_config());
+        auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(tensor_1.padded_shape());
+        // tensor_2 is always TILE layout (from permute of TILE temp)
+        // Only need to convert if tensor_1 is ROW_MAJOR
+        tensor_2 = tensor_2.to_device(tensor_1.device());
+        if (tensor_1.layout() == Layout::ROW_MAJOR) {
+            // Need to untilize tensor_2 to match tensor_1's ROW_MAJOR layout
+            bool pad_needed = tensor_2.padded_shape() != padded_shape;
+            tensor_2 = ttnn::untilize(tensor_2, tensor_1.memory_config());
+            if (pad_needed) {
+                tensor_2 = ttnn::pad(
+                    tensor_2,
+                    padded_shape.to_array_4D(),
+                    tt::tt_metal::Array4D({0, 0, 0, 0}),
+                    0.0f,
+                    false,
+                    tensor_1.memory_config());
+            }
+        }
+        // If tensor_1 is TILE, tensor_2 is already correct (both TILE, shapes match by assumption)
 
         after_permute_dims = {0, 3, 1, 2};
         Tensor result = permute(
@@ -1815,8 +1837,25 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
 
     // put the tensor back on device because permute throws it off device
     // See: Remove auto format within permute_op.cpp #9404
-    tensor_2 = ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_device_and_pad(
-        tensor_2, tensor_1.device(), tensor_1.layout(), tensor_1.memory_config());
+    auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(tensor_2.padded_shape());
+    // tensor_2 is always TILE layout (from permute of TILE temp)
+    // Only need to convert if tensor_1 is ROW_MAJOR
+    tensor_2 = tensor_2.to_device(tensor_1.device());
+    if (tensor_1.layout() == Layout::ROW_MAJOR) {
+        // Need to untilize tensor_2 to match tensor_1's ROW_MAJOR layout
+        bool pad_needed = tensor_2.padded_shape() != padded_shape;
+        tensor_2 = ttnn::untilize(tensor_2, tensor_1.memory_config());
+        if (pad_needed) {
+            tensor_2 = ttnn::pad(
+                tensor_2,
+                padded_shape.to_array_4D(),
+                tt::tt_metal::Array4D({0, 0, 0, 0}),
+                0.0f,
+                false,
+                tensor_1.memory_config());
+        }
+    }
+    // If tensor_1 is TILE, tensor_2 is already correct (both TILE, shapes match by assumption)
 
     Tensor result = ttnn::permute(
         ttnn::bcast(tensor_1, tensor_2, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config),

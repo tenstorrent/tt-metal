@@ -20,8 +20,8 @@ namespace unit_tests::dm::one_packet {
 // Test config, i.e. test parameters
 struct OnePacketConfig {
     uint32_t test_id = 0;
-    CoreCoord master_core_coord = CoreCoord();
-    CoreCoord subordinate_core_coord = CoreCoord();
+    CoreCoord master_core_coord;
+    CoreCoord subordinate_core_coord;
     uint32_t num_packets = 0;
     uint32_t packet_size_bytes = 0;
     bool read = true;
@@ -169,7 +169,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
 /* ========== Test case for reading varying number of packets and packet sizes; Test id = 80 ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadSizes) {
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
     // Physical Constraints
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
@@ -205,7 +205,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadSizes) {
 /* ========== Test case for writing varying number of packets and packet sizes; Test id = 81 ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteSizes) {
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
+    auto* device = mesh_device->get_device(0);
 
     // Physical Constraints
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =

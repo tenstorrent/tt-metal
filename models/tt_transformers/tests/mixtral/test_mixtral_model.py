@@ -13,7 +13,7 @@ from models.demos.t3000.mixtral8x7b.reference.model import Transformer as refTra
 from models.tt_transformers.tt.common import PagedAttentionConfig, sample_host
 from models.tt_transformers.tt.load_checkpoints import convert_meta_to_hf
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import CheckpointType, DecodersPrecision, ModelArgs
+from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
 # pytest models/tt_transformers/tests/mixtral/test_mixtral_model.py
 
@@ -129,17 +129,7 @@ def test_model_inference(
 
     model_name = model_args.base_model_name
     if layers == 1:  # quick mode has tight PCC checks for known models
-        if model_args.checkpoint_type == CheckpointType.HuggingFace:
-            model_name = model_args.base_model_name
-        else:
-            model_name = {
-                (16, False): "llama32_1b",
-                (28, False): "llama32_3b",
-                (32, False): "llama31_8b",
-                (32, True): "llama32_11b",
-                (80, False): "llama31_70b",
-                (80, True): "llama32_90b",
-            }[(model_args.n_layers, model_args.is_vision())]
+        model_name = model_args.base_model_name
 
         # Define tight final PCC thresholds for quick mode
         final_model_pcc = {
@@ -407,20 +397,10 @@ def test_model_inference(
             # Compare KV caches
             if cache_pcc:
                 for l in range(model_args.n_layers):
-                    if model_args.checkpoint_type == CheckpointType.HuggingFace:
-                        pytorch_layer_present = [
-                            reference_model.cache_k.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-                            reference_model.cache_v.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-                        ]
-                    else:
-                        pytorch_layer_present = [
-                            reference_model.layers[l]
-                            .attention.cache_k.clone()
-                            .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-                            reference_model.layers[l]
-                            .attention.cache_v.clone()
-                            .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-                        ]
+                    pytorch_layer_present = [
+                        reference_model.cache_k.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+                        reference_model.cache_v.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+                    ]
                     tt_layer_present = []
                     if paged_attention:
                         for layer_past in tt_model.layers[l].attention.layer_past:

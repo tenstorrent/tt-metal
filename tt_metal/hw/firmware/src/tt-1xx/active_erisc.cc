@@ -22,16 +22,16 @@
 #include "ethernet/dataflow_api.h"
 #include "ethernet/tunneling.h"
 #include "dev_mem_map.h"
-#include "tt_metal/lite_fabric/hw/inc/kernel_api.hpp"
 #include "eth_fw_api.h"
 #include "erisc.h"
 
 #include "debug/watcher_common.h"
 #include "debug/waypoint.h"
-#include "debug/stack_usage.h"
-#include "debug/dprint.h"
 
 uint8_t noc_index;
+// Renamed to kg_noc_mode to avoid conflict with noc_mode in dataflow_api_comon
+// noc_mode is the same for all erisc kernels in the program
+uint8_t kg_noc_mode;
 
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
@@ -65,6 +65,7 @@ uint32_t wIndex __attribute__((used));
 uint32_t stackSize __attribute__((used));
 uint32_t sums[SUM_COUNT] __attribute__((used));
 uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+uint32_t traceCount __attribute__((used));
 }  // namespace kernel_profiler
 #endif
 
@@ -88,7 +89,9 @@ inline void wait_subordinate_eriscs() {
     WAYPOINT("SEW");
     do {
         invalidate_l1_cache();
-        internal_::risc_context_switch();
+        // If the subordinate is using dynamic NOC mode, it may use NOC0 but we don't need to sync the counters
+        // as they are in a shared L1 region with base firmware
+        internal_::risc_context_switch(kg_noc_mode == DM_DYNAMIC_NOC);
     } while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
     WAYPOINT("SED");
 #endif
@@ -102,6 +105,91 @@ inline void initialize_local_memory() {
     const uint32_t ldm_data_size = (uint32_t)__ldm_data_end - (uint32_t)__ldm_data_start;
     // Copy data from data_image in __ldm_data_start for ldm_data_size bytes
     l1_to_local_mem_copy(__ldm_data_start, data_image, ldm_data_size);
+}
+
+#define STR(x) #x
+#define STRINGIFY(s) STR(s)
+#define MEM_ERISC_HALT_STACK_MAILBOX_ADDRESS (MEM_AERISC_MAILBOX_BASE + 4)
+#define MEM_ERISC_L1_TEMP_STORAGE (0x00040000)
+
+extern "C" __attribute__((naked, used)) void resume_from_reset() {
+    __asm__ volatile(
+        // Restore contents of local memory from L1
+	    ".option push\n"
+        ".option norelax\n"
+        "li   t0, " STRINGIFY(MEM_ERISC_L1_TEMP_STORAGE) "\n\t" // src
+        "li   t1, " STRINGIFY(MEM_LOCAL_BASE) "\n\t"   // dst
+        "li   t2, 2048\n\t"
+        "0:\n\t"
+        "lw   t3, 0(t0)\n\t"
+        "sw   t3, 0(t1)\n\t"
+        "addi t0, t0, 4\n\t"
+        "addi t1, t1, 4\n\t"
+        "addi t2, t2, -1\n\t"
+        "bnez t2, 0b\n\t"
+        "lw  sp, " STRINGIFY(MEM_ERISC_HALT_STACK_MAILBOX_ADDRESS) "( zero )\n"
+        // Restore contents of callee-saved registers from the stack.
+        "lw  ra, 0 * 4( sp )\n"
+        "lw  s0, 1 * 4( sp )\n"
+        "lw  s1, 2 * 4( sp )\n"
+        "lw  s2, 3 * 4( sp )\n"
+        "lw  s3, 4 * 4( sp )\n"
+        "lw  s4, 5 * 4( sp )\n"
+        "lw  s5, 6 * 4( sp )\n"
+        "lw  s6, 7 * 4( sp )\n"
+        "lw  s7, 8 * 4( sp )\n"
+        "lw  s8, 9 * 4( sp )\n"
+        "lw  s9, 10 * 4( sp )\n"
+        "lw  s10, 11 * 4( sp )\n"
+        "lw  s11, 12 * 4( sp )\n"
+        "lw gp, 13 * 4( sp )\n"
+        ".option pop\n"
+        "addi sp, sp, (16 * 4)\n"
+        "ret\n"
+    );
+}
+
+// After running the base firmware, some core state (for erisc0) seems broken, so jumps into the kernel may occasionally
+// hang. Resetting the core fixes the issue. We need to save all the GPR and local memory to L1, because local memory is
+// cleared on reset. ERISC1 is responsible for triggering the reset, which willl start execution in resume_from_reset.
+extern "C" __attribute__((naked)) void enter_reset(void) {
+    __asm__ volatile(
+        // Save contents to stack
+        "addi sp, sp, -(16 * 4)\n"
+        "sw ra, 0 * 4( sp )\n"
+        "sw s0, 1 * 4( sp )\n"
+        "sw s1, 2 * 4( sp )\n"
+        "sw s2, 3 * 4( sp )\n"
+        "sw s3, 4 * 4( sp )\n"
+        "sw s4, 5 * 4( sp )\n"
+        "sw s5, 6 * 4( sp )\n"
+        "sw s6, 7 * 4( sp )\n"
+        "sw s7, 8 * 4( sp )\n"
+        "sw s8, 9 * 4( sp )\n"
+        "sw s9, 10 * 4( sp )\n"
+        "sw s10, 11 * 4( sp )\n"
+        "sw s11, 12 * 4( sp )\n"
+        "sw gp, 13 * 4( sp )\n"
+
+        // Copy contents of local memory to L1, because local memory is cleared on reset. There is a register that in
+        // theory can be set to prevent resetting the core from clearing local memory, but the hardware doesn't support it.
+        "li   t0, " STRINGIFY(MEM_LOCAL_BASE) "\n\t"   // src
+        "li   t1, " STRINGIFY(MEM_ERISC_L1_TEMP_STORAGE) "\n\t"   // dst (256 KiB)
+        "li   t2, 2048\n\t"         // 8 KiB / 4B = 2048 words
+        "0:\n\t"
+        "lw   t3, 0(t0)\n\t"
+        "sw   t3, 0(t1)\n\t"
+        "addi t0, t0, 4\n\t"
+        "addi t1, t1, 4\n\t"
+        "addi t2, t2, -1\n\t"
+        "bnez t2, 0b\n\t"
+
+        // Store stack pointer to allow restoring after reset.
+        "sw sp, " STRINGIFY(MEM_ERISC_HALT_STACK_MAILBOX_ADDRESS) "( zero )\n"
+        // Infinite loop to prevent the core from continuing execution.
+        "done_loop:\n"
+        "j done_loop\n"
+    );
 }
 
 int __attribute__((noinline)) main(void) {
@@ -122,18 +210,27 @@ int __attribute__((noinline)) main(void) {
 #if defined(ENABLE_2_ERISC_MODE)
     mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
     mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
+
+    // ERISC firmware >= 1.7.2 has already done this step. But on older firmware versions we need to do it here
+    // and it will write to an "unused" region in base firmware.
+    dynamic_noc_local_state_init();
 #endif
 
     set_deassert_addresses();
 
+    kg_noc_mode = DM_DEDICATED_NOC;
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
     }
+    uint8_t prev_noc_mode = DM_DEDICATED_NOC;
     ncrisc_noc_full_sync();
 
 #if defined(ENABLE_2_ERISC_MODE)
     deassert_all_reset();
+
+    WRITE_REG(AERISC_RESET_PC, (uint32_t)(void*)resume_from_reset);
+    enter_reset();
 #endif
     wait_subordinate_eriscs();
     flag_disable[0] = 1;
@@ -143,6 +240,7 @@ int __attribute__((noinline)) main(void) {
     // Add an invalidate before the first read of mailboxes->go_messages[0].signal
     invalidate_l1_cache();
 
+    DeviceProfilerInit();
     while (1) {
         // Wait...
         WAYPOINT("GW");
@@ -156,10 +254,15 @@ int __attribute__((noinline)) main(void) {
             if (flag_disable[0] != 1) {
                 return 0;
             } else if (
-                go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
+                go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST ||
+                go_message_signal == RUN_MSG_REPLAY_TRACE) {
                 // Set the rd_ptr on workers to specified value
                 mailboxes->launch_msg_rd_ptr = 0;
-                if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
+                if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_REPLAY_TRACE) {
+                    if (go_message_signal == RUN_MSG_REPLAY_TRACE) {
+                        DeviceIncrementTraceCount();
+                        DeviceTraceOnlyProfilerInit();
+                    }
                     uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[0]);
                     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
                     // Notify dispatcher that this has been done
@@ -181,9 +284,29 @@ int __attribute__((noinline)) main(void) {
 
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
 
+            // Host side guarantees that if active_erisc is running on ERISC1 (single ERISC mode),
+            // the noc_index will be NOC_1 which ensures no conflict with base firmware running concurrently on ERISC0
+            //
+            // cmd_buf allocation is determined based on the physical ERISC index in tt_metal/hw/inc/dataflow_cmd_bufs.h
+            // ERISC0 is BRISC, ERISC1 is NCRISC.
+            //
+            kg_noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
             noc_index = launch_msg_address->kernel_config.brisc_noc_id;
             my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
             my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
+
+            if (kg_noc_mode == DM_DEDICATED_NOC) {
+                if (prev_noc_mode != kg_noc_mode) {
+                    noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+                }
+                noc_local_state_init(noc_index);
+            } else {
+                if (prev_noc_mode != kg_noc_mode) {
+                    dynamic_noc_init();
+                }
+                dynamic_noc_local_state_init();
+            }
+            prev_noc_mode = kg_noc_mode;
 
             uint32_t enables = launch_msg_address->kernel_config.enables;
             run_subordinate_eriscs(enables);

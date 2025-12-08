@@ -82,6 +82,9 @@ enum class SfpuType {
     sub_uint16,
     mul_uint16,
     mul_int32,
+    div_int32,
+    div_int32_floor,
+    div_int32_trunc,
     lt,
     gt,
     ge,
@@ -130,4 +133,8 @@ enum class SfpuType {
     selu,
     rpow,
     cbrt,  // cube root
+    hardmish,
+    reduce,
+    add_top_row,
+    rdiv,
 };

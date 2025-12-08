@@ -106,8 +106,8 @@ void kernel_main() {
                 uint64_t dest_noc_address2 = get_noc_addr(p + 1, dest_addr_gen, 0, NORMALIZED_NOC_INDEX);
                 fabric_set_unicast_route<false>((LowLatencyPacketHeader*)packet_header, config.unicast.distance);
                 packet_header->to_noc_unicast_scatter_write(
-                    tt::tt_fabric::NocUnicastScatterCommandHeader{
-                        {dest_noc_address, dest_noc_address2}, (uint16_t)page_size},
+                    tt::tt_fabric::NocUnicastScatterCommandHeader(
+                        {dest_noc_address, dest_noc_address2}, {static_cast<uint16_t>(page_size)}),
                     (pages_to_send * page_size));
             } else {
                 fabric_set_unicast_route<false>((LowLatencyPacketHeader*)packet_header, config.unicast.distance);
@@ -135,7 +135,7 @@ void kernel_main() {
         fabric_set_unicast_route<false>(packet_header, config.mcast.distance + config.mcast.range - 1);
     }
     packet_header->to_noc_unicast_atomic_inc(
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader(last_message_semaphore_noc0_addr, 1, 32));
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader(last_message_semaphore_noc0_addr, 1));
 
     sender.wait_for_empty_write_slot();
     sender.send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));

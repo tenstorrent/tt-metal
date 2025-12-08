@@ -44,7 +44,7 @@ void JointScaledDotProductAttention::validate(const std::vector<Tensor>& input_t
     const auto& joint_v_shape = joint_tensor_v.logical_shape();
 
     // Validate storage types and buffers
-    for (auto& tensor : input_tensors) {
+    for (const auto& tensor : input_tensors) {
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to Joint SDPA need to be on device");
         TT_FATAL(tensor.buffer() != nullptr, "Operands to Joint SDPA need to be allocated in buffers on device");
         TT_FATAL(tensor.layout() == Layout::TILE, "Inputs to Joint SDPA must be tilized");
@@ -155,8 +155,8 @@ std::uint32_t JointScaledDotProductAttention::get_k_chunk_size() const {
 
 std::vector<TensorSpec> JointScaledDotProductAttention::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
-    auto& input = input_tensors.at(0);
-    auto& joint_input = input_tensors.at(3);
+    const auto& input = input_tensors.at(0);
+    const auto& joint_input = input_tensors.at(3);
     return {
         TensorSpec(input.logical_shape(), TensorLayout(input.dtype(), PageConfig(Layout::TILE), output_mem_config)),
         TensorSpec(
@@ -166,12 +166,12 @@ std::vector<TensorSpec> JointScaledDotProductAttention::compute_output_specs(
 
 operation::ProgramWithCallbacks JointScaledDotProductAttention::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    auto& input_tensor_q = input_tensors.at(0);
-    auto& input_tensor_k = input_tensors.at(1);
-    auto& input_tensor_v = input_tensors.at(2);
-    auto& joint_tensor_q = input_tensors.at(3);
-    auto& joint_tensor_k = input_tensors.at(4);
-    auto& joint_tensor_v = input_tensors.at(5);
+    const auto& input_tensor_q = input_tensors.at(0);
+    const auto& input_tensor_k = input_tensors.at(1);
+    const auto& input_tensor_v = input_tensors.at(2);
+    const auto& joint_tensor_q = input_tensors.at(3);
+    const auto& joint_tensor_k = input_tensors.at(4);
+    const auto& joint_tensor_v = input_tensors.at(5);
     auto& output_tensor = output_tensors.at(0);
     auto& joint_output_tensor = output_tensors.at(1);
 

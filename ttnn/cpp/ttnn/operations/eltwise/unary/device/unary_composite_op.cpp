@@ -500,29 +500,6 @@ Tensor _polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryCo
     return ttnn::multiply(temp, fact_val, std::nullopt, output_mem_config);
 }
 
-// rdiv
-Tensor ExecuteRdiv::invoke(
-    const Tensor& input_tensor,
-    float value,
-    const std::optional<std::string>& round_mode,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
-    TT_FATAL(
-        (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
-        "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
-    float t_inf = std::numeric_limits<float>::infinity();
-    Tensor recip_result = ttnn::reciprocal(input_tensor, memory_config, optional_output_tensor);
-    Tensor result = ttnn::multiply(recip_result, value, std::nullopt, memory_config, optional_output_tensor);
-
-    if (round_mode == "trunc") {
-        result = ttnn::trunc(result);
-    } else if (round_mode == "floor") {
-        result = ttnn::floor(result);
-    }
-    return ttnn::where(
-        ttnn::eqz(input_tensor, memory_config), t_inf * value, result, memory_config, optional_output_tensor);
-}
-
 // logit(input, eps)=log(input / 1 - input)
 Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig>& output_mem_config) {
     float t1m_eps = 1 - eps;
@@ -542,12 +519,12 @@ Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig
             ttnn::eqz(logit_input, output_mem_config),
             t_inf,
             ttnn::where(
-                ttnn::eq(logit_input, 1.0, std::nullopt, output_mem_config),
+                ttnn::eq(logit_input, 1.0f, std::nullopt, output_mem_config),
                 tt::tt_metal::hal::get_inf(),
                 ttnn::log(log_input, true, output_mem_config)));
     } else {
         logit_result = ttnn::where(
-            ttnn::eq(logit_input, 1.0, std::nullopt, output_mem_config),
+            ttnn::eq(logit_input, 1.0f, std::nullopt, output_mem_config),
             t_inf,
             ttnn::where(
                 ttnn::ltz(log_input, output_mem_config),

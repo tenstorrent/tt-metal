@@ -65,7 +65,7 @@ ttnn::Shape compute_matmul_output_shape(const Tensor& input_tensor_a, const Tens
  * @return Shape of the resulting tensor after sparse matmul
  */
 ttnn::Shape compute_sparse_matmul_output_shape(
-    const Tensor& input_tensor_a, const Tensor& input_tensor_b, bool is_input_a_sparse);
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, bool is_input_a_sparse, bool is_input_b_sparse);
 
 /*
  * GENERAL MATMUL AND BMM
@@ -160,6 +160,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     const Tensor& sparsity,
     std::optional<uint32_t> nnz,
     bool is_input_a_sparse,
+    bool is_input_b_sparse,
     Tensor& output_tensor,
     CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
@@ -283,6 +284,7 @@ Matmul create_matmul_struct(
 struct SparseMatmul {
     const std::optional<uint32_t> nnz;
     bool is_input_a_sparse;
+    bool is_input_b_sparse;
     const std::optional<const MatmulProgramConfig> program_config = std::nullopt;
     const MemoryConfig output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
     const std::optional<DataType> output_dtype = std::nullopt;

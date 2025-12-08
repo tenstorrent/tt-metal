@@ -20,9 +20,11 @@ struct ExecuteScaledDotProductAttention {
         const std::optional<ttnn::Tensor>& attn_mask = std::nullopt,
         bool is_causal = true,
         std::optional<float> scale = std::nullopt,
+        std::optional<uint32_t> sliding_window_size = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<SDPAProgramConfig> program_config = std::nullopt,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        const std::optional<ttnn::Tensor>& attention_sink = std::nullopt);
 };
 
 struct ExecuteChunkedScaledDotProductAttention {

@@ -210,7 +210,7 @@ class TtFusedFalconLayernorm:
         return out1, out2
 
 
-def run_test_FalconLayernorm_inference(pcc, devices, model_location_generator, get_tt_cache_path):
+def run_test_FalconLayernorm_inference(pcc, device, model_location_generator, get_tt_cache_path):
     seqlen = 1024
     num_chips = 8
 
@@ -246,7 +246,7 @@ def run_test_FalconLayernorm_inference(pcc, devices, model_location_generator, g
 
     input_torch = (torch.rand(input_shape) * 2) - 1
     input = torch2tt_tensor(input_torch, None, tt_dtype=ttnn.bfloat16)  # tt_dtype=ttnn.bfloat16  # ttnn.bfloat8_b
-    input = input.to(devices[0], model_config["DEFAULT_MEMCFG"])
+    input = input.to(device, model_config["DEFAULT_MEMCFG"])
 
     # block sharded hardcoded for S=128 and 8x4 grid of cores
     shard_spec_cores_grid = ttnn.CoreRangeSet(
@@ -290,7 +290,7 @@ def run_test_FalconLayernorm_inference(pcc, devices, model_location_generator, g
     # TT hardware execution -------------------------------------------------------------
 
     tt_Falcon_layernorm_model = TtFusedFalconLayernorm(
-        devices[0], gamma1, beta1, gamma2, beta2, model_config, config, tt_cache_path
+        device, gamma1, beta1, gamma2, beta2, model_config, config, tt_cache_path
     )
     tt_out1, tt_out2 = tt_Falcon_layernorm_model(input)
 
@@ -318,12 +318,11 @@ def run_test_FalconLayernorm_inference(pcc, devices, model_location_generator, g
 
 
 @pytest.mark.parametrize("pcc", [(0.99)])
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 1), id="1x1_grid")], indirect=True)
 def test_FalconLayernorm_inference(
     pcc,
-    all_devices,
+    mesh_device,
     model_location_generator,
     get_tt_cache_path,
 ):
-    devices = all_devices
-
-    run_test_FalconLayernorm_inference(pcc, devices, model_location_generator, get_tt_cache_path)
+    run_test_FalconLayernorm_inference(pcc, mesh_device, model_location_generator, get_tt_cache_path)

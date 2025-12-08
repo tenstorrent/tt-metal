@@ -92,15 +92,16 @@ TEST(MeshDeviceViewTest, GetLineCoordinates3x3) {
     auto line_coords =
         MeshDeviceView::get_line_coordinates(/*length*/ 9, /*mesh_shape*/ Shape2D(3, 3), /*mesh_offset*/ Shape2D(0, 0));
     ASSERT_THAT(line_coords, SizeIs(9));
+    // Actual path produced by DFS algorithm (prefers ring but falls back if not possible)
     EXPECT_EQ(line_coords[0], MeshCoordinate(0, 0));
     EXPECT_EQ(line_coords[1], MeshCoordinate(0, 1));
     EXPECT_EQ(line_coords[2], MeshCoordinate(0, 2));
     EXPECT_EQ(line_coords[3], MeshCoordinate(1, 2));
-    EXPECT_EQ(line_coords[4], MeshCoordinate(1, 1));
-    EXPECT_EQ(line_coords[5], MeshCoordinate(1, 0));
+    EXPECT_EQ(line_coords[4], MeshCoordinate(2, 2));
+    EXPECT_EQ(line_coords[5], MeshCoordinate(2, 1));
     EXPECT_EQ(line_coords[6], MeshCoordinate(2, 0));
-    EXPECT_EQ(line_coords[7], MeshCoordinate(2, 1));
-    EXPECT_EQ(line_coords[8], MeshCoordinate(2, 2));
+    EXPECT_EQ(line_coords[7], MeshCoordinate(1, 0));
+    EXPECT_EQ(line_coords[8], MeshCoordinate(1, 1));
 }
 
 TEST(MeshDeviceViewTest, GetLineCoordinates3x3WithOffset) {
@@ -112,6 +113,65 @@ TEST(MeshDeviceViewTest, GetLineCoordinates3x3WithOffset) {
     EXPECT_EQ(line_coords[2], MeshCoordinate(2, 2));
     EXPECT_EQ(line_coords[3], MeshCoordinate(2, 1));
     EXPECT_EQ(line_coords[4], MeshCoordinate(2, 0));
+}
+
+TEST(MeshDeviceViewTest, GetLineCoordinatesRingFormation) {
+    // Test successful ring formation with various lengths and starting positions
+    // Helper lambda to verify ring formation
+    auto verify_ring = [](const std::vector<MeshCoordinate>& line_coords) {
+        ASSERT_GT(line_coords.size(), 1);
+        const MeshCoordinate& start = line_coords[0];
+        const MeshCoordinate& last = line_coords.back();
+        const size_t row_diff = (last[0] > start[0]) ? (last[0] - start[0]) : (start[0] - last[0]);
+        const size_t col_diff = (last[1] > start[1]) ? (last[1] - start[1]) : (start[1] - last[1]);
+        EXPECT_TRUE((row_diff == 1 && col_diff == 0) || (row_diff == 0 && col_diff == 1))
+            << "Last coordinate " << last << " must be adjacent to start " << start << " to form a ring";
+    };
+
+    // Test small length (2 nodes)
+    auto line_coords_2 = MeshDeviceView::get_line_coordinates(
+        /*length*/ 2, /*mesh_shape*/ Shape2D(3, 3), /*mesh_offset*/ Shape2D(1, 1));
+    ASSERT_THAT(line_coords_2, SizeIs(2));
+    verify_ring(line_coords_2);
+
+    // Test visiting all nodes in 2x2 mesh
+    auto line_coords_4 = MeshDeviceView::get_line_coordinates(
+        /*length*/ 4, /*mesh_shape*/ Shape2D(2, 2), /*mesh_offset*/ Shape2D(0, 0));
+    ASSERT_THAT(line_coords_4, SizeIs(4));
+    std::set<MeshCoordinate> unique_coords_4(line_coords_4.begin(), line_coords_4.end());
+    EXPECT_EQ(unique_coords_4.size(), 4);
+    verify_ring(line_coords_4);
+}
+
+TEST(MeshDeviceViewTest, GetLineCoordinatesRingPreferredButNotRequired) {
+    // Test cases where ring formation may not be possible, but function should still succeed
+    // The function prefers forming a ring but will return a valid path even if ring is impossible
+
+    // Helper lambda to check if path forms a ring
+    // Requesting more nodes than exist in the mesh should still fail
+    EXPECT_ANY_THROW((void)MeshDeviceView::get_line_coordinates(
+        /*length*/ 10, /*mesh_shape*/ Shape2D(2, 2), /*mesh_offset*/ Shape2D(0, 0)));
+
+    // Cases where ring may not be possible - function should still succeed
+    // Visiting 3 nodes from corner (0,0) in 3x3 mesh - may or may not form a ring
+    auto line_coords_3_corner = MeshDeviceView::get_line_coordinates(
+        /*length*/ 3, /*mesh_shape*/ Shape2D(3, 3), /*mesh_offset*/ Shape2D(0, 0));
+    ASSERT_THAT(line_coords_3_corner, SizeIs(3));
+    // Function succeeds, ring formation is preferred but not required
+
+    // Visiting 3 nodes from center (1,1) in 3x3 mesh - may or may not form a ring
+    auto line_coords_3_center = MeshDeviceView::get_line_coordinates(
+        /*length*/ 3, /*mesh_shape*/ Shape2D(3, 3), /*mesh_offset*/ Shape2D(1, 1));
+    ASSERT_THAT(line_coords_3_center, SizeIs(3));
+    // Function succeeds, ring formation is preferred but not required
+
+    // Visiting all nodes in 3x3 mesh from corner - may or may not form a ring
+    auto line_coords_9 = MeshDeviceView::get_line_coordinates(
+        /*length*/ 9, /*mesh_shape*/ Shape2D(3, 3), /*mesh_offset*/ Shape2D(0, 0));
+    ASSERT_THAT(line_coords_9, SizeIs(9));
+    std::set<MeshCoordinate> unique_coords_9(line_coords_9.begin(), line_coords_9.end());
+    EXPECT_EQ(unique_coords_9.size(), 9);  // All nodes should be unique
+    // Function succeeds, ring formation is preferred but not required
 }
 
 using MeshDeviceView2x4Test = MeshDevice2x4Fixture;
@@ -179,7 +239,7 @@ TEST_F(MeshDeviceView2x4Test, ViewGetDevices) {
     EXPECT_THAT(all_devices, SizeIs(8));
 
     // Verify all devices are unique
-    std::set<chip_id_t> device_ids;
+    std::set<ChipId> device_ids;
     for (auto* device : all_devices) {
         device_ids.insert(device->id());
     }

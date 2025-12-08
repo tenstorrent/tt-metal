@@ -43,6 +43,7 @@ def test_resnetblock2d(
     split_in,
     block,
     pcc,
+    debug_mode,
     is_ci_env,
     reset_seeds,
 ):
@@ -71,6 +72,8 @@ def test_resnetblock2d(
         model_config,
         conv_shortcut,
         split_in,
+        debug_mode=debug_mode,
+        use_negative_mask=block == "up_blocks" and down_block_id == 2,
     )
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
@@ -96,6 +99,7 @@ def test_resnetblock2d(
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
+    ttnn_temb_tensor = ttnn.silu(ttnn_temb_tensor)
     ttnn_output_tensor, output_shape = tt_resnet.forward(ttnn_input_tensor, ttnn_temb_tensor, [B, C, H, W])
 
     output_tensor = ttnn.to_torch(ttnn_output_tensor)

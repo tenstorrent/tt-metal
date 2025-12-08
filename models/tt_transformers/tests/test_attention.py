@@ -142,6 +142,7 @@ def test_attention_inference(
         model_args.rope_theta,
         model_args.rope_scaling.factor if model_args.rope_scaling else None,
         model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
+        model_args.rope_scaling.rope_type.value if model_args.rope_scaling else "llama3",
     )
     freqs_cis = torch.complex(cos, sin)
 

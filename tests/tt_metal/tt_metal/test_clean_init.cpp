@@ -7,7 +7,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <array>
 #include <exception>
@@ -60,7 +59,7 @@ int main(int argc, char** argv) {
 
     bool pass = true;
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-    vector<chip_id_t> ids;
+    vector<tt::ChipId> ids;
     ids.reserve(num_devices);
     for (unsigned int id = 0; id < num_devices; id++) {
         ids.push_back(id);

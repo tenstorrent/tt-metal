@@ -5,10 +5,11 @@
 #pragma once
 
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/core_descriptor.hpp>
+#include "llrt/core_descriptor.hpp"
 #include <cstdint>
 
 #include "impl/allocator/allocator_types.hpp"
+#include "impl/allocator/allocator.hpp"
 
 namespace tt {
 
@@ -16,11 +17,11 @@ namespace tt_metal {
 
 struct AllocatorConfig;
 
-class L1BankingAllocator : public Allocator {
+class L1BankingAllocator : public AllocatorImpl {
 public:
     explicit L1BankingAllocator(const AllocatorConfig& alloc_config);
     static AllocatorConfig generate_config(
-        chip_id_t device_id,
+        ChipId device_id,
         uint8_t num_hw_cqs,
         size_t l1_small_size,
         size_t trace_region_size,

@@ -27,7 +27,13 @@ from ...parallel.config import DiTParallelConfig, MochiVAEParallelConfig
 from ...parallel.manager import CCLManager
 from ...models.transformers.transformer_mochi import MochiTransformer3DModel
 from ...models.vae.vae_mochi import MochiVAEDecoder
-from ...utils.cache import get_cache_path, load_cache_dict
+from ...utils.cache import (
+    get_cache_path,
+    get_and_create_cache_path,
+    cache_dict_exists,
+    save_cache_dict,
+    load_cache_dict,
+)
 
 
 # from: https://github.com/genmoai/models/blob/075b6e36db58f1242921deff83a1066887b9c9e1/src/mochi_preview/infer.py#L77
@@ -226,19 +232,25 @@ class MochiPipeline(DiffusionPipeline):
 
         # Load state dict into TT transformer
         if use_cache:
-            cache_path = get_cache_path(
+            cache_path = get_and_create_cache_path(
                 model_name="mochi-1-preview",
                 subfolder="transformer",
                 parallel_config=parallel_config,
-                mesh_shape=mesh_device.shape,
+                mesh_shape=tuple(mesh_device.shape),
                 dtype="bf16",
             )
-            assert os.path.exists(
-                cache_path
-            ), f"Cache path: {cache_path} does not exist. Run test_mochi_transformer_model_caching first with the desired parallel config."
-            cache_dict = load_cache_dict(cache_path)
-            self.transformer.from_cached_state_dict(cache_dict)
+            # create cache if it doesn't exist
+            if not cache_dict_exists(cache_path):
+                logger.info(
+                    f"Cache does not exist. Creating cache: {cache_path} and loading transformer weights from PyTorch state dict"
+                )
+                self.transformer.load_state_dict(torch_transformer.state_dict())
+                save_cache_dict(self.transformer.to_cached_state_dict(cache_path), cache_path)
+            else:
+                logger.info(f"Loading transformer weights from cache: {cache_path}")
+                self.transformer.from_cached_state_dict(load_cache_dict(cache_path))
         else:
+            logger.info("Loading transformer weights from PyTorch state dict")
             self.transformer.load_state_dict(torch_transformer.state_dict())
 
         # Load pretrained VAE (Torch)
@@ -648,7 +660,7 @@ class MochiPipeline(DiffusionPipeline):
                     model_name="mochi-1-preview",
                     subfolder="transformer",
                     parallel_config=self.parallel_config,
-                    mesh_shape=self.mesh_device.shape,
+                    mesh_shape=tuple(self.mesh_device.shape),
                     dtype="bf16",
                 )
                 assert os.path.exists(

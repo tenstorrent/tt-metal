@@ -25,7 +25,7 @@ void MorehGetItemOperation::validate_inputs(
     // validate index tensors
     uint32_t index_size = index_tensors[0].logical_shape()[-1];
     for (uint32_t i = 0; i < index_tensors.size(); i++) {
-        auto& index_tensor = index_tensors[i];
+        const auto& index_tensor = index_tensors[i];
         TT_FATAL(index_tensor.storage_type() == StorageType::DEVICE, "Operands to getitem need to be on device!");
         TT_FATAL(index_tensor.buffer() != nullptr, "Operands to getitem need to be allocated in buffers on device!");
         TT_FATAL(index_tensor.dtype() == DataType::INT32, "Index tensor must be of type INT32!");
@@ -67,7 +67,7 @@ void MorehGetItemOperation::validate_inputs(
 }
 MorehGetItemOperation::program_factory_t MorehGetItemOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto& input_tensor = tensor_args.input;
+    const auto& input_tensor = tensor_args.input;
     auto input_layout = input_tensor.layout();
     if (input_layout == Layout::ROW_MAJOR) {
         return MorehGetItemRmFactory();

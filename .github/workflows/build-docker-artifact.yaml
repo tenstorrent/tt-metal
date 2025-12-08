@@ -96,7 +96,8 @@ jobs:
             install_dependencies.sh \
             tests/sweep_framework/requirements-sweeps.txt \
             tt_metal/python_env/requirements-dev.txt \
-            tt_metal/sfpi-version.sh \
+            tt_metal/sfpi-info.sh \
+            tt_metal/sfpi-version \
             scripts/ttexalens_ref.txt \
             tools/triage/requirements.txt \
             | sha1sum | cut -d' ' -f1)
@@ -109,7 +110,8 @@ jobs:
           BASIC_TTNN_RUNTIME_HASH=$(cat \
             dockerfile/Dockerfile.basic-dev \
             install_dependencies.sh \
-            tt_metal/sfpi-version.sh \
+            tt_metal/sfpi-info.sh \
+            tt_metal/sfpi-version \
             | sha1sum | cut -d' ' -f1)
           echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_TTNN_RUNTIME_IMAGE_NAME }}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
 
@@ -117,7 +119,8 @@ jobs:
             .github/workflows/build-docker-artifact.yaml \
             dockerfile/Dockerfile.manylinux \
             install_dependencies.sh \
-            tt_metal/sfpi-version.sh \
+            tt_metal/sfpi-info.sh \
+            tt_metal/sfpi-version \
             | sha1sum | cut -d' ' -f1)
           echo "manylinux-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.MANYLINUX_IMAGE_NAME }}:${MANYLINUX_HASH}" >> $GITHUB_OUTPUT
 

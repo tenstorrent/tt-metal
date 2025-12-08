@@ -152,7 +152,7 @@ void verify_tiles(
     fmt::print("=====================================================\n\n");
 }
 
-int main(int argc, char** argv) {
+int main(int /*argc*/, char** argv) {
     ////////// DEVICE SETUP //////////
     // A MeshDevice is a software concept that allows developers to virtualize a cluster of connected devices as a
     // single object, maintaining uniform memory and runtime state across all physical devices. A UnitMesh is a 1x1

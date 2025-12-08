@@ -4,6 +4,15 @@ add_library(TTNN::Ops::Experimental::UnaryBackward ALIAS ttnn_op_experimental_un
 target_precompile_headers(ttnn_op_experimental_unary_backward REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_unary_backward)
 
+set_target_properties(
+    ttnn_op_experimental_unary_backward
+    PROPERTIES
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
+)
+
+file(GLOB_RECURSE kernels gelu_backward/device/kernels/*)
+
 target_sources(
     ttnn_op_experimental_unary_backward
     PUBLIC
@@ -11,6 +20,10 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES gelu_backward/gelu_backward.hpp
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         gelu_backward/device/gelu_backward_device_operation.cpp
         gelu_backward/device/gelu_backward_program_factory.cpp

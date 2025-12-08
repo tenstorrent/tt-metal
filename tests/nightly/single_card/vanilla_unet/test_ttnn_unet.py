@@ -1,1 +1,0 @@
-../../../../models/demos/vanilla_unet/tests/pcc/test_ttnn_unet.py
