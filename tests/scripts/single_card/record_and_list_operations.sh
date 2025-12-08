@@ -46,11 +46,13 @@ echo "=========================================="
 
 # Modify pytest command to run under Tracy
 if [[ "$TEST_CMD" == pytest* ]]; then
-    # Replace 'pytest' with 'python -m tracy -r -v pytest'
-    TRACY_CMD="python -m tracy -r -v $TEST_CMD"
+    # For pytest: use -m flag to run pytest as a module
+    # Extract pytest args (everything after 'pytest ')
+    PYTEST_ARGS="${TEST_CMD#pytest }"
+    TRACY_CMD="python -m tracy -r -m pytest ${PYTEST_ARGS}"
 else
-    # Wrap non-pytest commands
-    TRACY_CMD="python -m tracy -r -v $TEST_CMD"
+    # Wrap non-pytest commands (python scripts)
+    TRACY_CMD="python -m tracy -r -m '${TEST_CMD}'"
 fi
 
 echo "Tracy command: $TRACY_CMD"
