@@ -461,7 +461,8 @@ void TopologyMapper::build_mapping() {
     auto fabric_node_id_to_mesh_rank = build_fabric_node_id_to_mesh_rank_mapping();
 
     // Only 1 host builds the mapping the rest will wait and use the mapping from the 1st host
-    if (generate_mapping_locally_ || *tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
+    if (generate_mapping_locally_ ||
+        *tt::tt_metal::MetalContext::instance().full_world_distributed_context().rank() == 0) {
         // Build logical and physical adjacency maps
         auto adjacency_map_logical = build_adjacency_map_logical();
         auto adjacency_map_physical = build_adjacency_map_physical(asic_id_to_mesh_rank);
@@ -767,7 +768,7 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
 
 void TopologyMapper::broadcast_mapping_to_all_hosts() {
     using namespace tt::tt_metal::distributed::multihost;
-    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
 
     const std::size_t world_size = *distributed_context.size();
     if (world_size <= 1) {
@@ -870,7 +871,7 @@ void TopologyMapper::broadcast_mapping_to_all_hosts() {
 
 void TopologyMapper::receive_mapping_from_host(int rank) {
     using namespace tt::tt_metal::distributed::multihost;
-    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
 
     // If not in distributed context, nothing to receive
     if (*distributed_context.size() <= 1) {

@@ -210,7 +210,7 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
         }
     };
 
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
     // For each mesh in the system
     for (auto mesh_id : user_meshes) {
         const auto& mesh_shape = this->get_physical_mesh_shape(MeshId{mesh_id});
@@ -313,7 +313,7 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
     // the MeshGraphDescriptor. Single Host Multi-Mesh is only used for testing purposes.
     const char* mesh_id_str = std::getenv("TT_MESH_ID");
     if (mesh_id_str == nullptr) {
-        auto& ctx = tt::tt_metal::MetalContext::instance().global_distributed_context();
+        auto& ctx = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
         TT_FATAL(
             *ctx.size() == 1 && *ctx.rank() == 0,
             "Not specifying both TT_MESH_ID and TT_MESH_HOST_RANK is only supported for single host systems.");
@@ -2251,7 +2251,7 @@ void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
 }
 
 void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
     if (*distributed_context.size() == 1) {
         // No need to collect from other hosts when running a single process
         return;
@@ -2337,7 +2337,8 @@ void ControlPlane::generate_intermesh_connectivity() {
     auto generate_mapping_locally_ = (this->mesh_graph_->get_mesh_ids().size() == 1) &&
                                      (this->mesh_graph_->get_host_ranks(local_mesh_binding_.mesh_ids[0]).size() == 1);
 
-    if (!generate_mapping_locally_ && *(tt_metal::MetalContext::instance().global_distributed_context().size()) > 1) {
+    if (!generate_mapping_locally_ &&
+        *(tt_metal::MetalContext::instance().full_world_distributed_context().size()) > 1) {
         // Intermesh Connectivity generation for the multi-host case
         auto exit_node_port_descriptors = this->generate_port_descriptors_for_exit_nodes();
         intermesh_connections = this->convert_port_desciptors_to_intermesh_connections(exit_node_port_descriptors);
@@ -2509,7 +2510,7 @@ void ControlPlane::forward_descriptors_to_controller(
     PortDescriptorTable& port_descriptors, uint32_t my_rank, const std::string& my_host) {
     using namespace tt::tt_metal::distributed::multihost;
     constexpr uint32_t CONTROLLER_RANK = 0;
-    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
     const auto& physical_system_descriptor = this->physical_system_descriptor_;
     std::size_t serialized_table_size = 0;
     std::vector<uint8_t> serialized_table;
@@ -2551,7 +2552,7 @@ void ControlPlane::forward_descriptors_to_controller(
 
 void ControlPlane::forward_intermesh_connections_from_controller(AnnotatedIntermeshConnections& intermesh_connections) {
     using namespace tt::tt_metal::distributed::multihost;
-    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
     constexpr uint32_t CONTROLLER_RANK = 0;
     const auto& my_host = physical_system_descriptor_->my_host_name();
     auto my_rank = physical_system_descriptor_->get_rank_for_hostname(my_host);

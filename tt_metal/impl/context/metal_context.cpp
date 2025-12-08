@@ -394,12 +394,12 @@ MetalContext::MetalContext() {
     std::atexit([]() { MetalContext::instance().~MetalContext(); });
 }
 
-distributed::multihost::DistributedContext& MetalContext::global_distributed_context() {
+distributed::multihost::DistributedContext& MetalContext::full_world_distributed_context() {
     TT_FATAL(distributed_context_, "Distributed context not initialized.");
     return *distributed_context_;
 }
 
-distributed::multihost::DistributedContext& MetalContext::compute_only_distributed_context() {
+distributed::multihost::DistributedContext& MetalContext::global_distributed_context() {
     if (compute_only_distributed_context_) {
         return *compute_only_distributed_context_;
     }
