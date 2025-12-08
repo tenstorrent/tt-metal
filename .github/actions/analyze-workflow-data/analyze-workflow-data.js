@@ -158,7 +158,7 @@ async function run() {
     core.info(`Loaded commits index entries: ${Array.isArray(commitsIndex) ? commitsIndex.length : 0}`);
 
     // Filter and process workflows (process all workflows since we only fetched runs for workflows we care about)
-    let { filteredGrouped, filteredPreviousGrouped, failedWorkflows } = filterWorkflowsByConfig(
+    const { filteredGrouped, filteredPreviousGrouped, failedWorkflows } = filterWorkflowsByConfig(
       grouped,
       previousGrouped,
       days
@@ -175,84 +175,12 @@ async function run() {
     // Optional: Build Slack-ready alert message for all failing workflows with owner mentions
     const alertAllMessage = await buildAlertMessage(filteredGrouped, failedWorkflows, alertAll, errorSnippetsCache);
 
-    // [TEST] Add fake regression to test Slack messaging when no failing jobs are found
-    const testWorkflowName = '.github/workflows/all-post-commit-workflows.yaml';
-    const now = new Date();
-    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    const fakeFailingRunDate = new Date(now.getTime() + 60 * 1000); // 1 minute in future to ensure it's newest
-
-    // Ensure previous data has a successful run as latest
-    if (filteredPreviousGrouped) {
-      const prevRuns = filteredPreviousGrouped.get(testWorkflowName) || [];
-      const fakePrevSuccessRun = {
-        id: 999999997,
-        name: 'All Post-Commit Workflows',
-        head_branch: 'main',
-        head_sha: '0000000000000000000000000000000000000000',
-        path: testWorkflowName,
-        conclusion: 'success',
-        status: 'completed',
-        created_at: yesterday.toISOString(),
-        updated_at: yesterday.toISOString(),
-        run_attempt: 1
-      };
-      const updatedPrevRuns = [fakePrevSuccessRun, ...prevRuns];
-      filteredPreviousGrouped.set(testWorkflowName, updatedPrevRuns);
-      core.info(`[TEST] Added fake successful run to previous data for '${testWorkflowName}': ${updatedPrevRuns.length} total runs`);
-    } else {
-      // Create previous grouped if it doesn't exist
-      const fakePrevSuccessRun = {
-        id: 999999997,
-        name: 'All Post-Commit Workflows',
-        head_branch: 'main',
-        head_sha: '0000000000000000000000000000000000000000',
-        path: testWorkflowName,
-        conclusion: 'success',
-        status: 'completed',
-        created_at: yesterday.toISOString(),
-        updated_at: yesterday.toISOString(),
-        run_attempt: 1
-      };
-      filteredPreviousGrouped = new Map([[testWorkflowName, [fakePrevSuccessRun]]]);
-      core.info(`[TEST] Created previous grouped data with fake successful run for '${testWorkflowName}'`);
-    }
-
-    // Ensure current data has a failing run as latest
-    const currentRuns = filteredGrouped.get(testWorkflowName) || [];
-    const fakeFailingRun = {
-      id: 999999999,
-      name: 'All Post-Commit Workflows',
-      head_branch: 'main',
-      head_sha: '1111111111111111111111111111111111111111',
-      path: testWorkflowName,
-      conclusion: 'failure',
-      status: 'completed',
-      created_at: fakeFailingRunDate.toISOString(),
-      updated_at: fakeFailingRunDate.toISOString(),
-      run_attempt: 1
-    };
-    const updatedCurrentRuns = [fakeFailingRun, ...currentRuns];
-    filteredGrouped.set(testWorkflowName, updatedCurrentRuns);
-    core.info(`[TEST] Added fake failing run to current data for '${testWorkflowName}': ${updatedCurrentRuns.length} total runs (failing run date: ${fakeFailingRunDate.toISOString()})`);
-
-    // Log what we expect to see
-    const prevLatest = filteredPreviousGrouped.get(testWorkflowName)?.[0];
-    const currLatest = filteredGrouped.get(testWorkflowName)?.[0];
-    core.info(`[TEST] Previous latest run: ${prevLatest ? `id=${prevLatest.id}, conclusion=${prevLatest.conclusion}, date=${prevLatest.created_at}` : 'none'}`);
-    core.info(`[TEST] Current latest run: ${currLatest ? `id=${currLatest.id}, conclusion=${currLatest.conclusion}, date=${currLatest.created_at}` : 'none'}`);
-
     // Compute status changes vs previous and write JSON
     const { changes, regressedDetails, stayedFailingDetails } = computeStatusChanges(
       filteredGrouped,
       filteredPreviousGrouped,
       github.context
     );
-
-    // Log regression detection results
-    core.info(`[TEST] Regression detection results: ${regressedDetails.length} regressions found`);
-    for (const reg of regressedDetails) {
-      core.info(`[TEST]   - Regression: ${reg.name}, run_id=${reg.run_id}`);
-    }
 
     // Enrich regressions with first failing run within the window
     await enrichRegressions(regressedDetails, filteredGrouped, errorSnippetsCache, changes, github.context);
