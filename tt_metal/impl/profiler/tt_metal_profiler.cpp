@@ -244,7 +244,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     int init = profiler_state_manager->device_host_time_pair.at(device_id).size() - sampleCount;
     for (int i = init; i < profiler_state_manager->device_host_time_pair.at(device_id).size(); i++) {
         log_file << fmt::format(
-                        "{:5},{:5},{:5},{:20},{:20},{:20.2f},{:20},{:20},{:20.2f},{:20.15f},{:20.15f},{:20},1.0,0",
+                        "{:5},{:5},{:5},{:20},{:20},{:20.2f},{:20},{:20},{:20.2f},{:20.15f},{:20.15f},{:20},1.0,0\n",
                         device_id,
                         phys_core.x,
                         phys_core.y,
@@ -256,8 +256,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
                         delay,
                         frequencyFit,
                         tracyToSecRatio,
-                        tracyBaseTime)
-                 << '\n';
+                        tracyBaseTime);
     }
     log_file.close();
     log_info(
@@ -303,7 +302,7 @@ void setShift(int device_id, int64_t shift, double scale, const SyncInfo& root_s
         std::filesystem::path log_path = output_dir / "sync_device_info.csv";
         std::ofstream log_file;
         log_file.open(log_path, std::ios_base::app);
-        log_file << fmt::format("{:5},,,,,,,,,,,,{:20.15f},{:20}", device_id, scale, shift) << '\n';
+        log_file << fmt::format("{:5},,,,,,,,,,,,{:20.15f},{:20}\n", device_id, scale, shift);
         log_file.close();
     }
 }
