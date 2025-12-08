@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
+
 import torch
 
 import ttnn
@@ -122,12 +124,17 @@ class MLP(LightweightModule):
         # In decode mode (seqlen <= 32) do DRAM sharded matmuls
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
         memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+
+        # Deep copy compute kernel config and enable packer_l1_acc for w1
+        w1_compute_kernel_cfg = copy.deepcopy(li_ff1_3_compute_kernel_cfg)
+        w1_compute_kernel_cfg.packer_l1_acc = True
+
         w1_out = ttnn.linear(
             x,
             self.w1,
             dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
-            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+            compute_kernel_config=w1_compute_kernel_cfg,
             program_config=pc_1,
             memory_config=memory_config,
         )
@@ -137,7 +144,7 @@ class MLP(LightweightModule):
             self.w3,
             dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
-            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+            compute_kernel_config=w1_compute_kernel_cfg,
             program_config=pc_3,
             memory_config=memory_config,
         )

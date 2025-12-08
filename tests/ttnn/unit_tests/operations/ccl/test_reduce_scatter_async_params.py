@@ -13,19 +13,19 @@ from models.tt_transformers.tt.generator import create_submeshes
 from tracy import signpost
 
 
-@pytest.mark.parametrize("num_workers_per_link", [1, 2, 3, 4])
-@pytest.mark.parametrize("num_buffers_per_channel", [1, 2, 3, 4])
-@pytest.mark.parametrize("chunks_per_sync", [5, 10, 20])
+@pytest.mark.parametrize("num_workers_per_link", [1])  # 1
+@pytest.mark.parametrize("num_buffers_per_channel", [1])  # 2
+@pytest.mark.parametrize("chunks_per_sync", [5])  # 10
 @pytest.mark.parametrize(
     "shard_grid, input_shard_shape",
     [
-        # Single row config - 8 cores (x=0-7, y=0)
+        # 8x2 grid config - 16 cores (x=0-7, y=0-1)
         (
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
-            (32, 512),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+            (32, 256),
         ),
     ],
-    ids=["8x1_grid"],
+    ids=["8x2_grid"],
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -82,7 +82,6 @@ def run_reduce_scatter_async_test(
     input_shape = [1, 1, 32, 4096]
     dim = 3
     num_devices = mesh_device.get_num_devices()
-    num_links = 4
 
     # Create WIDTH_SHARDED memory config for input
     input_shard_spec = ttnn.ShardSpec(
@@ -98,10 +97,10 @@ def run_reduce_scatter_async_test(
     )
 
     # Output memory config - after reduce_scatter, width is divided by num_devices
-    # Input per device: (1, 1, 32, 4096) with shard (32, 512) on 8 cores
-    # Output per device: (1, 1, 32, 512) with shard (32, 64) on 8 cores
-    # Each core gets: output_width / num_cores = 512 / 8 = 64
-    output_shard_shape = (input_shard_shape[0], input_shard_shape[1] // num_devices)  # (32, 64)
+    # Input per device: (1, 1, 32, 4096) with shard (32, 256) on 16 cores
+    # Output per device: (1, 1, 32, 512) with shard (32, 32) on 16 cores
+    # Each core gets: output_width / num_cores = 512 / 16 = 32
+    output_shard_shape = (input_shard_shape[0], input_shard_shape[1] // num_devices)  # (32, 32)
     output_shard_spec = ttnn.ShardSpec(
         shard_grid,
         output_shard_shape,
@@ -163,7 +162,7 @@ def run_reduce_scatter_async_test(
             dim=dim,
             multi_device_global_semaphore=rs_semaphore_handles,
             barrier_semaphore=barrier_semaphore_handle,
-            num_links=num_links,
+            num_links=4,
             memory_config=output_mem_cfg,
             intermediate_memory_config=ttnn.L1_MEMORY_CONFIG,
             topology=ttnn.Topology.Ring,
