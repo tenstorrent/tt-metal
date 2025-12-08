@@ -31,16 +31,8 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
 )
 
 fp32_accum = True
-
 conv_compute_kernel_config = None
 if fp32_accum:
-    conv_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        math_approx_mode=True,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=False,
-    )
-else:
     conv_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
