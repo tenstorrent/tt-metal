@@ -389,7 +389,7 @@ class MasterConfigLoader:
         Count the number of tensor inputs by checking the first config.
 
         Args:
-            configs: List of operation configurations
+            configs: List of operation configurations (list of (arguments, source) tuples)
 
         Returns:
             Number of tensor inputs (0, 1, 2, 3, etc.)
@@ -398,10 +398,11 @@ class MasterConfigLoader:
             return 0
 
         # Check first config for number of tensor arguments
-        first_config = configs[0]
+        # configs is a list of (arguments, source) tuples
+        first_config_args, first_source = configs[0]
         tensor_count = 0
 
-        for arg in first_config:
+        for arg in first_config_args:
             tensor_config = self.extract_tensor_config(arg)
             if tensor_config:
                 tensor_count += 1
