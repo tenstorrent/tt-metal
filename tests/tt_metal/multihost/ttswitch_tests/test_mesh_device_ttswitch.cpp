@@ -14,7 +14,7 @@
 #include <llrt/tt_cluster.hpp>
 #include "ttnn/device.hpp"
 #include "ttnn/distributed/api.hpp"
-#include "ttnn_test_fixtures.hpp"
+#include "tests/ttnn/unit_tests/gtests/ttnn_test_fixtures.hpp"
 
 namespace ttnn {
 namespace test {

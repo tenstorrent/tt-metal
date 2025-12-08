@@ -2929,12 +2929,17 @@ std::string ControlPlane::get_galaxy_cabling_descriptor_path(tt::tt_fabric::Fabr
 bool ControlPlane::is_local_host_on_switch_mesh() const {
     const auto& local_mesh_ids = this->get_local_mesh_id_bindings();
     const auto& mesh_graph = this->get_mesh_graph();
+
+    std::optional<MeshId> local_switch_mesh_id = std::nullopt;
     for (const auto& mesh_id : local_mesh_ids) {
         if (mesh_graph.is_switch_mesh(mesh_id)) {
-            return true;
+            if (local_switch_mesh_id.has_value()) {
+                TT_THROW("Local host is on multiple switch meshes: {} and {}", *local_switch_mesh_id, *mesh_id);
+            }
+            local_switch_mesh_id = mesh_id;
         }
     }
-    return false;
+    return local_switch_mesh_id.has_value();
 }
 
 std::vector<ChipId> ControlPlane::get_switch_mesh_device_ids() const {

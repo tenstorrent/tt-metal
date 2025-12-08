@@ -144,10 +144,7 @@ void MeshSocketTestContext::run_test(const ParsedTestConfig& test) {
             execute_socket_test(sockets[socket_idx], test);
         }
     }
-    // Use compute-only distributed context to exclude switch meshes from barriers
-    // Switch meshes don't run workloads, so they shouldn't participate in test synchronization
-    auto& compute_only_context = tt::tt_metal::MetalContext::instance().compute_only_distributed_context();
-    compute_only_context.barrier();
+    distributed_context_->barrier();
 }
 
 void MeshSocketTestContext::setup_fabric_configuration() {

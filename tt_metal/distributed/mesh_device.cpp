@@ -169,12 +169,11 @@ MeshDevice::ScopedDevices::ScopedDevices(
 
 MeshDevice::ScopedDevices::~ScopedDevices() {
     if (!opened_local_devices_.empty()) {
-        std::vector<IDevice*> devices_to_close;
-        devices_to_close.reserve(opened_local_devices_.size());
+        std::map<ChipId, IDevice*> devices_to_close;
         for (auto& [id, device] : opened_local_devices_) {
-            devices_to_close.push_back(device);
+            devices_to_close[id] = device;
         }
-        tt::DevicePool::instance().close_devices(devices_to_close, /*skip_synchronize=*/true);
+        tt::tt_metal::detail::CloseDevices(devices_to_close);
     }
 }
 

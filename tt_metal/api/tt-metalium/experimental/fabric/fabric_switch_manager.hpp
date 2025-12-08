@@ -4,7 +4,13 @@
 
 #pragma once
 
+#include <map>
 #include <tt_stl/indestructible.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+
+namespace tt::tt_metal {
+class IDevice;
+}  // namespace tt::tt_metal
 
 namespace tt::tt_fabric {
 
@@ -39,6 +45,9 @@ public:
      * handshake between tests. This is critical because fabric routers wait for peer handshake,
      * and if devices remain open from a previous test, the handshake won't be re-initiated,
      * causing subsequent tests to hang.
+     *
+     * @note See Issue #34040 for future optimization to keep routers in standby mode
+     *       instead of fully terminating them between workloads.
      */
     void teardown();
 
@@ -52,6 +61,9 @@ private:
     friend class tt::stl::Indestructible<FabricSwitchManager>;
     FabricSwitchManager() = default;
     ~FabricSwitchManager() = default;
+
+    // Cache the device map returned by CreateDevices to use directly in CloseDevices
+    std::map<tt::ChipId, tt::tt_metal::IDevice*> switch_devices_;
 };
 
 }  // namespace tt::tt_fabric
