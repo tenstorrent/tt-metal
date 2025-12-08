@@ -593,7 +593,7 @@ jobs:
     needs: [build-test-publish, release-precheck, create-tag]
     runs-on: ubuntu-latest
     # Only trigger if we are on an RC and the RC build-test-publish succeeded
-    if: ${{ needs.release-precheck.outputs.tag-type == 'rc' && success() }}
+    if: ${{ false && needs.release-precheck.outputs.tag-type == 'rc' && success() }}
     steps:
       - name: Wait for RC workflow completion
         run: |
