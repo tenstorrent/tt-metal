@@ -78,12 +78,6 @@ test_suite_bh_single_pcie_llama_demo_tests() {
     pytest models/tt_transformers/demo/simple_text_demo.py -k performance-batch-1
 }
 
-test_suite_bh_single_pcie_llama_demo_tests() {
-    echo "[upstream-tests] Running BH upstream Llama demo model tests"
-
-    pytest models/tt_transformers/demo/simple_text_demo.py -k performance-batch-1
-}
-
 test_suite_bh_multi_pcie_metal_unit_tests() {
     echo "[upstream-tests] Running BH LLMBox metal unit tests"
 
