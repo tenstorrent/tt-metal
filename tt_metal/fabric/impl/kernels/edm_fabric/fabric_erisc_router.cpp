@@ -303,17 +303,23 @@ constexpr bool is_spine_direction(eth_chan_directions direction) {
     return direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH;
 }
 
-// Defined here because sender_channel_0_free_slots_stream_id does not come from
-// fabric_erisc_router_ct_args.hpp
 static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_free_slots_stream_ids = {
-    tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id,
+    sender_channel_0_free_slots_stream_id,
     sender_channel_1_free_slots_stream_id,
     sender_channel_2_free_slots_stream_id,
-    sender_channel_3_free_slots_stream_id};
-static_assert(sender_channel_free_slots_stream_ids[0] == 17);
-static_assert(sender_channel_free_slots_stream_ids[1] == 18);
-static_assert(sender_channel_free_slots_stream_ids[2] == 19);
-static_assert(sender_channel_free_slots_stream_ids[3] == 20);
+    sender_channel_3_free_slots_stream_id,
+    sender_channel_4_free_slots_stream_id,
+    sender_channel_5_free_slots_stream_id,
+    sender_channel_6_free_slots_stream_id,
+    sender_channel_7_free_slots_stream_id};
+static_assert(sender_channel_free_slots_stream_ids[0] == 21);
+static_assert(sender_channel_free_slots_stream_ids[1] == 22);
+static_assert(sender_channel_free_slots_stream_ids[2] == 23);
+static_assert(sender_channel_free_slots_stream_ids[3] == 24);
+static_assert(sender_channel_free_slots_stream_ids[4] == 25);
+static_assert(sender_channel_free_slots_stream_ids[5] == 26);
+static_assert(sender_channel_free_slots_stream_ids[6] == 27);
+static_assert(sender_channel_free_slots_stream_ids[7] == 28);
 
 // For 2D fabric: maps compact index to downstream direction for each my_direction
 // For 1D fabric: only 1 downstream direction per router (EAST forwards to WEST in 1D linear topology)
@@ -376,15 +382,15 @@ FORCE_INLINE constexpr eth_chan_directions map_compact_index_to_direction(size_t
 // Determine which sender channels are "turn" channels (i.e., north/south for east/west routers)
 // Channel 0 is always for local workers, so it's never a turn channel
 // For 2D fabric, channels 1-3 correspond to compact indices 0-2, which map to actual directions
-constexpr auto get_sender_channel_turn_statuses() -> std::array<bool, MAX_NUM_SENDER_CHANNELS> {
-    std::array<bool, MAX_NUM_SENDER_CHANNELS> turn_statuses = {};  // Initialize to false
+constexpr auto get_sender_channel_turn_statuses() -> std::array<bool, MAX_NUM_SENDER_CHANNELS_VC0> {
+    std::array<bool, MAX_NUM_SENDER_CHANNELS_VC0> turn_statuses = {};  // Initialize to false
 
     // Channel 0 is always for local workers, never a turn channel
     // Only non-spine routers (EAST/WEST) have turn channels
     if constexpr (!is_spine_direction(static_cast<eth_chan_directions>(my_direction))) {
         // Check each sender channel (1-3) to see if it goes to a spine direction (NORTH/SOUTH)
         // Sender channel i (for i=1,2,3) corresponds to compact index (i-1)
-        for (size_t sender_channel = 1; sender_channel < MAX_NUM_SENDER_CHANNELS; sender_channel++) {
+        for (size_t sender_channel = 1; sender_channel < MAX_NUM_SENDER_CHANNELS_VC0; sender_channel++) {
             size_t compact_index = sender_channel - 1;
             eth_chan_directions actual_direction = map_compact_index_to_direction(compact_index);
             turn_statuses[sender_channel] = is_spine_direction(actual_direction);
@@ -417,7 +423,7 @@ FORCE_INLINE constexpr size_t map_downstream_direction_to_compact_index(eth_chan
     return direction_to_compact_index_map[my_direction][downstream_direction];
 }
 
-static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_channels_turn_status =
+static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS_VC0> sender_channels_turn_status =
     get_sender_channel_turn_statuses();
 
 static constexpr std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS> vc_0_free_slots_stream_ids = {
@@ -1234,31 +1240,40 @@ FORCE_INLINE void update_telemetry(
     bool rx_progress,
     LocalTelemetryT& local_fabric_telemetry,
     volatile tt_l1_ptr LocalTelemetryT* fabric_telemetry) {
-    // Helper to safely write to volatile BandwidthTelemetry destinations without discarding qualifiers
-    auto store_bandwidth_telemetry = [](volatile BandwidthTelemetry* dst, const BandwidthTelemetry& src) {
-        dst->elapsed_active_cycles.full = src.elapsed_active_cycles.full;
-        dst->elapsed_cycles.full = src.elapsed_cycles.full;
-        dst->num_words_sent = src.num_words_sent;
-        dst->num_packets_sent = src.num_packets_sent;
-    };
-
-    bool sender_idle = !any_sender_channels_active(local_sender_channel_free_slots_stream_ids_ordered);
-    bool receiver_idle = (get_ptr_val<to_receiver_packets_sent_streams[0]>() == 0);
-
-    {  // heartbeat update
-        volatile RiscTimestampV2* tx_heartbeat_addr = &fabric_telemetry->dynamic_info.erisc[MY_ERISC_ID].tx_heartbeat;
-        volatile RiscTimestampV2* rx_heartbeat_addr = &fabric_telemetry->dynamic_info.erisc[MY_ERISC_ID].rx_heartbeat;
-        if (sender_idle || tx_progress) {
+    if constexpr (FABRIC_TELEMETRY_HEARTBEAT_TX) {
+        bool sender_idle = false;
+        if (!tx_progress) {
+            sender_idle = !any_sender_channels_active(local_sender_channel_free_slots_stream_ids_ordered);
+        }
+        if (tx_progress || sender_idle) {
+            volatile RiscTimestampV2* tx_heartbeat_addr =
+                &fabric_telemetry->dynamic_info.erisc[MY_ERISC_ID].tx_heartbeat;
             local_fabric_telemetry.dynamic_info.erisc[MY_ERISC_ID].tx_heartbeat.full++;
             tx_heartbeat_addr->full = local_fabric_telemetry.dynamic_info.erisc[MY_ERISC_ID].tx_heartbeat.full;
         }
-        if (receiver_idle || rx_progress) {
+    }
+    if constexpr (FABRIC_TELEMETRY_HEARTBEAT_RX) {
+        bool receiver_idle = false;
+        if (!rx_progress) {
+            receiver_idle = (get_ptr_val<to_receiver_packets_sent_streams[0]>() == 0);
+        }
+        if (rx_progress || receiver_idle) {
+            volatile RiscTimestampV2* rx_heartbeat_addr =
+                &fabric_telemetry->dynamic_info.erisc[MY_ERISC_ID].rx_heartbeat;
             local_fabric_telemetry.dynamic_info.erisc[MY_ERISC_ID].rx_heartbeat.full++;
             rx_heartbeat_addr->full = local_fabric_telemetry.dynamic_info.erisc[MY_ERISC_ID].rx_heartbeat.full;
         }
     }
 
-    {  // bandwidth update
+    if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
+        // Helper to safely write to volatile BandwidthTelemetry destinations without discarding qualifiers
+        auto store_bandwidth_telemetry = [](volatile BandwidthTelemetry* dst, const BandwidthTelemetry& src) {
+            dst->elapsed_active_cycles.full = src.elapsed_active_cycles.full;
+            dst->elapsed_cycles.full = src.elapsed_cycles.full;
+            dst->num_words_sent = src.num_words_sent;
+            dst->num_packets_sent = src.num_packets_sent;
+        };
+
         if constexpr (NUM_ACTIVE_ERISCS == 1) {
             store_bandwidth_telemetry(
                 &fabric_telemetry->dynamic_info.tx_bandwidth, local_fabric_telemetry.dynamic_info.tx_bandwidth);
@@ -1399,7 +1414,7 @@ FORCE_INLINE bool run_sender_channel_step_impl(
             remote_receiver_channel,
             perf_telemetry_recorder);
         // Update local TX counters: split responsibility in multi-ERISC mode
-        if constexpr (ENABLE_FABRIC_TELEMETRY) {
+        if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(pkt_header, local_fabric_telemetry);
         }
         increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
@@ -1600,7 +1615,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             did_something = true;
             progress = true;
             // Count RX bytes/packets (header + payload) when consuming a packet from receiver buffer
-            if constexpr (ENABLE_FABRIC_TELEMETRY) {
+            if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 update_bw_counters(packet_header, local_fabric_telemetry);
             }
             uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
@@ -1802,7 +1817,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 
         uint32_t tx_progress = 0;
         uint32_t rx_progress = 0;
-        if constexpr (ENABLE_FABRIC_TELEMETRY) {
+        if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             loop_start_cycles = get_timestamp();
         }
 
@@ -1871,10 +1886,12 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         }
 
         // Compute idle conditions and update heartbeats in one helper
-        if constexpr (ENABLE_FABRIC_TELEMETRY) {
-            uint64_t loop_end_cycles = get_timestamp();
-            uint64_t loop_delta_cycles = loop_end_cycles - loop_start_cycles;
-            update_bw_cycles(loop_delta_cycles, tx_progress, rx_progress, local_fabric_telemetry);
+        if constexpr (FABRIC_TELEMETRY_ANY_DYNAMIC_STAT) {
+            if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
+                uint64_t loop_end_cycles = get_timestamp();
+                uint64_t loop_delta_cycles = loop_end_cycles - loop_start_cycles;
+                update_bw_cycles(loop_delta_cycles, tx_progress, rx_progress, local_fabric_telemetry);
+            }
             update_telemetry(
                 local_sender_channel_free_slots_stream_ids,
                 tx_progress,
@@ -2149,27 +2166,32 @@ void kernel_main() {
     init_ptr_val<to_receiver_packets_sent_streams[0]>(0);
     init_ptr_val<to_sender_packets_acked_streams[0]>(0);
     init_ptr_val<to_sender_packets_acked_streams[1]>(0);
-    init_ptr_val<to_sender_packets_acked_streams[2]>(0);
     init_ptr_val<to_sender_packets_completed_streams[0]>(0);
     init_ptr_val<to_sender_packets_completed_streams[1]>(0);
-    init_ptr_val<to_sender_packets_completed_streams[2]>(0);
     // The first sender channel in the array is always for the transient/worker connection
     init_ptr_val<sender_channel_free_slots_stream_ids[0]>(SENDER_NUM_BUFFERS_ARRAY[0]);  // LOCAL WORKER
     init_ptr_val<sender_channel_free_slots_stream_ids[1]>(SENDER_NUM_BUFFERS_ARRAY[1]);  // Compact index 0
-    init_ptr_val<sender_channel_free_slots_stream_ids[2]>(SENDER_NUM_BUFFERS_ARRAY[2]);  // Compact index 1
-    // TODO: change to per channel downstream buffers.
-    init_ptr_val<vc_0_free_slots_from_downstream_edge_1_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
-    init_ptr_val<vc_0_free_slots_from_downstream_edge_2_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
-    init_ptr_val<vc_0_free_slots_from_downstream_edge_3_stream_id>(DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
 
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
     }
 
     if constexpr (is_2d_fabric) {
-        init_ptr_val<sender_channel_free_slots_stream_ids[3]>(SENDER_NUM_BUFFERS_ARRAY[3]);  // Compact index 2
+        init_ptr_val<to_receiver_packets_sent_streams[1]>(0);
+        init_ptr_val<to_sender_packets_acked_streams[2]>(0);
         init_ptr_val<to_sender_packets_acked_streams[3]>(0);
-        init_ptr_val<to_sender_packets_completed_streams[3]>(0);
+
+        // Initialize completion streams and sender channel free slots for channels 2-7 using compile-time loop
+        // SENDER_NUM_BUFFERS_ARRAY[] is sized to NUM_SENDER_CHANNELS, which is the number of used sender channels.
+        [&]<size_t... Is>(std::index_sequence<Is...>) {
+            (([&]() {
+                 init_ptr_val<to_sender_packets_completed_streams[Is + 2]>(0);
+                 if constexpr (NUM_SENDER_CHANNELS > (Is + 2)) {
+                     init_ptr_val<sender_channel_free_slots_stream_ids[Is + 2]>(SENDER_NUM_BUFFERS_ARRAY[Is + 2]);
+                 }
+             }()),
+             ...);
+        }(std::make_index_sequence<6>{});
     }
 
     if constexpr (code_profiling_enabled_timers_bitfield != 0) {
@@ -2194,10 +2216,18 @@ void kernel_main() {
     const size_t local_sender_channel_1_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_2_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_3_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
+    const size_t local_sender_channel_4_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
+    const size_t local_sender_channel_5_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
+    const size_t local_sender_channel_6_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
+    const size_t local_sender_channel_7_connection_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_0_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_1_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_2_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
     const size_t local_sender_channel_3_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
+    const size_t local_sender_channel_4_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
+    const size_t local_sender_channel_5_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
+    const size_t local_sender_channel_6_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
+    const size_t local_sender_channel_7_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
 
     // downstream EDM VC0 connection info
     const auto has_downstream_edm_vc0_buffer_connection = get_arg_val<uint32_t>(arg_idx++);
@@ -2239,18 +2269,29 @@ void kernel_main() {
     [[maybe_unused]]
     const auto downstream_vc0_noc_interface_buffer_index_local_addr = 0;
 
+    // Read MAX_NUM_SENDER_CHANNELS teardown semaphores (host packs builder_config::num_max_sender_channels = 8)
     const auto my_sem_for_teardown_from_edm_0 = get_arg_val<uint32_t>(arg_idx++);
     const auto my_sem_for_teardown_from_edm_1 = get_arg_val<uint32_t>(arg_idx++);
     const auto my_sem_for_teardown_from_edm_2 = get_arg_val<uint32_t>(arg_idx++);
     const auto my_sem_for_teardown_from_edm_3 = get_arg_val<uint32_t>(arg_idx++);
+    const auto my_sem_for_teardown_from_edm_4 = get_arg_val<uint32_t>(arg_idx++);
+    const auto my_sem_for_teardown_from_edm_5 = get_arg_val<uint32_t>(arg_idx++);
+    const auto my_sem_for_teardown_from_edm_6 = get_arg_val<uint32_t>(arg_idx++);
+    const auto my_sem_for_teardown_from_edm_7 = get_arg_val<uint32_t>(arg_idx++);
 
     ////////////////////////
     // Sender runtime args
     ////////////////////////
+    // Read MAX_NUM_SENDER_CHANNELS sender worker semaphore pointers (host packs builder_config::num_max_sender_channels
+    // = 8)
     auto sender0_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
     auto sender1_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
     auto sender2_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
     auto sender3_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
+    auto sender4_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
+    auto sender5_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
+    auto sender6_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
+    auto sender7_worker_semaphore_ptr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
 
     ///////////////////////////////////////////////
     // Local tensix (relay) connection runtime args
@@ -2300,6 +2341,26 @@ void kernel_main() {
             *reinterpret_cast<volatile uint32_t*>(local_sender_channel_3_connection_buffer_index_id) = 0;
             *sender3_worker_semaphore_ptr = 0;
         }
+        if constexpr (is_sender_channel_serviced[4]) {
+            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_4_connection_semaphore_addr) = 0;
+            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_4_connection_buffer_index_id) = 0;
+            *sender4_worker_semaphore_ptr = 0;
+        }
+        if constexpr (is_sender_channel_serviced[5]) {
+            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_5_connection_semaphore_addr) = 0;
+            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_5_connection_buffer_index_id) = 0;
+            *sender5_worker_semaphore_ptr = 0;
+        }
+        if constexpr (is_sender_channel_serviced[6]) {
+            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_6_connection_semaphore_addr) = 0;
+            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_6_connection_buffer_index_id) = 0;
+            *sender6_worker_semaphore_ptr = 0;
+        }
+        if constexpr (is_sender_channel_serviced[7]) {
+            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_7_connection_semaphore_addr) = 0;
+            *reinterpret_cast<volatile uint32_t*>(local_sender_channel_7_connection_buffer_index_id) = 0;
+            *sender7_worker_semaphore_ptr = 0;
+        }
     }
     *edm_status_ptr = tt::tt_fabric::EDMStatus::STARTED;
 
@@ -2324,6 +2385,10 @@ void kernel_main() {
                 my_sem_for_teardown_from_edm_1,
                 my_sem_for_teardown_from_edm_2,
                 my_sem_for_teardown_from_edm_3,
+                my_sem_for_teardown_from_edm_4,
+                my_sem_for_teardown_from_edm_5,
+                my_sem_for_teardown_from_edm_6,
+                my_sem_for_teardown_from_edm_7,
             });
 
     // create the remote receiver channel buffers using multi-pool system
@@ -2353,14 +2418,22 @@ void kernel_main() {
                 local_sender_channel_0_connection_semaphore_addr,
                 local_sender_channel_1_connection_semaphore_addr,
                 local_sender_channel_2_connection_semaphore_addr,
-                local_sender_channel_3_connection_semaphore_addr});
+                local_sender_channel_3_connection_semaphore_addr,
+                local_sender_channel_4_connection_semaphore_addr,
+                local_sender_channel_5_connection_semaphore_addr,
+                local_sender_channel_6_connection_semaphore_addr,
+                local_sender_channel_7_connection_semaphore_addr});
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_connection_info_addresses =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
             std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
                 local_sender_channel_0_connection_info_addr,
                 local_sender_channel_1_connection_info_addr,
                 local_sender_channel_2_connection_info_addr,
-                local_sender_channel_3_connection_info_addr});
+                local_sender_channel_3_connection_info_addr,
+                local_sender_channel_4_connection_info_addr,
+                local_sender_channel_5_connection_info_addr,
+                local_sender_channel_6_connection_info_addr,
+                local_sender_channel_7_connection_info_addr});
 
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
         auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
