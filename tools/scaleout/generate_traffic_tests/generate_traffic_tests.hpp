@@ -60,6 +60,7 @@ struct MeshTopologyInfo {
 
 MeshTopologyInfo extract_topology_info(const proto::ClusterDescriptor& cluster_desc, bool verbose = false);
 MeshTopologyInfo extract_topology_info(const std::filesystem::path& cabling_descriptor_path, bool verbose = false);
+MeshTopologyInfo extract_topology_info_from_mgd(const std::filesystem::path& mgd_path, bool verbose = false);
 
 std::string generate_traffic_tests_yaml(
     const MeshTopologyInfo& topology,
