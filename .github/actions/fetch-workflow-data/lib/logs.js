@@ -325,7 +325,7 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
           // Extract quietly to avoid ENOBUFS
           execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
 
-          // Fetch actual job names from GitHub API (jobs were already fetched earlier, reuse them)
+          // Fetch all failing job names from GitHub API with pagination (separate fetch to ensure all jobs are captured)
           const failingJobNames = new Set();
           try {
             // Get jobs for this run - filter for failed jobs, handle pagination
