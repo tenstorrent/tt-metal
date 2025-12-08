@@ -162,8 +162,13 @@ def create_vgg_layers_with_weights(layers_config, device=None, dtype=ttnn.bfloat
     return layers_with_weights
 
 
-# Cache for pre-formatted device weights to avoid formatting during trace capture
 _weight_device_cache = {}
+
+
+def clear_vgg_weight_cache():
+    """Clear weight cache for fresh PCC tests."""
+    global _weight_device_cache
+    _weight_device_cache.clear()
 
 
 def apply_vgg_backbone(
@@ -332,18 +337,12 @@ def apply_vgg_backbone(
                         used_cache_fallback = True
                     else:
                         try:
-                            if ttnn.is_tensor_storage_on_device(weight):
-                                weight_torch = ttnn.to_torch(weight)
-                            else:
-                                weight_torch = ttnn.to_torch(weight)
+                            weight_torch = ttnn.to_torch(weight)
 
                             bias_torch = None
                             if bias is not None:
                                 if isinstance(bias, ttnn.Tensor):
-                                    if ttnn.is_tensor_storage_on_device(bias):
-                                        bias_torch = ttnn.to_torch(bias).reshape(-1)
-                                    else:
-                                        bias_torch = ttnn.to_torch(bias).reshape(-1)
+                                    bias_torch = ttnn.to_torch(bias).reshape(-1)
                                 elif isinstance(bias, torch.Tensor):
                                     bias_torch = bias.reshape(-1)
                                 else:
@@ -550,7 +549,6 @@ def apply_vgg_backbone(
                     if cached_bias is not None:
                         object.__setattr__(conv_config, "bias", cached_bias)
                 else:
-                    # Normal path for non-pre-formatted weights
                     conv_config = Conv2dConfiguration(
                         input_height=input_height,
                         input_width=input_width,

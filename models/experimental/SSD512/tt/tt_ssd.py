@@ -316,7 +316,6 @@ def forward_extras(
             dilation = config["dilation"]
             groups = config["groups"]
 
-            # Initialize cache_key for pre-formatted weight check
             cache_key = None
             used_cache_fallback = False
             if isinstance(weight, ttnn.Tensor):
@@ -340,22 +339,16 @@ def forward_extras(
                     used_cache_fallback = True
                 else:
                     try:
-                        if ttnn.is_tensor_storage_on_device(weight):
-                            weight_torch = ttnn.to_torch(weight)
-                        else:
-                            weight_torch = ttnn.to_torch(weight)
+                        weight_torch = ttnn.to_torch(weight)
 
                         bias_torch = None
                         if bias is not None:
                             if isinstance(bias, ttnn.Tensor):
-                                if ttnn.is_tensor_storage_on_device(bias):
-                                    bias_torch = ttnn.to_torch(bias).reshape(-1)
-                                else:
-                                    bias_torch = ttnn.to_torch(bias).reshape(-1)
+                                bias_torch = ttnn.to_torch(bias).reshape(-1)
                             elif isinstance(bias, torch.Tensor):
                                 bias_torch = bias.reshape(-1)
                             else:
-                                bias_torch = ttnn.to_torch(bias).reshape(-1) if hasattr(bias, "shape") else None
+                                bias_torch = None
 
                         weight_ttnn, bias_ttnn = Conv2dConfiguration.convert_torch_weight_and_bias_to_ttnn(
                             weight_torch, bias_torch
@@ -429,9 +422,6 @@ def forward_extras(
                                 bias_prep = None
 
                             _extras_weight_device_cache[cache_key] = (weight_prep, bias_prep)
-                            # weight_ttnn = weight_prep
-                            # bias_ttnn = bias_prep
-                            # used_cache_fallback = True
                         except (RuntimeError, ValueError):
                             pass
                     except RuntimeError as e:
@@ -544,7 +534,6 @@ def forward_extras(
                 if cached_bias is not None:
                     object.__setattr__(conv_config, "bias", cached_bias)
             else:
-                # Normal path for non-pre-formatted weights
                 conv_config = Conv2dConfiguration(
                     input_height=current_h,
                     input_width=current_w,
@@ -802,8 +791,6 @@ class SSD512Network:
         else:
             conf = conf_outputs[0]
 
-        # Return TTNN tensors directly to avoid device-to-host reads during trace capture
-        # The pipeline model function will handle conversion if needed
         if debug:
             debug_sources = [tt_to_torch_tensor(s) for s in processed_sources]
             debug_dict = {
@@ -815,8 +802,6 @@ class SSD512Network:
             conf_torch = tt_to_torch_tensor(conf)
             return loc_torch, conf_torch, debug_dict
 
-        # Return TTNN tensors directly (not converted to torch)
-        # This avoids device-to-host reads during trace capture
         return loc, conf
 
 

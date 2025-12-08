@@ -61,7 +61,7 @@ def load_image(image_path, size=512):
 
 
 def filter_top_detections(detections, max_detections=2, min_score=0.1):
-    """filter detections to keep only top N by confidence score."""
+    """Filter detections to keep only top N by confidence score."""
     if len(detections) == 0:
         return detections
 
@@ -105,7 +105,7 @@ def filter_top_detections(detections, max_detections=2, min_score=0.1):
 
 
 def draw_detections(image, detections, output_path, model_name):
-    """draw bounding boxes and labels on image."""
+    """Draw bounding boxes and labels on image."""
     draw = ImageDraw.Draw(image)
 
     # Try to load a font, fallback to default if not available

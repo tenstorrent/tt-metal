@@ -228,6 +228,12 @@ def apply_multibox_heads(
 _multibox_weight_device_cache = {}
 
 
+def clear_multibox_weight_cache():
+    """Clear weight cache for fresh PCC tests."""
+    global _multibox_weight_device_cache
+    _multibox_weight_device_cache.clear()
+
+
 def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttnn.bfloat16, memory_config=None):
     """Apply a single multibox head (location or confidence) to input tensor."""
     if isinstance(input_tensor, torch.Tensor):
@@ -349,14 +355,12 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
         and ((tensor_size_estimate > 1024 * 1024 or input_height > 64 or input_width > 64))
     )
 
-    # Initialize cache_key for pre-formatted weight check
     cache_key = None
     used_cache_fallback = False
     if isinstance(weight, ttnn.Tensor):
         weight_id = id(weight)
         input_mem_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
         input_layout = ttnn.TILE_LAYOUT
-        # cache_key = (weight_id, in_channels, out_channels, kernel_size, stride, padding, groups, id(input_mem_config) if input_mem_config else None, input_layout)
         cache_key = (
             weight_id,
             in_channels,
@@ -378,18 +382,12 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
             used_cache_fallback = True
         else:
             try:
-                if ttnn.is_tensor_storage_on_device(weight):
-                    weight_torch = ttnn.to_torch(weight)
-                else:
-                    weight_torch = ttnn.to_torch(weight)
+                weight_torch = ttnn.to_torch(weight)
 
                 bias_torch = None
                 if bias is not None:
                     if isinstance(bias, ttnn.Tensor):
-                        if ttnn.is_tensor_storage_on_device(bias):
-                            bias_torch = ttnn.to_torch(bias).reshape(-1)
-                        else:
-                            bias_torch = ttnn.to_torch(bias).reshape(-1)
+                        bias_torch = ttnn.to_torch(bias).reshape(-1)
                     elif isinstance(bias, torch.Tensor):
                         bias_torch = bias.reshape(-1)
                     else:
@@ -467,9 +465,6 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
                         bias_prep = None
 
                     _multibox_weight_device_cache[cache_key] = (weight_prep, bias_prep)
-                    # weight_ttnn = weight_prep
-                    # bias_ttnn = bias_prep
-                    # used_cache_fallback = True
                 except (RuntimeError, ValueError):
                     pass
             except RuntimeError as e:
@@ -598,7 +593,6 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
         if cached_bias is not None:
             object.__setattr__(conv_config, "bias", cached_bias)
     else:
-        # Normal path for non-pre-formatted weights
         conv_config = Conv2dConfiguration(
             input_height=input_height,
             input_width=input_width,

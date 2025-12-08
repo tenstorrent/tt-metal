@@ -133,6 +133,12 @@ def create_extras_layers_with_weights(layers_config, device=None, dtype=ttnn.bfl
 _weight_device_cache = {}
 
 
+def clear_extras_weight_cache():
+    """Clear weight cache for fresh PCC tests."""
+    global _weight_device_cache
+    _weight_device_cache.clear()
+
+
 def apply_extras_backbone(input_tensor, layers_with_weights, device=None, dtype=ttnn.bfloat8_b, memory_config=None):
     """
     Apply extras layers to input tensor using TTNN operations."""
@@ -282,18 +288,12 @@ def apply_extras_backbone(input_tensor, layers_with_weights, device=None, dtype=
                         used_cache_fallback = True
                     else:
                         try:
-                            if ttnn.is_tensor_storage_on_device(weight):
-                                weight_torch = ttnn.to_torch(weight)
-                            else:
-                                weight_torch = ttnn.to_torch(weight)
+                            weight_torch = ttnn.to_torch(weight)
 
                             bias_torch = None
                             if bias is not None:
                                 if isinstance(bias, ttnn.Tensor):
-                                    if ttnn.is_tensor_storage_on_device(bias):
-                                        bias_torch = ttnn.to_torch(bias).reshape(-1)
-                                    else:
-                                        bias_torch = ttnn.to_torch(bias).reshape(-1)
+                                    bias_torch = ttnn.to_torch(bias).reshape(-1)
                                 elif isinstance(bias, torch.Tensor):
                                     bias_torch = bias.reshape(-1)
                                 else:
@@ -371,11 +371,10 @@ def apply_extras_backbone(input_tensor, layers_with_weights, device=None, dtype=
                                     bias_prep = None
 
                                 _weight_device_cache[cache_key] = (weight_prep, bias_prep)
-                                # weight_ttnn = weight_prep
-                                # bias_ttnn = bias_prep
-                                # used_cache_fallback = True
-                            except (RuntimeError, ValueError):
-                                pass
+                            except Exception as e:
+                                raise RuntimeError(f"Error preparing weights: {e}") from e
+                        except (RuntimeError, ValueError):
+                            pass
                         except RuntimeError as e:
                             error_msg = str(e) if e else ""
                             if (
@@ -502,7 +501,6 @@ def apply_extras_backbone(input_tensor, layers_with_weights, device=None, dtype=
                     if cached_bias is not None:
                         object.__setattr__(conv_config, "bias", cached_bias)
                 else:
-                    # Normal path for non-pre-formatted weights
                     conv_config = Conv2dConfiguration(
                         input_height=input_height,
                         input_width=input_width,

@@ -87,7 +87,7 @@ def test_ssd512_e2e_performant(
     num_classes = 21
     dtype = ttnn.bfloat16
 
-    logger.info(f"Building SSD512 model for performance test...")
+    logger.info("Building SSD512 model...")
     torch_model = build_and_init_torch_model(phase="test", size=size, num_classes=num_classes)
     ttnn_model = build_and_load_ttnn_model(torch_model, device, num_classes=num_classes)
 
@@ -96,21 +96,20 @@ def test_ssd512_e2e_performant(
     input_shape = (batch_size, 3, size, size)
     sample_input = torch.randn(input_shape, dtype=torch.float32)
 
-    logger.info(f"Creating pipeline model function...")
+    logger.info("Creating pipeline model...")
     pipeline_model = create_ssd512_pipeline_model(ttnn_model, dtype=dtype)
 
-    logger.info(f"Preparing input tensor...")
+    logger.info("Preparing input tensor...")
     sample_input_permuted = sample_input.permute(0, 2, 3, 1)
     sample_input_shape = sample_input_permuted.shape
-    # Create host tensor for pipeline (device=None creates a host tensor)
     ttnn_input_tensor = ttnn.from_torch(
         sample_input_permuted,
-        device=None,  # None creates a host tensor, required by pipeline
+        device=None,
         dtype=dtype,
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
-    logger.info(f"Creating memory configs...")
+    logger.info("Creating memory configs...")
     batch_size, height, width, channels = sample_input_shape
     total_height = batch_size * height * width
 
@@ -168,8 +167,6 @@ def test_ssd512_e2e_performant(
     )
 
     logger.info(f"Configuring pipeline (2CQ with trace and overlapped input)...")
-    # Using MultiCQTracedModelOverlappedInputExecutor with trace=True
-    # This executor supports tuple outputs (loc, conf) unlike MultiCQTracedModelPipelinedIOExecutor
     pipeline = create_pipeline_from_config(
         config=PipelineConfig(use_trace=True, num_command_queues=2, all_transfers_on_separate_command_queue=False),
         model=pipeline_model,
@@ -180,7 +177,7 @@ def test_ssd512_e2e_performant(
 
     input_tensors = [ttnn_input_tensor] * num_iterations
 
-    logger.info(f"Compiling pipeline (warmup)...")
+    logger.info("Compiling pipeline (warmup)...")
     start = time.time()
     pipeline.compile(ttnn_input_tensor)
     end = time.time()
@@ -211,4 +208,4 @@ def test_ssd512_e2e_performant(
         comments=f"batch_{batch_size}-size_{size}",
     )
 
-    logger.info(f"Performance test completed successfully!")
+    logger.info("Performance test completed!")

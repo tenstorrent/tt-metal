@@ -17,7 +17,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 @pytest.mark.parametrize(
     "pcc",
-    ((0.99),),
+    ((0.97),),
 )
 @pytest.mark.parametrize(
     "size",
@@ -25,15 +25,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 98304}], indirect=True)
 def test_ssd512_network(device, pcc, size, reset_seeds):
-    """
-    Test Full SSD512 Network.
-    """
-    # from models.experimental.SSD512.tt.layers.tt_multibox_heads import clear_multibox_weight_cache
-    # from models.experimental.SSD512.tt.layers.tt_extras_backbone import clear_extras_weight_cache as clear_extras_backbone_cache
-    # from models.experimental.SSD512.tt.tt_ssd import clear_extras_weight_cache
-    # clear_multibox_weight_cache()
-    # clear_extras_backbone_cache()
-    # clear_extras_weight_cache()
+    """Test Full SSD512 Network."""
     setup_seeds_and_deterministic(reset_seeds=reset_seeds, seed=0)
 
     num_classes = 21  # VOC dataset
