@@ -349,9 +349,12 @@ tt::stl::hash::hash_t SDPAOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensors) {
     bool is_chunked_prefill = attrs.chunk_start_idx.has_value();
 
-    const Tensor& q = tensors.q;
-    const Tensor& k = tensors.k;
-    const Tensor& v = attrs.use_mla ? tensors.k : tensors.v.value_or(tensors.k);
+    std::vector<Tensor> input_tensors = {tensors.q, tensors.k};
+    if (tensors.v.has_value()) {
+        input_tensors.push_back(tensors.v.value());
+    }
+    std::vector<std::optional<Tensor>> optional_input_tensors = {
+        tensors.attn_mask, tensors.page_table, tensors.attention_sink};
 
     operation::Hash hash = operation::hash_operation<SDPAOperation>(
         attrs.head_dim_v,
@@ -361,12 +364,8 @@ tt::stl::hash::hash_t SDPAOperation::compute_program_hash(
         attrs.is_causal,
         is_chunked_prefill,
         attrs.compute_kernel_config,
-        q,
-        k,
-        v,
-        tensors.attn_mask,
-        tensors.page_table,
-        tensors.attention_sink);
+        input_tensors,
+        optional_input_tensors);
     return hash;
 }
 
