@@ -54,7 +54,7 @@ def get_expected_magic_for_location(location: OnChipCoordinate, magic_values: Co
     Determine the expected magic number based on location type.
     Returns (magic_value, type_name).
     """
-    block_type = location.device.get_block_type(location)
+    block_type = location.noc_block.block_type
     if block_type == "functional_workers":
         return magic_values.worker, "WORKER"
     elif location in location.device.idle_eth_block_locations:
@@ -70,7 +70,6 @@ def try_read_magic_with_elf(
     location: OnChipCoordinate,
     risc_name: str,
     fw_elf,
-    elfs_cache: ElfsCache,
 ) -> int | None:
     """
     Attempt to read core_magic_number using the given firmware ELF.
@@ -78,7 +77,7 @@ def try_read_magic_with_elf(
     """
     try:
         loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
-        mailboxes = fw_elf.read_global("mailboxes", loc_mem_access)
+        mailboxes = fw_elf.get_global("mailboxes", loc_mem_access)
         return int.from_bytes(mailboxes.core_info.core_magic_number.read_bytes(), byteorder="little")
     except Exception as e:
         return None
@@ -110,7 +109,7 @@ def check_core_magic(
         return
 
     # Read the magic number from the expected mailbox location
-    actual_magic = try_read_magic_with_elf(location, risc_name, fw_elf, elfs_cache)
+    actual_magic = try_read_magic_with_elf(location, risc_name, fw_elf)
 
     if actual_magic is None:
         log_check_location(
@@ -142,7 +141,7 @@ def check_core_magic(
 
     found_type = None
     for type_name, other_elf in other_elfs_to_try:
-        other_magic = try_read_magic_with_elf(location, risc_name, other_elf, elfs_cache)
+        other_magic = try_read_magic_with_elf(location, risc_name, other_elf)
         if other_magic is not None:
             other_type_name = magic_values.get_name(other_magic)
             if other_type_name == type_name:
