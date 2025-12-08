@@ -8,10 +8,11 @@
 
 namespace tt::tt_metal {
 
-class LightMetalBinary;
-
 class IDevice;
 
+namespace experimental::lightmetal {
+
+class LightMetalBinary;
 namespace detail {
 class LightMetalReplayImpl;
 }
@@ -35,5 +36,7 @@ public:
 private:
     std::unique_ptr<detail::LightMetalReplayImpl> pimpl_;
 };
+
+}  // namespace experimental::lightmetal
 
 }  // namespace tt::tt_metal
