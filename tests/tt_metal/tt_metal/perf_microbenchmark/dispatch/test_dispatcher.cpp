@@ -738,12 +738,12 @@ class DispatchPagedWriteTestFixture : public BaseDispatchTestFixture,
     CoreCoord get_bank_core(uint32_t bank_id) const {
         // If DRAM, get the logical core from the DRAM channel
         if (is_dram_) {
-            const auto dram_channel = device_->allocator()->get_dram_channel_from_bank_id(bank_id);
+            const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
             return device_->logical_core_from_dram_channel(dram_channel);
         }
 
         // If L1, get logical core from the bank id
-        return device_->allocator()->get_logical_core_from_bank_id(bank_id);
+        return device_->allocator_impl()->get_logical_core_from_bank_id(bank_id);
     }
 
 protected:

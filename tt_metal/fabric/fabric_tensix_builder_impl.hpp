@@ -465,7 +465,8 @@ private:
     bool has_fabric_router_ = true;
 
     // Channel connection liveness check disable array
-    mutable std::array<bool, builder_config::num_sender_channels> channel_connection_liveness_check_disable_array_{};
+    mutable std::array<bool, builder_config::num_max_sender_channels>
+        channel_connection_liveness_check_disable_array_{};
 
     // Upstream router coordinates for sync
     std::vector<uint32_t> upstream_routers_noc_x_;
@@ -526,7 +527,8 @@ private:
     std::shared_ptr<FabricTensixDatamoverRelayConfig> config_;
 
     // Channel connection liveness check disable array
-    mutable std::array<bool, builder_config::num_sender_channels> channel_connection_liveness_check_disable_array_{};
+    mutable std::array<bool, builder_config::num_max_sender_channels>
+        channel_connection_liveness_check_disable_array_{};
 
     // Router coordinate for sync (relay connects to one local router)
     uint32_t router_noc_x_ = 0;
