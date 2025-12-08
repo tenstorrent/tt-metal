@@ -63,7 +63,58 @@ using namespace tt;
 
 namespace {
 
-string logfile_path = "generated/dprint/";
+constexpr auto logfile_path = "generated/dprint/";
+
+// Returns the OS-agnostic null device path (/dev/null on Unix, NUL on Windows).
+std::filesystem::path get_null_device_path() {
+#ifdef _WIN32
+    return "NUL";
+#else
+    return "/dev/null";
+#endif
+}
+
+// Returns an OS-agnostic path for dprint log files: /tmp/tt-metalium/generated/dprint/
+// Uses std::filesystem::temp_directory_path() for cross-platform compatibility.
+// Creates the directory if it doesn't exist and validates it's writable.
+// Falls back to null device if the directory cannot be created or is not writable.
+std::filesystem::path get_dprint_log_dir() {
+    std::filesystem::path temp_dir;
+    try {
+        temp_dir = std::filesystem::temp_directory_path();
+    } catch (const std::filesystem::filesystem_error& e) {
+        log_warning(
+            tt::LogMetal,
+            "Failed to get system temp directory for DPRINT logging: {}. DPRINT output will be discarded.",
+            e.what());
+        return get_null_device_path();
+    }
+
+    std::filesystem::path log_dir = temp_dir / "tt-metalium" / logfile_path;
+
+    std::error_code ec;
+    std::filesystem::create_directories(log_dir, ec);
+    if (ec) {
+        log_warning(
+            tt::LogMetal,
+            "Failed to create DPRINT log directory '{}': {}. DPRINT output will be discarded.",
+            log_dir.string(),
+            ec.message());
+        return get_null_device_path();
+    }
+
+    // Verify the directory is writable by checking permissions
+    auto perms = std::filesystem::status(log_dir, ec).permissions();
+    if (ec || (perms & std::filesystem::perms::owner_write) == std::filesystem::perms::none) {
+        log_warning(
+            tt::LogMetal,
+            "DPRINT log directory '{}' is not writable. DPRINT output will be discarded.",
+            log_dir.string());
+        return get_null_device_path();
+    }
+
+    return log_dir;
+}
 
 inline float bfloat16_to_float(uint16_t bfloat_val) {
     uint32_t uint32_data = ((uint32_t)bfloat_val) << 16;
@@ -497,8 +548,8 @@ DPrintServer::Impl::Impl(llrt::RunTimeOptions& rtoptions) {
     }
 
     // Set the output stream according to RTOptions, either a file name or stdout if none specified.
-    std::filesystem::path output_dir(rtoptions.get_root_dir() + logfile_path);
-    std::filesystem::create_directories(output_dir);
+    // get_dprint_log_dir() creates the directory and validates it's writable.
+    std::filesystem::path output_dir = get_dprint_log_dir();
     if (!file_name.empty() && !one_file_per_risc) {
         outfile_ = new ofstream(file_name);
     }
@@ -1219,7 +1270,7 @@ ostream* DPrintServer::Impl::get_output_stream(const RiscKey& risc_key) {
             const ChipId chip_id = get<0>(risc_key);
             const umd::CoreDescriptor& logical_core = get<1>(risc_key);
             const int risc_id = get<2>(risc_key);
-            string filename = rtoptions.get_root_dir() + logfile_path;
+            string filename = get_dprint_log_dir().string();
             filename += fmt::format(
                 "device-{}_{}-core-{}-{}_{}.txt",
                 chip_id,
