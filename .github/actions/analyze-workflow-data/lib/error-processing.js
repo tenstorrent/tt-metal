@@ -430,9 +430,9 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
                   if (parts.length >= 2) {
                     const folderName = parts[1]; // e.g., "1_job-name" or "1_job-name.txt"
                     // Remove leading step number and underscore, then remove .txt suffix if present
-                    let jobName = folderName.replace(/^\d+_/, '').trim();
+                    let jobName = folderName.replace(/^\d+_/, '');
                     // Remove .txt extension if present (GitHub Actions sometimes includes it in folder names)
-                    jobName = jobName.replace(/\.txt$/i, '').trim();
+                    jobName = jobName.replace(/\.txt$/i, '');
                     // Replace " _ " (space-underscore-space) with " / " to match GitHub Actions job name format
                     jobName = jobName.replace(/\s+_\s+/g, ' / ').trim();
                     if (jobName) {

@@ -343,7 +343,8 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
                   }
                 }
               }
-              hasMore = jobs.length === 100;
+              // Continue if we got a full page (might have more), stop if we got fewer
+              hasMore = jobs.length >= 100;
               page++;
             }
           } catch (e) {
