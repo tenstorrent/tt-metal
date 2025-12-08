@@ -269,3 +269,124 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
         with:
           governor: ondemand
+
+  aggregate-ops-recording:
+    needs: single-card-demo-tests
+    if: ${{ !cancelled() && contains(toJSON(needs.single-card-demo-tests), 'ops_recording') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all TTNN reports artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ttnn_reports_*
+          path: all_ttnn_reports
+          merge-multiple: false
+
+      - name: Aggregate operations from all models
+        shell: bash
+        run: |
+          echo "=========================================="
+          echo "Aggregating Operations from All Models"
+          echo "=========================================="
+          
+          # Create output directory
+          mkdir -p aggregated_ops
+          
+          # Find all operations_list.txt files and db.sqlite files
+          echo "Found reports:"
+          find all_ttnn_reports -name "operations_list.txt" -o -name "db.sqlite" | head -50
+          
+          # Aggregate using Python
+          python3 << 'EOF'
+          import sqlite3
+          import os
+          import json
+          from pathlib import Path
+          from collections import defaultdict
+          
+          all_ops = defaultdict(lambda: {"count": 0, "total_duration": 0, "models": set()})
+          model_ops = {}
+          
+          # Find all db.sqlite files
+          for db_path in Path("all_ttnn_reports").rglob("db.sqlite"):
+              model_name = db_path.parent.name
+              print(f"\nProcessing: {db_path} (model: {model_name})")
+              
+              try:
+                  conn = sqlite3.connect(str(db_path))
+                  cursor = conn.cursor()
+                  
+                  # Get operations
+                  cursor.execute("SELECT name, COUNT(*), SUM(duration) FROM operations GROUP BY name")
+                  ops = cursor.fetchall()
+                  
+                  model_ops[model_name] = []
+                  for name, count, total_dur in ops:
+                      all_ops[name]["count"] += count
+                      all_ops[name]["total_duration"] += total_dur or 0
+                      all_ops[name]["models"].add(model_name)
+                      model_ops[model_name].append({"name": name, "count": count, "duration": total_dur})
+                  
+                  conn.close()
+                  print(f"  Found {len(ops)} unique operations")
+              except Exception as e:
+                  print(f"  Error: {e}")
+          
+          # Write aggregated report
+          with open("aggregated_ops/aggregated_operations.txt", "w") as f:
+              f.write("=" * 80 + "\n")
+              f.write("AGGREGATED TTNN OPERATIONS REPORT\n")
+              f.write("=" * 80 + "\n\n")
+              
+              f.write(f"Total unique operations: {len(all_ops)}\n")
+              f.write(f"Models processed: {len(model_ops)}\n\n")
+              
+              f.write("=" * 80 + "\n")
+              f.write("ALL OPERATIONS (sorted by frequency)\n")
+              f.write("=" * 80 + "\n")
+              f.write(f"{'Operation':<50} {'Count':<10} {'Total Dur':<15} {'Models'}\n")
+              f.write("-" * 100 + "\n")
+              
+              for name, data in sorted(all_ops.items(), key=lambda x: x[1]["count"], reverse=True):
+                  models_str = ", ".join(sorted(data["models"]))
+                  dur_str = f"{data['total_duration']:.4f}" if data['total_duration'] else "N/A"
+                  f.write(f"{name:<50} {data['count']:<10} {dur_str:<15} {models_str}\n")
+              
+              f.write("\n" + "=" * 80 + "\n")
+              f.write("OPERATIONS BY MODEL\n")
+              f.write("=" * 80 + "\n")
+              
+              for model, ops in sorted(model_ops.items()):
+                  f.write(f"\n--- {model} ({len(ops)} unique ops) ---\n")
+                  for op in sorted(ops, key=lambda x: x["count"], reverse=True)[:20]:
+                      f.write(f"  {op['name']}: {op['count']}x\n")
+          
+          # Write JSON for programmatic access
+          json_data = {
+              "all_operations": {k: {"count": v["count"], "total_duration": v["total_duration"], "models": list(v["models"])} for k, v in all_ops.items()},
+              "by_model": model_ops
+          }
+          with open("aggregated_ops/aggregated_operations.json", "w") as f:
+              json.dump(json_data, f, indent=2)
+          
+          print("\n" + "=" * 50)
+          print(f"Aggregated {len(all_ops)} unique operations from {len(model_ops)} models")
+          print("=" * 50)
+          
+          # Print summary
+          print("\nTop 20 operations by frequency:")
+          for i, (name, data) in enumerate(sorted(all_ops.items(), key=lambda x: x[1]["count"], reverse=True)[:20]):
+              print(f"  {i+1}. {name}: {data['count']}x")
+          EOF
+          
+          echo ""
+          echo "=========================================="
+          echo "Aggregation Complete"
+          echo "=========================================="
+          cat aggregated_ops/aggregated_operations.txt
+
+      - name: Upload aggregated operations report
+        uses: actions/upload-artifact@v4
+        with:
+          name: aggregated-ttnn-operations
+          path: aggregated_ops/
