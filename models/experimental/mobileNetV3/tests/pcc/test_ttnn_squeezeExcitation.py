@@ -27,7 +27,15 @@ def test_squeezeExcitation(device, reset_seeds):
     )
     torch_output_tensor = torch_model(torch_input_tensor)
 
-    ttnn_model = ttnn_SqueezeExcitation(16, 8, ttnn.relu, ttnn.hardsigmoid, parameters, device)
+    ttnn_model = ttnn_SqueezeExcitation(
+        input_channels=16,
+        squeeze_channels=8,
+        batch_size=1,
+        activation=ttnn.relu,
+        scale_activation=ttnn.hardsigmoid,
+        parameters=parameters,
+        device=device,
+    )
 
     ttnn_output_tensor = ttnn_model(device, ttnn_input_tensor)
     ttnn_output_tensor = ttnn.to_torch(ttnn_output_tensor)
