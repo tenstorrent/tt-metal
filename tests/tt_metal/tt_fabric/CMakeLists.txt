@@ -31,9 +31,7 @@ target_link_libraries(
     PRIVATE
         tt_metal
         test_common_libs
-        protobuf::libprotobuf
         generate_mgd_lib
-        scaleout_tools
 )
 
 target_include_directories(
