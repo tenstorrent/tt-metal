@@ -721,11 +721,8 @@ void py_module(nb::module_& mod) {
    )doc");
     mod.def(
         "distribute_tensor",
-        [](const Tensor& tensor,
-           const TensorToMesh& mapper,
-           std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt) -> Tensor {
-            return distribute_tensor(tensor, mapper, mesh_device);
-        },
+        [](const Tensor& tensor, const TensorToMesh& mapper, std::optional<MeshDevice*> mesh_device = std::nullopt)
+            -> Tensor { return distribute_tensor(tensor, mapper, nbh::rewrap_optional(mesh_device)); },
         nb::arg("tensor"),
         nb::arg("mapper"),
         nb::arg("mesh_device") = nb::none(),
