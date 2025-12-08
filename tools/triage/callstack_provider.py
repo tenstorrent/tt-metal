@@ -17,6 +17,7 @@ Description:
 """
 
 from dataclasses import dataclass
+import io
 
 from triage import (
     ScriptConfig,
@@ -186,6 +187,7 @@ class CallstackProvider:
         full_callstack: bool,
         gdb_callstack: bool,
         gdb_server: GdbServer | None,
+        gdb_error_stream: io.StringIO | None,
         force_active_eth: bool = False,
     ):
         self.dispatcher_data = dispatcher_data
@@ -193,6 +195,7 @@ class CallstackProvider:
         self.full_callstack = full_callstack
         self.gdb_callstack = gdb_callstack
         self.gdb_server = gdb_server
+        self.gdb_error_stream = gdb_error_stream
         self.force_active_eth = force_active_eth
 
     def __del__(self):
@@ -254,9 +257,16 @@ class CallstackProvider:
                         offsets.append(dispatcher_core_data.kernel_offset)
                     gdb_callstack = get_gdb_callstack(location, risc_name, elf_paths, offsets, self.gdb_server)
                     callstack_with_message = KernelCallstackWithMessage(callstack=gdb_callstack, message=None)
-                    # If GDB failed to get callstack, we default to top callstack
+                    # If GDB failed to get callstack, surface errors and default to top callstack
                     if len(gdb_callstack) == 0:
-                        error_message = "Failed to get callstack from GDB. Look for error message above the table."
+                        err_txt = self.gdb_error_stream.getvalue().strip() if self.gdb_error_stream else ""
+                        if self.gdb_error_stream:
+                            # Clear after read so we don't repeat the same errors next time
+                            self.gdb_error_stream.seek(0)
+                            self.gdb_error_stream.truncate(0)
+                        error_message = ""
+                        if err_txt:
+                            error_message += f"\n  {err_txt}"
                         callstack_with_message = get_callstack(
                             location,
                             risc_name,
@@ -320,17 +330,18 @@ def find_available_port() -> int:
         raise TTTriageError(f"No available port found: {e}")
 
 
-def start_gdb_server(port: int, context: Context) -> GdbServer:
-    """Start GDB server and return it."""
+def start_gdb_server(port: int, context: Context) -> tuple[GdbServer, io.StringIO]:
+    """Start GDB server and return it along with an error stream buffer."""
     try:
         server = ServerSocket(port)
         server.start()
-        gdb_server = GdbServer(context, server)
+        err_buf = io.StringIO()
+        gdb_server = GdbServer(context, server, error_stream=err_buf)
         gdb_server.start()
     except Exception as e:
         raise TTTriageError(f"Failed to start GDB server on port {port}. Error: {e}")
 
-    return gdb_server
+    return gdb_server, err_buf
 
 
 @triage_singleton
@@ -348,13 +359,22 @@ def run(args, context: Context):
     dispatcher_data = get_dispatcher_data(args, context)
 
     gdb_server: GdbServer | None = None
+    gdb_error_stream: io.StringIO | None = None
     if gdb_callstack:
         # Locking thread until we start gdb server on available port
         with _port_lock:
             port = find_available_port()
-            gdb_server = start_gdb_server(port, context)
+            gdb_server, gdb_error_stream = start_gdb_server(port, context)
 
-    return CallstackProvider(dispatcher_data, elfs_cache, full_callstack, gdb_callstack, gdb_server, force_active_eth)
+    return CallstackProvider(
+        dispatcher_data,
+        elfs_cache,
+        full_callstack,
+        gdb_callstack,
+        gdb_server,
+        gdb_error_stream,
+        force_active_eth,
+    )
 
 
 if __name__ == "__main__":
