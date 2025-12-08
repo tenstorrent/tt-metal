@@ -78,6 +78,7 @@ target_link_libraries(
         enchantum::enchantum
         protobuf::libprotobuf
         tt_metal
+        cxxopts::cxxopts
 )
 target_compile_features(scaleout_tools PUBLIC cxx_std_20)
 target_precompile_headers(scaleout_tools REUSE_FROM TT::CommonPCH)

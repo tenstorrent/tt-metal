@@ -13,6 +13,7 @@
 #include <tt-metalium/device.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/allocator/allocator.hpp"
 #include "tt_metal.hpp"
 #include <llrt/tt_cluster.hpp>
 
@@ -38,7 +39,7 @@ TEST(DevicePool, DevicePoolOpenClose) {
     DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     auto devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {
-        ASSERT_EQ((int)(dev->allocator()->get_config().l1_small_size), l1_small_size);
+        ASSERT_EQ((int)(dev->allocator_impl()->get_config().l1_small_size), l1_small_size);
         ASSERT_EQ((int)(dev->num_hw_cqs()), num_hw_cqs);
         ASSERT_TRUE(dev->is_initialized());
     }
@@ -55,8 +56,8 @@ TEST(DevicePool, DevicePoolReconfigDevices) {
     DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     auto devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {
-        const auto& config = dev->allocator()->get_config();
-        ASSERT_TRUE((int)(dev->allocator()->get_config().l1_small_size) == l1_small_size);
+        const auto& config = dev->allocator_impl()->get_config();
+        ASSERT_TRUE((int)(dev->allocator_impl()->get_config().l1_small_size) == l1_small_size);
         ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
         EXPECT_NE(config.l1_unreserved_base, config.worker_l1_size);
         ASSERT_TRUE(dev->is_initialized());
@@ -70,7 +71,7 @@ TEST(DevicePool, DevicePoolReconfigDevices) {
         device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config, {}, worker_l1_size);
     devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {
-        const auto& config = dev->allocator()->get_config();
+        const auto& config = dev->allocator_impl()->get_config();
         ASSERT_TRUE((int)(config.l1_small_size) == l1_small_size);
         EXPECT_EQ(config.worker_l1_size - config.l1_unreserved_base, worker_l1_size);
         ASSERT_TRUE(dev->is_initialized());
@@ -89,7 +90,7 @@ TEST(DevicePool, DevicePoolAddDevices) {
     DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     auto devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {
-        ASSERT_TRUE((int)(dev->allocator()->get_config().l1_small_size) == l1_small_size);
+        ASSERT_TRUE((int)(dev->allocator_impl()->get_config().l1_small_size) == l1_small_size);
         ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
         ASSERT_TRUE(dev->is_initialized());
     }
@@ -101,7 +102,7 @@ TEST(DevicePool, DevicePoolAddDevices) {
     devices = DevicePool::instance().get_all_active_devices();
     ASSERT_TRUE(devices.size() >= 4);
     for (const auto& dev : devices) {
-        ASSERT_TRUE((int)(dev->allocator()->get_config().l1_small_size) == l1_small_size);
+        ASSERT_TRUE((int)(dev->allocator_impl()->get_config().l1_small_size) == l1_small_size);
         ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
         ASSERT_TRUE(dev->is_initialized());
     }
@@ -119,7 +120,7 @@ TEST(DevicePool, DevicePoolReduceDevices) {
     DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     const auto devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {
-        ASSERT_TRUE((int)(dev->allocator()->get_config().l1_small_size) == l1_small_size);
+        ASSERT_TRUE((int)(dev->allocator_impl()->get_config().l1_small_size) == l1_small_size);
         ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
         ASSERT_TRUE(dev->is_initialized());
     }
@@ -130,7 +131,7 @@ TEST(DevicePool, DevicePoolReduceDevices) {
     DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     auto* dev = DevicePool::instance().get_active_device(0);
     ASSERT_TRUE(dev->id() == 0);
-    ASSERT_TRUE((int)(dev->allocator()->get_config().l1_small_size) == l1_small_size);
+    ASSERT_TRUE((int)(dev->allocator_impl()->get_config().l1_small_size) == l1_small_size);
     ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
     ASSERT_TRUE(dev->is_initialized());
     CloseDevicesInPool();

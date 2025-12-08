@@ -460,7 +460,7 @@ void add_paged_dram_data_to_device_data(
     uint32_t last_page = start_page + pages;
     for (uint32_t page_idx = start_page; page_idx < last_page; page_idx++) {
         uint32_t dram_bank_id = page_idx % num_dram_banks_g;
-        auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(dram_bank_id);
+        auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(dram_bank_id);
         CoreCoord bank_core = device->logical_core_from_dram_channel(dram_channel);
         uint32_t bank_offset = base_addr_words + (page_size_words * (page_idx / num_dram_banks_g));
 
@@ -516,7 +516,7 @@ void gen_dram_packed_read_cmd(
         uint32_t page_idx = sub_cmd.start_page;
         for (uint32_t i = 0; i < length_words; i += page_size_words) {
             uint32_t dram_bank_id = page_idx % num_dram_banks_g;
-            auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(dram_bank_id);
+            auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(dram_bank_id);
             CoreCoord bank_core = device->logical_core_from_dram_channel(dram_channel);
             uint32_t bank_offset = base_addr_words + (page_size_words * (page_idx / num_dram_banks_g));
 
@@ -1073,7 +1073,7 @@ void gen_dram_ringbuffer_read_cmd(
         uint32_t page_idx = ringbuffer_cmd.start_page;
         for (uint32_t i = 0; i < length_words; i += page_size_words) {
             uint32_t dram_bank_id = page_idx % num_dram_banks_g;
-            auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(dram_bank_id);
+            auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(dram_bank_id);
             CoreCoord bank_core = device->logical_core_from_dram_channel(dram_channel);
             uint32_t bank_offset = base_addr_words + (page_size_words * (page_idx / num_dram_banks_g));
 
@@ -1648,7 +1648,7 @@ void gen_relay_linear_h_test(
             // Set up the source NOC address - we'll read from DRAM where data is initialized
             // Use DRAM bank 0 for simplicity
             const uint32_t dram_bank_id = 0;
-            auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(dram_bank_id);
+            auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(dram_bank_id);
             CoreCoord dram_logical_core = device->logical_core_from_dram_channel(dram_channel);
             CoreCoord dram_physical_core = tt::tt_metal::MetalContext::instance()
                                                .get_cluster()
@@ -2489,7 +2489,7 @@ int main(int argc, char** argv) {
             all_workers_g,
             l1_buf_base_g,
             device->allocator()->get_base_allocator_addr(HalMemType::DRAM),
-            (uint32_t*)host_hugepage_completion_buffer_base_g,
+            static_cast<uint32_t*>(host_hugepage_completion_buffer_base_g),
             false,
             DRAM_DATA_SIZE_WORDS);
         num_dram_banks_g = device->allocator()->get_num_banks(BufferType::DRAM);
