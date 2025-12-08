@@ -319,7 +319,7 @@ class Pool2dSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
     std::array<uint32_t, 2> stride;
     std::array<uint32_t, 4> padding_n4;
     std::array<uint32_t, 2> dilation;
-    std::array<uint32_t, 2> ceil_pad;
+    std::array<uint32_t, 2> ceil_pad{};
     sliding_window::SlidingWindowConfig sliding_window_config;
     IOShape output_shape;
     bool ceil_mode;

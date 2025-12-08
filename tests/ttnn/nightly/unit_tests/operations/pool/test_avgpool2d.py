@@ -570,6 +570,8 @@ def test_avg_pool2d_dram(
     in_dtype,
     slice_type,
 ):
+    if slice_type == ttnn.Op2dDRAMSliceHeight and input_shape[3] >= 256:
+        pytest.skip("Skip height slice for inputs with large width")
     dram_slice_config = ttnn.Op2dSliceConfig(num_slices=num_slices, slice_type=slice_type)
 
     run_avg_pool2d(
