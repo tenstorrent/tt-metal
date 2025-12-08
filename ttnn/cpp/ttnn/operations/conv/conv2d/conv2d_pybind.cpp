@@ -68,8 +68,8 @@ void py_bind_conv2d(py::module& module) {
             - tuple[ttnn.Tensor, tuple[int, int], tuple[ttnn.Tensor, ttnn.Tensor]]: If true, the op also returns the preprocessed weight and bias on the device. Weight and bias should be used for the same convolution next time it is called to avoid preparing weights and bias multiple times. Default: false.
 
         Note:
-
             The :attr: `input_tensor` supports the following data type and layout:
+
             .. list-table:: input_tensor
                 :header-rows: 1
 
@@ -83,6 +83,7 @@ void py_bind_conv2d(py::module& module) {
                   - TILE
 
             The :attr: `output_tensor` supports the following data type and layout:
+
             .. list-table:: output_tensor
                 :header-rows: 1
 
@@ -96,6 +97,7 @@ void py_bind_conv2d(py::module& module) {
                   - TILE
 
             The :attr: `weights_tensor` on the host, supports the following data type and layout:
+
             .. list-table:: weights_tensor (host)
                 :header-rows: 1
 
@@ -107,6 +109,7 @@ void py_bind_conv2d(py::module& module) {
                   - ROW_MAJOR
 
             The :attr: `weights_tensor` prepared on device, supports the following data type and layout:
+
             .. list-table:: weights_tensor (prepared on device)
                 :header-rows: 1
 
@@ -120,6 +123,7 @@ void py_bind_conv2d(py::module& module) {
                   - TILE
 
             The :attr: `bias_tensor` on the host, supports the following data type and layout:
+
             .. list-table:: bias_tensor (host)
                 :header-rows: 1
 
@@ -131,6 +135,7 @@ void py_bind_conv2d(py::module& module) {
                   - ROW_MAJOR
 
             The :attr: `bias_tensor` prepared on device, supports the following data type and layout:
+
             .. list-table:: bias_tensor (prepared on device)
                 :header-rows: 1
 
