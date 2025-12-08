@@ -6,7 +6,6 @@ set(UNIT_TESTS_FABRIC_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_topology_mapper_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_custom_routing_tables.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_multi_host.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_cabling_descriptor_mgd_generation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_apis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_1d_fabric.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_mux.cpp
@@ -21,7 +20,6 @@ target_link_libraries(
     PRIVATE
         tt_metal
         test_common_libs
-        generate_mgd_lib
 )
 
 target_include_directories(
