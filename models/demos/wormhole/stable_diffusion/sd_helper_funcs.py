@@ -281,6 +281,16 @@ SD_HF_DOWNLOAD_OVERRIDE = os.getenv("SD_HF_DOWNLOAD_OVERRIDE", "0") == "1"
 
 
 def sd_use_local_files_only(is_ci_env, is_ci_v2_env):
+    """
+    Determines whether to use local files only when loading Stable Diffusion v1.4 model.
+    By default, CI environments use locally cached files. Set SD_HF_DOWNLOAD_OVERRIDE=1
+    to force downloading from HuggingFace even in CI (useful when local cache is unavailable).
+    Args:
+        is_ci_env (bool): Whether running in CI environment.
+        is_ci_v2_env (bool): Whether running in CI V2 environment.
+    Returns:
+        bool: True if should use local files only, False if should download from HuggingFace.
+    """
     return (is_ci_env or is_ci_v2_env) and not SD_HF_DOWNLOAD_OVERRIDE
 
 
