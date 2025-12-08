@@ -20,7 +20,7 @@ from ttml.common.utils import round_up_to_tile, initialize_device
 from huggingface_hub import hf_hub_download
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def configs():
     yaml_config = load_config(
         "training_shakespeare_tinyllama.yaml", f"{os.getcwd()}/configs/training_configs"
@@ -36,7 +36,7 @@ def configs():
     return yaml_config, model_config, device_config
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def tinyllama_model(tokenizer, configs):
     safetensors_path = hf_hub_download(
         repo_id="TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T",
@@ -56,14 +56,14 @@ def tinyllama_model(tokenizer, configs):
     return model, tt_model_factory
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def tokenizer():
     return AutoTokenizer.from_pretrained(
         "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
     )
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def causal_mask(tinyllama_model):
     # [1,1,T,T] float32 with 1s for allowed positions (i >= j), else 0\n",
     T = tinyllama_model[1].transformer_config.max_sequence_length
@@ -73,7 +73,7 @@ def causal_mask(tinyllama_model):
     )
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def logits_mask_tensor(tokenizer):
     orig_vocab_size = tokenizer.vocab_size
     padded_vocab_size = round_up_to_tile(orig_vocab_size, 32)
@@ -85,7 +85,7 @@ def logits_mask_tensor(tokenizer):
     )  # [1,1,1,T], bfloat16
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def output_size_128():
     """
     Expected output tokens for input string
@@ -93,21 +93,21 @@ def output_size_128():
     with max_sequence_length=128"
     """
 
-    return "\na) a member of the family of the human race\nb) a member of the family of the animal race\nc) a member of the family of the plant race\nd) a member of the family of the mineral race\ne) a member of the family of the inorganic race\nf) a member of the family of the organic race\ng) a member of the family of the living race\nh) a member of the family of the non-living race\ni) a member of the family of the inanimate race\nj) a member of the family of the inorgan"
+    return "\na) a member of the family of the human race\nb) a member of the family of the animal race\nc) a member of the family of the plant race\nd) a member of the family of the mineral race\ne) a member of the family of the inorganic race\nf) a member of the family of the organic race\ng) a member of the family of the living race\nh) a member of the family of the non-living race\ni) a member of the family of the inanimate race\nj) a member of the family of the inorganic non-living race\nk) a member of the family of the inorganic living race\nl) a member of the family of the inorganic non-living race\nm) a member of the family of the inorganic living race\nn) a member of the family of the inorganic non-living race\no) a member of the family of the inorganic living race\np) a member of the family of the inorganic non-living race\nq) a member of the family of the inorganic living race\nr)"
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def output_size_256():
     """
     Expected output tokens for input string
-    'The difference between cats and dogs is:'
+    'The three main differences between cats and dogs are:'
     with max_sequence_length=256"
     """
 
-    return " 1. Cats are more intelligent than dogs. 2. Cats are more social than dogs. 3. Cats are more independent than dogs. 4. Cats are more active than dogs. 5. Cats are more intelligent than dogs. 6. Cats are more social than dogs. 7. Cats are more independent than dogs. 8. Cats are more active than dogs. 9. Cats are more intelligent than dogs. 10. Cats are more social than dogs. 11. Cats are more independent than dogs. 12. Cats are more active than dogs. 13. Cats are more intelligent than dogs. 14. Cats are more social than dogs. 15. Cats are more independent than dogs. 16. Cats are more active than dogs. 17. Cats are more intelligent than dogs. 18. Cats are more social than dogs. 19. Cats are more independent than dogs. 20. Cats are more active than dogs. 21. Cats are more intelligent than dogs. 22. Cats are"
+    return "1. Dogs are more social than cats. 2. Dogs are more intelligent than cats. 3. Dogs are more affectionate than cats.\nDogs are more social than cats. Dogs are more intelligent than cats. Dogs are more affectionate than cats.\nDogs are more social than cats. Dogs are more intelligent than cats. Dogs are more affectionate than cats. Dogs are more intelligent than cats. Dogs are more affectionate than cats.\nDogs are more social than cats. Dogs are more intelligent than cats. Dogs are more affectionate than cats. Dogs are more intelligent than cats. Dogs are more affectionate than cats. Dogs are more intelligent than cats. Dogs are more affectionate than cats. Dogs are more intelligent than cats. Dogs are more affectionate than cats. Dogs are more intelligent than cats. Dogs are more affectionate than cats. Dogs are more intelligent than cats. Dogs are more affectionate"
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def output_size_512():
     """
     Expected output tokens for input string
@@ -115,7 +115,7 @@ def output_size_512():
     with max_sequence_length=512"
     """
 
-    return "\n\n\n*\n\n*Fine\n\n*Cloudy\n\n*Rainy\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are no clouds, then the weather is:\n\n\n*\n\n*Fine\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Cloudy\n\n*Rainy\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Rainy\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Cloudy\n\n*Rainy\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Rainy\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Cloudy\n\n*Rainy\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Rainy\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Cloudy\n\n*Rainy\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Rainy\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n"
+    return r"\n\n\n*\n\n*Fine\n\n*Cloudy\n\n*Rainy\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are no clouds, then the weather is:\n\n\n*\n\n*Fine\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Cloudy\n\n*Rainy\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Rainy\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Cloudy\n\n*Rainy\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Rainy\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Cloudy\n\n*Rainy\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Rainy\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Sunny\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Cloudy\n\n*Rainy\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n*\n\n*Rainy\n\n\nIf the sky outside is blue, the grass is green, and there are clouds, then the weather is:\n\n\n"
 
 
 def generate_text_tt(
@@ -150,11 +150,11 @@ def generate_text_tt(
     composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
 
     # Preallocate once
-    padded_prompt_tokens = np.full((1, 1, 1, 128), pad_token_id, dtype=np.uint32)
+    padded_prompt_tokens = np.full((1, 1, 1, 512), pad_token_id, dtype=np.uint32)
     for _ in range(max_gen_tokens):
         # Sliding window for long prompts
-        if len(prompt_tokens) > 128:
-            start_idx = len(prompt_tokens) - 128
+        if len(prompt_tokens) > 512:
+            start_idx = len(prompt_tokens) - 512
             window = prompt_tokens[start_idx:]
         else:
             start_idx = 0
@@ -181,7 +181,7 @@ def generate_text_tt(
         )
 
         # Take the token at the last active position in the current window
-        next_token_idx = 128 - 1 if len(prompt_tokens) > 128 else len(window) - 1
+        next_token_idx = 512 - 1 if len(prompt_tokens) > 512 else len(window) - 1
         next_token = int(
             next_token_tensor.to_numpy(composer=composer).reshape(-1, 1)[
                 next_token_idx
@@ -240,7 +240,7 @@ def test_tinyllama_inference_128(
         input_text,
         causal_mask,
         logits_mask_tensor,
-        max_gen_tokens=128,
+        max_gen_tokens=256,
         pad_token_id=tokenizer.eos_token_id,
     )
 
@@ -250,7 +250,7 @@ def test_tinyllama_inference_128(
 def test_tinyllama_inference_256(
     tinyllama_model, tokenizer, causal_mask, logits_mask_tensor, output_size_256
 ):
-    input_text = "The difference between cats and dogs is:"
+    input_text = "The three main differences between cats and dogs are:"
 
     generated_out = generate_text_tt(
         tinyllama_model[0],
@@ -276,7 +276,7 @@ def test_tinyllama_inference_512(
         input_text,
         causal_mask,
         logits_mask_tensor,
-        max_gen_tokens=512,
+        max_gen_tokens=256,
         pad_token_id=tokenizer.eos_token_id,
     )
 
