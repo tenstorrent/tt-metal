@@ -1820,65 +1820,75 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         init_receiver_channel_response_credit_senders<NUM_RECEIVER_CHANNELS>();
     auto sender_channel_from_receiver_credits =
         init_sender_channel_from_receiver_credits_flow_controllers<NUM_SENDER_CHANNELS>();
+
+    auto run_step = [&](uint32_t& tx_progress, uint32_t& rx_progress) {
+        router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+        // Capture these to see if we made progress
+
+        // There are some cases, mainly for performance, where we don't want to switch between sender channels
+        // so we interoduce this to provide finer grain control over when we disable the automatic switching
+        tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 0>(
+            local_sender_channels,
+            local_sender_channel_worker_interfaces,
+            outbound_to_receiver_channel_pointer_ch0,
+            remote_receiver_channels,
+            channel_connection_established,
+            local_sender_channel_free_slots_stream_ids,
+            sender_channel_from_receiver_credits,
+            inner_loop_perf_telemetry_collector,
+            local_fabric_telemetry);
+        rx_progress |= run_receiver_channel_step<0, DownstreamSenderVC0T, decltype(local_relay_interface)>(
+            local_receiver_channels,
+            downstream_edm_noc_interfaces_vc0,
+            local_relay_interface,
+            receiver_channel_pointers_ch0,
+            receiver_channel_0_trid_tracker,
+            port_direction_table,
+            receiver_channel_response_credit_senders,
+            routing_table,
+            local_fabric_telemetry);
+        tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 1>(
+            local_sender_channels,
+            local_sender_channel_worker_interfaces,
+            outbound_to_receiver_channel_pointer_ch0,
+            remote_receiver_channels,
+            channel_connection_established,
+            local_sender_channel_free_slots_stream_ids,
+            sender_channel_from_receiver_credits,
+            inner_loop_perf_telemetry_collector,
+            local_fabric_telemetry);
+        if constexpr (is_2d_fabric) {
+            tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 2>(
+                local_sender_channels,
+                local_sender_channel_worker_interfaces,
+                outbound_to_receiver_channel_pointer_ch0,
+                remote_receiver_channels,
+                channel_connection_established,
+                local_sender_channel_free_slots_stream_ids,
+                sender_channel_from_receiver_credits,
+                inner_loop_perf_telemetry_collector,
+                local_fabric_telemetry);
+            tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 3>(
+                local_sender_channels,
+                local_sender_channel_worker_interfaces,
+                outbound_to_receiver_channel_pointer_ch0,
+                remote_receiver_channels,
+                channel_connection_established,
+                local_sender_channel_free_slots_stream_ids,
+                sender_channel_from_receiver_credits,
+                inner_loop_perf_telemetry_collector,
+                local_fabric_telemetry);
+        }
+    };
     auto run_active_loop = [&](uint32_t& tx_progress, uint32_t& rx_progress) {
         for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
-            router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
-            // Capture these to see if we made progress
-
-            // There are some cases, mainly for performance, where we don't want to switch between sender channels
-            // so we interoduce this to provide finer grain control over when we disable the automatic switching
-            tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 0>(
-                local_sender_channels,
-                local_sender_channel_worker_interfaces,
-                outbound_to_receiver_channel_pointer_ch0,
-                remote_receiver_channels,
-                channel_connection_established,
-                local_sender_channel_free_slots_stream_ids,
-                sender_channel_from_receiver_credits,
-                inner_loop_perf_telemetry_collector,
-                local_fabric_telemetry);
-            rx_progress |= run_receiver_channel_step<0, DownstreamSenderVC0T, decltype(local_relay_interface)>(
-                local_receiver_channels,
-                downstream_edm_noc_interfaces_vc0,
-                local_relay_interface,
-                receiver_channel_pointers_ch0,
-                receiver_channel_0_trid_tracker,
-                port_direction_table,
-                receiver_channel_response_credit_senders,
-                routing_table,
-                local_fabric_telemetry);
-            tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 1>(
-                local_sender_channels,
-                local_sender_channel_worker_interfaces,
-                outbound_to_receiver_channel_pointer_ch0,
-                remote_receiver_channels,
-                channel_connection_established,
-                local_sender_channel_free_slots_stream_ids,
-                sender_channel_from_receiver_credits,
-                inner_loop_perf_telemetry_collector,
-                local_fabric_telemetry);
-            if constexpr (is_2d_fabric) {
-                tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 2>(
-                    local_sender_channels,
-                    local_sender_channel_worker_interfaces,
-                    outbound_to_receiver_channel_pointer_ch0,
-                    remote_receiver_channels,
-                    channel_connection_established,
-                    local_sender_channel_free_slots_stream_ids,
-                    sender_channel_from_receiver_credits,
-                    inner_loop_perf_telemetry_collector,
-                    local_fabric_telemetry);
-                tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 3>(
-                    local_sender_channels,
-                    local_sender_channel_worker_interfaces,
-                    outbound_to_receiver_channel_pointer_ch0,
-                    remote_receiver_channels,
-                    channel_connection_established,
-                    local_sender_channel_free_slots_stream_ids,
-                    sender_channel_from_receiver_credits,
-                    inner_loop_perf_telemetry_collector,
-                    local_fabric_telemetry);
-            }
+            run_step(tx_progress, rx_progress);
+        }
+    };
+    auto run_drain_loop = [&](uint32_t& tx_progress, uint32_t& rx_progress) {
+        while (any_sender_channels_active(local_sender_channel_free_slots_stream_ids) ||
+               (get_ptr_val<to_receiver_packets_sent_streams[0]>() != 0)) {
+            run_step(tx_progress, rx_progress);
         }
     };
     // This value defines the number of loop iterations we perform of the main control sequence before exiting
@@ -1900,7 +1910,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         }
 
         if (state_manager_l1->command == RouterCommand::NONE) [[likely]] {
-            if (state_manager_l1->state == RouterStateCommon::ACTIVE) { ] {
+            if (state_manager_l1->state == RouterStateCommon::ACTIVE) {
+                {
                     if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                         loop_start_cycles = get_timestamp();
                     }
@@ -1917,16 +1928,16 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         } else {
             switch (state_manager_l1->command) {
                 case RouterCommand::ACTIVATE: state_manager_l1->state = RouterStateCommon::ACTIVE; break;
-                case RouterCommand::PAUSE:
+                case RouterCommand::PAUSE: {
                     state_manager_l1->state = RouterStateCommon::DRAINING;
-                    // drain()
+                    // run_drain_loop(tx_progress, rx_progress);
                     state_manager_l1->state = RouterStateCommon::PAUSED;
-                    break;
-                case RouterCommand::STOP:
+                } break;
+                case RouterCommand::STOP: {
                     state_manager_l1->state = RouterStateCommon::DRAINING;
-                    // drain()
+                    // run_drain_loop(tx_progress, rx_progress);
                     state_manager_l1->state = RouterStateCommon::STOPPED;
-                    break;
+                } break;
                 case RouterCommand::NONE:
                 default: break;
             }
