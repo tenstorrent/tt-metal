@@ -171,7 +171,7 @@ tt::tt_metal::operation::ProgramWithCallbacks LayerNormPostAllGather::create_pro
                 if (program_config.use_welford == true) {
                     TT_FATAL(
                         this->norm_type != ttnn::operations::normalization::LayerNormDistributedType::RMSNORM,
-                        "Welford is not compatable with RMSNORM ");
+                        "Welford is not compatible with RMSNORM ");
                     return layernorm_post_allgather_welford_multi_core(
                         a,
                         stats,
