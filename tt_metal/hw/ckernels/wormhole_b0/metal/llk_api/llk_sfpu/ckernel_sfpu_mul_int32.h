@@ -44,11 +44,55 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
 
         // a0
         TT_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_3, dst_index_in0 * dst_tile_size);  // A with 32 bits
+
+        /*
+        SFPLOAD Mode    Expected Dst data type  →   Resultant LReg data type
+        MOD0_FMT_FP16   FP16 (configurable handling of infinity)    →   FP32
+        MOD0_FMT_BF16   BF16    →   FP32
+        MOD0_FMT_FP32   FP32 or Integer "32"    →   FP32 or sign-magnitude integer (as per Dst type)
+        MOD0_FMT_INT32  FP32 or Integer "32"    →   FP32 or sign-magnitude integer (as per Dst type)
+        MOD0_FMT_INT32_ALL (‡)  FP32 or Integer "32"    →   FP32 or sign-magnitude integer (as per Dst type)
+        MOD0_FMT_INT32_SM   Integer "32"    →   Two's complement integer
+
+        #define MOD0_FMT_SRCB      0
+        #define MOD0_FMT_FP16      1
+        #define MOD0_FMT_BF16      2
+        #define MOD0_FMT_FP32      3
+        #define MOD0_FMT_INT32     4 =
+        #define MOD0_FMT_INT8      5
+        #define MOD0_FMT_UINT16    6
+        #define MOD0_FMT_HI16      7
+        #define MOD0_FMT_INT16     8
+        #define MOD0_FMT_LO16      9
+        #define MOD0_FMT_INT32_ALL 10 =
+        #define MOD0_FMT_ZERO      11
+        #define MOD0_FMT_INT32_SM  12 =
+        #define MOD0_FMT_INT8_COMP 13
+        #define MOD0_FMT_LO16_ONLY 14
+        #define MOD0_FMT_HI16_ONLY 15
+
+                description: "instruction modifier:
+                         DEFAULT       4'b0000
+                         FP16A         4'b0001
+                         FP16B         4'b0010
+                         FP32          4'b0011
+                         INT32         4'b0100 = 4
+                         INT32_COMP    4'b1100 = 12
+                         INT8          4'b0101
+                         INT8_COMP     4'b1101
+                         LO16          4'b0110
+                         LO16_ONLY     4'b1110
+                         HI16          4'b0111
+                         HI16_ONLY     4'b1111"
+        */
+
         // a1
         TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG2, 5);  // A without last 11 bits
+        // lreg0 is input, lreg13 is -11 , lreg2 is dst is lreg0 being copied to lreg2 and then shifted ?
         // a2
         TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG13, p_sfpu::LREG4, 5);  // A without last 22 bits
         /*
+
         SFPSHFT2
         Shifts values between or within LREGs, either within an SFPU instance or globally across SFPU
         instances. The shift can be either at the granularity of the LREG, such that the entire value held
@@ -67,6 +111,20 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
         will be shifted to the right. When the sign bit of the shift
         amount is 0, the value is shifted to the left. The shift is a
         logical shift, where the value filled will be zero.
+
+        description: "instruction modifier :
+                      (One cycle) shift LREGs[3:0] all rows in parallel left towards LREG[0] within the SFPU instance
+        with all four rows of LREG[3] being written with zeros (type 0) - 0x0 (One cycle) shift LREGs[3:0] all rows in
+        series   left towards LREG[0] and up towards ROW[0] within the SFPU instance with only ROW[3]      LREG[3] being
+        written with zeros (type 1)                                                      - 0x1 (Two cycle) shift
+        LREGs[3:0] all rows in parallel left towards LREG[0] locally within the SFPU and globally shift a single LREG
+        from each row away from column 0 with LREG[src_c] of SFPU column X feeding into LREG[3] of SFPU column X+1 - 0x2
+                      (Two cycle) shift a single LREG from each row globally across SFPUs away from column 0 with
+        LREG[src_c] of SFPU column X feeding into LREG[lreg_dest] of SFPU column X+1 with rotation - 0x3 (Two cycle)
+        shift a single LREG from each row globally across SFPUs away from column 0 with LREG[src_c] of SFPU column X
+        feeding into LREG[lreg_dest] of SFPU column X+1 with zero fill on column 0 - 0x4 (One cycle) normal bitwise
+        shift within the LREG specified by lreg_dest/src_b by the amount specified in src_c - 0x5 (One cycle) normal
+        bitwise shift within the LREG specified by lreg_dest/src_b by the amount specified in imm12_math - 0x6 RESERVED
         */
 
         // a1 = (a1 & 0x7ff) as fp32
@@ -103,31 +161,27 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
         // b2 = b2 as fp32
         TTI_SFPCAST(p_sfpu::LREG5, p_sfpu::LREG5, 0);
 
-        // top = a0*b2 + 2**23
-        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG5, p_sfpu::LREG14, p_sfpu::LREG5, 0);
-
         // b1 = (b1 & 0x7ff) as fp32
         TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG3, 0);
         TTI_SFPCAST(p_sfpu::LREG3, p_sfpu::LREG3, 0);
-
-        // top += a1*b1
-        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG5, p_sfpu::LREG5, 0);
-
         // b0 = (b0 & 0x7ff) as fp32
         TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
         TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
 
+        // top = a0*b2 + 2**23
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG5, p_sfpu::LREG14, p_sfpu::LREG5, 0);
+        // top += a1*b1
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG5, p_sfpu::LREG5, 0);
         // top += a2*b0
         TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG5, 0);
 
         // mid = a0*b1 + 2**23
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG6, 0);
+        // mid += a1*b0
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG6, 0);
 
         // low = a0*b0 + 2**23
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG0, 0);
-
-        // mid += a1*b0
-        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG6, 0);
 
         // extract integers from mantissas
         TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPEXMAN_MOD1_PAD9);  // low
