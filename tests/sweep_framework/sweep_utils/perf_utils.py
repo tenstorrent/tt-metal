@@ -148,6 +148,14 @@ def simplify_device_perf(perf: Optional[dict]) -> dict:
 def run_with_cache_comparison(
     test_module, test_vector: dict, device, config: Any
 ) -> Tuple[bool, Any, Dict[str, Optional[float]], Optional[Dict[str, dict]], Optional[Dict[str, int]]]:
+    # Capture peak memory (NO_DISPATCH mode) if enabled
+    peak_memory_dict = None
+    if getattr(config, "measure_memory", False):
+        from sweep_utils.memory_utils import capture_peak_memory_with_cache_comparison
+
+        logger.info("Capturing peak memory in NO_DISPATCH mode")
+        peak_memory_dict = capture_peak_memory_with_cache_comparison(test_module, test_vector, device)
+
     # Prepare program cache state
     prepare_program_cache_for_comparison(device)
 
@@ -171,13 +179,6 @@ def run_with_cache_comparison(
     device_perf_cached = None
     if getattr(config, "measure_device_perf", False):
         device_perf_cached = gather_single_test_perf(device, status_cached)
-
-    # Capture peak memory if enabled (after both runs complete)
-    peak_memory_dict = None
-    if getattr(config, "measure_memory", False):
-        from sweep_utils.memory_utils import capture_peak_memory_with_cache_comparison
-
-        peak_memory_dict = capture_peak_memory_with_cache_comparison(test_module, test_vector, device)
 
     # Determine combined status and message
     if not status_uncached:
