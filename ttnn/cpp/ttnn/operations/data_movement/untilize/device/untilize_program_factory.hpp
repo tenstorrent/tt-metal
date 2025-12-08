@@ -31,15 +31,15 @@ tt::tt_metal::operation::ProgramWithCallbacks untilize_row_wise_fuseable(
     bool use_pack_untilize,
     bool fp32_dest_acc_en,
     const CoreRangeSet& sub_core_grids,
-    const std::optional<GlobalSemaphore>& _internal_semaphore,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& _internal_semaphore,
     const std::optional<CoreRangeSet>& sync_core_grids,
     uint32_t max_tiles_per_block = 1);
 }  // namespace detail
 
 namespace untilize {
 
-using FuseableUntilizeCallback =
-    std::function<void(const std::optional<GlobalSemaphore>&, Program&, const Tensor&, const Tensor&)>;
+using FuseableUntilizeCallback = std::function<void(
+    const std::optional<tt::tt_metal::GlobalSemaphore>&, tt::tt_metal::Program&, const Tensor&, const Tensor&)>;
 
 FuseableUntilizeCallback untilize_row_wise_fuseable(
     tt::tt_metal::Program& program,
@@ -48,7 +48,7 @@ FuseableUntilizeCallback untilize_row_wise_fuseable(
     bool use_pack_untilize,
     bool fp32_dest_acc_en,
     const CoreRangeSet& sub_core_grids,
-    const std::optional<GlobalSemaphore>& _internal_semaphore,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& _internal_semaphore,
     const std::optional<CoreRangeSet>& sync_core_grids,
     uint32_t max_tiles_per_block = 1);
 }  // namespace untilize

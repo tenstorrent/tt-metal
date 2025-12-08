@@ -29,8 +29,7 @@ struct Untilize {
     const bool enough_space_height;
     const uint32_t pf_type;
     const bool _internal_row_wise;
-    const std::optional<ttnn::GlobalSemaphore> _internal_semaphore;
-    
+    const std::optional<tt::tt_metal::GlobalSemaphore> _internal_semaphore;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
@@ -41,5 +40,4 @@ struct Untilize {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
 };
-
 }  // namespace ttnn::operations::data_movement

@@ -49,7 +49,7 @@ void bind_untilize(py::module& module) {
                bool use_pack_untilize,
                const std::optional<CoreRangeSet>& sub_core_grids,
                const bool _internal_row_wise,
-               const std::optional<ttnn::GlobalSemaphore> & _internal_semaphore) {
+               const std::optional<ttnn::GlobalSemaphore>& _internal_semaphore) {
                 return self(input_tensor, memory_config, use_multicore, use_pack_untilize, sub_core_grids, _internal_row_wise,_internal_semaphore);
             },
             py::arg("input_tensor"),
@@ -58,7 +58,7 @@ void bind_untilize(py::module& module) {
             py::arg("use_multicore") = true,
             py::arg("use_pack_untilize") = true,
             py::arg("sub_core_grids") = std::nullopt,
-            py::arg("_internal_row_wise")=false,
-            py::arg("_internal_semaphore")=std::nullopt});
+            py::arg("_internal_row_wise") = false,
+            py::arg("_internal_semaphore") = std::nullopt});
 }
 }  // namespace ttnn::operations::data_movement::detail

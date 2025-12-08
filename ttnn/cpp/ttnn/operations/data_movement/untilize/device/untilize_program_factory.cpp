@@ -16,6 +16,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
@@ -40,7 +41,7 @@ CoreRange validate_fuse_sync_args(
         sync_core_grids->contains(sub_core_grids), "synchronized cores must be a superset of untilize worker cores");
 
     auto core_range = sync_core_grids->ranges().back();
-    for(auto cr_iter =sync_core_grids->ranges().begin()+1; cr_iter!= sync_core_grids->ranges().end(); ++cr_iter){
+    for (auto cr_iter = sync_core_grids->ranges().begin() + 1; cr_iter != sync_core_grids->ranges().end(); ++cr_iter) {
         // This optional is empty if the ranges are not contiguous
         auto maybe_merged_range = core_range.merge(*cr_iter);
         TT_FATAL(maybe_merged_range.has_value(), "Sync core ranges must all be contiguous");
@@ -95,7 +96,7 @@ tt::tt_metal::operation::ProgramWithCallbacks untilize_row_wise_fuseable(
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>& optional_tensors,
                                                    const std::vector<Tensor>& output_tensors) {
-        auto op = reinterpret_cast<const Untilize*>(operation);
+        const auto op = reinterpret_cast<const Untilize*>(operation);
         return callback_impl(op->_internal_semaphore, program, input_tensors.back(), output_tensors.back());
     };
 
@@ -140,10 +141,7 @@ FuseableUntilizeCallback untilize_row_wise_fuseable(
     const uint32_t ntiles_per_column = padded_shape[-2] / TILE_HEIGHT;
     const auto upper_dim =
         std::accumulate(padded_shape.cbegin(), padded_shape.cend() - 2, 1u, std::multiplies<uint32_t>());
-    const auto total_column_tiles = ntiles_per_column*upper_dim;
-    // const uint32_t ncores = std::min(sub_core_grids.num_cores(), total_column_tiles);
-
-    // const uint32_t num_col_tiles_per_core = tt::div_up(total_column_tiles, ncores);
+    const auto total_column_tiles = ntiles_per_column * upper_dim;
 
     const auto
         [ncores,
@@ -152,14 +150,6 @@ FuseableUntilizeCallback untilize_row_wise_fuseable(
          core_group_2,
          num_col_tiles_per_core_group_1,
          num_col_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(sub_core_grids, total_column_tiles);
-
-    // const auto cores = corerange_to_cores(sub_core_grids, ncores, true);
-    //     std::variant<CoreCoord, CoreRange, CoreRangeSet> all_cores;
-    //     if (ncores == 1) {
-    //         all_cores = cores.at(0);
-    //     } else {
-    //         all_cores = num_cores_to_corerangeset_in_subcoregrids(cores[0], ncores, sub_core_grids, true);
-    //     }
 
     const uint32_t num_pages_cb = ntiles_per_block * 2;
     auto [src0_cb_index, cb_src0] = create_cb(
@@ -187,13 +177,13 @@ FuseableUntilizeCallback untilize_row_wise_fuseable(
     std::vector<uint32_t> writer_ct_args = {output_page_size_bytes};
     TensorAccessorArgs(*output_buffer).append_to(writer_ct_args);
 
-    std::map<std::string,std::string> writer_defines;
-    if(semaphore.has_value()){
-        writer_defines["FUSED_OP_SYNC"] ="1";
+    std::map<std::string, std::string> writer_defines;
+    if (semaphore.has_value()) {
+        writer_defines["FUSED_OP_SYNC"] = "1";
         const auto sync_core_range = detail::validate_fuse_sync_args(sub_core_grids, sync_core_grids);
         const auto sync_ct_args =
             detail::get_fuse_sync_ct_args(sync_core_range, input_tensor.device(), total_column_tiles);
-        writer_ct_args.insert(writer_ct_args.end(),sync_ct_args.begin(), sync_ct_args.end());
+        writer_ct_args.insert(writer_ct_args.end(), sync_ct_args.begin(), sync_ct_args.end());
     }
 
     auto writer_kernel_id = CreateKernel(
@@ -237,10 +227,6 @@ FuseableUntilizeCallback untilize_row_wise_fuseable(
     constexpr uint32_t num_rt_args_reader = 3, num_rt_args_writer = 8;
     uint32_t column_tile_start_id = 0, num_col_tiles_this_core;
     for (const auto& core : corerange_to_cores(all_cores, std::nullopt)) {
-        // reader runtime args
-        // const auto num_col_tiles_this_core =
-        // std::min(num_col_tiles_per_core, total_column_tiles - column_tile_start_id);
-
         if (core_group_1.contains(core)) {
             num_col_tiles_this_core = num_col_tiles_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -287,8 +273,8 @@ FuseableUntilizeCallback untilize_row_wise_fuseable(
                                                    Program& program,
                                                    const Tensor& input_tensor,
                                                    const Tensor& output_tensor) {
-        auto src_buffer = input_tensor.buffer();
-        auto dst_buffer = output_tensor.buffer();
+        auto* src_buffer = input_tensor.buffer();
+        auto* dst_buffer = output_tensor.buffer();
 
         for (const CoreCoord& core : cores_with_rtargs) {
             auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);

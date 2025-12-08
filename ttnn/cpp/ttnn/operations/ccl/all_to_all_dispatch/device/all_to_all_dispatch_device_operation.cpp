@@ -59,8 +59,8 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 untilize_intermediate_spec.value() == intermediate_tensor.tensor_spec(),
                 "Optional intermediate RM tensor spec {} does not match computed output spec {}",
-                sparse_token_tensor.tensor_spec(),
-                output_spec);
+                intermediate_tensor.tensor_spec(),
+                untilize_intermediate_spec.value());
         }
     }
     TT_FATAL(operation_attributes.num_links > 0, "Number of links must be greater than 0");
@@ -88,7 +88,7 @@ AllToAllDispatchDeviceOperation::spec_return_value_t AllToAllDispatchDeviceOpera
     auto indices_shape = tensor_args.expert_indices_tensor.tensor_spec().logical_shape();
     auto mapping_shape = tensor_args.expert_mapping_tensor.tensor_spec().logical_shape();
 
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
     uint32_t output_concat_dim = operation_attributes.output_concat_dim;
 

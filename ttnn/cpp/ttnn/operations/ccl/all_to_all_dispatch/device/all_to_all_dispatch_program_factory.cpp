@@ -50,8 +50,8 @@ auto launch_fused_untilize(
         program,
         input_tensor,
         untilize_output_tensor,
-        /*fp32_dest_acc_en*/ false,  // needed only for int32
         /*use_pack_untilize*/ true,
+        /*fp32_dest_acc_en*/ false,  // needed only for int32
         untilize_cores,
         sync_semaphore,
         subdevice_cores);
@@ -116,7 +116,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_mesh_workload(
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    auto mesh_device = tensor_args.input_tensor.device();
+    auto* mesh_device = tensor_args.input_tensor.device();
 
     auto init_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
@@ -487,7 +487,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         writer_runtime_args[7] = tokens_per_core_start;
         writer_runtime_args[8] = reader_runtime_args[7];
         tokens_per_core_start = reader_runtime_args[7];
-        for (auto& neighbor_coordinate : neighbors) {
+        for (const auto& neighbor_coordinate : neighbors) {
             log_debug(
                 tt::LogOp,
                 "Connection between mesh coord ({}, {}) and ({}, {}) at core {} will choose link_id: {} and handles "
@@ -532,9 +532,9 @@ void AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::override_runtime_a
     tensor_return_value_t& tensor_return_value) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
-        auto& ternary_reader_kernel_id = shared_variables.ternary_reader_kernel_id;
-        auto& binary_writer_kernel_id = shared_variables.binary_writer_kernel_id;
-        auto& cores = shared_variables.cores;
+        const auto& ternary_reader_kernel_id = shared_variables.ternary_reader_kernel_id;
+        const auto& binary_writer_kernel_id = shared_variables.binary_writer_kernel_id;
+        const auto& cores = shared_variables.cores;
 
         const auto& maybe_untilize_semaphore = shared_variables.untilize_sync_semaphore;
 
@@ -567,7 +567,7 @@ void AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::override_runtime_a
             writer_runtime_args.at(5) = (uint32_t)shared_variables.cross_device_semaphore.address();
             writer_runtime_args.at(6) = (uint32_t)shared_variables.init_semaphore.address();
         }
-        auto& maybe_untilize_callback = shared_variables.untilize_callback;
+        const auto& maybe_untilize_callback = shared_variables.untilize_callback;
         if (input_tiled) {
             (*maybe_untilize_callback)(
                 *maybe_untilize_semaphore, program, tensor_args.input_tensor, untilized_tensor.value());
