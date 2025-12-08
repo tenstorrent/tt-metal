@@ -27,7 +27,7 @@ void ShardedToInterleavedPartialDeviceOperation::validate_on_program_cache_miss(
         "Slice index and num_slices don't match! Index = {} num_slices = {}",
         args.slice_index,
         args.num_slices);
-    TT_FATAL(input_tensor.layout() == Layout::TILE, "Currently, only tile layout is supported for partial I->S");
+    TT_FATAL(input_tensor.layout() == Layout::TILE, "Currently, only tile layout is supported for partial S->I");
     TT_FATAL(
         (cache_tensor.physical_volume() / cache_tensor.padded_shape()[-1]) % args.num_slices == 0,
         "Total height of a tensor must be divisible by num_slices!");
