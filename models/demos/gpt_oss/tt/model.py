@@ -73,7 +73,8 @@ class Model:
 
         # Setup RoPE using tt-transformers RotarySetup (handles cos/sin matrices and transformation matrices)
         # Force datatype to bfloat16 since rotary_embedding_llama requires bfloat16
-        max_seq_len = getattr(hf_config, "max_position_embeddings", 131072)
+        # max_seq_len = getattr(hf_config, "max_position_embeddings", 131072)
+        max_seq_len = 1024
         self.rope_setup = RotarySetup(
             device=mesh_device,
             batch_size=1,

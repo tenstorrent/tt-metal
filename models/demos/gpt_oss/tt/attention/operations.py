@@ -131,7 +131,6 @@ def apply_allreduce(tensor, mesh_config, ccl_manager, batch_size: int, seq_len: 
     Returns:
         Tensor after allreduce (if TP > 1) or original tensor
     """
-    breakpoint()
     if mesh_config.tp > 1:
         tensor = ttnn.unsqueeze(tensor, 0)
         tensor = mesh_config.allreduce(tensor, ccl_manager, pad_size=0, axis=mesh_config.tp_axis)

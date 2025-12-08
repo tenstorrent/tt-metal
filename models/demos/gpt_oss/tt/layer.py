@@ -59,7 +59,8 @@ class DecoderLayer:
             num_heads=hf_config.num_attention_heads,
             num_kv_heads=hf_config.num_key_value_heads,
             head_dim=hf_config.head_dim,
-            max_seq_len=hf_config.max_position_embeddings,
+            # max_seq_len=hf_config.max_position_embeddings,
+            max_seq_len=1024,
             sliding_window=hf_config.sliding_window,
             max_batch_size=max_batch_size,
         )

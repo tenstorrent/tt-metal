@@ -58,7 +58,6 @@ def init_kv_cache(
         cache_file_name=get_cache_file_name(tensor_cache_path, f"k_cache_{cache_shape}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    breakpoint()
 
     # Create V cache
     v_cache = ttnn.as_tensor(

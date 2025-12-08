@@ -52,9 +52,15 @@ def decode_forward(
         raise ValueError(f"Decode mode requires seq_len=1, got {seq_len}")
 
     # QKV projection
+<<<<<<< Updated upstream
+=======
+    # xqkv_fused = ttnn.matmul(
+    #     hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+    # )
+>>>>>>> Stashed changes
     breakpoint()
     xqkv_fused = ttnn.matmul(
-        hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     xqkv_fused = ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
 
@@ -63,6 +69,7 @@ def decode_forward(
     num_local_kv_heads = mesh_config.shard_size(config.num_kv_heads)
     head_dim = config.head_dim
 
+    breakpoint()
     tt_q, tt_k, tt_v = ttnn.experimental.nlp_create_qkv_heads_decode(
         xqkv_fused,
         num_heads=num_local_heads,
@@ -74,15 +81,15 @@ def decode_forward(
     xqkv_fused.deallocate(True)
 
     # Apply RoPE
+    breakpoint()
     tt_q = apply_rope(tt_q, rope_mats, transformation_mat, is_decode_mode=True)
     tt_k = apply_rope(tt_k, rope_mats, transformation_mat, is_decode_mode=True)
 
     # Update KV cache
     k_cache, v_cache = kv_cache
-    tt_k = ttnn.to_memory_config(tt_k, kv_mem_cfg)
-    tt_v = ttnn.to_memory_config(tt_v, kv_mem_cfg)
+    # tt_k = ttnn.to_memory_config(tt_k, kv_mem_cfg)
+    # tt_v = ttnn.to_memory_config(tt_v, kv_mem_cfg)
 
-    breakpoint()
     ttnn.experimental.paged_update_cache(
         k_cache,
         tt_k,
@@ -95,7 +102,6 @@ def decode_forward(
         update_idxs_tensor=position_idx,
         page_table=page_table,
     )
-    breakpoint()
 
     tt_k.deallocate(True)
     tt_v.deallocate(True)
@@ -129,18 +135,20 @@ def decode_forward(
             memory_config=height_sharded_mem_config,
         )
     else:
+        position_idx = ttnn.to_layout(position_idx, ttnn.TILE_LAYOUT)
         tt_sdpa_tensor = ttnn.transformer.scaled_dot_product_attention_decode(
             tt_q,
             k_cache,
             v_cache,
             cur_pos_tensor=position_idx,
-            sliding_window_size=config.sliding_window,
-            attention_sink=weights.decode_sinks,
+            # sliding_window_size=config.sliding_window,
+            # attention_sink=weights.decode_sinks,
             scale=config.scaling,
             program_config=program_config.get_decode_sdpa_config(mesh_device),
             compute_kernel_config=program_config.get_compute_kernel_config(),
             memory_config=height_sharded_mem_config,
         )
+    breakpoint()
     tt_q.deallocate(True)
 
     # Concat heads and apply output projection
@@ -148,22 +156,24 @@ def decode_forward(
     tt_sdpa_out = ttnn.experimental.nlp_concat_heads_decode(tt_sdpa_tensor, num_heads=num_local_heads)
     tt_sdpa_tensor.deallocate(True)
 
+    # tt_out = ttnn.linear(
+    #     tt_sdpa_out, weights.o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+    # )
     tt_out = ttnn.linear(
-        tt_sdpa_out, weights.o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        tt_sdpa_out, weights.o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     tt_sdpa_out.deallocate(True)
-    tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+    # tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+    tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
-    tt_out = ttnn.reshape(
-        tt_out,
-        (batch_size, seq_len, hidden_size),
-        (batch_size, 32, hidden_size),
-    )
+    # tt_out = ttnn.reshape(
+    #     tt_out,
+    #     (batch_size, seq_len, hidden_size),
+    #     (batch_size, 32, hidden_size),
+    # )
 
     # Tensor parallel allreduce
     # TODO: This will need to be a reduce scatter so outputs are [1, 1, global_batch//num_rows, hidden_size//num_columns
-    breakpoint()
-    ## THIS HANGS???
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, batch_size, seq_len, hidden_size)
 
     return tt_out

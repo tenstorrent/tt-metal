@@ -47,25 +47,44 @@ def run_attention_component(
     hidden_states = torch.randn(hidden_shape)
 
     # Convert to TTNN tensors
-    tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    # tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, mesh_mapper=ttnn.ShardTensor2dMesh(dims=(-2, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
 
     reference_attention = reference_layer.self_attn
 
     # Reference attention forward
-    reference_out, _ = reference_attention(
-        hidden_states=hidden_states,
-        position_embeddings=position_embeddings,
-        attention_mask=mask,
-        use_cache=True,
-    )
+    breakpoint()
+    with torch.no_grad():
+        reference_out, _ = reference_attention(
+            hidden_states=hidden_states.reshape(-1, 1, hidden_states.shape[-1]),
+            position_embeddings=position_embeddings,
+            attention_mask=mask,
+            use_cache=True,
+        )
+            
 
     # TTNN attention forward (no mask needed, causal masking handled internally)
     attention_module = decoder_layer.self_attn
-    tt_out = attention_module(tt_hidden_states, rope_mats, tt_position_idx)
+    tt_out = attention_module(
+        tt_hidden_states,
+        rope_mats=rope_mats,
+        position_idx=tt_position_idx,
+        page_table=None,
+        kv_cache=None,
+    )
 
     # Compare outputs
-    passing, output = run_component_comparison(tt_out, reference_out, mesh_device, pcc_threshold=0.96)
-    assert passing, f"Attention test failed. Output: {output}"
+    breakpoint()
+    # passing, output = run_component_comparison(tt_out, reference_out, mesh_device, pcc_threshold=0.96)
+    # assert passing, f"Attention test failed. Output: {output}"
+    tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-3, -2), mesh_shape=tuple(mesh_device.shape)),)[:, :1, :]
+
+    # Compare outputs
+    passing, output = compare_tensors(tt_output_torch, reference_out, mesh_device, pcc_threshold=0.96)
+    if passing:
+        logger.info(f"Experts test passed. Output: {output}")
+    else:
+        assert passing, f"Experts test failed. Output: {output}"
 
 
 def run_rms_norm_component(mesh_device, hidden_shape, reference_layer, decoder_layer):
@@ -209,6 +228,7 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
 
     # Convert to TTNN tensors
     # tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    breakpoint()
     tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, mesh_mapper=ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
 
     # Create TT MLP using TestFactory setup
@@ -297,7 +317,6 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
     )
     transformation_mats = rope_setup.get_both_trans_mats()
 
-    breakpoint()
     decoder_layer = DecoderLayer(
         setup["mesh_device"],
         config,
@@ -390,7 +409,6 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
     # tt_hidden_states = ttnn.from_torch(
     #     hidden_states, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
     # )
-    breakpoint()
     hidden_states = torch.reshape(hidden_states, (1, 1, 128, 2880))
     tt_hidden_states = ttnn.from_torch(hidden_states, device=setup["mesh_device"], mesh_mapper=ttnn.ShardTensor2dMesh(dims=(-2, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
 
