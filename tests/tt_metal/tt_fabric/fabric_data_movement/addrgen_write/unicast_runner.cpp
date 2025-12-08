@@ -584,12 +584,30 @@ void run_linear_unicast_write_test(HelpersFixture* fixture, const AddrgenTestPar
             .defines = defines});
     tt::tt_metal::SetRuntimeArgs(sender_prog, reader_k, p.sender_core, {(uint32_t)src_buf->address()});
 
+    // Helper to map linear API variant to OPERATION_TYPE and API_VARIANT compile-time parameters
+    auto get_linear_operation_and_api_variant = [](AddrgenApiVariant variant) -> std::pair<OperationType, ApiVariant> {
+        switch (variant) {
+            case AddrgenApiVariant::LinearUnicastWrite: return {OperationType::BasicWrite, ApiVariant::Basic};
+            case AddrgenApiVariant::LinearUnicastWriteWithState:
+                return {OperationType::BasicWrite, ApiVariant::WithState};
+            case AddrgenApiVariant::LinearUnicastWriteSetState:
+                return {OperationType::BasicWrite, ApiVariant::SetState};
+            default:
+                TT_FATAL(false, "Unknown linear API variant");
+                return {OperationType::BasicWrite, ApiVariant::Basic};
+        }
+    };
+
+    auto [operation_type, api_variant] = get_linear_operation_and_api_variant(p.api_variant);
+
     // Writer kernel (linear addrgen)
     std::vector<uint32_t> writer_cta;
     tt::tt_metal::TensorAccessorArgs(*dst_buf).append_to(writer_cta);
-    writer_cta.push_back(NUM_PAGES);
-    writer_cta.push_back(p.page_size);
-    writer_cta.push_back(dst_aligned_page_size);
+    writer_cta.push_back(static_cast<uint32_t>(operation_type));  // OPERATION_TYPE
+    writer_cta.push_back(static_cast<uint32_t>(api_variant));     // API_VARIANT
+    writer_cta.push_back(NUM_PAGES);                              // TOTAL_PAGES
+    writer_cta.push_back(p.page_size);                            // Raw page size (actual data size to transfer)
+    writer_cta.push_back(dst_aligned_page_size);                  // Aligned page size (dest buffer addressing)
 
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,

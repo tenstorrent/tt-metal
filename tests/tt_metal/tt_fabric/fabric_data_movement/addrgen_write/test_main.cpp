@@ -52,7 +52,8 @@ protected:
 };
 
 // Separate test class for 1D linear fabric tests
-class AddrgenLinear1DTest : public ::testing::TestWithParam<std::tuple<uint32_t, bool>> {
+class AddrgenLinear1DTest
+    : public ::testing::TestWithParam<std::tuple<tt::tt_fabric::test::AddrgenApiVariant, uint32_t, bool>> {
 protected:
     inline static Fixture1D* fixture = nullptr;
 
@@ -118,7 +119,7 @@ TEST_P(AddrgenComprehensiveTest, Write) {
 
 // Linear 1D test - uses separate fixture with FABRIC_1D configuration
 TEST_P(AddrgenLinear1DTest, LinearUnicastWrite) {
-    auto [page_size, use_dram_dst] = GetParam();
+    auto [api_variant, page_size, use_dram_dst] = GetParam();
 
     // Calculate tensor_bytes based on page_size (8 pages total)
     uint32_t num_pages = 8;
@@ -133,7 +134,7 @@ TEST_P(AddrgenLinear1DTest, LinearUnicastWrite) {
         .page_size = page_size,
         .sender_core = {0, 0},
         .receiver_core = {1, 0},
-        .api_variant = tt::tt_fabric::test::AddrgenApiVariant::LinearUnicastWrite,
+        .api_variant = api_variant,
         .mesh_rows = 0,
         .mesh_cols = 0};
 
@@ -199,6 +200,8 @@ static std::string GetVariantName(tt::tt_fabric::test::AddrgenApiVariant variant
             return "ScatterWriteWithStateConnMgr";
         case tt::tt_fabric::test::AddrgenApiVariant::ScatterWriteSetStateConnMgr: return "ScatterWriteSetStateConnMgr";
         case tt::tt_fabric::test::AddrgenApiVariant::LinearUnicastWrite: return "LinearUnicastWrite";
+        case tt::tt_fabric::test::AddrgenApiVariant::LinearUnicastWriteWithState: return "LinearUnicastWriteWithState";
+        case tt::tt_fabric::test::AddrgenApiVariant::LinearUnicastWriteSetState: return "LinearUnicastWriteSetState";
         default: return "UnknownVariant";
     }
 }
@@ -258,19 +261,25 @@ INSTANTIATE_TEST_SUITE_P(
         return name;
     });
 
-// Instantiate 1D linear fabric test suite (LinearUnicastWrite)
+// Instantiate 1D linear fabric test suite (LinearUnicastWrite variants)
 // Uses separate Fixture1D with FABRIC_1D configuration
 INSTANTIATE_TEST_SUITE_P(
     Linear1D,
     AddrgenLinear1DTest,
     ::testing::Combine(
+        ::testing::Values(
+            tt::tt_fabric::test::AddrgenApiVariant::LinearUnicastWrite,
+            tt::tt_fabric::test::AddrgenApiVariant::LinearUnicastWriteWithState,
+            tt::tt_fabric::test::AddrgenApiVariant::LinearUnicastWriteSetState),
         ::testing::Values(100, 112, 2048, 10000, 10100, 99999),  // Page sizes: Aligned and unaligned
         ::testing::Bool()                                        // Destination: false=L1, true=DRAM
         ),
     [](const ::testing::TestParamInfo<AddrgenLinear1DTest::ParamType>& info) {
-        auto page_size = std::get<0>(info.param);
-        auto use_dram_dst = std::get<1>(info.param);
-        std::string name = "LinearUnicastWrite_" + std::to_string(page_size) + "B";
+        auto api_variant = std::get<0>(info.param);
+        auto page_size = std::get<1>(info.param);
+        auto use_dram_dst = std::get<2>(info.param);
+        std::string name = GetVariantName(api_variant);
+        name += "_" + std::to_string(page_size) + "B";
         name += use_dram_dst ? "_DRAM" : "_L1";
         return name;
     });
