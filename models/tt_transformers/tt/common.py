@@ -161,22 +161,6 @@ def preprocess_inputs_prefill(
         for idx, prompt in enumerate(input_prompts)
     ]
 
-    l = len(encoded_prompts)
-    for i in range(l):
-        if len(encoded_prompts[i]) < 128:
-            encoded_prompts[i] = encoded_prompts[i] + [encoded_prompts[i][10]] * (
-                128 - len(encoded_prompts[i])
-            )  # ensures length of 128
-            break
-        elif len(encoded_prompts[i]) > 128:
-            encoded_prompts[i] = encoded_prompts[i][:127] + [encoded_prompts[i][-1]]
-            break
-        else:
-            break
-
-    for j in range(l):
-        encoded_prompts[j] = list(encoded_prompts[i])
-
     # Print the length of encoded prompts
     logger.info("Encoded prompt lengths:" + ", ".join(str(len(prompt)) for prompt in encoded_prompts))
 
