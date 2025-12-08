@@ -408,21 +408,20 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
     std::set<PhysicalChannelConnection> missing_in_gsd;
     std::set<PhysicalChannelConnection> extra_in_gsd;
 
-    // Always find connections in GSD but not in FSD (both validation modes check this)
-    for (const auto& conn : discovered_connections) {
-        if (generated_connections.find(conn) == generated_connections.end()) {
-            extra_in_gsd.insert(conn);
+    // Always find connections in FSD but not in GSD (both validation modes check this)
+    for (const auto& conn : generated_connections) {
+        if (discovered_hostnames.contains(conn.first.hostname) && discovered_hostnames.contains(conn.second.hostname)) {
+            if (not discovered_connections.contains(conn)) {
+                missing_in_gsd.insert(conn);
+            }
         }
     }
 
-    // Only in strict validation: also find connections in FSD but not in GSD
+    // Only in strict validation: also find connections in GSD but not in FSD
     if (strict_validation) {
-        for (const auto& conn : generated_connections) {
-            if (discovered_hostnames.contains(conn.first.hostname) &&
-                discovered_hostnames.contains(conn.second.hostname)) {
-                if (not discovered_connections.contains(conn)) {
-                    missing_in_gsd.insert(conn);
-                }
+        for (const auto& conn : discovered_connections) {
+            if (generated_connections.find(conn) == generated_connections.end()) {
+                extra_in_gsd.insert(conn);
             }
         }
     }
@@ -517,6 +516,16 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
 
     // Call a shared validation function that does the actual work
     return validate_fsd_against_gsd_impl(generated_fsd, discovered_gsd, strict_validation, assert_on_connection_mismatch, log_output);
+}
+
+std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
+    const fsd::proto::FactorySystemDescriptor& fsd_proto,
+    const YAML::Node& gsd_yaml_node,
+    bool strict_validation,
+    bool assert_on_connection_mismatch,
+    bool log_output) {
+    return validate_fsd_against_gsd_impl(
+        fsd_proto, gsd_yaml_node, strict_validation, assert_on_connection_mismatch, log_output);
 }
 
 std::set<PhysicalChannelConnection> validate_cabling_descriptor_against_gsd(

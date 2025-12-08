@@ -339,9 +339,11 @@ struct NocUnicastScatterWriteFields {
     template <bool IS_SOURCE>
     static NocUnicastScatterWriteFields build_from_args(size_t& arg_idx) {
         uint32_t payload_size_bytes = get_local_arg_val<uint32_t>(arg_idx++);
+        uint32_t chunk_count = get_local_arg_val<uint32_t>(arg_idx++);
+        ASSERT(chunk_count == MAX_CHUNKS, "scatter chunk_count must be equal to 2 for tt_fabric perf microbenchmarks");
 
-        std::array<uint32_t, MAX_CHUNKS> dst_addresses;
-        for (uint32_t i = 0; i < MAX_CHUNKS; i++) {
+        std::array<uint32_t, MAX_CHUNKS> dst_addresses{};
+        for (uint32_t i = 0; i < chunk_count; i++) {
             dst_addresses[i] = get_local_arg_val<uint32_t>(arg_idx++);
         }
 
@@ -350,25 +352,29 @@ struct NocUnicastScatterWriteFields {
             dst_noc_encoding = get_local_arg_val<uint32_t>(arg_idx++);
         }
 
-        std::array<uint16_t, MAX_CHUNKS - 1> chunk_sizes;
-        for (uint32_t i = 0; i < MAX_CHUNKS - 1; i++) {
-            chunk_sizes[i] = get_local_arg_val<uint32_t>(arg_idx++);
+        std::array<uint16_t, MAX_CHUNKS - 1> chunk_sizes{};
+        for (uint32_t i = 0; i < (chunk_count - 1); i++) {
+            chunk_sizes[i] = static_cast<uint16_t>(get_local_arg_val<uint32_t>(arg_idx++));
         }
 
-        return NocUnicastScatterWriteFields(payload_size_bytes, dst_addresses, chunk_sizes, dst_noc_encoding);
+        return NocUnicastScatterWriteFields(
+            payload_size_bytes, static_cast<uint8_t>(chunk_count), dst_addresses, chunk_sizes, dst_noc_encoding);
     }
 
     NocUnicastScatterWriteFields(
         uint32_t payload_size_bytes,
+        uint8_t chunk_count,
         const std::array<uint32_t, MAX_CHUNKS>& dst_addresses,
         const std::array<uint16_t, MAX_CHUNKS - 1>& chunk_sizes,
         uint32_t dst_noc_encoding) :
         payload_size_bytes(payload_size_bytes),
+        chunk_count(chunk_count),
         dst_addresses(dst_addresses),
         chunk_sizes(chunk_sizes),
         dst_noc_encoding(dst_noc_encoding) {}
 
     uint32_t payload_size_bytes;
+    uint8_t chunk_count;
     std::array<uint32_t, MAX_CHUNKS> dst_addresses;
     std::array<uint16_t, MAX_CHUNKS - 1> chunk_sizes;
     uint32_t dst_noc_encoding;
@@ -1195,14 +1201,13 @@ inline void NocFusedSenderOperations::update_header_impl(SenderKernelTrafficConf
 inline void NocScatterWriteSenderOperations::parse_and_setup_impl(SenderKernelTrafficConfig* config, size_t& arg_idx) {
     auto fields = NocUnicastScatterWriteFields::build_from_args<true>(arg_idx);
 
-    // Build the scatter command header
-    NocUnicastScatterCommandHeader scatter_header;
-    for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS; i++) {
-        scatter_header.noc_address[i] = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_addresses[i]);
-    }
-    for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS - 1; i++) {
-        scatter_header.chunk_size[i] = fields.chunk_sizes[i];
-    }
+    ASSERT(fields.chunk_count == NocUnicastScatterWriteFields::MAX_CHUNKS);
+    const auto scatter_header = NocUnicastScatterCommandHeader(
+        {
+            get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_addresses[0]),
+            get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_addresses[1]),
+        },
+        {fields.chunk_sizes[0]});
 
     config->packet_header->to_noc_unicast_scatter_write(scatter_header, fields.payload_size_bytes);
     config->noc_fields_.scatter_write_fields = fields;
@@ -1212,17 +1217,14 @@ inline void NocScatterWriteSenderOperations::parse_and_setup_impl(SenderKernelTr
 inline void NocScatterWriteSenderOperations::update_header_impl(SenderKernelTrafficConfig* config) {
     const auto& fields = config->noc_fields_.scatter_write_fields;
     uint32_t buffer_offset = config->payload_buffer_->get_current_offset();
+    ASSERT(fields.chunk_count == NocUnicastScatterWriteFields::MAX_CHUNKS);
 
-    // Build the scatter command header with updated addresses
-    NocUnicastScatterCommandHeader scatter_header;
-    for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS; i++) {
-        uint32_t dest_address = fields.dst_addresses[i] + buffer_offset;
-        scatter_header.noc_address[i] = get_noc_addr_helper(fields.dst_noc_encoding, dest_address);
-    }
-    for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS - 1; i++) {
-        scatter_header.chunk_size[i] = fields.chunk_sizes[i];
-    }
-
+    const auto scatter_header = NocUnicastScatterCommandHeader(
+        {
+            get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_addresses[0] + buffer_offset),
+            get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_addresses[1] + buffer_offset),
+        },
+        {fields.chunk_sizes[0]});
     config->packet_header->to_noc_unicast_scatter_write(scatter_header, fields.payload_size_bytes);
 }
 

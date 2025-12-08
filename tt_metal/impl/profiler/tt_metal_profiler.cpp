@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <map>
 #include <optional>
@@ -46,7 +47,7 @@
 #include "profiler_types.hpp"
 #include "profiler_state_manager.hpp"
 #include "tt-metalium/program.hpp"
-#include <tt-metalium/device_pool.hpp>
+#include "tt_metal/impl/device/device_pool.hpp"
 #include "rtoptions.hpp"
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyTTDevice.hpp"
@@ -624,12 +625,12 @@ void ProfilerSync(ProfilerSyncState state) {
                 if (!tt::DevicePool::instance().is_device_active(sender_device_id)) {
                     continue;
                 }
-                auto sender_device = tt::DevicePool::instance().get_active_device(sender_device_id);
+                auto* sender_device = tt::DevicePool::instance().get_active_device(sender_device_id);
                 const auto& active_eth_cores = sender_device->get_active_ethernet_cores(false);
 
                 ChipId receiver_device_id;
                 tt_xy_pair receiver_eth_core;
-                for (auto& sender_eth_core : active_eth_cores) {
+                for (const auto& sender_eth_core : active_eth_cores) {
                     if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
                             sender_device_id, sender_eth_core)) {
                         continue;
@@ -659,7 +660,7 @@ void ProfilerSync(ProfilerSyncState state) {
     // something to sync with)
     if (state == ProfilerSyncState::INIT) {
         for (auto [root_device_id, num_devices] : num_connected_devices) {
-            auto root_device = tt::DevicePool::instance().get_active_device(root_device_id);
+            auto* root_device = tt::DevicePool::instance().get_active_device(root_device_id);
             syncDeviceHost(root_device, ProfilerStateManager::SYNC_CORE, true);
             if (num_devices > 1) {
                 syncAllDevices(root_device->id());
@@ -669,7 +670,7 @@ void ProfilerSync(ProfilerSyncState state) {
     if (state == ProfilerSyncState::CLOSE_DEVICE and profiler_state_manager->do_sync_on_close) {
         profiler_state_manager->do_sync_on_close = false;
         for (auto [root_device_id, num_devices] : num_connected_devices) {
-            auto root_device = tt::DevicePool::instance().get_active_device(root_device_id);
+            auto* root_device = tt::DevicePool::instance().get_active_device(root_device_id);
             syncDeviceHost(root_device, ProfilerStateManager::SYNC_CORE, false);
             if (num_devices > 1) {
                 syncAllDevices(root_device->id());
@@ -710,13 +711,13 @@ void InitDeviceProfiler(IDevice* device) {
         }
     }
 
-    auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
+    const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
 
     const uint32_t num_cores_per_dram_bank = soc_desc.profiler_ceiled_core_count_perf_dram_bank;
-    const uint32_t bank_size_bytes = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC *
-                                     MetalContext::instance().hal().get_max_processors_per_core() *
-                                     num_cores_per_dram_bank;
-    TT_ASSERT(bank_size_bytes <= MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::PROFILER));
+    const uint32_t bank_size_bytes =
+        get_profiler_dram_bank_size_per_risc_bytes() * hal.get_max_processors_per_core() * num_cores_per_dram_bank;
+    TT_ASSERT(bank_size_bytes <= hal.get_dev_size(HalDramMemAddrType::PROFILER));
 
     const uint32_t num_dram_banks = soc_desc.get_num_dram_views();
 
@@ -726,8 +727,7 @@ void InitDeviceProfiler(IDevice* device) {
     profiler.profile_buffer.resize(profiler.profile_buffer_bank_size_bytes * num_dram_banks / sizeof(uint32_t));
 
     std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
-    control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] =
-        MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::PROFILER);
+    control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
     setControlBuffer(device, control_buffer);
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {

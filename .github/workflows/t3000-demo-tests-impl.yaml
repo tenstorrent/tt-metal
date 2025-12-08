@@ -16,6 +16,11 @@ on:
         required: false
         type: string
         default: "in-service"
+      mlperf-read-only:
+        required: false
+        type: boolean
+        default: true
+        description: "Set to false to allow write access to MLPerf mount"
 
 jobs:
   t3000-demo-tests:
@@ -37,6 +42,7 @@ jobs:
           { name: "t3k flux1-dev tests", arch: wormhole_b0, cmd: run_t3000_flux1_tests, timeout: 60, owner_id: U08TED0JM9D}, #Samuel Adesoye
           { name: "t3k motif tests", arch: wormhole_b0, cmd: run_t3000_motif_tests, timeout: 25, owner_id: U08TED0JM9D}, #Samuel Adesoye
           { name: "t3k_mistral_tests", arch: wormhole_b0, cmd: run_t3000_mistral_tests, timeout: 90, owner_id: U0896VBAKFC}, # Pratikkumar Prajapati
+          { name: "t3k_whisper_tests", arch: wormhole_b0, cmd: run_t3000_whisper_tests, timeout: 90, owner_id: U088413NP0Q}, # Ashai Reddy
           # Temporary: Run Qwen 3 tests last as they update to a newer transformers version.
           # This requirements and comment removed when https://github.com/tenstorrent/tt-metal/pull/22608 merges.
           { name: "t3k_qwen3_tests", arch: wormhole_b0, cmd: run_t3000_qwen3_tests, timeout: 60, owner_id: U03HY7MK4BT}, # Mark O'Connor
@@ -66,15 +72,20 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
+        - /mnt/MLPerf:/mnt/MLPerf${{ inputs.mlperf-read-only && ':ro' || ':rw' }}
       options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -105,7 +116,7 @@ jobs:
 
       - name: Upload benchmark data
         if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
-        uses: ./.github/actions/upload-data-via-sftp
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt

@@ -8,7 +8,8 @@
 #include <string>
 
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -35,6 +36,11 @@ uint32_t get_input_channels_alignment(
     bool sliced_op,
     bool is_mm_conv,
     const std::optional<MemoryConfig>& input_memory_config);
+
+CoreCoord get_output_compute_grid_size(
+    const CoreCoord& device_compute_grid_size,
+    const Conv2dConfig& conv_config,
+    const sliding_window::ParallelConfig& input_parallel_config);
 
 bool use_matmul_for_1x1_conv(
     const std::array<uint32_t, 2>& kernel_size,
@@ -88,6 +94,14 @@ std::tuple<uint32_t, uint32_t> calculate_output_image_size(
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 4> padding,
+    std::array<uint32_t, 2> dilation);
+
+std::tuple<uint32_t, uint32_t> calculate_ct2d_output_image_size(
+    std::array<uint32_t, 2> input_image_size,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 4> padding,
+    std::array<uint32_t, 2> output_padding,
     std::array<uint32_t, 2> dilation);
 
 uint32_t get_num_cores_nhw_from_parallel_config(const sliding_window::ParallelConfig& pconfig);

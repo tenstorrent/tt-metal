@@ -27,6 +27,7 @@
 
 #include "fabric_host_utils.hpp"
 #include "fabric_context.hpp"
+#include "fabric_builder_context.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -191,9 +192,9 @@ void append_fabric_connection_rt_args(
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
                 src_chip_id, fabric_router_channel);
 
-        const auto& edm_config = fabric_context.get_fabric_router_config();
-        auto channel_allocator = edm_config.channel_allocator.get();
-        const auto static_channel_allocator =
+        const auto& edm_config = fabric_context.get_builder_context().get_fabric_router_config();
+        auto* channel_allocator = edm_config.channel_allocator.get();
+        auto* const static_channel_allocator =
             dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
         TT_FATAL(
             static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");

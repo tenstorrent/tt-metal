@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import List
 
 import torch
@@ -19,7 +19,7 @@ from models.common.llama_models import (
     extract_images_from_messages,
     sample_top_p,
 )
-from models.common.tt_sampling import format_sampling_params
+from models.common.sampling.generator import format_sampling_params
 from models.tt_transformers.tt.common import (
     copy_host_to_device,
     get_block_size,
@@ -39,6 +39,13 @@ class SamplingParams:
     temperature: float | list[float]
     top_k: int | list[int]
     top_p: float | list[float]
+    presence_penalty: float | list[float] = 0.0
+    frequency_penalty: float | list[float] = 0.0
+    repetition_penalty: float | list[float] = 1.0
+    seed: int | list[int] = 0
+
+
+SAMPLING_PARAM_FIELDS = tuple(f.name for f in fields(SamplingParams))
 
 
 # Split lists into chunks
@@ -79,6 +86,20 @@ class Generator:
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
         self.prefill_traces_warmup = False
+        # By default, enable split sampling (break the decode trace into two parts: upto logits, then sampling step)
+        self.enable_split_sampling = True
+        self.mode = None
+
+    def _chunk_sampling_param(self, values):
+        if isinstance(values, List):
+            return split_list(values, self.data_parallel)
+        return [values] * self.data_parallel
+
+    def _set_sampling_trace_mode(self, enabled: bool):
+        for model_instance in self.model:
+            sampling_module = getattr(model_instance, "sampling", None)
+            if sampling_module is not None:
+                sampling_module.enable_internal_trace = enabled
 
     def warmup_prefill_traces(
         self,
@@ -221,6 +242,7 @@ class Generator:
         model_id_warmup=None,
         **kwargs,
     ):
+        self.mode = "prefill"
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
         else:
@@ -444,39 +466,62 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
+        reset_batch=False,
+        prompt_tokens: torch.Tensor | None = None,
+        output_tokens: torch.Tensor | None = None,
     ):
+        mode_switched = False
+        if self.mode != "decode":
+            self.mode = "decode"
+            mode_switched = True
         sampling_on_device = sampling_params is not None
+        split_sampling_enabled = bool(self.enable_split_sampling and sampling_on_device)
+        self._set_sampling_trace_mode(split_sampling_enabled)
 
         B = tokens.shape[0]
+
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
-
-        if sampling_on_device:
-            if not isinstance(sampling_params.temperature, List):
-                sampling_params_list = [sampling_params] * self.data_parallel
-            else:
-                temperature_chunks = split_list(sampling_params.temperature, self.data_parallel)
-                top_k_chunks = split_list(sampling_params.top_k, self.data_parallel)
-                top_p_chunks = split_list(sampling_params.top_p, self.data_parallel)
-
-                # Create new SamplingParams objects for each chunk
-                sampling_params_list = []
-                for i in range(self.data_parallel):
-                    new_params = SamplingParams(
-                        temperature=temperature_chunks[i], top_k=top_k_chunks[i], top_p=top_p_chunks[i]
-                    )
-                    sampling_params_list.append(new_params)
-
+        sampling_params_list = None
+        if sampling_params is not None:
+            # Fall back to dataclass defaults when optional fields are omitted
+            chunked_fields = {}
+            for field in SAMPLING_PARAM_FIELDS:
+                try:
+                    val = getattr(sampling_params, field)
+                except AttributeError:
+                    if hasattr(SamplingParams, field):
+                        val = getattr(SamplingParams, field)
+                    else:
+                        raise
+                chunked_fields[field] = self._chunk_sampling_param(val)
+            prompt_chunks = (
+                torch.chunk(prompt_tokens, self.data_parallel, 0)
+                if prompt_tokens is not None
+                else [None] * self.data_parallel
+            )
+            output_chunks = (
+                torch.chunk(output_tokens, self.data_parallel, 0)
+                if output_tokens is not None
+                else [None] * self.data_parallel
+            )
+            sampling_params_list = [
+                SamplingParams(**{field: chunked_fields[field][i] for field in SAMPLING_PARAM_FIELDS})
+                for i in range(self.data_parallel)
+            ]
             for i in range(self.data_parallel):
                 formatted_params = format_sampling_params(
                     sampling_params_list[i], 32
                 )  # Sampling needs params padded to 32 regardless of batch_size
-                self.model[i].tt_sampling.reset_params(
-                    k=formatted_params.top_k,
-                    p=formatted_params.top_p,
-                    temp=formatted_params.temperature,
-                )
+                sampling_module = getattr(self.model[i], "sampling", None)
+                assert sampling_module is not None, "Sampling module not found in model for sampling on device."
+                sampling_module.reset_sampling_params(formatted_params)
+                if reset_batch:
+                    sampling_module.reset_seed(formatted_params.seed)
+                    sampling_module.reset_prompt_tokens(prompt_chunks[i])
+                    sampling_module.reset_output_state(output_chunks[i])
+
         decode_kwargs = {
             "current_pos": start_pos,
             "tokens": tokens,
@@ -485,14 +530,13 @@ class Generator:
             "sampling_on_device": sampling_on_device,
         }
         if enable_trace:
-            tt_decode_output = self._decode_forward_trace_text(**decode_kwargs)
+            tt_decode_output = self._decode_forward_trace_text(**decode_kwargs, reset_batch=mode_switched)
         else:
             tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
 
         if read_from_device:
             to_host = self.read_decode_output(tt_decode_output)
             return self.process_decode_output_host(to_host, is_tokens=(sampling_params is not None))
-
         return tt_decode_output
 
     def _decode_forward_no_trace_text(
@@ -578,6 +622,12 @@ class Generator:
             device_inputs.append(device_inputs_i)
 
         for i in range(self.data_parallel):
+            sampling_module = getattr(self.model[i], "sampling", None)
+            split_enabled = (
+                sampling_on_device
+                and sampling_module is not None
+                and getattr(sampling_module, "enable_internal_trace", False)
+            )
             trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
             trace_ids[i] = trace_id
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
@@ -586,19 +636,19 @@ class Generator:
                     *device_inputs[i],
                     kv_cache=user_kv_cache,
                     sampling_on_device=sampling_on_device,
+                    capture_sampling_trace=split_enabled,
                 )
             )
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
+
+            if split_enabled:
+                sampling_module.capture_trace(logits=tt_out_trace[i], tt_out_tok=device_inputs[i][0])
         logger.info("Done Capturing Decode Trace")
+
         return trace_ids, tt_out_trace, *device_inputs
 
     def _decode_forward_trace_text(
-        self,
-        tokens,
-        current_pos,
-        page_table=None,
-        kv_cache=None,
-        sampling_on_device=False,
+        self, tokens, current_pos, page_table=None, kv_cache=None, sampling_on_device=False, reset_batch=False
     ):
         """
         Run decode forward text with tracing
@@ -612,11 +662,12 @@ class Generator:
             self.trace_inputs_decode[sampling_on_device] = device_inputs
             self.trace_output_decode[sampling_on_device] = tt_out_trace
 
-        reset_inputs = not sampling_on_device
+        # reset inputs when mode switches from prefill to decode
+        reset_inputs = reset_batch or not sampling_on_device
         if self.prev_page_table is None or any(
             not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table)
         ):
-            # If the page table has changed, it means that the inputs have shuffled, so we need to copy them from host again
+            # If the page table has changed, it means additional pages have been added or inputs are shuffled
             reset_inputs = True
             if page_table is not None:
                 self.prev_page_table = tuple(pt.clone() for pt in page_table)
@@ -630,11 +681,25 @@ class Generator:
                     host_tensors=host_inputs_i,
                     device_tensors=self.trace_inputs_decode[sampling_on_device][i],
                 )
-
         for i, trace_id in self.trace_ids_decode[sampling_on_device].items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
+        outputs = self.trace_output_decode[sampling_on_device]
+        if sampling_on_device:
+            new_outputs = []
+            for i in range(self.data_parallel):
+                sampling_module = getattr(self.model[i], "sampling", None)
+                if sampling_module is None or not getattr(sampling_module, "enable_internal_trace", False):
+                    new_outputs.append(outputs[i])
+                    continue
 
-        return self.trace_output_decode[sampling_on_device]
+                new_outputs.append(
+                    sampling_module.sample(
+                        logits=outputs[i],
+                        tt_out_tok=self.trace_inputs_decode[sampling_on_device][i][0],
+                    )
+                )
+            return new_outputs
+        return outputs
 
     def _prefill_forward_single_user(
         self,

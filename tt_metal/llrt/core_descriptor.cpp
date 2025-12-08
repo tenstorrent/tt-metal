@@ -71,7 +71,7 @@ inline std::string get_core_descriptor_file(
         // Check if fabric tensix is enabled based on fabric tensix config
         tt_fabric::FabricTensixConfig fabric_tensix_config =
             tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
-        bool use_fabric_tensix = (fabric_tensix_config == tt_fabric::FabricTensixConfig::MUX);
+        bool use_fabric_tensix = (fabric_tensix_config != tt_fabric::FabricTensixConfig::DISABLED);
 
         switch (arch) {
             default:
@@ -205,7 +205,7 @@ const core_descriptor_t& get_core_descriptor_config(
     }
 
     std::vector<RelativeCoreCoord> dispatch_cores;
-    auto dispatch_cores_string = "dispatch_cores";
+    const auto* dispatch_cores_string = "dispatch_cores";
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() and product_name == "nebula_x1") {
         dispatch_cores_string = "tg_dispatch_cores";
     }
