@@ -13,6 +13,7 @@
 #include "fw_debug.h"
 #include "noc_overlay_parameters.h"
 #include "tensix.h"
+#include "tensix_dev_map.h"
 #include "tensix_functions.h"
 #include "noc.h"
 
@@ -23,15 +24,11 @@ public:
 #if defined(COMPILE_FOR_BRISC)
     // Only accessible on brisc
     static vptr_uint instrn_buf_base(uint32_t thread_id) {
-#if defined(__INSTRN_BUFFER_TOS)
-        return &instrn_buffer[thread_id * (INSTRN_BUF_STRIDE / sizeof(uint32_t))];
-#else
         // This must be declared consistently with the global scope,
         // because of the way GCC handles such declarations. I blame
         // me and the way I implemented a piece of C++20 modules.
         extern volatile uint32_t __instrn_buffer[];
         return &__instrn_buffer[thread_id * (INSTRN_BUF_STRIDE / sizeof(uint32_t))];
-#endif
     }
 #endif
     static vptr_pc_buf pc_buf_base(uint32_t thread_id) {
