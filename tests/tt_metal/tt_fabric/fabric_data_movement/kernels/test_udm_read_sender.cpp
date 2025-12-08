@@ -15,15 +15,18 @@ constexpr uint32_t source_l1_buffer_address = get_compile_time_arg_val(5);
 constexpr uint16_t packet_payload_size_bytes = static_cast<uint16_t>(get_compile_time_arg_val(6));
 constexpr uint32_t num_packets = get_compile_time_arg_val(7);
 constexpr uint32_t time_seed_init = get_compile_time_arg_val(8);
-constexpr uint32_t noc_x_start = get_compile_time_arg_val(9);
-constexpr uint32_t noc_y_start = get_compile_time_arg_val(10);
-constexpr uint32_t dst_dev_id = get_compile_time_arg_val(11);
-constexpr uint32_t dst_mesh_id = get_compile_time_arg_val(12);
-constexpr uint32_t req_notification_size_bytes = get_compile_time_arg_val(13);
+constexpr uint32_t dst_dev_id = get_compile_time_arg_val(9);
+constexpr uint32_t dst_mesh_id = get_compile_time_arg_val(10);
+constexpr uint32_t req_notification_size_bytes = get_compile_time_arg_val(11);
 
 void kernel_main() {
     // TODO: move this into fw once consolidated
     tt::tt_fabric::udm::fabric_local_state_init();
+
+    // Per-core receiver coordinates from runtime args
+    uint32_t arg_index = 0;
+    uint32_t noc_x_start = get_arg_val<uint32_t>(arg_index++);
+    uint32_t noc_y_start = get_arg_val<uint32_t>(arg_index);
 
     uint32_t time_seed = time_seed_init;
 

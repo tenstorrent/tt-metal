@@ -6,7 +6,6 @@
 #include <tt_stl/assert.hpp>
 #include <buffer.hpp>
 #include <buffer_types.hpp>
-#include <core_coord.hpp>
 #include <device.hpp>
 #include <graph_tracking.hpp>
 #include <enchantum/enchantum.hpp>
@@ -21,10 +20,12 @@
 #include <string>
 #include <string_view>
 #include <utility>
+
 #include "fmt/base.h"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/allocator/allocator.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_align.hpp"
 #include <tt-metalium/allocator.hpp>
@@ -180,33 +181,7 @@ void validate_sub_device_manager_id(std::optional<SubDeviceManagerId> sub_device
 std::atomic<size_t> Buffer::next_unique_id = 0;
 
 std::ostream& operator<<(std::ostream& os, const ShardSpec& spec) {
-    os << "ShardSpec{";
-    os << "grid=[";
-
-    // Format grid as proper JSON array of ranges
-    const auto& ranges = spec.grid.ranges();
-    for (size_t i = 0; i < ranges.size(); ++i) {
-        const auto& range = ranges[i];
-        os << "{";
-        os << R"("start":{"x":)" << range.start_coord.x << R"(,"y":)" << range.start_coord.y << R"(},)";
-        os << R"("end":{"x":)" << range.end_coord.x << R"(,"y":)" << range.end_coord.y << R"()";
-        os << "}";
-        if (i < ranges.size() - 1) {
-            os << ", ";
-        }
-    }
-    os << "], ";
-
-    os << "shape=[" << spec.shape[0] << ", " << spec.shape[1] << "], ";
-
-    // Serialize orientation
-    os << "orientation=";
-    switch (spec.orientation) {
-        case ShardOrientation::ROW_MAJOR: os << "ShardOrientation::ROW_MAJOR"; break;
-        case ShardOrientation::COL_MAJOR: os << "ShardOrientation::COL_MAJOR"; break;
-    }
-
-    os << "}";
+    tt::stl::reflection::operator<<(os, spec);
     return os;
 }
 
@@ -294,9 +269,9 @@ Buffer::Buffer(
     if (this->sub_device_id_.has_value()) {
         validate_sub_device_id(this->sub_device_id_, this->device_, buffer_type, shard_spec_);
         this->sub_device_manager_id_ = this->device_->get_active_sub_device_manager_id();
-        this->allocator_ = device->allocator(*this->sub_device_id_).get();
+        this->allocator_ = device->allocator_impl(*this->sub_device_id_).get();
     } else {
-        this->allocator_ = device->allocator().get();
+        this->allocator_ = device->allocator_impl().get();
     }
     validate_buffer_parameters(size, page_size, buffer_type, buffer_layout_, shard_spec_, buffer_distribution_spec_);
     unique_id_ = next_unique_id.fetch_add(1);
@@ -407,6 +382,8 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
 
     return buffer;
 }
+
+Allocator* Buffer::allocator() const { return allocator_->view().get(); }
 
 void Buffer::allocate_impl() {
     if (GraphTracker::instance().hook_allocate(this)) {
