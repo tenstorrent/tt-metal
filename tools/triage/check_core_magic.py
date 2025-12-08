@@ -106,17 +106,17 @@ def check_core_magic(
         fw_elf_path = dispatcher_data.get_core_data(location, risc_name).firmware_path
         fw_elf = elfs_cache[fw_elf_path]
     except Exception as e:
+        log_check_location(
+            location,
+            False,
+            f"{risc_name}: Failed to get firmware ELF: {e}",
+        )
         return
 
     # Read the magic number from the expected mailbox location
     actual_magic = try_read_magic_with_elf(location, risc_name, fw_elf)
 
     if actual_magic is None:
-        log_check_location(
-            location,
-            False,
-            f"{risc_name}: Failed to read core_magic_number from mailbox",
-        )
         return
 
     # Check if magic matches expected
