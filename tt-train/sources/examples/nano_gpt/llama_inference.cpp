@@ -29,8 +29,8 @@ constexpr uint32_t TILE_SIZE = 32;
 
 // Create a causal attention mask for autoregressive generation
 TensorPtr create_causal_mask(ttnn::distributed::MeshDevice* device, uint32_t query_seq_len, uint32_t prompt_len = 0) {
-    uint32_t padded_query_seq_len = ((query_seq_len + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
-    uint32_t padded_whole_seq_len = ((prompt_len + query_seq_len + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
+    const uint32_t padded_query_seq_len = ((query_seq_len + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
+    const uint32_t padded_whole_seq_len = ((prompt_len + query_seq_len + TILE_SIZE - 1) / TILE_SIZE) * TILE_SIZE;
 
     // Mask shape: [padded_seq_len, padded_whole_seq_len] - query_len x key_len
     std::vector<float> mask_data(padded_query_seq_len * padded_whole_seq_len, 0.0f);
@@ -41,8 +41,8 @@ TensorPtr create_causal_mask(ttnn::distributed::MeshDevice* device, uint32_t que
         }
     }
 
-    auto shape = ttnn::Shape({1, 1, padded_query_seq_len, padded_whole_seq_len});
-    auto mask_tensor = ttml::core::from_vector(mask_data, shape, device);
+    const auto shape = ttnn::Shape({1, 1, padded_query_seq_len, padded_whole_seq_len});
+    const auto mask_tensor = ttml::core::from_vector(mask_data, shape, device);
 
     return ttml::autograd::create_tensor(mask_tensor);
 }
