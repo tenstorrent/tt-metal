@@ -25,17 +25,28 @@ on:
 
 jobs:
   nightly-bh-models:
+    if: ${{ inputs.runner-label == 'P100' || inputs.runner-label == 'P150' }}
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
         test-group: [
-            { model: whisper, owner_id: U05RWH3QUPM , cmd: pytest tests/nightly/single_card/whisper },  #Salar Hosseini
-            { model: llama3.1-8b, owner_id: U03PUAKE719, cmd: HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-stress-1 }, # Miguel Tairum
+            {
+              model: whisper,
+              owner_id: U05RWH3QUPM, #Salar Hosseini
+              runs-on: ["cloud-virtual-machine", "in-service", "${{ inputs.runner-label }}", "pipeline-functional"],
+              cmd: pytest tests/nightly/single_card/whisper
+            },
+            {
+              model: llama3.1-8b,
+              owner_id: U03PUAKE719, # Miguel Tairum
+              runs-on: ["cloud-virtual-machine", "in-service", "${{ inputs.runner-label }}", "pipeline-functional"],
+              cmd: HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-stress-1
+            },
           ]
     name: Nightly ${{ inputs.runner-label }} ${{ matrix.test-group.model }}
-    runs-on: ["cloud-virtual-machine", "in-service", "${{ inputs.runner-label }}", "pipeline-functional"]
+    runs-on: ${{ matrix.test-group.runs-on }}
     container:
       image: ${{ inputs.docker-image }}
       env:
@@ -85,10 +96,8 @@ jobs:
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
-
   nightly-bh-models-ci-v2:
-    # Only run once (not for each matrix value in parent workflow)
-    if: ${{ inputs.runner-label == 'P150' }}
+    if: ${{ inputs.runner-label == 'p150b' }}
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -97,9 +106,9 @@ jobs:
         test-group: [
             { model: panoptic-deeplab, owner_id: U09LK84G4TF, cmd: pytest models/experimental/panoptic_deeplab/tests/pcc/ }, # Nikola Milicevic
           ]
-    name: Nightly all cores ${{ matrix.test-group.model }}
+    name: Nightly 20 cores ${{ matrix.test-group.model }}
     # CIv2 to get weights
-    runs-on: tt-ubuntu-2204-p150b-stable
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner-label) }}
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
