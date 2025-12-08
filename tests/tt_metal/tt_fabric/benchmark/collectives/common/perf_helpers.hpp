@@ -67,7 +67,4 @@ void warmup_once(HelpersFixture* fixture, PerfParams base, int iters = 1);
 
 PerfStats run_repeated(HelpersFixture* fixture, const PerfParams& p, int warmup_iters, int iters);
 
-// Utility used by multiple tests
-tt::tt_metal::IDevice* find_device_by_id(ChipId phys_id);
-
 }  // namespace tt::tt_fabric::bench

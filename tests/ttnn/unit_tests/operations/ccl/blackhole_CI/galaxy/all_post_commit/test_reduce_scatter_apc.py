@@ -255,13 +255,10 @@ def test_rs_row_nightly_ring(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
-    pytest.skip("Galaxy is currently mesh only")
-
     if cluster_axis == 0:
         submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     else:
         submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
-    cluster_axis = 0
     run_reduce_scatter_impl(
         submesh_device,
         num_devices,
