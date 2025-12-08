@@ -19,15 +19,15 @@ from tracy import signpost
 @pytest.mark.parametrize(
     "input_shard_grid, input_shard_shape, output_shard_grid, output_shard_shape",
     [
-        # 8x1 input grid, 8x4 output grid
+        # 8x2 input grid (16 cores), 8x4 output grid (32 cores)
         (
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
-            (32, 512),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+            (32, 256),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
             (32, 64),
         ),
     ],
-    ids=["8x1_to_8x4"],
+    ids=["8x2_to_8x4"],
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -59,8 +59,8 @@ def test_reduce_scatter_async_params(
         mesh_device = create_submeshes(mesh_device, 4)[0]
 
     num_devices = mesh_device.get_num_devices()
-    if num_devices < 4:
-        pytest.skip(f"Need at least 4 devices, got {num_devices}")
+    if num_devices < 2:
+        pytest.skip(f"Need at least 2 devices, got {num_devices}")
 
     run_reduce_scatter_async_test(
         mesh_device,
@@ -92,7 +92,7 @@ def run_reduce_scatter_async_test(
     num_devices = mesh_device.get_num_devices()
 
     # Create WIDTH_SHARDED memory config for input
-    # Input: 8x1 grid (cores 0-7 on row 0), shard shape (32, 512)
+    # Input: 8x2 grid (16 cores), shard shape (32, 256) → width = 16 × 256 = 4096
     input_shard_spec = ttnn.ShardSpec(
         input_shard_grid,
         input_shard_shape,
@@ -106,8 +106,8 @@ def run_reduce_scatter_async_test(
     )
 
     # Output memory config - after reduce_scatter, width is divided by num_devices
-    # Input per device: (1, 1, 32, 4096) with shard (32, 512) on 8x1 grid
-    # Output per device: (1, 1, 32, 512) with shard (32, 64) on 8x4 grid
+    # Input per device: (1, 1, 32, 4096) with shard (32, 256) on 16 cores
+    # Output per device: (1, 1, 32, 2048) with shard (32, 64) on 32 cores (8x4 grid)
     output_shard_spec = ttnn.ShardSpec(
         output_shard_grid,
         output_shard_shape,
@@ -188,7 +188,7 @@ def run_reduce_scatter_async_test(
         # Input: each device has (1, 1, 32, 4096)
         # After reduce: sum of all inputs = input * num_devices
         # After scatter: split reduced result along dim=3
-        # Each device gets (1, 1, 32, 512) slice
+        # Each device gets (1, 1, 32, 2048) slice (for num_devices=2)
         # Concatenating all outputs gives the full reduced tensor
         expected_reduced = input_tensor_golden * num_devices  # sum reduction
 
