@@ -322,11 +322,12 @@ void normalize_scores(
     const uint32_t unnormalized_scores_cb_index,
     const uint32_t reduce_scalar_cb_index,
     const uint32_t intermediate_reduce_cb_index,
+    const uint32_t transpose_cb_index,
     const uint32_t epsilon_cb_index,
     const uint32_t normalized_scores_cb_index) {
     compute_kernel_hw_startup(unnormalized_scores_cb_index, reduce_scalar_cb_index, normalized_scores_cb_index);
     reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-        unnormalized_scores_cb_index, reduce_scalar_cb_index, normalized_scores_cb_index);
+        unnormalized_scores_cb_index, reduce_scalar_cb_index, intermediate_reduce_cb_index);
 
     cb_wait_front(epsilon_cb_index, 1);
     cb_wait_front(unnormalized_scores_cb_index, 1);
@@ -348,8 +349,8 @@ void normalize_scores(
     // 3. Add epsilon
     tile_regs_acquire();
     cb_wait_front(intermediate_reduce_cb_index, 1);
-    add_tiles_init(intermediate_reduce_cb_index, epsilon_cb_index);
-    add_tiles(intermediate_reduce_cb_index, epsilon_cb_index, 0, 0, 0);
+    add_bcast_scalar_init_short(intermediate_reduce_cb_index, epsilon_cb_index);
+    add_tiles_bcast<BroadcastType::SCALAR>(intermediate_reduce_cb_index, epsilon_cb_index, 0, 0, 0);
 
     // 4. Recip
     recip_tile_init();
@@ -360,19 +361,19 @@ void normalize_scores(
 
     // 5. Pack reciprocals
     tile_regs_wait();
-    cb_reserve_back(intermediate_reduce_cb_index, 1);
-    pack_tile(0, intermediate_reduce_cb_index);
+    cb_reserve_back(transpose_cb_index, 1);
+    pack_tile(0, transpose_cb_index);
     tile_regs_release();
-    cb_push_back(intermediate_reduce_cb_index, 1);
+    cb_push_back(transpose_cb_index, 1);
 
     // 6. Broadcast multiply
     tile_regs_acquire();
-    cb_wait_front(intermediate_reduce_cb_index, 1);
+    cb_wait_front(transpose_cb_index, 1);
 
-    mul_bcast_cols_init_short(unnormalized_scores_cb_index, intermediate_reduce_cb_index);
+    mul_bcast_cols_init_short(unnormalized_scores_cb_index, transpose_cb_index);
     cb_reserve_back(normalized_scores_cb_index, 1);
     mul_tiles_bcast<BroadcastType::COL>(
-        unnormalized_scores_cb_index, intermediate_reduce_cb_index, 0, 0, 0);  // tile *= 1/(sum_col(tile))
+        unnormalized_scores_cb_index, transpose_cb_index, 0, 0, 0);  // tile *= 1/(sum_col(tile))
     tile_regs_commit();
 
     tile_regs_wait();
@@ -506,6 +507,7 @@ void MAIN {
             pre_normalized_scores_cb_index,
             reduce_scalar_cb_index,
             intermediate_local_sort_cb_index,
+            transpose_cb_index,
             epsilon_cb_index,
             normalized_cb_index);
 

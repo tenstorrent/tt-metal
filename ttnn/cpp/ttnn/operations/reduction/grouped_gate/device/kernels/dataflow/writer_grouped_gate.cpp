@@ -155,15 +155,7 @@ FORCE_INLINE void generate_reduce_scalar(
             write_ptr[i + 241] = scalar;
         }
     }
-    // rest of the face
-    for (uint32_t i = n_activated_experts; i < 32; i++) {
-        write_ptr[i] = 0;
-        if (i == 16) {
-            noc_async_read(get_noc_addr(MEM_ZEROS_BASE), write_addr + face_size_bytes, face_line_bytes);
-            break;
-        }
-    }
-    noc_async_read_barrier();
+
     cb_push_back(reduce_scalar_cb_index, 1);
 }
 
@@ -324,19 +316,6 @@ FORCE_INLINE void generate_winning_group_tiles(uint32_t tokens_per_tile) {
     cb_pop_front(sorted_group_indices_cb_index, num_group_tiles);
 }
 
-void write_epsilon(const uint32_t epsilon_cb_index, const uint32_t packed_epsilon) {
-    cb_reserve_back(epsilon_cb_index, 1);
-    uint32_t write_addr = get_write_ptr(epsilon_cb_index);
-    tt_l1_ptr uint32_t* write_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(write_addr);
-    uint16_t epsilon = packed_epsilon >> 16;
-    for (uint32_t i = 0; i < 8; i++) {
-        write_ptr[i] = epsilon << 16 | epsilon;
-    }
-    noc_async_read(get_noc_addr(write_addr), write_addr + 512, 32);
-    noc_async_read_barrier();
-    cb_push_back(epsilon_cb_index, 1);
-}
-
 void write_single_scalar(const uint32_t scales_cb_index, const uint32_t packed_route_scale) {
     cb_reserve_back(scales_cb_index, 1);
     uint32_t write_addr = get_write_ptr(scales_cb_index);
@@ -396,7 +375,7 @@ void kernel_main() {
     generate_index_tiles(topk_index_creation_cb_index, width_tiles, indices_page_size);
     generate_group_indices_tiles(group_indices_cb_index, width_tiles, n_groups);
     generate_reduce_scalar(reduce_scalar_cb_index, packed_one_scalar, n_activated_experts);
-    write_epsilon(epsilon_cb_index, packed_epsilon);
+    write_single_scalar(epsilon_cb_index, packed_epsilon);
     write_single_scalar(scales_cb_index, packed_route_scale);
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
