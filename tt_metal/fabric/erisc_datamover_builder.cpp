@@ -387,10 +387,17 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     // Determine if VC1 is needed based on mesh count
     // VC1 is required for inter-mesh routing (when mesh_count > 1)
+    // However, MUX mode always uses VC0 only (no VC1)
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    auto user_mesh_ids = control_plane.get_user_physical_mesh_ids();
+    auto user_mesh_ids = control_plane.get_mesh_graph().get_mesh_ids();
     size_t mesh_count = user_mesh_ids.size();
     bool needs_vc1 = (topology == Topology::Mesh || topology == Topology::Torus) && is_2D_routing && (mesh_count > 1);
+
+    // MUX mode always uses VC0 only, disable VC1
+    if (options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX) {
+        needs_vc1 = false;
+        log_trace(tt::LogFabric, "MUX mode detected: Disabling VC1 (VC0 only)");
+    }
 
     // Get per-VC channel counts based on routing type
     auto sender_channels_per_vc = builder_config::get_sender_channel_count_per_vc(is_2D_routing);
@@ -437,6 +444,15 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->num_used_sender_channels_per_vc[0] + this->num_used_sender_channels_per_vc[1];
     this->num_used_receiver_channels =
         this->num_used_receiver_channels_per_vc[0] + this->num_used_receiver_channels_per_vc[1];
+
+    // Update is_sender_channel_serviced_ to mark unused channels as false
+    // Used channels (0 to num_used_sender_channels - 1) are already set by update_sender_channel_servicing
+    // Unused channels (num_used_sender_channels to num_max_sender_channels - 1) should be false
+    for (auto& risc_config : this->risc_configs) {
+        for (size_t i = this->num_used_sender_channels; i < builder_config::num_max_sender_channels; i++) {
+            risc_config.set_sender_channel_serviced(i, false);
+        }
+    }
 
     // num_fwd_paths = total sender channels - 1 (worker channel)
     this->num_fwd_paths = this->num_used_sender_channels - 1;

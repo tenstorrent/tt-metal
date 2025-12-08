@@ -297,7 +297,8 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         {
             {16, 16, 0, 0},  // Option 1
             {8, 16, 0, 0},   // Option 2
-            {8, 8, 0, 0}     // Option 3
+            {8, 8, 0, 0},    // Option 3
+            {4, 8, 0, 0}     // Option 4
         },
         // BLACKHOLE
         {{32, 32, 0, 0}, {16, 32, 0, 0}, {16, 16, 0, 0}, {8, 16, 0, 0}, {8, 8, 0, 0}}};
@@ -308,16 +309,20 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         static const std::vector<std::vector<PerVcBufferSlots>> mesh_buffer_slot_options = {
             // WORMHOLE_B0
             {
-                {7, 11, 0, 0},  // Option 1: same for both VCs
-                {4, 8, 0, 0},   // Option 2: smaller, same for both VCs
-                {4, 8, 2, 4}    // Option 3: supports both VCs
+                {7, 11, 0, 0},  // Option 1: VC0 only
+                {4, 8, 0, 0},   // Option 2: VC0 only, smaller
+                {4, 8, 2, 4},   // Option 3: supports both VCs
+                {4, 8, 2, 2},   // Option 4: supports both VCs, smaller VC1 receiver
+                {2, 4, 2, 2}    // Option 5: supports both VCs, smaller overall
             },
             // BLACKHOLE
             {
-                {8, 16, 0, 0},  // Option 1: same for both VCs
-                {8, 8, 0, 0},   // Option 2
-                {4, 8, 0, 0},   // Option 3
-                {4, 8, 2, 4}    // Option 4: supports both VCs
+                {8, 16, 0, 0},  // Option 1: VC0 only
+                {8, 8, 0, 0},   // Option 2: VC0 only
+                {4, 8, 0, 0},   // Option 3: VC0 only
+                {4, 8, 2, 4},   // Option 4: supports both VCs
+                {4, 8, 2, 2},   // Option 5: supports both VCs, smaller VC1 receiver
+                {2, 4, 2, 2}    // Option 6: supports both VCs, smaller overall
             }};
         static const std::vector<std::vector<PerVcBufferSlots>> other_buffer_slot_options = {
             // WORMHOLE_B0
@@ -348,15 +353,23 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
                                             size_t& vc0_receiver_buffer_slots,
                                             size_t& vc1_sender_buffer_slots,
                                             size_t& vc1_receiver_buffer_slots) {
+        bool vc1_needed = (num_vc1_sender_channels > 0) || (num_vc1_receiver_channels > 0);
+        bool found_valid_option = false;
         for (auto& option : buffer_slot_options) {
             vc0_sender_buffer_slots = option.vc0_sender_slots;
             vc0_receiver_buffer_slots = option.vc0_receiver_slots;
             vc1_sender_buffer_slots = option.vc1_sender_slots;
             vc1_receiver_buffer_slots = option.vc1_receiver_slots;
+            // skip the VC0 only options if VC1 is needed (either sender or receiver channels)
+            if (vc1_needed) {
+                // Check if we need VC1 sender channels but this option doesn't provide them
+                bool skip_due_to_vc1_sender = (num_vc1_sender_channels > 0) && (vc1_sender_buffer_slots == 0);
+                // Check if we need VC1 receiver channels but this option doesn't provide them
+                bool skip_due_to_vc1_receiver = (num_vc1_receiver_channels > 0) && (vc1_receiver_buffer_slots == 0);
 
-            // skip the VC0 only options if VC1 is present
-            if (num_vc1_sender_channels > 0 && vc1_sender_buffer_slots == 0) {
-                continue;
+                if (skip_due_to_vc1_sender || skip_due_to_vc1_receiver) {
+                    continue;  // Skip this option - VC1 is needed but this option doesn't support it
+                }
             }
 
             // Calculate total slots across both VCs
@@ -370,8 +383,34 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
                                    this->channel_buffer_size_bytes;
 
             if (total_num_bytes <= this->available_channel_buffering_space) {
+                found_valid_option = true;
                 break;  // Found a configuration that fits
             }
+        }
+
+        // Validate that we found a valid option, especially if VC1 is needed
+        if (!found_valid_option) {
+            TT_THROW(
+                "Failed to find suitable buffer slot configuration. VC1 needed: {}, VC0 channels: {} senders/{} "
+                "receivers, VC1 channels: {} senders/{} receivers, Available space: {} bytes",
+                vc1_needed,
+                num_vc0_sender_channels,
+                num_vc0_receiver_channels,
+                num_vc1_sender_channels,
+                num_vc1_receiver_channels,
+                this->available_channel_buffering_space);
+        }
+
+        // Additional validation: ensure VC1 buffer slots are non-zero if VC1 channels are needed
+        if (num_vc1_sender_channels > 0 && vc1_sender_buffer_slots == 0) {
+            TT_THROW(
+                "VC1 sender channels are needed ({} channels) but selected buffer slot configuration has 0 slots",
+                num_vc1_sender_channels);
+        }
+        if (num_vc1_receiver_channels > 0 && vc1_receiver_buffer_slots == 0) {
+            TT_THROW(
+                "VC1 receiver channels are needed ({} channels) but selected buffer slot configuration has 0 slots",
+                num_vc1_receiver_channels);
         }
     };
 
