@@ -298,7 +298,8 @@ void kernel_main() {
                     NocUnicastScatterCommandHeader({0, 0, 0}, {page_size, page_size}),
                     page_size * 3);
                 break;
-            default:
+            case 2:
+            case 1:
                 fabric_unicast_noc_scatter_write_set_state<
                     UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
                     pkt_scatter_hdr,
@@ -306,6 +307,7 @@ void kernel_main() {
                     NocUnicastScatterCommandHeader({0, 0}, {page_size}),
                     page_size * 2);
                 break;
+            default: ASSERT(false);
         }
 
         fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
@@ -322,6 +324,10 @@ void kernel_main() {
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
         ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
     }
+
+#define FABRIC_UNICAST(ARG)                                                               \
+    fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>( \
+        mux_connection_handle, pkt_scatter_hdr, l1_read_addr, ARG)
 
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
@@ -350,10 +356,6 @@ void kernel_main() {
                 local_noc_addrs[i] = get_noc_addr(tile_id, output_addrgen);
             }
 
-#define FABRIC_UNICAST(ARG)                                                               \
-    fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>( \
-        mux_connection_handle, pkt_scatter_hdr, l1_read_addr, ARG)
-
             if (direction == 1) {
                 if constexpr (num_targets_backward_direction) {
                     switch (tiles_to_put_in_current_packet) {
@@ -376,6 +378,7 @@ void kernel_main() {
                                 l1_read_addr,
                                 NocUnicastCommandHeader{noc_addrs[0]});
                             break;
+                        default: ASSERT(false);
                     }
                 }
 
@@ -406,6 +409,7 @@ void kernel_main() {
                                 l1_read_addr,
                                 NocUnicastCommandHeader{noc_addrs[0]});
                             break;
+                        default: ASSERT(false);
                     }
                 }
             }
@@ -564,6 +568,7 @@ void kernel_main() {
                             l1_read_addr,
                             NocUnicastCommandHeader{noc_addrs[0]});
                         break;
+                    default: ASSERT(false);
                 }
 
                 tiles_read += tiles_to_put_in_current_packet;
@@ -609,6 +614,8 @@ void kernel_main() {
         }
         slice_writes++;
     }
+
+#undef FABRIC_UNICAST
 
     noc_async_write_barrier();
     noc_async_atomic_barrier();
