@@ -184,10 +184,7 @@ void emit_skip_platforms(YAML::Emitter& out, const std::vector<std::string>& pla
 
 // 1. Simple intra-mesh unicast (easiest)
 void generate_simple_unicast_test(
-    YAML::Emitter& out,
-    const MeshTopologyInfo& topology,
-    const std::filesystem::path& mgd_path,
-    const TrafficTestConfig& config) {
+    YAML::Emitter& out, const std::filesystem::path& mgd_path, const TrafficTestConfig& config) {
     out << YAML::BeginMap;
     out << YAML::Key << "name" << YAML::Value << (config.test_name_prefix + "SimpleUnicast");
     if (config.include_sync) {
@@ -265,10 +262,7 @@ void generate_inter_mesh_unicast_test(
 
 // 3. All-to-all unicast with parametrization
 void generate_all_to_all_unicast_test(
-    YAML::Emitter& out,
-    const MeshTopologyInfo& topology,
-    const std::filesystem::path& mgd_path,
-    const TrafficTestConfig& config) {
+    YAML::Emitter& out, const std::filesystem::path& mgd_path, const TrafficTestConfig& config) {
     out << YAML::BeginMap;
     out << YAML::Key << "name" << YAML::Value << (config.test_name_prefix + "AllToAllUnicast");
     if (config.include_sync) {
@@ -295,10 +289,7 @@ void generate_all_to_all_unicast_test(
 
 // 4. Random pairing test
 void generate_random_pairing_test(
-    YAML::Emitter& out,
-    const MeshTopologyInfo& topology,
-    const std::filesystem::path& mgd_path,
-    const TrafficTestConfig& config) {
+    YAML::Emitter& out, const std::filesystem::path& mgd_path, const TrafficTestConfig& config) {
     out << YAML::BeginMap;
     out << YAML::Key << "name" << YAML::Value << (config.test_name_prefix + "RandomPairing");
     if (config.include_sync) {
@@ -318,10 +309,7 @@ void generate_random_pairing_test(
 
 // 5. All-to-one convergence test (harder - many senders to single receiver)
 void generate_all_to_one_test(
-    YAML::Emitter& out,
-    const MeshTopologyInfo& topology,
-    const std::filesystem::path& mgd_path,
-    const TrafficTestConfig& config) {
+    YAML::Emitter& out, const std::filesystem::path& mgd_path, const TrafficTestConfig& config) {
     out << YAML::BeginMap;
     out << YAML::Key << "name" << YAML::Value << (config.test_name_prefix + "AllToOne");
     if (config.include_sync) {
@@ -347,10 +335,7 @@ void generate_all_to_one_test(
 
 // 6. Flow control test (stress - high packet counts)
 void generate_flow_control_test(
-    YAML::Emitter& out,
-    const MeshTopologyInfo& topology,
-    const std::filesystem::path& mgd_path,
-    const TrafficTestConfig& config) {
+    YAML::Emitter& out, const std::filesystem::path& mgd_path, const TrafficTestConfig& config) {
     out << YAML::BeginMap;
     out << YAML::Key << "name" << YAML::Value << (config.test_name_prefix + "FlowControlStress");
     out << YAML::Key << "enable_flow_control" << YAML::Value << true;
@@ -377,10 +362,7 @@ void generate_flow_control_test(
 
 // 7. Sequential all-to-all (hardest - stress test, many iterations)
 void generate_sequential_all_to_all_test(
-    YAML::Emitter& out,
-    const MeshTopologyInfo& topology,
-    const std::filesystem::path& mgd_path,
-    const TrafficTestConfig& config) {
+    YAML::Emitter& out, const std::filesystem::path& mgd_path, const TrafficTestConfig& config) {
     out << YAML::BeginMap;
     out << YAML::Key << "name" << YAML::Value << (config.test_name_prefix + "SequentialAllToAll");
     out << YAML::Key << "enable_flow_control" << YAML::Value << true;
@@ -494,10 +476,7 @@ MeshTopologyInfo extract_topology_info(const std::filesystem::path& cabling_desc
 }
 
 std::string generate_traffic_tests_yaml(
-    const MeshTopologyInfo& topology,
-    const std::filesystem::path& mgd_path,
-    const TrafficTestConfig& config,
-    bool verbose) {
+    const MeshTopologyInfo& topology, const std::filesystem::path& mgd_path, const TrafficTestConfig& config) {
     YAML::Emitter out;
     out << YAML::Comment("Auto-generated traffic tests");
     out << YAML::Comment("Topology: " + std::to_string(topology.num_meshes) + " meshes, " + topology.architecture);
@@ -509,7 +488,7 @@ std::string generate_traffic_tests_yaml(
 
     // Generate tests from easiest to hardest based on profile
     // 1. Simple unicast (always included)
-    generate_simple_unicast_test(out, topology, mgd_path, config);
+    generate_simple_unicast_test(out, mgd_path, config);
 
     // 2. Inter-mesh unicast (if multi-mesh)
     if (topology.num_meshes > 1) {
@@ -517,28 +496,28 @@ std::string generate_traffic_tests_yaml(
     }
 
     // 3. All-to-all unicast
-    generate_all_to_all_unicast_test(out, topology, mgd_path, config);
+    generate_all_to_all_unicast_test(out, mgd_path, config);
 
     // 4. Random pairing
     if (config.profile != TestProfile::SANITY) {
-        generate_random_pairing_test(out, topology, mgd_path, config);
+        generate_random_pairing_test(out, mgd_path, config);
     }
 
     // 5. All-to-one (convergence stress)
     if (config.profile == TestProfile::STRESS || config.profile == TestProfile::COVERAGE) {
-        generate_all_to_one_test(out, topology, mgd_path, config);
+        generate_all_to_one_test(out, mgd_path, config);
     }
 
     // 6. Flow control tests
     if (config.include_flow_control ||
         config.profile == TestProfile::STRESS ||
         config.profile == TestProfile::COVERAGE) {
-        generate_flow_control_test(out, topology, mgd_path, config);
+        generate_flow_control_test(out, mgd_path, config);
     }
 
     // 7. Sequential all-to-all (hardest)
     if (config.profile == TestProfile::STRESS || config.profile == TestProfile::COVERAGE) {
-        generate_sequential_all_to_all_test(out, topology, mgd_path, config);
+        generate_sequential_all_to_all_test(out, mgd_path, config);
     }
 
     out << YAML::EndSeq;
@@ -558,7 +537,7 @@ std::string generate_traffic_tests_yaml(
         mgd_path = config.mgd_output_path;
     }
 
-    return generate_traffic_tests_yaml(topology, mgd_path, config, verbose);
+    return generate_traffic_tests_yaml(topology, mgd_path, config);
 }
 
 void write_traffic_tests_to_file(const std::string& yaml_content, const std::filesystem::path& output_path) {
@@ -608,7 +587,7 @@ void generate_traffic_tests(
 
     // Generate traffic tests
     auto topology = extract_topology_info(cluster_desc, verbose);
-    auto yaml_content = generate_traffic_tests_yaml(topology, mgd_path, config, verbose);
+    auto yaml_content = generate_traffic_tests_yaml(topology, mgd_path, config);
     write_traffic_tests_to_file(yaml_content, output_path);
 
     if (verbose) {
@@ -669,4 +648,3 @@ TrafficTestConfig get_coverage_config() {
 }
 
 }  // namespace tt::scaleout_tools
-
