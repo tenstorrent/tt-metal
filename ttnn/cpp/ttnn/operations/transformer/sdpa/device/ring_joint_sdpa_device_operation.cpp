@@ -323,7 +323,7 @@ RingJointSdpaDeviceOperation::invoke(
     const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(),
-        "all-gather invoked with cluster_axis API withou 2D mesh, which is currently unsupported");
+        "all-gather invoked with cluster_axis API without 2D mesh, which is currently unsupported");
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     int32_t rank = input_tensor_k.logical_shape().rank();
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
