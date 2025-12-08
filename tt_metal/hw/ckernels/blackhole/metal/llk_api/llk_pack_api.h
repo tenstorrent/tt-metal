@@ -22,6 +22,7 @@
  * LLK PACK
  *************************************************************************/
 
+// TODO NC: can be removed altogether:
 template <bool untilize = false, bool zero_output = false, bool tilize = false>
 inline void llk_pack_mop_config(const uint32_t output) {
     const std::uint32_t output_id = get_output_id(output);
@@ -162,7 +163,7 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16) {
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_init_<untilize, zero_output, false, tilize>(
+    _llk_pack_init_<untilize, zero_output, tilize>(
         pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, tile_c_dim, num_faces, partial_face, narrow_tile);
 }
 
@@ -315,7 +316,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, is_tile_dim_reconfig_en, false, false>(
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, is_tile_dim_reconfig_en>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         get_local_cb_interface(output_id).fifo_page_size,
