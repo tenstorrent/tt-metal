@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import warnings
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union
@@ -272,7 +273,11 @@ def reshard_for_output_channels_divisibility(hidden_states, out_channels):
     return hidden_states
 
 
-STABLE_DIFFUSION_V1_4_MODEL_LOCATION = "CompVis/stable-diffusion-v1-4"
+STABLE_DIFFUSION_V1_4_MODEL_LOCATION = (
+    "/mnt/MLPerf/tt_dnn-models/hf_home/hub/models--CompVis--stable-diffusion-v1-4"
+    if os.getenv("TT_SD_CI_PATH_OVERRIDE", "0") == "1"
+    else "CompVis/stable-diffusion-v1-4"
+)
 CLIP_VIT_LARGE_PATCH14_MODEL_LOCATION = "openai/clip-vit-large-patch14"
 STABLE_DIFFUSION_CIV2_MODEL_LOCATION = "stable-diffusion-v1-4"
 CLIP_VIT_LARGE_PATCH14_CIV2_MODEL_LOCATION = "clip-vit-large-patch14"
