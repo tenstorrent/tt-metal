@@ -88,8 +88,7 @@ void print_usage(const char* exec_name) {
             "original program."
          << '\n';
     cout << "\t--dump-noc-transfer-data: Dump NOC transfer data. Data is only available if previous run had "
-            "TT_METAL_RECORD_NOC_TRANSFER_DATA defined."
-         << '\n';
+            "TT_METAL_RECORD_NOC_TRANSFER_DATA defined.\n";
     cout << "\t--eth-dispatch: Assume eth dispatch, should match previous run.\n";
 }
 
