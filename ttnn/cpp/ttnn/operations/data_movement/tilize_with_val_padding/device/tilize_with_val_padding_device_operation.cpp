@@ -24,7 +24,7 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
         return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreBlockInterleavedProgramFactory{};
     }
     if (!operation_attributes.use_multicore) {
-        return tilize_with_val_padding::program::TilizeWithValPaddingsingleCoreProgramFactory{};
+        return tilize_with_val_padding::program::TilizeWithValPaddingSingleCoreProgramFactory{};
     }
 
     return tilize_with_val_padding::program::TilizeWithValPaddingMultiCoreInterleavedProgramFactory{};

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/data_movement/tilize_with_val_padding/device/ProgramFactory/tilize_with_val_padding_single_core_program_factory.hpp"
+#include "tilize_with_val_padding_single_core_program_factory.hpp"
 
 #include <math.h>
 
@@ -23,7 +23,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::tilize_with_val_padding::program {
 
-TilizeWithValPaddingsingleCoreProgramFactory::cached_program_t TilizeWithValPaddingsingleCoreProgramFactory::create(
+TilizeWithValPaddingSingleCoreProgramFactory::cached_program_t TilizeWithValPaddingSingleCoreProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     const tensor_return_value_t& tensor_return_value) {
@@ -190,7 +190,7 @@ TilizeWithValPaddingsingleCoreProgramFactory::cached_program_t TilizeWithValPadd
     return cached_program_t(std::move(program), std::move(shared_variables));
 }
 
-void TilizeWithValPaddingsingleCoreProgramFactory::override_runtime_arguments(
+void TilizeWithValPaddingSingleCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
