@@ -27,7 +27,7 @@ struct operation_attributes_t {
     ttnn::RingAttentionAllGatherAsync all_gather_struct;
     CoreCoord ccl_core_grid_offset;
 
-    // We need a constructor, because all_gather_struct is not default intializable.
+    // We need a constructor, because all_gather_struct is not default initializable.
     operation_attributes_t(
         std::string joint_strategy,
         std::optional<float> scale,
