@@ -143,9 +143,11 @@ class Generator:
 
                 logger.info(f"Warming up prefill for sequence length: {supported_length}")
 
-                block_size = get_block_size(kv_cache[model_id])
-                num_blocks = num_blocks_in_seq(supported_length, block_size)
-                page_table_warmup = torch.zeros(1, num_blocks, dtype=torch.int32)
+                page_table_warmup = None
+                if kv_cache is not None:
+                    block_size = get_block_size(kv_cache[model_id])
+                    num_blocks = num_blocks_in_seq(supported_length, block_size)
+                    page_table_warmup = torch.zeros(1, num_blocks, dtype=torch.int32)
 
                 self.prefill_forward_text(
                     warmup_tokens,
