@@ -6,13 +6,14 @@
 
 LOG_FILE="sdxl_stress_test_results_$(date +%Y%m%d_%H%M%S).log"
 NUM_RUNS=50
-TEST_COMMAND="TT_SDXL_SKIP_CHECK_AND_SAVE=1 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=7,7 TT_MM_THROTTLE_PERF=5 pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py::test_accuracy_sdxl -k \"device_encoders and with_trace and device_vae and no_cfg_parallel\" --num-prompts=5000 -v -s"
+TEST_COMMAND="TT_SDXL_SKIP_CHECK_AND_SAVE=1 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=7,7 TT_MM_THROTTLE_PERF=5 pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_accuracy.py::test_accuracy_sdxl -k \"device_encoders and with_trace and device_vae and no_cfg_parallel and no_refiner\" --num-prompts=5000 -v -s"
 
 echo "Running SDXL accuracy test with configuration:"
 echo "- device_encoders: enabled"
 echo "- with_trace: enabled"
 echo "- device_vae: enabled"
 echo "- no_cfg_parallel: enabled"
+echo "- no_refiner: enabled"
 echo "- Number of runs: ${NUM_RUNS}"
 echo "- Log file: ${LOG_FILE}"
 echo ""
