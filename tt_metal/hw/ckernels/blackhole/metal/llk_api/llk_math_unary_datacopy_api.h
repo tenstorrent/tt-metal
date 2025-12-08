@@ -42,7 +42,6 @@ template <
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool is_int_fpu_en = false,
     bool tilize = false>
-// within_face_16x16_transpose is used by unpacker, math does not transpose
 inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand = 0) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);

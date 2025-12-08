@@ -30,10 +30,7 @@ template <
     int NUM_FIDELITY_PHASES = 0,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_binary_init_with_operands(
-    const std::uint32_t operand_A,
-    const std::uint32_t operand_B,
-    const std::uint32_t transpose = 0,
-    const std::uint32_t acc_to_dest = 0) {
+    const std::uint32_t operand_A, const std::uint32_t operand_B, const std::uint32_t acc_to_dest = 0) {
     const std::uint32_t operand_id =
         get_operand_id(operand_A);  // operand_id is used to extract tile dim data which is the same for both operands
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
