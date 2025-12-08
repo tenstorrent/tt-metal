@@ -328,17 +328,23 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
           // Fetch actual job names from GitHub API (jobs were already fetched earlier, reuse them)
           const failingJobNames = new Set();
           try {
-            // Get jobs for this run - filter for failed jobs
-            const jobsResp = await octokit.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: targetRun.id, per_page: 100 });
-            const jobs = Array.isArray(jobsResp.data.jobs) ? jobsResp.data.jobs : [];
-            for (const job of jobs) {
-              // Include jobs that failed (conclusion is 'failure' or 'cancelled')
-              const conclusion = (job.conclusion || '').toLowerCase();
-              if (conclusion === 'failure' || conclusion === 'cancelled') {
-                if (job.name) {
-                  failingJobNames.add(String(job.name));
+            // Get jobs for this run - filter for failed jobs, handle pagination
+            let page = 1;
+            let hasMore = true;
+            while (hasMore) {
+              const jobsResp = await octokit.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: targetRun.id, per_page: 100, page });
+              const jobs = Array.isArray(jobsResp.data.jobs) ? jobsResp.data.jobs : [];
+              for (const job of jobs) {
+                // Include jobs that failed (conclusion is 'failure' or 'cancelled')
+                const conclusion = (job.conclusion || '').toLowerCase();
+                if (conclusion === 'failure' || conclusion === 'cancelled') {
+                  if (job.name) {
+                    failingJobNames.add(String(job.name));
+                  }
                 }
               }
+              hasMore = jobs.length === 100;
+              page++;
             }
           } catch (e) {
             core.warning(`Failed to fetch job names from API for run ${targetRun.id}: ${e.message}`);
