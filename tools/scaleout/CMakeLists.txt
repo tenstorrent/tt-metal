@@ -166,7 +166,7 @@ add_library(
 add_dependencies(
     generate_mgd_lib
     scaleout_generated_protos
-    tt_metal
+    TT::Metalium::Fabric
 )
 
 target_include_directories(
@@ -196,7 +196,7 @@ add_executable(generate_mgd generate_mgd/generate_mgd_main.cpp)
 add_dependencies(
     generate_mgd
     scaleout_generated_protos
-    tt_metal
+    TT::Metalium::Fabric
 )
 
 set_target_properties(
@@ -220,11 +220,7 @@ target_link_libraries(
 # Generate Traffic Tests library
 add_library(generate_traffic_tests_lib OBJECT generate_traffic_tests/generate_traffic_tests.cpp)
 
-add_dependencies(
-    generate_traffic_tests_lib
-    scaleout_generated_protos
-    tt_metal
-)
+add_dependencies(generate_traffic_tests_lib scaleout_generated_protos)
 
 target_include_directories(
     generate_traffic_tests_lib
@@ -250,17 +246,7 @@ target_link_libraries(
 )
 
 # Generate Traffic Tests CLI tool
-add_executable(
-    generate_traffic_tests
-    generate_traffic_tests/generate_traffic_tests_main.cpp
-    ${CMAKE_BINARY_DIR}/tt_metal/fabric/protobuf/mesh_graph_descriptor.pb.cc
-)
-
-add_dependencies(
-    generate_traffic_tests
-    scaleout_generated_protos
-    tt_metal
-)
+add_executable(generate_traffic_tests generate_traffic_tests/generate_traffic_tests_main.cpp)
 
 add_dependencies(generate_traffic_tests scaleout_generated_protos)
 
@@ -270,8 +256,6 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${CMAKE_BINARY_DIR}/tools/scaleout
 )
-
-target_include_directories(generate_traffic_tests SYSTEM PRIVATE ${CMAKE_BINARY_DIR}/tt_metal/fabric)
 
 target_link_libraries(
     generate_traffic_tests
