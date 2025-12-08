@@ -10,12 +10,12 @@
 
 namespace ckernel {
 
-template <bool APPROXIMATE, uint32_t APPROX_MODE = 0>
+template <bool APPROXIMATE, uint32_t APPROX_MODE>
 inline void llk_math_eltwise_unary_sfpu_softplus_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::softplus, APPROXIMATE>();
 }
 
-template <bool APPROXIMATE, uint32_t APPROX_MODE = 0>
+template <bool APPROXIMATE, uint32_t APPROX_MODE>
 inline void llk_math_eltwise_unary_sfpu_softplus(
     uint dst_index, uint param0, uint param1, uint param2, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
