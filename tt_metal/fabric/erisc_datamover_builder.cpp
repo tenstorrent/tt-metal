@@ -446,8 +446,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->num_used_receiver_channels_per_vc[0] + this->num_used_receiver_channels_per_vc[1];
 
     // Update is_sender_channel_serviced_ to mark unused channels as false
-    // Used channels (0 to num_used_sender_channels - 1) are already set by update_sender_channel_servicing
-    // Unused channels (num_used_sender_channels to num_max_sender_channels - 1) should be false
+    // Used channels (0 to num_used_sender_channels - 1) are set by update_sender_channel_servicing in MUX mode,
+    // and by configure_risc_settings in non-MUX modes. Unused channels (num_used_sender_channels to num_max_sender_channels - 1) should be false.
     for (auto& risc_config : this->risc_configs) {
         for (size_t i = this->num_used_sender_channels; i < builder_config::num_max_sender_channels; i++) {
             risc_config.set_sender_channel_serviced(i, false);
