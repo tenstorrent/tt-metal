@@ -1100,6 +1100,7 @@ void bind_softplus(nb::module_& mod) {
         Keyword Args:
             beta (float, optional): Scales the input before applying the Softplus function. By modifying :attr:`beta`, you can adjust the steepness of the function. A higher :attr:`beta` value makes the function steeper, approaching a hard threshold like the ReLU function for large values of :attr:`beta`. Defaults to `1`.
             threshold (float, optional): Used to switch to a linear function for large values to improve numerical stability. This avoids issues with floating-point representation for very large values. Defaults to `20`.
+            impl_mode (int, optional): Implementation mode for the softplus calculation. 0 = FAST (legacy), 1 = ACCURATE (new polynomial approximation). Defaults to `0`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
@@ -1131,14 +1132,16 @@ void bind_softplus(nb::module_& mod) {
                const Tensor& input,
                const float beta,
                const float threshold,
+               const uint32_t impl_mode,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& output_tensor) {
-                return self(input, beta, threshold, memory_config, output_tensor);
+                return self(input, beta, threshold, impl_mode, memory_config, output_tensor);
             },
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("beta") = 1.0f,
             nb::arg("threshold") = 20.0f,
+            nb::arg("impl_mode") = 0,
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none()});
 }
