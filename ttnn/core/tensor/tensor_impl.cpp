@@ -500,11 +500,8 @@ std::string to_string_impl(const Tensor& tensor) {
                 std::stringstream ss;
                 for (size_t i = 0; i < buffers.size(); i++) {
                     const distributed::MeshCoordinate coord = *coords_it++;
-                    if (mesh_device->is_local(coord)) {
-                        ss << "fabric_node_id: " << mesh_device->get_fabric_node_id(coord) << ", " << coord
-                           << std::endl;
-                        detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
-                    }
+                    ss << "fabric_node_id: " << mesh_device->get_fabric_node_id(coord) << ", " << coord << std::endl;
+                    detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
                     if (i + 1 != buffers.size()) {
                         ss << std::endl;
                     }
