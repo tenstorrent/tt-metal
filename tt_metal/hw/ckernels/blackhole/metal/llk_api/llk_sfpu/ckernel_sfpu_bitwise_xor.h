@@ -16,10 +16,10 @@ namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_bitwise_xor(const uint value) {
+    vInt v = value;
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         vInt input = dst_reg[0];
-        vInt v = value;
         vInt res = input ^ v;
         v_if(res > INT_MIN && res < 0) {
             res = 0 - res;

@@ -11,10 +11,10 @@ namespace ckernel {
 namespace sfpu {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_bitwise_or(const uint value) {
+    vInt scalar_value = value;
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         vInt input = dst_reg[0];
-        vInt scalar_value = value;
         vInt res = input | scalar_value;
         v_if(res > INT_MIN && res < 0) {
             res = 0 - res;
