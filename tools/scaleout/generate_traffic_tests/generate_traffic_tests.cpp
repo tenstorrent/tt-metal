@@ -15,6 +15,7 @@
 #include <generate_mgd/generate_mgd.hpp>
 #include <node/node_type_info.hpp>
 #include "protobuf/cluster_config.pb.h"
+#include "protobuf/mesh_graph_descriptor.pb.h"
 
 namespace tt::scaleout_tools {
 
@@ -407,6 +408,57 @@ MeshTopologyInfo extract_topology_info(const std::filesystem::path& path, bool v
     }
 
     return extract_topology_info(cluster_desc, verbose);
+}
+
+MeshTopologyInfo extract_topology_info_from_mgd(const std::filesystem::path& mgd_path, bool verbose) {
+    MeshTopologyInfo info;
+
+    std::ifstream file(mgd_path);
+    if (!file.is_open()) {
+        throw std::runtime_error("Cannot open: " + mgd_path.string());
+    }
+    std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+    tt::tt_fabric::proto::MeshGraphDescriptor mgd;
+    if (!google::protobuf::TextFormat::ParseFromString(content, &mgd)) {
+        throw std::runtime_error("Failed to parse MGD: " + mgd_path.string());
+    }
+
+    if (mgd.mesh_descriptors_size() == 0 || mgd.graph_descriptors_size() == 0) {
+        throw std::runtime_error("Invalid MGD: missing mesh or graph descriptors");
+    }
+
+    const auto& mesh_desc = mgd.mesh_descriptors(0);
+    const auto& graph_desc = mgd.graph_descriptors(0);
+
+    info.num_meshes = graph_desc.instances_size();
+    const auto& device_topo = mesh_desc.device_topology();
+    info.device_dims = {device_topo.dims(0), device_topo.dims(1)};
+
+    std::string arch_name = tt::tt_fabric::proto::Architecture_Name(mesh_desc.arch());
+    info.architecture = arch_name;
+
+    std::set<std::pair<uint32_t, uint32_t>> unique_pairs;
+    for (const auto& connection : graph_desc.connections()) {
+        if (connection.nodes_size() == 2) {
+            uint32_t src = connection.nodes(0).mesh().mesh_id();
+            uint32_t dst = connection.nodes(1).mesh().mesh_id();
+            if (src != dst) {
+                info.mesh_connections[src][dst]++;
+                unique_pairs.insert(std::minmax(src, dst));
+            }
+        }
+    }
+    info.connected_pairs.assign(unique_pairs.begin(), unique_pairs.end());
+
+    if (verbose) {
+        std::cout << "Topology from MGD: " << info.num_meshes << " meshes, " << info.total_devices() << " devices, "
+                  << info.architecture << "\n";
+        std::cout << "  Device topology: " << info.device_dims[0] << "x" << info.device_dims[1] << "\n";
+        std::cout << "  Inter-mesh connections: " << info.connected_pairs.size() << " pairs\n";
+    }
+
+    return info;
 }
 
 void apply_profile_defaults(TrafficTestConfig& config) {

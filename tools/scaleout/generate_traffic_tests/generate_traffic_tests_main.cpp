@@ -54,13 +54,13 @@ int main(int argc, char* argv[]) {
 
     // clang-format off
     options.add_options()
-        ("c,cabling-descriptor-path", "Path to cabling descriptor textproto (required)",
+        ("c,cabling-descriptor-path", "Path to cabling descriptor textproto",
             cxxopts::value<std::string>())
         ("o,output-path", "Output YAML file path",
             cxxopts::value<std::string>()->default_value("traffic_tests.yaml"))
         ("m,mgd-output-path", "Path to generate MGD file",
             cxxopts::value<std::string>())
-        ("e,existing-mgd-path", "Use existing MGD file (skip generation)",
+        ("e,existing-mgd-path", "Use existing MGD file (requires cabling descriptor or MGD)",
             cxxopts::value<std::string>())
         ("p,profile", "Test profile: sanity, stress, benchmark",
             cxxopts::value<std::string>()->default_value("sanity"))
@@ -107,8 +107,17 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 
-        if (!result.count("cabling-descriptor-path")) {
-            std::cerr << "Error: --cabling-descriptor-path is required\n";
+        bool has_cabling = result.count("cabling-descriptor-path") > 0;
+        bool has_existing_mgd = result.count("existing-mgd-path") > 0;
+
+        if (!has_cabling && !has_existing_mgd) {
+            std::cerr << "Error: Must provide either --cabling-descriptor-path or --existing-mgd-path\n";
+            std::cerr << "Use --help for usage\n";
+            return 1;
+        }
+
+        if (has_cabling && has_existing_mgd) {
+            std::cerr << "Error: Cannot specify both --cabling-descriptor-path and --existing-mgd-path\n";
             std::cerr << "Use --help for usage\n";
             return 1;
         }
@@ -189,11 +198,18 @@ int main(int argc, char* argv[]) {
             config.include_sync = false;
         }
 
-        fs::path cabling_path = result["cabling-descriptor-path"].as<std::string>();
         fs::path output_path = result["output-path"].as<std::string>();
         bool verbose = result.count("verbose") > 0;
 
-        generate_traffic_tests(cabling_path, output_path, config, verbose);
+        if (has_cabling) {
+            fs::path cabling_path = result["cabling-descriptor-path"].as<std::string>();
+            generate_traffic_tests(cabling_path, output_path, config, verbose);
+        } else {
+            fs::path mgd_path = result["existing-mgd-path"].as<std::string>();
+            auto topology = extract_topology_info_from_mgd(mgd_path, verbose);
+            auto yaml = generate_traffic_tests_yaml(topology, mgd_path, config, verbose);
+            write_traffic_tests_to_file(yaml, output_path);
+        }
 
         std::cout << "Generated: " << output_path << "\n";
         if (config.generate_mgd && !config.mgd_output_path.empty()) {
