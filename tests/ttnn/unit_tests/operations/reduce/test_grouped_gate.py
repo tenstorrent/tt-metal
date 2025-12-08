@@ -97,7 +97,7 @@ def test_grouped_gate(device):
     torch.manual_seed(0)
     batch_size = 1
     num_batches = 1
-    seq_len = 2
+    seq_len = 32
     total_experts = 256
     # scores = torch.randint(-3, 3, (1, 1, seq_len, total_experts), dtype=torch.bfloat16)
     scores = torch.randn(num_batches, batch_size, seq_len, total_experts, dtype=torch.bfloat16)
@@ -139,3 +139,6 @@ def test_grouped_gate(device):
 
     logger.info(f"ttnn_scores: {ttnn_scores}")
     logger.info(f"ttnn_top_k_experts_indices: {ttnn_top_k_experts_indices}")
+    logger.info(
+        f"Torch Gathered From TTNN: {torch.gather(scores, dim=-1, index=ttnn_top_k_experts_indices.to(torch.int64))}"
+    )
