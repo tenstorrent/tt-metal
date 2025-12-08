@@ -27,12 +27,12 @@ template <
 inline void _llk_unpack_A_mop_config_(
     const bool transpose_of_faces, const std::uint32_t num_faces, const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format = 0)
 {
-    // static_assert(
-    //     !((BType != BroadcastType::NONE) && acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)), "Not supported configuration!");
-    // static_assert(
-    //     (((BType == BroadcastType::NONE) && (!acc_to_dest) && (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE)) || (!unpack_to_dest)),
-    //     "Not supported configuration when unpacking to dest!");
-    // LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    static_assert(
+        !((BType != BroadcastType::NONE) && acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)), "Not supported configuration!");
+    static_assert(
+        !(((acc_to_dest) || (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE)) && (unpack_to_dest)),
+        "Not supported configuration when unpacking to dest!");
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
     static constexpr uint unpack_srca =
         TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
@@ -96,7 +96,7 @@ inline void _llk_unpack_A_mop_config_(
     else if constexpr (BType == BroadcastType::COL)
     {
         constexpr uint32_t innerloop = 1;
-        constexpr uint32_t outerloop = 1; // TODO: add support for num_faces, add support for dest to srcB
+        constexpr uint32_t outerloop = 1; // TODO: add support for num_faces
         ckernel_template tmp(outerloop, innerloop, unpack_srcb, srcb_set_z_2);
         if (!(unpack_dst_format == (uint)DataFormat::UInt16))
         {
@@ -210,11 +210,11 @@ inline void _llk_unpack_A_init_(
     // cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable_src_zero_flag_val ? 1 : 0);
 
     constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE || unpack_to_dest) ? p_setadc::UNP_A : p_setadc::UNP_B;
-    if constexpr ((BType == BroadcastType::ROW || BType == BroadcastType::SCALAR) && unpack_to_dest)
+    if constexpr ((BType == BroadcastType::ROW || BType == BroadcastType::SCALAR) && unpack_to_dest) // ROW and SCALAR bcast will only upk a single row
     {
         config_unpacker_x_end<UNP_SEL>(1);
     }
-    else
+    else // base case is to upk the entire face
     {
         config_unpacker_x_end<UNP_SEL>(face_r_dim);
     }

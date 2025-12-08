@@ -260,7 +260,7 @@ inline void eltwise_unary_configure_addrmod(const uint dst_format)
                 .set(ADDR_MOD_0);
 
             // Just unpack into B and move to Dest
-            if (dst_format == (uint)DataFormat::UInt16)
+            if (dst_format == (uint)DataFormat::UInt16) // UInt16 case needs to use MOVB2D, which is 4 rows per op
             {
                 addr_mod_t {
                     .srca = {.incr = 0},
@@ -348,13 +348,13 @@ inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows, con
         }
         else if constexpr (bcast_type == BroadcastType::COL)
         {
-            if (dst_format == (uint)DataFormat::UInt16)
+            if (dst_format == (uint)DataFormat::UInt16) // UInt16 case needs to use MOVB2D because for ELWADD FPU interprests some numbers as a float with exp 0
             {
                 ckernel_template tmp(outerloop, innerloop, TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0));
                 tmp.set_end_op(TT_OP_SETRWC(0, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));
                 tmp.program();
             }
-            else
+            else // ELWADD is used for non UInt16 case, since it moves 8 rows per cycle
             {
                 ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, broadcast_type, addr_mod, 0));
                 tmp.set_end_op(TT_OP_SETRWC(0, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));
