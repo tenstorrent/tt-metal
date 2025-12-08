@@ -337,18 +337,19 @@ void device_module(py::module& m_device) {
     m_device.def("ClearKernelCache", &tt::tt_metal::experimental::ClearKernelCache, R"doc(
         Clear the in-memory kernel compilation hash lookup cache.
 
-        This forces kernels to be recompiled on next use, even if they were previously
-        compiled in this process. Use this to measure true cold-start compilation times
-        within a single process.
-
         Note:
-            This only clears the in-memory HashLookup cache. To also clear disk-cached
-            kernel binaries, you must delete the files in:
-            ~/.cache/tt-metal-cache/<git_hash>/<build_id>/kernels/
+            This only clears the in-memory HashLookup cache.
+            The compiler rebuilds binaries when:
+            1. Kernel hash is NOT in HashLookup (cleared by this function), AND
+            2. Binaries do not exist on disk (or persistent cache is disabled)
+
+            To also clear disk-cached
+                kernel binaries, you must delete the files in:
+                ~/.cache/tt-metal-cache/<git_hash>/<build_id>/kernels/
 
         Example:
             >>> import ttnn
-            >>> ttnn.device.ClearKernelCache()  # Force recompilation on next op
+            >>> ttnn.device.ClearKernelCache()
     )doc");
     m_device.def("EnableMemoryReports", &tt::tt_metal::detail::EnableMemoryReports, R"doc(
         Enables tt-metal to generate reports of memory allocation statistics
