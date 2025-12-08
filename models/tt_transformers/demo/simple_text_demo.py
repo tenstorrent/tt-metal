@@ -303,7 +303,7 @@ def prepare_generator_args(
             1024,  # max_seq_len
             32,  # batch_size
             200,  # max_generated_tokens
-            True,  # paged_attention
+            False,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {
                 "temperature": torch.linspace(0.0, 1.0, steps=32).tolist(),
