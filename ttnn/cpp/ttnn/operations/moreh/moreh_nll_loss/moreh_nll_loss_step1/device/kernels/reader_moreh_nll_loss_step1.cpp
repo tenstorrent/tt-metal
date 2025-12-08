@@ -5,6 +5,7 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
+    using namespace tt::constants;
     uint32_t i = 0;
     auto target_addr = get_arg_val<uint32_t>(i++);
     auto weight_addr = get_arg_val<uint32_t>(i++);
@@ -18,7 +19,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_target = tt::CBIndex::c_0;
     constexpr uint32_t cb_weight = tt::CBIndex::c_1;
-
+    constexpr uint32_t cb_weight_scratch = tt::CBIndex::c_7;
     constexpr uint32_t cb_output = tt::CBIndex::c_16;
 
     // ublocks size defined in tiles
@@ -46,7 +47,7 @@ void kernel_main() {
 
 #if defined(WEIGHT)
     // weight: (1, C)
-    read_line(cb_weight, addrg_weight, weight_num_tile);
+    read_line(cb_weight, cb_weight_scratch, addrg_weight, weight_num_tile);
 
     cb_wait_front(cb_weight, weight_num_tile);
     auto weight_l1_ptr = get_read_ptr<uint16_t>(cb_weight);

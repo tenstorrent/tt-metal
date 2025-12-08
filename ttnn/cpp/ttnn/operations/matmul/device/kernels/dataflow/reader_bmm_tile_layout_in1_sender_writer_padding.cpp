@@ -574,4 +574,5 @@ void kernel_main() {
         cb_id_out0,
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
 #endif
+    noc_async_write_barrier();
 }
