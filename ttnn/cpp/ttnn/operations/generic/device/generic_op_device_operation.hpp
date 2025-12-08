@@ -5,7 +5,7 @@
 #pragma once
 
 #include <variant>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program/program_descriptors.hpp>
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/tensor/tensor.hpp"

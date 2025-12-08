@@ -9,6 +9,7 @@
 namespace ttnn::operations::generic {
 
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental::program_descriptors;
 GenericOpDeviceOperation::program_factory_t GenericOpDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return GenericProgram{};

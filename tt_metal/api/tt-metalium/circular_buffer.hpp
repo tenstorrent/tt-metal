@@ -12,7 +12,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program/program_descriptors.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -25,6 +25,8 @@ namespace tt::tt_metal {
 namespace experimental {
 class GlobalCircularBuffer;
 }  // namespace experimental
+
+using tt::tt_metal::experimental::program_descriptors::CBDescriptor;
 
 class CircularBuffer {
 public:

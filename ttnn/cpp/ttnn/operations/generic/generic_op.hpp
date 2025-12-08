@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program/program_descriptors.hpp>
 #include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::generic {
