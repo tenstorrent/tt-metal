@@ -55,7 +55,9 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         unpA_num_faces,
         unpB_num_faces,
         partial_face_a,
-        partial_face_b);
+        partial_face_b,
+        get_local_cb_interface(operandA_id).fifo_page_size,
+        get_local_cb_interface(operandB_id).fifo_page_size);
 }
 
 inline void llk_unpack_AB_matmul(
