@@ -757,14 +757,13 @@ def test_demo_for_conditional_generation(
         pytest.skip("Skipping test in CI since it provides redundant testing")
 
     if (
-        is_ci_env
-        and model_repo == "distil-whisper/distil-large-v3"
+        model_repo == "distil-whisper/distil-large-v3"
         and mesh_device.get_num_devices() == available_devices
         and compression_ratio_threshold is None  # Check perf only when generate_kwargs are None
     ):
         metrics_dictionary = {
             2: {"prefill_time_to_token": 0.19, "decode_t/s/u": 130.0},
-            8: {"prefill_time_to_token": 0.28, "decode_t/s/u": 42.1},
+            8: {"prefill_time_to_token": 0.22, "decode_t/s/u": 85.0},
             32: {"prefill_time_to_token": 0.26, "decode_t/s/u": 55.0},
         }
         if is_blackhole():
