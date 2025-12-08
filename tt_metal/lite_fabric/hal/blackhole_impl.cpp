@@ -6,6 +6,7 @@
 #include "hw/inc/host_interface.hpp"
 #include "tt_metal/lite_fabric/hw/inc/blackhole/lf_dev_mem_map.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
+#include "umd/device/utils/semver.hpp"
 
 namespace {
 
@@ -52,8 +53,8 @@ void BlackholeLiteFabricHal::set_pc(tt_cxy_pair virtual_core, uint32_t pc_val) {
     cluster.write_core(reinterpret_cast<void*>(&pc_val), sizeof(uint32_t), virtual_core, LITE_FABRIC_RESET_PC);
 }
 
-tt::umd::tt_version BlackholeLiteFabricHal::get_binary_version() {
-    return tt::umd::tt_version{0, 0, 0};
+tt::umd::semver_t BlackholeLiteFabricHal::get_binary_version() {
+    return tt::umd::semver_t{0, 0, 0};
 }
 
 void BlackholeLiteFabricHal::launch(const std::filesystem::path& bin_path) {

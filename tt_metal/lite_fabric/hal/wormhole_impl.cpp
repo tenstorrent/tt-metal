@@ -10,8 +10,8 @@ void WormholeLiteFabricHal::set_reset_state(tt_cxy_pair virtual_core, bool asser
 
 void WormholeLiteFabricHal::set_pc(tt_cxy_pair virtual_core, uint32_t pc_val) {}
 
-tt::umd::tt_version WormholeLiteFabricHal::get_binary_version() {
-    return tt::umd::tt_version{0, 0, 0};
+tt::umd::semver_t WormholeLiteFabricHal::get_binary_version() {
+    return tt::umd::semver_t{0, 0, 0};
 }
 
 void WormholeLiteFabricHal::launch(const std::filesystem::path& bin_path) {}
