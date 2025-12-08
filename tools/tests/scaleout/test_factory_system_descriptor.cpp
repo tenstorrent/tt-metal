@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 #include <enchantum/enchantum.hpp>
+#include <algorithm>
 #include <fstream>
 #include <filesystem>
 #include <google/protobuf/text_format.h>
@@ -21,11 +22,9 @@ namespace tt::scaleout_tools {
 
 // Helper function to create a modified GSD with some connections removed
 // Returns path to the modified GSD file
+// Removes connections until each ASIC pair has exactly min_connections_to_keep_per_pair remaining
 std::string create_gsd_with_missing_connections(
-    const std::string& original_gsd_path,
-    const std::string& output_path,
-    uint32_t connections_to_remove_per_asic_pair,
-    uint32_t min_connections_to_keep_per_pair) {
+    const std::string& original_gsd_path, const std::string& output_path, uint32_t min_connections_to_keep_per_pair) {
     YAML::Node gsd = YAML::LoadFile(original_gsd_path);
 
     auto make_asic_key = [](const YAML::Node& endpoint) {
@@ -37,8 +36,8 @@ std::string create_gsd_with_missing_connections(
         return (a < b) ? (a + "|" + b) : (b + "|" + a);
     };
 
-    // Process both local and global eth connections
-    auto process_connections = [&](const std::string& connection_type) {
+    // Delete connections in GSD, keeping only min_connections_to_keep_per_pair per ASIC pair
+    auto delete_connections_in_gsd = [&](const std::string& connection_type) {
         if (!gsd[connection_type] || gsd[connection_type].IsNull() || gsd[connection_type].size() == 0) {
             return;
         }
@@ -48,7 +47,7 @@ std::string create_gsd_with_missing_connections(
 
         // Track connections per ASIC pair
         std::map<std::string, uint32_t> asic_pair_counts;
-        std::map<std::string, uint32_t> asic_pair_removed;
+        std::map<std::string, uint32_t> asic_pair_kept;
 
         // First pass: count connections per ASIC pair
         for (const auto& conn : original_connections) {
@@ -56,36 +55,35 @@ std::string create_gsd_with_missing_connections(
             std::string key_b = make_asic_key(conn[1]);
             std::string pair_key = make_pair_key(key_a, key_b);
             asic_pair_counts[pair_key]++;
-            asic_pair_removed[pair_key] = 0;
+            asic_pair_kept[pair_key] = 0;
         }
 
-        // Second pass: selectively remove connections
+        // Second pass: keep only min_connections_to_keep_per_pair connections per ASIC pair
         for (const auto& conn : original_connections) {
             std::string key_a = make_asic_key(conn[0]);
             std::string key_b = make_asic_key(conn[1]);
             std::string pair_key = make_pair_key(key_a, key_b);
 
+            uint32_t kept_for_pair = asic_pair_kept[pair_key];
             uint32_t total_for_pair = asic_pair_counts[pair_key];
-            uint32_t removed_for_pair = asic_pair_removed[pair_key];
-            uint32_t remaining = total_for_pair - removed_for_pair;
 
-            // Remove connection if we haven't removed enough yet and we can still keep min
-            bool should_remove = (removed_for_pair < connections_to_remove_per_asic_pair) &&
-                                 (remaining > min_connections_to_keep_per_pair);
-
-            if (should_remove) {
-                asic_pair_removed[pair_key]++;
-            } else {
+            // Keep connection if we haven't reached the minimum yet
+            // If total is less than min, keep all connections (kept_for_pair < total_for_pair)
+            // Otherwise, keep up to min_connections_to_keep_per_pair
+            uint32_t target_to_keep = std::min(min_connections_to_keep_per_pair, total_for_pair);
+            if (kept_for_pair < target_to_keep) {
                 modified_connections.push_back(conn);
+                asic_pair_kept[pair_key]++;
             }
+            // Otherwise, skip this connection (it will be removed)
         }
 
         gsd[connection_type] = modified_connections;
     };
 
-    // Process both local and global connections
-    process_connections("local_eth_connections");
-    process_connections("global_eth_connections");
+    // Delete connections in both local and global eth connections
+    delete_connections_in_gsd("local_eth_connections");
+    delete_connections_in_gsd("global_eth_connections");
 
     // Write modified GSD to output file
     std::filesystem::create_directories(std::filesystem::path(output_path).parent_path());
@@ -305,6 +303,9 @@ TEST(Cluster, TestMinConnectionsPassesWithMatchingConnections) {
         1);     // min_connections - specified but not used since no mismatches
 
     EXPECT_TRUE(missing_connections.empty());
+
+    // Clean up temporary file
+    std::filesystem::remove(fsd_file);
 }
 
 TEST(Cluster, TestMinConnectionsRelaxedModePassesWithPartialMismatches) {
@@ -317,11 +318,10 @@ TEST(Cluster, TestMinConnectionsRelaxedModePassesWithPartialMismatches) {
     const std::string fsd_file = root_output_dir + "fsd/factory_system_descriptor_16_n300_lb_relaxed_test.textproto";
     cabling_generator.emit_factory_system_descriptor(fsd_file);
 
-    // Create modified GSD with some connections removed (remove up to 2 per pair, keep at least 1)
+    // Create modified GSD with some connections removed (keep at least 1 per pair)
     const std::string modified_gsd = create_gsd_with_missing_connections(
         "tools/tests/scaleout/global_system_descriptors/16_lb_physical_desc.yaml",
         root_output_dir + "gsd/16_lb_physical_desc_partial_missing.yaml",
-        2,   // connections_to_remove_per_asic_pair
         1);  // min_connections_to_keep_per_pair
 
     // With min_connections=1, relaxed mode should pass because each ASIC pair has at least 1 connection
@@ -335,6 +335,10 @@ TEST(Cluster, TestMinConnectionsRelaxedModePassesWithPartialMismatches) {
 
     // Relaxed mode satisfied: returns empty set (treated as success)
     EXPECT_TRUE(missing_connections.empty());
+
+    // Clean up temporary files
+    std::filesystem::remove(modified_gsd);
+    std::filesystem::remove(fsd_file);
 }
 
 TEST(Cluster, TestMinConnectionsRelaxedModeFailsWhenAsicPairHasInsufficientConnections) {
@@ -347,11 +351,10 @@ TEST(Cluster, TestMinConnectionsRelaxedModeFailsWhenAsicPairHasInsufficientConne
         root_output_dir + "fsd/factory_system_descriptor_16_n300_lb_insufficient_test.textproto";
     cabling_generator.emit_factory_system_descriptor(fsd_file);
 
-    // Create modified GSD with connections removed (remove up to 3 per pair, keep at least 1)
+    // Create modified GSD with connections removed (keep at least 1 per pair)
     const std::string modified_gsd = create_gsd_with_missing_connections(
         "tools/tests/scaleout/global_system_descriptors/16_lb_physical_desc.yaml",
         root_output_dir + "gsd/16_lb_physical_desc_insufficient.yaml",
-        3,   // connections_to_remove_per_asic_pair
         1);  // min_connections_to_keep_per_pair
 
     // With min_connections=4, relaxed mode should fail because ASIC pairs only have ~1-2 connections left
@@ -366,6 +369,10 @@ TEST(Cluster, TestMinConnectionsRelaxedModeFailsWhenAsicPairHasInsufficientConne
                 4);     // min_connections - requires 4 per pair, but we only have 1-2
         },
         std::runtime_error);
+
+    // Clean up temporary files
+    std::filesystem::remove(modified_gsd);
+    std::filesystem::remove(fsd_file);
 }
 
 TEST(Cluster, TestMinConnectionsStrictModeFailsWithMismatches) {
@@ -379,11 +386,10 @@ TEST(Cluster, TestMinConnectionsStrictModeFailsWithMismatches) {
         root_output_dir + "fsd/factory_system_descriptor_16_n300_lb_strict_fail_test.textproto";
     cabling_generator.emit_factory_system_descriptor(fsd_file);
 
-    // Create modified GSD with some connections removed
+    // Create modified GSD with some connections removed (keep at least 1 per pair)
     const std::string modified_gsd = create_gsd_with_missing_connections(
         "tools/tests/scaleout/global_system_descriptors/16_lb_physical_desc.yaml",
         root_output_dir + "gsd/16_lb_physical_desc_strict_fail.yaml",
-        1,   // connections_to_remove_per_asic_pair
         1);  // min_connections_to_keep_per_pair
 
     // Without min_connections, strict validation should fail on any mismatch
@@ -398,6 +404,10 @@ TEST(Cluster, TestMinConnectionsStrictModeFailsWithMismatches) {
                 std::nullopt);  // min_connections - not specified, use strict mode
         },
         std::runtime_error);
+
+    // Clean up temporary files
+    std::filesystem::remove(modified_gsd);
+    std::filesystem::remove(fsd_file);
 }
 
 }  // namespace tt::scaleout_tools

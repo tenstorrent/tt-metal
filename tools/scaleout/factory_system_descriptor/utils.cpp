@@ -32,6 +32,58 @@
 
 namespace tt::scaleout_tools {
 
+bool check_min_connection_count_satisfied(
+    const std::set<PhysicalChannelConnection>& discovered_connections,
+    const std::set<std::pair<PhysicalChannelEndpoint, PhysicalChannelEndpoint>>& generated_connections,
+    uint32_t min_connections,
+    std::vector<std::pair<std::pair<AsicId, AsicId>, uint32_t>>& insufficient_connections) {
+    // Helper to extract AsicId from PhysicalChannelEndpoint
+    auto get_asic_id = [](const PhysicalChannelEndpoint& endpoint) -> AsicId {
+        return std::make_tuple(endpoint.hostname, *endpoint.tray_id, endpoint.asic_channel.asic_location);
+    };
+
+    // Helper to create ordered pair of AsicIds (for consistent map keys)
+    auto make_asic_pair = [](const AsicId& a, const AsicId& b) {
+        return (a < b) ? std::make_pair(a, b) : std::make_pair(b, a);
+    };
+
+    // Build map of expected ASIC pairs from generated_connections (FSD)
+    // Initialize all expected pairs with count = 0
+    std::map<std::pair<AsicId, AsicId>, uint32_t> asic_pair_connection_counts;
+
+    for (const auto& conn : generated_connections) {
+        auto asic_a = get_asic_id(conn.first);
+        auto asic_b = get_asic_id(conn.second);
+        auto asic_pair = make_asic_pair(asic_a, asic_b);
+        // Initialize to 0 if not present (we count from discovered connections)
+        if (asic_pair_connection_counts.find(asic_pair) == asic_pair_connection_counts.end()) {
+            asic_pair_connection_counts[asic_pair] = 0;
+        }
+    }
+
+    // Count actual discovered connections for each ASIC pair
+    for (const auto& conn : discovered_connections) {
+        auto asic_a = get_asic_id(conn.first);
+        auto asic_b = get_asic_id(conn.second);
+        auto asic_pair = make_asic_pair(asic_a, asic_b);
+        // Only count if this pair is expected (exists in FSD)
+        if (asic_pair_connection_counts.find(asic_pair) != asic_pair_connection_counts.end()) {
+            asic_pair_connection_counts[asic_pair]++;
+        }
+    }
+
+    // Check if all ASIC pairs have at least min_connections
+    bool all_satisfied = true;
+    for (const auto& [asic_pair, count] : asic_pair_connection_counts) {
+        if (count < min_connections) {
+            all_satisfied = false;
+            insufficient_connections.push_back({asic_pair, count});
+        }
+    }
+
+    return all_satisfied;
+}
+
 std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
     const tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& generated_fsd,
     const YAML::Node& discovered_gsd,
@@ -471,56 +523,12 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
     }
 
     // Handle validation results - check relaxed mode at per-ASIC-pair granularity
-    // An AsicId uniquely identifies an ASIC by (hostname, tray_id, asic_location)
-    using AsicId = std::tuple<std::string, uint32_t, uint32_t>;  // hostname, tray_id, asic_location
-
-    // Helper to extract AsicId from PhysicalChannelEndpoint
-    auto get_asic_id = [](const PhysicalChannelEndpoint& endpoint) -> AsicId {
-        return std::make_tuple(endpoint.hostname, *endpoint.tray_id, endpoint.asic_channel.asic_location);
-    };
-
-    // Helper to create ordered pair of AsicIds (for consistent map keys)
-    auto make_asic_pair = [](const AsicId& a, const AsicId& b) {
-        return (a < b) ? std::make_pair(a, b) : std::make_pair(b, a);
-    };
-
     bool relaxed_mode_satisfied = false;
     std::vector<std::pair<std::pair<AsicId, AsicId>, uint32_t>> insufficient_connections;
 
     if (min_connections.has_value()) {
-        // Build map of expected ASIC pairs from generated_connections (FSD)
-        // Initialize all expected pairs with count = 0
-        std::map<std::pair<AsicId, AsicId>, uint32_t> asic_pair_connection_counts;
-
-        for (const auto& conn : generated_connections) {
-            auto asic_a = get_asic_id(conn.first);
-            auto asic_b = get_asic_id(conn.second);
-            auto asic_pair = make_asic_pair(asic_a, asic_b);
-            // Initialize to 0 if not present (we count from discovered connections)
-            if (asic_pair_connection_counts.find(asic_pair) == asic_pair_connection_counts.end()) {
-                asic_pair_connection_counts[asic_pair] = 0;
-            }
-        }
-
-        // Count actual discovered connections for each ASIC pair
-        for (const auto& conn : discovered_connections) {
-            auto asic_a = get_asic_id(conn.first);
-            auto asic_b = get_asic_id(conn.second);
-            auto asic_pair = make_asic_pair(asic_a, asic_b);
-            // Only count if this pair is expected (exists in FSD)
-            if (asic_pair_connection_counts.find(asic_pair) != asic_pair_connection_counts.end()) {
-                asic_pair_connection_counts[asic_pair]++;
-            }
-        }
-
-        // Check if all ASIC pairs have at least min_connections
-        relaxed_mode_satisfied = true;
-        for (const auto& [asic_pair, count] : asic_pair_connection_counts) {
-            if (count < min_connections.value()) {
-                relaxed_mode_satisfied = false;
-                insufficient_connections.push_back({asic_pair, count});
-            }
-        }
+        relaxed_mode_satisfied = check_min_connection_count_satisfied(
+            discovered_connections, generated_connections, min_connections.value(), insufficient_connections);
     }
 
     if (!missing_in_gsd.empty() || !extra_in_gsd.empty()) {
@@ -608,9 +616,10 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
     const YAML::Node& gsd_yaml_node,
     bool strict_validation,
     bool assert_on_connection_mismatch,
-    bool log_output) {
+    bool log_output,
+    std::optional<uint32_t> min_connections) {
     return validate_fsd_against_gsd_impl(
-        fsd_proto, gsd_yaml_node, strict_validation, assert_on_connection_mismatch, log_output);
+        fsd_proto, gsd_yaml_node, strict_validation, assert_on_connection_mismatch, log_output, min_connections);
 }
 
 std::set<PhysicalChannelConnection> validate_cabling_descriptor_against_gsd(
