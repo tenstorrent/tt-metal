@@ -274,7 +274,9 @@ public:
 
     // Returns the devices in the mesh in row-major order.
     std::vector<IDevice*> get_devices() const;
+    [[deprecated("Deprecated, retrieving physical devices can fail in distributed contexts.")]]
     IDevice* get_device(ChipId physical_device_id) const;
+    [[deprecated("Deprecated, retrieving physical devices can fail in distributed contexts.")]]
     IDevice* get_device(const MeshCoordinate& coord) const;
     tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
 
@@ -290,6 +292,7 @@ public:
 
     // Returns true if the coordinate is local to this mesh device.
     // Throws if the coordinate is out of bounds of this mesh device.
+    [[deprecated("Deprecated, is_local should be avoided as it is likely to cause issues in distributed contexts.")]]
     bool is_local(const MeshCoordinate& coord) const;
 
     const MeshShape& shape() const;
