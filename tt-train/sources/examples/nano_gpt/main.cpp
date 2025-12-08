@@ -47,7 +47,7 @@ void model_to_train(Model &model) {
 
 ttml::autograd::TensorPtr run_model(
     Model &model, const ttml::autograd::TensorPtr &data, const ttml::autograd::TensorPtr &mask) {
-    return (*model)(data, mask);
+    return (*model)(data, mask, /** use_cache */ false);
 }
 
 ttml::serialization::NamedParameters get_model_parameters(Model &model) {
