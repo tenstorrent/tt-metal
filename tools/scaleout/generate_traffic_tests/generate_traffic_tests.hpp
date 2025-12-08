@@ -24,11 +24,11 @@ struct TestCategories {
     bool all_to_all = true;
     bool random_pairing = false;
     bool all_to_one = false;
-    bool flow_control = false;
+    bool flow_control = true;
     bool sequential = false;
 };
 
-enum class TestProfile { SANITY, STRESS, BENCHMARK };
+enum class TestProfile { SANITY, STRESS };
 
 struct TrafficTestConfig {
     TestProfile profile = TestProfile::SANITY;
@@ -59,17 +59,10 @@ struct MeshTopologyInfo {
 };
 
 MeshTopologyInfo extract_topology_info(const proto::ClusterDescriptor& cluster_desc, bool verbose = false);
-MeshTopologyInfo extract_topology_info(const std::filesystem::path& cabling_descriptor_path, bool verbose = false);
 MeshTopologyInfo extract_topology_info_from_mgd(const std::filesystem::path& mgd_path, bool verbose = false);
 
 std::string generate_traffic_tests_yaml(
-    const MeshTopologyInfo& topology,
-    const std::filesystem::path& mgd_path,
-    const TrafficTestConfig& config = {},
-    bool verbose = false);
-
-std::string generate_traffic_tests_yaml(
-    const proto::ClusterDescriptor& cluster_desc, const TrafficTestConfig& config = {}, bool verbose = false);
+    const MeshTopologyInfo& topology, const TrafficTestConfig& config = {}, bool verbose = false);
 
 void write_traffic_tests_to_file(const std::string& yaml_content, const std::filesystem::path& output_path);
 
@@ -79,9 +72,14 @@ void generate_traffic_tests(
     const TrafficTestConfig& config = {},
     bool verbose = false);
 
+void generate_traffic_tests_from_mgd(
+    const std::filesystem::path& mgd_path,
+    const std::filesystem::path& output_path,
+    const TrafficTestConfig& config = {},
+    bool verbose = false);
+
 TrafficTestConfig get_sanity_config();
 TrafficTestConfig get_stress_config();
-TrafficTestConfig get_benchmark_config();
 
 void apply_profile_defaults(TrafficTestConfig& config);
 

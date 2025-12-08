@@ -23,12 +23,11 @@ cmake --build build --target generate_traffic_tests
 - `-o, --output-path PATH` - Output YAML file (default: `traffic_tests.yaml`)
 - `-m, --mgd-output-path PATH` - Auto-generate MGD file
 - `-e, --existing-mgd-path PATH` - Use existing MGD instead of generating
-- `-p, --profile PROFILE` - Test profile: `sanity`, `stress`, `benchmark`
+- `-p, --profile PROFILE` - Test profile: `sanity`, `stress`
 - `-n, --name-prefix PREFIX` - Prefix for test names
 - `--packets N` - Packets per sender
 - `--sizes S1,S2,...` - Packet sizes
 - `--noc-types T1,T2,...` - NoC types (e.g., `unicast_write,atomic_inc`)
-- `--no-sync` - Disable sync
 - `--skip PLATFORMS` - Platforms to skip (comma-separated)
 - `-v, --verbose` - Verbose output
 
@@ -36,9 +35,8 @@ cmake --build build --target generate_traffic_tests
 
 | Profile | Tests | Packets | Sizes |
 |---------|-------|---------|-------|
-| `sanity` | simple, inter-mesh, all-to-all | 100 | 1024, 2048 |
+| `sanity` | simple, inter-mesh, all-to-all, sequential | 100 | 1024, 2048 |
 | `stress` | all categories | 1000 | 1024, 2048, 4096 |
-| `benchmark` | simple, inter-mesh, all-to-all, flow-control | 1000 | 512-8192 |
 
 ## Examples
 

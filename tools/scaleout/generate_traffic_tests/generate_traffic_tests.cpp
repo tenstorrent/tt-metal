@@ -59,13 +59,10 @@ std::vector<std::string> generate_hostnames(size_t num_hosts) {
     return hostnames;
 }
 
-void emit_fabric_setup(YAML::Emitter& out, const std::filesystem::path& mgd_path) {
+void emit_fabric_setup(YAML::Emitter& out) {
     out << YAML::Key << "fabric_setup";
     out << YAML::Value << YAML::BeginMap;
     out << YAML::Key << "topology" << YAML::Value << "Mesh";
-    if (!mgd_path.empty()) {
-        out << YAML::Key << "mesh_descriptor_path" << YAML::Value << mgd_path.string();
-    }
     out << YAML::EndMap;
 }
 
@@ -131,18 +128,12 @@ void emit_skip_platforms(YAML::Emitter& out, const std::vector<std::string>& pla
 }
 
 void generate_simple_unicast_test(
-    YAML::Emitter& out,
-    const std::filesystem::path& mgd_path,
-    const TrafficTestConfig& config,
-    uint32_t num_packets,
-    const std::vector<uint32_t>& sizes) {
+    YAML::Emitter& out, const TrafficTestConfig& config, uint32_t num_packets, const std::vector<uint32_t>& sizes) {
     out << YAML::BeginMap;
     out << YAML::Key << "name" << YAML::Value << (config.test_name_prefix + "SimpleUnicast");
-    if (config.include_sync) {
-        out << YAML::Key << "sync" << YAML::Value << true;
-    }
+    out << YAML::Key << "sync" << YAML::Value << true;
     emit_skip_platforms(out, config.skip_platforms);
-    emit_fabric_setup(out, mgd_path);
+    emit_fabric_setup(out);
     emit_defaults(out, "unicast", "unicast_write", sizes[0], num_packets);
 
     out << YAML::Key << "senders";
@@ -169,7 +160,6 @@ void generate_simple_unicast_test(
 void generate_inter_mesh_test(
     YAML::Emitter& out,
     const MeshTopologyInfo& topology,
-    const std::filesystem::path& mgd_path,
     const TrafficTestConfig& config,
     uint32_t num_packets,
     const std::vector<uint32_t>& sizes) {
@@ -179,11 +169,9 @@ void generate_inter_mesh_test(
 
     out << YAML::BeginMap;
     out << YAML::Key << "name" << YAML::Value << (config.test_name_prefix + "InterMeshUnicast");
-    if (config.include_sync) {
-        out << YAML::Key << "sync" << YAML::Value << true;
-    }
+    out << YAML::Key << "sync" << YAML::Value << true;
     emit_skip_platforms(out, config.skip_platforms);
-    emit_fabric_setup(out, mgd_path);
+    emit_fabric_setup(out);
     emit_defaults(out, "unicast", "unicast_write", sizes.size() > 1 ? sizes[1] : sizes[0], num_packets);
 
     out << YAML::Key << "senders";
@@ -211,18 +199,15 @@ void generate_inter_mesh_test(
 
 void generate_all_to_all_test(
     YAML::Emitter& out,
-    const std::filesystem::path& mgd_path,
     const TrafficTestConfig& config,
     uint32_t num_packets,
     const std::vector<uint32_t>& sizes,
     const std::vector<std::string>& noc_types) {
     out << YAML::BeginMap;
     out << YAML::Key << "name" << YAML::Value << (config.test_name_prefix + "AllToAll");
-    if (config.include_sync) {
-        out << YAML::Key << "sync" << YAML::Value << true;
-    }
+    out << YAML::Key << "sync" << YAML::Value << true;
     emit_skip_platforms(out, config.skip_platforms);
-    emit_fabric_setup(out, mgd_path);
+    emit_fabric_setup(out);
     emit_parametrization(out, noc_types, sizes);
 
     out << YAML::Key << "defaults";
@@ -236,18 +221,12 @@ void generate_all_to_all_test(
 }
 
 void generate_random_pairing_test(
-    YAML::Emitter& out,
-    const std::filesystem::path& mgd_path,
-    const TrafficTestConfig& config,
-    uint32_t num_packets,
-    const std::vector<uint32_t>& sizes) {
+    YAML::Emitter& out, const TrafficTestConfig& config, uint32_t num_packets, const std::vector<uint32_t>& sizes) {
     out << YAML::BeginMap;
     out << YAML::Key << "name" << YAML::Value << (config.test_name_prefix + "RandomPairing");
-    if (config.include_sync) {
-        out << YAML::Key << "sync" << YAML::Value << true;
-    }
+    out << YAML::Key << "sync" << YAML::Value << true;
     emit_skip_platforms(out, config.skip_platforms);
-    emit_fabric_setup(out, mgd_path);
+    emit_fabric_setup(out);
     emit_defaults(out, "unicast", "unicast_write", sizes.size() > 1 ? sizes[1] : sizes[0], num_packets);
 
     uint32_t iterations = config.profile == TestProfile::STRESS ? 5 : 3;
@@ -256,18 +235,12 @@ void generate_random_pairing_test(
 }
 
 void generate_all_to_one_test(
-    YAML::Emitter& out,
-    const std::filesystem::path& mgd_path,
-    const TrafficTestConfig& config,
-    uint32_t num_packets,
-    const std::vector<uint32_t>& sizes) {
+    YAML::Emitter& out, const TrafficTestConfig& config, uint32_t num_packets, const std::vector<uint32_t>& sizes) {
     out << YAML::BeginMap;
     out << YAML::Key << "name" << YAML::Value << (config.test_name_prefix + "AllToOne");
-    if (config.include_sync) {
-        out << YAML::Key << "sync" << YAML::Value << true;
-    }
+    out << YAML::Key << "sync" << YAML::Value << true;
     emit_skip_platforms(out, config.skip_platforms);
-    emit_fabric_setup(out, mgd_path);
+    emit_fabric_setup(out);
     emit_parametrization(out, {"unicast_write"}, sizes);
 
     out << YAML::Key << "defaults";
@@ -282,7 +255,6 @@ void generate_all_to_one_test(
 
 void generate_flow_control_test(
     YAML::Emitter& out,
-    const std::filesystem::path& mgd_path,
     const TrafficTestConfig& config,
     uint32_t num_packets,
     const std::vector<uint32_t>& sizes,
@@ -290,11 +262,9 @@ void generate_flow_control_test(
     out << YAML::BeginMap;
     out << YAML::Key << "name" << YAML::Value << (config.test_name_prefix + "FlowControl");
     out << YAML::Key << "enable_flow_control" << YAML::Value << true;
-    if (config.include_sync) {
-        out << YAML::Key << "sync" << YAML::Value << true;
-    }
+    out << YAML::Key << "sync" << YAML::Value << true;
     emit_skip_platforms(out, config.skip_platforms);
-    emit_fabric_setup(out, mgd_path);
+    emit_fabric_setup(out);
     emit_parametrization(out, noc_types, sizes);
 
     uint32_t fc_packets = std::max(num_packets, 5000u);
@@ -310,7 +280,6 @@ void generate_flow_control_test(
 
 void generate_sequential_test(
     YAML::Emitter& out,
-    const std::filesystem::path& mgd_path,
     const TrafficTestConfig& config,
     uint32_t num_packets,
     const std::vector<uint32_t>& sizes,
@@ -318,11 +287,9 @@ void generate_sequential_test(
     out << YAML::BeginMap;
     out << YAML::Key << "name" << YAML::Value << (config.test_name_prefix + "SequentialAllToAll");
     out << YAML::Key << "enable_flow_control" << YAML::Value << true;
-    if (config.include_sync) {
-        out << YAML::Key << "sync" << YAML::Value << true;
-    }
+    out << YAML::Key << "sync" << YAML::Value << true;
     emit_skip_platforms(out, config.skip_platforms);
-    emit_fabric_setup(out, mgd_path);
+    emit_fabric_setup(out);
 
     std::vector<uint32_t> seq_sizes = {sizes[0]};
     if (sizes.size() > 2) {
@@ -360,14 +327,14 @@ MeshTopologyInfo extract_topology_info(const proto::ClusterDescriptor& cluster_d
         info.node_type = find_node_type_from_template(cluster_desc.root_instance().template_name(), cluster_desc);
     }
 
-    if (is_known_node_type(info.node_type)) {
-        const auto& node_info = get_node_type_info(info.node_type);
-        info.device_dims = node_info.device_dims;
-        info.architecture = node_info.architecture;
-    } else {
-        info.device_dims = {2, 4};
-        info.architecture = "WORMHOLE_B0";
+    if (!is_known_node_type(info.node_type)) {
+        throw std::runtime_error(
+            "Unknown node type: " + info.node_type + ". Supported types: " + get_supported_node_types_string());
     }
+
+    const auto& node_info = get_node_type_info(info.node_type);
+    info.device_dims = node_info.device_dims;
+    info.architecture = node_info.architecture;
 
     auto hostnames = generate_hostnames(info.num_meshes);
     auto cabling_generator = CablingGenerator(cluster_desc, hostnames);
@@ -393,21 +360,6 @@ MeshTopologyInfo extract_topology_info(const proto::ClusterDescriptor& cluster_d
     }
 
     return info;
-}
-
-MeshTopologyInfo extract_topology_info(const std::filesystem::path& path, bool verbose) {
-    std::ifstream file(path);
-    if (!file.is_open()) {
-        throw std::runtime_error("Cannot open: " + path.string());
-    }
-    std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-
-    proto::ClusterDescriptor cluster_desc;
-    if (!google::protobuf::TextFormat::ParseFromString(content, &cluster_desc)) {
-        throw std::runtime_error("Failed to parse: " + path.string());
-    }
-
-    return extract_topology_info(cluster_desc, verbose);
 }
 
 MeshTopologyInfo extract_topology_info_from_mgd(const std::filesystem::path& mgd_path, bool verbose) {
@@ -486,44 +438,24 @@ void apply_profile_defaults(TrafficTestConfig& config) {
                 config.noc_types = {"unicast_write", "atomic_inc", "fused_atomic_inc"};
             }
             break;
-
-        case TestProfile::BENCHMARK:
-            if (!config.packet_sizes) {
-                config.packet_sizes = {512, 1024, 2048, 4096, 8192};
-            }
-            if (!config.num_packets) {
-                config.num_packets = 1000;
-            }
-            if (config.noc_types.empty()) {
-                config.noc_types = {"unicast_write"};
-            }
-            break;
     }
 }
 
 std::string generate_traffic_tests_yaml(
-    const MeshTopologyInfo& topology,
-    const std::filesystem::path& mgd_path,
-    const TrafficTestConfig& config,
-    bool /*verbose*/) {
+    const MeshTopologyInfo& topology, const TrafficTestConfig& config, bool /*verbose*/) {
     TrafficTestConfig cfg = config;
     apply_profile_defaults(cfg);
 
-    std::vector<uint32_t> sizes = cfg.packet_sizes.value_or(std::vector<uint32_t>{1024, 2048});
-    uint32_t num_packets = cfg.num_packets.value_or(100);
-    std::vector<std::string> noc_types =
-        cfg.noc_types.empty() ? std::vector<std::string>{"unicast_write"} : cfg.noc_types;
+    std::vector<uint32_t> sizes = *cfg.packet_sizes;
+    uint32_t num_packets = *cfg.num_packets;
+    std::vector<std::string> noc_types = cfg.noc_types;
 
     YAML::Emitter out;
     out << YAML::Comment("Auto-generated traffic tests");
     out << YAML::Comment(
         "Topology: " + std::to_string(topology.num_meshes) + " meshes, " + std::to_string(topology.total_devices()) +
         " devices, " + topology.architecture);
-    out << YAML::Comment(
-        "Profile: " + std::string(
-                          cfg.profile == TestProfile::SANITY   ? "sanity"
-                          : cfg.profile == TestProfile::STRESS ? "stress"
-                                                               : "benchmark"));
+    out << YAML::Comment("Profile: " + std::string(cfg.profile == TestProfile::SANITY ? "sanity" : "stress"));
     out << YAML::Newline;
 
     out << YAML::BeginMap;
@@ -533,45 +465,31 @@ std::string generate_traffic_tests_yaml(
     const auto& cat = cfg.categories;
 
     if (cat.simple_unicast) {
-        generate_simple_unicast_test(out, mgd_path, cfg, num_packets, sizes);
+        generate_simple_unicast_test(out, cfg, num_packets, sizes);
     }
     if (cat.inter_mesh && topology.num_meshes > 1) {
-        generate_inter_mesh_test(out, topology, mgd_path, cfg, num_packets, sizes);
+        generate_inter_mesh_test(out, topology, cfg, num_packets, sizes);
     }
     if (cat.all_to_all) {
-        generate_all_to_all_test(out, mgd_path, cfg, num_packets, sizes, noc_types);
+        generate_all_to_all_test(out, cfg, num_packets, sizes, noc_types);
     }
     if (cat.random_pairing) {
-        generate_random_pairing_test(out, mgd_path, cfg, num_packets, sizes);
+        generate_random_pairing_test(out, cfg, num_packets, sizes);
     }
     if (cat.all_to_one) {
-        generate_all_to_one_test(out, mgd_path, cfg, num_packets, sizes);
+        generate_all_to_one_test(out, cfg, num_packets, sizes);
     }
     if (cat.flow_control) {
-        generate_flow_control_test(out, mgd_path, cfg, num_packets, sizes, noc_types);
+        generate_flow_control_test(out, cfg, num_packets, sizes, noc_types);
     }
     if (cat.sequential) {
-        generate_sequential_test(out, mgd_path, cfg, num_packets, sizes, noc_types);
+        generate_sequential_test(out, cfg, num_packets, sizes, noc_types);
     }
 
     out << YAML::EndSeq;
     out << YAML::EndMap;
 
     return out.c_str();
-}
-
-std::string generate_traffic_tests_yaml(
-    const proto::ClusterDescriptor& cluster_desc, const TrafficTestConfig& config, bool verbose) {
-    auto topology = extract_topology_info(cluster_desc, verbose);
-
-    std::filesystem::path mgd_path;
-    if (config.existing_mgd_path) {
-        mgd_path = *config.existing_mgd_path;
-    } else if (!config.mgd_output_path.empty()) {
-        mgd_path = config.mgd_output_path;
-    }
-
-    return generate_traffic_tests_yaml(topology, mgd_path, config, verbose);
 }
 
 void write_traffic_tests_to_file(const std::string& yaml_content, const std::filesystem::path& output_path) {
@@ -606,19 +524,34 @@ void generate_traffic_tests(
         throw std::runtime_error("Failed to parse: " + cabling_path.string());
     }
 
-    std::filesystem::path mgd_path = config.mgd_output_path;
     if (config.generate_mgd && !config.mgd_output_path.empty()) {
         auto mgd = generate_mgd_from_cabling(cluster_desc, verbose);
         write_mgd_to_file(mgd, config.mgd_output_path);
         if (verbose) {
             std::cout << "Generated MGD: " << config.mgd_output_path << "\n";
         }
-    } else if (config.existing_mgd_path) {
-        mgd_path = *config.existing_mgd_path;
     }
 
     auto topology = extract_topology_info(cluster_desc, verbose);
-    auto yaml = generate_traffic_tests_yaml(topology, mgd_path, config, verbose);
+    auto yaml = generate_traffic_tests_yaml(topology, config, verbose);
+    write_traffic_tests_to_file(yaml, output_path);
+
+    if (verbose) {
+        std::cout << "Generated: " << output_path << "\n";
+    }
+}
+
+void generate_traffic_tests_from_mgd(
+    const std::filesystem::path& mgd_path,
+    const std::filesystem::path& output_path,
+    const TrafficTestConfig& config,
+    bool verbose) {
+    if (verbose) {
+        std::cout << "Reading MGD: " << mgd_path << "\n";
+    }
+
+    auto topology = extract_topology_info_from_mgd(mgd_path, verbose);
+    auto yaml = generate_traffic_tests_yaml(topology, config, verbose);
     write_traffic_tests_to_file(yaml, output_path);
 
     if (verbose) {
@@ -635,8 +568,8 @@ TrafficTestConfig get_sanity_config() {
         .all_to_all = true,
         .random_pairing = false,
         .all_to_one = false,
-        .flow_control = false,
-        .sequential = false};
+        .flow_control = true,
+        .sequential = true};
     return config;
 }
 
@@ -651,20 +584,6 @@ TrafficTestConfig get_stress_config() {
         .all_to_one = true,
         .flow_control = true,
         .sequential = true};
-    return config;
-}
-
-TrafficTestConfig get_benchmark_config() {
-    TrafficTestConfig config;
-    config.profile = TestProfile::BENCHMARK;
-    config.categories = {
-        .simple_unicast = true,
-        .inter_mesh = true,
-        .all_to_all = true,
-        .random_pairing = false,
-        .all_to_one = false,
-        .flow_control = true,
-        .sequential = false};
     return config;
 }
 

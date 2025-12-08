@@ -62,7 +62,7 @@ int main(int argc, char* argv[]) {
             cxxopts::value<std::string>())
         ("e,existing-mgd-path", "Use existing MGD file (requires cabling descriptor or MGD)",
             cxxopts::value<std::string>())
-        ("p,profile", "Test profile: sanity, stress, benchmark",
+        ("p,profile", "Test profile: sanity, stress",
             cxxopts::value<std::string>()->default_value("sanity"))
 
         // Packet configuration
@@ -87,7 +87,6 @@ int main(int argc, char* argv[]) {
             cxxopts::value<std::string>()->default_value(""))
         ("skip", "Platforms to skip (comma-separated)",
             cxxopts::value<std::string>())
-        ("no-sync", "Disable sync between devices")
         ("v,verbose", "Verbose output")
         ("h,help", "Print help");
     // clang-format on
@@ -98,17 +97,28 @@ int main(int argc, char* argv[]) {
         if (result.count("help")) {
             std::cout << options.help() << "\n";
             std::cout << "Profiles:\n";
-            std::cout << "  sanity    - Tests: simple, inter-mesh, all-to-all\n";
+            std::cout << "  sanity    - Tests: simple, inter-mesh, all-to-all, sequential\n";
             std::cout << "              Packets: 100, Sizes: 1024,2048\n\n";
             std::cout << "  stress    - Tests: all categories\n";
-            std::cout << "              Packets: 1000, Sizes: 1024,2048,4096\n\n";
-            std::cout << "  benchmark - Tests: simple, inter-mesh, all-to-all, flow-control\n";
-            std::cout << "              Packets: 1000, Sizes: 512,1024,2048,4096,8192\n";
+            std::cout << "              Packets: 1000, Sizes: 1024,2048,4096\n";
             return 0;
         }
 
         bool has_cabling = result.count("cabling-descriptor-path") > 0;
         bool has_existing_mgd = result.count("existing-mgd-path") > 0;
+        bool has_mgd_output = result.count("mgd-output-path") > 0;
+
+        if (has_mgd_output && has_existing_mgd) {
+            std::cerr << "Error: Cannot specify both --mgd-output-path and --existing-mgd-path\n";
+            std::cerr << "Use --help for usage\n";
+            return 1;
+        }
+
+        if (has_mgd_output && !has_cabling) {
+            std::cerr << "Error: --mgd-output-path requires --cabling-descriptor-path\n";
+            std::cerr << "Cannot generate MGD without a cabling descriptor\n";
+            return 1;
+        }
 
         if (!has_cabling && !has_existing_mgd) {
             std::cerr << "Error: Must provide either --cabling-descriptor-path or --existing-mgd-path\n";
@@ -130,11 +140,9 @@ int main(int argc, char* argv[]) {
             config = get_sanity_config();
         } else if (profile_str == "stress") {
             config = get_stress_config();
-        } else if (profile_str == "benchmark") {
-            config = get_benchmark_config();
         } else {
             std::cerr << "Error: Unknown profile '" << profile_str << "'\n";
-            std::cerr << "Valid profiles: sanity, stress, benchmark\n";
+            std::cerr << "Valid profiles: sanity, stress\n";
             return 1;
         }
 
@@ -146,7 +154,7 @@ int main(int argc, char* argv[]) {
             config.generate_mgd = false;
         }
 
-        if (result.count("existing-mgd-path")) {
+        if (result.count("existing-mgd-path") && !has_cabling) {
             config.existing_mgd_path = result["existing-mgd-path"].as<std::string>();
             config.generate_mgd = false;
         }
@@ -179,9 +187,6 @@ int main(int argc, char* argv[]) {
         if (result.count("enable-all-to-one")) {
             config.categories.all_to_one = true;
         }
-        if (result.count("enable-flow-control")) {
-            config.categories.flow_control = true;
-        }
         if (result.count("enable-sequential")) {
             config.categories.sequential = true;
         }
@@ -194,10 +199,6 @@ int main(int argc, char* argv[]) {
             config.skip_platforms = split(result["skip"].as<std::string>(), ',');
         }
 
-        if (result.count("no-sync")) {
-            config.include_sync = false;
-        }
-
         fs::path output_path = result["output-path"].as<std::string>();
         bool verbose = result.count("verbose") > 0;
 
@@ -206,13 +207,10 @@ int main(int argc, char* argv[]) {
             generate_traffic_tests(cabling_path, output_path, config, verbose);
         } else {
             fs::path mgd_path = result["existing-mgd-path"].as<std::string>();
-            auto topology = extract_topology_info_from_mgd(mgd_path, verbose);
-            auto yaml = generate_traffic_tests_yaml(topology, mgd_path, config, verbose);
-            write_traffic_tests_to_file(yaml, output_path);
+            generate_traffic_tests_from_mgd(mgd_path, output_path, config, verbose);
         }
 
-        std::cout << "Generated: " << output_path << "\n";
-        if (config.generate_mgd && !config.mgd_output_path.empty()) {
+        if (config.generate_mgd) {
             std::cout << "Generated MGD: " << config.mgd_output_path << "\n";
         }
 
