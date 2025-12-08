@@ -121,8 +121,10 @@ void MAIN {
     constexpr uint32_t N_block_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(4);
     constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(5);
-    constexpr uint32_t subblock_h = get_compile_time_arg_val(6);
-    constexpr uint32_t subblock_w = get_compile_time_arg_val(7);
+    constexpr uint32_t warmup_M_block_tiles = get_compile_time_arg_val(6);
+    constexpr uint32_t warmup_M_blocks_per_core = get_compile_time_arg_val(7);
+    constexpr uint32_t subblock_h = get_compile_time_arg_val(8);
+    constexpr uint32_t subblock_w = get_compile_time_arg_val(9);
 
     uint32_t argidx = 0;
     const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
@@ -161,9 +163,14 @@ void MAIN {
     uint32_t current_subblock_h = subblock_h;
     uint32_t current_subblock_w = subblock_w;
 
+    uint32_t warmup_M_tile_offset = warmup_M_blocks_per_core * warmup_M_block_tiles;
+
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
-        uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
-        uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
+        bool is_warmup_M_block = m_block_iter < warmup_M_blocks_per_core;
+        uint32_t m_tile = is_warmup_M_block ? M_start_tile + m_block_iter * warmup_M_block_tiles
+                                            : M_start_tile + (m_block_iter - warmup_M_blocks_per_core) * M_block_tiles +
+                                                  warmup_M_tile_offset;
+        uint32_t m_tile_end = std::min(m_tile + (is_warmup_M_block ? warmup_M_block_tiles : M_block_tiles), M_end_tile);
         current_M_block_tiles = m_tile_end - m_tile;
         current_subblock_h = std::min(current_M_block_tiles, subblock_h);
 

@@ -271,6 +271,9 @@ ttnn::operations::experimental::minimal_matmul::minimal_matmul_override_variable
     uint32_t K_block_tiles = config.has_value() ? config.value().K_block_size : default_K_block_tiles;
     uint32_t N_block_tiles = config.has_value() ? config.value().N_block_size : default_N_block_tiles;
 
+    uint32_t warmup_M_block_tiles = config.has_value() ? config.value().warmup_M_block_size : default_M_block_tiles;
+    uint32_t warmup_M_ht = config.has_value() ? config.value().warmup_M_ht : 0;
+
     /**
      * We originally saw that for non-square outputs, N > M was significantly faster than M > N.
      * This is because originally, the in0 DM kernel was responsible for reading in0 and writing output.
@@ -321,7 +324,9 @@ ttnn::operations::experimental::minimal_matmul::minimal_matmul_override_variable
 
     uint32_t K_blocks = padded_K_tiles / K_block_tiles;
 
-    uint32_t M_blocks_per_core = tt::div_up(M_tiles_per_core, M_block_tiles);
+    uint32_t warmup_M_blocks_per_core = warmup_M_ht / warmup_M_block_tiles;
+    uint32_t normal_M_blocks_per_core = tt::div_up(M_tiles_per_core - warmup_M_ht, M_block_tiles);
+    uint32_t M_blocks_per_core = warmup_M_blocks_per_core + normal_M_blocks_per_core;
     uint32_t N_blocks_per_core = tt::div_up(N_tiles_per_core, N_block_tiles);
 
     log_debug(tt::LogOp, "M_tiles_per_core: {}", M_tiles_per_core);
@@ -453,6 +458,8 @@ ttnn::operations::experimental::minimal_matmul::minimal_matmul_override_variable
         N_block_tiles,
         M_blocks_per_core,
         N_blocks_per_core,
+        warmup_M_block_tiles,
+        warmup_M_blocks_per_core,
         in0_tile_size,
         out_tile_size,
         in2_tile_size,
@@ -491,6 +498,8 @@ ttnn::operations::experimental::minimal_matmul::minimal_matmul_override_variable
         N_block_tiles,
         M_blocks_per_core,
         N_blocks_per_core,
+        warmup_M_block_tiles,
+        warmup_M_blocks_per_core,
         in0_tile_size,
         out_tile_size,
         in2_tile_size,
@@ -522,6 +531,8 @@ ttnn::operations::experimental::minimal_matmul::minimal_matmul_override_variable
         N_block_tiles,
         M_blocks_per_core,
         N_blocks_per_core,
+        warmup_M_block_tiles,
+        warmup_M_blocks_per_core,
         in1_tile_size,
         out_tile_size,
         in2_tile_size,
@@ -551,6 +562,8 @@ ttnn::operations::experimental::minimal_matmul::minimal_matmul_override_variable
         N_block_tiles,
         M_blocks_per_core,
         N_blocks_per_core,
+        warmup_M_block_tiles,
+        warmup_M_blocks_per_core,
         in1_tile_size,
         out_tile_size,
         in2_tile_size,
@@ -575,6 +588,8 @@ ttnn::operations::experimental::minimal_matmul::minimal_matmul_override_variable
         N_block_tiles,
         M_blocks_per_core,
         N_blocks_per_core,
+        warmup_M_block_tiles,
+        warmup_M_blocks_per_core,
         subblock_h,
         subblock_w};
 

@@ -34,12 +34,16 @@ struct MinimalMatmulConfig {
         uint32_t N_block_size_ = 1,
         uint32_t subblock_h_ = 1,
         uint32_t subblock_w_ = 1,
+        uint32_t warmup_M_block_size_ = 1,
+        uint32_t warmup_M_ht_ = 1,
         CoreCoord compute_with_storage_grid_size_ = {1, 1}) :
         M_block_size(M_block_size_),
         K_block_size(K_block_size_),
         N_block_size(N_block_size_),
         subblock_h(subblock_h_),
         subblock_w(subblock_w_),
+        warmup_M_block_size(warmup_M_block_size_),
+        warmup_M_ht(warmup_M_ht_),
         compute_with_storage_grid_size(compute_with_storage_grid_size_) {}
 
     uint32_t M_block_size;
@@ -47,11 +51,20 @@ struct MinimalMatmulConfig {
     uint32_t N_block_size;
     uint32_t subblock_h;
     uint32_t subblock_w;
+    uint32_t warmup_M_block_size;
+    uint32_t warmup_M_ht;
 
     CoreCoord compute_with_storage_grid_size;
 
     static constexpr auto attribute_names = std::make_tuple(
-        "M_block_size", "K_block_size", "N_block_size", "subblock_h", "subblock_w", "compute_with_storage_grid_size");
+        "M_block_size",
+        "K_block_size",
+        "N_block_size",
+        "subblock_h",
+        "subblock_w",
+        "warmup_M_block_size",
+        "warmup_M_ht",
+        "compute_with_storage_grid_size");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -60,6 +73,8 @@ struct MinimalMatmulConfig {
             this->N_block_size,
             this->subblock_h,
             this->subblock_w,
+            this->warmup_M_block_size,
+            this->warmup_M_ht,
             this->compute_with_storage_grid_size);
     }
 };

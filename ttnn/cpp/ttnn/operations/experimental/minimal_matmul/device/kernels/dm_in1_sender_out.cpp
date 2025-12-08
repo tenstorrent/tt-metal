@@ -19,14 +19,16 @@ void kernel_main() {
     constexpr uint32_t N_block_tiles = get_compile_time_arg_val(8);
     constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(9);
     constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(10);
-    constexpr uint32_t in1_tile_size = get_compile_time_arg_val(11);
-    constexpr uint32_t out_tile_size = get_compile_time_arg_val(12);
-    constexpr uint32_t in2_tile_size = get_compile_time_arg_val(13);
-    uint32_t in1_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
-    uint32_t in1_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
-    uint32_t in1_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
-    constexpr uint32_t is_output_writer = get_compile_time_arg_val(17);
-    constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
+    constexpr uint32_t warmup_M_block_tiles = get_compile_time_arg_val(11);
+    constexpr uint32_t warmup_M_blocks_per_core = get_compile_time_arg_val(12);
+    constexpr uint32_t in1_tile_size = get_compile_time_arg_val(13);
+    constexpr uint32_t out_tile_size = get_compile_time_arg_val(14);
+    constexpr uint32_t in2_tile_size = get_compile_time_arg_val(15);
+    uint32_t in1_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
+    uint32_t in1_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(17));
+    uint32_t in1_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(18));
+    constexpr uint32_t is_output_writer = get_compile_time_arg_val(19);
+    constexpr uint32_t is_injector_core = get_compile_time_arg_val(20);
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -45,7 +47,7 @@ void kernel_main() {
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
-    constexpr auto in1_args = TensorAccessorArgs<19>();
+    constexpr auto in1_args = TensorAccessorArgs<21>();
     const auto in1_reader = TensorAccessor(in1_args, in1_addr, in1_tile_size);
     constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
     const auto out_reader = TensorAccessor(out_args, out_addr, out_tile_size);
@@ -116,9 +118,14 @@ void kernel_main() {
     uint32_t defer_write_n_tile_end = 0;
     bool defer_write = false;
 
+    uint32_t warmup_M_tile_offset = warmup_M_blocks_per_core * warmup_M_block_tiles;
+
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
-        uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
-        uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
+        bool is_warmup_M_block = m_block_iter < warmup_M_blocks_per_core;
+        uint32_t m_tile = is_warmup_M_block ? M_start_tile + m_block_iter * warmup_M_block_tiles
+                                            : M_start_tile + (m_block_iter - warmup_M_blocks_per_core) * M_block_tiles +
+                                                  warmup_M_tile_offset;
+        uint32_t m_tile_end = std::min(m_tile + (is_warmup_M_block ? warmup_M_block_tiles : M_block_tiles), M_end_tile);
 #ifdef FUSE_AG
         if constexpr (is_injector_core) {
             fused_op_receiver.reset();
