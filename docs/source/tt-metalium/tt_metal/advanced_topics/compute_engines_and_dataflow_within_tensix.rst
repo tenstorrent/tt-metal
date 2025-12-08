@@ -202,8 +202,8 @@ For example, to perform matrix multiplication:
         // Perform matrix multiplication:
         // - Take tile 0 from CB 0 and tile 0 from CB 1.
         // - Place the result into Dst tile 0.
-        //              cb_in0     cb_in1        in0_offset  in1_offset  dst_idx
-        matmul_tiles(CBIndex::c_0, CBIndex::c_1, 0         , 0         , 0);
+        //              cb_in0     cb_in1        in0_offset  in1_offset  dst_idx   transp
+        matmul_tiles(CBIndex::c_0, CBIndex::c_1, 0         , 0         , 0      , false);
 
         // Commit the results, transferring ownership of Dst registers to the packer.
         tile_regs_commit();
