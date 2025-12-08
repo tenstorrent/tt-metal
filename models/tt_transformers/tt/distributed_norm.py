@@ -91,8 +91,12 @@ class DistributedNorm(LightweightModule):
                 chunks_per_sync=self.args.model_config[self.all_gather_config_key]["chunks_per_sync"]
                 if self.all_gather_config_key
                 else 10,
-                num_workers_per_link=self.args.model_config[self.all_gather_config_key]["num_workers_per_link"],
-                num_buffers_per_channel=self.args.model_config[self.all_gather_config_key]["num_buffers_per_channel"],
+                num_workers_per_link=self.args.model_config[self.all_gather_config_key]["num_workers_per_link"]
+                if self.all_gather_config_key
+                else 1,
+                num_buffers_per_channel=self.args.model_config[self.all_gather_config_key]["num_buffers_per_channel"]
+                if self.all_gather_config_key
+                else 2,
             )
             # 2 faktora
             # 4096 optimalna velicina paketa, tad je maks troughput (a. i  razlog), inace mozda/uvek opadne
