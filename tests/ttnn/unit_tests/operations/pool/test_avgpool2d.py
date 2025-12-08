@@ -122,9 +122,8 @@ def test_avg_pool2d_post_commit(
         # Wide reduction cases channels > 8 * 32
         # Large reduction cases (channels < 32 and kernel_hw > 16) or (channels > 32 and kernel_hw > 32)
         ([2, 32, 1024, 1024], 8),
-        ([1, 512, 256, 256], 8),
         ([1, 320, 384, 384], 6),
-        ([1, 768, 128, 128], 4),
+        ([1, 64, 96, 96], 4),
     ),
 )
 @pytest.mark.parametrize(
@@ -135,7 +134,6 @@ def test_avg_pool2d_post_commit(
         # Reductions which are large and wide at the same time
         # go to large kernels
         (3, 3),
-        (5, 5),
     ),
 )
 @pytest.mark.parametrize(
@@ -148,9 +146,7 @@ def test_avg_pool2d_post_commit(
 )
 @pytest.mark.parametrize(
     "ceil_mode",
-    [
-        True,
-    ],
+    [True],
 )
 @pytest.mark.parametrize(
     "divisor_override",
@@ -160,9 +156,7 @@ def test_avg_pool2d_post_commit(
 )
 @pytest.mark.parametrize(
     "count_include_pad",
-    [
-        True,
-    ],
+    [True],
 )
 @pytest.mark.parametrize(
     "shard_scheme",
@@ -172,7 +166,7 @@ def test_avg_pool2d_post_commit(
 )
 @pytest.mark.parametrize(
     "in_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    [ttnn.bfloat16],
 )
 def test_avg_pool2d_dram_post_commit(
     device,

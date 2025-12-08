@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <fmt/core.h>
@@ -46,6 +47,7 @@ struct SlidingWindowConfig {
     std::array<uint32_t, 4> padding = {0, 0, 0, 0};
     uint32_pair_t output_pad_hw = {0, 0};
     uint32_pair_t dilation_hw = {1, 1};
+    std::optional<uint32_pair_t> ceil_pad_hw = std::nullopt;
 
     // parallel configuration
     uint32_t num_cores_nhw = 1;                                             // num cores along collapsed height nhw
@@ -83,6 +85,7 @@ struct SlidingWindowConfig {
     uint32_t get_pad_w() const;
     uint32_t get_ceil_pad_h() const;
     uint32_t get_ceil_pad_w() const;
+    uint32_pair_t get_ceil_pad_hw() const;
 
     ttnn::Shape get_transposed_full_input_shape() const;
 

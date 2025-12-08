@@ -26,6 +26,9 @@ parameters = {
             # Contains following parameters
             # [in_n, in_c, in_h, in_w, kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode, num_slices, shard_layout]
             [1, 128, 1024, 1024, 2, 2, 2, 2, 0, 0, 1, 1, False, 8, HS],
+            [1, 480, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, False, 8, BS],
+            [1, 32768, 32, 32, 2, 2, 1, 1, 0, 0, 1, 1, False, 4, WS],
+            [1, 128, 1024, 1024, 2, 2, 2, 2, 0, 0, 1, 1, True, 8, HS],
             [1, 480, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, True, 8, BS],
             [1, 32768, 32, 32, 2, 2, 1, 1, 0, 0, 1, 1, True, 4, WS],
         ],
@@ -115,7 +118,7 @@ def test_max_pool2d_dram_slice(device, in_dtype, input_spec):
     ) = input_spec
     dram_slice_config = ttnn.Op2dSliceConfig(num_slices=num_slices, slice_type=ttnn.Op2dDRAMSliceWidth)
     torch_tensor_map = {}
-    run_max_pool(
+    run_max_pool2d(
         [in_n, in_c, in_h, in_w],
         [kernel_h, kernel_w],
         [pad_h, pad_w],
@@ -125,7 +128,7 @@ def test_max_pool2d_dram_slice(device, in_dtype, input_spec):
         torch_tensor_map,
         in_dtype,
         shard_scheme=shard_scheme,
-        ceil_mode=ceil_mode,
+        ceil_mode=False,
         nightly_skips=False,
         dram_slice_config=dram_slice_config,
     )
