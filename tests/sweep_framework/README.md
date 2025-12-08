@@ -350,7 +350,7 @@ python3 tests/sweep_framework/sweeps_runner.py \
 **How it works:**
 - Uses ttnn graph trace with NO_DISPATCH mode (fast, no device execution overhead)
 - Captures peak L1 memory usage in bytes for each test vector
-- Stores memory data in results as `peak_l1_memory_bytes` metric
+- Stores memory data in results using metric names depending on run mode (see below): `peak_l1_memory_bytes` for single runs, `peak_l1_memory_uncached_bytes` and `peak_l1_memory_cached_bytes` for cache comparison mode
 - Compatible with `--perf-with-cache` flag (captures memory for both cached/uncached runs)
 - Memory capture failures are non-fatal (returns null but test continues)
 
