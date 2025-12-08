@@ -97,7 +97,7 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
 
     WAYPOINT("UPAW");
     _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
-        address, transpose_of_faces > 0, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
+        address, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
     WAYPOINT("UPAD");
 }
 
