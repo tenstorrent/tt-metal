@@ -267,11 +267,8 @@ int main(int argc, char** argv) {
 
     CLI11_PARSE(app, argc, argv);
 
-    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
-    TT_FATAL(tt_metal_home != nullptr, "TT_METAL_HOME environment variable is not set");
-
     // Use default LLaMA config path
-    std::string model_config_path = std::string(tt_metal_home) + "/tt-train/configs/model_configs/tinyllama.yaml";
+    std::string model_config_path = "./configs/model_configs/tinyllama.yaml";
 
     fmt::print("\n{}\n", std::string(80, '='));
     fmt::print("LLaMA Inference {}\n", inference_config.use_kv_cache ? "with KV Cache" : "without KV Cache");
