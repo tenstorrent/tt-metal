@@ -874,7 +874,7 @@ SystemMemoryManager& MeshDevice::sysmem_manager() {
 
 CommandQueue& MeshDevice::command_queue(std::optional<uint8_t> cq_id) {
     TT_THROW("command_queue() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->command_queue(cq_id);
+    return reference_device()->impl()->command_queue(cq_id);
 }
 
 void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id) {
@@ -1005,32 +1005,32 @@ bool MeshDevice::initialize(
 
 void MeshDevice::init_command_queue_host() {
     TT_THROW("init_command_queue_host() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->init_command_queue_host();
+    reference_device()->impl()->init_command_queue_host();
 }
 void MeshDevice::init_command_queue_device() {
     TT_THROW("init_command_queue_device() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->init_command_queue_device();
+    reference_device()->impl()->init_command_queue_device();
 }
 bool MeshDevice::compile_fabric() {
     TT_THROW("compile_fabric() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->compile_fabric();
+    return reference_device()->impl()->compile_fabric();
 }
 void MeshDevice::configure_fabric() {
     TT_THROW("configure_fabric() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->configure_fabric();
+    reference_device()->impl()->configure_fabric();
 }
 void MeshDevice::init_fabric() {
     TT_THROW("init_fabric_program() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->init_fabric();
+    reference_device()->impl()->init_fabric();
 }
 
 program_cache::detail::ProgramCache& MeshDevice::get_program_cache() { return *program_cache_; }
 HalProgrammableCoreType MeshDevice::get_programmable_core_type(CoreCoord virtual_core) const {
-    return reference_device()->get_programmable_core_type(virtual_core);
+    return reference_device()->impl()->get_programmable_core_type(virtual_core);
 }
 
 HalMemType MeshDevice::get_mem_type_of_core(CoreCoord virtual_core) const {
-    return reference_device()->get_mem_type_of_core(virtual_core);
+    return reference_device()->impl()->get_mem_type_of_core(virtual_core);
 }
 
 // Methods for SubDevice Management
@@ -1055,8 +1055,9 @@ SubDeviceManagerId MeshDevice::get_default_sub_device_manager_id() const {
     return sub_device_manager_tracker_->get_default_sub_device_manager()->id();
 }
 CoreCoord MeshDevice::virtual_program_dispatch_core(uint8_t cq_id) const {
-    return validate_and_get_reference_value(
-        this->get_devices(), [cq_id](const auto* device) { return device->virtual_program_dispatch_core(cq_id); });
+    return validate_and_get_reference_value(this->get_devices(), [cq_id](const auto* device) {
+        return device->impl()->virtual_program_dispatch_core(cq_id);
+    });
 }
 const std::vector<SubDeviceId>& MeshDevice::get_sub_device_ids() const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->get_sub_device_ids();

@@ -168,10 +168,10 @@ void validate_sub_device_id(
 void validate_sub_device_manager_id(std::optional<SubDeviceManagerId> sub_device_manager_id, IDevice* device) {
     if (sub_device_manager_id.has_value()) {
         TT_FATAL(
-            sub_device_manager_id.value() == device->get_active_sub_device_manager_id(),
+            sub_device_manager_id.value() == device->impl()->get_active_sub_device_manager_id(),
             "Sub-device manager id mismatch. Buffer sub-device manager id: {}, Device active sub-device manager id: {}",
             sub_device_manager_id.value(),
-            device->get_active_sub_device_manager_id());
+            device->impl()->get_active_sub_device_manager_id());
     }
 }
 
@@ -267,7 +267,7 @@ Buffer::Buffer(
     TT_FATAL(this->device_ != nullptr, "Device needs to not be null.");
     if (this->sub_device_id_.has_value()) {
         validate_sub_device_id(this->sub_device_id_, this->device_, buffer_type, shard_spec_);
-        this->sub_device_manager_id_ = this->device_->get_active_sub_device_manager_id();
+        this->sub_device_manager_id_ = this->device_->impl()->get_active_sub_device_manager_id();
         this->allocator_ = device->impl()->allocator(*this->sub_device_id_).get();
     } else {
         this->allocator_ = device->allocator().get();

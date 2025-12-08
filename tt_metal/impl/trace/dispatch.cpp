@@ -99,10 +99,10 @@ void issue_trace_commands(
 
     for (const auto& [id, desc] : dispatch_md.trace_worker_descriptors) {
         const auto& noc_data_start_idx =
-            device->noc_data_start_index(id, desc.num_traced_programs_needing_go_signal_unicast);
+            device->impl()->noc_data_start_index(id, desc.num_traced_programs_needing_go_signal_unicast);
 
         const auto& num_noc_unicast_txns =
-            desc.num_traced_programs_needing_go_signal_unicast ? device->num_virtual_eth_cores(id) : 0;
+            desc.num_traced_programs_needing_go_signal_unicast ? device->impl()->num_virtual_eth_cores(id) : 0;
         auto index = *id;
 
         // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
@@ -114,7 +114,7 @@ void issue_trace_commands(
                 dispatch_core.y,
                 MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(index)),
             MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(index),
-            desc.num_traced_programs_needing_go_signal_multicast && device->has_noc_mcast_txns(id)
+            desc.num_traced_programs_needing_go_signal_multicast && device->impl()->has_noc_mcast_txns(id)
                 ? index
                 : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
             num_noc_unicast_txns,
@@ -132,7 +132,7 @@ void issue_trace_commands(
             expected_num_workers += device->num_worker_cores(HalProgrammableCoreType::TENSIX, id);
         }
         if (desc.num_traced_programs_needing_go_signal_unicast) {
-            expected_num_workers += device->num_virtual_eth_cores(id);
+            expected_num_workers += device->impl()->num_virtual_eth_cores(id);
         }
 
         if (MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher()) {

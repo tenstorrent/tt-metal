@@ -743,7 +743,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
                     physical_core,
                     kg->launch_msg.view(),
                     kg->go_msg.view(),
-                    device->get_dev_addr(physical_core, HalL1MemAddrType::LAUNCH));
+                    device->impl()->get_dev_addr(physical_core, HalL1MemAddrType::LAUNCH));
             }
         }
         if (wait_until_cores_done) {

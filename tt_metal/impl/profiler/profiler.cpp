@@ -999,7 +999,7 @@ bool isGalaxyMMIODevice(IDevice* device) {
     // This is wrapped in a try-catch block because get_mesh_device() can throw a std::bad_weak_ptr if profiler read is
     // called during MeshDevice::close()
     try {
-        if (auto mesh_device = device->get_mesh_device()) {
+        if (auto mesh_device = device->impl()->get_mesh_device()) {
             return false;
         } else {
             return tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() &&
@@ -1024,7 +1024,7 @@ void writeToCoreControlBuffer(IDevice* device, const CoreCoord& virtual_core, co
         profiler_msg_addr + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
                                 dev_msgs::profiler_msg_t::Field::control_vector);
     if (useFastDispatch(device)) {
-        if (auto mesh_device = device->get_mesh_device()) {
+        if (auto mesh_device = device->impl()->get_mesh_device()) {
             distributed::FDMeshCommandQueue& mesh_cq =
                 dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
             const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
@@ -1032,7 +1032,7 @@ void writeToCoreControlBuffer(IDevice* device, const CoreCoord& virtual_core, co
             mesh_cq.enqueue_write_shard_to_core(
                 address, data.data(), kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, true);
         } else {
-            dynamic_cast<HWCommandQueue&>(device->command_queue())
+            dynamic_cast<HWCommandQueue&>(device->impl()->command_queue())
                 .enqueue_write_to_core(
                     virtual_core,
                     data.data(),
@@ -1056,7 +1056,7 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
     for (uint32_t x = 0; x < dram_grid_size.x; ++x) {
         for (uint32_t y = 0; y < dram_grid_size.y; ++y) {
             const CoreCoord dram_core = device->virtual_core_from_logical_core({x, y}, CoreType::DRAM);
-            if (auto mesh_device = device->get_mesh_device()) {
+            if (auto mesh_device = device->impl()->get_mesh_device()) {
                 const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device_id);
                 dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue())
                     .enqueue_read_shard_from_core(
@@ -1065,7 +1065,7 @@ void DeviceProfiler::issueFastDispatchReadFromProfilerBuffer(IDevice* device) {
                         profile_buffer_bank_size_bytes,
                         true);
             } else {
-                dynamic_cast<HWCommandQueue&>(device->command_queue())
+                dynamic_cast<HWCommandQueue&>(device->impl()->command_queue())
                     .enqueue_read_from_core(
                         dram_core,
                         &(profile_buffer[profile_buffer_idx]),
@@ -1111,7 +1111,7 @@ void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
                                 dev_msgs::profiler_msg_t::Field::buffer);
     const uint32_t num_risc_processors = hal.get_num_risc_processors(core_type);
     core_l1_data_buffer.resize(kernel_profiler::PROFILER_L1_VECTOR_SIZE * num_risc_processors);
-    if (auto mesh_device = device->get_mesh_device()) {
+    if (auto mesh_device = device->impl()->get_mesh_device()) {
         const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device_id);
         dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue())
             .enqueue_read_shard_from_core(
@@ -1120,7 +1120,7 @@ void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
                 kernel_profiler::PROFILER_L1_BUFFER_SIZE * num_risc_processors,
                 true);
     } else {
-        dynamic_cast<HWCommandQueue&>(device->command_queue())
+        dynamic_cast<HWCommandQueue&>(device->impl()->command_queue())
             .enqueue_read_from_core(
                 worker_core,
                 core_l1_data_buffer.data(),
@@ -1175,7 +1175,7 @@ void DeviceProfiler::readControlBufferForCore(IDevice* device, const CoreCoord& 
         profiler_msg + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
                            dev_msgs::profiler_msg_t::Field::control_vector);
     if (useFastDispatch(device)) {
-        if (auto mesh_device = device->get_mesh_device()) {
+        if (auto mesh_device = device->impl()->get_mesh_device()) {
             distributed::FDMeshCommandQueue& mesh_cq =
                 dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
             const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device_id);
@@ -1188,7 +1188,7 @@ void DeviceProfiler::readControlBufferForCore(IDevice* device, const CoreCoord& 
                 true);
         } else {
             core_control_buffers[virtual_core].resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
-            dynamic_cast<HWCommandQueue&>(device->command_queue())
+            dynamic_cast<HWCommandQueue&>(device->impl()->command_queue())
                 .enqueue_read_from_core(
                     virtual_core,
                     core_control_buffers[virtual_core].data(),

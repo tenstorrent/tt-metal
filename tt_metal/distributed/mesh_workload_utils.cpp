@@ -82,10 +82,10 @@ void write_go_signal(
         expected_num_workers_completed,
         go_msg_u32_val,
         MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(sub_device_index),
-        (send_mcast && device->has_noc_mcast_txns(sub_device_id)) ? *sub_device_id
-                                                                  : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
-        send_unicasts ? device->num_virtual_eth_cores(sub_device_id) : 0,
-        device->noc_data_start_index(sub_device_id, send_unicasts), /* noc_data_start_idx */
+        (send_mcast && device->impl()->has_noc_mcast_txns(sub_device_id)) ? *sub_device_id
+                                                                          : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
+        send_unicasts ? device->impl()->num_virtual_eth_cores(sub_device_id) : 0,
+        device->impl()->noc_data_start_index(sub_device_id, send_unicasts), /* noc_data_start_idx */
         dispatcher_for_go_signal);
 
     TT_ASSERT(go_signal_cmd_sequence.size_bytes() == go_signal_cmd_sequence.write_offset_bytes());

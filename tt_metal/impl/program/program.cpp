@@ -1228,12 +1228,12 @@ uint32_t& detail::ProgramImpl::get_program_config_size(uint32_t programmable_cor
 const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(const IDevice* device) {
     // We need to calculate the sub_device_id when we haven't compiled the program yet, or this is the first time we
     // are getting the sub_device_ids after compilation
-    auto sub_device_manager_id = device->get_active_sub_device_manager_id();
+    auto sub_device_manager_id = device->impl()->get_active_sub_device_manager_id();
     auto& sub_device_ids_map = this->sub_device_ids_[device->id()];
     auto sub_device_ids = sub_device_ids_map.find(sub_device_manager_id);
     if (this->compiled_.empty() || sub_device_ids == sub_device_ids_map.end()) {
         if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr ||
-            sub_device_manager_id == device->get_default_sub_device_manager_id()) {
+            sub_device_manager_id == device->impl()->get_default_sub_device_manager_id()) {
             // No sub device manager, nothing to validate
             auto [sub_device_ids, _] =
                 sub_device_ids_map.insert_or_assign(sub_device_manager_id, std::vector<SubDeviceId>{SubDeviceId{0}});
@@ -1250,7 +1250,7 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
                 uint32_t num_intersections = 0;
                 uint32_t num_cores = 0;
                 for (const auto& kg : program_kgs) {
-                    for (size_t i = 0; i < device->num_sub_devices(); ++i) {
+                    for (size_t i = 0; i < device->impl()->num_sub_devices(); ++i) {
                         const auto& sub_device_cores = device->worker_cores(core_type, SubDeviceId{i});
                         auto intersection = sub_device_cores.intersection(kg->core_ranges);
                         if (!intersection.empty()) {
@@ -1294,7 +1294,7 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
 }
 
 void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
-    uint64_t command_hash = *device->get_active_sub_device_manager_id();
+    uint64_t command_hash = *device->impl()->get_active_sub_device_manager_id();
 
     uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->impl()->build_id()).build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
@@ -1336,7 +1336,7 @@ void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetche
 }
 
 void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
-    uint64_t command_hash = *device->get_active_sub_device_manager_id();
+    uint64_t command_hash = *device->impl()->get_active_sub_device_manager_id();
 
     uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->impl()->build_id()).build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
@@ -1386,7 +1386,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     // Clear the determined sub_device_ids when we compile the program for the first time
     // This way, determine_sub_device_ids is forced to recalculate with the finalized information on the used cores
     if (compiled_.empty()) {
-        this->sub_device_ids_[device->id()].erase(device->get_active_sub_device_manager_id());
+        this->sub_device_ids_[device->id()].erase(device->impl()->get_active_sub_device_manager_id());
     }
 
     Inspector::program_compile_started(this, device, build_env.build_key());
@@ -1483,7 +1483,7 @@ CommandQueue* detail::ProgramImpl::get_last_used_command_queue() const {
 
 uint32_t detail::ProgramImpl::get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
     CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
-    HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
+    HalProgrammableCoreType programmable_core_type = device->impl()->get_programmable_core_type(virtual_core);
     uint32_t index = MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
 
     return this->program_configs_[index].sem_size;
@@ -1491,7 +1491,7 @@ uint32_t detail::ProgramImpl::get_sem_size(IDevice* device, CoreCoord logical_co
 
 uint32_t detail::ProgramImpl::get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
     CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
-    HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
+    HalProgrammableCoreType programmable_core_type = device->impl()->get_programmable_core_type(virtual_core);
     uint32_t index = MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
 
     return this->program_configs_[index].cb_size;

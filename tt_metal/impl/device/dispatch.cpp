@@ -31,10 +31,10 @@ struct CoreWriteDispatchParams : public CoreDispatchParams {
 
 void validate_core_read_write_bounds(
     IDevice* device, const CoreCoord& virtual_core, DeviceAddr address, uint32_t size_bytes) {
-    const HalMemType mem_type = device->get_mem_type_of_core(virtual_core);
+    const HalMemType mem_type = device->impl()->get_mem_type_of_core(virtual_core);
     if (mem_type == HalMemType::L1) {
-        const DeviceAddr l1_base_address = device->get_dev_addr(virtual_core, HalL1MemAddrType::BASE);
-        const DeviceAddr l1_size = device->get_dev_size(virtual_core, HalL1MemAddrType::BASE);
+        const DeviceAddr l1_base_address = device->impl()->get_dev_addr(virtual_core, HalL1MemAddrType::BASE);
+        const DeviceAddr l1_size = device->impl()->get_dev_size(virtual_core, HalL1MemAddrType::BASE);
 
         TT_FATAL(address >= l1_base_address, "Region in L1 is out of bounds");
         TT_FATAL(address + size_bytes <= l1_base_address + l1_size, "Region in L1 is out of bounds");
@@ -53,7 +53,7 @@ void validate_core_read_write_bounds(
 }
 
 DeviceAddr add_bank_offset_to_address(IDevice* device, const CoreCoord& virtual_core, DeviceAddr address) {
-    const HalMemType mem_type = device->get_mem_type_of_core(virtual_core);
+    const HalMemType mem_type = device->impl()->get_mem_type_of_core(virtual_core);
     if (mem_type == HalMemType::DRAM) {
         const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
         const uint32_t dram_channel = device->impl()->dram_channel_from_virtual_core(virtual_core);

@@ -25,8 +25,8 @@ L1AddressInfo get_l1_address_and_size(
 
     CoreCoord physical_core = device->worker_core_from_logical_core(core_coord);
 
-    uint64_t core_l1_base_address = device->get_dev_addr(physical_core, HalL1MemAddrType::DEFAULT_UNRESERVED);
-    uint64_t core_l1_size = device->get_dev_size(physical_core, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    uint64_t core_l1_base_address = device->impl()->get_dev_addr(physical_core, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    uint64_t core_l1_size = device->impl()->get_dev_size(physical_core, HalL1MemAddrType::DEFAULT_UNRESERVED);
 
     return {core_l1_base_address, core_l1_size};
 

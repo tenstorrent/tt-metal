@@ -375,7 +375,7 @@ void DevicePool::initialize_host(IDevice* dev) const {
     // hugepage). Need to do this before FW init so we know what dispatch cores to reset.
     if (using_fast_dispatch_) {
         detail::DispatchStateCheck(true);
-        dev->init_command_queue_host();
+        dev->impl()->init_command_queue_host();
     } else {
         detail::DispatchStateCheck(false);
         TT_ASSERT(dev->impl()->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
@@ -387,7 +387,7 @@ void DevicePool::init_fabric(const std::vector<tt_metal::IDevice*>& active_devic
     for (uint32_t i = 0; i < active_devices.size(); i++) {
         const auto& dev = active_devices[i];
         events.emplace_back(detail::async([dev]() {
-            if (dev->compile_fabric()) {
+            if (dev->impl()->compile_fabric()) {
                 return dev;
             } else {
                 // compile failure mostly come from Nebula (TG)
@@ -402,7 +402,7 @@ void DevicePool::init_fabric(const std::vector<tt_metal::IDevice*>& active_devic
     for (const auto& event : events) {
         auto* dev = event.get();
         if (dev) {
-            dev->configure_fabric();
+            dev->impl()->configure_fabric();
         }
     }
 }
@@ -489,7 +489,7 @@ void DevicePool::initialize_active_devices() const {
 
         auto tunnels_from_mmio =
             tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
-        dev->init_command_queue_device();
+        dev->impl()->init_command_queue_device();
         log_debug(tt::LogMetal, "Command Queue initialized on Device {}", dev->id());
         if (not this->skip_remote_devices) {
             for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
@@ -497,7 +497,7 @@ void DevicePool::initialize_active_devices() const {
                 for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
                     uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
                     auto* device = get_device(mmio_controlled_device_id);
-                    device->init_command_queue_device();
+                    device->impl()->init_command_queue_device();
                     log_info(tt::LogMetal, "Command Queue initialized on Device {}", device->id());
                 }
             }
@@ -536,7 +536,7 @@ void DevicePool::activate_device(ChipId id) {
     } else {
         log_debug(tt::LogMetal, "DevicePool re-initialize device {}", id);
         if (not device->impl()->is_initialized()) {
-            device->initialize(
+            device->impl()->initialize(
                 num_hw_cqs, this->l1_small_size, this->trace_region_size, this->worker_l1_size, this->l1_bank_remap);
         } else {
             TT_THROW("Cannot re-initialize device {}, must first call close()", id);
@@ -828,7 +828,7 @@ void DevicePool::teardown_fd(const std::unordered_set<ChipId>& devices_to_close)
         }
 
         for (int cq_id = 0; cq_id < dev->impl()->num_hw_cqs(); cq_id++) {
-            auto& cq = dev->command_queue(cq_id);
+            auto& cq = dev->impl()->command_queue(cq_id);
             if (cq.sysmem_manager().get_bypass_mode()) {
                 cq.record_end();
             }
@@ -982,7 +982,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip
     bool pass = true;
     for (const auto& dev_id : devices_to_close) {
         auto* dev = tt::DevicePool::instance().get_active_device(dev_id);
-        pass &= dev->close();
+        pass &= dev->impl()->close();
     }
 
     tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
@@ -1004,7 +1004,7 @@ DevicePool::~DevicePool() {
             // TODO: #13876, Was encountering issues with the DispatchMemMap being destroyed before the DevicePool
             // destructor, which leads to device->close() hitting asserts. We need to move the ownership of
             // DispatchMemMap to the device, so it doesn't go out of scope before the device is closed.
-            dev->close();
+            dev->impl()->close();
         }
     }
     this->devices.clear();

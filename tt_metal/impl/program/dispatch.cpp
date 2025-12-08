@@ -1676,8 +1676,9 @@ public:
         const ProgramTransferInfo& program_transfer_info,
         bool has_multicast_launch_cmds,
         bool has_unicast_launch_cmds) {
-        const auto& noc_data_start_idx = device->noc_data_start_index(sub_device_id, has_unicast_launch_cmds);
-        const auto& num_noc_unicast_txns = has_unicast_launch_cmds ? device->num_noc_unicast_txns(sub_device_id) : 0;
+        const auto& noc_data_start_idx = device->impl()->noc_data_start_index(sub_device_id, has_unicast_launch_cmds);
+        const auto& num_noc_unicast_txns =
+            has_unicast_launch_cmds ? device->impl()->num_noc_unicast_txns(sub_device_id) : 0;
         DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
         auto sub_device_index = *sub_device_id;
         if (tt_metal::MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
@@ -2362,7 +2363,7 @@ void write_program_command_sequence(
 TraceNode create_trace_node(ProgramImpl& program, IDevice* device, bool use_prefetcher_cache) {
     std::vector<SubDeviceId> sub_device_ids{program.determine_sub_device_ids(device)};
     program.generate_trace_dispatch_commands(device, use_prefetcher_cache);
-    uint64_t command_hash = *device->get_active_sub_device_manager_id();
+    uint64_t command_hash = *device->impl()->get_active_sub_device_manager_id();
 
     // By using the traced command sequence, we know the RTA data source-of-truth isn't this command sequence (it's in a
     // regular cached program command sequence), so rta_updates includes all the RTAs.
@@ -2456,7 +2457,7 @@ void reset_worker_dispatch_state_on_device(
     CoreCoord dispatch_core,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
     bool reset_launch_msg_state) {
-    auto num_sub_devices = device->num_sub_devices();
+    auto num_sub_devices = device->impl()->num_sub_devices();
 
     tt::tt_metal::DeviceCommandCalculator calculator;
     if (reset_launch_msg_state) {
@@ -2499,9 +2500,9 @@ void reset_worker_dispatch_state_on_device(
                     dispatch_core.y,
                     MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(i)),
                 MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(i),
-                device->has_noc_mcast_txns(sub_device_id) ? i : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
-                device->num_noc_unicast_txns(sub_device_id),
-                device->noc_data_start_index(sub_device_id),
+                device->impl()->has_noc_mcast_txns(sub_device_id) ? i : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
+                device->impl()->num_noc_unicast_txns(sub_device_id),
+                device->impl()->noc_data_start_index(sub_device_id),
                 dispatcher_for_go_signal);
         }
     }

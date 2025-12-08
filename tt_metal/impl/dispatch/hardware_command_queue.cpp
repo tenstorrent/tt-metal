@@ -185,7 +185,7 @@ void HWCommandQueue::reset_worker_state(
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         this->config_buffer_mgr_,
         this->expected_num_workers_completed_,
-        device_->num_sub_devices(),
+        device_->impl()->num_sub_devices(),
         device_->allocator()->get_config().l1_unreserved_base);
     if (reset_launch_msg_state) {
         std::for_each(
@@ -552,7 +552,7 @@ void HWCommandQueue::record_begin(const uint32_t tid, const std::shared_ptr<Trac
     // Clear host dispatch state, since when trace runs we will reset the launch_msg_ring_buffer,
     // worker_config_buffer, etc.
     trace_dispatch::reset_host_dispatch_state_for_trace(
-        device_->num_sub_devices(),
+        device_->impl()->num_sub_devices(),
         this->cq_shared_state_->worker_launch_message_buffer_state,
         this->expected_num_workers_completed_,
         this->config_buffer_mgr_,
@@ -646,7 +646,7 @@ void HWCommandQueue::record_end() {
         RecordProgramRun(program.get_id());
 
         // Access the program dispatch-command cache
-        uint64_t command_hash = *device_->get_active_sub_device_manager_id();
+        uint64_t command_hash = *device_->impl()->get_active_sub_device_manager_id();
         auto& cached_program_command_sequence = program.get_trace_cached_program_command_sequences().at(command_hash);
         auto& worker_launch_message_buffer_state =
             this->cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id];
@@ -738,7 +738,7 @@ void HWCommandQueue::record_end() {
     // so device can run programs after a trace was captured. This is needed since trace capture modifies the state on
     // host, even though device doesn't run any programs.
     trace_dispatch::load_host_dispatch_state(
-        device_->num_sub_devices(),
+        device_->impl()->num_sub_devices(),
         this->cq_shared_state_->worker_launch_message_buffer_state,
         this->expected_num_workers_completed_,
         this->config_buffer_mgr_,

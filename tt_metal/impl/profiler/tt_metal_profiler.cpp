@@ -138,7 +138,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     std::vector<int64_t> writeTimes(sampleCount);
 
     const auto& hal = MetalContext::instance().hal();
-    HalProgrammableCoreType core_type = device->get_programmable_core_type(core);
+    HalProgrammableCoreType core_type = device->impl()->get_programmable_core_type(core);
     auto dev_msgs_factory = hal.get_dev_msgs_factory(core_type);
     DeviceAddr profiler_msg_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
     DeviceAddr control_vector_addr = profiler_msg_addr + dev_msgs_factory.offset_of<dev_msgs::profiler_msg_t>(

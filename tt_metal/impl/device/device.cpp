@@ -64,16 +64,16 @@ namespace tt {
 
 namespace tt_metal {
 
-uint64_t IDevice::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
+uint64_t IDeviceImpl::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
     return MetalContext::instance().hal().get_dev_addr(this->get_programmable_core_type(virtual_core), addr_type);
 }
 
-uint64_t IDevice::get_dev_size(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
+uint64_t IDeviceImpl::get_dev_size(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
     return MetalContext::instance().hal().get_dev_size(this->get_programmable_core_type(virtual_core), addr_type);
 }
 
 void IDevice::set_program_cache_misses_allowed(bool allowed) {
-    this->get_program_cache().set_cache_misses_allowed(allowed);
+    this->impl()->get_program_cache().set_cache_misses_allowed(allowed);
 }
 
 Device::Device(Device&& other) noexcept = default;

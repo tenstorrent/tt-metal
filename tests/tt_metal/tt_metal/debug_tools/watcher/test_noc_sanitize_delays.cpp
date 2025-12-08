@@ -162,7 +162,7 @@ void RunDelayTestOnCore(
         tt::tt_metal::HalProgrammableCoreType::TENSIX);
     auto msg = dev_msgs_factory.create<dev_msgs::debug_insert_delays_msg_t>();
     uint64_t read_addr =
-        device->get_dev_addr(virtual_core, HalL1MemAddrType::WATCHER) +
+        device->impl()->get_dev_addr(virtual_core, HalL1MemAddrType::WATCHER) +
         dev_msgs_factory.offset_of<dev_msgs::watcher_msg_t>(dev_msgs::watcher_msg_t::Field::debug_insert_delays);
     tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         msg.data(), msg.size(), {device->id(), virtual_core}, read_addr);

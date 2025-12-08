@@ -170,10 +170,10 @@ void FDMeshCommandQueue::populate_virtual_program_dispatch_core() {
     for (auto* device : mesh_device_->get_devices()) {
         if (device_idx) {
             TT_FATAL(
-                this->dispatch_core_ == device->virtual_program_dispatch_core(this->id_),
+                this->dispatch_core_ == device->impl()->virtual_program_dispatch_core(this->id_),
                 "Expected Dispatch Cores to match across devices in a Mesh");
         } else {
-            this->dispatch_core_ = device->virtual_program_dispatch_core(this->id_);
+            this->dispatch_core_ = device->impl()->virtual_program_dispatch_core(this->id_);
         }
         device_idx++;
     }
