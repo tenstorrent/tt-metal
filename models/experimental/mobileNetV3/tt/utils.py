@@ -4,12 +4,53 @@
 
 import ttnn
 from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
+from models.tt_cnn.tt.builder import (
+    Conv2dConfiguration,
+    AutoShardedStrategyConfiguration,
+    L1FullSliceStrategyConfiguration,
+)
 
 conv_config = {
     "MATH_FIDELITY": ttnn.MathFidelity.HiFi4,
     "WEIGHTS_DTYPE": ttnn.bfloat16,
     "ACTIVATIONS_DTYPE": ttnn.bfloat16,
 }
+
+
+def post_conv_reshape(x):
+    """Convert sharded conv output to [N,1,1,C] tile layout for SE block."""
+    x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+    x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+    x = ttnn.reshape(x, (x.shape[0], 1, 1, x.shape[3]))
+    return ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
+
+
+def create_se_conv_config(input_shape, parameters, stride=(1, 1), padding=(0, 0)):
+    """
+    Create Conv2dConfiguration from parameters dict for SqueezeExcitation.
+    """
+    return Conv2dConfiguration(
+        input_height=input_shape[-3],
+        input_width=input_shape[-2],
+        in_channels=input_shape[-1],
+        out_channels=parameters["weight"].shape[0],
+        batch_size=input_shape[-4],
+        kernel_size=(parameters["weight"].shape[2], parameters["weight"].shape[3]),
+        stride=stride,
+        padding=padding,
+        weight=parameters["weight"],
+        bias=parameters["bias"],
+        activation_dtype=conv_config["ACTIVATIONS_DTYPE"],
+        weights_dtype=conv_config["WEIGHTS_DTYPE"],
+        output_dtype=conv_config["ACTIVATIONS_DTYPE"],
+        math_fidelity=conv_config["MATH_FIDELITY"],
+        sharding_strategy=AutoShardedStrategyConfiguration(),
+        slice_strategy=L1FullSliceStrategyConfiguration(),
+        enable_act_double_buffer=True,
+        enable_weights_double_buffer=True,
+        deallocate_activation=False,
+        reallocate_halo_output=True,
+    )
 
 
 class Conv:
@@ -119,7 +160,7 @@ class Conv:
             shard_layout=self.shard_layout,
             enable_act_double_buffer=self.enable_act_double_buffer,
             enable_weights_double_buffer=self.enable_weights_double_buffer,
-            in_place=True,
+            # in_place=True,
         )
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
