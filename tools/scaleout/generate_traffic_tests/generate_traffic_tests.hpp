@@ -111,10 +111,7 @@ struct MeshTopologyInfo {
 
 /// Generate traffic test YAML content from topology info
 [[nodiscard]] std::string generate_traffic_tests_yaml(
-    const MeshTopologyInfo& topology,
-    const std::filesystem::path& mgd_path,
-    const TrafficTestConfig& config = {},
-    bool verbose = false);
+    const MeshTopologyInfo& topology, const std::filesystem::path& mgd_path, const TrafficTestConfig& config = {});
 
 /// Write traffic test YAML to file
 void write_traffic_tests_to_file(const std::string& yaml_content, const std::filesystem::path& output_path);
@@ -144,4 +141,3 @@ void generate_traffic_tests(
 [[nodiscard]] TrafficTestConfig get_coverage_config();
 
 }  // namespace tt::scaleout_tools
-
