@@ -29,9 +29,9 @@ void enable_fabric(uint32_t num_devices) {
 
         bool set_env_var = (num_devices == 8U || num_devices == 32U);
         if (num_devices == 8U) {
-            mesh_graph_descriptor_path += "t3k_1x8_mesh_graph_descriptor.yaml";
+            mesh_graph_descriptor_path += "t3k_1x8_mesh_graph_descriptor.textproto";
         } else if (num_devices == 32U) {
-            mesh_graph_descriptor_path += "galaxy_1x32_mesh_graph_descriptor.yaml";
+            mesh_graph_descriptor_path += "galaxy_1x32_mesh_graph_descriptor.textproto";
         }
 
         // set environment variable
@@ -41,7 +41,7 @@ void enable_fabric(uint32_t num_devices) {
         }
     }
 
-    tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+    tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D);
 }
 
 }  // namespace ttml::ttnn_fixed::distributed

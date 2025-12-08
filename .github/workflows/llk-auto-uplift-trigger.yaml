@@ -68,7 +68,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          token: ${{ secrets.TEMP_METAL_PAT }}
+          token: ${{ secrets.LLK_UPLIFT_PAT }}
           fetch-depth: 0
           ref: main
           clean: true
@@ -94,7 +94,7 @@ jobs:
           cd ${{ env.SUBMODULE_PATH }}
           OLD_SHA=$(git rev-parse --short=7 HEAD)
 
-          git remote set-url origin https://${{ secrets.TEMP_METAL_PAT }}@github.com/tenstorrent/tt-llk.git
+          git remote set-url origin https://${{ secrets.LLK_UPLIFT_PAT }}@github.com/tenstorrent/tt-llk.git
           git fetch origin main
           git checkout main
           git pull origin main
@@ -165,10 +165,12 @@ jobs:
 
           # Create rich PR body
           cat > ../../../pr_body.md << EOF
+          <pre>
           ╔═════════════════════════════════════════════════╗
           ║    THIS IS AN AUTOMATED PULL REQUEST CREATED    ║
           ║              BY THE LLK UPLIFT BOT              ║
           ╚═════════════════════════════════════════════════╝
+          </pre>
           ## 📋 Summary
           This PR updates the LLK submodule to the latest version from the main branch.
 
@@ -187,8 +189,8 @@ jobs:
           </details>
 
           ### 🏗️ Architecture Impact
-          $(if [ "$SHOULD_RUN_WH" = "true" ]; then echo "- ⚠️ **Wormhole** changes detected - will trigger all-post-commit tests"; fi)
-          $(if [ "$SHOULD_RUN_BH" = "true" ]; then echo "- ⚠️ **Blackhole** changes detected - will trigger blackhole-post-commit tests"; fi)
+          $(if [ "$SHOULD_RUN_WH" = "true" ]; then echo "- ⚠️ **Wormhole** changes detected - will trigger all-post-commit and tt-metal-l2-nightly tests"; fi)
+          $(if [ "$SHOULD_RUN_BH" = "true" ]; then echo "- ⚠️ **Blackhole** changes detected - will trigger blackhole-post-commit and tt-metal-l2-nightly tests"; fi)
           $(if [ "$SHOULD_RUN_WH" = "false" ] && [ "$SHOULD_RUN_BH" = "false" ]; then echo "- ℹ️ No architecture-specific changes detected"; fi)
 
           <!-- WORKFLOW_DECISIONS:should-run-wormhole=$SHOULD_RUN_WH,should-run-blackhole=$SHOULD_RUN_BH -->
@@ -209,7 +211,7 @@ jobs:
         if: steps.update.outputs.has-changes == 'true'
         uses: peter-evans/create-pull-request@v7
         with:
-          token: ${{ secrets.TEMP_METAL_PAT }}
+          token: ${{ secrets.LLK_UPLIFT_PAT }}
           commit-message: "chore: update LLK submodule to ${{ steps.update.outputs.new-sha }}"
           title: "chore: update LLK submodule to ${{ steps.update.outputs.new-sha }}"
           branch: ${{ env.BRANCH_NAME }}
@@ -242,7 +244,7 @@ jobs:
             should-run: ${{ needs.update-submodule.outputs.should-run-blackhole }}
           - workflow: "tt-metal-l2-nightly.yaml"
             name: "TT-Metal L2 Nightly APC"
-            should-run: ${{ needs.update-submodule.outputs.should-run-wormhole }}
+            should-run: ${{ (needs.update-submodule.outputs.should-run-wormhole == 'true' || needs.update-submodule.outputs.should-run-blackhole == 'true') && 'true' || 'false' }}
     steps:
       - name: Checkout
         if: matrix.should-run == 'true'
@@ -251,7 +253,7 @@ jobs:
       - name: Trigger and monitor workflow
         if: matrix.should-run == 'true'
         env:
-          GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
+          GH_TOKEN: ${{ secrets.LLK_UPLIFT_PAT }}
         run: |
           PR_NUMBER="${{ needs.update-submodule.outputs.pr-number }}"
           WORKFLOW="${{ matrix.workflow }}"
@@ -378,12 +380,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.TEMP_METAL_PAT }}
+          token: ${{ secrets.LLK_UPLIFT_PAT }}
 
       - name: Check latest test runs
         id: check
         env:
-          GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
+          GH_TOKEN: ${{ secrets.LLK_UPLIFT_PAT }}
         run: |
           # Find PR and get decisions
           PR_NUMBER=$(gh pr list --head "${{ env.BRANCH_NAME }}" --json number --jq '.[0].number // empty')
@@ -442,13 +444,6 @@ jobs:
               RESULTS+="- $(check_workflow "all-post-commit-workflows.yaml" "All Post Commit Workflows")"$'\n'
               ALL_PASSED=false
             fi
-
-            if check_workflow "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly APC"; then
-              RESULTS+="- $(check_workflow "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly APC")"$'\n'
-            else
-              RESULTS+="- $(check_workflow "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly APC")"$'\n'
-              ALL_PASSED=false
-            fi
           fi
 
           if [ "$SHOULD_RUN_BH" = "true" ]; then
@@ -456,6 +451,15 @@ jobs:
               RESULTS+="- $(check_workflow "blackhole-post-commit.yaml" "Blackhole Post Commit")"$'\n'
             else
               RESULTS+="- $(check_workflow "blackhole-post-commit.yaml" "Blackhole Post Commit")"$'\n'
+              ALL_PASSED=false
+            fi
+          fi
+
+          if [ "$SHOULD_RUN_WH" = "true" ] || [ "$SHOULD_RUN_BH" = "true" ]; then
+            if check_workflow "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly APC"; then
+              RESULTS+="- $(check_workflow "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly APC")"$'\n'
+            else
+              RESULTS+="- $(check_workflow "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly APC")"$'\n'
               ALL_PASSED=false
             fi
           fi
@@ -486,7 +490,7 @@ jobs:
 
       - name: Finalize PR
         env:
-          GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
+          GH_TOKEN: ${{ secrets.LLK_UPLIFT_PAT }}
         run: |
           PR_NUMBER="${{ inputs.recheck_tests == true && needs.recheck-tests.outputs.pr-number || needs.update-submodule.outputs.pr-number }}"
 
@@ -527,18 +531,6 @@ jobs:
               WH_URL=$(echo "$WH_RUNS" | jq -r '.url // ""')
               TEST_STATUS+="- ✅ **All Post Commit Workflows** passed: [View run]($WH_URL)"$'\n'
             fi
-
-            # Get TT-Metal L2 Nightly APC workflow results (filter by PR creation time if not recheck)
-            if [ "${{ inputs.recheck_tests }}" = "true" ]; then
-              L2_RUNS=$(gh run list --workflow "tt-metal-l2-nightly.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "${{ github.repository }}")
-            else
-              L2_RUNS=$(gh run list --workflow "tt-metal-l2-nightly.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "${{ github.repository }}")
-            fi
-
-            if [ "$L2_RUNS" != "empty" ]; then
-              L2_URL=$(echo "$L2_RUNS" | jq -r '.url // ""')
-              TEST_STATUS+="- ✅ **TT-Metal L2 Nightly APC** passed: [View run]($L2_URL)"$'\n'
-            fi
           fi
 
           if [ "${{ needs.update-submodule.outputs.should-run-blackhole || 'false' }}" = "true" ] || [ "${{ inputs.recheck_tests }}" = "true" ]; then
@@ -552,6 +544,20 @@ jobs:
             if [ "$BH_RUNS" != "empty" ]; then
               BH_URL=$(echo "$BH_RUNS" | jq -r '.url // ""')
               TEST_STATUS+="- ✅ **Blackhole Post Commit** passed: [View run]($BH_URL)"$'\n'
+            fi
+          fi
+
+          if [ "${{ needs.update-submodule.outputs.should-run-wormhole || 'false' }}" = "true" ] || [ "${{ needs.update-submodule.outputs.should-run-blackhole || 'false' }}" = "true" ] || [ "${{ inputs.recheck_tests }}" = "true" ]; then
+            # Get TT-Metal L2 Nightly APC workflow results (filter by PR creation time if not recheck)
+            if [ "${{ inputs.recheck_tests }}" = "true" ]; then
+              L2_RUNS=$(gh run list --workflow "tt-metal-l2-nightly.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "${{ github.repository }}")
+            else
+              L2_RUNS=$(gh run list --workflow "tt-metal-l2-nightly.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "${{ github.repository }}")
+            fi
+
+            if [ "$L2_RUNS" != "empty" ]; then
+              L2_URL=$(echo "$L2_RUNS" | jq -r '.url // ""')
+              TEST_STATUS+="- ✅ **TT-Metal L2 Nightly APC** passed: [View run]($L2_URL)"$'\n'
             fi
           fi
 
@@ -590,7 +596,7 @@ jobs:
       - name: Auto-approve by codeowners
         if: success()
         env:
-          GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
+          GH_TOKEN: ${{ secrets.LLK_UPLIFT_PAT }}
         run: |
           echo "🚀 Triggering auto-approval"
           gh workflow run "code-analysis.yaml" \

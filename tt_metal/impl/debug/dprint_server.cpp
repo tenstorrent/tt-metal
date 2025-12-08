@@ -23,6 +23,7 @@
 #include <thread>
 #include <tuple>
 #include <vector>
+#include <fstream>
 
 #include <enchantum/enchantum.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -42,6 +43,7 @@
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_backend_api_types.hpp"
+#include <llrt/tt_cluster.hpp>
 
 using std::flush;
 using std::int32_t;
@@ -564,7 +566,7 @@ void DPrintServer::Impl::init_device(ChipId device_id) {
     // This way in the kernel code (dprint.h) we can detect whether the magic value is present and
     // skip prints entirely to prevent kernel code from hanging waiting for the print buffer to be
     // flushed from the host.
-    for (auto& logical_core : all_cores) {
+    for (const auto& logical_core : all_cores) {
         CoreCoord virtual_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                 device_id, logical_core.coord, logical_core.type);
@@ -663,7 +665,7 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
                 rtoptions.get_feature_cores(tt::llrt::RunTimeDebugFeatureDprint).at(core_type);
 
             // We should also validate that the cores the user specified are valid worker cores.
-            for (auto& logical_core : print_cores) {
+            for (const auto& logical_core : print_cores) {
                 // Need to convert user-specified logical cores to virtual cores, this can throw
                 // if the user gave bad coords.
                 CoreCoord virtual_core;
@@ -823,7 +825,7 @@ void DPrintServer::Impl::detach_device(ChipId device_id) {
 
     // When detaching a device, disable prints on it.
     CoreDescriptorSet all_cores = GetAllCores(device_id);
-    for (auto& logical_core : all_cores) {
+    for (const auto& logical_core : all_cores) {
         CoreCoord virtual_core = MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
             device_id, logical_core.coord, logical_core.type);
         auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
@@ -849,7 +851,7 @@ void DPrintServer::Impl::clear_log_file() {
 }  // clear_log_file
 
 bool DPrintServer::Impl::peek_one_risc_non_blocking(
-    ChipId device_id, const umd::CoreDescriptor& logical_core, int risc_id, bool new_data_this_iter) {
+    ChipId device_id, const umd::CoreDescriptor& logical_core, int risc_id, bool /*new_data_this_iter*/) {
     // If init magic isn't cleared for this risc, then dprint isn't enabled on it, don't read it.
     CoreCoord virtual_core =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(

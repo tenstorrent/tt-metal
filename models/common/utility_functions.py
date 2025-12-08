@@ -158,23 +158,6 @@ profiler = Profiler()
 
 
 ### Turn flags on/off ###
-def enable_persistent_kernel_cache():
-    """
-    Enables persistent compiled kernel caching - disables recompiling the kernels for the duration of running process if built_kernels/.../hash directory with kernel binaries is present.
-    """
-    logger.warning(
-        "Persistent kernel cache is enabled. Cache invalidation may fail after a rebase and may require deleting the built directory."
-    )
-    ttnn.device.EnablePersistentKernelCache()
-
-
-def disable_persistent_kernel_cache():
-    """
-    Disables persistent compiled kernel caching. This is the default state.
-    """
-    ttnn.device.DisablePersistentKernelCache()
-
-
 def enable_memory_reports():
     """
     Enables generating reports of memory allocation statistics in .reports/tt_metal dir
@@ -660,9 +643,15 @@ def comp_ulp(golden, calculated, ulp_threshold, allow_nonfinite=False):
         calculated = calculated.type(golden.dtype)
         ulp_value = ulp_value.type(golden.dtype)  # Convert ULP to higher precision (for sub-1 ULP measurements)
 
-    ulp_delta = torch.max(torch.abs(calculated - golden) / ulp_value)
-
-    return (ulp_delta <= ulp_threshold, f"Max ULP Delta: {ulp_delta}")
+    ulp_tensor = torch.abs(calculated - golden) / ulp_value
+    ulp_delta = torch.max(ulp_tensor)
+    within_threshold = ulp_delta <= ulp_threshold
+    message = f"Max ULP Delta: {ulp_delta}"
+    if not within_threshold:
+        ulp_index = torch.argmax(ulp_tensor)
+        ulp_index_tuple = tuple(int(idx) for idx in torch.unravel_index(ulp_index, golden.shape))
+        message += f" @ {list(ulp_index_tuple)} = |{calculated[ulp_index_tuple]} - {golden[ulp_index_tuple]}| / {ulp_value[ulp_index_tuple]}"
+    return (within_threshold, message)
 
 
 def calculate_detailed_ulp_stats(expected, actual):
@@ -1084,6 +1073,10 @@ def run_for_wormhole_b0(reason_str="only runs for Wormhole B0"):
 
 def run_for_grayskull(reason_str="only runs for Grayskull"):
     return ti_skip(not is_grayskull(), reason=reason_str)
+
+
+def run_for_n_dev(n, reason_str="Test is not meant for this number of devices"):
+    return ti_skip(ttnn.get_num_devices() != n, reason=reason_str)
 
 
 def skip_for_n_dev(n, reason_str="Test is not meant for this number of devices"):

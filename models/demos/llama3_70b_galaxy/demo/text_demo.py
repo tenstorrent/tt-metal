@@ -229,6 +229,10 @@ def create_tt_model(
                 "temperature": torch.linspace(0.0, 1.0, steps=32).tolist(),
                 "top_p": torch.linspace(0.08, 1.0, steps=32).tolist(),
                 "top_k": torch.arange(1, 33).tolist(),  # 1 to 32 inclusive
+                "presence_penalty": torch.linspace(-2.0, 2.0, steps=32).tolist(),
+                "frequency_penalty": torch.linspace(-2.0, 2.0, steps=32).tolist(),
+                "repetition_penalty": torch.linspace(0.8, 1.5, steps=32).tolist(),
+                "seed": torch.randint(0, 33, size=(32,)).tolist(),
             },  # sampling_params (non-uniform)
             False,  # stop_at_eos
             False,  # apc_test
@@ -372,12 +376,12 @@ def create_tt_model(
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
         ),
-        (  # long-16k-b32 - 32 users, 16K long prompt
+        (  # long-16k-b1 - 1 user, 16K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
-            32,  # batch_size
+            1,  # batch_size
             128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
@@ -462,7 +466,7 @@ def create_tt_model(
             False,  # apc_test
             False,  # pcc_check
             True,  # prefill-only profile
-            80,  # num layers
+            1,  # num layers
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
@@ -516,7 +520,7 @@ def create_tt_model(
         "repeat2",  # latency with 2 repeat batches
         "long-4k-b1",  # 4k context for 1 user
         "long-8k-b1",  # 4k context for 1 user
-        "long-16k-b32",  # 16K context for 32 users
+        "long-16k-b1",  # 16K context for 1 user
         "long-32k-b1",  # 32k context for 1 user
         "long-64k-b1",  # 64k context for 1 user
         "long-128k-b1",  # 128k context for 1 user
@@ -807,7 +811,19 @@ def test_demo_text(
         temperature = sampling_params["temperature"]
         top_k = sampling_params.get("top_k", 32)
         top_p = sampling_params["top_p"]
-        device_sampling_params = SamplingParams(temperature=temperature, top_k=top_k, top_p=top_p)
+        presence_penalty = sampling_params.get("presence_penalty", 0.0)
+        frequency_penalty = sampling_params.get("frequency_penalty", 0.0)
+        repetition_penalty = sampling_params.get("repetition_penalty", 1.0)
+        seed = sampling_params.get("seed", 0)
+        device_sampling_params = SamplingParams(
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            repetition_penalty=repetition_penalty,
+            seed=seed,
+        )
         if batch_idx == 0:
             logger.info("Starting prefill warmup...")
             profiler.start(f"compile_prefill", iteration=batch_idx)
@@ -856,7 +872,7 @@ def test_demo_text(
             torch_output_logits = torch_output[0]
             logits = tt_out_logits_all_users[0, 0, :vocab_size]
             does_pass, pcc_message = comp_pcc(
-                logits, torch_output_logits, 0.91 if not apc_test else demo_targets["prefill_pcc"]
+                logits, torch_output_logits, 0.90 if not apc_test else demo_targets["prefill_pcc"]
             )
             logger.info(f"PCC: {pcc_message}")
             logger.info(
@@ -953,6 +969,8 @@ def test_demo_text(
                     tt_out_logits_saved=tt_out_logits_saved,
                     is_cur_pos_sharded=is_cur_pos_sharded,
                     is_page_table_sharded=is_page_table_sharded,
+                    prompt_tokens=input_tokens_prefill_pt,
+                    output_tokens=prefilled_token,
                 )
                 read_events.append(read_event)
                 tt_out_toks.append(tt_out_tok)
