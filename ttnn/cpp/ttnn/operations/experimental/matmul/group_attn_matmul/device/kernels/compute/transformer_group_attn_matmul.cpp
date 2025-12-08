@@ -92,7 +92,7 @@ void MAIN {
                                     for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
                                         uint32_t in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
                                         uint32_t in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                                        matmul_tiles(cb_in0, cb_in1, in0_index, in1_index, dst_index, transpose_hw);
+                                        matmul_tiles(cb_in0, cb_in1, in0_index, in1_index, dst_index);
                                         in1_index_inner_dim_offset += in1_per_core_w;
                                     }
                                     dst_index++;
@@ -109,7 +109,7 @@ void MAIN {
                                     for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
                                         uint32_t in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
                                         uint32_t in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                                        matmul_tiles(cb_in0, cb_in1, in0_index, in1_index, dst_index, transpose_hw);
+                                        matmul_tiles(cb_in0, cb_in1, in0_index, in1_index, dst_index);
                                         in1_index_inner_dim_offset += in1_per_core_w;
                                     }
                                     dst_index++;
@@ -125,7 +125,7 @@ void MAIN {
                             //     // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                             //     // accumulation is done by iterating matmul_block across inner dim
                             //     // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride in0
-                            //     matmul_block(cb_in0, cb_in1, in0_index, in1_index, dst_index, transpose_hw, out_subblock_w, out_subblock_h, in0_block_w);
+                            //     matmul_block(cb_in0, cb_in1, in0_index, in1_index, dst_index, out_subblock_w, out_subblock_h, in0_block_w);
                             //     in0_index ++;  // stride right by 1
                             //     in1_index += in1_per_core_w; // to stride down by 1 need to stride by in_per_core_w (should be called in1_block_w)
                             // }

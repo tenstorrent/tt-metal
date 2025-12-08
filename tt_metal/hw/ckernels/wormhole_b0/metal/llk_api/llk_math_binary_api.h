@@ -16,11 +16,11 @@ template <
     BroadcastType src_b_bcast_type,
     int NUM_FIDELITY_PHASES = 0,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_math_eltwise_binary_init(const std::uint32_t transpose = 0, const std::uint32_t acc_to_dest = 0) {
+inline void llk_math_eltwise_binary_init(const std::uint32_t acc_to_dest = 0) {
     const std::uint32_t num_faces = 4;
 
     _llk_math_eltwise_binary_init_<eltwise_binary_type, src_b_bcast_type, NUM_FIDELITY_PHASES, binary_reuse_dest>(
-        num_faces, transpose, acc_to_dest);
+        num_faces, acc_to_dest);
 }
 
 // Version with operands
@@ -39,7 +39,7 @@ inline void llk_math_eltwise_binary_init_with_operands(
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
 
     _llk_math_eltwise_binary_init_<eltwise_binary_type, src_b_bcast_type, NUM_FIDELITY_PHASES, binary_reuse_dest>(
-        num_faces, transpose, acc_to_dest);
+        num_faces, acc_to_dest);
 }
 
 template <
