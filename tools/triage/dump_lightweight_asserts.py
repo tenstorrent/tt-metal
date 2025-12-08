@@ -60,7 +60,7 @@ def dump_callstacks(
         pc = risc_debug.get_pc()
         code_private_memory = risc_debug.get_code_private_memory()
         if code_private_memory is not None and code_private_memory.contains_private_address(pc):
-            dispatcher_core_data = callstack_provider.dispatcher_data.get_core_data(location, risc_name)
+            dispatcher_core_data = callstack_provider.dispatcher_data.get_cached_core_data(location, risc_name)
             elf = callstack_provider.elfs_cache[dispatcher_core_data.kernel_path].elf
             text_section = elf.get_section_by_name(".text")
             if text_section is None or dispatcher_core_data.kernel_offset is None:
