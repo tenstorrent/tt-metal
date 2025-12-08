@@ -1,9 +1,6 @@
 include(CTest)
 enable_testing()
 
-# Include GoogleTest before using gtest_discover_tests
-include(GoogleTest)
-
 set(SOURCES
     core/tensor_utils_test.cpp
     core/n300_utils_test.cpp
@@ -108,11 +105,4 @@ else()
 endif()
 
 include(GoogleTest)
-# Set a reasonable default timeout for unit tests. If specific tests need more time,
-# use set_tests_properties(<test> PROPERTIES TIMEOUT <seconds>) after discovery.
-gtest_discover_tests(
-    ttml_tests
-    PROPERTIES
-        TIMEOUT
-            60
-)
+gtest_discover_tests(ttml_tests)
