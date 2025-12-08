@@ -8,6 +8,7 @@
 #include <chrono>
 #include <stdint.h>
 #include <vector>
+#include <fstream>
 #include <map>
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
