@@ -1,0 +1,79 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+Tests:
+  # ======================================================================================
+  # Routing within a superpod (cluster of 4 loudboxes)
+  # Tests routing from Mesh 0 to Meshes 1-3 (all in Superpod 1)
+  # ======================================================================================
+  - name: "ClosetBoxWithinSuperpod"
+    fabric_setup:
+      topology: Mesh
+
+    top_level_iterations: 3
+
+    parametrization_params:
+      size: [64, 128]
+      num_packets: [50]
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+
+    senders:
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [1, [0, 0]]
+          - destination:
+              device: [2, [1, 1]]
+          - destination:
+              device: [3, [0, 1]]
+
+  # ======================================================================================
+  # Routing across superpods
+  # Tests routing from Mesh 0 (Superpod 1) to Meshes 12-15 (Superpod 4)
+  # ======================================================================================
+  - name: "ClosetBoxAcrossSuperpods"
+    fabric_setup:
+      topology: Mesh
+
+    top_level_iterations: 3
+
+    parametrization_params:
+      size: [64, 128]
+      num_packets: [50]
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+
+    senders:
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [12, [0, 0]]
+          - destination:
+              device: [13, [1, 1]]
+          - destination:
+              device: [14, [0, 2]]
+          - destination:
+              device: [15, [1, 3]]
+
+  # ======================================================================================
+  # All-to-All Pattern (Sequential): Fabric stress test
+  # 16 meshes * 8 chips = 128 chips (vs 5 galaxies with 160 chips)
+  # ======================================================================================
+  - name: "ClosetBoxSequentialAllToAll"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [128]
+      num_packets: [250]
+
+    patterns:
+      - type: sequential_all_to_all
