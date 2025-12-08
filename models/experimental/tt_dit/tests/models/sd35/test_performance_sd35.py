@@ -316,7 +316,7 @@ def test_sd35_new_pipeline_performance(
                     iteration=iteration,
                     step_name=step_name,
                     name=step_name,
-                    value=benchmark_profiler.get_duration(step_name, i),
+                    value=benchmark_profiler.get_duration(step_name, iteration),
                     target=target,
                 )
         device_name_map = {

@@ -477,7 +477,7 @@ class MotifPipeline:
 
             with timer("denoising", timer_iteration) if timer else nullcontext():
                 for i, t in enumerate(tqdm.tqdm(timesteps)):
-                    with timer(f"denoising_step_{i}") if timer else nullcontext():
+                    with timer(f"denoising_step_{i}", timer_iteration) if timer else nullcontext():
                         sigma_difference = sigmas[i + 1] - sigmas[i]
 
                         tt_timestep_list = []
@@ -825,10 +825,10 @@ class TextEncoder:
         timer: BenchmarkProfiler = None,
         timer_iteration: int = 0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        with timer("clip_encoding", timing_iteration) if timer else nullcontext():
+        with timer("clip_encoding", timer_iteration) if timer else nullcontext():
             clip_l, pooled_clip_l = self._clip_l.encode(prompts=prompts_1, num_images_per_prompt=num_images_per_prompt)
             clip_g, pooled_clip_g = self._clip_g.encode(prompts=prompts_2, num_images_per_prompt=num_images_per_prompt)
-        with timer("t5_encoding", timing_iteration) if timer else nullcontext():
+        with timer("t5_encoding", timer_iteration) if timer else nullcontext():
             t5 = self._t5.encode(prompts=prompts_3, num_images_per_prompt=num_images_per_prompt)
 
         clip = torch.cat([clip_l, clip_g], dim=-1)
