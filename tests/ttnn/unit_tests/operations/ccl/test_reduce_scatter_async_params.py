@@ -17,15 +17,17 @@ from tracy import signpost
 @pytest.mark.parametrize("num_buffers_per_channel", [1])  # 2
 @pytest.mark.parametrize("chunks_per_sync", [5])  # 10
 @pytest.mark.parametrize(
-    "shard_grid, input_shard_shape",
+    "input_shard_grid, input_shard_shape, output_shard_grid, output_shard_shape",
     [
-        # 8x2 grid config - 16 cores (x=0-7, y=0-1)
+        # 8x1 input grid, 8x4 output grid
         (
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
-            (32, 256),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+            (32, 512),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+            (32, 64),
         ),
     ],
-    ids=["8x2_grid"],
+    ids=["8x1_to_8x4"],
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -46,8 +48,10 @@ def test_reduce_scatter_async_params(
     num_workers_per_link,
     num_buffers_per_channel,
     chunks_per_sync,
-    shard_grid,
+    input_shard_grid,
     input_shard_shape,
+    output_shard_grid,
+    output_shard_shape,
 ):
     """Test reduce_scatter_minimal_async with different parameter combinations"""
 
@@ -63,8 +67,10 @@ def test_reduce_scatter_async_params(
         num_workers_per_link,
         num_buffers_per_channel,
         chunks_per_sync,
-        shard_grid,
+        input_shard_grid,
         input_shard_shape,
+        output_shard_grid,
+        output_shard_shape,
     )
 
 
@@ -73,8 +79,10 @@ def run_reduce_scatter_async_test(
     num_workers_per_link,
     num_buffers_per_channel,
     chunks_per_sync,
-    shard_grid,
+    input_shard_grid,
     input_shard_shape,
+    output_shard_grid,
+    output_shard_shape,
 ):
     """Test reduce_scatter_minimal_async with parameterized worker/buffer/sync configs"""
 
@@ -84,8 +92,9 @@ def run_reduce_scatter_async_test(
     num_devices = mesh_device.get_num_devices()
 
     # Create WIDTH_SHARDED memory config for input
+    # Input: 8x1 grid (cores 0-7 on row 0), shard shape (32, 512)
     input_shard_spec = ttnn.ShardSpec(
-        shard_grid,
+        input_shard_grid,
         input_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
@@ -97,12 +106,10 @@ def run_reduce_scatter_async_test(
     )
 
     # Output memory config - after reduce_scatter, width is divided by num_devices
-    # Input per device: (1, 1, 32, 4096) with shard (32, 256) on 16 cores
-    # Output per device: (1, 1, 32, 512) with shard (32, 32) on 16 cores
-    # Each core gets: output_width / num_cores = 512 / 16 = 32
-    output_shard_shape = (input_shard_shape[0], input_shard_shape[1] // num_devices)  # (32, 32)
+    # Input per device: (1, 1, 32, 4096) with shard (32, 512) on 8x1 grid
+    # Output per device: (1, 1, 32, 512) with shard (32, 64) on 8x4 grid
     output_shard_spec = ttnn.ShardSpec(
-        shard_grid,
+        output_shard_grid,
         output_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
@@ -169,7 +176,6 @@ def run_reduce_scatter_async_test(
             chunks_per_sync=chunks_per_sync,
             num_workers_per_link=num_workers_per_link,
             num_buffers_per_channel=num_buffers_per_channel,
-            subdevice_id=worker_sub_device_id,
         )
 
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
