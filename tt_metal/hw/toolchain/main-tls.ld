@@ -3,73 +3,60 @@
 ** SPDX-License-Identifier: Apache-2.0
 */
 
-#if TYPE_FIRMWARE + TYPE_KERNEL != 1
-#error "Exactly one of TYPE_FIRMWARE and TYPE_KERNEL must be defined"
-#endif
-
-#if (defined(COMPILE_FOR_TRISC) + defined(COMPILE_FOR_DM)) != 1
-#error "Exactly one COMPILE_FOR_${PROC}RISC must be defined"
+/* TYPE_FIRMWARE=0 -> Firmware
+   TYPE_KERNEL=0 -> TLS kernel
+   TYPE_KERNEL=1 -> legacy kernel
+  */
+#if defined(TYPE_FIRMWARE)
+#define IF_FIRMWARE(...) __VA_ARGS__
+#define IF_KERNEL(...)
+#define IS_TLS 1
+#elif defined(TYPE_KERNEL)
+#define IF_FIRMWARE(...)
+#define IF_KERNEL(...) __VA_ARGS__
+#define IS_TLS (!TYPE_KERNEL)
+#else
+#error "Neither TYPE_FIRMWARE nor TYPE_KERNEL defined"
 #endif
 
 #if !ARCH_QUASAR
 #error "Only quasar supported"
 #endif
 
-#include "dev_mem_map.h"
-#include "tensix_dev_map.h"
-
 /*
+  We generate the following linker scripts:
+  FW Firmware.  Runs at specific address, has shared globals and per-cpu TLS region
+  KN-tls TLS kernel.  XIP execution, has shared globals and per-cpu TLS region
+  KN-lgc Legacy kernel.  XIP execution, hash per-cpu globals and TLS region
 
-All kernels link their code at
-  MEM_FOO_LOCAL_BASE + MEM_FOO_LOCAL_SIZE * NUM_FOO_CORES
-(it is xip'ed executes from a buffer).
+  Kernels may access Firmware globals and TLS
+  the following symbols defined by the user (via -Wl,--defsym=NAME=EXPR)
 
-Kernels place their TLS or, for legacy kernels their globals, directly
-after the firmware's TLS region. (For legacy kernels, these globals are
-at the thread-specific region.)
+  __fw_text -- base address of firmware code (FW)
+  __fw_data -- base address of firmware globals (FW,KN-{tls,lgc})
+  __fw_tls  -- base address of firmware TLS (FW,KN-{tls,lgc})
+  __kn_data -- base address of kernel globals (KN-tls)
+  __kn_text -- base address of kernel code (KN-{tls,lgc})
 
-Firmware and kernels have their TLS (or global) init image placed with
-an LMA directly after their code.
+  Legacy kernels place their global data in the tls region.
 
-TLS kernels place their globals after the firmware's globals. Both
-firmware and TLS kernels globals have an LMA directly after TLS's LMA.
+  The following limits should also be defined:
 
+  __text_size -- space for code
+  __global_size -- space for globals
+  __tls_size -- space for TLS & stack (& legacy kernel globals)
+  __min_stack -- minimum stack size limit
 */
 
-#if 0
-/* Empty block to make all the following blocks have the same template.  */
+#define FW_DATA_START __fw_data
+#define DATA_START IF_FIRMWARE(FW_DATA_START)IF_KERNEL(__kn_data)
+#define TLS_START __fw_tls
+#define TEXT_START IF_FIRMWARE(__fw_text)IF_KERNEL(__kn_text)
 
-#elif defined(COMPILE_FOR_DM)
-#if (0 - COMPILE_FOR_DM - 1) == 1
-/* COMPILE_FOR_DM is empty -> a single TLS script */
-#define IS_TLS 1
-#endif
-#define DATA_START MEM_DM_GLOBAL_BASE
-#define DATA_SIZE MEM_DM_GLOBAL_SIZE
-#define TLS_START  (MEM_DM_LOCAL_BASE + (COMPILE_FOR_DM + 0) * MEM_DM_LOCAL_SIZE)
-#define TLS_SIZE MEM_DM_LOCAL_SIZE
-#define TEXT_FIRMWARE_START MEM_DM_FIRMWARE_BASE
-#define TEXT_START IF_FIRMWARE(TEXT_FIRMWARE_START)IF_KERNEL(MEM_DM_LOCAL_BASE + MEM_DM_LOCAL_SIZE * NUM_DM_CORES)
-#define TEXT_SIZE IF_FIRMWARE(MEM_DM_FIRMWARE_SIZE)IF_KERNEL(MEM_DM_KERNEL_SIZE)
-#define STACK_MIN_SIZE MEM_DM_STACK_MIN_SIZE
-
-#elif defined(COMPILE_FOR_TRISC)
-#if (0 - COMPILE_FOR_TRISC - 1) == 1
-/* COMPILE_FOR_TRISC is empty -> a single TLS script */
-#define IS_TLS 1
-#endif
-#define DATA_START MEM_TRISC_GLOBAL_BASE
-#define DATA_SIZE MEM_TRISC_GLOBAL_SIZE
-#define TLS_START  (MEM_TRISC_LOCAL_BASE + (COMPILE_FOR_TRISC + 0) * MEM_TRISC_LOCAL_SIZE)
-#define TLS_SIZE MEM_TRISC_LOCAL_SIZE
-#define TEXT_FIRMWARE_START MEM_TRISC_FIRMWARE_BASE
-#define TEXT_START IF_FIRMWARE(TEXT_FIRMWARE_START)IF_KERNEL(MEM_TRISC_LOCAL_BASE + MEM_TRISC_LOCAL_SIZE * NUM_TRISC_CORES)
-#define TEXT_SIZE IF_FIRMWARE(MEM_TRISC_FIRMWARE_SIZE)IF_KERNEL(MEM_TRISC_KERNEL_SIZE)
-#define STACK_MIN_SIZE MEM_TRISC_STACK_MIN_SIZE
-
-#else
-#error "compiling for unknown"
-#endif
+#define DATA_SIZE __data_size
+#define TLS_SIZE __tls_size
+#define TEXT_SIZE __text_size
+#define STACK_MIN_SIZE __min_stack
 
 #if IS_TLS
 #define IF_TLS(...) __VA_ARGS__
@@ -77,16 +64,6 @@ firmware and TLS kernels globals have an LMA directly after TLS's LMA.
 #else
 #define IF_TLS(...)
 #define IF_NOT_TLS(...) __VA_ARGS__
-#endif
-
-#if TYPE_FIRMWARE
-#define IF_FIRMWARE(...) __VA_ARGS__
-#define IF_KERNEL(...)
-#elif TYPE_KERNEL
-#define IF_FIRMWARE(...)
-#define IF_KERNEL(...) __VA_ARGS__
-#else
-#error "Neither TYPE_FIRMWARE nor TYPE_KERNEL defined"
 #endif
 
 /* Abut the previous section.  */
@@ -115,12 +92,12 @@ PHDRS {
   tdata PT_LOAD;
   tls PT_TLS;
   data PT_LOAD;
-  IF_NOT_TLS(firmdata PT_LOAD;)
+  IF_KERNEL(firmdata PT_LOAD;)
 }
 
 SECTIONS {
 /* Text-like */
-#if TYPE_KERNEL
+#if defined(TYPE_KERNEL)
   /DISCARD/ : { *_object.o(.text) }
 #endif
   .text TEXT_START
@@ -158,25 +135,23 @@ SECTIONS {
     *(.tbss.end)
   } :tdata :tls
 
-#if TYPE_KERNEL
-  /DISCARD/ : { *_object.o(.empty.ctors.dtors .empty.init_array.fini_array) }
+#if defined(TYPE_KERNEL)
+  /DISCARD/ : { *_object.o(.empty.*) }
 #endif
 
-#if !IS_TLS
-  .firmdata DATA_START
-  : AT(DATA_START)
+#if defined(TYPE_KERNEL)
+  .firmdata FW_DATA_START
+  : AT(FW_DATA_START)
   {
     *object.o(.data .bss)
   } :firmdata
 #endif
-  .data IF_TLS(DATA_START)IF_NOT_TLS(ADDR(.tbss) + SIZEOF(.tbss))
+  .data DATA_START IF_KERNEL(? DATA_START : IF_TLS(ADDR(.firmdata) + SIZEOF(.firmdata))IF_NOT_TLS(ADDR(.tbss) + SIZEOF(.tbss)))
   : IF_KERNEL(LOAD_AFTER_ABUT(.data, .tdata))
   {
-    *_object.o(.data .bss)
-    . = ALIGN(4);
     __ldm_data_start = .;
-     *(.rodata .rodata.* .gnu.linkonce.r.*)
-     *(.rodata1)
+    *(.rodata .rodata.* .gnu.linkonce.r.*)
+    *(.rodata1)
 
     *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*)
 
@@ -220,11 +195,11 @@ SECTIONS {
     . = ALIGN(4);
     __ldm_bss_end = .;
   } :data
-#if TYPE_KERNEL
+#if defined(TYPE_KERNEL)
   __stack_base_offset = IF_TLS(0)IF_NOT_TLS((ABSOLUTE(__ldm_bss_end) - ABSOLUTE(__stack_base_lwm)) / 4);
 #endif
 
-#if TYPE_KERNEL
+#if defined(TYPE_KERNEL)
   /DISCARD/ : { *_object.o(*) }
 #endif
 
@@ -237,14 +212,9 @@ SECTIONS {
     LONG(ADDR(.tdata)) LONG(__ldm_tdata_init)
        LONG(TLS_SIZE - STACK_MIN_SIZE - (__ldm_tdata_init - ADDR(.tdata)))
     LONG(ADDR(.data)) LONG(__ldm_data_start) LONG(DATA_SIZE - (__ldm_data_start - ADDR(.data)))
-    IF_NOT_TLS(LONG(ADDR(.firmdata)) LONG(ADDR(.firmdata) + SIZEOF(.firmdata)) LONG(0))
+    IF_KERNEL(LONG(ADDR(.firmdata)) LONG(ADDR(.firmdata) + SIZEOF(.firmdata)) LONG(0))
   }
 
   .riscv.attributes 0 : { *(.riscv.attributes) } :attributes
 
 }
-
-#if TYPE_FIRMWARE
-PROVIDE(__local_base = TLS_START);
-PROVIDE(__local_stride = TLS_SIZE);
-#endif
