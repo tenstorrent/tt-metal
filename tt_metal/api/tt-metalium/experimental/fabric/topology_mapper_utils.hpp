@@ -9,7 +9,12 @@
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+
+namespace tt::tt_metal {
+class PhysicalSystemDescriptor;
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal::experimental::tt_fabric {
 
@@ -122,5 +127,34 @@ TopologyMappingResult map_mesh_to_physical(
     const std::map<FabricNodeId, MeshHostRankId>& node_to_host_rank,
     const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_to_host_rank,
     const TopologyMappingConfig& config = {});
+
+/**
+ * @brief Build logical adjacency maps from mesh graph connectivity
+ *
+ * Creates adjacency maps for each mesh based on the logical connectivity defined in the mesh graph.
+ * For each fabric node in a mesh, this function identifies its logical neighbors by examining
+ * the intra-mesh connectivity from the mesh graph and creates a mapping of FabricNodeId to
+ * its vector of adjacent FabricNodeIds.
+ *
+ * @param mesh_graph Reference to the mesh graph object containing fabric topology
+ * @return std::map<MeshId, LogicalAdjacencyMap> Map from mesh ID to logical adjacency map
+ */
+std::map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical(const ::tt::tt_fabric::MeshGraph& mesh_graph);
+
+/**
+ * @brief Build physical adjacency maps from system descriptor connectivity
+ *
+ * Creates adjacency maps for each mesh based on the physical connectivity defined in the physical system
+ * descriptor. For each ASIC in a mesh, this function identifies its physical neighbors by examining the ASIC
+ * neighbors from the physical system descriptor and filters them to only include neighbors that are also part of
+ * the same mesh. The resulting map contains ASIC IDs mapped to their vectors of adjacent ASIC IDs within the mesh.
+ *
+ * @param physical_system_descriptor Reference to the physical system descriptor containing ASIC topology
+ * @param asic_id_to_mesh_rank Mapping of mesh IDs to ASIC IDs to mesh host ranks
+ * @return std::map<MeshId, PhysicalAdjacencyMap> Map from mesh ID to physical adjacency map
+ */
+std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
 
 }  // namespace tt::tt_metal::experimental::tt_fabric
