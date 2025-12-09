@@ -12,11 +12,6 @@ Note: The model wrapper handles different output formats:
 - For PANOPTIC_DEEPLAB: Returns tuple (semantic_logits, center_heatmap, offset_map)
 - For DEEPLAB_V3_PLUS: Returns single tensor (semantic_logits only)
 This avoids None handling issues in the executor's output schema creation.
-
-Known Issue: There is a bug in models/tt_cnn/tt/builder.py TtConv2d._apply_channel_slicing()
-where the tuple (weight, bias) returned from conv2d with return_weights_and_bias=True
-is incorrectly assigned to self.weight_slices[i], causing subsequent calls to pass
-a tuple as weight_tensor. This needs to be fixed in the builder code.
 """
 
 import pytest
@@ -169,10 +164,7 @@ def create_host_input_tensors(
             original_mem_config = ttnn_input.memory_config()
             original_shard_spec = original_mem_config.shard_spec
 
-            # Always use interleaved DRAM (no core constraints)
-            # This avoids the logical grid constraint issue with traced executors
-            # The executor will use to_memory_config to convert from interleaved DRAM to sharded L1
-            dram_memory_config = ttnn.DRAM_MEMORY_CONFIG
+            dram_memory_config = None
 
             # Use the original L1 sharding (full grid) - to_memory_config will handle conversion
             l1_memory_config = ttnn.MemoryConfig(
@@ -375,7 +367,6 @@ def test_panoptic_deeplab_pipeline_e2e(
             pytorch_semantic, pytorch_center, pytorch_offset = ref_tuple
 
             # Handle different output formats based on model category
-            # Note: Pipeline converts tuple outputs to lists, so we check for both
             if model_category == DEEPLAB_V3_PLUS:
                 # For DEEPLAB_V3_PLUS, output is a single tensor (semantic_logits only)
                 ttnn_semantic = ttnn_output
