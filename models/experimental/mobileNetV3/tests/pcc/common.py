@@ -6,7 +6,7 @@ dilation = 1
 
 bneck_conf = partial(InvertedResidualConfig, width_mult=1.0)
 adjust_channels = partial(InvertedResidualConfig.adjust_channels, width_mult=1.0)
-
+# TODO explain all the parameters below
 inverted_residual_setting = [
     bneck_conf(16, 3, 16, 16, True, "RE", 2, 1),
     bneck_conf(16, 3, 72, 24, False, "RE", 2, 1),

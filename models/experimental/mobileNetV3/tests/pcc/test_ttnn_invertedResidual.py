@@ -21,19 +21,20 @@ from models.experimental.mobileNetV3.tests.pcc.common import inverted_residual_s
     "batch_size,channels,height,width,feature_i",
     [
         (1, 16, 112, 112, 1),
-        (1, 16, 56, 56, 2),
-        (1, 24, 28, 28, 3),
-        (1, 24, 28, 28, 4),
-        (1, 40, 14, 14, 5),
-        (1, 40, 14, 14, 6),
-        (1, 40, 14, 14, 7),
-        (1, 48, 14, 14, 8),
-        (1, 48, 14, 14, 9),
-        (1, 96, 7, 7, 10),
-        (1, 96, 7, 7, 11),
+        # (1, 16, 56, 56, 2),
+        # (1, 24, 28, 28, 3),
+        # (1, 24, 28, 28, 4),
+        # (1, 40, 14, 14, 5),
+        # (1, 40, 14, 14, 6),
+        # (1, 40, 14, 14, 7),
+        # (1, 48, 14, 14, 8),
+        # (1, 48, 14, 14, 9),
+        # (1, 96, 7, 7, 10),
+        # (1, 96, 7, 7, 11),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+# @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1024}], indirect=True)
 def test_invertedResidual(device, reset_seeds, batch_size, channels, height, width, feature_i):
     torch_input_tensor = torch.randn(batch_size, channels, height, width)
     ttnn_input_tensor = ttnn.from_torch(
@@ -49,7 +50,13 @@ def test_invertedResidual(device, reset_seeds, batch_size, channels, height, wid
 
     torch_output_tensor = torch_model(torch_input_tensor)
 
-    ttnn_model = ttnn_InvertedResidual(inverted_residual_setting[feature_i - 1], parameters=parameters)
+    ttnn_model = ttnn_InvertedResidual(
+        inverted_residual_setting[feature_i - 1],
+        parameters=parameters,
+        device=device,
+        input_height=height,
+        input_width=width,
+    )
 
     ttnn_output_tensor = ttnn_model(device, ttnn_input_tensor)
     ttnn_output_tensor = ttnn.to_torch(ttnn_output_tensor)

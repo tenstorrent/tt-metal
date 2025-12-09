@@ -55,12 +55,13 @@ class ttnn_SqueezeExcitation:
         #     self.fc1 = TtConv2d(self.fc1_config, device)
         #     self.fc2 = TtConv2d(self.fc2_config, device)
 
-        scale = self.fc1(scale)
+        [scale, [_out_height, _out_width]] = self.fc1(scale, return_output_dim=True)
         # scale = post_conv_reshape(scale)
         scale = self.activation(scale)
 
-        scale = self.fc2(scale)
+        [scale, [_out_height, _out_width]] = self.fc2(scale, return_output_dim=True)
         # scale = post_conv_reshape(scale)
         scale = self.scale_activation(scale)
 
+        # return scale * input
         return scale * input

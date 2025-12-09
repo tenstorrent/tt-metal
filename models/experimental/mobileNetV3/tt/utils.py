@@ -17,12 +17,21 @@ conv_config = {
 }
 
 
-def post_conv_reshape(x):
+def post_conv_reshape(x, out_height=1, out_width=1):
     """Convert sharded conv output to [N,1,1,C] tile layout for SE block."""
     x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
     x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-    x = ttnn.reshape(x, (x.shape[0], 1, 1, x.shape[3]))
+    x = ttnn.reshape(x, (x.shape[0], out_height, out_width, x.shape[3]))
     return ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
+
+    # ##########################################3333
+    # output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
+    # output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    # output_tensor = ttnn.reshape(output_tensor, (1, _out_height, _out_width, output_tensor.shape[3]))
+    # output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
+    # del _out_height, _out_width
+    ####################################################3
 
 
 # def _create_conv_config_from_params(
@@ -71,6 +80,7 @@ def post_conv_reshape(x):
 #             slice_strategy=L1FullSliceStrategyConfiguration(),
 #             output_layout=ttnn.TILE_LAYOUT,
 #         )
+# TODO move it to new file config.py
 def _create_conv_config_from_params(
     input_height: int,
     input_width: int,
@@ -81,16 +91,20 @@ def _create_conv_config_from_params(
     kernel_size=(1, 1),
     stride=(1, 1),
     padding=(0, 0),
+    dilation=(1, 1),
+    groups=1,
     activation=None,
     deallocate_activation=False,
     activation_dtype=None,
     weights_dtype=None,
     output_dtype=None,
     math_fidelity=None,
+    sharding_strategy=AutoShardedStrategyConfiguration(),
 ) -> Conv2dConfiguration:
     """
     Conv2dConfiguration from parameters dict for SqueezeExcitation.
     """
+
     return Conv2dConfiguration(
         input_height=input_height,
         input_width=input_width,
@@ -100,6 +114,8 @@ def _create_conv_config_from_params(
         kernel_size=kernel_size,
         stride=stride,
         padding=padding,
+        groups=groups,
+        dilation=dilation,
         weight=parameters["weight"],
         bias=parameters["bias"],
         activation=activation,
@@ -107,7 +123,7 @@ def _create_conv_config_from_params(
         weights_dtype=weights_dtype or conv_config["WEIGHTS_DTYPE"],
         output_dtype=output_dtype or conv_config["ACTIVATIONS_DTYPE"],
         math_fidelity=math_fidelity or conv_config["MATH_FIDELITY"],
-        sharding_strategy=AutoShardedStrategyConfiguration(),
+        sharding_strategy=sharding_strategy,
         slice_strategy=L1FullSliceStrategyConfiguration(),
         enable_act_double_buffer=True,
         enable_weights_double_buffer=True,
