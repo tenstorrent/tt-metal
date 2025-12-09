@@ -137,11 +137,6 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
         [8, 192],
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    shard_spec_sm = ttnn.ShardSpec(
-        shard_grid,
-        [16, 32],
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
 
     mem_config_l = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec_l
