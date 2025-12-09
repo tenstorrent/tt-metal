@@ -327,9 +327,7 @@ def train():
     print("Loading tokenizer and config...")
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
     # Disable tokenizer parallelism to avoid conflicts with DataLoader multiprocessing
-    tokenizer = AutoTokenizer.from_pretrained(
-        "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
-    )
+    tokenizer = AutoTokenizer.from_pretrained("gpt2")
 
     yaml_config = load_config(
         CONFIG, f"{get_tt_metal_home()}/tt-train/configs/training_configs"
@@ -369,7 +367,7 @@ def train():
     # Download safetensors
     print("Downloading safetensors...")
     safetensors_path = hf_hub_download(
-        repo_id="TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T",
+        repo_id="gpt2",
         filename="model.safetensors",
     )
 

@@ -1,8 +1,8 @@
 training_config:
   project_name: "tt_train_gsm8k_finetune" # not really nanogpt, but want to use the same wandb project name for now
-  model_type: "llama"
+  model_type: "gpt2"
   seed: 5489
-  batch_size: 1
+  batch_size: 32
   validation_batch_size: 4
   num_epochs: 1
   max_steps: 160
@@ -12,12 +12,12 @@ training_config:
   use_kahan_summation: false
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
-  gradient_accumulation_steps: 64
+  gradient_accumulation_steps: 1
   eval_every: 20
   model_save_interval: 50
   tokenizer_type: "bpe"
   checkpoint_dir: "checkpoints_gsm8k"
-  model_config: "model_configs/tinyllama.yaml"
+  model_config: "model_configs/gpt2s.yaml"
 
 scheduler_config:
   max_lr : 1e-4
