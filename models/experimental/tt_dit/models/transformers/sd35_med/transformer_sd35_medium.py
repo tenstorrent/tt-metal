@@ -5,17 +5,184 @@
 SD3Transformer2DModel implementation for SD3.5 Medium
 """
 
+import math
+import torch
 import ttnn
-from models.experimental.tt_dit.layers.module import Module
+from models.experimental.tt_dit.layers.module import Module, Parameter
 from models.experimental.tt_dit.layers.linear import Linear
 from models.experimental.tt_dit.layers.normalization import LayerNorm
 from models.experimental.tt_dit.utils.substate import substate
 
 # Import working implementations from embeddings
 from models.experimental.tt_dit.layers.embeddings import (
-    PatchEmbed,
     SD35CombinedTimestepTextProjEmbeddings,
 )
+
+
+class SD35PatchEmbed(Module):
+    """
+    Custom PatchEmbed for SD3.5 Medium that handles 4D output tensors properly.
+    Converts image latents to patch embeddings with positional encoding.
+    Supports dynamic input sizes by cropping pos_embed at runtime.
+    """
+
+    def __init__(
+        self,
+        height,
+        width,
+        patch_size,
+        in_channels,
+        embed_dim,
+        pos_embed_max_size,
+        mesh_device=None,
+    ):
+        super().__init__()
+
+        self.height = height // patch_size  # Max height in patches
+        self.width = width // patch_size  # Max width in patches
+        self.patch_size = patch_size
+        self.in_channels = in_channels
+        self.embed_dim = embed_dim
+        self.pos_embed_max_size = pos_embed_max_size
+        self.mesh_device = mesh_device
+
+        # Compute kernel config for linear operations
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+        # Projection weights (equivalent to conv2d)
+        self.proj_weight = Parameter(
+            total_shape=[in_channels * patch_size * patch_size, embed_dim],
+            mesh_axes=[None, None],
+            device=mesh_device,
+        )
+        self.proj_bias = Parameter(
+            total_shape=[1, 1, 1, embed_dim],
+            mesh_axes=[None, None, None, None],
+            device=mesh_device,
+        )
+
+        # Position embeddings - store at max size [1, 1, max_seq_len, embed_dim]
+        # Will be cropped at runtime based on actual input size
+        max_seq_len = self.height * self.width
+        self.pos_embed = Parameter(
+            total_shape=[1, 1, max_seq_len, embed_dim],
+            device=mesh_device,
+            mesh_axes=[None, None, None, None],
+        )
+
+        # Store the torch pos_embed for runtime cropping
+        self._torch_pos_embed = None
+
+    def _cropped_pos_embed_torch(self, pos_embed_param, target_height, target_width):
+        """Crop position embeddings from max size to target size (torch tensor)."""
+        pos_embed_max_size = math.isqrt(pos_embed_param.shape[1])
+        top = (pos_embed_max_size - target_height) // 2
+        left = (pos_embed_max_size - target_width) // 2
+
+        spatial_pos_embed = pos_embed_param.reshape([1, pos_embed_max_size, pos_embed_max_size, -1])
+        spatial_pos_embed = spatial_pos_embed[:, top : top + target_height, left : left + target_width, :]
+        spatial_pos_embed = spatial_pos_embed.reshape([1, 1, -1, spatial_pos_embed.shape[-1]])
+
+        return spatial_pos_embed
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        """Prepare PyTorch state dict for loading."""
+        conv_weight = state.pop("proj.weight", None)
+        if conv_weight is not None:
+            # Convert from (out_channels, in_channels, kh, kw) to (kh*kw*in_channels, out_channels)
+            out_channels, in_c, kh, kw = conv_weight.shape
+            conv_weight = conv_weight.permute(2, 3, 1, 0)  # (kh, kw, in_c, out_channels)
+            conv_weight = conv_weight.reshape(kh * kw * in_c, out_channels)
+            state["proj_weight"] = conv_weight
+
+        if "proj.bias" in state:
+            state["proj_bias"] = state.pop("proj.bias").reshape(1, 1, 1, -1)
+
+        if "pos_embed" in state:
+            # Store original pos_embed for runtime cropping
+            self._torch_pos_embed = state["pos_embed"].clone()
+            # Crop for default size
+            state["pos_embed"] = self._cropped_pos_embed_torch(state.pop("pos_embed"), self.height, self.width)
+
+    def forward(self, latent: ttnn.Tensor) -> ttnn.Tensor:
+        """
+        Forward pass: apply patch projection and add position embeddings.
+
+        Args:
+            latent: Input tensor of shape (batch_size, height, width, channels) in NHWC format
+
+        Returns:
+            Patch embeddings of shape (1, batch_size, num_patches, embed_dim)
+        """
+        batch_size, img_h, img_w, img_c = latent.shape
+        patches_h = img_h // self.patch_size
+        patches_w = img_w // self.patch_size
+
+        latent = self._unfold_conv2d(latent)
+
+        # Check if we need to use different pos_embed size
+        actual_seq_len = patches_h * patches_w
+        stored_seq_len = self.pos_embed.data.shape[2]
+
+        if actual_seq_len != stored_seq_len and self._torch_pos_embed is not None:
+            # Crop pos_embed to match actual input size
+            cropped_pos_embed = self._cropped_pos_embed_torch(self._torch_pos_embed, patches_h, patches_w)
+            pos_embed_tensor = ttnn.from_torch(
+                cropped_pos_embed,
+                dtype=ttnn.bfloat16,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            return latent + pos_embed_tensor
+        else:
+            return latent + self.pos_embed.data
+
+    def _unfold_conv2d(self, x):
+        """
+        Unfold conv2d operation: reshape patches and apply linear transformation.
+
+        Args:
+            x: Input tensor (batch_size, height, width, channels)
+
+        Returns:
+            Projected tensor (1, batch_size, patches_h * patches_w, embed_dim)
+        """
+        batch_size, img_h, img_w, img_c = x.shape
+
+        patches_h = img_h // self.patch_size
+        patches_w = img_w // self.patch_size
+
+        # Reshape input to extract patches
+        # (batch_size, patches_h, patch_size, patches_w, patch_size, img_c)
+        x = ttnn.reshape(x, (batch_size, patches_h, self.patch_size, patches_w, self.patch_size, img_c))
+
+        # Permute to group patch dimensions together
+        # (batch_size, patches_h, patches_w, patch_size, patch_size, img_c)
+        x = ttnn.permute(x, (0, 1, 3, 2, 4, 5))
+
+        # Flatten patch dimensions
+        # (batch_size, patches_h * patches_w, patch_size * patch_size * img_c)
+        x = ttnn.reshape(x, (batch_size, patches_h * patches_w, self.patch_size * self.patch_size * img_c))
+
+        # Apply linear projection (equivalent to conv2d)
+        out = ttnn.linear(
+            x,
+            self.proj_weight.data,
+            bias=self.proj_bias.data,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+
+        out = ttnn.reshape(out, (1, batch_size, patches_h * patches_w, -1))
+        return out
+
 
 # Import JointTransformerBlock implementations
 from models.experimental.tt_dit.models.transformers.sd35_med.joint_block_sd35_medium import (
@@ -134,16 +301,14 @@ class SD3Transformer2DModel(Module):
         # Calculate hidden dimension
         self.inner_dim = num_attention_heads * attention_head_dim
 
-        # Positional embedding (patch embedding) - use imported version
-        self.pos_embed = PatchEmbed(
+        # Positional embedding (patch embedding) - use custom SD35PatchEmbed
+        self.pos_embed = SD35PatchEmbed(
             height=sample_size,
             width=sample_size,
             patch_size=patch_size,
             in_channels=in_channels,
             embed_dim=self.inner_dim,
             pos_embed_max_size=pos_embed_max_size,
-            tp_mesh_axis=None,
-            sp_mesh_axis=None,
             mesh_device=mesh_device,
         )
 
@@ -280,6 +445,51 @@ class SD3Transformer2DModel(Module):
         output = self.proj_out(hidden_states)
 
         return output
+
+    def unpatchify(self, x, height, width):
+        """
+        Unpatchify the output tensor from [B, seq_len, patch_size^2 * out_channels]
+        to [B, out_channels, height, width]
+
+        This matches Diffusers' _get_output_for_patched_inputs which uses:
+        output = hidden_states.reshape(batch_size, height, width, p, p, out_channels)
+        output = output.permute(0, 5, 1, 3, 2, 4).reshape(batch_size, out_channels, height*p, width*p)
+
+        Args:
+            x: Tensor of shape [B, seq_len, patch_size^2 * out_channels] or [1, B, seq_len, ...]
+            height: Output height in latent space (before VAE upscaling)
+            width: Output width in latent space (before VAE upscaling)
+
+        Returns:
+            Tensor of shape [B, out_channels, height, width]
+        """
+        import torch
+
+        # Handle TTNN tensor
+        if hasattr(x, "shape") and not isinstance(x, torch.Tensor):
+            x = ttnn.to_torch(ttnn.from_device(x))
+
+        # Remove extra dimensions
+        while x.dim() > 3:
+            x = x.squeeze(0)
+
+        batch_size = x.shape[0]
+        p = self.patch_size
+        c = self.out_channels
+        h = height // p
+        w = width // p
+
+        # Diffusers order: features are [p * p * c] -> reshape to [p, p, c]
+        # Reshape: [B, h*w, p*p*c] -> [B, h, w, p, p, c]
+        x = x.reshape(batch_size, h, w, p, p, c)
+
+        # Permute: [B, h, w, p, p, c] -> [B, c, h, p, w, p]
+        x = x.permute(0, 5, 1, 3, 2, 4)
+
+        # Reshape: [B, c, h, p, w, p] -> [B, c, h*p, w*p]
+        x = x.reshape(batch_size, c, h * p, w * p)
+
+        return x
 
     def load_torch_state_dict(self, state_dict):
         """Load weights from PyTorch state dict"""

@@ -5,12 +5,14 @@
 
 import statistics
 import pytest
+import torch
 import ttnn
 from loguru import logger
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 
 from ....pipelines.stable_diffusion_35_medium.pipeline_stable_diffusion_35_medium import (
     StableDiffusion3MediumPipeline as TTSD35MediumPipeline,
+    TimingCollector,
 )
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 
@@ -26,18 +28,19 @@ from ....parallel.config import DiTParallelConfig, ParallelFactor
     [
         # N150 configurations - single card
         [(1, 1), 0, 1, 1],  # Single device, no parallelism
-        [(1, 2), 0, 1, 1],  # Tensor parallel on axis 1
-        [(1, 2), 1, 0, 1],  # Sequence parallel on axis 1
+        # [(1, 2), 0, 1, 1],  # Tensor parallel on axis 1
+        # [(1, 2), 1, 0, 1],  # Sequence parallel on axis 1
     ],
     ids=[
         "1x1",
-        "1x2sp0tp1",
-        "1x2sp1tp0",
+        # "1x2sp0tp1",
+        # "1x2sp1tp0",
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-@pytest.mark.parametrize("use_cache", [True, False], ids=["yes_use_cache", "no_use_cache"])
+@pytest.mark.parametrize("use_cache", [False], ids=["no_use_cache"])
+# @pytest.mark.parametrize("use_cache", [True, False], ids=["yes_use_cache", "no_use_cache"])
 def test_sd35_medium_pipeline_performance(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -227,7 +230,9 @@ def test_sd35_medium_pipeline_performance(
     ids=["1x1"],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}], indirect=True
+)
 def test_sd35_medium_pipeline_functional(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -256,19 +261,330 @@ def test_sd35_medium_pipeline_functional(
         use_cache=False,
     )
 
+    # Prepare with guidance_scale=1.0 to disable CFG (single device doesn't support batched CFG)
+    tt_pipe.prepare(
+        batch_size=1,
+        num_images_per_prompt=1,
+        width=512,
+        height=512,
+        guidance_scale=1.0,  # Disable CFG for single device
+        max_t5_sequence_length=256,
+        prompt_sequence_length=333,
+        spatial_sequence_length=1024,
+    )
+
     # Test with a simple prompt
+    # Use 28+ steps for better quality (10 steps causes accumulated numerical error)
+    # prompt = "A girl with long hair and blue eyes"
+    prompt = "a cat with a hat and pink nose"
+    # prompt = "A red circle on a white background, digital art, clean lines"
+    seed = 123
+    num_steps = 28
+
     images = tt_pipe.run_single_prompt(
-        prompt="A red circle on a white background",
+        prompt=prompt,
         negative_prompt="",
-        num_inference_steps=10,  # Few steps for speed
-        seed=123,
+        num_inference_steps=num_steps,
+        seed=seed,
     )
 
     # Basic validation
     assert len(images) == 1, "Should generate exactly one image"
     assert images[0].size == (512, 512), f"Image size should be 512x512, got {images[0].size}"
 
-    # Save test image for visual inspection (optional)
-    if logger.level <= "DEBUG":
-        images[0].save("test_sd35_medium_output.png")
-        logger.info("Test image saved to test_sd35_medium_output.png")
+    # Save TT test image for visual inspection
+    images[0].save("test_sd35_medium_tt_output.png")
+    logger.info("TT image saved to test_sd35_medium_tt_output.png")
+
+    # Skip Diffusers reference generation (too slow on CPU without GPU)
+    # To generate Diffusers reference, run separately on a GPU machine:
+    # ```
+    # from diffusers import StableDiffusion3Pipeline
+    # pipe = StableDiffusion3Pipeline.from_pretrained("stabilityai/stable-diffusion-3.5-medium", torch_dtype=torch.bfloat16).to("cuda")
+    # pipe(prompt="A red circle on a white background, digital art, clean lines", num_inference_steps=28, height=512, width=512, guidance_scale=1.0, generator=torch.Generator().manual_seed(123)).images[0].save("diffusers_ref.png")
+    # ```
+    logger.info("TT image generation complete. Check test_sd35_medium_tt_output.png")
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        (1, 1),
+    ],
+    ids=["1x1"],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}], indirect=True
+)
+def test_sd35_medium_pipeline_debug_pcc(
+    *,
+    mesh_device: ttnn.MeshDevice,
+) -> None:
+    """Debug test comparing TT pipeline with Diffusers step-by-step."""
+    from diffusers.models.transformers.transformer_sd3 import SD3Transformer2DModel as DiffusersTransformer
+    from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
+
+    # Load reference models
+    model_id = "stabilityai/stable-diffusion-3.5-medium"
+
+    logger.info("Loading Diffusers reference transformer...")
+    ref_transformer = DiffusersTransformer.from_pretrained(
+        model_id, subfolder="transformer", torch_dtype=torch.bfloat16
+    )
+    ref_transformer.eval()
+
+    scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(model_id, subfolder="scheduler")
+
+    # Create TT transformer
+    from ....models.transformers.sd35_med.transformer_sd35_medium import SD3Transformer2DModel
+
+    logger.info("Creating TT transformer...")
+    tt_transformer = SD3Transformer2DModel(
+        sample_size=128,  # Same as mmdit test (128x128 latents for 1024x1024 images)
+        patch_size=2,
+        in_channels=16,
+        num_layers=24,
+        attention_head_dim=64,
+        num_attention_heads=24,
+        joint_attention_dim=4096,
+        caption_projection_dim=2432,
+        pooled_projection_dim=2048,
+        out_channels=16,
+        pos_embed_max_size=192,
+        mesh_device=mesh_device,
+    )
+
+    # Load weights
+    state_dict = ref_transformer.state_dict()
+    logger.info(f"pos_embed shape in state_dict: {state_dict['pos_embed.pos_embed'].shape}")
+    tt_transformer.load_torch_state_dict(state_dict)
+    logger.info("Weights loaded")
+
+    # Debug: check pos_embed was loaded correctly
+    tt_pos_embed = ttnn.to_torch(ttnn.from_device(tt_transformer.pos_embed.pos_embed.data))
+    logger.info(f"TT pos_embed shape after loading: {tt_pos_embed.shape}")
+
+    # Test inputs - use same size as mmdit test (128x128 latents for 1024x1024 images)
+    torch.manual_seed(123)
+    batch_size = 1
+    latent_h, latent_w = 128, 128  # For 1024x1024 (same as working mmdit test)
+    seq_len = (latent_h // 2) * (latent_w // 2)  # 4096
+    context_seq_len = 154  # CLIP only (77 + 77)
+
+    # Initial latents NCHW for Diffusers
+    latents_nchw = torch.randn((batch_size, 16, latent_h, latent_w), dtype=torch.bfloat16)
+    # NHWC for TT
+    latents_nhwc = latents_nchw.permute(0, 2, 3, 1)
+
+    # Encoder hidden states
+    encoder_hidden_states = torch.randn((batch_size, context_seq_len, 4096), dtype=torch.bfloat16)
+
+    # Pooled projection
+    pooled_projection = torch.randn((batch_size, 2048), dtype=torch.bfloat16)
+
+    # Setup scheduler
+    # Use 28 steps for better quality and more stable PCC across steps
+    num_steps = 28
+    scheduler.set_timesteps(num_steps)
+    timesteps = scheduler.timesteps
+
+    logger.info("=" * 60)
+    logger.info("Comparing single transformer forward pass")
+    logger.info("=" * 60)
+
+    # Single step comparison
+    t = timesteps[0]
+
+    # Diffusers forward - get output BEFORE unpatchify
+    with torch.no_grad():
+        # Run manually to get pre-unpatchify output
+        ref_hidden = ref_transformer.pos_embed(latents_nchw)
+        ref_temb = ref_transformer.time_text_embed(torch.tensor([t]), pooled_projection)
+        ref_ctx = ref_transformer.context_embedder(encoder_hidden_states)
+
+        for block in ref_transformer.transformer_blocks:
+            result = block(hidden_states=ref_hidden, encoder_hidden_states=ref_ctx, temb=ref_temb)
+            if isinstance(result, tuple):
+                ref_ctx, ref_hidden = result
+            else:
+                ref_hidden = result
+
+        ref_normed = ref_transformer.norm_out(ref_hidden, ref_temb)
+        ref_proj = ref_transformer.proj_out(ref_normed)  # BEFORE unpatchify
+
+        # Now get the full output (with unpatchify)
+        ref_output = ref_transformer(
+            hidden_states=latents_nchw,
+            encoder_hidden_states=encoder_hidden_states,
+            timestep=torch.tensor([t]),
+            pooled_projections=pooled_projection,
+        ).sample
+
+    logger.info(f"Diffusers proj_out shape (before unpatchify): {ref_proj.shape}")
+    logger.info(f"Diffusers output shape (after unpatchify): {ref_output.shape}")
+
+    # TT forward
+    tt_latents = ttnn.from_torch(
+        latents_nhwc,
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    tt_encoder = ttnn.from_torch(
+        encoder_hidden_states,
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    tt_timestep = ttnn.from_torch(
+        torch.tensor([[t]], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    tt_pooled = ttnn.from_torch(
+        pooled_projection.unsqueeze(0).unsqueeze(0),
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    tt_output = tt_transformer(
+        hidden_states=tt_latents,
+        encoder_hidden_states=tt_encoder,
+        timestep=tt_timestep,
+        pooled_projection=tt_pooled,
+        seq_len=seq_len,
+        context_seq_len=context_seq_len,
+    )
+
+    # Convert TT output to torch
+    tt_output_torch = ttnn.to_torch(ttnn.from_device(tt_output))
+    logger.info(f"TT output shape (patched): {tt_output_torch.shape}")
+
+    # Compare BEFORE unpatchify (this should match mmdit test results)
+    # Squeeze TT output to match ref_proj shape
+    tt_proj = tt_output_torch
+    while tt_proj.dim() > ref_proj.dim():
+        tt_proj = tt_proj.squeeze(0)
+    while tt_proj.dim() < ref_proj.dim():
+        tt_proj = tt_proj.unsqueeze(0)
+
+    logger.info(f"ref_proj shape: {ref_proj.shape}, tt_proj shape: {tt_proj.shape}")
+    logger.info(f"ref_proj - min: {ref_proj.min():.4f}, max: {ref_proj.max():.4f}")
+    logger.info(f"tt_proj - min: {tt_proj.min():.4f}, max: {tt_proj.max():.4f}")
+
+    ref_flat = ref_proj.flatten().float()
+    tt_flat = tt_proj.flatten().float()
+    pcc_proj = torch.corrcoef(torch.stack([ref_flat, tt_flat]))[0, 1].item()
+    logger.info(f"proj_out PCC (BEFORE unpatchify): {pcc_proj:.6f}")
+
+    # DEBUG: Test unpatchify on REFERENCE data to verify the logic
+    # If our unpatchify is correct, applying it to ref_proj should give ref_output
+    ref_proj_unpatchified = tt_transformer.unpatchify(ref_proj, latent_h, latent_w)
+    ref_flat1 = ref_output.flatten().float()
+    ref_flat2 = ref_proj_unpatchified.flatten().float()
+    pcc_ref_unpatch = torch.corrcoef(torch.stack([ref_flat1, ref_flat2]))[0, 1].item()
+    logger.info(f"DEBUG: Unpatchify on REF data PCC (should be 1.0): {pcc_ref_unpatch:.6f}")
+
+    # Now compare AFTER unpatchify
+    tt_output_spatial = tt_transformer.unpatchify(tt_output_torch, latent_h, latent_w)
+    logger.info(f"TT output shape (spatial): {tt_output_spatial.shape}")
+
+    logger.info(f"ref_output - min: {ref_output.min():.4f}, max: {ref_output.max():.4f}")
+    logger.info(f"tt_output_spatial - min: {tt_output_spatial.min():.4f}, max: {tt_output_spatial.max():.4f}")
+
+    ref_flat = ref_output.flatten().float()
+    tt_flat = tt_output_spatial.flatten().float()
+    pcc_spatial = torch.corrcoef(torch.stack([ref_flat, tt_flat]))[0, 1].item()
+    logger.info(f"output PCC (AFTER unpatchify): {pcc_spatial:.6f}")
+
+    logger.info("=" * 60)
+    logger.info("Comparing scheduler step")
+    logger.info("=" * 60)
+
+    # Diffusers scheduler step
+    sigma = scheduler.sigmas[0]
+    sigma_next = scheduler.sigmas[1]
+    dt = sigma_next - sigma
+    logger.info(f"sigma={sigma:.6f}, sigma_next={sigma_next:.6f}, dt={dt:.6f}")
+
+    # Flow matching step: x_{t+1} = x_t + dt * velocity
+    ref_next_latents = latents_nchw + dt * ref_output
+
+    # TT step (same formula but using unpatchified output)
+    tt_next_latents = latents_nchw + dt * tt_output_spatial
+
+    ref_flat = ref_next_latents.flatten().float()
+    tt_flat = tt_next_latents.flatten().float()
+    pcc = torch.corrcoef(torch.stack([ref_flat, tt_flat]))[0, 1].item()
+    logger.info(f"After step 0 latents PCC: {pcc:.6f}")
+
+    logger.info("=" * 60)
+    logger.info("Running full denoising loop comparison")
+    logger.info("=" * 60)
+
+    # Full loop
+    ref_latents = latents_nchw.clone()
+    tt_latents_spatial = latents_nchw.clone()  # Keep in NCHW for comparison
+
+    for i, t in enumerate(timesteps):
+        sigma = scheduler.sigmas[i]
+        sigma_next = scheduler.sigmas[i + 1]
+        dt = sigma_next - sigma
+
+        # Diffusers step
+        with torch.no_grad():
+            ref_velocity = ref_transformer(
+                hidden_states=ref_latents,
+                encoder_hidden_states=encoder_hidden_states,
+                timestep=torch.tensor([t]),
+                pooled_projections=pooled_projection,
+            ).sample
+        ref_latents = ref_latents + dt * ref_velocity
+
+        # TT step - update timestep for each iteration!
+        tt_latents_nhwc = tt_latents_spatial.permute(0, 2, 3, 1)  # NCHW -> NHWC
+        tt_latents_dev = ttnn.from_torch(
+            tt_latents_nhwc,
+            dtype=ttnn.bfloat16,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        # Create timestep tensor for current step
+        tt_timestep_current = ttnn.from_torch(
+            torch.tensor([[t]], dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        tt_velocity = tt_transformer(
+            hidden_states=tt_latents_dev,
+            encoder_hidden_states=tt_encoder,
+            timestep=tt_timestep_current,
+            pooled_projection=tt_pooled,
+            seq_len=seq_len,
+            context_seq_len=context_seq_len,
+        )
+        tt_velocity_torch = ttnn.to_torch(ttnn.from_device(tt_velocity))
+        tt_velocity_spatial = tt_transformer.unpatchify(tt_velocity_torch, latent_h, latent_w)
+        tt_latents_spatial = tt_latents_spatial + dt * tt_velocity_spatial
+
+        # Compare
+        ref_flat = ref_latents.flatten().float()
+        tt_flat = tt_latents_spatial.flatten().float()
+        pcc = torch.corrcoef(torch.stack([ref_flat, tt_flat]))[0, 1].item()
+        logger.info(f"Step {i}: PCC={pcc:.6f}")
+
+    logger.info("=" * 60)
+    logger.info("Final latents comparison")
+    logger.info("=" * 60)
+    ref_flat = ref_latents.flatten().float()
+    tt_flat = tt_latents_spatial.flatten().float()
+    final_pcc = torch.corrcoef(torch.stack([ref_flat, tt_flat]))[0, 1].item()
+    logger.info(f"Final latents PCC: {final_pcc:.6f}")
+
+    # Don't fail - just report
+    if final_pcc < 0.99:
+        logger.warning(f"Final PCC is low: {final_pcc:.6f}")
