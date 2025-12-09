@@ -117,177 +117,173 @@ static bool test_sdpa_reduce_c(
         fp32_dest_acc_en,
         do_eltwise_max);
 
-    try {
-        // Get device and command queue from mesh
-        tt_metal::IDevice* device = mesh_device->get_devices().at(0);
-        tt_metal::distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
+    // Get device and command queue from mesh
+    tt_metal::IDevice* device = mesh_device->get_devices().at(0);
+    tt_metal::distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
 
-        tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
-        CoreCoord core = {0, 0};
+    CoreCoord core = {0, 0};
 
-        auto cb_df = tt::DataFormat::Float16_b;
-        auto cb_tile_size = tt::tile_size(cb_df);
+    auto cb_df = tt::DataFormat::Float16_b;
+    auto cb_tile_size = tt::tile_size(cb_df);
 
-        uint32_t qk_im_num_tiles = q_chunk_size * k_chunk_size;
-        uint32_t stats_num_tiles = q_chunk_size;
+    uint32_t qk_im_num_tiles = q_chunk_size * k_chunk_size;
+    uint32_t stats_num_tiles = q_chunk_size;
 
-        auto qk_im_buffer_config = tt::tt_metal::ShardedBufferConfig{
-            .device = device,
-            .size = qk_im_num_tiles * cb_tile_size,
-            .page_size = cb_tile_size,
-            .buffer_type = tt::tt_metal::BufferType::L1,
-            .buffer_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-            .shard_parameters = tt::tt_metal::ShardSpecBuffer(
-                CoreRangeSet(std::set<CoreRange>({CoreRange(core, core)})),
-                {q_chunk_size * tt::constants::TILE_HEIGHT, k_chunk_size * tt::constants::TILE_WIDTH},
-                tt::tt_metal::ShardOrientation::ROW_MAJOR,
-                {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-                {q_chunk_size, k_chunk_size})};
+    auto qk_im_buffer_config = tt::tt_metal::ShardedBufferConfig{
+        .device = device,
+        .size = qk_im_num_tiles * cb_tile_size,
+        .page_size = cb_tile_size,
+        .buffer_type = tt::tt_metal::BufferType::L1,
+        .buffer_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+        .shard_parameters = tt::tt_metal::ShardSpecBuffer(
+            CoreRangeSet(std::set<CoreRange>({CoreRange(core, core)})),
+            {q_chunk_size * tt::constants::TILE_HEIGHT, k_chunk_size * tt::constants::TILE_WIDTH},
+            tt::tt_metal::ShardOrientation::ROW_MAJOR,
+            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+            {q_chunk_size, k_chunk_size})};
 
-        auto stats_buffer_config = tt::tt_metal::ShardedBufferConfig{
-            .device = device,
-            .size = stats_num_tiles * cb_tile_size,
-            .page_size = cb_tile_size,
-            .buffer_type = tt::tt_metal::BufferType::L1,
-            .buffer_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-            .shard_parameters = tt::tt_metal::ShardSpecBuffer(
-                CoreRangeSet(std::set<CoreRange>({CoreRange(core, core)})),
-                {stats_num_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-                tt::tt_metal::ShardOrientation::ROW_MAJOR,
-                {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-                {stats_num_tiles, 1})};
+    auto stats_buffer_config = tt::tt_metal::ShardedBufferConfig{
+        .device = device,
+        .size = stats_num_tiles * cb_tile_size,
+        .page_size = cb_tile_size,
+        .buffer_type = tt::tt_metal::BufferType::L1,
+        .buffer_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+        .shard_parameters = tt::tt_metal::ShardSpecBuffer(
+            CoreRangeSet(std::set<CoreRange>({CoreRange(core, core)})),
+            {stats_num_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+            tt::tt_metal::ShardOrientation::ROW_MAJOR,
+            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+            {stats_num_tiles, 1})};
 
-        auto one_tile_buffer_config = tt::tt_metal::ShardedBufferConfig{
-            .device = device,
-            .size = cb_tile_size,
-            .page_size = cb_tile_size,
-            .buffer_type = tt::tt_metal::BufferType::L1,
-            .buffer_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-            .shard_parameters = tt::tt_metal::ShardSpecBuffer(
-                CoreRangeSet(std::set<CoreRange>({CoreRange(core, core)})),
-                {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-                tt::tt_metal::ShardOrientation::ROW_MAJOR,
-                {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-                {1, 1})};
+    auto one_tile_buffer_config = tt::tt_metal::ShardedBufferConfig{
+        .device = device,
+        .size = cb_tile_size,
+        .page_size = cb_tile_size,
+        .buffer_type = tt::tt_metal::BufferType::L1,
+        .buffer_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+        .shard_parameters = tt::tt_metal::ShardSpecBuffer(
+            CoreRangeSet(std::set<CoreRange>({CoreRange(core, core)})),
+            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+            tt::tt_metal::ShardOrientation::ROW_MAJOR,
+            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+            {1, 1})};
 
-        // Create sharded buffers for CB inputs/outputs
-        auto qk_im_buffer = CreateBuffer(qk_im_buffer_config);
-        auto prev_max_buffer = CreateBuffer(stats_buffer_config);
-        auto out_max_buffer = CreateBuffer(stats_buffer_config);
-        auto identity_scale_buffer = CreateBuffer(one_tile_buffer_config);
+    // Create sharded buffers for CB inputs/outputs
+    auto qk_im_buffer = CreateBuffer(qk_im_buffer_config);
+    auto prev_max_buffer = CreateBuffer(stats_buffer_config);
+    auto out_max_buffer = CreateBuffer(stats_buffer_config);
+    auto identity_scale_buffer = CreateBuffer(one_tile_buffer_config);
 
-        // Create CBs and point them to sharded buffers
-        auto cb_qk_im_id = tt::CBIndex::c_0;
-        auto cb_qk_im_config =
-            tt::tt_metal::CircularBufferConfig(qk_im_num_tiles * cb_tile_size, {{cb_qk_im_id, cb_df}})
-                .set_page_size(cb_qk_im_id, cb_tile_size)
-                .set_globally_allocated_address(*qk_im_buffer);
-        tt_metal::CreateCircularBuffer(program, core, cb_qk_im_config);
+    // Create CBs and point them to sharded buffers
+    auto cb_qk_im_id = tt::CBIndex::c_0;
+    auto cb_qk_im_config = tt::tt_metal::CircularBufferConfig(qk_im_num_tiles * cb_tile_size, {{cb_qk_im_id, cb_df}})
+                               .set_page_size(cb_qk_im_id, cb_tile_size)
+                               .set_globally_allocated_address(*qk_im_buffer);
+    tt_metal::CreateCircularBuffer(program, core, cb_qk_im_config);
 
-        auto cb_prev_max_id = tt::CBIndex::c_1;
-        auto cb_prev_max_config =
-            tt::tt_metal::CircularBufferConfig(stats_num_tiles * cb_tile_size, {{cb_prev_max_id, cb_df}})
-                .set_page_size(cb_prev_max_id, cb_tile_size)
-                .set_globally_allocated_address(*prev_max_buffer);
-        tt_metal::CreateCircularBuffer(program, core, cb_prev_max_config);
+    auto cb_prev_max_id = tt::CBIndex::c_1;
+    auto cb_prev_max_config =
+        tt::tt_metal::CircularBufferConfig(stats_num_tiles * cb_tile_size, {{cb_prev_max_id, cb_df}})
+            .set_page_size(cb_prev_max_id, cb_tile_size)
+            .set_globally_allocated_address(*prev_max_buffer);
+    tt_metal::CreateCircularBuffer(program, core, cb_prev_max_config);
 
-        auto cb_out_max_id = tt::CBIndex::c_2;
-        auto cb_out_max_config =
-            tt::tt_metal::CircularBufferConfig(stats_num_tiles * cb_tile_size, {{cb_out_max_id, cb_df}})
-                .set_page_size(cb_out_max_id, cb_tile_size)
-                .set_globally_allocated_address(*out_max_buffer);
-        tt_metal::CreateCircularBuffer(program, core, cb_out_max_config);
+    auto cb_out_max_id = tt::CBIndex::c_2;
+    auto cb_out_max_config =
+        tt::tt_metal::CircularBufferConfig(stats_num_tiles * cb_tile_size, {{cb_out_max_id, cb_df}})
+            .set_page_size(cb_out_max_id, cb_tile_size)
+            .set_globally_allocated_address(*out_max_buffer);
+    tt_metal::CreateCircularBuffer(program, core, cb_out_max_config);
 
-        auto cb_identity_scale_id = tt::CBIndex::c_3;
-        auto cb_identity_scale_config =
-            tt::tt_metal::CircularBufferConfig(1 * cb_tile_size, {{cb_identity_scale_id, cb_df}})
-                .set_page_size(cb_identity_scale_id, cb_tile_size)
-                .set_globally_allocated_address(*identity_scale_buffer);
-        tt_metal::CreateCircularBuffer(program, core, cb_identity_scale_config);
+    auto cb_identity_scale_id = tt::CBIndex::c_3;
+    auto cb_identity_scale_config =
+        tt::tt_metal::CircularBufferConfig(1 * cb_tile_size, {{cb_identity_scale_id, cb_df}})
+            .set_page_size(cb_identity_scale_id, cb_tile_size)
+            .set_globally_allocated_address(*identity_scale_buffer);
+    tt_metal::CreateCircularBuffer(program, core, cb_identity_scale_config);
 
-        std::vector<uint32_t> compute_kernel_args = {
-            cb_qk_im_id,
-            cb_prev_max_id,
-            cb_out_max_id,
-            cb_identity_scale_id,
-            q_chunk_size,
-            k_chunk_size,
-            static_cast<uint32_t>(do_eltwise_max ? 1 : 0)};
-        std::map<std::string, std::string> compute_defines;
-        // unnecessary defines
-        compute_defines["SUB_EXP_GRANULARITY"] = "0";
-        compute_defines["LOG2_SUB_EXP_GRANULARITY"] = "0";
-        compute_defines["STATS_GRANULARITY"] = "0";
-        compute_defines["LOG2_STATS_GRANULARITY"] = "0";
-        compute_defines["MUL_BCAST_GRANULARITY"] = "0";
-        compute_defines["LOG2_MUL_BCAST_GRANULARITY"] = "0";
-        compute_defines["DHT_GRANULARITY"] = "0";
-        compute_defines["LOG2_DHT_GRANULARITY"] = "0";
-        compute_defines["EXP_APPROX_MODE"] = "0";
+    std::vector<uint32_t> compute_kernel_args = {
+        cb_qk_im_id,
+        cb_prev_max_id,
+        cb_out_max_id,
+        cb_identity_scale_id,
+        q_chunk_size,
+        k_chunk_size,
+        static_cast<uint32_t>(do_eltwise_max ? 1 : 0)};
+    std::map<std::string, std::string> compute_defines;
+    // unnecessary defines
+    compute_defines["SUB_EXP_GRANULARITY"] = "0";
+    compute_defines["LOG2_SUB_EXP_GRANULARITY"] = "0";
+    compute_defines["STATS_GRANULARITY"] = "0";
+    compute_defines["LOG2_STATS_GRANULARITY"] = "0";
+    compute_defines["MUL_BCAST_GRANULARITY"] = "0";
+    compute_defines["LOG2_MUL_BCAST_GRANULARITY"] = "0";
+    compute_defines["DHT_GRANULARITY"] = "0";
+    compute_defines["LOG2_DHT_GRANULARITY"] = "0";
+    compute_defines["EXP_APPROX_MODE"] = "0";
+    // For this testing, use granularity of 1
+    compute_defines["REDUCE_GRANULARITY"] = "1";
+    compute_defines["LOG2_REDUCE_GRANULARITY"] = "0";
 
-        tt_metal::CreateKernel(
-            program,
-            kernel_path,
-            core,
-            tt_metal::ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi2,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .math_approx_mode = false,
-                .compile_args = compute_kernel_args,
-                .defines = compute_defines});
+    tt_metal::CreateKernel(
+        program,
+        kernel_path,
+        core,
+        tt_metal::ComputeConfig{
+            .math_fidelity = MathFidelity::HiFi2,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .math_approx_mode = false,
+            .compile_args = compute_kernel_args,
+            .defines = compute_defines});
 
-        // Prepare inputs
-        SHAPE qk_im_shape = {1, 1, q_chunk_size * 32, k_chunk_size * 32};
-        tt::deprecated::Tensor<bfloat16> qk_im_tensor = tt::deprecated::initialize_tensor<bfloat16>(
-            qk_im_shape, tt::deprecated::Initialize::RANDOM, -50, 50, 0 /* seed */);
+    // Prepare inputs
+    SHAPE qk_im_shape = {1, 1, q_chunk_size * 32, k_chunk_size * 32};
+    tt::deprecated::Tensor<bfloat16> qk_im_tensor = tt::deprecated::initialize_tensor<bfloat16>(
+        qk_im_shape, tt::deprecated::Initialize::RANDOM, -50, 50, 0 /* seed */);
 
-        vector<uint32_t> qk_im;
-        auto qk_im_tilized = tilize_nfaces(qk_im_tensor.get_values(), q_chunk_size * 32, k_chunk_size * 32);
-        qk_im = pack_bfloat16_vec_into_uint32_vec(qk_im_tilized);
-        tt_metal::detail::WriteToBuffer(qk_im_buffer, qk_im);
+    vector<uint32_t> qk_im;
+    auto qk_im_tilized = tilize_nfaces(qk_im_tensor.get_values(), q_chunk_size * 32, k_chunk_size * 32);
+    qk_im = pack_bfloat16_vec_into_uint32_vec(qk_im_tilized);
+    tt_metal::detail::WriteToBuffer(qk_im_buffer, qk_im);
 
-        std::vector<bfloat16> prev_max_first_col;
-        auto prev_max_rm = make_prev_max_matrix(q_chunk_size, 25.0f, 65.0f, prev_max_first_col);
-        auto prev_max_tilized = tilize_nfaces(prev_max_rm, q_chunk_size * 32, 32);
-        auto prev_max_uint_vec = pack_bfloat16_vec_into_uint32_vec(prev_max_tilized);
-        tt_metal::detail::WriteToBuffer(prev_max_buffer, prev_max_uint_vec);
+    std::vector<bfloat16> prev_max_first_col;
+    auto prev_max_rm = make_prev_max_matrix(q_chunk_size, 25.0f, 65.0f, prev_max_first_col);
+    auto prev_max_tilized = tilize_nfaces(prev_max_rm, q_chunk_size * 32, 32);
+    auto prev_max_uint_vec = pack_bfloat16_vec_into_uint32_vec(prev_max_tilized);
+    tt_metal::detail::WriteToBuffer(prev_max_buffer, prev_max_uint_vec);
 
-        auto identity_scale_tile = make_identity_scale_tile();
-        auto identity_scale_uint_vec = pack_bfloat16_vec_into_uint32_vec(identity_scale_tile);
-        tt_metal::detail::WriteToBuffer(identity_scale_buffer, identity_scale_uint_vec);
+    auto identity_scale_tile = make_identity_scale_tile();
+    auto identity_scale_uint_vec = pack_bfloat16_vec_into_uint32_vec(identity_scale_tile);
+    tt_metal::detail::WriteToBuffer(identity_scale_buffer, identity_scale_uint_vec);
 
-        // Execute program using MeshWorkload
-        tt_metal::distributed::MeshWorkload workload;
-        tt_metal::distributed::MeshCoordinate zero_coord =
-            tt_metal::distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
-        tt_metal::distributed::MeshCoordinateRange device_range =
-            tt_metal::distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        workload.add_program(device_range, std::move(program));
-        tt_metal::distributed::EnqueueMeshWorkload(cq, workload, false);
-        tt_metal::distributed::Finish(cq);
+    // Execute program using MeshWorkload
+    tt_metal::distributed::MeshWorkload workload;
+    tt_metal::distributed::MeshCoordinate zero_coord =
+        tt_metal::distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
+    tt_metal::distributed::MeshCoordinateRange device_range =
+        tt_metal::distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    workload.add_program(device_range, std::move(program));
+    tt_metal::distributed::EnqueueMeshWorkload(cq, workload, false);
+    tt_metal::distributed::Finish(cq);
 
-        // Read outputs
-        std::vector<uint32_t> out_max_vec;
-        tt_metal::detail::ReadFromBuffer(out_max_buffer, out_max_vec);
-        auto out_max_bfp16 = unpack_uint32_vec_into_bfloat16_vec(out_max_vec);
-        auto out_max_rm = untilize_nfaces(out_max_bfp16, q_chunk_size * 32, 32);
+    // Read outputs
+    std::vector<uint32_t> out_max_vec;
+    tt_metal::detail::ReadFromBuffer(out_max_buffer, out_max_vec);
+    auto out_max_bfp16 = unpack_uint32_vec_into_bfloat16_vec(out_max_vec);
+    auto out_max_rm = untilize_nfaces(out_max_bfp16, q_chunk_size * 32, 32);
 
-        // Golden
-        auto golden_first_col_rm =
-            golden_reduce_c(qk_im_tensor.get_values(), prev_max_first_col, q_chunk_size, k_chunk_size, do_eltwise_max);
+    // Golden
+    auto golden_first_col_rm =
+        golden_reduce_c(qk_im_tensor.get_values(), prev_max_first_col, q_chunk_size, k_chunk_size, do_eltwise_max);
 
-        float mse = compare_first_col_mse(out_max_rm, golden_first_col_rm);
-        const float max_mse = 0.0f;  // expect exact max match in first column
-        log_info(LogTest, "{} first-col mse: {} (do_eltwise: {})", kernel_name, mse, do_eltwise_max);
-        if (mse > max_mse) {
-            log_error(LogTest, "{} first-col mse: {} > {} (do_eltwise: {})", kernel_name, mse, max_mse, do_eltwise_max);
-            pass = false;
-        }
-
-    } catch (const std::exception& e) {
+    float mse = compare_first_col_mse(out_max_rm, golden_first_col_rm);
+    const float max_mse = 0.0f;  // expect exact max match in first column
+    log_info(LogTest, "{} first-col mse: {} (do_eltwise: {})", kernel_name, mse, do_eltwise_max);
+    if (mse > max_mse) {
+        log_error(LogTest, "{} first-col mse: {} > {} (do_eltwise: {})", kernel_name, mse, max_mse, do_eltwise_max);
         pass = false;
-        log_error(LogTest, "{}", e.what());
     }
 
     return pass;
@@ -320,10 +316,8 @@ int main(int argc, char** argv) {
     // std::vector<bool> do_eltwise = {false, true};
 
     // Test both implementations
-    // std::vector<std::pair<std::string, std::string>> kernel_variants = {
-    //     {"tests/tt_metal/tt_metal/test_kernels/misc/sdpa/reduce_c/compute.cpp", "reduce_c"},
-    //     {"tests/tt_metal/tt_metal/test_kernels/misc/sdpa/reduce_block_max_row/compute.cpp", "reduce_block_max_row"}};
     std::vector<std::pair<std::string, std::string>> kernel_variants = {
+        {"tests/tt_metal/tt_metal/test_kernels/misc/sdpa/reduce_c/compute.cpp", "reduce_c"},
         {"tests/tt_metal/tt_metal/test_kernels/misc/sdpa/reduce_block_max_row/compute.cpp", "reduce_block_max_row"}};
 
     for (const auto& [kernel_path, kernel_name] : kernel_variants) {
