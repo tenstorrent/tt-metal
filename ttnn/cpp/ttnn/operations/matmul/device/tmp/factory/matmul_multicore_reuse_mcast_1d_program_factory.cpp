@@ -2505,7 +2505,6 @@ inline void override_gather_in0_program_parameters(
     }
 
     if (out_sharded) {
-        // TODO:[Migration] Verify assert won't fire
         TT_ASSERT(
             override_variables.cbs.size() == 3, "Expected 3 cbs: 2 cb for input tensors + 1 cb for output tensor");
         // cbs 0 and 1 contain cb_src0 and cb_src1
