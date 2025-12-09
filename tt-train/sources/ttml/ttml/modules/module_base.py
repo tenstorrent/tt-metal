@@ -14,7 +14,7 @@ from abc import ABC, abstractmethod
 from collections import OrderedDict
 from typing import Any, Dict, Optional
 
-from .._ttml import RunMode
+from .._ttml.modules import RunMode
 
 from .exceptions import (
     DuplicateNameError,
