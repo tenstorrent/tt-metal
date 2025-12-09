@@ -917,7 +917,7 @@ std::string PhysicalSystemDescriptor::get_hostname_for_rank(uint32_t rank) const
             return host;
         }
     }
-    TT_FATAL(false, "Hostname for rank {} not found", rank);
+    TT_THROW("Hostname for rank {} not found", rank);
 }
 
 std::string PhysicalSystemDescriptor::get_host_name_for_asic(AsicID asic_id) const {

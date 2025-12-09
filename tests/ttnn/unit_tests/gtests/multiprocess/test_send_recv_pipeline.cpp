@@ -93,6 +93,8 @@ std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> generate_a
 std::vector<LogicalPipelineStageConfig> build_2x4_pipeline(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate>& asic_id_to_mesh_coord) {
+    // Physical locations used here correspond to the BH Galaxy (Rev A and Rev B).
+    // This setup will not work on the WH Galaxy or BH Galaxy Rev C.
     // Setup pipeline stages in physical space (Host rank, Tray ID, ASIC Location)
     std::vector<PhysicalPipelineStageConfig> physical_pipeline_stage_configs = {
         {.tray_id = 1, .entry_node_asic_location = 4, .exit_node_asic_location = 6},
@@ -153,6 +155,10 @@ PhysicalSystemDescriptor create_physical_system_descriptor() {
 // - This data is streamed through the pipeline for 10 iterations
 // - Final pipeline stage validates data correctness
 TEST_F(MeshDevice4StagePipelineSendRecvFixture, TestSendRecvPipeline) {
+    auto arch = tt::tt_metal::MetalContext::instance().get_cluster().arch();
+    if (arch != ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "This test can only run on Blackhole systems";
+    }
     constexpr uint32_t XFER_SIZE = 14 * 1024;
     constexpr uint32_t NUM_ITERATIONS = 10;
 
@@ -256,11 +262,6 @@ TEST_F(MeshDevice4StagePipelineSendRecvFixture, TestSendRecvPipeline) {
             .receiver_rank = distributed_context->rank()};
         auto recv_socket = distributed::MeshSocket(mesh_device_, recv_socket_config);
 
-        distributed::MeshSocket send_socket;
-        distributed::MeshSocket intermed_send;
-        distributed::MeshSocket intermed_recv;
-        uint32_t output_linear_index = 0;
-
         if (is_intermediate) {
             auto [my_sender, downstream_recv] = get_connecting_coords(pipeline_stages, my_mesh_id, downstream_mesh_id);
             distributed::SocketConnection fwd_connection = {
@@ -270,43 +271,41 @@ TEST_F(MeshDevice4StagePipelineSendRecvFixture, TestSendRecvPipeline) {
                 .socket_mem_config = socket_mem_config,
                 .sender_rank = distributed_context->rank(),
                 .receiver_rank = distributed::multihost::Rank(downstream_mesh_id)};
-            send_socket = distributed::MeshSocket(mesh_device_, send_socket_config);
+            auto send_socket = distributed::MeshSocket(mesh_device_, send_socket_config);
 
-            std::tie(intermed_send, intermed_recv) = create_intermed_socket_pair(my_recv, my_sender);
-        } else {
-            // Pipeline end
-            distributed::MeshCoordinate end_coord = pipeline_stages[*pipeline_end_rank].exit_node_coord;
-            std::tie(intermed_send, intermed_recv) = create_intermed_socket_pair(my_recv, end_coord);
-            output_linear_index = (end_coord[0] * mesh_device_->shape()[1] + end_coord[1]);
-        }
+            auto [intermed_send, intermed_recv] = create_intermed_socket_pair(my_recv, my_sender);
 
-        auto run_intermed_step = [&]() {
-            ttnn::experimental::recv_async(intermediate_tensor, recv_socket);
-            ttnn::experimental::send_async(intermediate_tensor, intermed_send);
-            ttnn::experimental::recv_async(intermediate_tensor, intermed_recv);
-            ttnn::experimental::send_async(intermediate_tensor, send_socket);
-        };
+            auto run_intermed_step = [&]() {
+                ttnn::experimental::recv_async(intermediate_tensor, recv_socket);
+                ttnn::experimental::send_async(intermediate_tensor, intermed_send);
+                ttnn::experimental::recv_async(intermediate_tensor, intermed_recv);
+                ttnn::experimental::send_async(intermediate_tensor, send_socket);
+            };
 
-        auto run_receiver_step = [&](uint32_t i) {
-            ttnn::experimental::recv_async(intermediate_tensor, recv_socket);
-            ttnn::experimental::send_async(intermediate_tensor, intermed_send);
-            Tensor output_tensor = tt::tt_metal::allocate_tensor_on_device(tensor_spec, mesh_device_.get());
-            ttnn::experimental::recv_async(output_tensor, intermed_recv);
-            auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*mesh_device_, /*dim=*/0);
-            auto output_data = ttnn::distributed::aggregate_tensor(output_tensor, *composer).to_vector<uint32_t>();
-            auto expected_output_data = ttnn::arange(i, num_elems + i, 1, tt::tt_metal::DataType::UINT32);
-            auto expected_output_data_vector = expected_output_data.to_vector<uint32_t>();
-            auto chunked_output_vector = std::vector<uint32_t>(
-                output_data.begin() + output_linear_index * num_elems,
-                output_data.begin() + (output_linear_index + 1) * num_elems);
-            EXPECT_EQ(chunked_output_vector, expected_output_data_vector);
-        };
-
-        if (is_intermediate) {
             for (uint32_t i = 0; i < NUM_ITERATIONS; i++) {
                 run_intermed_step();
             }
         } else {
+            // Pipeline end
+            distributed::MeshCoordinate end_coord = pipeline_stages[*pipeline_end_rank].exit_node_coord;
+            auto [intermed_send, intermed_recv] = create_intermed_socket_pair(my_recv, end_coord);
+            uint32_t output_linear_index = ((end_coord[0] * mesh_device_->shape()[1]) + end_coord[1]);
+
+            auto run_receiver_step = [&](uint32_t i) {
+                ttnn::experimental::recv_async(intermediate_tensor, recv_socket);
+                ttnn::experimental::send_async(intermediate_tensor, intermed_send);
+                Tensor output_tensor = tt::tt_metal::allocate_tensor_on_device(tensor_spec, mesh_device_.get());
+                ttnn::experimental::recv_async(output_tensor, intermed_recv);
+                auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*mesh_device_, /*dim=*/0);
+                auto output_data = ttnn::distributed::aggregate_tensor(output_tensor, *composer).to_vector<uint32_t>();
+                auto expected_output_data = ttnn::arange(i, num_elems + i, 1, tt::tt_metal::DataType::UINT32);
+                auto expected_output_data_vector = expected_output_data.to_vector<uint32_t>();
+                auto chunked_output_vector = std::vector<uint32_t>(
+                    output_data.begin() + output_linear_index * num_elems,
+                    output_data.begin() + (output_linear_index + 1) * num_elems);
+                EXPECT_EQ(chunked_output_vector, expected_output_data_vector);
+            };
+
             for (uint32_t i = 0; i < NUM_ITERATIONS; i++) {
                 run_receiver_step(i);
             }

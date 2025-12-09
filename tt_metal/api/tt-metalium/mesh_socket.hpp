@@ -70,7 +70,6 @@ enum class SocketEndpoint : uint8_t { SENDER, RECEIVER };
 class MeshSocket {
 public:
     MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketConfig& config);
-    MeshSocket() = default;
     // Sockets can only be created in sender/receiver pairs.
     static std::pair<MeshSocket, MeshSocket> create_socket_pair(
         const std::shared_ptr<MeshDevice>& sender,
@@ -87,8 +86,6 @@ public:
     SocketEndpoint get_socket_endpoint_type() const { return socket_endpoint_type_; }
 
     tt::tt_fabric::FabricNodeId get_fabric_node_id(SocketEndpoint endpoint, const MeshCoordinate& coord) const;
-
-    MeshDevice* get_device() const { return config_buffer_->device(); }
 
     static constexpr auto attribute_names =
         std::forward_as_tuple("config", "socket_endpoint_type", "fabric_node_id_map");
