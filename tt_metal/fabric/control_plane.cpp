@@ -978,9 +978,6 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                     auto host_rank_for_chip =
                         this->topology_mapper_->get_host_rank_for_chip(mesh_id, logical_connected_chip_id);
 
-                    auto neighbor_host = this->topology_mapper_->get_hostname_for_fabric_node_id(
-                        FabricNodeId(mesh_id, logical_connected_chip_id));
-
                     TT_ASSERT(
                         host_rank_for_chip.has_value(),
                         "Mesh {} Chip {} does not have a host rank associated with it",

@@ -620,7 +620,6 @@ public:
     void setup_ci_artifacts() {
         std::filesystem::path tt_metal_home =
             std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
-        std::filesystem::path bandwidth_results_path = tt_metal_home / output_dir;
         std::filesystem::path ci_artifacts_path = tt_metal_home / ci_artifacts_dir;
         // Create CI artifacts directory if it doesn't exist
         if (!std::filesystem::exists(ci_artifacts_path)) {

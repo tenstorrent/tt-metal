@@ -16,6 +16,15 @@
 #include <board/board.hpp>
 #include <factory_system_descriptor/utils.hpp>
 
+// Forward declarations for in-memory validation
+namespace YAML {
+class Node;
+}
+
+namespace tt::scaleout_tools::fsd::proto {
+class FactorySystemDescriptor;
+}
+
 namespace tt::scaleout_tools {
 
 using tt::ChipId;
@@ -87,17 +96,17 @@ tt_metal::AsicTopology generate_asic_topology_from_connections(
     const std::set<PhysicalChannelConnection>& physical_connections,
     PhysicalSystemDescriptor& physical_system_descriptor);
 
-std::string get_factory_system_descriptor_path(
+fsd::proto::FactorySystemDescriptor get_factory_system_descriptor(
     const std::optional<std::string>& cabling_descriptor_path,
     const std::optional<std::string>& deployment_descriptor_path,
     const std::optional<std::string>& fsd_path,
-    const std::string& output_path,
     const std::vector<std::string>& hostnames);
 
 tt_metal::AsicTopology validate_connectivity(
-    const std::string& fsd_path,
-    const std::string& gsd_yaml_path,
+    const fsd::proto::FactorySystemDescriptor& fsd_proto,
+    const YAML::Node& gsd_yaml_node,
     bool fail_on_warning,
-    PhysicalSystemDescriptor& physical_system_descriptor);
+    PhysicalSystemDescriptor& physical_system_descriptor,
+    std::optional<uint32_t> min_connections = std::nullopt);
 
 }  // namespace tt::scaleout_tools

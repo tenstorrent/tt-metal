@@ -40,6 +40,15 @@
         }
       },
       {
+        "name": "clang-tidy-fix-parallel",
+        "inherits": "clang-tidy",
+        "description": "Run Clang Tidy in parallel and export fixes to YAML files (apply with clang-apply-replacements)",
+        "binaryDir": "${sourceDir}/.build/clang-tidy-fix-parallel",
+        "cacheVariables": {
+          "CMAKE_CXX_CLANG_TIDY": {"value": "${sourceDir}/cmake/clang-tidy-export-fixes-wrapper.sh;${sourceDir}/.build/clang-tidy-fix-parallel/fixes"}
+        }
+      },
+      {
         "name": "gcc",
         "inherits": "default",
         "description": "Build with GCC",
@@ -95,6 +104,13 @@
       {
         "name": "clang-tidy-fix",
         "configurePreset": "clang-tidy-fix",
+        "configuration": "RelWithDebInfo",
+        "targets": ["all", "all_verify_interface_header_sets"],
+        "nativeToolOptions": ["-k0"]
+      },
+      {
+        "name": "clang-tidy-fix-parallel",
+        "configurePreset": "clang-tidy-fix-parallel",
         "configuration": "RelWithDebInfo",
         "targets": ["all", "all_verify_interface_header_sets"],
         "nativeToolOptions": ["-k0"]

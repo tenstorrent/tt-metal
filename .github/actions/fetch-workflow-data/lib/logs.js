@@ -314,7 +314,7 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
           core.info(`[LOGS] Downloaded and indexed gtest logs for run ${targetRun.id} → ${jobsIndex.jobs.length} job(s), ${jobsIndex.jobs.reduce((sum, j) => sum + (j.files || []).length, 0)} files`);
         } else if (!sawAnyFailureAnnotations || annotationsFetchFailed) {
           // Download other logs (non-gtest failures with no annotations, or if annotation fetch failed entirely)
-          // Just download and list files, no detailed indexing
+          // Store actual job names from GitHub API instead of extracting from file paths
           const runLogsZip = await octokit.rest.actions.downloadWorkflowRunLogs({ owner, repo, run_id: targetRun.id });
           const runDir = path.join(otherLogsRoot, String(targetRun.id));
           if (!fs.existsSync(runDir)) fs.mkdirSync(runDir, { recursive: true });
@@ -324,6 +324,32 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
           if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
           // Extract quietly to avoid ENOBUFS
           execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
+
+          // Fetch all failing job names from GitHub API with pagination (separate fetch to ensure all jobs are captured)
+          const failingJobNames = new Set();
+          try {
+            // Get jobs for this run - filter for failed jobs, handle pagination
+            let page = 1;
+            let hasMore = true;
+            while (hasMore) {
+              const jobsResp = await octokit.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: targetRun.id, per_page: 100, page });
+              const jobs = Array.isArray(jobsResp.data.jobs) ? jobsResp.data.jobs : [];
+              for (const job of jobs) {
+                // Include jobs that failed (conclusion is 'failure' or 'cancelled')
+                const conclusion = (job.conclusion || '').toLowerCase();
+                if (conclusion === 'failure' || conclusion === 'cancelled') {
+                  if (job.name) {
+                    failingJobNames.add(String(job.name));
+                  }
+                }
+              }
+              // Continue if we got a full page (might have more), stop if we got fewer
+              hasMore = jobs.length >= 100;
+              page++;
+            }
+          } catch (e) {
+            core.warning(`Failed to fetch job names from API for run ${targetRun.id}: ${e.message}`);
+          }
 
           // Build a simple index of all .txt log files (no parsing, just list files)
           const logFiles = [];
@@ -341,11 +367,15 @@ async function processWorkflowLogs(grouped, branch, workspace, cachedAnnotations
               }
             }
           }
+          // Store both file list and actual job names from GitHub API
           const logsListPath = path.join(runDir, 'logs-list.json');
-          fs.writeFileSync(logsListPath, JSON.stringify({ files: logFiles }));
+          fs.writeFileSync(logsListPath, JSON.stringify({
+            files: logFiles,
+            job_names: Array.from(failingJobNames)
+          }));
           const relativeRunDir = path.relative(workspace, runDir) || runDir;
           otherLogsIndex[String(targetRun.id)] = relativeRunDir;
-          core.info(`[LOGS] Downloaded other logs for run ${targetRun.id} → ${logFiles.length} file(s)`);
+          core.info(`[LOGS] Downloaded other logs for run ${targetRun.id} → ${logFiles.length} file(s), ${failingJobNames.size} failing job(s)`);
         }
       } catch (e) {
         core.warning(`Failed to download/index logs for run ${targetRun.id}: ${e.message}`);

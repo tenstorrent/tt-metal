@@ -7,7 +7,7 @@
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_op.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_op.hpp"
-#include "ttnn/operations/transformer/sdpa/device/ring_distributed_sdpa_op.hpp"
+#include "ttnn/operations/transformer/sdpa/device/ring_distributed_sdpa_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.hpp"
 #include "ttnn/device.hpp"
@@ -287,18 +287,16 @@ ttnn::Tensor ExecuteRingDistributedScaledDotProductAttention::invoke(
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
-    return tt::tt_metal::operation::run(
-               RingDistributedScaledDotProductAttention{
-                   .ring_size = ring_size,
-                   .ring_id = ring_id,  // Pass through the ring_id parameter (can be used or ignored)
-                   .scale = scale,
-                   .output_mem_config = memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-                   .program_config = std::move(program_config),
-                   .compute_kernel_config = kernel_config_val},
-               {input_tensor_q, input_tensor_k, input_tensor_v},
-               {},
-               {})
-        .at(0);
+    return ttnn::prim::ring_distributed_sdpa(
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
+        ring_size,
+        ring_id,  // Pass through the ring_id parameter (can be used or ignored)
+        scale,
+        memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+        std::move(program_config),
+        kernel_config_val);
 }
 
 }  // namespace ttnn::operations::transformer

@@ -18,7 +18,7 @@ FORCE_INLINE void receive_upper_block(
     uint32_t num_blocks_in_column,
     uint32_t num_slices_along_channels,
     uint32_t block_depth,
-    uint32_t generic_block_depth = 32) {
+    uint32_t generic_block_depth) {
     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
         const uint32_t read_tile_id = get_tile_id(
             num_blocks_in_column,
@@ -42,7 +42,7 @@ FORCE_INLINE void output_block(
     uint32_t num_blocks_in_column,
     uint32_t num_slices_along_channels,
     uint32_t block_depth,
-    uint32_t generic_block_depth = 32) {
+    uint32_t generic_block_depth) {
     for (uint32_t inner_tile_stride = 0; inner_tile_stride < block_depth; ++inner_tile_stride) {
         const uint32_t write_tile_id = get_tile_id(
             num_blocks_in_column,
@@ -62,9 +62,9 @@ void kernel_main() {
     const uint32_t output_base_addr = get_arg_val<uint32_t>(0);
     constexpr auto ctas = get_ctas();
     const auto output_addr_gtor = TensorAccessor(ctas.output_args, output_base_addr, get_tile_size(ctas.output_cb));
-    constexpr uint32_t num_slices_along_channels = block_depth_ceil(ctas.num_channels, ctas.block_depth);
-    constexpr uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
-    constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, ctas.block_depth);
+    constexpr uint32_t num_slices_along_channels = ceil(ctas.num_channels, ctas.tile_width);
+    constexpr uint32_t num_blocks_in_row = ceil(ctas.input_depth, ctas.block_depth);
+    constexpr uint32_t num_blocks_in_column = ceil(ctas.input_height, ctas.tile_height);
 
     const auto core_x = get_absolute_logical_x();
     const auto core_y = get_absolute_logical_y();
