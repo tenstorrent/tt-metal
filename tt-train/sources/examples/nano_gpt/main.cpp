@@ -46,7 +46,7 @@ void model_to_train(Model &model) {
 
 ttml::autograd::TensorPtr run_model(
     Model &model, const ttml::autograd::TensorPtr &data, const ttml::autograd::TensorPtr &mask) {
-    return (*model)(data, mask, /** use_cache */ false);
+    return (*model)(data, mask);
 }
 
 ttml::serialization::NamedParameters get_model_parameters(Model &model) {
@@ -302,14 +302,13 @@ int main(int argc, char **argv) {
     CLI::App app{"NanoGPT Example"};
     argv = app.ensure_utf8(argv);
 
-    std::string training_config_name = "./configs/training_configs/training_shakespeare_llama3_gpt2s_size.yaml";
+    std::string training_config_name = "./configs/training_configs/training_shakespeare_nanogpt.yaml";
     std::string multihost_config_name = "";
 
     std::string run_name = "";
     bool add_time_to_name = true;
     std::string safetensors_path = "";
     std::string save_and_exit_path = "";
-
     app.add_option("-c,--config", training_config_name, "Training Config name")->default_val(training_config_name);
     app.add_option("--multihost", multihost_config_name, "Multihost Config name")->default_val(multihost_config_name);
 
