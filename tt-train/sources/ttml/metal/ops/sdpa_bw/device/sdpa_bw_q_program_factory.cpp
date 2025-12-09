@@ -210,8 +210,8 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     TT_FATAL(qWt == kWt && qWt == vWt, "Query, Key and Value inner dims must be the same");
 
     // Scale factor for attention computation
-    // TODO(vmelnykov): double check if this is correct
-    float per_head_dim = static_cast<float>(qEmbd) / static_cast<float>(qNH);
+    // Note: qEmbd is already the per-head dimension (tensor shape is B, NH, S, Embd)
+    float per_head_dim = static_cast<float>(qEmbd);
     uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(per_head_dim));
     uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);
     uint32_t custom_inf = std::bit_cast<uint32_t>(1e9F);
@@ -274,22 +274,22 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
 
     // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
-    [[maybe_unused]] auto cb_intermediates =  // CBIndex::c_6
-        create_circular_buffer(
-            program,
-            all_cores,
-            kIntermediatesCbIndex,
-            precise_data_format,
-            float32_single_tile_size_bytes,
-            kNumOfIntermCBTiles);
     // [[maybe_unused]] auto cb_intermediates =  // CBIndex::c_6
     //     create_circular_buffer(
     //         program,
     //         all_cores,
     //         kIntermediatesCbIndex,
-    //         data_format,
-    //         bfloat16_single_tile_size_bytes,
+    //         precise_data_format,
+    //         float32_single_tile_size_bytes,
     //         kNumOfIntermCBTiles);
+    [[maybe_unused]] auto cb_intermediates =  // CBIndex::c_6
+        create_circular_buffer(
+            program,
+            all_cores,
+            kIntermediatesCbIndex,
+            data_format,
+            bfloat16_single_tile_size_bytes,
+            kNumOfIntermCBTiles);
 
     // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
     [[maybe_unused]] auto cb_mat_mul_reduce =  // CBIndex::c_7
@@ -403,22 +403,22 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             kSingleTileBuffer);
 
     // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
-    [[maybe_unused]] auto cb_masked_interm =  // CBIndex::c_22
-        create_circular_buffer(
-            program,
-            all_cores,
-            kMaskedIntermCbIndex,
-            precise_data_format,
-            float32_single_tile_size_bytes,
-            kNumOfIntermCBTiles);
     // [[maybe_unused]] auto cb_masked_interm =  // CBIndex::c_22
     //     create_circular_buffer(
     //         program,
     //         all_cores,
     //         kMaskedIntermCbIndex,
-    //         data_format,
-    //         bfloat16_single_tile_size_bytes,
+    //         precise_data_format,
+    //         float32_single_tile_size_bytes,
     //         kNumOfIntermCBTiles);
+    [[maybe_unused]] auto cb_masked_interm =  // CBIndex::c_22
+        create_circular_buffer(
+            program,
+            all_cores,
+            kMaskedIntermCbIndex,
+            data_format,
+            bfloat16_single_tile_size_bytes,
+            kNumOfIntermCBTiles);
 
     [[maybe_unused]] auto cb_scaled_key =  // CBIndex::c_23
         create_circular_buffer(
@@ -489,9 +489,13 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     // 4) Create compute kernels
     // -------------------------------------------------------------------------
 
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    unpack_to_dest_mode[tt::CBIndex::c_9] = UnpackToDestMode::UnpackToDestFp32;   // set for prev_grad_query_holder
-    unpack_to_dest_mode[tt::CBIndex::c_10] = UnpackToDestMode::UnpackToDestFp32;  // set for cur_grad_query_holder
+    // Set UnpackToDestFp32 only for accumulator buffers (used with SFPU/copy, not FPU matmul)
+    auto create_unpack_to_dest_mode = []() {
+        std::vector<UnpackToDestMode> mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+        mode[tt::CBIndex::c_9] = UnpackToDestMode::UnpackToDestFp32;   // kPrevGradQueryHolderCbIndex
+        mode[tt::CBIndex::c_10] = UnpackToDestMode::UnpackToDestFp32;  // kCurGradQueryHolderCbIndex
+        return mode;
+    };
 
     // Group 1 compile-time arguments
     std::vector<uint32_t> compute_group_1_args = {
@@ -506,8 +510,6 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         minus_one,                  // used to transform mask from 1/0 to 0/-1
         custom_inf                  // used to transform mask from 0/-1 to 0/-1e9F
     };
-    // kernels.compute_group_1 = create_compute_kernel(
-    //     program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, /* fp32_dest_acc_en */ true);
     kernels.compute_group_1 = tt::tt_metal::CreateKernel(
         program,
         kComputeKernelPath,
@@ -515,7 +517,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
-            .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+            .unpack_to_dest_mode = create_unpack_to_dest_mode(),
             .math_approx_mode = false,
             .compile_args = compute_group_1_args,
             .defines = defines});
@@ -534,8 +536,6 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             minus_one,                  // used to transform mask from 1/0 to 0/-1
             custom_inf                  // used to transform mask from 0/-1 to 0/-1e9F
         };
-        // kernels.compute_group_2 = create_compute_kernel(
-        //     program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /* fp32_dest_acc_en */ true);
         kernels.compute_group_2 = tt::tt_metal::CreateKernel(
             program,
             kComputeKernelPath,
@@ -543,7 +543,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,
                 .fp32_dest_acc_en = args.fp32_dest_acc_en,
-                .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+                .unpack_to_dest_mode = create_unpack_to_dest_mode(),
                 .math_approx_mode = false,
                 .compile_args = compute_group_2_args,
                 .defines = defines});

@@ -87,8 +87,9 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_grad_output);
     const DataFormat data_format = get_dataformat(cb_grad_output);
 
-    const uint32_t precise_tile_bytes = get_tile_size(cb_intermediates);
-    const DataFormat precise_data_format = get_dataformat(cb_intermediates);
+    // [DEBUG]: Use fp32 for intermediates to improve numerical stability
+    // const uint32_t precise_tile_bytes = get_tile_size(cb_intermediates);
+    // const DataFormat precise_data_format = get_dataformat(cb_intermediates);
 
     // Create TensorAccessor generators for inputs
     const auto grad_output_addr_generator = TensorAccessor(grad_output_args, grad_output_addr, tile_bytes);
@@ -97,8 +98,11 @@ void kernel_main() {
     const auto key_addr_generator = TensorAccessor(key_args, key_addr, tile_bytes);
     const auto value_addr_generator = TensorAccessor(value_args, value_addr, tile_bytes);
     const auto mask_addr_generator = TensorAccessor(mask_args, mask_addr, tile_bytes);
+    // [DEBUG]: Use fp32 for intermediates to improve numerical stability
+    // const auto intermediates_addr_generator =
+    //     TensorAccessor(intermediates_args, intermediates_addr, precise_tile_bytes);
     const auto intermediates_addr_generator =
-        TensorAccessor(intermediates_args, intermediates_addr, precise_tile_bytes);
+        TensorAccessor(intermediates_args, intermediates_addr, tile_bytes);
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
     const uint32_t num_of_interm_tiles = 2U;
@@ -144,8 +148,12 @@ void kernel_main() {
         // intermediates shape: (B, qNH, S, 64) -> (batch, heads, seq_len, 2 tiles)
         uint32_t intermediates_idx = global_row_idx * num_of_interm_tiles;
         DPRINT << "Q_READER: intermediates_idx=" << intermediates_idx << ENDL();
+        // [DEBUG]: Use fp32 for intermediates to improve numerical stability
+        // read_row(
+        //     intermediates_idx, num_of_interm_tiles, cb_intermediates, intermediates_addr_generator,
+        //     precise_tile_bytes);
         read_row(
-            intermediates_idx, num_of_interm_tiles, cb_intermediates, intermediates_addr_generator, precise_tile_bytes);
+            intermediates_idx, num_of_interm_tiles, cb_intermediates, intermediates_addr_generator, tile_bytes);
 
         // cb_wait_front(cb_intermediates, num_of_interm_tiles);
         // print_tile(cb_intermediates, 0);

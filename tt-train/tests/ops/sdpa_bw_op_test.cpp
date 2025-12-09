@@ -541,7 +541,7 @@ std::vector<ttnn::Tensor> composite_sdpa(
 
 TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     using namespace ttml;
-    const uint32_t B = 1U, qNH = 1U, kvNH = 1U, S = 1024U, qD = 128U, kvD = 128U;
+    const uint32_t B = 1U, qNH = 6U, kvNH = 6U, S = 256U, qD = 128U, kvD = 128U;
     const float dropout_probability = 0.0F;
     const bool fp32_dest_acc_en = true;
     const float atol = 3e-2F, rtol = 3e-2F;
@@ -604,30 +604,19 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     // ========== Composite Implementation (uses ttnn ops) ==========
     fmt::print("Computing composite SDPA backward (ttnn ops)...\n");
     auto composite_output = composite_sdpa(query, key, value, grad_output, attn_mask, /*return_intermediate=*/true);
-    auto attn_output = /* attn_output */ composite_output[0];
+    auto composite_attn_output = /* attn_output */ composite_output[0];
     auto max_value = /* max_value */ composite_output[1];
     auto recip_sum_exp = /* recip_sum_exp */ composite_output[2];
     auto dL_dQ = /* dL_dQ */ composite_output[3];
     auto dL_dK = /* dL_dK */ composite_output[4];
     auto dL_dV = /* dL_dV */ composite_output[5];
-    auto attention_weights = /* attention_weights */ composite_output[6];
+    [[maybe_unused]] auto attention_weights = /* attention_weights */ composite_output[6];
 
     auto padded_interm = core::zeros(ttnn::Shape{B, qNH, S, 32U}, device, ttnn::DataType::BFLOAT16);
     max_value = ttnn::add(padded_interm, max_value);
     recip_sum_exp = ttnn::add(padded_interm, recip_sum_exp);
 
-    auto forward_intermediates = ttnn::concat(std::vector<ttnn::Tensor>{max_value, recip_sum_exp}, 3);
-    // fmt::print("Intermediates shape: {}\n", forward_intermediates.logical_shape());
-    // xt::xarray<float> fowrard_intermediates_xtensor = core::to_xtensor(forward_intermediates);
-    // for (uint32_t i = 0; i < 2U; ++i) {
-    //     for (uint32_t j = 0; j < S; ++j) {
-    //         fmt::print(
-    //             "forward_intermediates[0,0,{},{}] = {:.6e}\n",
-    //             j,
-    //             i * 32,
-    //             fowrard_intermediates_xtensor(0, 0, j, i * 32));
-    //     }
-    // }
+    auto composite_intermediates = ttnn::concat(std::vector<ttnn::Tensor>{max_value, recip_sum_exp}, 3);
 
     // Diagnostic: Check intermediate values that might affect numerical stability
     xt::xarray<float> max_val_cpu = core::to_xtensor(max_value);
@@ -636,20 +625,44 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     fmt::print("Q row 0 (seq 0-31): max={:.6e}, recip_sum={:.6e}\n", max_val_cpu(0, 0, 0, 0), recip_cpu(0, 0, 0, 0));
     fmt::print("Q row 32 (seq 32): max={:.6e}, recip_sum={:.6e}\n", max_val_cpu(0, 0, 32, 0), recip_cpu(0, 0, 32, 0));
 
-    auto float_intermediates_cpu = core::from_xtensor<float, ttnn::DataType::FLOAT32>(float_intermediates, device);
-
-    auto op_result = ttml::metal::sdpa_bw(
-        grad_output,
-        attn_output,
+    // ========== SDPA Forward Kernel (get attn_output and intermediates) ==========
+    fmt::print("\nComputing SDPA forward kernel...\n");
+    auto sdpa_fw_result = ttml::metal::sdpa_fw(
         query,
         key,
         value,
         attn_mask,
-        float_intermediates_cpu,
+        dropout_probability,
+        /*return_intermediates=*/true,
+        fp32_dest_acc_en);
+
+    // sdpa_fw returns std::vector<std::optional<ttnn::Tensor>>, unwrap with .value()
+    auto kernel_attn_output = sdpa_fw_result[0].value();
+    auto kernel_intermediates = sdpa_fw_result[1].value();
+    fmt::print("SDPA forward kernel output shape: {}\n", kernel_attn_output.logical_shape());
+    fmt::print("SDPA forward kernel intermediates shape: {}\n", kernel_intermediates.logical_shape());
+
+    // ========== SDPA Backward Kernel (using forward kernel outputs) ==========
+    fmt::print("\nComputing SDPA backward kernel (using sdpa_fw outputs)...\n");
+    auto op_result = ttml::metal::sdpa_bw(
+        grad_output,
+        kernel_attn_output,
+        query,
+        key,
+        value,
+        attn_mask,
+        kernel_intermediates,
         dropout_probability,
         fp32_dest_acc_en);
 
     fmt::print("\n=== Converting tensors to xtensor ===\n");
+
+    // Convert forward kernel outputs for comparison
+    xt::xarray<float> kernel_attn_output_cpu = core::to_xtensor(kernel_attn_output);
+    xt::xarray<float> kernel_intermediates_cpu = core::to_xtensor(kernel_intermediates);
+    xt::xarray<float> composite_attn_output_cpu = core::to_xtensor(composite_attn_output);
+    xt::xarray<float> composite_intermediates_cpu = core::to_xtensor(composite_intermediates);
+    fmt::print("Converted forward outputs\n");
 
     xt::xarray<float> sdpa_bw_dQ = core::to_xtensor(op_result[0]);  // dL_dQ
     fmt::print("Converted kernel dQ\n");
@@ -665,8 +678,6 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     fmt::print("Converted kernel dV\n");
     xt::xarray<float> composite_dV = core::to_xtensor(dL_dV);
     fmt::print("Converted composite dV\n");
-
-    // xt::xarray<float> composite_attention_weights = core::to_xtensor(attention_weights);
 
     // Print shapes before checking
     fmt::print("\n=== Tensor Shapes ===\n");
@@ -736,14 +747,27 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     // ========== Comparisons ==========
     fmt::print("\n=== COMPARISON RESULTS ===\n\n");
 
+    // 0. Forward pass: Kernel vs Composite vs Float
+    fmt::print("------- FORWARD PASS: KERNEL VS COMPOSITE -------\n");
+    print_error_analysis(
+        kernel_attn_output_cpu, composite_attn_output_cpu, {atol, rtol}, 50, "Attn Output (Kernel FW vs Composite)");
+    print_error_analysis(
+        kernel_intermediates_cpu,
+        composite_intermediates_cpu,
+        {atol, rtol},
+        50,
+        "Intermediates (Kernel FW vs Composite)");
+    print_error_analysis(
+        kernel_intermediates_cpu, float_intermediates, {atol, rtol}, 50, "Intermediates (Kernel FW vs Float)");
+
     // 1. Float vs Composite
     fmt::print("------- FLOAT REFERENCE VS COMPOSITE -------\n");
     print_error_analysis(composite_dQ, float_dQ, {atol, rtol}, 50, "dQ (Composite vs Float)");
     print_error_analysis(composite_dK, float_dK, {atol, rtol}, 50, "dK (Composite vs Float)");
     print_error_analysis(composite_dV, float_dV, {atol, rtol}, 50, "dV (Composite vs Float)");
 
-    // 2. Float vs Kernel
-    fmt::print("------- FLOAT REFERENCE VS KERNEL -------\n");
+    // 2. Float vs Kernel (using sdpa_fw outputs)
+    fmt::print("------- FLOAT REFERENCE VS KERNEL (using sdpa_fw) -------\n");
     print_error_analysis(sdpa_bw_dQ, float_dQ, {atol, rtol}, 50, "dQ (Kernel vs Float)");
     print_error_analysis(sdpa_bw_dK, float_dK, {atol, rtol}, 50, "dK (Kernel vs Float)");
     print_error_analysis(sdpa_bw_dV, float_dV, {atol, rtol}, 50, "dV (Kernel vs Float)");
@@ -762,7 +786,11 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     // add analysis for the second tile (elements 32-63 in seq dimension) if needed
 
     // Final assertions
-    // 3e-2F
+    // Forward pass checks (sdpa_fw kernel vs composite)
+    bool fw_attn_output_matches = xt::allclose(kernel_attn_output_cpu, composite_attn_output_cpu, rtol, atol);
+    bool fw_intermediates_matches = xt::allclose(kernel_intermediates_cpu, composite_intermediates_cpu, rtol, atol);
+
+    // Backward pass checks
     bool kernel_dQ_matches_float = xt::allclose(sdpa_bw_dQ, float_dQ, rtol, atol);
     bool kernel_dK_matches_float = xt::allclose(sdpa_bw_dK, float_dK, rtol, atol);
     bool kernel_dV_matches_float = xt::allclose(sdpa_bw_dV, float_dV, rtol, atol);
@@ -773,13 +801,15 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
     bool composite_dK_matches_float = xt::allclose(composite_dK, float_dK, rtol, atol);
     bool composite_dV_matches_float = xt::allclose(composite_dV, float_dV, rtol, atol);
 
-    // bool kernel_attention_weights_matches_composite =
-    //     xt::allclose(sdpa_bw_dQ, composite_attention_weights, 2e-2F, 2e-2F);
-
     fmt::print("\n=== FINAL RESULTS ===\n");
-    // fmt::print("dQ: Kernel vs Composite temp res: {}\n", kernel_attention_weights_matches_composite ? "PASS" :
-    // "FAIL");
 
+    // Forward pass results
+    fmt::print("Forward Pass (sdpa_fw kernel vs composite):\n");
+    fmt::print("  Attn Output: {}\n", fw_attn_output_matches ? "PASS" : "FAIL");
+    fmt::print("  Intermediates: {}\n", fw_intermediates_matches ? "PASS" : "FAIL");
+
+    // Backward pass results
+    fmt::print("\nBackward Pass (sdpa_bw kernel using sdpa_fw outputs):\n");
     fmt::print(
         "dQ: Kernel vs Float: {}, Kernel vs Composite: {}\n",
         kernel_dQ_matches_float ? "PASS" : "FAIL",
@@ -793,14 +823,14 @@ TEST_F(SDPABackwardTest, SDPABackwardTest_SmallBatch) {
         kernel_dV_matches_float ? "PASS" : "FAIL",
         kernel_dV_matches_composite ? "PASS" : "FAIL");
 
-    fmt::print("dQ: Composite vs Float: {}\n", composite_dQ_matches_float ? "PASS" : "FAIL");
-    fmt::print("dK: Composite vs Float: {}\n", composite_dK_matches_float ? "PASS" : "FAIL");
-    fmt::print("dV: Composite vs Float: {}\n", composite_dV_matches_float ? "PASS" : "FAIL");
+    fmt::print("\nComposite vs Float Reference:\n");
+    fmt::print("dQ: {}\n", composite_dQ_matches_float ? "PASS" : "FAIL");
+    fmt::print("dK: {}\n", composite_dK_matches_float ? "PASS" : "FAIL");
+    fmt::print("dV: {}\n", composite_dV_matches_float ? "PASS" : "FAIL");
 
-    // fmt::print(
-    //     "kernel_attention_weights_matches_composite: {}\n",
-    //     kernel_attention_weights_matches_composite ? "PASS" : "FAIL");
-
+    // Assertions
+    EXPECT_TRUE(fw_attn_output_matches);
+    EXPECT_TRUE(fw_intermediates_matches);
     EXPECT_TRUE(kernel_dQ_matches_float);
     EXPECT_TRUE(kernel_dK_matches_float);
     EXPECT_TRUE(kernel_dV_matches_float);

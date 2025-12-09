@@ -219,7 +219,8 @@ SDPABackwardProgramFactory::cached_program_t SDPABackwardProgramFactory::create(
     TT_FATAL(qWt == kWt && qWt == vWt, "Query, Key and Value inner dims must be the same");
 
     // Scale factor for attention computation
-    float per_head_dim = static_cast<float>(qEmbd) / static_cast<float>(qNH);
+    // Note: qEmbd is already the per-head dimension (tensor shape is B, NH, S, Embd)
+    float per_head_dim = static_cast<float>(qEmbd);
     uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(per_head_dim));
     uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);
     uint32_t custom_inf = std::bit_cast<uint32_t>(1e9F);

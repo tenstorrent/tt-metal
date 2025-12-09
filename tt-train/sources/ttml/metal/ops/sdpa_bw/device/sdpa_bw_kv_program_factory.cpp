@@ -219,7 +219,8 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     TT_FATAL(qWt == kWt && qWt == vWt, "Query, Key and Value inner dims must be the same");
 
     // Scale factor for attention computation
-    float per_head_dim = static_cast<float>(qEmbd) / static_cast<float>(qNH);
+    // Note: qEmbd is already the per-head dimension (tensor shape is B, NH, S, Embd)
+    float per_head_dim = static_cast<float>(qEmbd);
     uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(per_head_dim));
     uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);
     uint32_t custom_inf = std::bit_cast<uint32_t>(1e9F);
@@ -282,16 +283,16 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
 
     // Could we write intermediates in fp32 to improve numerical stability?
     // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
-    [[maybe_unused]] auto cb_intermediates = create_circular_buffer(
-        program,
-        all_cores,
-        kIntermediatesCbIndex,
-        precise_data_format,
-        float32_single_tile_size_bytes,
-        kNumOfIntermCBTiles);
     // [[maybe_unused]] auto cb_intermediates = create_circular_buffer(
-    //     program, all_cores, kIntermediatesCbIndex, data_format, bfloat16_single_tile_size_bytes,
+    //     program,
+    //     all_cores,
+    //     kIntermediatesCbIndex,
+    //     precise_data_format,
+    //     float32_single_tile_size_bytes,
     //     kNumOfIntermCBTiles);
+    [[maybe_unused]] auto cb_intermediates = create_circular_buffer(
+        program, all_cores, kIntermediatesCbIndex, data_format, bfloat16_single_tile_size_bytes,
+        kNumOfIntermCBTiles);
 
     // Utility buffers
     // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
@@ -407,15 +408,15 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
 
     // [DEBUG]: Used for debug, should be removed later
     // [DEBUG]: switch to fp32 to improve numerical stability when accumulating over multiple tiles
-    [[maybe_unused]] auto cb_masked_interm = create_circular_buffer(
-        program,
-        all_cores,
-        kMaskedIntermCbIndex,
-        precise_data_format,
-        float32_single_tile_size_bytes,
-        kNumOfIntermCBTiles);
     // [[maybe_unused]] auto cb_masked_interm = create_circular_buffer(
-    //     program, all_cores, kMaskedIntermCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumOfIntermCBTiles);
+    //     program,
+    //     all_cores,
+    //     kMaskedIntermCbIndex,
+    //     precise_data_format,
+    //     float32_single_tile_size_bytes,
+    //     kNumOfIntermCBTiles);
+    [[maybe_unused]] auto cb_masked_interm = create_circular_buffer(
+        program, all_cores, kMaskedIntermCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumOfIntermCBTiles);
 
     [[maybe_unused]] auto cb_scaled_query = create_circular_buffer(
         program, all_cores, tt::CBIndex::c_23, data_format, bfloat16_single_tile_size_bytes, qWt);
@@ -495,13 +496,15 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     // 4) Create compute kernels
     // -------------------------------------------------------------------------
 
-    // constexpr auto kPrevGradKeyHolderCbIndex = tt::CBIndex::c_11;
-    // constexpr auto kCurGradKeyHolderCbIndex = tt::CBIndex::c_12;
-    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    unpack_to_dest_mode[tt::CBIndex::c_11] = UnpackToDestMode::UnpackToDestFp32;  // set for prev_grad_key_holder
-    unpack_to_dest_mode[tt::CBIndex::c_12] = UnpackToDestMode::UnpackToDestFp32;  // set for cur_grad_key_holder
-    unpack_to_dest_mode[tt::CBIndex::c_9] = UnpackToDestMode::UnpackToDestFp32;   // set for prev_grad_value_holder
-    unpack_to_dest_mode[tt::CBIndex::c_10] = UnpackToDestMode::UnpackToDestFp32;  // set for cur_grad_value_holder
+    // Set UnpackToDestFp32 only for accumulator buffers (used with SFPU/copy, not FPU matmul)
+    auto create_unpack_to_dest_mode = []() {
+        std::vector<UnpackToDestMode> mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+        mode[tt::CBIndex::c_9] = UnpackToDestMode::UnpackToDestFp32;   // kPrevGradValueHolderCbIndex
+        mode[tt::CBIndex::c_10] = UnpackToDestMode::UnpackToDestFp32;  // kCurGradValueHolderCbIndex
+        mode[tt::CBIndex::c_11] = UnpackToDestMode::UnpackToDestFp32;  // kPrevGradKeyHolderCbIndex
+        mode[tt::CBIndex::c_12] = UnpackToDestMode::UnpackToDestFp32;  // kCurGradKeyHolderCbIndex
+        return mode;
+    };
 
     // Group 1 compile-time arguments
     std::vector<uint32_t> compute_group_1_args = {
@@ -527,7 +530,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
-            .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+            .unpack_to_dest_mode = create_unpack_to_dest_mode(),
             .math_approx_mode = false,
             .compile_args = compute_group_1_args,
             .defines = defines});
@@ -547,9 +550,6 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
             custom_inf                  // mask transform constant
         };
 
-        // kernels.compute_group_2 = create_compute_kernel(
-        //     program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, args.fp32_dest_acc_en);
-
         kernels.compute_group_2 = tt::tt_metal::CreateKernel(
             program,
             kComputeKernelPath,
@@ -557,7 +557,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,
                 .fp32_dest_acc_en = args.fp32_dest_acc_en,
-                .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+                .unpack_to_dest_mode = create_unpack_to_dest_mode(),
                 .math_approx_mode = false,
                 .compile_args = compute_group_2_args,
                 .defines = defines});

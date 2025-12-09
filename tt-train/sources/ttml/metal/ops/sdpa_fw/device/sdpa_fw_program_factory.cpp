@@ -235,9 +235,12 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumAttnMaskTiles);
     }
     // create intermediate buffer only if we need to return intermediates
+    // Intermediate shape: (B, H, S, 64) = 2 tiles wide (max_val at col 0, recip_sum_exp at col 32)
+    constexpr uint32_t kIntermediateTiles = 2U;
     if (args.return_intermediates) {
         [[maybe_unused]] auto cb_intermediate = create_circular_buffer(
-            program, all_cores, kIntermediateCbIndex, data_format, bfloat16_single_tile_size_bytes, kSingleTileBuffer);
+            program, all_cores, kIntermediateCbIndex, data_format, bfloat16_single_tile_size_bytes, kIntermediateTiles);
+        // OLD: kSingleTileBuffer (1 tile for recip_sum_exp only)
     }
 
     [[maybe_unused]] auto cb_reduction_scaler = create_circular_buffer(
