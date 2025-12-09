@@ -93,7 +93,20 @@ struct tensor_args_t {
     Tensor batch_offset_tensor;
 };
 
-using spec_return_value_t = std::vector<TensorSpec>;
-using tensor_return_value_t = std::vector<Tensor>;
+// Return types using named structs for Q, K, V heads
+// all_reduce is included as an internal implementation detail
+struct spec_return_value_t {
+    TensorSpec all_reduce;  // Internal: needed for circular buffer setup
+    TensorSpec q;
+    TensorSpec k;
+    TensorSpec v;
+};
+
+struct tensor_return_value_t {
+    Tensor all_reduce;  // Internal: needed for circular buffer setup
+    Tensor q;
+    Tensor k;
+    Tensor v;
+};
 
 }  // namespace ttnn::operations::experimental::ccl::all_reduce_create_qkv_heads

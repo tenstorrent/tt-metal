@@ -128,10 +128,10 @@ AllReduceCreateQkvHeadsMeshWorkloadFactory::create_at(
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& buffer_tensor = tensor_args.buffer_tensor;
     const auto& batch_offset_tensor = tensor_args.batch_offset_tensor;
-    auto& output_tensor = tensor_return_value[0];
-    auto& q_output_tensor = tensor_return_value[1];
-    auto& k_output_tensor = tensor_return_value[2];
-    auto& v_output_tensor = tensor_return_value[3];
+    auto& output_tensor = tensor_return_value.all_reduce;
+    auto& q_output_tensor = tensor_return_value.q;
+    auto& k_output_tensor = tensor_return_value.k;
+    auto& v_output_tensor = tensor_return_value.v;
 
     auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
@@ -804,10 +804,10 @@ void AllReduceCreateQkvHeadsMeshWorkloadFactory::override_runtime_arguments(
     const auto& input = tensor_args.input_tensor;
     const auto& buffer_tensor = tensor_args.buffer_tensor;
     const auto& batch_tensor = tensor_args.batch_offset_tensor;
-    const auto& output = tensor_return_value[0];
-    const auto& q_output = tensor_return_value[1];
-    const auto& k_output = tensor_return_value[2];
-    const auto& v_output = tensor_return_value[3];
+    const auto& output = tensor_return_value.all_reduce;
+    const auto& q_output = tensor_return_value.q;
+    const auto& k_output = tensor_return_value.k;
+    const auto& v_output = tensor_return_value.v;
 
     auto q_base_addr = q_output.buffer()->address();
     auto k_base_addr = k_output.buffer()->address();

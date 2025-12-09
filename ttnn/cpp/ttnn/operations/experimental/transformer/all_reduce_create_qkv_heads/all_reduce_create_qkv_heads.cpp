@@ -66,7 +66,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteAllRed
         dtype.value_or(input_tensor.dtype()),
         cluster_axis);
 
-    return {output_tensors[0], output_tensors[1], output_tensors[2], output_tensors[3]};
+    return {output_tensors.all_reduce, output_tensors.q, output_tensors.k, output_tensors.v};
 }
 
 }  // namespace ttnn::operations::experimental::ccl::transformer

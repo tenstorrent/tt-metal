@@ -254,16 +254,16 @@ AllReduceCreateQkvHeadsDeviceOperation::compute_output_specs(
     MemoryConfig v_mem_config = operation_attributes.final_mem_config.with_shard_spec(v_shard_spec);
 
     return {
-        all_reduce_tensor_spec,
-        TensorSpec(
+        .all_reduce = all_reduce_tensor_spec,
+        .q = TensorSpec(
             q_output_shape,
             tt::tt_metal::TensorLayout(
                 operation_attributes.dtype, tt::tt_metal::PageConfig(input_tensor.layout()), q_mem_config)),
-        TensorSpec(
+        .k = TensorSpec(
             k_output_shape,
             tt::tt_metal::TensorLayout(
                 operation_attributes.dtype, tt::tt_metal::PageConfig(input_tensor.layout()), k_mem_config)),
-        TensorSpec(
+        .v = TensorSpec(
             v_output_shape,
             tt::tt_metal::TensorLayout(
                 operation_attributes.dtype, tt::tt_metal::PageConfig(input_tensor.layout()), v_mem_config))};
@@ -275,12 +275,11 @@ AllReduceCreateQkvHeadsDeviceOperation::create_output_tensors(
     auto output_specs = compute_output_specs(operation_attributes, tensor_args);
     auto* device = tensor_args.input_tensor.device();
 
-    tensor_return_value_t output_tensors;
-    output_tensors.reserve(output_specs.size());
-    for (const auto& spec : output_specs) {
-        output_tensors.push_back(create_device_tensor(spec, device));
-    }
-    return output_tensors;
+    return {
+        .all_reduce = create_device_tensor(output_specs.all_reduce, device),
+        .q = create_device_tensor(output_specs.q, device),
+        .k = create_device_tensor(output_specs.k, device),
+        .v = create_device_tensor(output_specs.v, device)};
 }
 
 tt::stl::hash::hash_t AllReduceCreateQkvHeadsDeviceOperation::compute_program_hash(
