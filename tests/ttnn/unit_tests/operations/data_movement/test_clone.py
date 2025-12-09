@@ -316,7 +316,7 @@ def test_clone_sharded_tilized(
 
     compute_grid_size = device.compute_with_storage_grid_size()
     x_grid_size = compute_grid_size.x
-    y_grid_size = compute_grid_size.x
+    y_grid_size = compute_grid_size.y
     while shape[-1] % x_grid_size != 0:
         x_grid_size = x_grid_size - 1
     while shape[-2] % y_grid_size != 0:
@@ -375,7 +375,7 @@ def test_clone_sharded_row_major(
 
     compute_grid_size = device.compute_with_storage_grid_size()
     x_grid_size = compute_grid_size.x
-    y_grid_size = compute_grid_size.x
+    y_grid_size = compute_grid_size.y
     while shape[-1] % x_grid_size != 0:
         x_grid_size = x_grid_size - 1
     while shape[-2] % y_grid_size != 0:
@@ -425,7 +425,7 @@ def test_clone_sharded_dtype_conversion(
     compute_grid_size = device.compute_with_storage_grid_size()
 
     x_grid_size = compute_grid_size.x
-    y_grid_size = compute_grid_size.x
+    y_grid_size = compute_grid_size.y
     while shape[-1] % x_grid_size != 0:
         x_grid_size = x_grid_size - 1
     while shape[-2] % y_grid_size != 0:
