@@ -1101,14 +1101,15 @@ void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_
         pages -= initial_pages_at_once;
 
         while (initial_pages_at_once != 0) {
-            uint32_t pages_to_read = ncrisc_noc_available_transactions(noc_index, 1);
+            uint32_t pages_to_read = noc_available_transactions(noc_index, 1);
             if (pages_to_read > initial_pages_at_once) {
                 pages_to_read = initial_pages_at_once;
             }
             initial_pages_at_once -= pages_to_read;
             while (pages_to_read != 0) {
                 uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
-                noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SNDl, CQ_NOC_SEND, CQ_NOC_WAIT>(noc_index, noc_addr, read_ptr, 0);
+                noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SNDl, CQ_NOC_SEND, CQ_NOC_WAIT>(
+                    noc_index, noc_addr, read_ptr, 0);
                 read_ptr += page_size;
                 page_id++;
                 pages_to_read--;
@@ -1143,14 +1144,15 @@ void paged_read_into_cmddat_q(uint32_t& cmd_ptr, PrefetchExecBufState& exec_buf_
         pages -= prefetch_pages_at_once;
 
         while (prefetch_pages_at_once != 0) {
-            uint32_t pages_to_read = ncrisc_noc_available_transactions(noc_index, 1);
+            uint32_t pages_to_read = noc_available_transactions(noc_index, 1);
             if (pages_to_read > prefetch_pages_at_once) {
                 pages_to_read = prefetch_pages_at_once;
             }
             prefetch_pages_at_once -= pages_to_read;
             while (pages_to_read != 0) {
                 uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
-                noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SNDl, CQ_NOC_SEND, CQ_NOC_WAIT>(noc_index, noc_addr, read_ptr, 0);
+                noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SNDl, CQ_NOC_SEND, CQ_NOC_WAIT>(
+                    noc_index, noc_addr, read_ptr, 0);
                 read_ptr += page_size;
                 page_id++;
                 pages_to_read--;
