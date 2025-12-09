@@ -72,7 +72,6 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
 
     max_tile_init();
 
-    // Hardcoding some granularity constants
     uint32_t row_start_idx = 0;
     for (uint32_t g = 0; g < granularity; g++) {
         cb_wait_front(in0_cb, in0_wait_tiles);
