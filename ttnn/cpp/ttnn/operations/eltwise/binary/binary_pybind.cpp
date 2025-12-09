@@ -2328,18 +2328,6 @@ void py_module(py::module& module) {
         ". ",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    detail::bind_binary_operation_with_fast_approx(
-        module,
-        ttnn::divide,
-        R"doc(Divides :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i / \mathrm{{input\_tensor\_b}}_i))doc",
-        R"doc(BFLOAT16, FLOAT32, INT32, UINT16)doc",
-        R"doc(
-        When :attr:`fast_and_approximate_mode` is `True`, operation assumes that :attr:`input_tensor_b` is not zero.
-        When :attr:`fast_and_approximate_mode` is `False` (default), operation properly handle division by zero.
-        When the inputs are INT32, the outputs are FLOAT32 and output datatype conversion is not supported.
-        )doc");
-
     detail::bind_binary_operation(
         module,
         ttnn::xlogy,

@@ -329,6 +329,7 @@ import ttnn.experimental_loader.golden_functions
 
 import ttnn.operations
 
+divide = ttnn.div
 sub = ttnn.subtract
 sub_ = ttnn.subtract_
 mul = ttnn.multiply
