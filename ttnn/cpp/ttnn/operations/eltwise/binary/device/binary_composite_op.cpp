@@ -207,7 +207,8 @@ Tensor ExecuteDiv::invoke(
                                  input, value, output_mem_config, output_tensor, lhs_activations, rhs_activations))) {
         TT_FATAL(
             not has_legacy_only_args,
-            "round_mode, fast_and_approximate_mode are not valid when passing use_legacy parameter in div");
+            "round_mode or fast_and_approximate_mode=true are not valid when passing use_legacy=false in div "
+            "(tensor-scalar); binary_ng does not support these features for scalar operations yet");
         return BinaryOperation<BinaryOpType::DIV>::invoke(
             input,
             value,
@@ -277,9 +278,9 @@ Tensor ExecuteDiv::invoke(
     // Only require legacy mode for round_mode if not INT32
     const auto has_legacy_only_args = ((round_mode.has_value() and !is_int32));
 
-    // Only round_mode and fast_and_approximate_mode=true force the legacy path
-    // output_dtype can be used with both legacy and new (binary_ng) paths
-    const auto has_legacy_only_args = (round_mode.has_value() and !is_int32) or (fast_and_approximate_mode == true);
+    // Only fast_and_approximate_mode=true forces the legacy path
+    // round_mode and output_dtype can be used with both legacy and new (binary_ng) paths
+    const auto has_legacy_only_args = (fast_and_approximate_mode == true);
 
     if (not(use_legacy
                 ? *use_legacy
@@ -288,8 +289,7 @@ Tensor ExecuteDiv::invoke(
                           input_a, input_b, output_mem_config, output_tensor, lhs_activations, rhs_activations))) {
         TT_FATAL(
             not has_legacy_only_args,
-            "fast_and_approximate_mode=true and round_mode are not valid when passing use_legacy parameter as false in "
-            "div");
+            "fast_and_approximate_mode=true is not valid when passing use_legacy=false in div");
 
         TT_FATAL(
             (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
