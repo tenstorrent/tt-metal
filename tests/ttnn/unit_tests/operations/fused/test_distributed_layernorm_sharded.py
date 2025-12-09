@@ -69,6 +69,7 @@ def create_input_and_weight_tensors(input_width, num_devices, seed, mean, std):
 def create_tt_tensors(
     torch_chunk, device, df, core_grid, input_width, is_weight=False, grid_offset=ttnn.CoreCoord(0, 0)
 ):
+    device.disable_program_cache()
     tt_tensor = ttnn.from_torch(
         torch_chunk,
         layout=ttnn.TILE_LAYOUT,
@@ -76,6 +77,7 @@ def create_tt_tensors(
         memory_config=ttnn.DRAM_MEMORY_CONFIG if is_weight else ttnn.L1_MEMORY_CONFIG,
         dtype=df,
     )
+    device.enable_program_cache()
 
     if not is_weight:
         core_range = ttnn.CoreRange(
