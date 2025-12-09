@@ -11,27 +11,7 @@ import torch
 import numpy as np
 
 import ttnn
-from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, tt_dtype_to_np_dtype
-
-
-def update_for_unsigned_widening(py_tensor, py_tensor_after_round_trip):
-    if py_tensor.dtype == torch.int16:
-        # TTNN does not have int16 type, so roundtrip with default parameters will
-        # convert types as `int16 -> uint16 -> int32`
-        return py_tensor_after_round_trip.to(torch.int16)
-
-    elif py_tensor.dtype == torch.int32:
-        # Same for `int32 -> uint32 -> int64` conversion sequence
-        return py_tensor_after_round_trip.to(torch.int32)
-
-    elif py_tensor.dtype == np.int16:
-        return py_tensor_after_round_trip.astype(np.int16)
-
-    elif py_tensor.dtype == np.int32:
-        return py_tensor_after_round_trip.astype(np.int32)
-
-    else:
-        return py_tensor_after_round_trip
+from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, tt_dtype_to_np_dtype, update_for_unsigned_widening
 
 
 @pytest.mark.parametrize("convert_to_device", [True, False])

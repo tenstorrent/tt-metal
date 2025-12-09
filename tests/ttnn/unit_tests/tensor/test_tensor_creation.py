@@ -11,7 +11,7 @@ import torch
 import numpy as np
 
 import ttnn
-from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
+from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, update_for_unsigned_widening
 
 
 @pytest.mark.parametrize(
@@ -53,6 +53,8 @@ def test_tensor_creation(shape, tt_dtype, layout, device):
     tt_tensor = tt_tensor.cpu()
 
     py_tensor_after_round_trip = tt_tensor.to_torch()
+
+    py_tensor_after_round_trip = update_for_unsigned_widening(py_tensor, py_tensor_after_round_trip)
 
     assert py_tensor.dtype == py_tensor_after_round_trip.dtype
     assert py_tensor.shape == py_tensor_after_round_trip.shape
@@ -117,6 +119,11 @@ def test_tensor_creation_api_parity(shape, tt_dtype, layout, device):
         allclose_kwargs = dict(atol=1e-2)
     elif tt_dtype == ttnn.bfloat4_b:
         allclose_kwargs = dict(atol=0.2)
+
+    py_tensor_after_round_trip_1 = update_for_unsigned_widening(py_tensor, py_tensor_after_round_trip_1)
+    py_tensor_after_round_trip_2 = update_for_unsigned_widening(py_tensor, py_tensor_after_round_trip_2)
+    py_tensor_after_round_trip_3 = update_for_unsigned_widening(py_tensor, py_tensor_after_round_trip_3)
+    py_tensor_after_round_trip_4 = update_for_unsigned_widening(py_tensor, py_tensor_after_round_trip_4)
 
     passing = torch.allclose(py_tensor, py_tensor_after_round_trip_1, **allclose_kwargs)
     passing = torch.allclose(py_tensor, py_tensor_after_round_trip_2, **allclose_kwargs)
@@ -220,6 +227,11 @@ def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layo
         allclose_kwargs = dict(atol=1e-2)
     elif tt_dtype == ttnn.bfloat4_b:
         allclose_kwargs = dict(atol=0.2)
+
+    py_tensor_after_round_trip_1 = update_for_unsigned_widening(py_tensor, py_tensor_after_round_trip_1)
+    py_tensor_after_round_trip_2 = update_for_unsigned_widening(py_tensor, py_tensor_after_round_trip_2)
+    py_tensor_after_round_trip_3 = update_for_unsigned_widening(py_tensor, py_tensor_after_round_trip_3)
+    py_tensor_after_round_trip_4 = update_for_unsigned_widening(py_tensor, py_tensor_after_round_trip_4)
 
     passing = torch.allclose(py_tensor, py_tensor_after_round_trip_1, **allclose_kwargs)
     passing = torch.allclose(py_tensor, py_tensor_after_round_trip_2, **allclose_kwargs)

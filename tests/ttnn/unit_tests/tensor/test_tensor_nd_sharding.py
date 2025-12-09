@@ -5,7 +5,7 @@ import pytest
 
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, assert_with_pcc
+from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, assert_with_pcc, update_for_unsigned_widening
 
 
 @pytest.mark.parametrize(
@@ -87,6 +87,8 @@ def test_tensor_nd_sharding_loopback(tensor_shape, shard_shape, layout, buffer_t
 
     tt_tensor = ttnn.from_torch(py_tensor, dtype=tt_dtype, device=device, layout=layout, memory_config=memory_config)
     py_tensor_after_round_trip = ttnn.to_torch(tt_tensor)
+
+    py_tensor_after_round_trip = update_for_unsigned_widening(py_tensor, py_tensor_after_round_trip)
 
     if tt_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
         assert_with_pcc(py_tensor, py_tensor_after_round_trip, 0.95)
