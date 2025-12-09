@@ -387,7 +387,6 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: out_cb has num_tiles produced
     // Postcondition: in0_cb and in1_cb has num_tiles produced
-
     sub_tiles_init(in0_cb, in1_cb);
     exp_tile_init<EXP_APPROX_MODE, false>();
     cb_wait_front(in0_cb, num_tiles);
@@ -539,6 +538,7 @@ void move_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     // Postcondition: out_cb has num_tiles produced
 
     copy_tile_to_dst_init_short(in_cb);
+
     cb_wait_front(in_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
 
