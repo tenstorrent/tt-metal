@@ -140,43 +140,47 @@ void zero_buffer(uint32_t write_addr, int bytes) {
 
 FORCE_INLINE void generate_reduce_scalar(
     const uint32_t reduce_scalar_cb_index, const uint32_t packed_scalar, const uint32_t n_activated_experts) {
-    // 32x32 tile where a num_selected_experts x tokens_per_tile subset of the tile needs to be {1.0bf16, 1.0bf16,
-    // ..., 1.0bf16} the rest should be {0.0bf16, 0.0bf16, ..., 0.0bf16}
+    // GAPOOL instruction takes the FIRST ROW, transposes it, and broadcasts to columns
+    // So we need: Row 0 = [n_activated_experts ones | (32 - n_activated_experts) zeros]
+    // All other rows can be zero (don't care)
     cb_reserve_back(reduce_scalar_cb_index, 1);
     uint32_t write_addr = get_write_ptr(reduce_scalar_cb_index);
     tt_l1_ptr uint16_t* write_ptr = reinterpret_cast<tt_l1_ptr uint16_t*>(write_addr);
-    // the uint32_t contains two bf16 values, so we write one face line/2 elements through pointer access:
     uint16_t scalar = packed_scalar >> 16;
-    for (uint32_t i = 0; i < 16; i++) {
-        write_ptr[i] = scalar;
-    }
-    // then we can use noc_async_read to write the rest of the ones
+
     constexpr uint32_t face_line_bytes = 32;
     constexpr uint32_t face_size_bytes = 512;
-    for (uint32_t i = 1; i < 32; i++) {
-        if (i < n_activated_experts) {
-            if (i > 15) {
-                noc_async_read(
-                    get_noc_addr(write_addr), write_addr + i * face_line_bytes + face_size_bytes, face_line_bytes);
-            } else {
-                noc_async_read(get_noc_addr(write_addr), write_addr + i * face_line_bytes, face_line_bytes);
-            }
+
+    // Write first row (row 0) in Face 0 (cols 0-15)
+    for (uint32_t col = 0; col < 16; col++) {
+        if (col < n_activated_experts) {
+            write_ptr[col] = scalar;  // 1.0
         } else {
-            // write zeros
-            if (i == 16) {
-                // one full face
-                zero_buffer(write_addr + i * face_line_bytes + face_size_bytes, face_size_bytes);
-                break;
-            } else {
-                zero_buffer(write_addr + i * face_line_bytes, face_line_bytes);
-            }
+            write_ptr[col] = 0;  // 0.0
         }
     }
-    noc_async_read_barrier();
-    // face 1 and face 3 are written, now we need to write face 2 and face 4, where face 2 = face 1 and face 4 = face 3
-    noc_async_read(get_noc_addr(write_addr), write_addr + face_size_bytes, face_size_bytes);
-    noc_async_read(get_noc_addr(write_addr) + 2 * face_size_bytes, write_addr + 3 * face_size_bytes, face_size_bytes);
-    noc_async_read_barrier();
+
+    // Write first row (row 0) in Face 1 (cols 16-31)
+    // Face 1 starts at offset 256 uint16_t elements (512 bytes)
+    tt_l1_ptr uint16_t* face1_ptr = write_ptr + 256;
+    for (uint32_t col = 16; col < 32; col++) {
+        if (col < n_activated_experts) {
+            face1_ptr[col - 16] = scalar;  // 1.0
+        } else {
+            face1_ptr[col - 16] = 0;  // 0.0
+        }
+    }
+
+    // Zero out all other rows (rows 1-31) in all faces
+    // Face 0 rows 1-15: zero from offset face_line_bytes to face_size_bytes
+    zero_buffer(write_addr + face_line_bytes, face_size_bytes - face_line_bytes);
+    // Face 1 rows 1-15: zero from offset face_size_bytes + face_line_bytes to 2*face_size_bytes
+    zero_buffer(write_addr + face_size_bytes + face_line_bytes, face_size_bytes - face_line_bytes);
+    // Face 2 (rows 16-31): zero entire face
+    zero_buffer(write_addr + 2 * face_size_bytes, face_size_bytes);
+    // Face 3 (rows 16-31): zero entire face
+    zero_buffer(write_addr + 3 * face_size_bytes, face_size_bytes);
+
     cb_push_back(reduce_scalar_cb_index, 1);
 }
 

@@ -290,20 +290,36 @@ void normalize_scores(
     const uint32_t unnormalized_scores_cb_index,
     const uint32_t reduce_scalar_cb_index,
     const uint32_t normalized_scores_cb_index) {
+    // Not needed:
     // compute_kernel_hw_startup(unnormalized_scores_cb_index, reduce_scalar_cb_index, normalized_scores_cb_index);
+    // Need some of these reconfigs! Please look which data formats and tile sizes change between the calls of
+    // normalize_scores
+    reconfig_data_format(unnormalized_scores_cb_index, reduce_scalar_cb_index);
+    pack_reconfig_data_format(normalized_scores_cb_index);
+
     reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL>(
         unnormalized_scores_cb_index, reduce_scalar_cb_index, normalized_scores_cb_index);
     cb_wait_front(unnormalized_scores_cb_index, 1);
     cb_wait_front(reduce_scalar_cb_index, 1);
-    // UNPACK(print_tile(unnormalized_scores_cb_index, 0, true, 0, 8, 0, 1));
-    // UNPACK(print_tile(reduce_scalar_cb_index, 0, true, 0, 8, 0, 1));
+    // --------------------Print block start---------------
+    // tensix_sync() to avoid races in printing tiles
+    tensix_sync();
+    UNPACK(print_tile(unnormalized_scores_cb_index, 0, true, 0, 32, 0, 32));
+    UNPACK(print_tile(reduce_scalar_cb_index, 0, true, 0, 32, 0, 32));
+    tensix_sync();
+    // --------------------Print block end-----------------
     acquire_dst();
     reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL>(unnormalized_scores_cb_index, reduce_scalar_cb_index, 0, 0, 0);
     // recip_tile_init();
     // recip_tile(0);  // DST[0] = 1/sum(unnormalized_scores)
     cb_reserve_back(normalized_scores_cb_index, 1);
     pack_tile(0, normalized_scores_cb_index);
-    PACK(print_tile(normalized_scores_cb_index, 0, true, 0, 8, 0, 1));
+    // --------------------Print block start---------------
+    // tensix_sync() to avoid races in printing tiles
+    tensix_sync();
+    PACK(print_tile(normalized_scores_cb_index, 0, true, 0, 32, 0, 1));
+    tensix_sync();
+    // --------------------Print block end-----------------
     cb_push_back(normalized_scores_cb_index, 1);
     release_dst();
     reduce_uninit();
