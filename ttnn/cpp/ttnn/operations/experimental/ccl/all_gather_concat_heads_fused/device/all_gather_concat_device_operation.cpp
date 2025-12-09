@@ -42,7 +42,7 @@ void AllGatherConcatDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(args.num_links > 0, "Error, num_links should be more than 0 but is {}", args.num_links);
     TT_FATAL(
         args.num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
-        "Worker cores used by links are parallelized over rows");
+        "Worker cores used by {} links are parallelized over rows", args.num_links);
 
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
