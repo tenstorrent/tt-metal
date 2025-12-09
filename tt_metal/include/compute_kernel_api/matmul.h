@@ -115,12 +115,7 @@ ALWI void mm_init(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t out_cb_id, co
  */
 // clang-format on
 ALWI void matmul_tiles(
-    uint32_t in0_cb_id,
-    uint32_t in1_cb_id,
-    uint32_t in0_tile_index,
-    uint32_t in1_tile_index,
-    uint32_t idst,
-    const uint32_t transpose) {
+    uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t in0_tile_index, uint32_t in1_tile_index, uint32_t idst) {
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index)));
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst)));
 }
@@ -260,7 +255,6 @@ ALWI void matmul_block(
     uint32_t ct_dim,
     uint32_t rt_dim,
     uint32_t kt_dim) {
-    state_configure<Operation::MATMUL>(in0_cb_id, in1_cb_id);
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
 #ifdef ARCH_BLACKHOLE
     // Dynamic throttling is only available on Blackhole architecture

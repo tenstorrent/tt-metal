@@ -17,6 +17,8 @@
 #include <variant>
 #include <vector>
 
+#include <impl/context/metal_context.hpp>
+
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -37,7 +39,6 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include <umd/device/types/arch.hpp>
 #include <impl/debug/watcher_server.hpp>
-#include <impl/context/metal_context.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 
 namespace tt {
@@ -56,23 +57,9 @@ namespace unit_tests::compute::state_tracker {
 
 struct ReconfigConfig {
     size_t num_tiles = 0;
-    // Number of tiles finished with single LLK API call:
-    size_t ublock_size_tiles = 0;
-    // Reconfig LLK API calls can either explicitly or implicitly take previous
-    // CB indices; which version of the call is used is defined by this flag:
-    bool explicit_reconfig = false;
-    // Some reconfig calls are joined for SrcA/B; whether split or joined calls
-    // are used is defined with this flag:
-    bool split_src_reconfig = false;
-    // This flag defines whether regular packing to L1 is used, or the one
-    // where the result is accumulated with the previous value:
-    bool l1_acc = false;
     // Whether or not we want the result to be stored in DST in FP32 and/or
     // accumulated with previous DST value is controlled with this flag:
     bool fp32_dest_acc_en = false;
-    // Whether to test with copy_tile or copy_block_matmul_partials is contro-
-    // lled with this flag:
-    bool block_copy = true;
     // Whether or not to sync full/half DST between MATH and PACK:
     bool dst_full_sync_en = false;
 };
@@ -86,7 +73,6 @@ bool single_core_state_tracker(
     ////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////
-    bool pass = true;
     uint32_t in0_id = 0;
     uint32_t in1_id = 1;
     uint32_t in2_id = 2;
@@ -140,11 +126,7 @@ bool single_core_state_tracker(
     vector<uint32_t> compute_kernel_args = {};
     std::map<std::string, std::string> defines;
 
-    defines["DST_ACCUM_MODE"] = "1";  // Needed always in order for reader kernel to load data from CB2
-    defines["EXPLICIT_RECONFIG"] = test_config.explicit_reconfig ? "1" : "0";
-    defines["SPLIT_SRC_RECONFIG"] = test_config.split_src_reconfig ? "1" : "0";
-    defines["BLOCK_COPY"] = test_config.block_copy ? "1" : "0";
-    defines["L1_ACC"] = test_config.l1_acc ? "1" : "0";
+    defines["TT_METAL_STATE_TRACKER_TESTING_ENABLED"] = "1";  // Define to enable state tracker testing interface
 
     auto compute_kernel = tt_metal::CreateKernel(
         program_,
@@ -156,52 +138,14 @@ bool single_core_state_tracker(
             .compile_args = compute_kernel_args,
             .defines = defines});
 
-    SetRuntimeArgs(
-        program_,
-        compute_kernel,
-        core,
-        {
-            uint32_t(test_config.num_tiles),
-            uint32_t(test_config.ublock_size_tiles),
-        });
+    SetRuntimeArgs(program_, compute_kernel, core, {});
 
-    // Enqueue the workload without blocking. The watcher will detect errors asynchronously.
-    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
 
-    // // Wait for either completion or watcher error detection
-    // // Poll watcher status while waiting for the kernel to finish or trip an assert
-    // const int max_poll_iterations = 1000;  // ~10 seconds with 10ms sleeps
-    // int poll_count = 0;
-    // bool watcher_error = false;
-
-    // while (poll_count < max_poll_iterations) {
-    //     // Check if watcher detected an error
-    //     if (MetalContext::instance().watcher_server()->killed_due_to_error()) {
-    //         watcher_error = true;
-    //         log_error(
-    //             LogTest, "Kernel execution stopped due to watcher detecting an error. See watcher log for details.");
-    //         break;
-    //     }
-
-    //     // Small sleep to avoid busy-waiting and let watcher run
-    //     std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    //     poll_count++;
-    // }
-    // log_info(LogTest, "Completed polling for watcher errors after {} iterations.", poll_count);
-    // pass = !watcher_error;
-    try {
-        distributed::Finish(cq);
-        // if (MetalContext::instance().watcher_server()->killed_due_to_error()) {
-        //     log_error(
-        //         LogTest, "Kernel execution stopped due to watcher detecting an error. See watcher log for details.");
-        //     pass = false;
-        // }
-    } catch (const std::exception& e) {
-        log_error(LogTest, "Kernel execution failed with exception: {}", e.what());
-        pass = false;
-    }
-    log_info(LogTest, "HERE IT IS");
-    return pass;
+    // Always returns true. Failed lightweight asserts will hang the core, triggering triage timeout that dumps the
+    // call stack. For local testing, run ./tools/triage/dump_lightweight_asserts.py when a kernel hangs to print
+    // assert info and callstack.
+    return true;
 }
 }  // namespace unit_tests::compute::state_tracker
 
@@ -217,28 +161,33 @@ bool single_core_state_tracker(
 // - unpack_reconfig_data_format_srcb
 // - pack_reconfig_l1_acc
 ////////////////////////////////////////////////////////////////////////////
-TEST_F(MeshWatcherFixture, TensixComputeStateTracker) {
+
+// Test fixture that enables lightweight asserts for the duration of the test
+class MeshStateTrackerFixture : public MeshDeviceFixture {
+protected:
+    bool lightweight_prev_state{};
+    void SetUp() override {
+        lightweight_prev_state = tt::tt_metal::MetalContext::instance().rtoptions().get_lightweight_kernel_asserts();
+        tt::tt_metal::MetalContext::instance().rtoptions().set_lightweight_kernel_asserts(true);
+        MeshDeviceFixture::SetUp();
+    }
+
+    void TearDown() override {
+        tt::tt_metal::MetalContext::instance().rtoptions().set_lightweight_kernel_asserts(lightweight_prev_state);
+        MeshDeviceFixture::TearDown();
+    }
+};
+
+TEST_F(MeshStateTrackerFixture, TensixComputeStateTracker) {
     auto arch = this->arch_;
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
     }
 
-    if (this->slow_dispatch_) {
-        log_info(tt::LogTest, "Test requires fast dispatch - skipping in slow dispatch mode");
-        GTEST_SKIP();
-    }
-
     // Test that should pass
     unit_tests::compute::state_tracker::ReconfigConfig test_config = {
-        .num_tiles = 1,
-        .ublock_size_tiles = 1,
-        .explicit_reconfig = true,
-        .split_src_reconfig = false,
-        .fp32_dest_acc_en = false,
-        .block_copy = true,
-        .dst_full_sync_en = false};
+        .num_tiles = 1, .fp32_dest_acc_en = false, .dst_full_sync_en = false};
 
-    tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(false);
     for (unsigned int id = 0; id < devices_.size(); id++) {
         ASSERT_TRUE(unit_tests::compute::state_tracker::single_core_state_tracker(devices_.at(id), test_config));
     }
