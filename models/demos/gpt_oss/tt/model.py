@@ -40,7 +40,7 @@ class Model:
         paged_attention_config=None,
         mesh_config=None,
         create_kv_cache=True,
-        max_batch_size=1,
+        max_local_batch_size=1,
     ):
         """
         Initialize GPT-OSS model
@@ -60,7 +60,7 @@ class Model:
         self.hf_config = hf_config
         self.core_grid = mesh_device.compute_with_storage_grid_size()
         self.head_dim = hf_config.head_dim
-        self.max_batch_size = max_batch_size
+        self.max_local_batch_size = max_local_batch_size
 
         self.ccl_manager = ccl_manager
 
@@ -113,7 +113,7 @@ class Model:
                 mesh_config=self.mesh_config,
                 create_kv_cache=create_kv_cache,
                 transformation_mats=self.transformation_mats,
-                max_batch_size=max_batch_size,
+                max_local_batch_size=max_local_batch_size,
             )
             for layer_idx in range(hf_config.num_hidden_layers)
         ]
@@ -206,7 +206,6 @@ class Model:
                 kv_cache=layer_kv_cache,
             )
         logits = hidden_states
-        breakpoint()
 
         if get_last_token != -1:
             # The logits come from the shared method, slice them

@@ -25,7 +25,7 @@ class DecoderLayer:
         mesh_config=None,
         create_kv_cache=True,
         transformation_mats=None,
-        max_batch_size=1,
+        max_local_batch_size=1,
     ):
         self.input_layernorm = RMSNorm(
             mesh_device,
@@ -62,7 +62,7 @@ class DecoderLayer:
             # max_seq_len=hf_config.max_position_embeddings,
             max_seq_len=1024,
             sliding_window=hf_config.sliding_window,
-            max_batch_size=max_batch_size,
+            max_local_batch_size=max_local_batch_size,
         )
 
         # Create attention program config

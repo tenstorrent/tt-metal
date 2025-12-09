@@ -44,7 +44,7 @@ def init_kv_cache(
         ]
     else:
         # Standard cache shape: [batch_size, num_kv_heads, max_seq_len, head_dim]
-        cache_shape = [32, 1, config.max_seq_len, config.head_dim]
+        cache_shape = [config.max_local_batch_size, 1, config.max_seq_len, config.head_dim]
 
     # Create K cache
     k_cache = ttnn.as_tensor(
@@ -75,12 +75,13 @@ def init_kv_cache(
     return [k_cache, v_cache]
 
 
-def get_kv_memory_config(mesh_device, max_batch_size: int, num_local_kv_heads: int, head_dim: int):
+def get_kv_memory_config(mesh_device, max_local_batch_size: int, num_local_kv_heads: int, head_dim: int):
     """
     Get sharded memory config for KV tensors in decode mode.
 
     Args:
         mesh_device: TTNN mesh device
+        max_local_batch_size: Maximum local batch size per device
         num_local_kv_heads: Number of KV heads per device
         head_dim: Head dimension
 
@@ -90,7 +91,7 @@ def get_kv_memory_config(mesh_device, max_batch_size: int, num_local_kv_heads: i
     grid_size = mesh_device.compute_with_storage_grid_size()
 
     # KV tensors should be [local_batch_size, num_local_kv_heads, 1, head_dim] for decode
-    kv_shape = (32, num_local_kv_heads, 1, head_dim)
+    kv_shape = (max_local_batch_size, num_local_kv_heads, 1, head_dim)
     kv_shard_height = nearest_y(kv_shape[1], ttnn.TILE_SIZE)  # height = num_local_kv_heads
     kv_shard_width = kv_shape[3]  # width = head_dim
     kv_num_cores = kv_shape[0]  # cores = 1 (sequence length for decode)

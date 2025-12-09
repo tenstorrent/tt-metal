@@ -92,7 +92,7 @@ class Attention:
         # Get KV memory config for decode mode
         self.kv_mem_cfg = get_kv_memory_config(
             mesh_device,
-            config.max_batch_size,
+            config.max_local_batch_size,
             mesh_config.shard_size(config.num_kv_heads),
             config.head_dim,
         )

@@ -388,7 +388,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
         dtype=setup["dtype"],
         mesh_config=setup["mesh_config"],
         transformation_mats=transformation_mats,
-        max_batch_size=batch_size,
+        max_local_batch_size=batch_size // setup["mesh_device"].shape[0],
     )
 
     # Create input
@@ -437,26 +437,28 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
     # Create TTNN RoPE embeddings in Meta format using gather_cos_sin
     cos_meta, sin_meta = gather_cos_sin(position_ids_1d, cos_full, sin_full)
 
-    # tt_cos = ttnn.from_torch(cos_meta, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    tt_cos = ttnn.from_torch(
-        cos_meta.reshape(1, 128, 1, 64),
-        device=setup["mesh_device"],
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            dims=(-3, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]
-        ),
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-    )
-    # tt_sin = ttnn.from_torch(sin_meta, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    tt_sin = ttnn.from_torch(
-        sin_meta.reshape(1, 128, 1, 64),
-        device=setup["mesh_device"],
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            dims=(-3, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]
-        ),
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-    )
+    if batch_size > setup["mesh_device"].shape[0]:
+        tt_cos = ttnn.from_torch(
+            cos_meta.reshape(1, batch_size, seq_len, config.head_dim),
+            device=setup["mesh_device"],
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                dims=(-3, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]
+            ),
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+        )
+        tt_sin = ttnn.from_torch(
+            sin_meta.reshape(1, batch_size, seq_len, config.head_dim),
+            device=setup["mesh_device"],
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                dims=(-3, None), mesh_shape=setup["mesh_device"].shape, mesh_device=setup["mesh_device"]
+            ),
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+        )
+    else:
+        tt_cos = ttnn.from_torch(cos_meta, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        tt_sin = ttnn.from_torch(sin_meta, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
     # For decode mode, convert cos/sin to HEIGHT_SHARDED to match Q/K/V from nlp_create_qkv_heads_decode
     if seq_len == 1:
@@ -497,7 +499,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
     # tt_hidden_states = ttnn.from_torch(
     #     hidden_states, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
     # )
-    hidden_states = torch.reshape(hidden_states, (1, 1, 128, 2880))
+    hidden_states = torch.reshape(hidden_states, (1, 1, batch_size, -1))
     tt_hidden_states = ttnn.from_torch(
         hidden_states,
         device=setup["mesh_device"],
@@ -565,9 +567,9 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
             tt_output_torch.squeeze(), reference_output.squeeze(), mesh_device, pcc_threshold=pcc_threshold
         )
         if passing:
-            logger.info(f"MLP Pipeline test passed. Output: {output}")
+            logger.info(f"Decoder Layer test passed. Output: {output}")
         else:
-            assert passing, f"MLP Pipeline test failed. Output: {output}"
+            assert passing, f"Decoder Layer test failed. Output: {output}"
         # passing, output = run_component_comparison(
         #     tt_output, reference_output, setup["mesh_device"], pcc_threshold=pcc_threshold
         # )

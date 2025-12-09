@@ -79,8 +79,8 @@ class MLP:
             state_dict=experts_state_dict,
             weight_dtype=ttnn.bfloat4_b,
             dispatch_cluster_axis=0,
-            decode_memory_config=ttnn.L1_MEMORY_CONFIG,
-            # decode_memory_config=ttnn.DRAM_MEMORY_CONFIG,  ## Change this back to L1 when test runs
+            # decode_memory_config=ttnn.L1_MEMORY_CONFIG,
+            decode_memory_config=ttnn.DRAM_MEMORY_CONFIG,  ## Change this back to L1 when test runs
         )
 
     def __call__(self, hidden_states):
