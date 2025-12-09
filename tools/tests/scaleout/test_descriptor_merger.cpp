@@ -5,9 +5,12 @@
 #include <gtest/gtest.h>
 #include <filesystem>
 #include <fstream>
+#include <google/protobuf/text_format.h>
 
 #include <cabling_generator/descriptor_merger.hpp>
+#include <cabling_generator/cabling_generator.hpp>
 #include "protobuf/cluster_config.pb.h"
+#include "protobuf/factory_system_descriptor.pb.h"
 
 namespace tt::scaleout_tools {
 
@@ -21,6 +24,92 @@ protected:
     }
 
     std::string fixture_path(const std::string& filename) const { return test_fixtures_dir + filename; }
+
+    // Helper function to split a descriptor's internal connections into two parts
+    // Returns pair of (part1_path, part2_path)
+    std::pair<std::string, std::string> split_descriptor(
+        const std::string& source_path, const std::string& output_dir, const std::string& template_name = "") {
+        // Load original descriptor
+        std::ifstream file(source_path);
+        if (!file.is_open()) {
+            throw std::runtime_error("Failed to open " + source_path);
+        }
+        std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        file.close();
+
+        cabling_generator::proto::ClusterDescriptor original_desc;
+        if (!google::protobuf::TextFormat::ParseFromString(content, &original_desc)) {
+            throw std::runtime_error("Failed to parse " + source_path);
+        }
+
+        // Determine which template to split (use first one if not specified)
+        std::string target_template = template_name;
+        if (target_template.empty()) {
+            if (original_desc.graph_templates().empty()) {
+                throw std::runtime_error("No graph templates in descriptor");
+            }
+            target_template = original_desc.graph_templates().begin()->first;
+        }
+
+        if (!original_desc.graph_templates().contains(target_template)) {
+            throw std::runtime_error("Template '" + target_template + "' not found");
+        }
+
+        // Create two copies
+        cabling_generator::proto::ClusterDescriptor part1 = original_desc;
+        cabling_generator::proto::ClusterDescriptor part2 = original_desc;
+
+        // Split internal connections
+        auto* template1 = part1.mutable_graph_templates()->at(target_template).mutable_internal_connections();
+        auto* template2 = part2.mutable_graph_templates()->at(target_template).mutable_internal_connections();
+
+        // Find first port type with connections
+        std::string port_type_key;
+        int total_conns = 0;
+        for (const auto& [key, conns] : *template1) {
+            if (conns.connections_size() > 0) {
+                port_type_key = key;
+                total_conns = conns.connections_size();
+                break;
+            }
+        }
+
+        if (total_conns == 0) {
+            throw std::runtime_error("No connections found to split");
+        }
+
+        auto& qsfp_conns1 = (*template1)[port_type_key];
+        auto& qsfp_conns2 = (*template2)[port_type_key];
+
+        int half = total_conns / 2;
+
+        // Copy connections and split
+        auto conns_copy = qsfp_conns1.connections();
+        qsfp_conns1.clear_connections();
+        qsfp_conns2.clear_connections();
+
+        for (int i = 0; i < half; i++) {
+            *qsfp_conns1.add_connections() = conns_copy[i];
+        }
+        for (int i = half; i < total_conns; i++) {
+            *qsfp_conns2.add_connections() = conns_copy[i];
+        }
+
+        // Write to files
+        std::filesystem::create_directories(output_dir);
+
+        std::string part1_path = output_dir + "/part1.textproto";
+        std::string part2_path = output_dir + "/part2.textproto";
+
+        std::string part1_str, part2_str;
+        google::protobuf::TextFormat::PrintToString(part1, &part1_str);
+        google::protobuf::TextFormat::PrintToString(part2, &part2_str);
+
+        std::ofstream(part1_path) << part1_str;
+        std::ofstream(part2_path) << part2_str;
+
+        return {part1_path, part2_path};
+    }
 };
 
 TEST_F(DescriptorMergerTest, FindDescriptorFilesInDirectory) {
@@ -110,26 +199,6 @@ TEST_F(DescriptorMergerTest, HandleDuplicateConnections) {
     EXPECT_EQ(connections.connections().size(), 3);
 }
 
-TEST_F(DescriptorMergerTest, ValidateMergedDescriptor) {
-    std::vector<std::string> paths = {fixture_path("base_intrapod.textproto")};
-    auto merged = DescriptorMerger::merge_descriptors(paths);
-    auto validation = DescriptorMerger::validate_merged_descriptor(merged);
-
-    EXPECT_TRUE(validation.success);
-    EXPECT_TRUE(validation.errors.empty());
-}
-
-TEST_F(DescriptorMergerTest, GetMergeStatistics) {
-    std::vector<std::string> paths = {fixture_path("base_intrapod.textproto")};
-    auto merged = DescriptorMerger::merge_descriptors(paths);
-    auto stats = DescriptorMerger::get_merge_statistics(merged);
-
-    EXPECT_EQ(stats.total_graph_templates, 1);
-    EXPECT_EQ(stats.total_connections, 2);
-    EXPECT_EQ(stats.host_ids_found.size(), 4);
-    EXPECT_EQ(stats.expected_host_count(), 4);
-}
-
 TEST_F(DescriptorMergerTest, ValidateHostConsistencySameHosts) {
     std::vector<std::string> paths = {
         fixture_path("base_intrapod.textproto"), fixture_path("additional_interpod.textproto")};
@@ -206,6 +275,79 @@ TEST_F(DescriptorMergerTest, MergeFromDirectoryExcludingConflicts) {
     EXPECT_EQ(merged.graph_templates().at("test_pod").internal_connections().at("QSFP_DD").connections().size(), 4);
     EXPECT_EQ(
         merged.graph_templates().at("test_superpod").internal_connections().at("QSFP_DD").connections().size(), 1);
+}
+
+TEST_F(DescriptorMergerTest, MergeSplitDescriptorProducesSameFSD) {
+    // Load the original 8x16 superpod descriptor
+    std::string original_path = "tools/tests/scaleout/cabling_descriptors/8x16_wh_galaxy_xy_torus_superpod.textproto";
+    std::ifstream file(original_path);
+    ASSERT_TRUE(file.is_open()) << "Failed to open " << original_path;
+    std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    file.close();
+
+    cabling_generator::proto::ClusterDescriptor original_desc;
+    ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(content, &original_desc));
+
+    int total_conns = original_desc.graph_templates()
+                          .at("8x16_wh_galaxy_xy_torus_superpod")
+                          .internal_connections()
+                          .at("QSFP_DD")
+                          .connections_size();
+
+    // Split descriptor using helper function
+    std::string temp_dir = "generated/tests/split_merge_test/";
+    std::string cabling_dir = temp_dir + "cabling/";
+
+    auto [part1_path, part2_path] = split_descriptor(original_path, cabling_dir, "8x16_wh_galaxy_xy_torus_superpod");
+
+    // Merge the split descriptors
+    auto merged = DescriptorMerger::merge_descriptors({part1_path, part2_path});
+
+    // Verify merged has same number of connections as original
+    ASSERT_TRUE(merged.graph_templates().contains("8x16_wh_galaxy_xy_torus_superpod"));
+    const auto& merged_template = merged.graph_templates().at("8x16_wh_galaxy_xy_torus_superpod");
+    ASSERT_TRUE(merged_template.internal_connections().contains("QSFP_DD"));
+
+    int merged_conn_count = merged_template.internal_connections().at("QSFP_DD").connections_size();
+    EXPECT_EQ(merged_conn_count, total_conns) << "Merged descriptor should have same number of connections as original";
+
+    // Generate FSDs for both original and merged
+    std::string deployment_path = temp_dir + "deployment.textproto";
+    std::ofstream deployment_file(deployment_path);
+    deployment_file << R"(
+rack_capacity: 1
+hosts { hall: "0" aisle: "0" rack: 0 shelf_u: 0 node_type: "WH_GALAXY_Y_TORUS" host: "h0" }
+hosts { hall: "0" aisle: "0" rack: 0 shelf_u: 1 node_type: "WH_GALAXY_Y_TORUS" host: "h1" }
+hosts { hall: "0" aisle: "0" rack: 0 shelf_u: 2 node_type: "WH_GALAXY_Y_TORUS" host: "h2" }
+hosts { hall: "0" aisle: "0" rack: 0 shelf_u: 3 node_type: "WH_GALAXY_Y_TORUS" host: "h3" }
+)";
+    deployment_file.close();
+
+    // Write original descriptor to file
+    std::string original_temp_path = temp_dir + "original.textproto";
+    std::ofstream(original_temp_path) << content;
+
+    // Generate FSD from original
+    CablingGenerator gen_original(original_temp_path, deployment_path);
+    auto fsd_original = gen_original.generate_factory_system_descriptor();
+
+    // Generate FSD from merged (use cabling directory not temp_dir)
+    CablingGenerator gen_merged(cabling_dir, deployment_path);
+    auto fsd_merged = gen_merged.generate_factory_system_descriptor();
+
+    // Compare FSDs - they should be identical
+    EXPECT_EQ(fsd_original.hosts_size(), fsd_merged.hosts_size());
+
+    // Count ethernet connections in both
+    int original_eth_conns = fsd_original.eth_connections().connection_size();
+    int merged_eth_conns = fsd_merged.eth_connections().connection_size();
+
+    EXPECT_EQ(original_eth_conns, merged_eth_conns)
+        << "FSD from merged should have same ethernet connections as original";
+    EXPECT_GT(original_eth_conns, 0) << "Should have at least some ethernet connections";
+
+    // Cleanup
+    std::filesystem::remove_all(temp_dir);
 }
 
 }  // namespace tt::scaleout_tools

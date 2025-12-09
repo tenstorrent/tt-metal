@@ -8,14 +8,11 @@
 #include <set>
 #include <string>
 #include <vector>
-#include <optional>
 
 namespace tt::scaleout_tools::cabling_generator::proto {
 class ClusterDescriptor;
 class GraphTemplate;
 class NodeDescriptor;
-class PortConnections;
-class Connection;
 class Port;
 }  // namespace tt::scaleout_tools::cabling_generator::proto
 
@@ -34,9 +31,7 @@ struct MergeValidationResult {
     }
 
     void merge(const MergeValidationResult& other) {
-        if (!other.success) {
-            success = false;
-        }
+        success = success && other.success;
         warnings.insert(warnings.end(), other.warnings.begin(), other.warnings.end());
         errors.insert(errors.end(), other.errors.begin(), other.errors.end());
     }
@@ -65,44 +60,24 @@ struct ConnectionPair {
     std::string to_string() const;
 };
 
-struct MergeStatistics {
-    size_t total_descriptors = 0;
-    size_t total_graph_templates = 0;
-    size_t total_node_descriptors = 0;
-    size_t total_connections = 0;
-    size_t duplicate_connections_removed = 0;
-    std::set<uint32_t> host_ids_found;
-
-    size_t expected_host_count() const { return host_ids_found.empty() ? 0 : (*host_ids_found.rbegin() + 1); }
-};
-
-// Utility class for merging multiple cabling descriptors into a single unified descriptor.
 class DescriptorMerger {
 public:
-    // Merge descriptors from file paths. Throws on conflicts or parse errors.
     static cabling_generator::proto::ClusterDescriptor merge_descriptors(
         const std::vector<std::string>& descriptor_paths);
 
-    // Merge already-loaded descriptors with validation output.
     static cabling_generator::proto::ClusterDescriptor merge_descriptors(
         const std::vector<cabling_generator::proto::ClusterDescriptor>& descriptors,
         MergeValidationResult& validation_result);
 
-    // Find all .textproto files in a directory recursively.
     static std::vector<std::string> find_descriptor_files(const std::string& directory_path);
 
-    // Validate structural consistency of a merged descriptor.
-    static MergeValidationResult validate_merged_descriptor(
-        const cabling_generator::proto::ClusterDescriptor& descriptor);
-
-    // Check host configuration consistency across descriptors.
     static MergeValidationResult validate_host_consistency(const std::vector<std::string>& descriptor_paths);
 
     static bool is_directory(const std::string& path);
 
-    static MergeStatistics get_merge_statistics(const cabling_generator::proto::ClusterDescriptor& descriptor);
-
 private:
+    using ConnectionMap = std::map<ConnectionEndpoint, ConnectionEndpoint>;
+
     static cabling_generator::proto::ClusterDescriptor load_descriptor(const std::string& file_path);
 
     static void merge_internal_connections(
@@ -112,7 +87,6 @@ private:
         const std::string& source_file,
         MergeValidationResult& result);
 
-    using ConnectionMap = std::map<ConnectionEndpoint, ConnectionEndpoint>;
     static ConnectionMap build_connection_map(const cabling_generator::proto::ClusterDescriptor& descriptor);
 
     static void detect_connection_conflicts(
@@ -124,11 +98,9 @@ private:
 
     static std::set<uint32_t> extract_host_ids(const cabling_generator::proto::ClusterDescriptor& descriptor);
 
-    // Get a NodeDescriptor by name (from inline descriptors or create from type)
     static cabling_generator::proto::NodeDescriptor get_node_descriptor(
         const std::string& node_descriptor_name, const cabling_generator::proto::ClusterDescriptor& descriptor);
 
-    // Merge two NodeDescriptors by combining their connections
     static cabling_generator::proto::NodeDescriptor merge_node_descriptor_connections(
         const cabling_generator::proto::NodeDescriptor& a, const cabling_generator::proto::NodeDescriptor& b);
 

@@ -12,7 +12,6 @@
 #include <stdexcept>
 
 #include <google/protobuf/text_format.h>
-#include <google/protobuf/util/message_differencer.h>
 
 #include "protobuf/cluster_config.pb.h"
 #include "node/node.hpp"
@@ -29,8 +28,7 @@ Descriptor load_descriptor_from_textproto(const std::string& file_path) {
         throw std::runtime_error("Failed to open file: " + file_path);
     }
 
-    std::string file_content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    file.close();
+    const std::string file_content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
     Descriptor descriptor;
     if (!google::protobuf::TextFormat::ParseFromString(file_content, &descriptor)) {
@@ -199,13 +197,13 @@ cabling_generator::proto::ClusterDescriptor DescriptorMerger::merge_descriptors(
 
     cabling_generator::proto::ClusterDescriptor merged = descriptors[0];
 
-    // 1. Union all graph_templates and inline node_descriptors
     for (size_t i = 1; i < descriptors.size(); ++i) {
-        for (const auto& [name, tmpl] : descriptors[i].graph_templates()) {
-            if (merged.graph_templates().find(name) == merged.graph_templates().end()) {
+        const auto& source = descriptors[i];
+
+        for (const auto& [name, tmpl] : source.graph_templates()) {
+            if (!merged.graph_templates().contains(name)) {
                 (*merged.mutable_graph_templates())[name] = tmpl;
             } else {
-                // Same name - merge internal_connections
                 merge_internal_connections(
                     (*merged.mutable_graph_templates())[name],
                     tmpl,
@@ -214,18 +212,18 @@ cabling_generator::proto::ClusterDescriptor DescriptorMerger::merge_descriptors(
                     validation_result);
             }
         }
-        for (const auto& [name, desc] : descriptors[i].node_descriptors()) {
-            if (merged.node_descriptors().find(name) == merged.node_descriptors().end()) {
+
+        for (const auto& [name, desc] : source.node_descriptors()) {
+            if (!merged.node_descriptors().contains(name)) {
                 (*merged.mutable_node_descriptors())[name] = desc;
             }
         }
     }
 
-    // 2. Collect all node_descriptors used across all root templates
-    std::map<std::string, std::set<std::string>> child_to_descriptors;  // child_name -> set of node_descriptors
+    std::map<std::string, std::set<std::string>> child_to_descriptors;
     for (const auto& desc : descriptors) {
         const auto& root_template_name = desc.root_instance().template_name();
-        auto it = desc.graph_templates().find(root_template_name);
+        const auto it = desc.graph_templates().find(root_template_name);
         if (it == desc.graph_templates().end()) {
             continue;
         }
@@ -237,19 +235,17 @@ cabling_generator::proto::ClusterDescriptor DescriptorMerger::merge_descriptors(
         }
     }
 
-    // 3. Merge node_descriptor connections where multiple types exist for same child
     for (const auto& [child_name, desc_names] : child_to_descriptors) {
         if (desc_names.size() <= 1) {
             continue;
         }
 
-        // Merge all into the first one
         auto it = desc_names.begin();
-        std::string base_name = *it++;
+        const std::string base_name = *it++;
         auto base_desc = get_node_descriptor(base_name, merged);
 
         while (it != desc_names.end()) {
-            auto other_desc = get_node_descriptor(*it, merged);
+            const auto other_desc = get_node_descriptor(*it, merged);
             base_desc = merge_node_descriptor_connections(base_desc, other_desc);
             validation_result.add_warning("Merged connections from '" + base_name + "' and '" + *it + "'");
             ++it;
@@ -270,11 +266,10 @@ void DescriptorMerger::merge_internal_connections(
 
     for (const auto& [port_type, connections] : target_template.internal_connections()) {
         for (const auto& conn : connections.connections()) {
-            ConnectionPair pair;
-            pair.port_type = port_type;
-            pair.endpoint_a = port_to_endpoint(conn.port_a(), template_name);
-            pair.endpoint_b = port_to_endpoint(conn.port_b(), template_name);
-            existing_connections.insert(pair);
+            existing_connections.insert(
+                {port_to_endpoint(conn.port_a(), template_name),
+                 port_to_endpoint(conn.port_b(), template_name),
+                 port_type});
         }
     }
 
@@ -282,12 +277,12 @@ void DescriptorMerger::merge_internal_connections(
         auto* target_connections = &(*target_template.mutable_internal_connections())[port_type];
 
         for (const auto& conn : source_connections.connections()) {
-            ConnectionPair pair;
-            pair.port_type = port_type;
-            pair.endpoint_a = port_to_endpoint(conn.port_a(), template_name);
-            pair.endpoint_b = port_to_endpoint(conn.port_b(), template_name);
+            const ConnectionPair pair{
+                port_to_endpoint(conn.port_a(), template_name),
+                port_to_endpoint(conn.port_b(), template_name),
+                port_type};
 
-            if (existing_connections.count(pair) > 0) {
+            if (existing_connections.contains(pair)) {
                 result.add_warning(
                     "Duplicate connection in template '" + template_name + "' from " + source_file + ": " +
                     pair.to_string() + ". Using first occurrence.");
@@ -321,12 +316,11 @@ void DescriptorMerger::detect_connection_conflicts(
     const cabling_generator::proto::ClusterDescriptor& desc2,
     const std::string& file2,
     MergeValidationResult& result) {
-    auto map1 = build_connection_map(desc1);
-    auto map2 = build_connection_map(desc2);
+    const auto map1 = build_connection_map(desc1);
+    const auto map2 = build_connection_map(desc2);
 
     for (const auto& [endpoint, connected_to_1] : map1) {
-        auto it = map2.find(endpoint);
-        if (it != map2.end() && !(connected_to_1 == it->second)) {
+        if (const auto it = map2.find(endpoint); it != map2.end() && !(connected_to_1 == it->second)) {
             result.add_error(
                 "Connection conflict: " + endpoint.to_string() + " connects to " + connected_to_1.to_string() + " in " +
                 file1 + " but connects to " + it->second.to_string() + " in " + file2);
@@ -354,81 +348,23 @@ std::set<uint32_t> DescriptorMerger::extract_host_ids(const cabling_generator::p
     return host_ids;
 }
 
-MergeValidationResult DescriptorMerger::validate_merged_descriptor(
-    const cabling_generator::proto::ClusterDescriptor& descriptor) {
-    MergeValidationResult result;
-
-    std::function<void(const cabling_generator::proto::GraphInstance&, const std::string&)> validate_instance;
-    validate_instance = [&](const cabling_generator::proto::GraphInstance& instance, const std::string& path) {
-        const auto& template_name = instance.template_name();
-
-        if (descriptor.graph_templates().find(template_name) == descriptor.graph_templates().end()) {
-            result.add_error("Graph template '" + template_name + "' referenced at " + path + " not found");
-            return;
-        }
-
-        const auto& graph_template = descriptor.graph_templates().at(template_name);
-
-        for (const auto& child : graph_template.children()) {
-            const auto& child_name = child.name();
-            std::string child_path = path.empty() ? child_name : path + "/" + child_name;
-
-            if (instance.child_mappings().find(child_name) == instance.child_mappings().end()) {
-                result.add_error("Missing child mapping for '" + child_name + "' in template '" + template_name + "'");
-                continue;
-            }
-
-            const auto& mapping = instance.child_mappings().at(child_name);
-
-            if (child.has_graph_ref()) {
-                if (!mapping.has_sub_instance()) {
-                    result.add_error("Graph child '" + child_name + "' requires sub_instance mapping, not host_id");
-                } else {
-                    validate_instance(mapping.sub_instance(), child_path);
-                }
-            } else if (child.has_node_ref() && !mapping.has_host_id()) {
-                result.add_error("Node child '" + child_name + "' requires host_id mapping, not sub_instance");
-            }
-        }
-    };
-
-    if (descriptor.has_root_instance()) {
-        validate_instance(descriptor.root_instance(), "");
-    }
-
-    auto host_ids = extract_host_ids(descriptor);
-    if (!host_ids.empty()) {
-        uint32_t max_host_id = *host_ids.rbegin();
-        for (uint32_t i = 0; i <= max_host_id; ++i) {
-            if (host_ids.find(i) == host_ids.end()) {
-                result.add_warning(
-                    "Host ID " + std::to_string(i) + " is missing from sequence 0.." + std::to_string(max_host_id));
-            }
-        }
-    }
-    return result;
-}
-
 MergeValidationResult DescriptorMerger::validate_host_consistency(const std::vector<std::string>& descriptor_paths) {
     MergeValidationResult result;
     if (descriptor_paths.size() < 2) {
         return result;
     }
 
-    // Get host counts from descriptors that have root_instances
     std::optional<size_t> first_host_count;
-    std::string first_path;
 
     for (const auto& path : descriptor_paths) {
-        auto host_ids = extract_host_ids(load_descriptor(path));
+        const auto host_ids = extract_host_ids(load_descriptor(path));
         if (host_ids.empty()) {
             continue;
         }
 
-        size_t count = *host_ids.rbegin() + 1;
+        const size_t count = *host_ids.rbegin() + 1;
         if (!first_host_count) {
             first_host_count = count;
-            first_path = path;
         } else if (count != *first_host_count) {
             result.add_warning(
                 "Host count mismatch: " + std::to_string(*first_host_count) + " vs " + std::to_string(count) +
@@ -439,30 +375,13 @@ MergeValidationResult DescriptorMerger::validate_host_consistency(const std::vec
     return result;
 }
 
-MergeStatistics DescriptorMerger::get_merge_statistics(const cabling_generator::proto::ClusterDescriptor& descriptor) {
-    MergeStatistics stats;
-    stats.total_graph_templates = descriptor.graph_templates().size();
-    stats.total_node_descriptors = descriptor.node_descriptors().size();
-
-    for (const auto& [name, graph_template] : descriptor.graph_templates()) {
-        for (const auto& [port_type, connections] : graph_template.internal_connections()) {
-            stats.total_connections += connections.connections().size();
-        }
-    }
-
-    stats.host_ids_found = extract_host_ids(descriptor);
-    return stats;
-}
-
 cabling_generator::proto::NodeDescriptor DescriptorMerger::get_node_descriptor(
     const std::string& node_descriptor_name, const cabling_generator::proto::ClusterDescriptor& descriptor) {
-    // First check inline descriptors
-    auto it = descriptor.node_descriptors().find(node_descriptor_name);
-    if (it != descriptor.node_descriptors().end()) {
+    if (const auto it = descriptor.node_descriptors().find(node_descriptor_name);
+        it != descriptor.node_descriptors().end()) {
         return it->second;
     }
-    // Fall back to creating from node type
-    auto node_type = get_node_type_from_string(node_descriptor_name);
+    const auto node_type = get_node_type_from_string(node_descriptor_name);
     return create_node_descriptor(node_type);
 }
 
@@ -470,41 +389,36 @@ cabling_generator::proto::NodeDescriptor DescriptorMerger::merge_node_descriptor
     const cabling_generator::proto::NodeDescriptor& a, const cabling_generator::proto::NodeDescriptor& b) {
     cabling_generator::proto::NodeDescriptor merged = a;
 
-    // Merge boards - use boards from 'a' as base, add any missing from 'b'
     std::set<int32_t> existing_tray_ids;
     for (const auto& board : merged.boards().board()) {
         existing_tray_ids.insert(board.tray_id());
     }
     for (const auto& board : b.boards().board()) {
-        if (existing_tray_ids.find(board.tray_id()) == existing_tray_ids.end()) {
+        if (!existing_tray_ids.contains(board.tray_id())) {
             *merged.mutable_boards()->add_board() = board;
         }
     }
 
-    // Merge port_type_connections - combine connections from both
     for (const auto& [port_type, b_connections] : b.port_type_connections()) {
         auto& merged_connections = (*merged.mutable_port_type_connections())[port_type];
 
-        // Build set of existing connections for deduplication
         std::set<std::tuple<int32_t, int32_t, int32_t, int32_t>> existing;
         for (const auto& conn : merged_connections.connections()) {
-            auto key = std::make_tuple(
+            const auto key = std::make_tuple(
                 conn.port_a().tray_id(), conn.port_a().port_id(), conn.port_b().tray_id(), conn.port_b().port_id());
             existing.insert(key);
-            // Also insert reverse
-            auto rev_key = std::make_tuple(
+            const auto rev_key = std::make_tuple(
                 conn.port_b().tray_id(), conn.port_b().port_id(), conn.port_a().tray_id(), conn.port_a().port_id());
             existing.insert(rev_key);
         }
 
-        // Add connections from 'b' that don't already exist
         for (const auto& conn : b_connections.connections()) {
-            auto key = std::make_tuple(
+            const auto key = std::make_tuple(
                 conn.port_a().tray_id(), conn.port_a().port_id(), conn.port_b().tray_id(), conn.port_b().port_id());
-            if (existing.find(key) == existing.end()) {
+            if (!existing.contains(key)) {
                 *merged_connections.add_connections() = conn;
                 existing.insert(key);
-                auto rev_key = std::make_tuple(
+                const auto rev_key = std::make_tuple(
                     conn.port_b().tray_id(), conn.port_b().port_id(), conn.port_a().tray_id(), conn.port_a().port_id());
                 existing.insert(rev_key);
             }
