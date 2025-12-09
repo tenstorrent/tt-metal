@@ -41,6 +41,9 @@ target_sources(
             all_gather_async/device/all_gather_async_op.hpp
             composite_common.hpp
             reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp
+            reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp
+            reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp
+            reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp
             reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp
         FILE_SET kernels
         TYPE HEADERS
