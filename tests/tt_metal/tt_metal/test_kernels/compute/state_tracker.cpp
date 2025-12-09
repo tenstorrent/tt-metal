@@ -2,19 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#define TT_METAL_STATE_TRACKER_TESTING_ENABLED
+#define REDUCE_OP PoolType::SUM
+#define REDUCE_DIM ReduceDim::REDUCE_ROW
 
 #include <cstdint>
+#include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api/pack_untilize.h"
+#include "compute_kernel_api/tilize.h"
+#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/untilize.h"
 #include "debug/assert.h"  // Required in all kernels using watcher asserts
-#include "debug/waypoint.h"
-#include "tt_metal/include/compute_kernel_api/state_tracker.h"
+#include "compute_kernel_api/state_tracker.h"
+#include "compute_kernel_api/reduce.h"
 
 namespace NAMESPACE {
 void MAIN {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    uint32_t ublock_size_tiles = get_arg_val<uint32_t>(1);
-
     SET_CALLED_RECONFIG(RECONFIG_NOTHING_CHANGED);
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;    // Bfp8_b
@@ -24,28 +28,96 @@ void MAIN {
     constexpr auto cb_out1 = tt::CBIndex::c_17;  // Bfp8_b
 
     compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
-    /*
-     * For each init test, it will cover different paths for state tracker reconfiguration calls
-     */
 
-    // --- UNARY init test ---
-    WAYPOINT("BNRY");
+    // Binary op init, this will test all code paths of the state tracker, each call after that will cover and ensure
+    // that init functions have correct reconfig calls
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_NOTHING_CHANGED));
-
-    binary_op_init_common(cb_in1, cb_in2, cb_out1);  // All 3 changed
+    binary_op_init_common(cb_in1, cb_in1, cb_out0);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
+    binary_op_init_common(cb_in1, cb_in0, cb_out0);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCB));
+    binary_op_init_common(cb_in1, cb_in0, cb_out1);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_PACK));
+    binary_op_init_common(cb_in0, cb_in2, cb_out0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
 
-    binary_op_init_common(cb_in0, cb_in1, cb_out1);  // SRCA + SRCB changed
+    // Matmul init: tests state tracker with matmul CB ordering (SRCB, SRCA, OUT)
+    mm_init(cb_in2, cb_in0, cb_out0);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_NOTHING_CHANGED));
+    mm_init(cb_in0, cb_in1, cb_out1);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
+
+    // Matmul init short: tests state tracker with 2-param version (no PACK)
+    mm_init_short(cb_in2, cb_in0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
 
-    binary_op_init_common(cb_in2, cb_in1, cb_out1);  // Only SRCA changed
+    mm_block_init(cb_in0, cb_in1, cb_out0);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
+
+    mm_block_init_short(cb_in1, cb_in2);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
+
+    init_bcast<ELWADD, BroadcastType::NONE>(cb_in0, cb_in2, cb_out1);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
+
+    add_bcast_rows_init_short(cb_in2, cb_in1);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
+    add_bcast_rows_init_short(cb_in1, cb_in0);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
+    add_bcast_cols_init_short(cb_in0, cb_in1);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
+    add_bcast_scalar_init_short(cb_in1, cb_in0);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
+    mul_tiles_bcast_scalar_init_short(cb_in0, cb_in1);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
+    mul_tiles_bcast_scalar(cb_in1, cb_in0, 0, 0, 0);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
+    mul_bcast_cols_init_short(cb_in0, cb_in1);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
+    mul_bcast_rows_init_short(cb_in1, cb_in0);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
+    sub_bcast_cols_init_short(cb_in0, cb_in1);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
+    sub_tiles_bcast_scalar_init_short(cb_in1, cb_in0);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
+
+    binary_tiles_init<false, ELWADD>(cb_in0, cb_in1);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
+
+    binary_dest_reuse_tiles_init(cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
-    binary_op_init_common(cb_in2, cb_in0, cb_out1);  // Only SRCB changed
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCB));
-
-    binary_op_init_common(cb_in2, cb_in0, cb_out0);  // Only PACK changed
+    pack_untilize_dest_init<1>(cb_out0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_PACK));
+
+    pack_untilize_init(cb_in0, cb_out1);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
+
+    reduce_init(cb_in1, cb_in0, cb_out0);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
+
+    tilize_init(cb_in0, 1, cb_out1);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
+
+    tilize_init_no_pack(cb_in1, 1);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
+
+#if (defined(REDUCE_OP) and defined(REDUCE_DIM)) or defined(__DOXYGEN__)
+    tilizeA_B_reduce_init<false, true>(cb_in0, cb_in1, 1, cb_out0);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
+#endif
+
+    fast_tilize_init(cb_in2, 1, cb_out1);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
+
+    transpose_wh_init(cb_in0, cb_out0);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
+
+    transpose_wh_init_short(cb_in1);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
+
+    untilize_init(cb_in2);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 }
 }  // namespace NAMESPACE

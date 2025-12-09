@@ -345,7 +345,7 @@ ALWI void mul_tiles_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1) {
  * Performs a broadcast-multiply of a tile from icb0[itile0] with a scalar encoded as a tile from icb1[itile1].
  */
 ALWI void mul_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
-    state_configure<Operation::BINARY>(icb0, icb1, idst);
+    state_configure<Operation::BINARY>(icb0, icb1);
     MATH((llk_math_eltwise_binary<
           ELWMUL,
           BroadcastType::SCALAR,

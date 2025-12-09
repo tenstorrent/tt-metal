@@ -21,28 +21,26 @@
 #endif
 
 namespace ckernel {
-
 /*
  * State Tracking Overview:
  *
  * The state_configure functions are organized into three overloads based on operand count:
  *
  * 1) Single operand: state_configure(cb)
- *    - Handles operations that only need one input buffer (UNARY, COPY, TRANSPOSE, PACK)
+ *    - Handles operations that only need one input buffer
  *    - Reconfigures either srcA or pack registers depending on operation type
  *
  * 2) Dual operand: state_configure(cb_a, cb_b)
- *    - Handles operations with two buffers (BINARY, MATMUL, REDUCE inputs, or UNARY with output)
- *    - Reconfigures srcA and srcB registers, or srcA and pack for UNARY with output
+ *    - Handles operations with two buffers
+ *    - Reconfigures srcA and srcB registers, or srcA and pack
  *
  * 3) Three operand: state_configure(cb_a, cb_b, cb_out)
- *    - Handles full pipeline operations (BINARY, MATMUL, REDUCE with explicit output buffer)
+ *    - Handles full pipeline operations
  *    - Reconfigures all three registers: srcA, srcB, and pack
  *
  * Each operation type uses compile-time dispatch (if constexpr) to call the appropriate
  * reconfiguration helper, minimizing runtime overhead while maintaining flexibility.
  */
-
 // Forward declarations to avoid circular dependency with pack.h
 ALWI void pack_reconfig_data_format(uint32_t new_cb_id);
 ALWI void pack_reconfig_data_format(uint32_t old_cb_id, uint32_t new_cb_id);
@@ -65,24 +63,13 @@ enum Type : uint8_t {
     UNTILIZE,   // Untilize operations (srcA)
     COPY,       // Copy/move operations (srcA)
     TRANSPOSE,  // Transpose operations (srcA)
-    CUSTOM      // Custom operations (manual configuration)
 };
 }
 
 struct StateTracker {
-    // Circular buffer indices (12 bytes)
     uint32_t srca_cb = INVALID_CB_INDEX;
     uint32_t srcb_cb = INVALID_CB_INDEX;
     uint32_t pack_cb = INVALID_CB_INDEX;
-
-    // Data formats and operation type (4 bytes total)
-    DataFormat srca_format = DataFormat::Invalid;    // uint8_t
-    DataFormat srcb_format = DataFormat::Invalid;    // uint8_t
-    DataFormat pack_format = DataFormat::Invalid;    // uint8_t
-    Operation::Type current_op = Operation::CUSTOM;  // uint8_t
-
-    // Kernel execution flag (1 byte)
-    bool kernel_executing = false;
 };
 
 // Global State Tracker instance
@@ -174,90 +161,6 @@ ALWI void reconfig_all_operands(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
     }
     reconfigure_dual_operand<to_from_int8>(cb_a, cb_b);
     reconfigure_pack_operand(cb_out);
-}
-
-/*
- *  *-------------------------------*
- *  |  Operation-specific handlers  |
- *  *-------------------------------*
- */
-
-// --- UNARY Operation Handler ---
-template <bool to_from_int8>
-ALWI void state_impl_unary(uint32_t cb) {
-    // UNARY-specific implementation: exp, sqrt, abs, etc.
-}
-
-// --- COPY Operation Handler ---
-template <bool to_from_int8>
-ALWI void state_impl_copy(uint32_t cb) {
-    // COPY-specific implementation: copy_tile
-}
-
-// --- TRANSPOSE Operation Handler ---
-template <bool to_from_int8>
-ALWI void state_impl_transpose(uint32_t cb) {
-    // TRANSPOSE-specific implementation: transpose_wh
-}
-
-// --- BINARY Operation Handler ---
-template <bool to_from_int8>
-ALWI void state_impl_binary(uint32_t cb_a, uint32_t cb_b) {
-    // reconfigure_dual_operand(cb_a, cb_b);
-}
-
-// --- MATMUL Operation Handler ---
-template <bool to_from_int8>
-ALWI void state_impl_matmul(uint32_t cb_a, uint32_t cb_b) {
-    // MATMUL-specific implementation: matrix multiplication
-}
-
-// --- REDUCE Operation Handler ---
-template <bool to_from_int8>
-ALWI void state_impl_reduce(uint32_t cb_input, uint32_t cb_scaler) {
-    // REDUCE-specific implementation: reduction operations
-}
-
-// --- UNARY with output Operation Handler ---
-template <bool to_from_int8>
-ALWI void state_impl_unary_with_output(uint32_t cb_in, uint32_t cb_out) {
-    // UNARY with output implementation: unary_op_init_common
-}
-
-// --- TRANSPOSE with output Operation Handler ---
-template <bool to_from_int8>
-ALWI void state_impl_transpose_with_output(uint32_t cb_in, uint32_t cb_out) {
-    // TRANSPOSE with output implementation: transpose_wh_init
-}
-
-// --- TILIZE Operation Handler ---
-template <bool to_from_int8>
-ALWI void state_impl_tilize(uint32_t cb_in, uint32_t cb_out) {
-    // TILIZE-specific implementation
-}
-
-// --- UNTILIZE Operation Handler ---
-template <bool to_from_int8>
-ALWI void state_impl_untilize(uint32_t cb_in, uint32_t cb_out) {
-    // UNTILIZE-specific implementation
-}
-
-// --- BINARY with output Operation Handler ---
-template <bool to_from_int8>
-ALWI void state_impl_binary_with_output(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
-    reconfig_all_operands<to_from_int8>(cb_a, cb_b, cb_out);
-}
-
-// --- MATMUL with output Operation Handler ---
-template <bool to_from_int8>
-ALWI void state_impl_matmul_with_output(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
-    // MATMUL with output implementation: full mm_init
-}
-
-// --- PACK Operation Handler ---
-template <bool to_from_int8>
-ALWI void state_impl_pack(uint32_t cb) {
-    reconfigure_pack_operand(cb);
 }
 
 /*
@@ -368,67 +271,42 @@ ALWI void set_g_srca_srcb(uint32_t cb_a, uint32_t cb_b) {
 }
 
 /**
- * @brief Set current srcA state (for debugging)
+ * @brief Set current srcA state
  */
 ALWI void set_g_srca(uint32_t cb_a) { g_state_tracker.srca_cb = cb_a; }
 
 /**
- * @brief Set current srcB state (for debugging)
+ * @brief Set current srcB state
  */
 ALWI void set_g_srcb(uint32_t cb_b) { g_state_tracker.srcb_cb = cb_b; }
 
 /**
- * @brief Set current pack state (for debugging)
+ * @brief Set current pack state
  */
 ALWI void set_g_pack(uint32_t cb_out) { g_state_tracker.pack_cb = cb_out; }
 
 /**
- * @brief Get current srcA state (for debugging)
+ * @brief Get current srcA state
  */
 ALWI uint32_t get_state_srca() { return g_state_tracker.srca_cb; }
 
 /**
- * @brief Get current srcB state (for debugging)
+ * @brief Get current srcB state
  */
 ALWI uint32_t get_state_srcb() { return g_state_tracker.srcb_cb; }
 
 /**
- * @brief Get current pack state (for debugging)
+ * @brief Get current pack state
  */
 ALWI uint32_t get_state_pack() { return g_state_tracker.pack_cb; }
 
 /**
- * @brief Mark the beginning of kernel execution
- *
- * Call this at the start of your kernel to indicate that a kernel is now executing.
- */
-ALWI void kernel_start() { g_state_tracker.kernel_executing = true; }
-
-/**
- * @brief Mark the end of kernel execution
- *
- * Call this at the end of your kernel to indicate that the kernel has finished.
- */
-ALWI void kernel_end() { g_state_tracker.kernel_executing = false; }
-
-/**
- * @brief Check if a kernel is currently executing
- *
- * @return true if a kernel is executing, false otherwise
- */
-ALWI bool is_kernel_executing() { return g_state_tracker.kernel_executing; }
-
-/**
- * @brief Reset all global state to invalid
- *
- * Call this at kernel boundaries or when external events may have
- * changed hardware state outside the API's knowledge.
+ * @brief Reset the state tracker to initial invalid state
  */
 ALWI void reset_state_tracker() {
     g_state_tracker.srca_cb = INVALID_CB_INDEX;
     g_state_tracker.srcb_cb = INVALID_CB_INDEX;
     g_state_tracker.pack_cb = INVALID_CB_INDEX;
-    g_state_tracker.kernel_executing = false;
 }
 
 }  // namespace ckernel
