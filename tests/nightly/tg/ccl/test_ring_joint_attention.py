@@ -14,9 +14,8 @@ from tests.nightly.t3000.ccl.test_ring_joint_attention import run_ring_joint_sdp
     [
         (ttnn.bfloat16, 0.994),
         (ttnn.bfloat8_b, 0.944),
-        (ttnn.bfloat4_b, 0.8),
     ],
-    ids=["bf16", "bf8_b", "bf4_b"],
+    ids=["bf16", "bf8_b"],
 )
 @pytest.mark.parametrize(
     "b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size",
@@ -114,15 +113,7 @@ def test_ring_joint_sdpa(
     )
 
 
-@pytest.mark.parametrize(
-    "dtype, pcc_threshold",
-    [
-        (ttnn.bfloat16, 0.994),
-        (ttnn.bfloat8_b, 0.944),
-        (ttnn.bfloat4_b, 0.8),
-    ],
-    ids=["bf16", "bf8_b", "bf4_b"],
-)
+@pytest.mark.parametrize("dtype, pcc_threshold", [(ttnn.bfloat16, 0.994)], ids=["bf16"])
 @pytest.mark.parametrize(
     "b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size",
     [

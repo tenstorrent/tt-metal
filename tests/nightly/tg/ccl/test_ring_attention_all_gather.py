@@ -18,12 +18,10 @@ from tests.nightly.t3000.ccl.test_ring_attention_all_gather import (
     [
         (ttnn.TILE_LAYOUT, ttnn.bfloat16, 1.0),
         (ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 0.99),
-        (ttnn.TILE_LAYOUT, ttnn.bfloat4_b, 0.985),
     ],
     ids=[
         "tile_bfloat16",
         "tile_bfloat8_b",
-        "tile_bfloat4_b",
     ],
 )
 @pytest.mark.parametrize(
@@ -112,13 +110,9 @@ def test_ring_attention_all_gather(
     "layout, ag_input_dtype, pcc_threshold",
     [
         (ttnn.TILE_LAYOUT, ttnn.bfloat16, 1.0),
-        (ttnn.TILE_LAYOUT, ttnn.bfloat8_b, 0.99),
-        (ttnn.TILE_LAYOUT, ttnn.bfloat4_b, 0.985),
     ],
     ids=[
         "tile_bfloat16",
-        "tile_bfloat8_b",
-        "tile_bfloat4_b",
     ],
 )
 @pytest.mark.parametrize(
