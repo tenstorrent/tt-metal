@@ -34,7 +34,6 @@ ALWI void copy_tile_to_dst_init_short(
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(
         false /*transpose of faces*/, false /*transpose within 16x16 face*/, cbid)));
 }
-
 /**
  * Perform a init for the copy tile operation. This calls the short init function and initializes packer dst offset
  * registers.
