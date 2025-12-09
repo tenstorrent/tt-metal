@@ -21,7 +21,9 @@
 #include "gtest/gtest.h"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
+#include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 
 ////////////////////////////////////////////////////////////////////////////////
 // A test for checking that prints are prepended with their corresponding device, core and RISC.
@@ -43,7 +45,7 @@ void UpdateGoldenOutput(
     const std::string& output_line_all_riscs = device_core_risc + "Printing on a RISC.";
     golden_output.push_back(output_line_all_riscs);
 
-    if (risc != "ER") {
+    if (risc != "ER0" && risc != "ER") {
         const std::string& output_line_risc = device_core_risc + "Printing on " + risc + ".";
         golden_output.push_back(output_line_risc);
     }
@@ -89,14 +91,17 @@ void RunTest(
     if (add_active_eth_kernel) {
         const std::unordered_set<CoreCoord>& active_eth_cores = device->get_active_ethernet_cores(true);
         CoreRangeSet crs(std::set<CoreRange>(active_eth_cores.begin(), active_eth_cores.end()));
-        CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/misc/print_simple.cpp",
-            crs,
-            EthernetConfig{.noc = NOC::NOC_0});
+        tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0, .processor = DataMovementProcessor::RISCV_0};
+        eth_test_common::set_arch_specific_eth_config(config);
+        CreateKernel(program_, "tests/tt_metal/tt_metal/test_kernels/misc/print_simple.cpp", crs, config);
 
         for ([[maybe_unused]] const CoreCoord& core : active_eth_cores) {
-            UpdateGoldenOutput(golden_output, mesh_device, "ER");
+            if (tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
+                    HalProgrammableCoreType::ACTIVE_ETH) > 1) {
+                UpdateGoldenOutput(golden_output, mesh_device, "ER0");
+            } else {
+                UpdateGoldenOutput(golden_output, mesh_device, "ER");
+            }
         }
     }
 

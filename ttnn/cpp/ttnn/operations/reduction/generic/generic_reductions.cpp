@@ -15,8 +15,7 @@
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-namespace ttnn {
-namespace operations::reduction {
+namespace ttnn::operations::reduction {
 
 // input_shape has original shape while output_shape has reduction applied and last 2 dims padded.
 // Need to get slice parameters based on the minimum of the two shapes.
@@ -282,7 +281,7 @@ static Tensor reduce_impl(
                                          : input_tensor_arg;
 
         if constexpr (reduce_type == ReduceType::Sum) {
-            output_tensor = tt::tt_metal::reduce(
+            output_tensor = ttnn::operations::reduction::generic::detail::reduce(
                 input_tensor,
                 tt::tt_metal::ReduceOpMath::SUM,
                 reduce_op_dim,
@@ -292,7 +291,7 @@ static Tensor reduce_impl(
                 compute_kernel_config,
                 sub_core_grids);
         } else if constexpr (reduce_type == ReduceType::Mean) {
-            output_tensor = tt::tt_metal::reduce(
+            output_tensor = ttnn::operations::reduction::generic::detail::reduce(
                 input_tensor,
                 tt::tt_metal::ReduceOpMath::SUM,
                 reduce_op_dim,
@@ -302,7 +301,7 @@ static Tensor reduce_impl(
                 compute_kernel_config,
                 sub_core_grids);
         } else if constexpr (reduce_type == ReduceType::Max) {
-            output_tensor = tt::tt_metal::reduce(
+            output_tensor = ttnn::operations::reduction::generic::detail::reduce(
                 input_tensor,
                 tt::tt_metal::ReduceOpMath::MAX,
                 reduce_op_dim,
@@ -312,7 +311,7 @@ static Tensor reduce_impl(
                 compute_kernel_config,
                 sub_core_grids);
         } else if constexpr (reduce_type == ReduceType::Min) {
-            output_tensor = tt::tt_metal::reduce(
+            output_tensor = ttnn::operations::reduction::generic::detail::reduce(
                 input_tensor,
                 tt::tt_metal::ReduceOpMath::MIN,
                 reduce_op_dim,
@@ -503,5 +502,4 @@ template struct Reduce<ReduceType::Max>;
 template struct Reduce<ReduceType::Min>;
 template struct Reduce<ReduceType::Std>;
 template struct Reduce<ReduceType::Var>;
-}  // namespace operations::reduction
-}  // namespace ttnn
+}  // namespace ttnn::operations::reduction

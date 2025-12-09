@@ -696,8 +696,13 @@ jobs:
         || format('tt-ubuntu-2204-{0}-viommu-stable', matrix.runner_label)
       }}
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -829,7 +834,16 @@ jobs:
           ccl_batches = chunk_modules(ccl_modules, BATCH_SIZE)
 
           is_comprehensive = schedule_expr == "0 4 * * 3" or schedule_expr == "0 5 * * 6" or sweep_name == "ALL SWEEPS (Comprehensive)"
-          wormhole_suite_name = "nightly" if not is_comprehensive else None
+          is_model_traced = schedule_expr == "30 4 * * *" or sweep_name == "ALL SWEEPS (Model Traced)"
+          # For model_traced runs, use "model_traced" suite only
+          # For nightly runs, use "nightly" suite
+          # For comprehensive runs, don't override suite_name
+          if is_model_traced:
+              wormhole_suite_name = "model_traced"
+          elif is_comprehensive:
+              wormhole_suite_name = None
+          else:
+              wormhole_suite_name = "nightly"
 
           include_entries = []
 
@@ -930,8 +944,13 @@ jobs:
         || format('tt-ubuntu-2204-{0}-viommu-stable', matrix.test-group.runner_label)
       }}
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -1023,8 +1042,13 @@ jobs:
     timeout-minutes: 720
     runs-on: ${{ matrix.runs_on }}
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -1137,8 +1161,13 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     runs-on: tt-ubuntu-2204-large-stable
     steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

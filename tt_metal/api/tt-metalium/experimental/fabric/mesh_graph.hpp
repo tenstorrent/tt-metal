@@ -22,11 +22,10 @@
 
 #include <vector>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 enum class ClusterType : std::uint8_t;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
+
 namespace tt::tt_fabric {
 
 using tt::tt_metal::distributed::MeshContainer;
@@ -42,11 +41,12 @@ struct ChipSpec {
 
 enum class RoutingDirection {
     N = 0,
-    E = 2,
-    S = 4,
-    W = 8,
-    C = 16,     // Centre, means that destination is same as source
-    NONE = 32,  // No direction, means that destination is not reachable
+    E = 1,
+    S = 2,
+    W = 3,
+    Z = 4,
+    C = 5,     // Centre, means that destination is same as source
+    NONE = 6,  // No direction, means that destination is not reachable
 };
 
 struct RouterEdge {
