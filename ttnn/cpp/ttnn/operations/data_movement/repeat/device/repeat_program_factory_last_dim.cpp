@@ -43,10 +43,6 @@ RepeatProgramFactoryLastDim::cached_program_t RepeatProgramFactoryLastDim::creat
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
     ttnn::Shape input_log_shape = ttnn::Shape(input.logical_shape().view());
     ttnn::Shape output_log_shape = ttnn::Shape(output.logical_shape().view());
-    log_debug(tt::LogOp, "row major reshape");
-    log_debug(tt::LogOp, "input shape: {}", input_log_shape);
-    log_debug(tt::LogOp, "output shape: {}", output_log_shape);
-    log_debug(tt::LogOp, "data size: {}", data_size);
     uint32_t source_page_size_bytes = input_log_shape[-1] * data_size;
     uint32_t dest_page_size_bytes = source_page_size_bytes * num_repeats;
     TT_FATAL(
@@ -94,8 +90,6 @@ RepeatProgramFactoryLastDim::cached_program_t RepeatProgramFactoryLastDim::creat
                     src_buffer->address(), dst_buffer->address(), 0, 0, 1};
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
             } else {
-                // set the runtime args
-                // set the compile time args
                 const uint32_t start_of_read = read_start_page;
                 uint32_t end_of_read = read_start_page + responsibility;
                 end_of_read = end_of_read < number_of_pages ? end_of_read : number_of_pages;
