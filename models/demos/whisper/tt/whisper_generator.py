@@ -613,7 +613,6 @@ def _generate_with_temperature(
                 trace_executor = TracedWhisperDecoderExecutor(
                     model_fn=traced_decoder_fn,
                     device=mesh_device,
-                    l1_input_memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
                 trace_executor.compile(decoder_hidden_states)
                 trace_compiled = True

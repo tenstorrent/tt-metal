@@ -43,7 +43,6 @@ class TracedWhisperDecoderExecutor:
         self,
         model_fn: Callable,
         device,
-        l1_input_memory_config: ttnn.MemoryConfig,
         cq_id: int = 0,
     ):
         """
@@ -59,16 +58,15 @@ class TracedWhisperDecoderExecutor:
         self.device = device
         self.cq_id = cq_id
 
-        self.l1_input_memory_config = l1_input_memory_config
+        self.l1_input_memory_config = ttnn.L1_MEMORY_CONFIG
 
         # Persistent tensors (no DRAM staging needed)
         self.l1_input_tensor = None
         self.output_tensor = None
-        self._compilation_output_tensor = None
 
         # Trace state
         self.trace_id = None
-        self.input_trace_addr = None
+        self.l1_input_tensor = None
 
     def compile(self, device_input: ttnn.Tensor):
         """
@@ -95,44 +93,33 @@ class TracedWhisperDecoderExecutor:
         """Run the model once to set up memory state for trace capture."""
         # Move device input directly to L1 and run model
         l1_input_for_compile = ttnn.to_memory_config(device_input, self.l1_input_memory_config)
-        self._compilation_output_tensor = self.model_fn(l1_input_for_compile)
+        compilation_output_tensor = self.model_fn(l1_input_for_compile)
+        self._deallocate_tensor(compilation_output_tensor, force=True)
 
         # Cleanup L1 input tensor
-        if l1_input_for_compile.is_allocated():
-            ttnn.deallocate(l1_input_for_compile)
+        ttnn.deallocate(l1_input_for_compile)
 
     def _capture_execution_trace(self, device_input: ttnn.Tensor):
         """Capture execution trace for efficient replay."""
         # Move device input directly to L1
-        l1_input_for_trace = ttnn.to_memory_config(device_input, self.l1_input_memory_config)
-
-        # Record tensor address and spec for validation
-        self.input_trace_addr = l1_input_for_trace.buffer_address()
-        spec = l1_input_for_trace.spec
-
-        # Force cleanup of compilation output to ensure address consistency
-        # This is necessary because trace capture relies on the L1 input tensor
-        # being allocated at the same address as during the initial trace
-        if self._compilation_output_tensor is not None:
-            self._deallocate_tensor(self._compilation_output_tensor, force=True)
+        self.l1_input_tensor = ttnn.to_memory_config(device_input, self.l1_input_memory_config)
 
         # Begin trace capture
         self.trace_id = ttnn.begin_trace_capture(self.device, cq_id=self.cq_id)
 
         # Run model under trace
-        self.output_tensor = self.model_fn(l1_input_for_trace)
+        self.output_tensor = self.model_fn(self.l1_input_tensor)
 
         # Deallocate L1 input inside trace
-        if l1_input_for_trace.is_allocated():
-            ttnn.deallocate(l1_input_for_trace, force=True)
+        ttnn.deallocate(self.l1_input_tensor, force=True)
 
         # Allocate persistent L1 input tensor and validate address
-        self.l1_input_tensor = ttnn.allocate_tensor_on_device(spec, self.device)
+        self.l1_input_tensor = ttnn.allocate_tensor_on_device(self.l1_input_tensor.spec, self.device)
         actual_addr = self.l1_input_tensor.buffer_address()
 
-        if self.input_trace_addr != actual_addr:
+        if self.l1_input_tensor.buffer_address() != actual_addr:
             raise RuntimeError(
-                f"L1 input tensor address mismatch: trace captured {self.input_trace_addr}, "
+                f"L1 input tensor address mismatch: trace captured {self.l1_input_tensor.buffer_address()}, "
                 f"but persistent tensor allocated at {actual_addr}"
             )
 
@@ -167,10 +154,10 @@ class TracedWhisperDecoderExecutor:
 
         # Validate address consistency
         actual_addr = self.l1_input_tensor.buffer_address()
-        if actual_addr != self.input_trace_addr:
+        if actual_addr != self.l1_input_tensor.buffer_address():
             raise RuntimeError(
                 f"L1 input tensor address mismatch during execution: "
-                f"expected {self.input_trace_addr}, got {actual_addr}"
+                f"expected {self.l1_input_tensor.buffer_address()}, got {actual_addr}"
             )
 
         # Execute trace
@@ -184,21 +171,3 @@ class TracedWhisperDecoderExecutor:
             ttnn.release_trace(self.device, self.trace_id)
             self.trace_id = None
             logger.debug("Released Whisper decoder trace")
-
-
-def get_decoder_trace_memory_configs(device, input_shape, dtype=ttnn.bfloat16):
-    """
-    Get memory configurations for traced decoder execution.
-
-    Args:
-        device: The TTNN device.
-        input_shape: Shape of decoder hidden states input.
-        dtype: Data type for tensors.
-
-    Returns:
-        L1 memory config for decoder input.
-    """
-    # L1 config - interleaved for decoder input
-    l1_memory_config = ttnn.L1_MEMORY_CONFIG
-
-    return l1_memory_config
