@@ -9,9 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "types.hpp"
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 tt::tt_metal::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape);
 
@@ -63,5 +61,4 @@ struct ShardDivisionSpec {
 // Returns ShardDivisionSpecs given 2D shape and shard_shape
 ShardDivisionSpec compute_shard_division_spec(const Shape2D& shape, const Shape2D& shard_shape);
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

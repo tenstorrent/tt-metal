@@ -18,8 +18,7 @@
 #include <tt_stl/caseless_comparison.hpp>
 #include <llrt/tt_cluster.hpp>
 
-namespace tt::tt_fabric {
-namespace system_health_tests {
+namespace tt::tt_fabric::system_health_tests {
 
 enum class ConnectorType { UNUSED, QSFP, WARP, TRACE, LK1, LK2, LK3, UNKNOWN };
 
@@ -540,5 +539,4 @@ TEST(Cluster, TestMeshFullConnectivity) {
     }
 }
 
-}  // namespace system_health_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::system_health_tests
