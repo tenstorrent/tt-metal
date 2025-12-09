@@ -270,17 +270,6 @@ def run_broadcast_impl(
             None,
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ),
-        (
-            4,
-            2,
-            1,
-            [1, 3168],
-            (1, 3168),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-            None,
-            None,
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ),
     ],
 )
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])

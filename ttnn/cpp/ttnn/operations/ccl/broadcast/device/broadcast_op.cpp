@@ -94,8 +94,9 @@ tt::tt_metal::operation::ProgramWithCallbacks Broadcast::create_program_at(
 
     // call batch 1 program factory if input is sharded on a single core, is tiny tile and has shape (1,1536) or
     // (1,7168)
+    // (1,7168) is to be added once fabric support larger packets
     auto input_shape = input_tensor.logical_shape();
-    if (input_tensor.is_sharded() && input_shape[0] == 1 && (input_shape[1] == 1536 || input_shape[1] == 3168)) {
+    if (input_tensor.is_sharded() && input_shape[0] == 1 && (input_shape[1] == 1536)) {
         const auto& shard_spec = input_tensor.shard_spec().value();
         const auto& shard_grid = shard_spec.grid;
         std::vector<CoreCoord> cores;
