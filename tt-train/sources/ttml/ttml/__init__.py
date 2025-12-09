@@ -1,4 +1,4 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from _ttml import *  # noqa: F401, F403
+from ._ttml import *  # noqa: F401, F403

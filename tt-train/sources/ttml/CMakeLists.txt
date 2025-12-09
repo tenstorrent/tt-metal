@@ -516,15 +516,6 @@ target_link_libraries(
         Python3::Python
         ttml
 )
-target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
-install(
-    TARGETS
-        _ttml
-    LIBRARY
-        DESTINATION .
-        COMPONENT ttml
-)
-
 # Install Python source files
 install(
     DIRECTORY
@@ -543,9 +534,11 @@ install(
     TARGETS
         _ttml
     LIBRARY
-        DESTINATION ${PROJECT_SOURCE_DIR}/ttml
+        DESTINATION ttml
         COMPONENT ttml
 )
+
+target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
 
 # CPack configuration for creating ttml deb package
 set(CPACK_GENERATOR "DEB")
