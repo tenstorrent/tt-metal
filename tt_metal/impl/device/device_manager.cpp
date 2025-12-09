@@ -2,57 +2,43 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device_pool.hpp"
+#include "device_manager.hpp"
 #include <numa.h>
 #include <pthread.h>
-#include <sched.h>
 #include <tracy/Tracy.hpp>
-#include <tt_metal.hpp>
-#include <umd/device/types/arch.hpp>
 #include <unistd.h>  // Warning Linux Only, needed for _SC_NPROCESSORS_ONLN
-#include <algorithm>
-#include <chrono>
-#include <cstdlib>
-#include <future>
-#include <set>
-#include <unordered_map>
-#include <utility>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include "core_coord.hpp"
-#include "device_impl.hpp"
-#include "dispatch/dispatch_settings.hpp"
-#include "env_lib.hpp"
-#include <tt_metal/fabric/erisc_datamover_builder.hpp>
-#include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include "host_api.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt_stl/span.hpp>
-#include "impl/context/metal_context.hpp"
-#include <tt-metalium/tt_metal_profiler.hpp>
-#include "impl/profiler/profiler_state.hpp"
-#include "impl/profiler/profiler_state_manager.hpp"
-#include <tt-metalium/experimental/fabric/fabric.hpp>
-#include "tt_metal/fabric/fabric_host_utils.hpp"
-#include "tt_metal/fabric/fabric_context.hpp"
-#include "tt_metal/fabric/fabric_builder_context.hpp"
-#include "tt_metal/impl/dispatch/topology.hpp"
-#include "tt_metal/impl/dispatch/system_memory_manager.hpp"
-#include "tt_metal/common/executor.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt_metal.hpp>
+#include "common/executor.hpp"
+#include "context/metal_context.hpp"
+
+#include <experimental/fabric/control_plane.hpp>
+#include <experimental/fabric/fabric_types.hpp>
+#include <experimental/fabric/fabric.hpp>
+#include "fabric/fabric_context.hpp"
+#include "fabric/fabric_builder_context.hpp"
+
+#include "dispatch/dispatch_settings.hpp"
+#include "dispatch/topology.hpp"
+#include "dispatch/system_memory_manager.hpp"
+
+#include <tt_metal_profiler.hpp>
+#include "profiler/profiler_state.hpp"
+#include "profiler/profiler_state_manager.hpp"
+
+#include <device.hpp>
+#include "device_impl.hpp"
 
 using namespace tt::tt_metal;
 
 namespace tt {
 
-namespace llrt {
-
-namespace internal_ {
+namespace llrt::internal_ {
 void wait_until_cores_done(
     ChipId device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms);
-}  // namespace internal_
-}  // namespace llrt
+}  // namespace llrt::internal_
 
 namespace device_cpu_allocator {
 std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node(std::unordered_set<uint32_t>& free_cores) {
@@ -195,9 +181,11 @@ std::unordered_map<uint32_t, uint32_t> get_device_id_to_core_map(
 }
 }  // namespace device_cpu_allocator
 
-DevicePool* DevicePool::_inst = nullptr;
+namespace tt_metal {
 
-void DevicePool::init_profiler() const {
+DeviceManager* DeviceManager::_inst = nullptr;
+
+void DeviceManager::init_profiler() const {
 #if defined(TRACY_ENABLE)
     if (!getDeviceProfilerState()) {
         return;
@@ -220,10 +208,7 @@ void DevicePool::init_profiler() const {
                     uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
                     auto* mmio_device = get_device(mmio_controlled_device_id);
                     detail::InitDeviceProfiler(mmio_device);
-                    log_info(
-                        tt::LogMetal,
-                        "Profiler started on remote device {}",
-                        mmio_device->id());
+                    log_info(tt::LogMetal, "Profiler started on remote device {}", mmio_device->id());
                 }
             }
         }
@@ -232,26 +217,22 @@ void DevicePool::init_profiler() const {
 #endif
 }
 
-void DevicePool::initialize(
+void DeviceManager::initialize(
     const std::vector<ChipId>& device_ids,
     const uint8_t num_hw_cqs,
     size_t l1_small_size,
     size_t trace_region_size,
-    const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size,
     bool init_profiler,
-    bool use_max_eth_core_count_on_all_devices,
     bool initialize_fabric_and_dispatch_fw) {
     // Issue #19729: use_max_eth_core_count_on_all_devices is a workaround
     // to allow TT-Mesh Workload dispatch to target active ethernet cores.
     ZoneScoped;
-    log_debug(tt::LogMetal, "DevicePool initialize");
-    tt::tt_metal::MetalContext::instance().initialize(
-        dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
+    log_debug(tt::LogMetal, "DeviceManager initialize");
 
     if (_inst == nullptr) {
-        static DevicePool device_pool{};
+        static DeviceManager device_pool{};
         _inst = &device_pool;
     }
 
@@ -265,7 +246,6 @@ void DevicePool::initialize(
     _inst->using_fast_dispatch_ = tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
     _inst->init_profiler_ = init_profiler;
     _inst->initialize_fabric_and_dispatch_fw_ = initialize_fabric_and_dispatch_fw;
-    _inst->use_max_eth_core_count_on_all_devices_ = use_max_eth_core_count_on_all_devices;
     _inst->l1_bank_remap.assign(l1_bank_remap.begin(), l1_bank_remap.end());
 
     std::vector<ChipId> device_ids_to_open = device_ids;
@@ -356,7 +336,7 @@ void DevicePool::initialize(
     _inst->init_firmware_on_active_devices();
 }
 
-void DevicePool::initialize_fabric_and_dispatch_fw() const {
+void DeviceManager::initialize_fabric_and_dispatch_fw() const {
     if (using_fast_dispatch_ && tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
         // Due to galaxy taking potentially taking a 2-3 minutes to compile all the firmware kernels
         log_info(
@@ -368,7 +348,7 @@ void DevicePool::initialize_fabric_and_dispatch_fw() const {
     log_trace(tt::LogMetal, "Fabric and Dispatch Firmware initialized");
 }
 
-void DevicePool::initialize_host(IDevice* dev) const {
+void DeviceManager::initialize_host(IDevice* dev) const {
     detail::ClearProfilerControlBuffer(dev);
 
     // Create system memory writer for this device to have an associated interface to hardware command queue (i.e.
@@ -382,7 +362,7 @@ void DevicePool::initialize_host(IDevice* dev) const {
     }
 }
 
-void DevicePool::init_fabric(const std::vector<tt_metal::IDevice*>& active_devices) const {
+void DeviceManager::init_fabric(const std::vector<tt_metal::IDevice*>& active_devices) const {
     std::vector<std::shared_future<tt_metal::IDevice*>> events;
     for (uint32_t i = 0; i < active_devices.size(); i++) {
         const auto& dev = active_devices[i];
@@ -407,7 +387,7 @@ void DevicePool::init_fabric(const std::vector<tt_metal::IDevice*>& active_devic
     }
 }
 
-void DevicePool::initialize_active_devices() const {
+void DeviceManager::initialize_active_devices() const {
     const auto& active_devices = this->get_all_active_devices();
 
     // Activate fabric (must be before FD)
@@ -506,7 +486,7 @@ void DevicePool::initialize_active_devices() const {
     _inst->dispatch_firmware_active_ = true;
 }
 
-void DevicePool::activate_device(ChipId id) {
+void DeviceManager::activate_device(ChipId id) {
     TT_FATAL(
         tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().find(id) !=
             tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().end(),
@@ -519,7 +499,7 @@ void DevicePool::activate_device(ChipId id) {
     }
     auto* device = get_device(id);
     if (!device) {
-        log_debug(tt::LogMetal, "DevicePool new device {}", id);
+        log_debug(tt::LogMetal, "DeviceManager new device {}", id);
         int worker_core_thread_core = this->worker_thread_to_cpu_core_map.at(id);
         int completion_queue_reader_core = this->completion_queue_reader_to_cpu_core_map.at(id);
         device = new Device(
@@ -534,7 +514,7 @@ void DevicePool::activate_device(ChipId id) {
             this->worker_l1_size);
         this->devices.emplace_back(std::unique_ptr<IDevice>(device));
     } else {
-        log_debug(tt::LogMetal, "DevicePool re-initialize device {}", id);
+        log_debug(tt::LogMetal, "DeviceManager re-initialize device {}", id);
         if (not device->is_initialized()) {
             device->initialize(
                 num_hw_cqs, this->l1_small_size, this->trace_region_size, this->worker_l1_size, this->l1_bank_remap);
@@ -544,7 +524,7 @@ void DevicePool::activate_device(ChipId id) {
     }
 }
 
-bool DevicePool::is_device_active(ChipId id) const {
+bool DeviceManager::is_device_active(ChipId id) const {
     auto* device = get_device(id);
     if (!device) {
         return false;
@@ -553,7 +533,7 @@ bool DevicePool::is_device_active(ChipId id) const {
     return device->is_initialized();
 }
 
-IDevice* DevicePool::get_device(ChipId id) const {
+IDevice* DeviceManager::get_device(ChipId id) const {
     auto it = std::find_if(devices.begin(), devices.end(), [&id](const auto& device) { return device->id() == id; });
     if (it == devices.end()) {
         return nullptr;
@@ -562,7 +542,7 @@ IDevice* DevicePool::get_device(ChipId id) const {
     return it->get();
 }
 
-std::size_t DevicePool::get_max_num_eth_cores_across_all_devices() const {
+std::size_t DeviceManager::get_max_num_eth_cores_across_all_devices() const {
     // This API is needed due to Issue #19729:
     // Workaround to allow TT-Mesh Workload dispatch to target active ethernet cores.
     // Records the maximum number of active ethernet cores across all devices opened in the cluster.
@@ -583,7 +563,7 @@ std::size_t DevicePool::get_max_num_eth_cores_across_all_devices() const {
     return max_eth_core_count;
 }
 
-void DevicePool::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
+void DeviceManager::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
     std::set<ChipId> devices_to_activate;
 
     if (this->skip_remote_devices) {
@@ -632,12 +612,12 @@ void DevicePool::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
         }
     }
 
-    if (using_fast_dispatch_) {
+    if (using_fast_dispatch_ && !devices_to_activate.empty()) {
         populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
     }
 }
 
-uint32_t DevicePool::get_fabric_router_sync_timeout_ms() {
+uint32_t DeviceManager::get_fabric_router_sync_timeout_ms() {
     // Return user-configured timeout or default value
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     if (rtoptions.get_simulator_enabled()) {
@@ -650,13 +630,13 @@ uint32_t DevicePool::get_fabric_router_sync_timeout_ms() {
     return timeout.value_or(10000);
 }
 
-void DevicePool::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
+void DeviceManager::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
     tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (!tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
         return;
     }
 
-    const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto& builder_context = fabric_context.get_builder_context();
 
@@ -729,7 +709,7 @@ void DevicePool::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
     }
 }
 
-void DevicePool::init_firmware_on_active_devices() const {
+void DeviceManager::init_firmware_on_active_devices() const {
     const auto& active_devices = this->get_all_active_devices();
     for (const auto& dev : active_devices) {
         // For Galaxy init, we only need to loop over mmio devices
@@ -762,19 +742,19 @@ void DevicePool::init_firmware_on_active_devices() const {
     }
 }
 
-DevicePool::DevicePool() {
+DeviceManager::DeviceManager() {
     ZoneScoped;
-    log_debug(tt::LogMetal, "DevicePool constructor");
+    log_debug(tt::LogMetal, "DeviceManager constructor");
 }
 
-IDevice* DevicePool::get_active_device(ChipId device_id) const {
+IDevice* DeviceManager::get_active_device(ChipId device_id) const {
     auto* device = get_device(device_id);
-    TT_ASSERT(device != nullptr, "DevicePool does not contain device {}", device_id);
+    TT_ASSERT(device != nullptr, "DeviceManager does not contain device {}", device_id);
     TT_ASSERT(device->is_initialized(), "Device {} is not initialized", device_id);
     return device;
 }
 
-std::vector<IDevice* > DevicePool::get_all_active_devices() const {
+std::vector<IDevice*> DeviceManager::get_all_active_devices() const {
     std::vector<IDevice*> user_devices;
     for (const auto& device : this->devices) {
         if (device && device->is_initialized()) {
@@ -786,7 +766,7 @@ std::vector<IDevice* > DevicePool::get_all_active_devices() const {
 
 // Get all active device ids
 // This function needs to be thread-safe as its called in inspector::data on a different thread
-std::vector<ChipId> DevicePool::get_all_active_device_ids() const {
+std::vector<ChipId> DeviceManager::get_all_active_device_ids() const {
     std::vector<ChipId> device_ids;
     std::lock_guard<std::mutex> lock(this->lock);
     device_ids.reserve(this->devices.size());
@@ -801,7 +781,7 @@ std::vector<ChipId> DevicePool::get_all_active_device_ids() const {
 // Get all command queue event infos for all active devices
 // The key is the device id and the value is a vector of event ids for each command queue
 // This function needs to be thread-safe as its called in inspector::data on a different thread
-std::unordered_map<ChipId, std::vector<uint32_t>> DevicePool::get_all_command_queue_event_infos() const {
+std::unordered_map<ChipId, std::vector<uint32_t>> DeviceManager::get_all_command_queue_event_infos() const {
     std::unordered_map<ChipId, std::vector<uint32_t>> cq_to_event_by_device;
     std::lock_guard<std::mutex> lock(this->lock);
     cq_to_event_by_device.reserve(this->devices.size());
@@ -819,10 +799,10 @@ std::unordered_map<ChipId, std::vector<uint32_t>> DevicePool::get_all_command_qu
     return cq_to_event_by_device;
 }
 
-void DevicePool::teardown_fd(const std::unordered_set<ChipId>& devices_to_close) {
+void DeviceManager::teardown_fd(const std::unordered_set<ChipId>& devices_to_close) {
     for (const auto& dev_id : devices_to_close) {
         // Device is still active at this point
-        auto* dev = tt::DevicePool::instance().get_active_device(dev_id);
+        auto* dev = DeviceManager::instance().get_active_device(dev_id);
         if (!using_fast_dispatch_) {
             continue;
         }
@@ -837,9 +817,9 @@ void DevicePool::teardown_fd(const std::unordered_set<ChipId>& devices_to_close)
     }
 }
 
-bool DevicePool::is_dispatch_firmware_active() const { return this->dispatch_firmware_active_; }
+bool DeviceManager::is_dispatch_firmware_active() const { return this->dispatch_firmware_active_; }
 
-bool DevicePool::close_device(ChipId device_id) {
+bool DeviceManager::close_device(ChipId device_id) {
     // Sync and close one device
     // Currently can only call this on mmio chips, once we split dispatch kernel shutdown
     // from device close, we can call this on remote devices too
@@ -857,7 +837,7 @@ bool DevicePool::close_device(ChipId device_id) {
     return close_devices(devices_to_close);
 }
 
-bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip_synchronize*/) {
+bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*skip_synchronize*/) {
     ZoneScoped;
 
     // Ordered, because we need to shutdown tunnels from the farthest to the closest.
@@ -889,7 +869,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip
 
     // TODO(MO): Remove when legacy non-mesh device is removed
     for (const ChipId device_id : devices_to_close) {
-        IDevice* device = tt::DevicePool::instance().get_active_device(device_id);
+        IDevice* device = DeviceManager::instance().get_active_device(device_id);
         detail::ReadDeviceProfilerResults(device, ProfilerReadState::LAST_FD_READ);
     }
 
@@ -898,7 +878,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip
     // Terminate sent to each device. Wait for dispatch to finish. MMIO only to prevent clogging SD path.
     // Dispatch kernels internally have a sync at the end to ensure all credits are returned
     for (const auto& dev_id : devices_to_close) {
-        auto* dev = tt::DevicePool::instance().get_active_device(dev_id);
+        auto* dev = DeviceManager::instance().get_active_device(dev_id);
         if (!dev->is_mmio_capable() || !using_fast_dispatch_) {
             continue;
         }
@@ -909,7 +889,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip
 
     // Process registered termination signals from topology
     for (const auto& dev_id : devices_to_close) {
-        auto* dev = tt::DevicePool::instance().get_active_device(dev_id);
+        auto* dev = DeviceManager::instance().get_active_device(dev_id);
         const auto& info = tt::tt_metal::get_registered_termination_cores(dev_id);
         for (const auto& core_to_terminate : info) {
             std::vector<uint32_t> val{core_to_terminate.val};
@@ -922,7 +902,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip
     // Terminate fabric routers
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
-        const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
         const auto& fabric_context = control_plane.get_fabric_context();
         const auto& builder_ctx = fabric_context.get_builder_context();
         auto [termination_signal_address, signal] = builder_ctx.get_fabric_router_termination_address_and_signal();
@@ -973,7 +953,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip
     }
 
     for (const ChipId device_id : devices_to_close) {
-        IDevice* device = tt::DevicePool::instance().get_active_device(device_id);
+        IDevice* device = DeviceManager::instance().get_active_device(device_id);
         detail::ReadDeviceProfilerResults(device, ProfilerReadState::ONLY_DISPATCH_CORES);
     }
 
@@ -981,7 +961,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip
 
     bool pass = true;
     for (const auto& dev_id : devices_to_close) {
-        auto* dev = tt::DevicePool::instance().get_active_device(dev_id);
+        auto* dev = DeviceManager::instance().get_active_device(dev_id);
         pass &= dev->close();
     }
 
@@ -998,10 +978,10 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip
     return pass;
 }
 
-DevicePool::~DevicePool() {
+DeviceManager::~DeviceManager() {
     for (const auto& dev : this->devices) {
         if (dev != nullptr and dev->is_initialized()) {
-            // TODO: #13876, Was encountering issues with the DispatchMemMap being destroyed before the DevicePool
+            // TODO: #13876, Was encountering issues with the DispatchMemMap being destroyed before the DeviceManager
             // destructor, which leads to device->close() hitting asserts. We need to move the ownership of
             // DispatchMemMap to the device, so it doesn't go out of scope before the device is closed.
             dev->close();
@@ -1009,5 +989,5 @@ DevicePool::~DevicePool() {
     }
     this->devices.clear();
 }
-
+}  // namespace tt_metal
 }  // namespace tt

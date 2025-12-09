@@ -35,8 +35,7 @@ const std::string default_mux_kernel_src = "tt_metal/fabric/impl/kernels/tt_fabr
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 using FabricMuxConfig = tt::tt_fabric::FabricMuxConfig;
 
-namespace tt::tt_fabric {
-namespace fabric_tests {
+namespace tt::tt_fabric::fabric_tests {
 
 struct ConnectionKey {
     RoutingDirection direction;
@@ -425,5 +424,4 @@ private:
     bool use_unified_connection_manager_ = false;
 };
 
-}  // namespace fabric_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_tests
