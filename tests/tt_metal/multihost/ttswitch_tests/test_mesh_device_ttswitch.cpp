@@ -13,6 +13,7 @@
 #include "impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
 #include "hostdevcommon/common_values.hpp"
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 namespace tt::tt_metal {
 
@@ -36,10 +37,13 @@ protected:
 
         // setup tt-switch manager
         tt::tt_fabric::FabricSwitchManager::instance().setup();
+
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D);
     }
 
     void TearDown() override {
         // teardown tt-switch manager
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
         tt::tt_fabric::FabricSwitchManager::instance().teardown();
     }
 };
@@ -145,13 +149,6 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenMeshDeviceWithExplicitPhysicalDeviceId
     // Close mesh device
     mesh_device->close();
     mesh_device.reset();
-
-    // Note: You CANNOT open devices from mesh_id 1 on a host configured for mesh_id 0
-    // because:
-    // 1. TT_VISIBLE_DEVICES is set per-rank and only exposes devices for that mesh
-    // 2. Device locks prevent accessing devices assigned to other ranks
-    // 3. The fabric node IDs are determined by the physical device IDs, which must
-    //    belong to the mesh_id specified in the mesh graph descriptor
 }
 
 TEST_F(MeshDeviceTTSwitchFixture, TestOpenUnitMeshesOnComputeMeshFabricNodes) {

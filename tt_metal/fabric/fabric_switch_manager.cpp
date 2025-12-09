@@ -34,10 +34,9 @@ void FabricSwitchManager::setup() {
     // Set fabric config explicitly before creating devices
     // This is required for workloads that need fabric (not just minimal fabric for dispatch)
     // Check if fabric config is already set, and if not, set it to FABRIC_2D for inter-mesh routing
-    auto current_fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    tt::tt_fabric::FabricConfig current_fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D;
     tt::tt_fabric::SetFabricConfig(
         current_fabric_config, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
-    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     // Cache the device map returned by CreateDevices to use directly in CloseDevices
     // TODO: Issue #34040 - If routers are in standby mode, we could skip full reinitialization
@@ -66,13 +65,12 @@ void FabricSwitchManager::teardown() {
     // In the future, we could keep routers in standby mode instead of fully terminating
     // them, allowing faster reactivation without recompilation and re-handshake overhead.
     if (!switch_devices_.empty()) {
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+
         // Use the cached device map returned by CreateDevices
         tt::tt_metal::detail::CloseDevices(switch_devices_);
         switch_devices_.clear();
     }
-
-    // Reset fabric config to disabled after teardown
-    tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
 }
 
 }  // namespace tt::tt_fabric
