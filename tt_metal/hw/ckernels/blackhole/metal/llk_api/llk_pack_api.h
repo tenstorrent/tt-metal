@@ -291,7 +291,7 @@ inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_outpu
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_init_packer_dest_offset_registers_<DST_SYNC_MODE, false>(face_r_dim, narrow_tile);
+    _llk_init_packer_dest_offset_registers_<DST_SYNC_MODE>(face_r_dim, narrow_tile);
 }
 
 template <bool is_fp32_dest_acc_en, bool untilize = false>
