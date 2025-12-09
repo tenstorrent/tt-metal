@@ -12,9 +12,7 @@
 #include "hal_types.hpp"
 #include <umd/device/types/arch.hpp>
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 std::ostream& operator<<(std::ostream& os, const HalProcessorIdentifier& processor) {
     using enchantum::iostream_operators::operator<<;
@@ -202,8 +200,7 @@ uint32_t Hal::make_go_msg_u32(
     return go_msg_u32_val;
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 std::size_t std::hash<tt::tt_metal::HalProcessorIdentifier>::operator()(
     const tt::tt_metal::HalProcessorIdentifier& processor) const {
