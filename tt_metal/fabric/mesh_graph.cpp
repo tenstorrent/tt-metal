@@ -242,28 +242,8 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
         bool is_device_level = (src_instance.kind == NodeKind::Device) && (dst_instance.kind == NodeKind::Device);
 
         if (is_device_level) {
-            // Find the Mesh instance in the hierarchy (not necessarily the last element)
-            GlobalNodeId src_mesh_instance_id = -1;
-            GlobalNodeId dst_mesh_instance_id = -1;
-            for (auto it = src_instance.hierarchy.rbegin(); it != src_instance.hierarchy.rend(); ++it) {
-                const auto& inst = mgd.get_instance(*it);
-                if (inst.kind == NodeKind::Mesh) {
-                    src_mesh_instance_id = *it;
-                    break;
-                }
-            }
-            for (auto it = dst_instance.hierarchy.rbegin(); it != dst_instance.hierarchy.rend(); ++it) {
-                const auto& inst = mgd.get_instance(*it);
-                if (inst.kind == NodeKind::Mesh) {
-                    dst_mesh_instance_id = *it;
-                    break;
-                }
-            }
-            TT_FATAL(src_mesh_instance_id != -1, "Could not find Mesh instance in device hierarchy");
-            TT_FATAL(dst_mesh_instance_id != -1, "Could not find Mesh instance in device hierarchy");
-
-            const auto& src_mesh_instance = mgd.get_instance(src_mesh_instance_id);
-            const auto& dst_mesh_instance = mgd.get_instance(dst_mesh_instance_id);
+            const auto& src_mesh_instance = mgd.get_instance(src_instance.hierarchy.back());
+            const auto& dst_mesh_instance = mgd.get_instance(dst_instance.hierarchy.back());
 
             MeshId src_mesh_id(src_mesh_instance.local_id);
             MeshId dst_mesh_id(dst_mesh_instance.local_id);
