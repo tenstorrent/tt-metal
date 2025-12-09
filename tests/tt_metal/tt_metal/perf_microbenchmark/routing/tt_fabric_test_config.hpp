@@ -460,6 +460,7 @@ private:
         resolved_test.global_sync = parsed_test.global_sync;
         resolved_test.global_sync_val = parsed_test.global_sync_val;
         resolved_test.enable_flow_control = parsed_test.enable_flow_control;
+        resolved_test.benchmark_kernels = parsed_test.benchmark_kernels;
 
         // Resolve defaults
         if (parsed_test.defaults.has_value()) {
@@ -660,6 +661,7 @@ private:
                             auto& next_config = next_level_configs.back();
                             // Explicitly preserve performance_test_mode
                             next_config.performance_test_mode = current_config.performance_test_mode;
+                            next_config.benchmark_kernels = current_config.benchmark_kernels;
 
                             // Initialize parametrized_name with original name if empty
                             if (next_config.parametrized_name.empty()) {
@@ -686,6 +688,7 @@ private:
                             auto& next_config = next_level_configs.back();
                             // Explicitly preserve performance_test_mode
                             next_config.performance_test_mode = current_config.performance_test_mode;
+                            next_config.benchmark_kernels = current_config.benchmark_kernels;
 
                             // Initialize parametrized_name with original name if empty
                             if (next_config.parametrized_name.empty()) {

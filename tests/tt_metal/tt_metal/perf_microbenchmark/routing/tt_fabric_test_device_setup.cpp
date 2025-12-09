@@ -860,7 +860,7 @@ void TestDevice::create_sender_kernels() {
             is_2D_routing_enabled,
             (uint32_t)num_connections,                           /* num connections (from FabricConnectionManager) */
             sender.configs_.size(),                              /* num traffic configs */
-            (uint32_t)benchmark_mode_,                           /* benchmark mode */
+            (uint32_t)benchmark_kernels_,                        /* benchmark mode */
             (uint32_t)global_sync_,                              /* line sync enabled */
             num_local_sync_cores,                                /* num local sync cores */
             sender_memory_map_->common.get_kernel_config_size(), /* kernel config buffer size */
@@ -973,7 +973,7 @@ void TestDevice::create_receiver_kernels() {
         std::vector<uint32_t> ct_args = {
             is_2D_routing_enabled ? 1u : 0u,                       /* IS_2D_FABRIC */
             receiver.configs_.size(),                              /* NUM_TRAFFIC_CONFIGS */
-            benchmark_mode_ ? 1u : 0u,                             /* BENCHMARK_MODE */
+            benchmark_kernels_ ? 1u : 0u,                          /* BENCHMARK_MODE */
             receiver_memory_map_->common.get_kernel_config_size(), /* KERNEL_CONFIG_BUFFER_SIZE */
             (uint32_t)num_connections,                             /* NUM_CREDIT_CONNECTIONS */
             has_mux_connections ? 1u : 0u,                         /* HAS_MUX_CONNECTIONS */

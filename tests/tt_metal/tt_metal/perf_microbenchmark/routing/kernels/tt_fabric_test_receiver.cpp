@@ -60,32 +60,32 @@ void kernel_main() {
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
             auto* traffic_config = receiver_config->traffic_configs()[i];
 
-            // if constexpr (!BENCHMARK_MODE) {
-            //     if (!traffic_config->has_packets_to_validate()) {
-            //         continue;
-            //     }
+            if constexpr (!BENCHMARK_MODE) {
+                if (!traffic_config->has_packets_to_validate()) {
+                    continue;
+                }
 
-            //     // if we are here, this means that we have atleast 1 packet left to validate
-            //     packets_left_to_validate = true;
+                // if we are here, this means that we have atleast 1 packet left to validate
+                packets_left_to_validate = true;
 
-            //     bool got_new_data = traffic_config->poll();
-            //     if (!got_new_data) {
-            //         continue;
-            //     }
+                bool got_new_data = traffic_config->poll();
+                if (!got_new_data) {
+                    continue;
+                }
 
-            //     bool data_valid = traffic_config->validate();
-            //     if (!data_valid) {
-            //         failed = true;
-            //         break;
-            //     }
+                bool data_valid = traffic_config->validate();
+                if (!data_valid) {
+                    failed = true;
+                    break;
+                }
 
-            //     traffic_config->advance();  // Automatically handles credit return
-            //     total_packets_received++;
+                traffic_config->advance();  // Automatically handles credit return
+                total_packets_received++;
 
-            //     packets_left_to_validate |= traffic_config->has_packets_to_validate();
-            // } else {
-            total_packets_received += traffic_config->metadata.num_packets;
-            //}
+                packets_left_to_validate |= traffic_config->has_packets_to_validate();
+            } else {
+                total_packets_received += traffic_config->metadata.num_packets;
+            }
         }
 
         if (failed) {
@@ -101,7 +101,7 @@ void kernel_main() {
 
     // Write test results
     write_test_packets(receiver_config->get_result_buffer_address(), total_packets_received);
-    uint32_t final_status = TT_FABRIC_STATUS_PASS;
+    uint32_t final_status = failed ? TT_FABRIC_STATUS_DATA_MISMATCH : TT_FABRIC_STATUS_PASS;
     write_test_status(receiver_config->get_result_buffer_address(), final_status);
 
     noc_async_full_barrier();

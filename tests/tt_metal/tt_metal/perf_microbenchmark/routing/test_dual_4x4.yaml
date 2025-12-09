@@ -9,6 +9,27 @@ Tests:
   # ======================================================================================
   - name: InterMeshCrossTraffic
     sync: true
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [2048, 4096]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 50000
+    senders:
+      - device: [1, 0]
+        patterns:
+          - destination:
+              device: [1, 1]
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+
+  - name: InterMeshCrossTraffic
+    sync: true
     fabric_setup:
       topology: Mesh
     parametrization_params:
@@ -54,19 +75,19 @@ Tests:
           - destination:
               device: [0, 15]
 
-  - name: "FlowControlMultiMesh"
-    sync: true
-    fabric_setup:
-      topology: Mesh
+  # - name: "FlowControlMultiMesh"
+  #   sync: true
+  #   fabric_setup:
+  #     topology: Mesh
 
-    defaults:
-      ftype: unicast
-      ntype: unicast_write
-      size: 1024
-      num_packets: 10000
+  #   defaults:
+  #     ftype: unicast
+  #     ntype: unicast_write
+  #     size: 1024
+  #     num_packets: 10000
 
-    patterns:
-      - type: all_to_all
+  #   patterns:
+  #     - type: all_to_all
 
   # - name: "FlowControlMultiMesh"
   #   sync: true

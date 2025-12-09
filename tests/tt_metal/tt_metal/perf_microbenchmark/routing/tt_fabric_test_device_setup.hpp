@@ -306,6 +306,7 @@ public:
         CoreCoord sender_virtual_core);
 
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
+    void set_benchmark_kernels(bool benchmark_kernels) { benchmark_kernels_ = benchmark_kernels; }
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
     void set_global_sync_val(uint32_t global_sync_val) { global_sync_val_ = global_sync_val; }
     void set_progress_monitoring_enabled(bool enabled) { progress_monitoring_enabled_ = enabled; }
@@ -414,6 +415,7 @@ private:
     std::unordered_map<CoreCoord, TestMux> muxes_;            // Mux workers
 
     bool benchmark_mode_ = false;
+    bool benchmark_kernels_ = false;
     bool global_sync_ = false;
     uint32_t global_sync_val_ = 0;
     CoreCoord sync_core_coord_;

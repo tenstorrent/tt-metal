@@ -152,6 +152,7 @@ struct ParsedTestConfig {
                                   // cross-chip start-skew effects
     uint32_t global_sync_val = 0;
     bool enable_flow_control = false;  // Enable flow control for all patterns in this test
+    bool benchmark_kernels = false;    // Enable benchmark mode in kernels (skips validation)
     uint32_t seed{};
     uint32_t num_top_level_iterations = 1;  // Number of times to repeat a built test
 };
@@ -177,6 +178,7 @@ struct TestConfig {
                                   // cross-chip start-skew effects
     uint32_t global_sync_val = 0;
     bool enable_flow_control = false;  // Enable flow control for all patterns in this test
+    bool benchmark_kernels = false;    // Enable benchmark mode in kernels (skips validation)
     uint32_t seed{};
 };
 

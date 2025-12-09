@@ -192,11 +192,6 @@ int main(int argc, char** argv) {
             log_info(tt::LogTest, "Building tests");
             auto built_tests = builder.build_tests({test_config}, cmdline_parser);
 
-            // Set performance test mode and line sync for this test group
-            test_context.set_performance_test_mode(test_config.performance_test_mode);
-            // Enable telemetry for both benchmark and latency modes to ensure buffer clearing
-            test_context.set_telemetry_enabled(test_config.performance_test_mode != PerformanceTestMode::NONE);
-
             // Set code profiling enabled based on rtoptions
             auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
             test_context.set_code_profiling_enabled(rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd());

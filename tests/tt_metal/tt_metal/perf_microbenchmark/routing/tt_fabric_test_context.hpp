@@ -213,12 +213,16 @@ public:
             device.set_pristine_cores(std::move(pristine_cores));
         }
 
+        // Set flags from config (independent of sync mode)
+        this->set_performance_test_mode(config.performance_test_mode);
+        this->set_benchmark_kernels(config.benchmark_kernels);
+        this->set_telemetry_enabled(config.telemetry_enabled);
+
         if (config.global_sync) {
             // set it only after the test_config is built since it needs set the sync value during expand the high-level
             // patterns.
             this->set_global_sync(config.global_sync);
             this->set_global_sync_val(config.global_sync_val);
-            this->set_performance_test_mode(config.performance_test_mode);
 
             log_debug(tt::LogTest, "Enabled sync, global sync value: {}, ", global_sync_val_);
             log_debug(tt::LogTest, "Performance test mode: {}", enchantum::to_string(performance_test_mode_));
@@ -367,6 +371,7 @@ public:
         // TODO: should we be taking const ref?
         for (auto& [coord, test_device] : test_devices_) {
             test_device.set_benchmark_mode(performance_test_mode_ == PerformanceTestMode::BANDWIDTH);
+            test_device.set_benchmark_kernels(benchmark_kernels_);
             test_device.set_global_sync(global_sync_);
             test_device.set_global_sync_val(global_sync_val_);
             test_device.set_progress_monitoring_enabled(progress_config_.enabled);
@@ -579,6 +584,8 @@ public:
 
     void set_global_sync_val(uint32_t val) { global_sync_val_ = val; }
 
+    void set_benchmark_kernels(bool benchmark_kernels) { benchmark_kernels_ = benchmark_kernels; }
+
     bool has_test_failures() const { return has_test_failures_; }
 
     std::vector<std::string> get_all_failed_tests() const;
@@ -675,8 +682,10 @@ public:
 private:
     void reset_local_variables() {
         performance_test_mode_ = PerformanceTestMode::NONE;
+        telemetry_enabled_ = false;
         global_sync_ = false;
         global_sync_val_ = 0;
+        benchmark_kernels_ = false;
         outgoing_traffic_.clear();
         device_direction_cycles_.clear();
         device_core_cycles_.clear();
@@ -1830,6 +1839,7 @@ private:
     bool telemetry_enabled_ = false;                                         // Telemetry enabled for current test
     bool global_sync_ = false;        // Line sync for current test
     uint32_t global_sync_val_ = 0;
+    bool benchmark_kernels_ = false;  // Enable benchmark mode in kernels (skips validation)
 
     // Performance profiling data
     // TODO: add link index into the result

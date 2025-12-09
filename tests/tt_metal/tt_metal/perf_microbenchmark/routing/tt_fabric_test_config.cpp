@@ -265,6 +265,10 @@ ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml
         validate_latency_test_config(test_config);
     }
 
+    if (test_yaml["benchmark_kernels"]) {
+        test_config.benchmark_kernels = parse_scalar<bool>(test_yaml["benchmark_kernels"]);
+    }
+
     if (test_yaml["sync"]) {
         test_config.global_sync = parse_scalar<bool>(test_yaml["sync"]);
     }

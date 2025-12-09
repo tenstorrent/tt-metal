@@ -75,11 +75,9 @@ void kernel_main() {
             if (!traffic_config->has_packets_to_send()) {
                 continue;
             }
-            // for (volatile int j = 0; j < 10000; j++) {
-            //     asm("nop");
-            // }
+
             // Send one packet (credit management is automatic, inside send_one_packet)
-            bool sent = traffic_config->template send_one_packet<true>();
+            bool sent = traffic_config->template send_one_packet<BENCHMARK_MODE>();
 
             if (!sent) {
                 // Packet blocked (no credits) - keep trying
@@ -94,16 +92,16 @@ void kernel_main() {
         loop_count++;
 
         // Periodically write progress updates (skip in BENCHMARK_MODE for performance)
-        // if constexpr (!BENCHMARK_MODE) {
-        //     if (loop_count % PROGRESS_UPDATE_INTERVAL == 0) {
-        //         // Calculate total packets sent across all traffic configs
-        //         uint64_t progress_packets_sent = 0;
-        //         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-        //             progress_packets_sent += sender_config->traffic_config_ptrs[i]->num_packets_processed;
-        //         }
-        //         write_test_packets(sender_config->get_result_buffer_address(), progress_packets_sent);
-        //     }
-        // }
+        if constexpr (!BENCHMARK_MODE) {
+            if (loop_count % PROGRESS_UPDATE_INTERVAL == 0) {
+                // Calculate total packets sent across all traffic configs
+                uint64_t progress_packets_sent = 0;
+                for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
+                    progress_packets_sent += sender_config->traffic_config_ptrs[i]->num_packets_processed;
+                }
+                write_test_packets(sender_config->get_result_buffer_address(), progress_packets_sent);
+            }
+        }
     }
 
     sender_config->close_connections();
