@@ -356,11 +356,13 @@ jobs:
           submodules: recursive
           path: docker-job
       - name: ⬇️ Setup Metal
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./docker-job/.github/§
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          auto-triage: false # We need to disable auto hang detection because ...
+          slow-dispatch-timeout: 15 # If we ever decide to enable auto-triage, we need to increase default timeout
 
       - name: Ensure BH Eth links online
         if: ${{ contains(matrix.test-group.mesh-device, 'P150') }}
