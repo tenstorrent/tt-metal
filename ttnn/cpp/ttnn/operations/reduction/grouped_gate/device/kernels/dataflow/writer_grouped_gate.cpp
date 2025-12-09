@@ -324,7 +324,6 @@ FORCE_INLINE void generate_winning_group_tiles(uint32_t tokens_per_tile) {
     cb_push_back(winning_group_indices_cb_index, topk_groups);
 
     cb_pop_front(sigmoid_input_cb_index, width_tiles);
-    cb_pop_front(topk_index_creation_cb_index, width_tiles);
     cb_pop_front(sorted_group_indices_cb_index, num_group_tiles);
 }
 

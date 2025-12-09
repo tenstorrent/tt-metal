@@ -225,9 +225,7 @@ void topk_group_scores(
 void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_index, const uint32_t tiles) {
     reconfig_data_format_srca(input_cb_index);
     transpose_wh_init_short(input_cb_index);
-    PACK(DPRINT << "Transpose wh init short input cb index" << ENDL();)
     pack_reconfig_data_format(output_cb_index);  // uncommenting this causes a hang
-    PACK(DPRINT << "Reconfig data format output cb index" << ENDL();)
     for (uint32_t i = 0; i < tiles; i++) {
         tile_regs_acquire();
         cb_wait_front(input_cb_index, 1);
@@ -236,16 +234,13 @@ void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_
 
         tile_regs_wait();
         cb_reserve_back(output_cb_index, 1);
-        PACK(DPRINT << "Reserving back output cb index" << ENDL();)
 
         pack_tile(0, output_cb_index);
         tile_regs_release();
         cb_push_back(output_cb_index, 1);
-        PACK(DPRINT << "End of push back output cb index" << ENDL();)
 
         cb_pop_front(input_cb_index, 1);
     }
-    PACK(DPRINT << "Final tile regs release" << ENDL();)
 }
 
 void topk(
@@ -346,13 +341,10 @@ void normalize_scores(
     // 2. Pack sums to intermediate to add epsilon
     tile_regs_wait();
     cb_reserve_back(intermediate_reduce_cb_index, 1);
-    PACK(DPRINT << "Reserving back intermediate reduce cb index" << ENDL();)
     pack_tile(0, intermediate_reduce_cb_index);
     // PACK(print_tile(intermediate_reduce_cb_index, 0, true, 0, 1, 0, 1));
     tile_regs_release();
-    PACK(DPRINT << "End of tile regs release after intermediate reduce cb index" << ENDL();)
     cb_push_back(intermediate_reduce_cb_index, 1);
-    PACK(DPRINT << "End of push back intermediate reduce cb index" << ENDL();)
     // 3. Add epsilon
     tile_regs_acquire();
     cb_wait_front(epsilon_cb_index, 1);
@@ -369,13 +361,9 @@ void normalize_scores(
 
     // 5. Pack reciprocals
     tile_regs_wait();
-    // PACK(DPRINT << "End of tile regs wait after recip tile" << ENDL();)
     cb_reserve_back(transpose_cb_index, 1);
-    // PACK(DPRINT << "Reserving back transpose cb index" << ENDL();)
     pack_tile(0, transpose_cb_index);
-    // PACK(print_tile(transpose_cb_index, 0, true, 0, 1, 0, 1));
     cb_push_back(transpose_cb_index, 1);
-    // PACK(DPRINT << "End of push back transpose cb index" << ENDL();)
 
     // 6. Broadcast multiply
     tile_regs_acquire();
@@ -390,17 +378,11 @@ void normalize_scores(
     cb_pop_front(unnormalized_scores_cb_index, 1);
 
     tile_regs_wait();
-
     cb_reserve_back(normalized_scores_cb_index, 1);
-    // PACK(DPRINT << "Reserving back normalized scores cb index" << ENDL();)
     pack_reconfig_data_format(normalized_scores_cb_index);
     pack_tile(0, normalized_scores_cb_index);
-    // PACK(print_tile(normalized_scores_cb_index, 0, true, 0, 1, 0, 8));
-    // PACK(DPRINT << "End of push back normalized scores cb index" << ENDL();)
     cb_push_back(normalized_scores_cb_index, 1);
-    // PACK(DPRINT << "End of push back on normalized scores cb index" << ENDL();)
     tile_regs_release();
-    // PACK(DPRINT << "End of tile regs release after normalized scores cb index" << ENDL();)
 }
 
 void scale(const uint32_t normalized_scores_cb_index, const uint32_t scales_cb_index, const uint32_t weights_cb_index) {
@@ -522,7 +504,6 @@ void MAIN {
             transpose_cb_index,
             epsilon_cb_index,
             normalized_cb_index);
-        DPRINT << "End of normalize scores" << ENDL();
         blocks::scale(normalized_cb_index, scales_cb_index, weights_cb_index);
     }
 }
