@@ -170,6 +170,27 @@ void TestContext::read_telemetry() {
             cycles,
             tel.num_words_sent,
             tel.num_packets_sent);
+
+        // Check if this ethernet connection is within the cluster
+        // Skip external connections to remote MMIO devices
+        const auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
+        auto eth_chan = soc_desc.logical_eth_core_to_chan_map.at(result.eth_core);
+        const auto& ethernet_connections_within_cluster = cluster.get_ethernet_connections();
+
+        bool is_internal_connection =
+            (ethernet_connections_within_cluster.find(physical_chip_id) != ethernet_connections_within_cluster.end()) &&
+            (ethernet_connections_within_cluster.at(physical_chip_id).find(eth_chan) !=
+             ethernet_connections_within_cluster.at(physical_chip_id).end());
+
+        if (!is_internal_connection) {
+            log_debug(
+                tt::LogTest,
+                "Skipping telemetry for {} core {} - connects to remote MMIO device outside cluster",
+                result.coord,
+                result.eth_core.str());
+            continue;
+        }
+
         auto [connected_physical_id, connected_eth_core] =
             cluster.get_connected_ethernet_core({physical_chip_id, result.eth_core});
         auto connected_device_id = control_plane.get_fabric_node_id_from_physical_chip_id(connected_physical_id);

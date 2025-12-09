@@ -22,6 +22,8 @@ Tests:
   # Fabric must be 2D.
   # ======================================================================================
   - name: UnicastWithChipId
+    benchmark_mode: true
+    sync: true
     fabric_setup:
       topology: Mesh
 
