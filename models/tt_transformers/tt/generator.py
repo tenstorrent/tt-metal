@@ -141,7 +141,7 @@ class Generator:
                     page_table_warmup = torch.zeros(1, num_blocks, dtype=torch.int32)
 
                 # chunked prefill not supported without paged attention
-                if not page_table_warmup and max_prefill_chunk_size_cutoff(
+                if page_table_warmup is not None and max_prefill_chunk_size_cutoff(
                     supported_length, self.model_args[0].max_prefill_chunk_size
                 ):
                     logger.warning(
