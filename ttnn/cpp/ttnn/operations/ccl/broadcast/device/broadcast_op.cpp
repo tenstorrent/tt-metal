@@ -92,6 +92,42 @@ tt::tt_metal::operation::ProgramWithCallbacks Broadcast::create_program_at(
         ccl::get_physical_neighbor_from_physical_coord(input_tensor, coord, -1, this->topology, this->cluster_axis);
     TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
 
+    // call batch 1 program factory if input is sharded on a single core, is tiny tile and has shape (1,1536) or
+    // (1,7168)
+    auto input_shape = input_tensor.logical_shape();
+    if (input_tensor.is_sharded() && input_shape[0] == 1 && (input_shape[1] == 1536 || input_shape[1] == 3168)) {
+        const auto& shard_spec = input_tensor.shard_spec().value();
+        const auto& shard_grid = shard_spec.grid;
+        std::vector<CoreCoord> cores;
+        for (const auto& core_range : shard_grid.ranges()) {
+            auto c = corerange_to_cores(core_range, std::nullopt);
+            cores.insert(cores.end(), c.begin(), c.end());
+        }
+        if (cores.size() == 1) {
+            const auto tile_width = input_tensor.tensor_spec().tile().get_width();
+            const auto tile_height = input_tensor.tensor_spec().tile().get_height();
+            if (input_tensor.layout() == ttnn::TILE_LAYOUT && tile_width == 32 && tile_height == 1) {
+                log_debug(
+                    tt::LogOp,
+                    "DEBUG: Using broadcast_batch1 program for sharded input tensor on single core with tiny tiles");
+                return broadcast_batch1(
+                    input_tensor,
+                    this->sender_coord,
+                    coord,
+                    forward_coord,
+                    backward_coord,
+                    output_tensor,
+                    this->num_links,
+                    target_ring_size,
+                    device_index,
+                    this->topology,
+                    final_barrier_semaphore,
+                    init_barrier_semaphore,
+                    this->sub_device_id);
+            }
+        }
+    }
+
     return broadcast_multicore(
         input_tensor,
         this->sender_coord,
