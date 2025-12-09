@@ -197,11 +197,17 @@ void MetalContext::initialize(
                 }
                 [[maybe_unused]] int ai_clk = cluster_->get_device_aiclk(device_id);
                 log_debug(tt::LogMetal, "AI CLK for device {} is:   {} MHz", device_id, ai_clk);
-                generate_device_bank_to_noc_tables(device_id);
-                generate_worker_logical_to_virtual_map(device_id);
+                {
+                    ZoneScopedN("Generate device bank to noc tables");
+                    generate_device_bank_to_noc_tables(device_id);
+                    generate_worker_logical_to_virtual_map(device_id);
+                }
 
-                // Create build env for this device, and build FW if it's not built already
-                BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
+                {
+                    ZoneScopedN("Create build env and build FW");
+                    // Create build env for this device, and build FW if it's not built already
+                    BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
+                }
                 // fw_build_key is a combination of build_key and fw_compile_hash
                 // If fw_compile_hash changes, the fw_build_key will change and FW will be rebuilt
                 // if it's not already in firmware_built_keys_
@@ -218,12 +224,15 @@ void MetalContext::initialize(
                     }
                 }
 
-                // Clear the entire launch message ring buffer on ethernet cores before application firmware is
-                // activated. This is required since ethernet cores context switch between application and routing
-                // firmware. If ERISC application firmware is activated before the launch messages are cleared, it can
-                // enter an undefined state by reading a corrupted launch message. Routing firmware will never run in
-                // this case, causing UMD issued transactions to hang.
-                clear_launch_messages_on_eth_cores(device_id);
+                {
+                    ZoneScopedN("Clear launch messages on ethernet cores");
+                    // Clear the entire launch message ring buffer on ethernet cores before application firmware is
+                    // activated. This is required since ethernet cores context switch between application and routing
+                    // firmware. If ERISC application firmware is activated before the launch messages are cleared, it can
+                    // enter an undefined state by reading a corrupted launch message. Routing firmware will never run in
+                    // this case, causing UMD issued transactions to hang.
+                    clear_launch_messages_on_eth_cores(device_id);
+                }
             }));
         }
 
@@ -240,8 +249,11 @@ void MetalContext::initialize(
         // populate_fd_kernels(all_devices_set, num_hw_cqs);
     }
 
-    // Set internal routing for active ethernet cores, this is required for our FW to run
-    cluster_->set_internal_routing_info_for_ethernet_cores(true);
+    {
+        ZoneScopedN("Set internal routing for active ethernet cores");
+        // Set internal routing for active ethernet cores, this is required for our FW to run
+        cluster_->set_internal_routing_info_for_ethernet_cores(true);
+    }
 
     // Initialize debug tools, reset cores, init FW
     if (dprint_server_) {
@@ -1101,6 +1113,9 @@ void MetalContext::initialize_firmware(
     std::optional<CoreCoord> end_core) {
     ZoneScoped;
 
+    fmt::println(stderr, "Initializing firmware for core type: {}, core {}", core_type, virtual_core);
+
+
     TT_FATAL(
         core_type != HalProgrammableCoreType::TENSIX or end_core.has_value(),
         "Tensix cores require end_core to be specified for bank to noc table initialization.");
@@ -1548,75 +1563,84 @@ void MetalContext::initialize_and_launch_firmware(ChipId device_id) {
             hal_->get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO));
     }
 
-    // Load erisc app base FW to eth cores on WH and active_erisc FW on second risc of BH active eth cores
-    log_debug(tt::LogMetal, "Initializing active ethernet cores");
-    dev_msgs_factory = hal_->get_dev_msgs_factory(HalProgrammableCoreType::ACTIVE_ETH);
-    core_info = populate_core_info_msg(device_id, HalProgrammableCoreType::ACTIVE_ETH);
-    launch_msg = dev_msgs_factory.create<dev_msgs::launch_msg_t>();
-    go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
-    go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
-
     std::unordered_set<CoreCoord> multi_risc_active_eth_cores;
-    for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
-        CoreCoord virtual_core =
-            cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
-        core_info.view().absolute_logical_x() = eth_core.x;
-        core_info.view().absolute_logical_y() = eth_core.y;
-        cluster_->write_core_immediate(
-            core_info.data(),
-            core_info.size(),
-            {device_id, virtual_core},
-            hal_->get_dev_addr(llrt::get_core_type(device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
-        initialize_firmware(
-            device_id, HalProgrammableCoreType::ACTIVE_ETH, virtual_core, launch_msg.view(), go_msg.view());
-        if (!hal_->get_eth_fw_is_cooperative()) {
-            multi_risc_active_eth_cores.insert(virtual_core);
-            not_done_cores.insert(virtual_core);
+    {
+        ZoneScopedN("Initialize active ethernet cores");
+        // Load erisc app base FW to eth cores on WH and active_erisc FW on second risc of BH active eth cores
+        log_debug(tt::LogMetal, "Initializing active ethernet cores");
+        dev_msgs_factory = hal_->get_dev_msgs_factory(HalProgrammableCoreType::ACTIVE_ETH);
+        core_info = populate_core_info_msg(device_id, HalProgrammableCoreType::ACTIVE_ETH);
+        launch_msg = dev_msgs_factory.create<dev_msgs::launch_msg_t>();
+        go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
+        go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
+
+        for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
+            CoreCoord virtual_core =
+                cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
+            core_info.view().absolute_logical_x() = eth_core.x;
+            core_info.view().absolute_logical_y() = eth_core.y;
+            cluster_->write_core_immediate(
+                core_info.data(),
+                core_info.size(),
+                {device_id, virtual_core},
+                hal_->get_dev_addr(llrt::get_core_type(device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
+            initialize_firmware(
+                device_id, HalProgrammableCoreType::ACTIVE_ETH, virtual_core, launch_msg.view(), go_msg.view());
+            if (!hal_->get_eth_fw_is_cooperative()) {
+                multi_risc_active_eth_cores.insert(virtual_core);
+                not_done_cores.insert(virtual_core);
+            }
         }
     }
 
-    log_debug(tt::LogMetal, "Initializing idle ethernet cores");
-    dev_msgs_factory = hal_->get_dev_msgs_factory(HalProgrammableCoreType::IDLE_ETH);
-    core_info = populate_core_info_msg(device_id, HalProgrammableCoreType::IDLE_ETH);
-    launch_msg = dev_msgs_factory.create<dev_msgs::launch_msg_t>();
-    go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
-    go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
-    for (const auto& eth_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
-        CoreCoord virtual_core =
-            cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
-        core_info.view().absolute_logical_x() = eth_core.x;
-        core_info.view().absolute_logical_y() = eth_core.y;
-        cluster_->write_core_immediate(
-            core_info.data(),
-            core_info.size(),
-            {device_id, virtual_core},
-            hal_->get_dev_addr(llrt::get_core_type(device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
-        initialize_firmware(
-            device_id, HalProgrammableCoreType::IDLE_ETH, virtual_core, launch_msg.view(), go_msg.view());
-        not_done_cores.insert(virtual_core);
+    {
+        ZoneScopedN("Initialize idle ethernet cores");
+        log_debug(tt::LogMetal, "Initializing idle ethernet cores");
+        dev_msgs_factory = hal_->get_dev_msgs_factory(HalProgrammableCoreType::IDLE_ETH);
+        core_info = populate_core_info_msg(device_id, HalProgrammableCoreType::IDLE_ETH);
+        launch_msg = dev_msgs_factory.create<dev_msgs::launch_msg_t>();
+        go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
+        go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
+        for (const auto& eth_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
+            CoreCoord virtual_core =
+                cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
+            core_info.view().absolute_logical_x() = eth_core.x;
+            core_info.view().absolute_logical_y() = eth_core.y;
+            cluster_->write_core_immediate(
+                core_info.data(),
+                core_info.size(),
+                {device_id, virtual_core},
+                hal_->get_dev_addr(llrt::get_core_type(device_id, virtual_core), HalL1MemAddrType::CORE_INFO));
+            initialize_firmware(
+                device_id, HalProgrammableCoreType::IDLE_ETH, virtual_core, launch_msg.view(), go_msg.view());
+            not_done_cores.insert(virtual_core);
+        }
     }
 
     // Barrier between L1 writes above and deassert below
     cluster_->l1_barrier(device_id);
 
-    // Deassert worker cores
-    for (const auto& worker_core : not_done_cores) {
-        if (multi_risc_active_eth_cores.contains(worker_core) && rtoptions_.get_enable_2_erisc_mode()) {
-            // Not needed for 2 erisc mode. primary erisc handles deasserting subordinate
-            continue;
-        }
-
-        tt::umd::RiscType reset_val;
-        if (cluster_->arch() == ARCH::QUASAR) {
-            reset_val = tt::umd::RiscType::ALL_NEO_DMS;
-        } else {
-            reset_val = tt::umd::RiscType::BRISC;
-            if (multi_risc_active_eth_cores.contains(worker_core)) {
-                // bit 12 needs to be deasserted to run second erisc on BH
-                reset_val |= tt::umd::RiscType::ERISC1;
+    {
+        ZoneScopedN("Deassert worker cores");
+        // Deassert worker cores
+        for (const auto& worker_core : not_done_cores) {
+            if (multi_risc_active_eth_cores.contains(worker_core) && rtoptions_.get_enable_2_erisc_mode()) {
+                // Not needed for 2 erisc mode. primary erisc handles deasserting subordinate
+                continue;
             }
+
+            tt::umd::RiscType reset_val;
+            if (cluster_->arch() == ARCH::QUASAR) {
+                reset_val = tt::umd::RiscType::ALL_NEO_DMS;
+            } else {
+                reset_val = tt::umd::RiscType::BRISC;
+                if (multi_risc_active_eth_cores.contains(worker_core)) {
+                    // bit 12 needs to be deasserted to run second erisc on BH
+                    reset_val |= tt::umd::RiscType::ERISC1;
+                }
+            }
+            cluster_->deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
         }
-        cluster_->deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
     }
 
     // Wait until fw init is done, ensures the next launch msg doesn't get
