@@ -31,7 +31,7 @@ static uint32_t compute_L1_usage_for_slice_config(
 
     if (output_layout == tt::tt_metal::Layout::TILE &&
         dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_WIDTH) {
-        // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
+        // Slice Write requires that the slice boundaries and shard boundaries are aligned to the tile boundaries.
         slice_rounding_value = tt::constants::TILE_HEIGHT;
     }
 
@@ -158,7 +158,7 @@ Op2DSliceConfig determine_slice_config(
     uint32_t output_height = output_shape[1];
     uint32_t output_width = output_shape[2];
     uint32_t current_num_slices = 1;
-    log_debug(tt::LogOp, "Conv2D DRAM Auto slice with {} free memory", L1_stats.total_free_bytes);
+    log_debug(tt::LogOp, "DRAM Auto slice with {} free memory", L1_stats.total_free_bytes);
     const uint32_t output_sliced_dim =
         return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
 
@@ -173,7 +173,11 @@ Op2DSliceConfig determine_slice_config(
         uint32_t l1_usage = compute_L1_usage_for_slice_config(
             input_shape, output_shape, output_layout, op_slice_attr, return_slice_config);
         log_debug(
-            tt::LogOp, "Conv2D DRAM Auto slice with {} slices requires {} L1 memory", current_num_slices, l1_usage);
+            tt::LogOp,
+            "DRAM Auto slice for {} op with {} slices requires {} L1 memory",
+            op_slice_attr->name(),
+            current_num_slices,
+            l1_usage);
         if (L1_stats.total_free_bytes >= l1_usage) {
             break;
         }
@@ -181,8 +185,8 @@ Op2DSliceConfig determine_slice_config(
     }
     if (output_layout == tt::tt_metal::Layout::TILE &&
         return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_WIDTH) {
-        // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
-        // This can result in more slices than expected, so we need to adjust the number of slices accordingly.
+        // The rounding up of the slice size to tile height can result in the slice_config having a larger num_slices
+        // than needed. So it is clamped.
         const uint32_t max_slices = tt::div_up(output_sliced_dim, tt::constants::TILE_HEIGHT);
         return_slice_config.num_slices = std::min(return_slice_config.num_slices, max_slices);
     }
@@ -194,7 +198,7 @@ Op2DSliceConfig determine_slice_config(
         //  In this case, we switch to height slicing and try again.
         log_debug(
             tt::LogOp,
-            "Conv2D DRAM Auto slice could not find suitable number of slices with width slicing, switching to height "
+            "DRAM Auto slice could not find suitable number of slices with width slicing, switching to height "
             "slicing");
         return determine_slice_config(
             op_slice_attr,
@@ -233,8 +237,8 @@ void run_sliced_op(
         log_info(tt::LogOp, "Auto determined DRAM Slice Config as {} for {}", dram_slice_config, op_slice_attr->name());
     }
 
-    log_debug(tt::LogOp, "Conv2D DRAM with Slice Config {}", dram_slice_config);
-    TT_FATAL(dram_slice_config.num_slices > 0, " Number of slices should be greater than 0 for Conv2D DRAM Slicing");
+    log_debug(tt::LogOp, "{} DRAM with Slice Config {}", op_slice_attr->name(), dram_slice_config);
+    TT_FATAL(dram_slice_config.num_slices > 0, " Number of slices should be greater than 0 for DRAM Slicing");
     auto [batch_size, output_height, output_width, output_channels] = output_tensor.logical_shape().to_array_4D();
     auto [in_batch_, input_height, input_width, input_channels] = input_tensor.logical_shape().to_array_4D();
 
@@ -263,9 +267,10 @@ void run_sliced_op(
     } else {
         TT_ASSERT(
             dram_slice_config.num_slices < output_sliced_dim,
-            " Number of slices {} should be less than the dimension {} being sliced in Conv2D DRAM Slicing",
+            " Number of slices {} should be less than the dimension {} being sliced in DRAM Slicing for {}",
             dram_slice_config.num_slices,
-            output_sliced_dim);
+            output_sliced_dim,
+            op_slice_attr->name());
     }
 
     const uint32_t min_output_slice_size =
