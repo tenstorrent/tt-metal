@@ -323,6 +323,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
     size_t worker_l1_size) {
+    ZoneScoped;
     auto mapped_devices_full_system_device_ids =
         (*MetalContext::instance().global_distributed_context().size() > 1)
             ? SystemMesh::instance().get_mapped_devices(std::nullopt).device_ids

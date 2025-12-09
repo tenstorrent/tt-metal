@@ -380,6 +380,7 @@ void MetalContext::teardown_base_objects() {
 }
 
 MetalContext::MetalContext() {
+    ZoneScoped;
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
     // to initialize the control plane.
     if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {

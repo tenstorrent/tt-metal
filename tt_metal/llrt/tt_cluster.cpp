@@ -308,6 +308,7 @@ void Cluster::validate_harvesting_masks() const {
 }
 
 void Cluster::initialize_device_drivers() {
+    ZoneScoped;
     this->open_driver();
     this->generate_cluster_descriptor();
     this->get_metal_desc_from_tt_desc();
@@ -339,6 +340,7 @@ void Cluster::initialize_device_drivers() {
 }
 
 void Cluster::assert_risc_reset() {
+    ZoneScoped;
     this->driver_->assert_risc_reset();
 }
 
@@ -1081,6 +1083,7 @@ void Cluster::disable_ethernet_cores_with_retrain() {
 }
 
 void Cluster::initialize_ethernet_cores_router_mode() {
+    ZoneScoped;
     for (const auto& [assoc_mmio_device, devices] : this->cluster_desc_->get_chips_grouped_by_closest_mmio()) {
         for (const auto &chip_id : devices) {
             if (this->device_eth_routing_info_.find(chip_id) == this->device_eth_routing_info_.end()) {
