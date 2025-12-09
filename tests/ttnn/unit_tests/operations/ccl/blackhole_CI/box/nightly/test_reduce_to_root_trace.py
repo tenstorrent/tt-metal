@@ -101,13 +101,13 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
 
     # Setup
     num_devices = 4
-    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     root_coord = (1, 0)
     root_device_idx = root_coord[0]
     num_cores = 8
 
     topology = ttnn.Topology.Linear
     validate_test(num_devices, topology, bh_2d_mesh_device.shape, 0)
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
     # Tensor shapes
     l_shape = [8, 128 * num_cores]
