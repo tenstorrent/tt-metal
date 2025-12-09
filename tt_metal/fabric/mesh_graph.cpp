@@ -719,7 +719,7 @@ std::optional<SwitchId> MeshGraph::get_switch_for_mesh(MeshId mesh_id) const {
     return std::nullopt;
 }
 
-std::vector<MeshId> MeshGraph::get_mesh_ids() const {
+std::vector<MeshId> MeshGraph::get_all_mesh_ids() const {
     std::vector<MeshId> mesh_ids;
     mesh_ids.reserve(this->mesh_to_chip_ids_.size());
     for (const auto& [mesh_id, _] : this->mesh_to_chip_ids_) {
@@ -728,15 +728,15 @@ std::vector<MeshId> MeshGraph::get_mesh_ids() const {
     return mesh_ids;
 }
 
-std::vector<MeshId> MeshGraph::get_compute_mesh_ids() const {
-    std::vector<MeshId> compute_mesh_ids;
-    compute_mesh_ids.reserve(this->mesh_to_chip_ids_.size() - switch_ids_.size());
+std::vector<MeshId> MeshGraph::get_mesh_ids() const {
+    std::vector<MeshId> mesh_ids;
+    mesh_ids.reserve(this->mesh_to_chip_ids_.size() - switch_ids_.size());
     for (const auto& [mesh_id, _] : this->mesh_to_chip_ids_) {
         if (!this->is_switch_mesh(mesh_id)) {
-            compute_mesh_ids.push_back(mesh_id);
+            mesh_ids.push_back(mesh_id);
         }
     }
-    return compute_mesh_ids;
+    return mesh_ids;
 }
 
 bool MeshGraph::is_switch_mesh(MeshId mesh_id) const {

@@ -122,11 +122,11 @@ public:
     // Get the coordinate range of the mesh, or the coordinate range of the submesh for a given host rank if provided
     MeshCoordinateRange get_coord_range(MeshId mesh_id, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
 
-    std::vector<MeshId> get_mesh_ids() const;
+    // Get all mesh IDs (includes switches)
+    std::vector<MeshId> get_all_mesh_ids() const;
 
-    // Get compute mesh IDs only (excludes switches)
-    // This is the preferred method for APIs that need to allocate compute devices
-    std::vector<MeshId> get_compute_mesh_ids() const;
+    // Get compute only mesh IDs (excludes switches)
+    std::vector<MeshId> get_mesh_ids() const;
 
     // Get the chip ids for a given mesh_id
     // If host_rank is provided, return the chip ids for the submesh for that host rank

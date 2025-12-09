@@ -75,7 +75,7 @@ std::shared_ptr<distributed::multihost::DistributedContext> construct_compute_on
 
     // Get all compute mesh IDs (excludes switches) from control plane mesh graph
     const auto& mesh_graph = metal_context.get_control_plane().get_mesh_graph();
-    const auto& compute_mesh_ids = mesh_graph.get_compute_mesh_ids();
+    const auto& compute_mesh_ids = mesh_graph.get_mesh_ids();
 
     // Get global logical bindings to map ranks to mesh IDs
     const auto& global_logical_bindings = metal_context.get_control_plane().get_global_logical_bindings();

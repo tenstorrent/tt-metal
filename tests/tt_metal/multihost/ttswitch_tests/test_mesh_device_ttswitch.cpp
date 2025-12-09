@@ -107,8 +107,11 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenMeshDeviceWithExplicitPhysicalDeviceId
     tt::tt_fabric::MeshId mesh_id_0(0);
     const auto& chip_ids_container_0 = mesh_graph.get_chip_ids(mesh_id_0);
     std::vector<int> device_ids_0;
-    for (const auto& chip_id : chip_ids_container_0.values()) {
-        device_ids_0.push_back(chip_id);
+    // Convert logical chip IDs to physical chip IDs
+    for (const auto& logical_chip_id : chip_ids_container_0.values()) {
+        tt::tt_fabric::FabricNodeId fabric_node_id(mesh_id_0, logical_chip_id);
+        int physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(fabric_node_id);
+        device_ids_0.push_back(physical_chip_id);
     }
 
     EXPECT_EQ(device_ids_0.size(), 4) << "Mesh 0 should have 4 devices";
@@ -150,55 +153,6 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenMeshDeviceWithExplicitPhysicalDeviceId
     //    belong to the mesh_id specified in the mesh graph descriptor
 }
 
-// TEST_F(MeshDeviceTTSwitchFixture, TestOpenCloseSwitchMeshDevice) {
-//     GTEST_SKIP() << "This test is disabled because it hangs when running in multi-process environment";
-//     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-//     const auto& mesh_graph = control_plane.get_mesh_graph();
-//
-//     // Only test switch mesh - skip if not on switch mesh
-//     if (!control_plane.is_local_host_on_switch_mesh()) {
-//         tt::tt_fabric::FabricSwitchManager::instance().setup();
-//         GTEST_SKIP() << "This test is for switch mesh only";
-//     }
-//
-//     auto mesh_id_val = *control_plane.get_local_mesh_id_bindings()[0];
-//
-//     // Verify this is a switch
-//     tt::tt_fabric::MeshId mesh_id(mesh_id_val);
-//     const auto& switch_ids = mesh_graph.get_switch_ids();
-//     bool is_switch = false;
-//     for (const auto& switch_id : switch_ids) {
-//         if (*switch_id == mesh_id_val) {
-//             is_switch = true;
-//             break;
-//         }
-//     }
-//     ASSERT_TRUE(is_switch) << "Mesh ID " << mesh_id_val << " should be a switch";
-//
-//     // Get mesh shape for switch
-//     const auto mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
-//     EXPECT_EQ(mesh_shape, tt::tt_metal::distributed::MeshShape(2, 2)) << "Switch mesh should have 2x2 shape";
-//
-//     // Verify switch connectivity
-//     tt::tt_fabric::SwitchId switch_id(mesh_id_val);
-//     const auto& connected_meshes = mesh_graph.get_meshes_connected_to_switch(switch_id);
-//     EXPECT_EQ(connected_meshes.size(), 1) << "Switch should be connected to 1 compute mesh";
-//
-//     // Attempting to open mesh device on switch should fail
-//     // Devices cannot be created on tt-switch meshes
-//     EXPECT_THROW(
-//         {
-//             ttnn::distributed::open_mesh_device(
-//                 mesh_shape,
-//                 l1_small_size_,
-//                 trace_region_size_,
-//                 1,  // num_command_queues
-//                 tt::tt_metal::DispatchCoreConfig{tt::tt_metal::DispatchCoreType::WORKER});
-//         },
-//         std::exception)
-//         << "Opening mesh device on switch should fail";
-// }
-
 TEST_F(MeshDeviceTTSwitchFixture, TestOpenUnitMeshesOnComputeMeshFabricNodes) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
@@ -225,8 +179,11 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenUnitMeshesOnComputeMeshFabricNodes) {
     // Get chip IDs for this mesh
     const auto& chip_ids_container = mesh_graph.get_chip_ids(mesh_id);
     std::vector<int> device_ids;
-    for (const auto& chip_id : chip_ids_container.values()) {
-        device_ids.push_back(chip_id);
+    // Convert logical chip IDs to physical chip IDs
+    for (const auto& logical_chip_id : chip_ids_container.values()) {
+        tt::tt_fabric::FabricNodeId fabric_node_id(mesh_id, logical_chip_id);
+        int physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(fabric_node_id);
+        device_ids.push_back(physical_chip_id);
     }
 
     EXPECT_EQ(device_ids.size(), 4) << "Compute mesh should have 4 devices (2x2)";
@@ -264,54 +221,6 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenUnitMeshesOnComputeMeshFabricNodes) {
     }
     unit_meshes.clear();
 }
-
-// TEST_F(MeshDeviceTTSwitchFixture, TestOpenUnitMeshesOnSwitchFabricNodes) {
-//     GTEST_SKIP() << "This test is disabled because it hangs when running in multi-process environment";
-//     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-//     const auto& mesh_graph = control_plane.get_mesh_graph();
-//
-//     // Only test switch mesh - skip if not on switch mesh
-//     if (!control_plane.is_local_host_on_switch_mesh()) {
-//         GTEST_SKIP() << "This test is for switch mesh only";
-//     }
-//
-//     auto mesh_id_val = *control_plane.get_local_mesh_id_bindings()[0];
-//
-//     // Verify this is a switch
-//     tt::tt_fabric::MeshId mesh_id(mesh_id_val);
-//     const auto& switch_ids = mesh_graph.get_switch_ids();
-//     bool is_switch = false;
-//     for (const auto& switch_id : switch_ids) {
-//         if (*switch_id == mesh_id_val) {
-//             is_switch = true;
-//             break;
-//         }
-//     }
-//     ASSERT_TRUE(is_switch) << "Mesh ID " << mesh_id_val << " should be a switch";
-//
-//     // Get chip IDs for the switch mesh
-//     const auto& chip_ids_container = mesh_graph.get_chip_ids(mesh_id);
-//     std::vector<int> device_ids;
-//     for (const auto& chip_id : chip_ids_container.values()) {
-//         device_ids.push_back(chip_id);
-//     }
-//
-//     EXPECT_EQ(device_ids.size(), 4) << "Switch mesh should have 4 devices (2x2)";
-//
-//     // Attempting to create unit meshes on switch devices should fail
-//     // Devices cannot be created on tt-switch meshes
-//     EXPECT_THROW(
-//         {
-//             tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
-//                 device_ids,
-//                 l1_small_size_,
-//                 trace_region_size_,
-//                 1,  // num_command_queues
-//                 tt::tt_metal::DispatchCoreConfig{tt::tt_metal::DispatchCoreType::WORKER});
-//         },
-//         std::exception)
-//         << "Creating unit meshes on switch devices should fail";
-// }
 
 }  // namespace test
 }  // namespace ttnn

@@ -315,12 +315,12 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
     // the MeshGraphDescriptor. Single Host Multi-Mesh is only used for testing purposes.
     const char* mesh_id_str = std::getenv("TT_MESH_ID");
     if (mesh_id_str == nullptr) {
-        auto& ctx = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
+        const auto& ctx = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
         TT_FATAL(
             *ctx.size() == 1 && *ctx.rank() == 0,
             "Not specifying both TT_MESH_ID and TT_MESH_HOST_RANK is only supported for single host systems.");
         std::vector<MeshId> local_mesh_ids;
-        for (const auto& mesh_id : this->mesh_graph_->get_mesh_ids()) {
+        for (const auto& mesh_id : this->mesh_graph_->get_all_mesh_ids()) {
             // TODO: #24528 - Move this to use TopologyMapper once Topology mapper works for multi-mesh systems
             const auto& host_ranks = this->mesh_graph_->get_host_ranks(mesh_id);
             TT_FATAL(
@@ -344,7 +344,7 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
         local_mesh_binding.host_rank);
 
     // Validate the local mesh binding exists in the mesh graph descriptor
-    const auto mesh_ids = this->mesh_graph_->get_mesh_ids();
+    const auto mesh_ids = this->mesh_graph_->get_all_mesh_ids();
     TT_FATAL(
         std::find(mesh_ids.begin(), mesh_ids.end(), local_mesh_binding.mesh_ids[0]) != mesh_ids.end(),
         "Invalid TT_MESH_ID: Local mesh binding mesh_id {} not found in mesh graph descriptor",
@@ -386,7 +386,7 @@ void ControlPlane::initialize_distributed_contexts() {
 
     // Use mesh_graph to get all (mesh_id, host_rank) pairs (this follows topology_mapper's mesh_rank_bindings),
     // then use topology_mapper's helper function to get the MPI rank for each (mesh_id, host_rank) pair.
-    for (const auto& mesh_id : this->mesh_graph_->get_mesh_ids()) {
+    for (const auto& mesh_id : this->mesh_graph_->get_all_mesh_ids()) {
         const auto& host_ranks = this->mesh_graph_->get_host_ranks(mesh_id);
         for (const auto& [_, mesh_host_rank] : host_ranks) {
             int mpi_rank = topology_mapper_->get_mpi_rank_for_mesh_host_rank(mesh_id, mesh_host_rank);
@@ -567,7 +567,7 @@ void ControlPlane::validate_mesh_connections(MeshId mesh_id) const {
 }
 
 void ControlPlane::validate_mesh_connections() const {
-    for (const auto& mesh_id : this->mesh_graph_->get_mesh_ids()) {
+    for (const auto& mesh_id : this->mesh_graph_->get_all_mesh_ids()) {
         if (this->is_local_mesh(mesh_id)) {
             this->validate_mesh_connections(mesh_id);
         }
@@ -1557,7 +1557,7 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
     std::uint8_t exit_table[MAX_NUM_MESHES];
     std::fill_n(exit_table, MAX_NUM_MESHES, eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
     const auto& inter_mesh_table = this->routing_table_generator_->get_inter_mesh_table();
-    for (const auto& dst_mesh_id : this->mesh_graph_->get_mesh_ids()) {
+    for (const auto& dst_mesh_id : this->mesh_graph_->get_all_mesh_ids()) {
         auto direction = inter_mesh_table[*mesh_id][chip_id][*dst_mesh_id];
         if (direction == RoutingDirection::NONE) {
             continue;
@@ -2337,7 +2337,7 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
 void ControlPlane::generate_intermesh_connectivity() {
     AnnotatedIntermeshConnections intermesh_connections;
 
-    auto generate_mapping_locally_ = (this->mesh_graph_->get_mesh_ids().size() == 1) &&
+    auto generate_mapping_locally_ = (this->mesh_graph_->get_all_mesh_ids().size() == 1) &&
                                      (this->mesh_graph_->get_host_ranks(local_mesh_binding_.mesh_ids[0]).size() == 1);
 
     if (!generate_mapping_locally_ &&
@@ -2513,7 +2513,7 @@ void ControlPlane::forward_descriptors_to_controller(
     PortDescriptorTable& port_descriptors, uint32_t my_rank, const std::string& my_host) {
     using namespace tt::tt_metal::distributed::multihost;
     constexpr uint32_t CONTROLLER_RANK = 0;
-    auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
     const auto& physical_system_descriptor = this->physical_system_descriptor_;
     std::size_t serialized_table_size = 0;
     std::vector<uint8_t> serialized_table;
@@ -2555,7 +2555,7 @@ void ControlPlane::forward_descriptors_to_controller(
 
 void ControlPlane::forward_intermesh_connections_from_controller(AnnotatedIntermeshConnections& intermesh_connections) {
     using namespace tt::tt_metal::distributed::multihost;
-    auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
     constexpr uint32_t CONTROLLER_RANK = 0;
     const auto& my_host = physical_system_descriptor_->my_host_name();
     auto my_rank = physical_system_descriptor_->get_rank_for_hostname(my_host);
