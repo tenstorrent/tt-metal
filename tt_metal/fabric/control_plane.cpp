@@ -2351,11 +2351,12 @@ void ControlPlane::generate_intermesh_connectivity() {
 std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
     const std::string& my_host,
     const std::string& neighbor_host,
+    MeshId my_mesh_id,
+    MeshId neighbor_mesh_id,
     bool strict_binding,
     const std::unordered_set<FabricNodeId>& requested_exit_nodes,
     std::unordered_set<port_id_t>& assigned_port_ids) {
     const auto& exit_nodes = physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
-    const auto& my_mesh_id = this->local_mesh_binding_.mesh_ids[0];
     const auto& mesh_edge_ports_to_chip_id = this->mesh_graph_->get_mesh_edge_ports_to_chip_id();
 
     std::vector<PortDescriptor> ports_to_neighbor;
@@ -2375,18 +2376,15 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
         auto src_eth_chan = exit_node.eth_conn.src_chan;
         auto exit_node_chip = exit_node_fabric_node_id.chip_id;
 
-        // Check if this is BLACKHOLE and channel 8 or 9, which should use Z direction
-        const auto& chip_spec = this->mesh_graph_->get_chip_spec();
-        bool is_blackhole_z_channel =
-            (chip_spec.arch == tt::ARCH::BLACKHOLE) && (src_eth_chan == 8 || src_eth_chan == 9);
+        bool should_assign_z = this->mesh_graph_->should_assign_z_direction(my_mesh_id, neighbor_mesh_id);
 
         for (const auto& [port_id, chip_id] : mesh_edge_ports_to_chip_id[*my_mesh_id]) {
             if (exit_node_chip == chip_id) {
                 auto port_direction = port_id.first;
                 auto logical_chan_id = port_id.second;
 
-                // If this is a Z channel on BLACKHOLE, prefer Z direction ports
-                if (is_blackhole_z_channel && port_direction != RoutingDirection::Z) {
+                // If this is a Z channel on BLACKHOLE or should assign Z direction, prefer Z direction ports
+                if (should_assign_z && port_direction != RoutingDirection::Z) {
                     continue;
                 }
 
@@ -2398,8 +2396,8 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
                 if (assigned_port_ids.find(port_id) == assigned_port_ids.end() && valid_direction) {
                     assigned_port_ids.insert(port_id);
                     ports_to_neighbor.push_back(PortDescriptor{port_id, assoc_connection_hash});
-                    // Override direction to Z if this is a Z channel on BLACKHOLE
-                    RoutingDirection final_direction = is_blackhole_z_channel ? RoutingDirection::Z : port_direction;
+                    // Override direction to Z if this is a Z channel on BLACKHOLE or should assign Z direction
+                    RoutingDirection final_direction = (should_assign_z) ? RoutingDirection::Z : port_direction;
                     exit_node_directions_[exit_node_fabric_node_id][src_eth_chan] = final_direction;
                     logical_port_to_eth_chan_[exit_node_fabric_node_id][port_id] = src_eth_chan;
                     curr_exit_node_direction[exit_node_hash] = final_direction;
@@ -2458,7 +2456,13 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
             requested_intermesh_ports,
             src_exit_node_chips);
         port_descriptors[my_mesh_id][neighbor_mesh_id] = this->assign_logical_ports_to_exit_nodes(
-            my_host, neighbor_host, strict_binding, requested_exit_nodes, assigned_port_ids);
+            my_host,
+            neighbor_host,
+            my_mesh_id,
+            neighbor_mesh_id,
+            strict_binding,
+            requested_exit_nodes,
+            assigned_port_ids);
     }
     return port_descriptors;
 }

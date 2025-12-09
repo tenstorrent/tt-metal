@@ -10,8 +10,10 @@
 #include <cstdio>
 #include <set>
 #include <unordered_set>
+#include <fstream>
 
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 
 using namespace tt::tt_fabric;
 
@@ -1421,6 +1423,408 @@ TEST(MeshGraphDescriptorTests, SwitchMixedWithMeshesInGraph) {
     // Verify we have meshes and switches
     EXPECT_EQ(desc.all_meshes().size(), 2) << "Should have 2 mesh instances";
     EXPECT_EQ(desc.all_switches().size(), 1) << "Should have 1 switch instance";
+}
+
+TEST(MeshGraphDescriptorTests, AssignZDirectionFlag) {
+    // Test that assign_z_direction flag is properly parsed and stored
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        mesh_descriptors: {
+          name: "M1"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        mesh_descriptors: {
+          name: "M2"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M1" mesh_id: 1 } }
+          instances: { mesh: { mesh_descriptor: "M2" mesh_id: 2 } }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+            nodes: { mesh: { mesh_descriptor: "M1" mesh_id: 1 } }
+            channels: { count: 2 }
+            assign_z_direction: true
+          }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+            nodes: { mesh: { mesh_descriptor: "M2" mesh_id: 2 } }
+            channels: { count: 2 }
+            assign_z_direction: false
+          }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M1" mesh_id: 1 } }
+            nodes: { mesh: { mesh_descriptor: "M2" mesh_id: 2 } }
+            channels: { count: 2 }
+            # assign_z_direction not specified, should default to false
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
+
+    MeshGraphDescriptor desc(text_proto);
+
+    // Get the graph instance
+    auto graph_ids = desc.instances_by_type("FABRIC");
+    ASSERT_EQ(graph_ids.size(), 1);
+    auto graph_id = graph_ids[0];
+
+    // Get all connections for this graph
+    auto connections = desc.connections_by_instance_id(graph_id);
+
+    // Find connections with assign_z_direction set
+    bool found_z_direction_true = false;
+    bool found_z_direction_false = false;
+    bool found_z_direction_default = false;
+
+    for (auto conn_id : connections) {
+        const auto& conn = desc.get_connection(conn_id);
+        // Check if this connection is between M0 and M1 (should have assign_z_direction: true)
+        const auto& src_instance = desc.get_instance(conn.nodes[0]);
+        const auto& dst_instance = desc.get_instance(conn.nodes[1]);
+
+        bool is_m0_to_m1 = (src_instance.name == "M0" && dst_instance.name == "M1") ||
+                           (src_instance.name == "M1" && dst_instance.name == "M0");
+        bool is_m0_to_m2 = (src_instance.name == "M0" && dst_instance.name == "M2") ||
+                           (src_instance.name == "M2" && dst_instance.name == "M0");
+        bool is_m1_to_m2 = (src_instance.name == "M1" && dst_instance.name == "M2") ||
+                           (src_instance.name == "M2" && dst_instance.name == "M1");
+
+        if (is_m0_to_m1) {
+            EXPECT_TRUE(conn.assign_z_direction) << "Connection M0<->M1 should have assign_z_direction=true";
+            found_z_direction_true = true;
+        } else if (is_m0_to_m2) {
+            EXPECT_FALSE(conn.assign_z_direction) << "Connection M0<->M2 should have assign_z_direction=false";
+            found_z_direction_false = true;
+        } else if (is_m1_to_m2) {
+            EXPECT_FALSE(conn.assign_z_direction)
+                << "Connection M1<->M2 should have assign_z_direction=false (default)";
+            found_z_direction_default = true;
+        }
+    }
+
+    EXPECT_TRUE(found_z_direction_true) << "Should find connection with assign_z_direction=true";
+    EXPECT_TRUE(found_z_direction_false) << "Should find connection with assign_z_direction=false";
+    EXPECT_TRUE(found_z_direction_default) << "Should find connection with assign_z_direction defaulting to false";
+}
+
+TEST(MeshGraphDescriptorTests, AssignZDirectionInMeshGraph) {
+    // Test that assign_z_direction flag is properly tracked in MeshGraph
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        mesh_descriptors: {
+          name: "M1"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        mesh_descriptors: {
+          name: "M2"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M1" mesh_id: 1 } }
+          instances: { mesh: { mesh_descriptor: "M2" mesh_id: 2 } }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+            nodes: { mesh: { mesh_descriptor: "M1" mesh_id: 1 } }
+            channels: { count: 2 }
+            assign_z_direction: true
+          }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 device_id: 0 } }
+            nodes: { mesh: { mesh_descriptor: "M2" mesh_id: 2 device_id: 0 } }
+            channels: { count: 1 }
+            assign_z_direction: true
+          }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M1" mesh_id: 1 } }
+            nodes: { mesh: { mesh_descriptor: "M2" mesh_id: 2 } }
+            channels: { count: 2 }
+            # assign_z_direction not specified, should default to false
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    // Create a temporary file for the test
+    const std::filesystem::path test_file =
+        std::filesystem::temp_directory_path() / "test_assign_z_direction.textproto";
+    {
+        std::ofstream file(test_file);
+        file << text_proto;
+    }
+
+    EXPECT_NO_THROW(tt::tt_fabric::MeshGraph mesh_graph(test_file.string()));
+
+    tt::tt_fabric::MeshGraph mesh_graph(test_file.string());
+
+    // Test should_assign_z_direction method
+    tt::tt_fabric::MeshId mesh_0(0);
+    tt::tt_fabric::MeshId mesh_1(1);
+    tt::tt_fabric::MeshId mesh_2(2);
+
+    // M0 <-> M1 should use Z direction (mesh-level connection with assign_z_direction: true)
+    EXPECT_TRUE(mesh_graph.should_assign_z_direction(mesh_0, mesh_1)) << "M0 <-> M1 should use Z direction";
+    EXPECT_TRUE(mesh_graph.should_assign_z_direction(mesh_1, mesh_0))
+        << "M1 <-> M0 should use Z direction (bidirectional)";
+
+    // M0 <-> M2 should use Z direction (device-level connection with assign_z_direction: true)
+    EXPECT_TRUE(mesh_graph.should_assign_z_direction(mesh_0, mesh_2)) << "M0 <-> M2 should use Z direction";
+    EXPECT_TRUE(mesh_graph.should_assign_z_direction(mesh_2, mesh_0))
+        << "M2 <-> M0 should use Z direction (bidirectional)";
+
+    // M1 <-> M2 should NOT use Z direction (assign_z_direction not specified, defaults to false)
+    EXPECT_FALSE(mesh_graph.should_assign_z_direction(mesh_1, mesh_2)) << "M1 <-> M2 should NOT use Z direction";
+    EXPECT_FALSE(mesh_graph.should_assign_z_direction(mesh_2, mesh_1))
+        << "M2 <-> M1 should NOT use Z direction (bidirectional)";
+
+    // Clean up
+    std::filesystem::remove(test_file);
+}
+
+TEST(MeshGraphDescriptorTests, AssignZDirectionAllToAllGraphTopology) {
+    // Test that assign_z_direction flag is properly parsed and stored for ALL-to-ALL graph topology
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 2 } }
+          graph_topology: {
+            layout_type: ALL_TO_ALL
+            channels: { count: 2 }
+            assign_z_direction: true
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
+
+    MeshGraphDescriptor desc(text_proto);
+
+    // Get the graph instance
+    auto graph_ids = desc.instances_by_type("FABRIC");
+    ASSERT_EQ(graph_ids.size(), 1);
+    auto graph_id = graph_ids[0];
+
+    // Get all connections for this graph
+    // ALL-to-ALL with 3 meshes should generate 3*2 = 6 connections (bidirectional)
+    auto connections = desc.connections_by_instance_id(graph_id);
+    ASSERT_EQ(connections.size(), 6) << "ALL-to-ALL with 3 meshes should generate 6 connections";
+
+    // Verify all connections have assign_z_direction set to true
+    for (auto conn_id : connections) {
+        const auto& conn = desc.get_connection(conn_id);
+        EXPECT_TRUE(conn.assign_z_direction) << "All connections generated by ALL-to-ALL graph topology with "
+                                                "assign_z_direction=true should have assign_z_direction=true";
+    }
+}
+
+TEST(MeshGraphDescriptorTests, AssignZDirectionRingGraphTopology) {
+    // Test that assign_z_direction flag is properly parsed and stored for RING graph topology
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 2 } }
+          graph_topology: {
+            layout_type: RING
+            channels: { count: 2 }
+            assign_z_direction: true
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
+
+    MeshGraphDescriptor desc(text_proto);
+
+    // Get the graph instance
+    auto graph_ids = desc.instances_by_type("FABRIC");
+    ASSERT_EQ(graph_ids.size(), 1);
+    auto graph_id = graph_ids[0];
+
+    // Get all connections for this graph
+    // RING with 3 meshes should generate 3*2 = 6 connections (bidirectional)
+    auto connections = desc.connections_by_instance_id(graph_id);
+    ASSERT_EQ(connections.size(), 6) << "RING with 3 meshes should generate 6 connections";
+
+    // Verify all connections have assign_z_direction set to true
+    for (auto conn_id : connections) {
+        const auto& conn = desc.get_connection(conn_id);
+        EXPECT_TRUE(conn.assign_z_direction) << "All connections generated by RING graph topology with "
+                                                "assign_z_direction=true should have assign_z_direction=true";
+    }
+}
+
+TEST(MeshGraphDescriptorTests, AssignZDirectionGraphTopologyInMeshGraph) {
+    // Test that assign_z_direction flag from graph topology is properly tracked in MeshGraph
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 2 } }
+          graph_topology: {
+            layout_type: ALL_TO_ALL
+            channels: { count: 2 }
+            assign_z_direction: true
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    // Create a temporary file for the test
+    const std::filesystem::path test_file =
+        std::filesystem::temp_directory_path() / "test_assign_z_direction_graph_topology.textproto";
+    {
+        std::ofstream file(test_file);
+        file << text_proto;
+    }
+
+    EXPECT_NO_THROW(tt::tt_fabric::MeshGraph mesh_graph(test_file.string()));
+
+    tt::tt_fabric::MeshGraph mesh_graph(test_file.string());
+
+    // Test should_assign_z_direction method for all mesh pairs
+    tt::tt_fabric::MeshId mesh_0(0);
+    tt::tt_fabric::MeshId mesh_1(1);
+    tt::tt_fabric::MeshId mesh_2(2);
+
+    // All pairs should use Z direction (ALL-to-ALL with assign_z_direction: true)
+    EXPECT_TRUE(mesh_graph.should_assign_z_direction(mesh_0, mesh_1))
+        << "M0 <-> M1 should use Z direction (ALL-to-ALL topology)";
+    EXPECT_TRUE(mesh_graph.should_assign_z_direction(mesh_1, mesh_0))
+        << "M1 <-> M0 should use Z direction (bidirectional)";
+
+    EXPECT_TRUE(mesh_graph.should_assign_z_direction(mesh_0, mesh_2))
+        << "M0 <-> M2 should use Z direction (ALL-to-ALL topology)";
+    EXPECT_TRUE(mesh_graph.should_assign_z_direction(mesh_2, mesh_0))
+        << "M2 <-> M0 should use Z direction (bidirectional)";
+
+    EXPECT_TRUE(mesh_graph.should_assign_z_direction(mesh_1, mesh_2))
+        << "M1 <-> M2 should use Z direction (ALL-to-ALL topology)";
+    EXPECT_TRUE(mesh_graph.should_assign_z_direction(mesh_2, mesh_1))
+        << "M2 <-> M1 should use Z direction (bidirectional)";
+
+    // Clean up
+    std::filesystem::remove(test_file);
+}
+
+TEST(MeshGraphDescriptorTests, AssignZDirectionGraphTopologyDefaultFalse) {
+    // Test that assign_z_direction defaults to false when not specified in graph topology
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 2 } }
+          graph_topology: {
+            layout_type: ALL_TO_ALL
+            channels: { count: 2 }
+            # assign_z_direction not specified, should default to false
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
+
+    MeshGraphDescriptor desc(text_proto);
+
+    // Get the graph instance
+    auto graph_ids = desc.instances_by_type("FABRIC");
+    ASSERT_EQ(graph_ids.size(), 1);
+    auto graph_id = graph_ids[0];
+
+    // Get all connections for this graph
+    auto connections = desc.connections_by_instance_id(graph_id);
+    ASSERT_EQ(connections.size(), 6) << "ALL-to-ALL with 3 meshes should generate 6 connections";
+
+    // Verify all connections have assign_z_direction set to false (default)
+    for (auto conn_id : connections) {
+        const auto& conn = desc.get_connection(conn_id);
+        EXPECT_FALSE(conn.assign_z_direction)
+            << "Connections generated by graph topology without assign_z_direction should default to false";
+    }
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

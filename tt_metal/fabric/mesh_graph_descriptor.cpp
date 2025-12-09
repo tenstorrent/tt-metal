@@ -1299,6 +1299,7 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
                 .policy = connection.channels().policy(),
                 .parent_instance_id = graph_id,
                 .routing_direction = proto::RoutingDirection::NONE,
+                .assign_z_direction = connection.has_assign_z_direction() && connection.assign_z_direction(),
             };
 
             add_connection_to_fast_lookups(data, instance.type);
@@ -1352,6 +1353,8 @@ void MeshGraphDescriptor::populate_inter_mesh_topology_connections_all_to_all(Gl
                 .policy = graph_desc->graph_topology().channels().policy(),
                 .parent_instance_id = graph_id,
                 .routing_direction = proto::RoutingDirection::NONE,
+                .assign_z_direction = graph_desc->graph_topology().has_assign_z_direction() &&
+                                      graph_desc->graph_topology().assign_z_direction(),
             };
 
             const auto id = data.connection_id;
@@ -1382,6 +1385,8 @@ void MeshGraphDescriptor::populate_inter_mesh_topology_connections_ring(GlobalNo
             .policy = graph_desc->graph_topology().channels().policy(),
             .parent_instance_id = graph_id,
             .routing_direction = proto::RoutingDirection::NONE,
+            .assign_z_direction = graph_desc->graph_topology().has_assign_z_direction() &&
+                                  graph_desc->graph_topology().assign_z_direction(),
         };
 
         const auto id = data.connection_id;
@@ -1394,6 +1399,8 @@ void MeshGraphDescriptor::populate_inter_mesh_topology_connections_ring(GlobalNo
             .policy = graph_desc->graph_topology().channels().policy(),
             .parent_instance_id = graph_id,
             .routing_direction = proto::RoutingDirection::NONE,
+            .assign_z_direction = graph_desc->graph_topology().has_assign_z_direction() &&
+                                  graph_desc->graph_topology().assign_z_direction(),
         };
 
         const auto id_reverse = data_reverse.connection_id;
