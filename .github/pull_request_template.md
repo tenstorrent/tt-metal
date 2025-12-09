@@ -17,6 +17,15 @@ Summarize the changes made and its impact.
 
 #### Model tests
 CI tests related to models pass (choose "models-mandatory", "models-extended" presets, or select applicable tests manually):
-- [ ] [(Single) Choose your pipeline](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select.yaml)
+- [ ] [(Single) Choose your pipeline](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select.yaml) 
+  - [ ] models-mandatory
+  - [ ] models-extended
+  - [ ] other selection - specify
 - [ ] [(T3K) Choose your pipeline](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select-t3k.yaml)
+  - [ ] models-mandatory
+  - [ ] models-extended
+  - [ ] other selection - specify
 - [ ] [(Galaxy) Choose your pipeline](https://github.com/tenstorrent/tt-metal/actions/workflows/pipeline-select-galaxy.yaml)
+  - [ ] models-mandatory
+  - [ ] models-extended
+  - [ ] other selection - specify
