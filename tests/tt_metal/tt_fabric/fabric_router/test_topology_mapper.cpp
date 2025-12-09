@@ -859,14 +859,14 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::ValuesIn(fabric_router_tests::t3k_mesh_descriptor_chip_mappings));
 
 TEST_F(TopologyMapperTest, T3kMeshGraphTestFromPhysicalSystemDescriptor) {
-    // Test that generate_from_physical_system_descriptor uses map_mesh_to_physical
+    // Test that TopologyMapper::generate_mesh_graph_from_physical_system_descriptor uses map_mesh_to_physical
     // to find a valid mesh shape that can be mapped to the physical topology
     FabricConfig fabric_config = FabricConfig::FABRIC_2D;
 
     // Generate mesh graph from physical system descriptor
     // This should internally use map_mesh_to_physical to find a valid mapping
-    MeshGraph mesh_graph =
-        MeshGraph::generate_from_physical_system_descriptor(*physical_system_descriptor_, fabric_config);
+    MeshGraph mesh_graph = TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
+        *physical_system_descriptor_, fabric_config);
 
     // Verify that the mesh graph was generated successfully
     const MeshId mesh_id{0};

@@ -146,9 +146,9 @@ public:
         const std::string& root_dir,
         tt::tt_fabric::FabricType fabric_type = tt::tt_fabric::FabricType::MESH);
 
-    // Generate a mesh graph based on the physical system descriptor
-    static MeshGraph generate_from_physical_system_descriptor(
-        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor, FabricConfig fabric_config);
+    // Generate a mesh graph of a specific shape (used by topology mapper)
+    static MeshGraph generate_mesh_graph_of_shape(
+        MeshShape mesh_shape, tt::tt_fabric::FabricType fabric_type, std::uint32_t num_connections_per_direction);
 
     // Get the number of active channels the user has requested between meshes
     const RequestedIntermeshConnections& get_requested_intermesh_connections() const;
@@ -167,9 +167,6 @@ public:
 private:
     // Private constructor for static factory functions
     MeshGraph() = default;
-
-    static MeshGraph generate_mesh_graph_of_shape(
-        MeshShape mesh_shape, tt::tt_fabric::FabricType fabric_type, std::uint32_t num_connections_per_direction);
 
     void validate_mesh_id(MeshId mesh_id) const;
     std::unordered_map<ChipId, RouterEdge> get_valid_connections(

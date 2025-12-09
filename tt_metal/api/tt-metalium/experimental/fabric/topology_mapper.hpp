@@ -262,6 +262,19 @@ public:
 
     InterMeshConnectivity get_inter_mesh_connectivity(MeshId mesh_id) const;
 
+    /**
+     * @brief Generate a mesh graph from a physical system descriptor
+     *
+     * This static function creates a mesh graph by trying different mesh shapes and finding
+     * one that matches the physical topology described by the physical system descriptor.
+     *
+     * @param physical_system_descriptor The physical system descriptor containing ASIC topology
+     * @param fabric_config The fabric configuration
+     * @return MeshGraph A mesh graph that matches the physical topology
+     */
+    static MeshGraph generate_mesh_graph_from_physical_system_descriptor(
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor, FabricConfig fabric_config);
+
 private:
     /**
      * @brief Build the mapping between fabric node IDs and physical ASIC IDs

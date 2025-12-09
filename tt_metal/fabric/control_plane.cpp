@@ -527,7 +527,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
     // NOTE: This algorithm is only supported for single host systems for now
     TT_FATAL(
         *distributed_context->size() == 1,
-        "Auto discovery is only supported for single host systems, since you are running on a {} host system,"
+        "Auto discovery is only supported for single host systems, since you are running on a {} process,"
         " please specify a rank binding file via the tt-run argument --rank-binding argument",
         *distributed_context->size());
 
@@ -537,8 +537,8 @@ void ControlPlane::init_control_plane_auto_discovery() {
 
     // Generate Mesh graph based on physical system descriptor
     // Reliability mode is obtained from MetalContext inside the function
-    this->mesh_graph_ =
-        std::make_unique<tt::tt_fabric::MeshGraph>(tt::tt_fabric::MeshGraph::generate_from_physical_system_descriptor(
+    this->mesh_graph_ = std::make_unique<tt::tt_fabric::MeshGraph>(
+        tt::tt_fabric::TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
             *this->physical_system_descriptor_, fabric_config));
 
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
