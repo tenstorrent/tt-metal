@@ -37,7 +37,7 @@ struct JointSDPADeviceOperation {
         const ttnn::Tensor& joint_tensor_k,
         const ttnn::Tensor& joint_tensor_v,
         const std::string& joint_strategy,
-        std::optional<SDPAProgramConfig> program_config = std::nullopt,
+        const std::optional<SDPAProgramConfig>& program_config = std::nullopt,
         std::optional<float> scale = std::nullopt,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };

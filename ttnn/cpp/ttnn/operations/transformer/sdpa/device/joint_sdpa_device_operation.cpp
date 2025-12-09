@@ -190,7 +190,7 @@ JointSDPADeviceOperation::invoke(
     const ttnn::Tensor& joint_tensor_k,
     const ttnn::Tensor& joint_tensor_v,
     const std::string& joint_strategy,
-    const std::optional<SDPAProgramConfig> program_config,
+    const std::optional<SDPAProgramConfig>& program_config,
     const std::optional<float> scale,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
@@ -207,7 +207,7 @@ JointSDPADeviceOperation::invoke(
             joint_strategy,
             scale_val,
             tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            std::move(program_config),
+            program_config,
             kernel_config_val},
         tensor_args_t{
             .input_q = input_tensor_q,
