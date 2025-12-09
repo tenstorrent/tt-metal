@@ -25,7 +25,7 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
 
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure_disaggregated(icb, icb)));
+    MATH((llk_math_hw_configure(icb, icb)));
 }
 
 // clang-format off
@@ -41,7 +41,7 @@ ALWI void unary_op_init_common_no_pack(uint32_t icb) {
         false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
 
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
-    MATH((llk_math_hw_configure_disaggregated(icb, icb)));
+    MATH((llk_math_hw_configure(icb, icb)));
 }
 
 ALWI void init_sfpu(uint32_t icb, uint32_t ocb) { unary_op_init_common(icb, ocb); }
