@@ -28,6 +28,7 @@
 #include "tt_fabric_test_progress_monitor.hpp"
 #include "tt_fabric_test_results.hpp"
 #include "tt_fabric_test_eth_readback.hpp"
+#include "tt_fabric_test_code_profiler.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -180,6 +181,10 @@ public:
         device_global_sync_cores_.clear();
         device_local_sync_cores_.clear();
         this->allocator_->reset();
+
+        // Destroy managers that hold references to eth_readback before clearing it
+        code_profiler_.reset();
+        eth_readback_.reset();
 
         reset_local_variables();
     }
@@ -572,8 +577,19 @@ public:
 
     // Code profiling getters/setters
     bool get_code_profiling_enabled() const { return code_profiling_enabled_; }
-    void set_code_profiling_enabled(bool enabled) { code_profiling_enabled_ = enabled; }
-    const std::vector<CodeProfilingEntry>& get_code_profiling_entries() const { return code_profiling_entries_; }
+    void set_code_profiling_enabled(bool enabled) {
+        code_profiling_enabled_ = enabled;
+        if (code_profiler_) {
+            code_profiler_->set_enabled(enabled);
+        }
+    }
+    const std::vector<CodeProfilingEntry>& get_code_profiling_entries() const {
+        static const std::vector<CodeProfilingEntry> empty_entries{};
+        if (code_profiler_) {
+            return code_profiler_->get_entries();
+        }
+        return empty_entries;
+    }
 
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
 
@@ -682,7 +698,6 @@ private:
         device_core_cycles_.clear();
         bandwidth_results_.clear();
         // Note: latency_results_ is NOT cleared here to preserve for golden comparison at end
-        code_profiling_entries_.clear();
         // Note: has_test_failures_ is NOT reset here to preserve failures across tests
         // Note: golden_csv_entries_ is kept loaded for reuse across tests
         // Note: latency_results_ is kept for golden comparison after all tests complete
@@ -1840,7 +1855,6 @@ private:
     std::vector<BandwidthResultSummary> bandwidth_results_summary_;
     std::vector<LatencyResult> latency_results_;
     std::vector<TelemetryEntry> telemetry_entries_;  // Per-test raw data
-    std::vector<CodeProfilingEntry> code_profiling_entries_;  // Per-test code profiling data
     bool code_profiling_enabled_ = false;
 
     // Device frequency cache to avoid repeated calculations
@@ -1874,6 +1888,7 @@ private:
 
     // Ethernet core buffer readback helper
     std::unique_ptr<EthCoreBufferReadback> eth_readback_;
+    std::unique_ptr<CodeProfiler> code_profiler_;
 
     // Getter for lazy initialization of eth_readback_
     EthCoreBufferReadback& get_eth_readback() {
@@ -1881,5 +1896,12 @@ private:
             eth_readback_ = std::make_unique<EthCoreBufferReadback>(test_devices_, *fixture_);
         }
         return *eth_readback_;
+    }
+
+    CodeProfiler& get_code_profiler() {
+        if (!code_profiler_) {
+            code_profiler_ = std::make_unique<CodeProfiler>(get_eth_readback());
+        }
+        return *code_profiler_;
     }
 };
