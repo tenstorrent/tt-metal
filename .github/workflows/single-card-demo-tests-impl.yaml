@@ -230,7 +230,7 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         with:
-          path: generated/profiler/reports/
+          path: /work/generated/profiler/reports
           prefix: "tracy_ops_"
       - name: Save environment data
         id: save-environment-data
