@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
-
-#define ALWI inline __attribute__((always_inline))
+#include "fixed_point_arithmetic.h"
 
 // Fill given four values into the memory starting at the given address.
+// Used to fill the bilinear weights for reduction into L1 memory.
 // WARNING: Use with caution as there's no memory protection. Make sure size is within limits
 ALWI void fill_four_val(uint32_t begin_addr, uint16_t val, uint16_t val1, uint16_t val2, uint16_t val3) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
@@ -15,36 +15,10 @@ ALWI void fill_four_val(uint32_t begin_addr, uint16_t val, uint16_t val1, uint16
     ptr[1] = (val2 | (val3 << 16));
 }
 
-// Fixed-point math constants and helpers for Q16.16 format
-constexpr int32_t FIXED_POINT_SHIFT = 16;
-constexpr int32_t FIXED_ONE = 1 << FIXED_POINT_SHIFT;         // 1.0 in Q16.16
-constexpr int32_t FIXED_HALF = 1 << (FIXED_POINT_SHIFT - 1);  // 0.5 in Q16.16
-
-// Extract integer part from fixed-point
-ALWI constexpr int32_t fixed_to_int(int32_t fixed) { return fixed >> FIXED_POINT_SHIFT; }
-
-// Extract fractional part from fixed-point (0 to FIXED_ONE)
-ALWI constexpr int32_t fixed_frac(int32_t fixed) { return fixed & ((1 << FIXED_POINT_SHIFT) - 1); }
-
-// Multiply two fixed-point numbers
-ALWI constexpr int32_t fixed_mul(int32_t a, int32_t b) { return ((int64_t)a * b) >> FIXED_POINT_SHIFT; }
-
-ALWI uint16_t float_to_bfloat16_non_constexpr(float val) {
-    const uint32_t* p = reinterpret_cast<const uint32_t*>(&val);
-    return uint16_t(*p >> 16);
-}
-
-// Convert fixed-point to bfloat16 for weight values
-ALWI uint16_t fixed_to_bfloat16(int32_t fixed) {
-    float fval = (float)fixed / FIXED_ONE;
-    return float_to_bfloat16_non_constexpr(fval);
-}
-
 void kernel_main() {
-    // Only runtime argument - which row in the image this core starts processing
+    // Only runtime argument - which row in the input image this core starts processing
     uint32_t start_input_row_in_image_id = get_arg_val<uint32_t>(0);
 
-    // Moved to compile-time arguments
     constexpr uint32_t stick_nbytes = get_compile_time_arg_val(0);
     constexpr uint32_t in_image_rows_per_core = get_compile_time_arg_val(1);
     constexpr uint32_t scale_h = get_compile_time_arg_val(2);
@@ -53,7 +27,6 @@ void kernel_main() {
     constexpr uint32_t out_w = get_compile_time_arg_val(5);
     constexpr uint32_t in_h = get_compile_time_arg_val(6);
 
-    // Existing compile-time arguments (shifted indices)
     constexpr uint32_t in_cb_id = get_compile_time_arg_val(7);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(8);
     constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(9);
@@ -66,16 +39,18 @@ void kernel_main() {
     constexpr uint32_t blocks = get_compile_time_arg_val(15);
     constexpr uint32_t input_block_size_bytes = get_compile_time_arg_val(16);
 
-    constexpr bool src1_is_dram = false;
     uint32_t l1_read_addr = get_read_ptr(in_cb_id);
-    constexpr uint32_t total_nsticks_to_process = in_w * scale_w;
-    // Calculate the number of sticks to process per core by dividing the total number of sticks (in width direction)
-    // by 2.
-    constexpr uint32_t nsticks_reader =
-        (total_nsticks_to_process % 2) ? total_nsticks_to_process / 2 + 1 : total_nsticks_to_process / 2;
-    constexpr uint32_t nsticks_writer =
-        (total_nsticks_to_process % 2) ? total_nsticks_to_process / 2 : total_nsticks_to_process / 2;
-    constexpr uint32_t nsticks_to_process_on_core = is_reader ? nsticks_reader : nsticks_writer;
+    constexpr uint32_t number_output_sticks_per_input_row = in_w * scale_w;
+    // Calculate the number of output sticks per row to process per core by dividing the total number of output sticks
+    // per row (in width direction) by 2.
+    constexpr uint32_t number_output_sticks_per_row_reader_core = (number_output_sticks_per_input_row % 2)
+                                                                      ? number_output_sticks_per_input_row / 2 + 1
+                                                                      : number_output_sticks_per_input_row / 2;
+    constexpr uint32_t number_output_sticks_per_row_writer_core = (number_output_sticks_per_input_row % 2)
+                                                                      ? number_output_sticks_per_input_row / 2
+                                                                      : number_output_sticks_per_input_row / 2;
+    constexpr uint32_t number_output_sticks_per_row_on_core =
+        is_reader ? number_output_sticks_per_row_reader_core : number_output_sticks_per_row_writer_core;
     // assuming shard begins with a new row. TODO: generalize?
     // Values are already in fixed-point format from host, just cast them
     constexpr int32_t scale_h_inv = static_cast<int32_t>(scale_h_inv_fixed_u32);
@@ -91,19 +66,19 @@ void kernel_main() {
 
     y_coordinate = y_starting_coordinate_fixed;
 
-    // If the current core is a writer core, adjust the x_starting_coordinate to start from the correct position.
+    // If the current core is a writer core (passed as argument from the factory), adjust the x_starting_coordinate to
+    // start from the correct position.
     constexpr int32_t x_starting_coordinate =
         (!is_reader) ? x_starting_coordinate_fixed + scale_w_inv : x_starting_coordinate_fixed;
     int32_t accumulated_offset = 0;  // offset used to calculate the position of row in batch
                                      // every time we encounter a boundary between images, it is increased by
-                                     // in_h (corresponding to height of a single batch) +
+                                     // in_h (corresponding to the height of a single batch) +
                                      // 2 (corresponding to the 2 skipped padding rows)
 
     noc_async_read_one_packet_set_state(get_noc_addr(l1_read_addr), input_block_size_bytes);
     constexpr uint32_t img2_stick_bytes = in_w * stick_nbytes;
-    // DPRINT << "num outer loops: " << in_image_rows_per_core * scale_h << ENDL();
-    // DPRINT << "scale_h: " << scale_h << ENDL();
     constexpr uint32_t num_outer_loops = in_image_rows_per_core * scale_h;
+
     for (uint32_t image_row = 0; image_row < num_outer_loops; ++image_row) {
         x_coordinate = x_starting_coordinate;
 
@@ -161,8 +136,6 @@ void kernel_main() {
                 dy = 0;
             }
         }
-        // DPRINT << "x increment: " << scale_w_inv * 2 << ENDL();
-        // DPRINT << "nsticks_to_process_on_core: " << nsticks_to_process_on_core << ENDL();
 
         // Check if we can use the optimization for pre-computed weights
         // The optimization only works when dx alternates between at most 2 values
@@ -178,64 +151,64 @@ void kernel_main() {
         // Variables for pre-computed weights (only used when optimization is enabled)
         // These are only used when use_precomputed_weights is true, so we can avoid
         // initializing them otherwise
-        [[maybe_unused]] int32_t dx_a, dx_b;
+        [[maybe_unused]] int32_t dx_even, dx_odd;
         [[maybe_unused]] bool has_special_first;
-        [[maybe_unused]] uint16_t p1_bf16_set_a, p2_bf16_set_a, p3_bf16_set_a, p4_bf16_set_a;
-        [[maybe_unused]] uint16_t p1_bf16_set_b, p2_bf16_set_b, p3_bf16_set_b, p4_bf16_set_b;
+        [[maybe_unused]] uint16_t p1_bf16_even, p2_bf16_even, p3_bf16_even, p4_bf16_even;
+        [[maybe_unused]] uint16_t p1_bf16_odd, p2_bf16_odd, p3_bf16_odd, p4_bf16_odd;
         [[maybe_unused]] uint16_t p1_bf16_zero, p2_bf16_zero, p3_bf16_zero, p4_bf16_zero;
 
         if constexpr (use_precomputed_weights) {
-            // Pre-calculate bilinear interpolation weights for the two alternating dx values
-            // Since dy is constant for this row and dx alternates between two values,
+            // Pre-calculate bilinear interpolation weights for the even/odd alternating dx values
+            // Since dy is constant for this row and dx alternates between even and odd positions,
             // we can pre-compute the weights and avoid expensive floating-point operations
 
-            // Pre-compute dx values for the alternating pattern
-            // When x increments by scale_w_inv*2, we get a repeating pattern
+            // Pre-compute dx values for the even/odd alternating pattern
+            // When x increments by scale_w_inv*2, we get a repeating even/odd pattern
             // Handle special case when starting x is negative (gets clamped to 0)
             has_special_first = (x_coordinate < 0);
 
-            // Calculate the two alternating dx values based on the actual increment
-            // For reader core, after any special first value, dx alternates between two values
+            // Calculate the even/odd alternating dx values based on the actual increment
+            // For reader core, after any special first value, dx alternates between even and odd positions
             if (has_special_first) {
-                // First position is special (dx=0), calculate next two
+                // First position is special (dx=0), calculate next even and odd
                 int32_t x1 = x_coordinate + (scale_w_inv_x2);  // scale_w_inv * 2
-                dx_a = fixed_frac(x1);                         // This will be the first regular dx
+                dx_even = fixed_frac(x1);                      // This will be the even position dx
                 int32_t x2 = x1 + (scale_w_inv_x2);            // x1 + scale_w_inv * 2
-                dx_b = fixed_frac(x2);                         // This will be the second regular dx
+                dx_odd = fixed_frac(x2);                       // This will be the odd position dx
             } else {
-                // No special first, calculate the two alternating values
+                // No special first, calculate the even and odd alternating values
                 int32_t x1 = x_coordinate;
-                dx_a = fixed_frac(x1);
+                dx_even = fixed_frac(x1);
                 int32_t x2 = x1 + (scale_w_inv_x2);  // x1 + scale_w_inv * 2
-                dx_b = fixed_frac(x2);
+                dx_odd = fixed_frac(x2);
             }
 
-            // Pre-compute weights for the two alternating dx values
-            int32_t one_minus_dx_a = FIXED_ONE - dx_a;
-            int32_t one_minus_dx_b = FIXED_ONE - dx_b;
+            // Pre-compute weights for the even/odd alternating dx values
+            int32_t one_minus_dx_even = FIXED_ONE - dx_even;
+            int32_t one_minus_dx_odd = FIXED_ONE - dx_odd;
 
-            // Weight set A
-            int32_t p1_set_a = fixed_mul(one_minus_dx_a, one_minus_dy);
-            int32_t p2_set_a = fixed_mul(dx_a, one_minus_dy);
-            int32_t p3_set_a = fixed_mul(one_minus_dx_a, dy);
-            int32_t p4_set_a = fixed_mul(dx_a, dy);
+            // Even position weights
+            int32_t p1_even = fixed_mul(one_minus_dx_even, one_minus_dy);
+            int32_t p2_even = fixed_mul(dx_even, one_minus_dy);
+            int32_t p3_even = fixed_mul(one_minus_dx_even, dy);
+            int32_t p4_even = fixed_mul(dx_even, dy);
 
-            // Weight set B
-            int32_t p1_set_b = fixed_mul(one_minus_dx_b, one_minus_dy);
-            int32_t p2_set_b = fixed_mul(dx_b, one_minus_dy);
-            int32_t p3_set_b = fixed_mul(one_minus_dx_b, dy);
-            int32_t p4_set_b = fixed_mul(dx_b, dy);
+            // Odd position weights
+            int32_t p1_odd = fixed_mul(one_minus_dx_odd, one_minus_dy);
+            int32_t p2_odd = fixed_mul(dx_odd, one_minus_dy);
+            int32_t p3_odd = fixed_mul(one_minus_dx_odd, dy);
+            int32_t p4_odd = fixed_mul(dx_odd, dy);
 
             // Convert weights to bfloat16 once
-            p1_bf16_set_a = fixed_to_bfloat16(p1_set_a);
-            p2_bf16_set_a = fixed_to_bfloat16(p2_set_a);
-            p3_bf16_set_a = fixed_to_bfloat16(p3_set_a);
-            p4_bf16_set_a = fixed_to_bfloat16(p4_set_a);
+            p1_bf16_even = fixed_to_bfloat16(p1_even);
+            p2_bf16_even = fixed_to_bfloat16(p2_even);
+            p3_bf16_even = fixed_to_bfloat16(p3_even);
+            p4_bf16_even = fixed_to_bfloat16(p4_even);
 
-            p1_bf16_set_b = fixed_to_bfloat16(p1_set_b);
-            p2_bf16_set_b = fixed_to_bfloat16(p2_set_b);
-            p3_bf16_set_b = fixed_to_bfloat16(p3_set_b);
-            p4_bf16_set_b = fixed_to_bfloat16(p4_set_b);
+            p1_bf16_odd = fixed_to_bfloat16(p1_odd);
+            p2_bf16_odd = fixed_to_bfloat16(p2_odd);
+            p3_bf16_odd = fixed_to_bfloat16(p3_odd);
+            p4_bf16_odd = fixed_to_bfloat16(p4_odd);
 
             // Special case weights for dx=0 (only used when x starts negative)
             // Formula: p1=(1-dx)*(1-dy), p2=dx*(1-dy), p3=(1-dx)*dy, p4=dx*dy
@@ -246,7 +219,7 @@ void kernel_main() {
             p4_bf16_zero = 0;
         }
 
-        for (uint32_t j = 0; j < nsticks_to_process_on_core; j++) {
+        for (uint32_t j = 0; j < number_output_sticks_per_row_on_core; j++) {
             // Calculate x position and indices (needed for memory addressing)
             x = x_coordinate < 0 ? 0 : x_coordinate;
 
@@ -262,25 +235,25 @@ void kernel_main() {
                     p3_bf16 = p3_bf16_zero;
                     p4_bf16 = p4_bf16_zero;
                 } else {
-                    // Regular alternating pattern
-                    bool use_set_a;
+                    // Regular even/odd alternating pattern
+                    bool use_even_weights;
                     if (has_special_first) {
-                        use_set_a = ((j - 1) % 2) == 0;
+                        use_even_weights = ((j - 1) % 2) == 0;
                     } else {
-                        // No special first, simple alternation
-                        use_set_a = (j % 2) == 0;
+                        // No special first, simple even/odd alternation
+                        use_even_weights = (j % 2) == 0;
                     }
 
-                    if (use_set_a) {
-                        p1_bf16 = p1_bf16_set_a;
-                        p2_bf16 = p2_bf16_set_a;
-                        p3_bf16 = p3_bf16_set_a;
-                        p4_bf16 = p4_bf16_set_a;
+                    if (use_even_weights) {
+                        p1_bf16 = p1_bf16_even;
+                        p2_bf16 = p2_bf16_even;
+                        p3_bf16 = p3_bf16_even;
+                        p4_bf16 = p4_bf16_even;
                     } else {
-                        p1_bf16 = p1_bf16_set_b;
-                        p2_bf16 = p2_bf16_set_b;
-                        p3_bf16 = p3_bf16_set_b;
-                        p4_bf16 = p4_bf16_set_b;
+                        p1_bf16 = p1_bf16_odd;
+                        p2_bf16 = p2_bf16_odd;
+                        p3_bf16 = p3_bf16_odd;
+                        p4_bf16 = p4_bf16_odd;
                     }
                 }
             } else {
@@ -305,21 +278,21 @@ void kernel_main() {
 
                 uint32_t l1_write_addr = get_write_ptr(out_cb_id);
                 uint32_t l1_read_addr_temp = y1_base + x1_offset + block_offset;
-                // 1st tile
+                // 1st stick
                 noc_async_read_one_packet_with_state<true>(l1_read_addr_temp, l1_write_addr);
                 l1_write_addr += input_block_size_bytes;
 
-                // 2nd tile
+                // 2nd stick
                 l1_read_addr_temp = y1_base + x2_offset + block_offset;
                 noc_async_read_one_packet_with_state<true>(l1_read_addr_temp, l1_write_addr);
                 l1_write_addr += input_block_size_bytes;
 
-                // 3rd tile
+                // 3rd stick
                 l1_read_addr_temp = y2_base + x1_offset + block_offset;
                 noc_async_read_one_packet_with_state<true>(l1_read_addr_temp, l1_write_addr);
                 l1_write_addr += input_block_size_bytes;
 
-                // 4th tile
+                // 4th stick
                 l1_read_addr_temp = y2_base + x2_offset + block_offset;
                 noc_async_read_one_packet_with_state<true>(l1_read_addr_temp, l1_write_addr);
                 l1_write_addr += input_block_size_bytes;
