@@ -9,7 +9,6 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce_custom.h"
-#include "compute_kernel_api/transpose_wh.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -48,7 +47,6 @@ void MAIN {
 
     for (uint32_t i = 0; i < rows; i++) {
         acquire_dst();
-
         reduce_block_max_row_init<cols>();
         reduce_block_max_row<cols>(qk_im_cb, scale_cb, i * cols, reduce_dst_idx);
         reduce_block_max_row_uninit();
