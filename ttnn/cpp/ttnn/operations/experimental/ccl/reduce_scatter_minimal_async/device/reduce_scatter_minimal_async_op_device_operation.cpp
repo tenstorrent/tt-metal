@@ -10,16 +10,6 @@
 
 namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async_detail {
 
-// Forward declarations of validation functions
-void reduce_scatter_common_validates(
-    const ttnn::Tensor& input_tensor,
-    ttnn::ccl::Topology topology,
-    uint32_t dim,
-    uint32_t num_links,
-    uint32_t ring_size,
-    const ttnn::MemoryConfig& memory_config,
-    const std::optional<ttnn::Tensor>& optional_output_tensor);
-
 ReduceScatterMinimalAsyncDeviceOperation::program_factory_t
 ReduceScatterMinimalAsyncDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

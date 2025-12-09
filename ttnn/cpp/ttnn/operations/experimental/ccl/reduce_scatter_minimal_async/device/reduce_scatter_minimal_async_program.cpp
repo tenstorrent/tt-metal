@@ -53,10 +53,10 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
@@ -66,7 +66,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    const CoreCoord core_grid_offset);
+    CoreCoord core_grid_offset);
 
 tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_helper(
     tt::tt_metal::Program& program,
@@ -76,10 +76,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
@@ -89,7 +89,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
-    const CoreCoord core_grid_offset);
+    CoreCoord core_grid_offset);
 
 tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_helper(
     tt::tt_metal::Program& program,
@@ -99,10 +99,10 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
@@ -112,7 +112,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
-    const CoreCoord core_grid_offset);
+    CoreCoord core_grid_offset);
 
 namespace operations::experimental::ccl::detail {
 

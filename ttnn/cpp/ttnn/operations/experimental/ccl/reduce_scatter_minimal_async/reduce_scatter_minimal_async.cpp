@@ -39,7 +39,7 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
 
     if (using_persistent_buffers) {
         const auto& buffers = persistent_output_buffers.value();
-        if (buffers.size() >= 1) {
+        if (!buffers.empty()) {
             optional_intermediate_tensor = buffers[0];
         }
         if (buffers.size() >= 2) {

@@ -22,12 +22,6 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
-// Import functions from the new namespace
-using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async_detail::
-    build_line_reduce_scatter_minimal_async_program_artifacts;
-using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async_detail::
-    build_ring_reduce_scatter_minimal_async_program_artifacts;
-
 namespace ttnn {
 
 // Forward declaration for reduce_scatter_minimal_async_helper (defined in reduce_scatter_minimal_async_program.cpp)
@@ -39,10 +33,10 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     const std::optional<MeshCoordinate>& forward_coord,
     const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
