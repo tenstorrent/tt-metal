@@ -57,9 +57,12 @@ public:
     virtual ~Llama() = default;
     void load_from_safetensors(const std::filesystem::path& model_path) override;
     ttml::autograd::TensorPtr operator()(
-        const ttml::autograd::TensorPtr& x,
-        const ttml::autograd::TensorPtr& mask,
-        const bool use_cache = false) override;
+        const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask, const bool use_cache) override;
+
+    ttml::autograd::TensorPtr operator()(
+        const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) override {
+        return (*this)(x, mask, false);
+    }
 
     // Get the original vocabulary size for token validation
     [[nodiscard]] uint32_t get_original_vocab_size() const {

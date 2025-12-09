@@ -47,7 +47,7 @@ void model_to_train(Model &model) {
 
 ttml::autograd::TensorPtr run_model(
     Model &model, const ttml::autograd::TensorPtr &data, const ttml::autograd::TensorPtr &mask) {
-    return (*model)(data, mask, /** use_cache */ false);
+    return (*model)(data, mask);
 }
 
 ttml::serialization::NamedParameters get_model_parameters(Model &model) {
@@ -295,12 +295,8 @@ int main(int argc, char **argv) {
     CLI::App app{"NanoGPT Example"};
     argv = app.ensure_utf8(argv);
 
-<<<<<<< HEAD
     std::string training_config_name =
         std::filesystem::current_path().string() + "/configs/training_configs/training_shakespeare_nanogpt.yaml";
-=======
-    std::string training_config_name = "./configs/training_configs/training_shakespeare_llama3_gpt2s_size.yaml";
->>>>>>> 135317c114 (removing TT_METAL_HOME from inference and training scripts)
     std::string multihost_config_name = "";
 
     std::string run_name = "";
