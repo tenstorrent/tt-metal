@@ -100,7 +100,9 @@ class ModelArgs:
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
     def get_warmup_prefill_supported_seq_lens(self, max_seq_len):
-        to_warmup_seq_lens = calculate_prefill_warmup_seq_lens(max_seq_len, self.trace_prefill_supported_seq_lens)
+        to_warmup_seq_lens = calculate_prefill_warmup_seq_lens(
+            max_seq_len, self.trace_prefill_supported_seq_lens, self.max_seq_len
+        )
 
         to_warmup_seq_lens = self.filter_warmup_seq_lens(to_warmup_seq_lens)
 

@@ -564,16 +564,16 @@ def get_all_padded_prefill_lengths(max_len: int = 8192):
     return sorted(list(padded_lengths))
 
 
-def calculate_prefill_warmup_seq_lens(max_seq_len, trace_supported_seq_lens):
-    max_seq_len = get_padded_prefill_len(max_seq_len)
-    to_warmup_seq_lens = get_all_padded_prefill_lengths(max_seq_len)
+def calculate_prefill_warmup_seq_lens(max_seq_len_to_warmup, trace_supported_seq_lens, model_args_max_seq_len):
+    max_seq_len_to_warmup = get_padded_prefill_len(max_seq_len_to_warmup)
+    to_warmup_seq_lens = get_all_padded_prefill_lengths(max_seq_len_to_warmup)
     for trace_supported_seq_len in trace_supported_seq_lens:
         if trace_supported_seq_len not in to_warmup_seq_lens:
             to_warmup_seq_lens.append(trace_supported_seq_len)
     to_warmup_seq_lens.sort()
 
     for seq_len in to_warmup_seq_lens:
-        if seq_len > max_seq_len:
+        if seq_len > model_args_max_seq_len:
             to_warmup_seq_lens = to_warmup_seq_lens[: to_warmup_seq_lens.index(seq_len)]
             break
 
