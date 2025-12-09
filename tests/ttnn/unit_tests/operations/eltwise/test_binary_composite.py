@@ -121,7 +121,7 @@ def test_binary_logical_xor_ttnn(input_shapes, device):
     assert torch.equal(output_tensor, golden_tensor)
 
 
-@pytest.mark.parametrize("approx_mode", [True, False])
+@pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
 @pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
@@ -131,15 +131,17 @@ def test_binary_logical_xor_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_binary_div_ttnn(approx_mode, round_mode, input_shapes, device):
-    if approx_mode == True:  # If input_b is non-zero tensor (fast/approximate mode)
+def test_binary_div_ttnn(fast_and_approximate_mode, round_mode, input_shapes, device):
+    if fast_and_approximate_mode == True:  # If input_b is non-zero tensor (fast/approximate mode)
         in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
         in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, -1, device)
     else:
         in_data1, input_tensor1 = data_gen_with_range(input_shapes, -200, 150, device)
         in_data2, input_tensor2 = data_gen_with_range(input_shapes, -120, 200, device)
 
-    output_tensor = ttnn.div(input_tensor1, input_tensor2, approx_mode=approx_mode, round_mode=round_mode)
+    output_tensor = ttnn.div(
+        input_tensor1, input_tensor2, fast_and_approximate_mode=fast_and_approximate_mode, round_mode=round_mode
+    )
     golden_function = ttnn.get_golden_function(ttnn.div)
     golden_tensor = golden_function(in_data1, in_data2, round_mode)
 
@@ -147,7 +149,7 @@ def test_binary_div_ttnn(approx_mode, round_mode, input_shapes, device):
     assert comp_pass
 
 
-@pytest.mark.parametrize("approx_mode", [True, False])
+@pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
 @pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
@@ -157,15 +159,17 @@ def test_binary_div_ttnn(approx_mode, round_mode, input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_binary_div_ttnn_ci(approx_mode, round_mode, input_shapes, device):
-    if approx_mode == True:  # If input_b is non-zero tensor (fast/approximate mode)
+def test_binary_div_ttnn_ci(fast_and_approximate_mode, round_mode, input_shapes, device):
+    if fast_and_approximate_mode == True:  # If input_b is non-zero tensor (fast/approximate mode)
         in_data1, input_tensor1 = data_gen_with_range(input_shapes, -1e6, 1e6, device)
         in_data2, input_tensor2 = data_gen_with_range(input_shapes, -1e6, -1, device)
     else:
         in_data1, input_tensor1 = data_gen_with_range(input_shapes, -2e6, 1e6, device)
         in_data2, input_tensor2 = data_gen_with_range(input_shapes, -1e6, 2e6, device)
 
-    output_tensor = ttnn.div(input_tensor1, input_tensor2, approx_mode=approx_mode, round_mode=round_mode)
+    output_tensor = ttnn.div(
+        input_tensor1, input_tensor2, fast_and_approximate_mode=fast_and_approximate_mode, round_mode=round_mode
+    )
     golden_function = ttnn.get_golden_function(ttnn.div)
     golden_tensor = golden_function(in_data1, in_data2, round_mode)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -174,7 +178,7 @@ def test_binary_div_ttnn_ci(approx_mode, round_mode, input_shapes, device):
     assert comp_pass
 
 
-@pytest.mark.parametrize("approx_mode", [True, False])
+@pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
 @pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
@@ -184,8 +188,8 @@ def test_binary_div_ttnn_ci(approx_mode, round_mode, input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_binary_div_ttnn_opt(approx_mode, round_mode, input_shapes, device):
-    if approx_mode == True:  # If input_b is non-zero tensor (fast/approximate mode)
+def test_binary_div_ttnn_opt(fast_and_approximate_mode, round_mode, input_shapes, device):
+    if fast_and_approximate_mode == True:  # If input_b is non-zero tensor (fast/approximate mode)
         in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
         in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, -1, device)
     else:
@@ -198,7 +202,7 @@ def test_binary_div_ttnn_opt(approx_mode, round_mode, input_shapes, device):
     ttnn.div(
         input_tensor1,
         input_tensor2,
-        approx_mode=approx_mode,
+        fast_and_approximate_mode=fast_and_approximate_mode,
         round_mode=round_mode,
         output_tensor=output_tensor,
         queue_id=cq_id,
@@ -210,7 +214,7 @@ def test_binary_div_ttnn_opt(approx_mode, round_mode, input_shapes, device):
     assert comp_pass
 
 
-@pytest.mark.parametrize("approx_mode", [True, False])
+@pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
 @pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
@@ -221,10 +225,12 @@ def test_binary_div_ttnn_opt(approx_mode, round_mode, input_shapes, device):
     ),
 )
 @pytest.mark.parametrize("value", [-5.1, 0.0, 10.9])
-def test_binary_div_scalar_ttnn(approx_mode, round_mode, input_shapes, value, device):
+def test_binary_div_scalar_ttnn(fast_and_approximate_mode, round_mode, input_shapes, value, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
 
-    output_tensor = ttnn.div(input_tensor1, value, approx_mode=approx_mode, round_mode=round_mode)
+    output_tensor = ttnn.div(
+        input_tensor1, value, fast_and_approximate_mode=fast_and_approximate_mode, round_mode=round_mode
+    )
     golden_function = ttnn.get_golden_function(ttnn.div)
     golden_tensor = golden_function(in_data1, value, round_mode)
 
@@ -232,7 +238,7 @@ def test_binary_div_scalar_ttnn(approx_mode, round_mode, input_shapes, value, de
     assert comp_pass
 
 
-@pytest.mark.parametrize("approx_mode", [True, False])
+@pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
 @pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
     "input_shapes",
@@ -243,12 +249,18 @@ def test_binary_div_scalar_ttnn(approx_mode, round_mode, input_shapes, value, de
     ),
 )
 @pytest.mark.parametrize("value", [-5.1, 0.0, 10.9])
-def test_binary_div_scalar_ttnn_opt(approx_mode, round_mode, input_shapes, value, device):
+def test_binary_div_scalar_ttnn_opt(fast_and_approximate_mode, round_mode, input_shapes, value, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
     cq_id = 0
-    ttnn.div(input_tensor1, value, approx_mode=approx_mode, round_mode=round_mode, output_tensor=output_tensor)
+    ttnn.div(
+        input_tensor1,
+        value,
+        fast_and_approximate_mode=fast_and_approximate_mode,
+        round_mode=round_mode,
+        output_tensor=output_tensor,
+    )
     golden_function = ttnn.get_golden_function(ttnn.div)
     golden_tensor = golden_function(in_data1, value, round_mode)
 

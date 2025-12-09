@@ -40,8 +40,7 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.div(input_tensor_a, input_tensor_b)
 
 
-# Note: ttnn.divide is an alias to ttnn.div, so we don't attach golden function here
-# The golden function is attached to ttnn.div in binary.py
+ttnn.attach_golden_function(ttnn.divide, golden_function=_golden_function)
 
 
 __all__ = []
