@@ -4,6 +4,7 @@
 
 #include "fabric_builder_config.hpp"
 #include "fabric_tensix_builder_impl.hpp"
+#include "tt_metal/fabric/fabric_context.hpp"
 
 #include <cstdint>
 
@@ -45,10 +46,10 @@ std::array<uint32_t, 2> get_receiver_channel_count_per_vc(const Topology topolog
 uint32_t get_num_used_sender_channel_count(const Topology topology) {
     switch (topology) {
         case Topology::NeighborExchange: return builder_config::num_sender_channels_1d_neighbor_exchange;
-        case Topology::Linear: return builder_config::num_sender_channels_1d_linear;
-        case Topology::Mesh: return builder_config::num_sender_channels_2d_mesh;
-        case Topology::Ring: return builder_config::num_sender_channels_1d_ring;
-        case Topology::Torus: return builder_config::num_sender_channels_2d_torus;
+        case Topology::Linear:
+        case Topology::Ring: return builder_config::num_sender_channels_1d_linear;
+        case Topology::Mesh:
+        case Topology::Torus: return builder_config::num_sender_channels_2d_mesh;
         default: TT_THROW("unknown fabric topology: {}", topology); break;
     }
 }

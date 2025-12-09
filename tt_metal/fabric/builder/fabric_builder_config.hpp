@@ -72,9 +72,9 @@ uint32_t get_sender_channel_count(bool is_2D_routing);
 uint32_t get_receiver_channel_count(bool is_2D_routing);
 
 // Per-VC channel counts (index 0 = VC0, index 1 = VC1)
-std::array<uint32_t, 2> get_sender_channel_count_per_vc(bool is_2D_routing);
+std::array<uint32_t, 2> get_sender_channel_count_per_vc(Topology topology);
 
-std::array<uint32_t, 2> get_receiver_channel_count_per_vc(bool is_2D_routing);
+std::array<uint32_t, 2> get_receiver_channel_count_per_vc(Topology topology);
 
 uint32_t get_num_used_sender_channel_count(const Topology topology);
 
