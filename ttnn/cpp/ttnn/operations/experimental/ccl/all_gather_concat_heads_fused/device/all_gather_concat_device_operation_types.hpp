@@ -4,14 +4,12 @@
 
 #pragma once
 
-#include <optional>
-#include <vector>
-
-#include <tt_stl/reflection.hpp>
-
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include <tt_stl/reflection.hpp>
+#include <optional>
+#include <vector>
 
 namespace ttnn::operations::experimental::ccl::all_gather_concat_heads_fused {
 
@@ -48,7 +46,7 @@ struct operation_attributes_t {
         num_heads(num_heads),
         use_noc1_only(use_noc1_only),
         cluster_axis(cluster_axis) {}
-
+    // Add attributes method for reflection
     auto attributes() const {
         using tt::stl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
