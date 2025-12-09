@@ -14,8 +14,7 @@
 
 #include <tracy/Tracy.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 tt::tt_metal::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape) {
     int64_t old_volume = tensor.logical_volume();
@@ -108,6 +107,4 @@ ShardDivisionSpec compute_shard_division_spec(const Shape2D& shape, const Shape2
     return ShardDivisionSpec{num_shards_height, last_shard_height, num_shards_width, last_shard_width};
 };
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal
