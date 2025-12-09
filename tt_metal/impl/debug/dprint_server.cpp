@@ -103,14 +103,29 @@ std::filesystem::path get_dprint_log_dir() {
         return get_null_device_path();
     }
 
-    // Verify the directory is writable by checking permissions
-    auto perms = std::filesystem::status(log_dir, ec).permissions();
-    if (ec || (perms & std::filesystem::perms::owner_write) == std::filesystem::perms::none) {
+    // Verify the directory is writable by attempting to create and remove a temporary file
+    // Use a unique name combining timestamp and thread ID to avoid conflicts in multi-process scenarios
+    auto thread_id = std::hash<std::thread::id>{}(std::this_thread::get_id());
+    auto epoch_count = std::chrono::steady_clock::now().time_since_epoch().count();
+    std::filesystem::path test_file = log_dir / (".write_test_" + std::to_string(epoch_count) + "_" + std::to_string(thread_id));
+    {
+        std::ofstream test_stream(test_file);
+        if (!test_stream) {
+            log_warning(
+                tt::LogMetal,
+                "DPRINT log directory '{}' is not writable. DPRINT output will be discarded.",
+                log_dir.string());
+            return get_null_device_path();
+        }
+        test_stream.close();
+    }
+    std::filesystem::remove(test_file, ec);
+    if (ec) {
         log_warning(
             tt::LogMetal,
-            "DPRINT log directory '{}' is not writable. DPRINT output will be discarded.",
-            log_dir.string());
-        return get_null_device_path();
+            "Failed to remove test file '{}': {}. Continuing anyway.",
+            test_file.string(),
+            ec.message());
     }
 
     return log_dir;
