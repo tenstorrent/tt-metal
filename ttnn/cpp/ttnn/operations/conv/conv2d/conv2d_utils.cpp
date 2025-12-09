@@ -282,52 +282,58 @@ std::tuple<uint32_t, uint32_t> calculate_ct2d_output_image_size(
     return {output_height, output_width};
 }
 
-uint32_t get_num_cores_nhw_from_parallel_config(const ParallelConfig& pconfig) {
-    TT_ASSERT(!pconfig.grid.ranges().empty());
+uint32_t get_num_cores_nhw(
+    const CoreRangeSet& cores, TensorMemoryLayout shard_layout, ShardOrientation shard_orientation) {
+    TT_ASSERT(!cores.ranges().empty());
     TT_ASSERT(
-        pconfig.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED ||
-        pconfig.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED ||
-        pconfig.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED);
-    auto grid_size = pconfig.grid.bounding_box().grid_size();
-    uint32_t num_cores = pconfig.grid.num_cores();
+        shard_layout == TensorMemoryLayout::HEIGHT_SHARDED || shard_layout == TensorMemoryLayout::BLOCK_SHARDED ||
+        shard_layout == TensorMemoryLayout::WIDTH_SHARDED);
+    auto grid_size = cores.bounding_box().grid_size();
+    uint32_t num_cores = cores.num_cores();
     uint32_t num_cores_nhw = 0;
-    if (pconfig.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
+    if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         return 1;
     }
 
-    if (pconfig.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
+    if (shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         num_cores_nhw = num_cores;
-    } else if (pconfig.shard_orientation == ShardOrientation::COL_MAJOR) {
+    } else if (shard_orientation == ShardOrientation::COL_MAJOR) {
         num_cores_nhw = grid_size.x;
     } else {
-        TT_ASSERT(pconfig.shard_orientation == ShardOrientation::ROW_MAJOR);
+        TT_ASSERT(shard_orientation == ShardOrientation::ROW_MAJOR);
         num_cores_nhw = grid_size.y;
     }
-
     TT_ASSERT(num_cores_nhw > 0);
     return num_cores_nhw;
 }
+uint32_t get_num_cores_nhw_from_parallel_config(const ParallelConfig& pconfig) {
+    return get_num_cores_nhw(pconfig.grid, pconfig.shard_scheme, pconfig.shard_orientation);
+}
 
-uint32_t get_num_cores_channels_from_parallel_config(const ParallelConfig& pconfig) {
-    TT_ASSERT(!pconfig.grid.ranges().empty());
+uint32_t get_num_cores_channels(
+    const CoreRangeSet& cores, TensorMemoryLayout shard_layout, ShardOrientation shard_orientation) {
+    TT_ASSERT(!cores.ranges().empty());
     TT_ASSERT(
-        pconfig.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED ||
-        pconfig.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED ||
-        pconfig.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED);
-    auto grid_size = pconfig.grid.bounding_box().grid_size();
+        shard_layout == TensorMemoryLayout::HEIGHT_SHARDED || shard_layout == TensorMemoryLayout::BLOCK_SHARDED ||
+        shard_layout == TensorMemoryLayout::WIDTH_SHARDED);
+    auto grid_size = cores.bounding_box().grid_size();
     uint32_t num_cores_channels = 0;
-    if (pconfig.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
+    if (shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         num_cores_channels = 1;
-    } else if (pconfig.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
-        num_cores_channels = pconfig.grid.num_cores();
-    } else if (pconfig.shard_orientation == ShardOrientation::COL_MAJOR) {
+    } else if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        num_cores_channels = cores.num_cores();
+    } else if (shard_orientation == ShardOrientation::COL_MAJOR) {
         num_cores_channels = grid_size.y;
     } else {
-        TT_ASSERT(pconfig.shard_orientation == ShardOrientation::ROW_MAJOR);
+        TT_ASSERT(shard_orientation == ShardOrientation::ROW_MAJOR);
         num_cores_channels = grid_size.x;
     }
     TT_ASSERT(num_cores_channels > 0);
     return num_cores_channels;
+}
+
+uint32_t get_num_cores_channels_from_parallel_config(const ParallelConfig& pconfig) {
+    return get_num_cores_channels(pconfig.grid, pconfig.shard_scheme, pconfig.shard_orientation);
 }
 
 MemoryConfig create_sharded_memory_config_from_parallel_config(

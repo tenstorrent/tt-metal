@@ -15,6 +15,7 @@
 #include "ttnn/operations/conv/conv_transpose2d/prepare_conv_transpose2d_weights.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
@@ -423,13 +424,7 @@ Result conv_transpose2d_DRAM(
         dims.input_pad_left,
         dims.input_pad_right);
 
-    const bool mm_conv = use_matmul_for_1x1_conv(
-        kernel_size,
-        {1, 1},
-        {dims.input_pad_top + dims.input_pad_bottom, dims.input_pad_left + dims.input_pad_right},
-        dilation,
-        groups,
-        conv_config);
+    const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     Tensor input_tensor_on_device = input_tensor;
     if (!is_device_tensor(input_tensor_on_device)) {
         input_tensor_on_device =
@@ -473,48 +468,9 @@ Result conv_transpose2d_DRAM(
     if (!conv_config.weights_dtype.has_value()) {
         conv_config.weights_dtype = weight_tensor.dtype();
     }
-    TT_FATAL(dram_slice_config_.has_value(), "DRAM Auto Slicing not supported for conv_transpose2d.");
-    Conv2dSliceConfig dram_slice_config = dram_slice_config_.value();
 
-    log_debug(tt::LogOp, "Conv2D DRAM with Slice Config {}", dram_slice_config);
-    TT_FATAL(dram_slice_config.num_slices > 0, " Number of slices should be greater than 0 for Conv2D DRAM Slicing");
+    log_debug(tt::LogOp, "Conv2D DRAM with Slice Config {}", dram_slice_config_);
 
-    const uint32_t output_sliced_dim = dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT
-                                           ? dims.output_height
-                                           : dims.output_width;
-
-    if (output_sliced_dim == 1) {
-        dram_slice_config.num_slices = 1;
-    } else {
-        TT_ASSERT(
-            dram_slice_config.num_slices < output_sliced_dim,
-            " Number of slices {} should be less than the dimension {} being sliced in Conv2D DRAM Slicing",
-            dram_slice_config.num_slices,
-            output_sliced_dim);
-    }
-    if (dram_slice_config.num_slices == 1) {
-        return conv_transpose2d_L1(
-            input_tensor,
-            weight_tensor,
-            device,
-            in_channels,
-            out_channels,
-            batch_size,
-            input_height,
-            input_width,
-            kernel_size,
-            stride,
-            padding,
-            output_padding,
-            dilation,
-            groups,
-            dtype,
-            bias_tensor,
-            conv_config_,
-            compute_config_,
-            DRAM_MEMORY_CONFIG,
-            mirror_kernel);
-    }
     const auto unflattened_input_shape = ttnn::Shape{batch_size, input_height, input_width, in_channels};
     input_tensor_on_device = ttnn::reshape(input_tensor_on_device, unflattened_input_shape, unflattened_input_shape);
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
@@ -558,7 +514,7 @@ Result conv_transpose2d_DRAM(
         mirror_kernel);
 
     ttnn::operations::op_slicing::run_sliced_op(
-        input_tensor_on_device, dram_output_tensor, &slice_attr, dram_slice_config);
+        input_tensor_on_device, dram_output_tensor, &slice_attr, dram_slice_config_);
 
     if (conv_config.deallocate_activation) {
         input_tensor_on_device.deallocate(true);
@@ -587,11 +543,8 @@ ConvT2dExecutionPath determine_conv_transpose2d_execution_path(
     }
 
     // If no slice config and input is already on device in L1, use L1 path
-    if (!slice_config.has_value()
-        // Auto slicing is not currently supported for conv_transpose2d.
-        // So keep existing default behaviour.
-        //&& tt::tt_metal::is_device_tensor(input_tensor) && input_tensor.memory_config().is_l1()
-    ) {
+    if (!slice_config.has_value() && tt::tt_metal::is_device_tensor(input_tensor) &&
+        input_tensor.memory_config().is_l1()) {
         return ConvT2dExecutionPath::L1;
     }
 
@@ -646,7 +599,109 @@ std::tuple<ConvT2DSliceAttr::IOShape, ConvT2DSliceAttr::IOShape> ConvT2DSliceAtt
 
 uint32_t ConvT2DSliceAttr::get_L1_usage(
     IOShape output_slice_start, IOShape output_slice_end, op_slicing::Op2DSliceConfig slice_config) {
-    return 0;
+    auto sliced_input_tensor_memory_config = get_input_memory_config(output_slice_start, output_slice_end);
+    if (!conv_config.shard_layout.has_value()) {
+        conv_config.shard_layout = sliced_input_tensor_memory_config.memory_layout();
+    }
+    auto [input_slice, this_slice_padding, this_output_padding] =
+        get_input_slice_and_padding(output_slice_start, output_slice_end);
+    auto [input_slice_start, input_slice_end] = input_slice;
+    auto [input_slice_height_start, input_slice_width_start] = input_slice_start;
+    auto [input_slice_height_end, input_slice_width_end] = input_slice_end;
+    uint32_t input_slice_height = input_slice_height_end - input_slice_height_start;
+    uint32_t input_slice_width = input_slice_width_end - input_slice_width_start;
+
+    auto [output_slice_height_start, output_slice_width_start] = output_slice_start;
+    auto [output_slice_height_end, output_slice_width_end] = output_slice_end;
+    uint32_t output_slice_height = output_slice_height_end - output_slice_height_start;
+    uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
+
+    auto shard_shape = sliced_input_tensor_memory_config.shard_spec().value().shape;
+    // Output of halo op is always ROW_MAJOR, so input for convs is either DataType::FLOAT32 or DataType::BFLOAT16
+    const tt::tt_metal::DataType conv_input_dtype = (input_dtype == tt::tt_metal::DataType::FLOAT32)
+                                                        ? tt::tt_metal::DataType::FLOAT32
+                                                        : tt::tt_metal::DataType::BFLOAT16;
+    const uint32_t input_datum_size = conv_input_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
+    uint32_t input_size = shard_shape[0] * shard_shape[1] * input_datum_size;
+
+    sliding_window::ParallelConfig parallel_config = {
+        .grid = sliced_input_tensor_memory_config.shard_spec().value().grid,
+        .shard_scheme = sliced_input_tensor_memory_config.memory_layout(),
+        .shard_orientation = sliced_input_tensor_memory_config.shard_spec().value().orientation};
+    // Create SlidingWindowConfig for precise halo calculation
+    sliding_window::SlidingWindowConfig slice_halo_config;
+    slice_halo_config.batch_size = batch_size;
+    slice_halo_config.input_hw = {input_slice_height, input_slice_width};
+    slice_halo_config.window_hw = {kernel_size[0], kernel_size[1]};
+    slice_halo_config.stride_hw = {stride[0], stride[1]};
+    slice_halo_config.padding = this_slice_padding;
+    slice_halo_config.output_pad_hw = {this_output_padding.at(0), this_output_padding.at(1)};
+    slice_halo_config.dilation_hw = {dilation[0], dilation[1]};
+    slice_halo_config.num_cores_nhw = get_num_cores_channels_from_parallel_config(parallel_config);
+    slice_halo_config.core_range_set = sliced_input_tensor_memory_config.shard_spec().value().grid;
+    slice_halo_config.snap_to_tile = true;
+    const uint32_t input_channels_alignment = get_input_channels_alignment(
+        conv_config.shard_layout.value(),
+        conv_config.output_layout,
+        slice_config.num_slices > 1,
+        false,  // Matmul based convs should never take the slicing route.
+        std::nullopt);
+    uint32_t precise_max_halo_bytes =
+        sliding_window::calculate_precise_halo_output_elems(slice_halo_config, shard_shape) * input_datum_size;
+    auto compute_grid = device->compute_with_storage_grid_size();
+
+    ShardOrientation shard_orientation =
+        conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
+
+    sliding_window::ParallelConfig output_parallel_config =
+        determine_output_parallel_config(parallel_config, compute_grid, output_channels, shard_orientation, false);
+
+    uint32_t padded_in_channels = tt::round_up(
+        input_channels, tt::constants::TILE_WIDTH * get_num_cores_channels_from_parallel_config(parallel_config));
+    uint32_t padded_out_channels = tt::round_up(
+        output_channels,
+        tt::constants::TILE_WIDTH * get_num_cores_channels_from_parallel_config(output_parallel_config));
+    ttnn::Shape folded_weights_shape({1, 1, padded_in_channels * kernel_size[0] * kernel_size[1], padded_out_channels});
+
+    auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
+        conv_config,
+        compute_config,
+        parallel_config,
+        output_parallel_config,
+        padded_in_channels,
+        output_channels,
+        batch_size,
+        output_slice_height,
+        output_slice_width,
+        kernel_size,
+        compute_grid);
+    const uint32_t in_channels_padded = tt::round_up(
+        input_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
+    conv_op_l1_usage l1_usage = calculate_L1_usage(
+        compute_config,
+        opt_conv_op_block_config,
+        opt_conv_op_parallel_config,
+        folded_weights_shape,
+        slice_halo_config,
+        dilation,
+        conv_config,
+        input_dtype,
+        output_dtype,
+        output_slice_width,
+        bias_tensor.has_value(),
+        false,
+        in_channels_padded);
+    log_info(
+        tt::LogOp,
+        "Conv DRAM Auto slicing: num_slices = {}, input_shard_shape = {}, precise_max_halo_bytes = {}, conv size = "
+        "{}",
+        slice_config.num_slices,
+        sliced_input_tensor_memory_config.shard_spec().value(),
+        precise_max_halo_bytes,
+        l1_usage);
+    return std::max(
+        precise_max_halo_bytes + l1_usage.tensor_allocation_size + l1_usage.CB_allocation_size,
+        input_size + precise_max_halo_bytes);
 };
 
 tt::tt_metal::MemoryConfig ConvT2DSliceAttr::get_input_memory_config(
@@ -799,11 +854,16 @@ ConvT2DSliceAttr::InputWithPadding ConvT2DSliceAttr::get_input_slice_and_padding
         this_output_pad[1] = output_padding[1];
     }
 
+    uint32_t input_slice_height = input_slice_height_end - input_slice_height_start;
+    uint32_t input_slice_width = input_slice_width_end - input_slice_width_start;
     uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
+
+    bool single_slice =
+        (input_slice_height == std::get<0>(input_shape)) && (input_slice_width == std::get<1>(input_shape));
     uint32_t width_rounding_value =
         (conv_config.output_layout == tt::tt_metal::Layout::TILE) ? tt::constants::TILE_HEIGHT : 1;
 
-    if (output_slice_width % width_rounding_value != 0) {
+    if (output_slice_width % width_rounding_value != 0 && !single_slice) {
         uint32_t additional_padded_width = width_rounding_value - (output_slice_width % width_rounding_value);
         log_debug(
             tt::LogOp,

@@ -759,7 +759,6 @@ uint32_t Conv2dSliceAttr::get_L1_usage(
     IOShape output_slice_start, IOShape output_slice_end, op_slicing::Op2DSliceConfig slice_config) {
     // Remove this->conv_config from scope so that for each slice, conv_config can be calculated independently.
     auto conv_config = this->conv_config;
-    auto weights_datatype = conv_config.weights_dtype.value_or(weight_tensor.dtype());
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     TT_FATAL(!mm_conv, "Conv2D DRAM with matmul should never use the slicing code path.");
 
@@ -780,48 +779,13 @@ uint32_t Conv2dSliceAttr::get_L1_usage(
         input_slice_width,
         output_slice_height,
         output_slice_width);
+
+    auto sliced_input_tensor_memory_config = get_input_memory_config(output_slice_start, output_slice_end);
     if (!conv_config.shard_layout.has_value()) {
-        if (!conv_config.weights_dtype.has_value()) {
-            conv_config.weights_dtype = weights_datatype;
-        }
-        conv_config = determine_conv_config_for_auto_shard(
-            conv_config,
-            mm_conv,
-            batch_size,
-            input_channels,
-            output_channels,
-            output_slice_height,
-            output_slice_width,
-            output_channels,
-            input_slice_height,
-            input_slice_width,
-            compute_grid,
-            conv_config.output_layout,
-            input_dtype,
-            output_dtype,
-            DRAM_MEMORY_CONFIG,
-            kernel_size,
-            stride,
-            dilation,
-            padding_n4,
-            groups,
-            bias_tensor.has_value(),
-            compute_config);
+        conv_config.shard_layout = sliced_input_tensor_memory_config.memory_layout();
     }
     ShardOrientation shard_orientation =
         conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
-    auto sliced_input_tensor_memory_config = std::get<1>(determine_input_memory_config(
-        conv_config.shard_layout.value(),
-        shard_orientation,
-        batch_size,
-        ttnn::Shape({batch_size, input_slice_height, input_slice_width, input_channels}),
-        ttnn::Shape({batch_size, output_slice_height, output_slice_width, output_channels}),
-        mm_conv,
-        compute_grid,
-        input_layout,
-        slice_config.num_slices == 1 ? BufferType::L1 : BufferType::DRAM,
-        std::nullopt,
-        conv_config.act_block_h_override));
 
     sliding_window::ParallelConfig parallel_config = {
         .grid = sliced_input_tensor_memory_config.shard_spec().value().grid,
@@ -977,21 +941,6 @@ ttnn::Tensor Conv2dSliceAttr::run_L1_op(
     // Calculate dimensions directly from result
     uint32_t input_slice_height = input_slice_height_end - input_slice_height_start;
     uint32_t input_slice_width = input_slice_width_end - input_slice_width_start;
-
-    auto [output_slice_height_start, output_slice_width_start] = output_slice_start;
-    auto [output_slice_height_end, output_slice_width_end] = output_slice_end;
-    uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
-
-    log_debug(
-        tt::LogOp,
-        "Conv input {}, padding {}, dilation {}, kernel {}, stride {}, output slice {}x{}",
-        sliced_input_tensor.logical_shape(),
-        this_op_padding,
-        dilation,
-        kernel_size,
-        stride,
-        output_slice_height_end - output_slice_height_start,
-        output_slice_width);
 
     auto conv_config_l1 = conv_config;
 
