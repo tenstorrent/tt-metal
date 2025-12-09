@@ -53,7 +53,7 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenCloseComputeMeshDevice) {
         GTEST_SKIP() << "This test is for compute mesh only (mesh_id 0)";
     }
 
-    auto mesh_id_val = *control_plane.get_local_mesh_id_bindings()[0];
+    auto mesh_id_val = 0;
 
     // Verify this is a compute mesh, not a switch
     tt::tt_fabric::MeshId mesh_id(mesh_id_val);
@@ -162,7 +162,7 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenUnitMeshesOnComputeMeshFabricNodes) {
         GTEST_SKIP() << "This test is for compute mesh only (mesh_id 0)";
     }
 
-    auto mesh_id_val = *control_plane.get_local_mesh_id_bindings()[0];
+    auto mesh_id_val = 0;
 
     // Verify this is a compute mesh, not a switch
     tt::tt_fabric::MeshId mesh_id(mesh_id_val);
@@ -206,6 +206,7 @@ TEST_F(MeshDeviceTTSwitchFixture, TestOpenUnitMeshesOnComputeMeshFabricNodes) {
             EXPECT_EQ(unit_mesh->shape(), tt::tt_metal::distributed::MeshShape(1, 1)) << "Unit mesh should be 1x1";
 
             // Verify fabric node ID is correctly mapped
+            auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
             auto expected_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device_id);
             auto actual_fabric_node_id = unit_mesh->get_fabric_node_id(tt::tt_metal::distributed::MeshCoordinate(0, 0));
             EXPECT_EQ(actual_fabric_node_id.mesh_id, expected_fabric_node_id.mesh_id)
