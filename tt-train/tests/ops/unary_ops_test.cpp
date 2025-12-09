@@ -10,7 +10,6 @@
 #include <algorithm>
 #include <core/ttnn_all_includes.hpp>
 #include <cstdint>
-#include <cstring>
 #include <limits>
 #include <random>
 #include <ranges>
