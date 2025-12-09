@@ -232,6 +232,13 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
          num_tile_rows_per_core_group_1,
          num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
 
+    log_debug(
+        tt::LogOp,
+        "num_cores: {}, num_tile_rows_per_core_group_1: {}, num_tile_rows_per_core_group_2: {}",
+        num_cores,
+        num_tile_rows_per_core_group_1,
+        num_tile_rows_per_core_group_2);
+
     auto cores = corerange_to_cores(all_cores, std::nullopt);
 
     ////////////////////////////////////////////////////////////////////////////
