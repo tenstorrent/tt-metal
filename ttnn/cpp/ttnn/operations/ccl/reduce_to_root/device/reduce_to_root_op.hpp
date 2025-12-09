@@ -94,7 +94,6 @@ struct ReduceToRootOp {
 
     static void validate_on_program_cache_hit(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-        ;
         validate(operation_attributes, tensor_args);
     };
 

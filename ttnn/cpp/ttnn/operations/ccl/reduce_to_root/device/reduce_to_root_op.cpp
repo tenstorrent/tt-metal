@@ -11,7 +11,6 @@
 #include "ttnn/global_semaphore.hpp"
 
 #include "reduce_to_root_op.hpp"
-#include "ttnn/operations/ccl/ccl_common.hpp"
 
 using namespace tt::tt_metal;
 namespace ttnn::operations::ccl {
@@ -21,7 +20,7 @@ using cached_workload_t = device_operation::CachedProgram<ReduceToRootOp::Reduce
 void ReduceToRootOp::validate(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_l = tensor_args.input_tensor_l;
 
-    auto mesh_device = input_l.device();
+    auto* mesh_device = input_l.device();
 
     const auto& optional_output_tensor_l = tensor_args.optional_output_tensor_l;
     const auto& optional_output_tensor_s = tensor_args.optional_output_tensor_s;
@@ -95,7 +94,7 @@ ReduceToRootOp::spec_return_value_t ReduceToRootOp::compute_output_specs(
     // intermediate shape is the shape of the 3 tenssors combined so that we can send them all in a single packet
     uint32_t shape_0 = final_output_spec[0].memory_config().shard_spec()->shape[0];
     uint32_t shape_1 = final_output_spec[0].memory_config().shard_spec()->shape[1] +
-                       2 * final_output_spec[1].memory_config().shard_spec()->shape[1];
+                       (2 * final_output_spec[1].memory_config().shard_spec()->shape[1]);
     Shape intermediate_shape = Shape{shape_0, shape_1};
     TensorSpec intermediate_spec(intermediate_shape, final_output_spec[0].tensor_layout());
     intermediate_specs.push_back(intermediate_spec);
@@ -107,7 +106,7 @@ ReduceToRootOp::tensor_return_value_t ReduceToRootOp::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto output_specs = compute_output_specs(operation_attributes, tensor_args);
 
-    auto mesh_device = tensor_args.input_tensor_l.device();
+    auto* mesh_device = tensor_args.input_tensor_l.device();
 
     std::vector<ttnn::Tensor> intermediate_output_tensors;
     std::vector<ttnn::Tensor> final_output_tensors;
@@ -146,10 +145,11 @@ ReduceToRootOp::ReduceToRoot::cached_mesh_workload_t ReduceToRootOp::ReduceToRoo
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    auto mesh_device = tensor_args.input_tensor_l.device();
+    auto* mesh_device = tensor_args.input_tensor_l.device();
     auto sd_id = mesh_device->get_sub_device_ids().at(0);
     auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
+    semaphores.reserve(2);
     // 2 semaphores: one for each round
     for (size_t i = 0; i < 2; ++i) {
         semaphores.push_back(ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0));
@@ -201,8 +201,6 @@ cached_workload_t ReduceToRootOp::ReduceToRoot::create_at(
         backward_coord,
         tensor_return_value,
         semaphores);
-
-    return {Program{}, shared_variables_t{.semaphores = semaphores}};
 }
 
 }  // namespace ttnn::operations::ccl

@@ -136,7 +136,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     std::optional<ttnn::MeshCoordinate>& backward_coord,
     ReduceToRootOp::tensor_return_value_t& output_tensors,
     std::vector<tt::tt_metal::GlobalSemaphore>& semaphores) {
-    auto mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor_l.device());
+    auto* mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor_l.device());
     const auto& input_tensor_l = tensor_args.input_tensor_l;
     const auto& input_tensor_s = tensor_args.input_tensor_s;
     const auto& input_tensor_m = tensor_args.input_tensor_m;
@@ -152,7 +152,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     // senders are leaf devices (only have one neighbor)
 
     // check which device is this one based on coordinates
-    auto device = input_tensor_l.device();
+    auto* device = input_tensor_l.device();
     auto mesh_shape = mesh_device->shape();
     bool is_root_device = false;
     bool is_root2_device = false;
@@ -688,8 +688,8 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                     device_coordinate,
                     forward_coord,
                     backward_coord);
-                auto send_coord = transfer_coords[0];
-                auto receive_coord = transfer_coords[1];
+                const auto& send_coord = transfer_coords[0];
+                const auto& receive_coord = transfer_coords[1];
                 const auto src_node_id = mesh_device->get_fabric_node_id(send_coord);
                 const auto dst_node_id = mesh_device->get_fabric_node_id(receive_coord);
                 mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(

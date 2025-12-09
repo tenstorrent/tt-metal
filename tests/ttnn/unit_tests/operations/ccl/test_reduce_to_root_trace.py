@@ -7,7 +7,7 @@ import torch
 import ttnn
 from loguru import logger
 from tracy import signpost
-from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
 def compute_reference_reduce_to_root(
@@ -152,9 +152,6 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
     mesh_config_int_l = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec_int_l
     )
-    mem_config_sm = ttnn.MemoryConfig(
-        ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec_sm
-    )
 
     mesh_mapper_config = ttnn.MeshMapperConfig(
         [ttnn.PlacementShard(0), ttnn.PlacementReplicate()], submesh_device.shape
@@ -235,7 +232,7 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
     profiler = BenchmarkProfiler()
     # Run once to compile
     print("Running reduce_to_root (compiling)...")
-    out_l_compile, out_s_compile, out_m_compile = ttnn.reduce_to_root(
+    ttnn.reduce_to_root(
         l_tensor,
         s_tensor,
         m_tensor,
@@ -299,7 +296,6 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
 
     profiler.end("reduce-to-root-trace")
     signpost("stop")
-    time_taken = profiler.get_duration("reduce-to-root-trace") - profiler.get_duration("reduce-to-root-warmup")
 
     # Verify the output from the last trace execution
     print("\nVerifying trace output...")

@@ -15,12 +15,14 @@ namespace ttnn::operations::ccl {
 namespace py = pybind11;
 
 void py_bind_reduce_to_root(py::module& module) {
-    auto doc =
+    const auto* doc =
         R"doc(
             Reduce-to-root operation. Performs sdpa tree reduction across 4 devices and stores the output on the root device only.
 
             Args:
-                input_tensor (std::vector<ttnn.Tensor>): the input tensor is a vector of (l, s, m).
+                input_tensor_l: the input tensor is a vector of values l of SDPA.
+                input_tensor_s: the input tensor is a vector of state s of SDPA.
+                input_tensor_m: the input tensor is a vector of state m of SDPA.
                 root_coord (ttnn.MeshCoordinate): Coordinate of the root device. Should be (1,0) or (2,0)
 
             Keyword Args:
@@ -29,19 +31,30 @@ void py_bind_reduce_to_root(py::module& module) {
                 intermediate_tensor (ttnn.Tensor,optional): Optional intermediate tensor.
 
            Returns:
-               ttnn.Tensor: the output tensor, with transferred shard on receiving device.
+               ttnn.Tensor output_tensor_l: the output tensor for values.
+                ttnn.Tensor output_tensor_s: the output tensor for sum.
+                ttnn.Tensor output_tensor_m: the output tensor for max.
 
             Example:
 
-                >>> input_tensor_torch = torch.zeros((2,1,1,16), dtype=dtype)
-                >>> input_tensor_torch[0, :, :, :] = data # arbitary data in one shard
+                >>> input_tensor_torch_l = torch.zeros((8,128), dtype=dtype)
+                >>> input_tensor_torch_s = torch.zeros((8,32), dtype=dtype)
+                >>> input_tensor_torch_m = torch.zeros((8,32), dtype=dtype)
 
-                >>> input_tensor = ttnn.from_torch(
-                >>>     input_tensor_torch, device=mesh_device, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)
+                >>> input_tensor_l = ttnn.from_torch(
+                >>>     input_tensor_torch_l, device=mesh_device, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)
+                >>> )
+                >>> input_tensor_s = ttnn.from_torch(
+                >>>     input_tensor_torch_s, device=mesh_device, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)
+                >>> )
+                >>> input_tensor_m = ttnn.from_torch(
+                >>>     input_tensor_torch_m, device=mesh_device, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)
                 >>> )
                 >>> root_coord= ttnn.MeshCoordinate((1,0))
-                >>> sent_tensor = ttnn.reduce_to_root(
-                        input_tensor,
+                >>> output_tensor_l, output_tensor_s, output_tensor_m = ttnn.reduce_to_root(
+                        input_tensor_l,
+                        input_tensor_s,
+                        input_tensor_m,
                         root_coord,
                         scale_fp32=1.0,
                         topology=ttnn.Topology.Linear)
