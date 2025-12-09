@@ -90,12 +90,23 @@ target_link_libraries(
         $<BUILD_INTERFACE:protobuf::libprotobuf>
 )
 
+# We are adding yaml-cpp include like this to avoid including
+# scaleout_tools headers because that would cause protobuf issues.
+target_include_directories(
+    run_cluster_validation
+    SYSTEM
+    PRIVATE
+        $<TARGET_PROPERTY:yaml-cpp::yaml-cpp,INTERFACE_INCLUDE_DIRECTORIES>
+        $<TARGET_PROPERTY:cxxopts::cxxopts,INTERFACE_INCLUDE_DIRECTORIES>
+)
+
 target_link_libraries(
     run_cluster_validation
     PRIVATE
         enchantum::enchantum
         protobuf::libprotobuf
         tt_metal
+        cxxopts::cxxopts
 )
 
 # Separate binary to get functional coverage for CI. End user fabric manager tool is productized at https://github.com/tenstorrent/tt-fabric-manager
