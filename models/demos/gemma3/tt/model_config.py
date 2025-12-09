@@ -16,6 +16,7 @@ from models.common.utility_functions import is_blackhole, is_wormhole_b0, neares
 from models.demos.gemma3.tt.load_checkpoints import convert_vision_hf_to_meta, convert_vision_meta_to_hf
 from models.tt_transformers.tt.common import (
     calculate_hidden_dim,
+    calculate_prefill_warmup_seq_lens,
     encode_prompt_hf,
     get_base_model_name,
     get_out_subblock_w,
@@ -1207,6 +1208,28 @@ class ModelArgs:
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
+
+    def get_warmup_prefill_supported_seq_lens(self):
+        DEFAULT_VALUE = 8192
+        # This dictionary is used to override the default ceil warmup prefill value
+        model_specific_ceil_warmup_lengths = {
+            # e.g. "gemma-3-4b": 4096
+        }
+
+        max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
+
+        to_warmup_seq_lens = calculate_prefill_warmup_seq_lens(
+            max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens, self.max_seq_len
+        )
+
+        to_warmup_seq_lens = self.filter_warmup_seq_lens(to_warmup_seq_lens)
+
+        return to_warmup_seq_lens
+
+    def filter_warmup_seq_lens(self, to_warmup_seq_lens):
+        # TODO: Add more model-specific filtering here
+        # This filtering is based on the current PR's (https://github.com/tenstorrent/tt-metal/pull/33143) sequence lengths that are used for warmup
+        return to_warmup_seq_lens
 
     def get_trace_prefill_supported_seq_lens(self):
         default_supported_seq_lens = {

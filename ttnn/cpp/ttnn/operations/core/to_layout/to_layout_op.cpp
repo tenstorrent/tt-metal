@@ -15,11 +15,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn {
-
-namespace operations {
-
-namespace core {
+namespace ttnn::operations::core {
 
 namespace CMAKE_UNIQUE_NAMESPACE {
 namespace {
@@ -233,6 +229,4 @@ Tensor ToLayout::invoke(
     return CMAKE_UNIQUE_NAMESPACE::to_layout_impl(tensor_arg, layout, dtype, memory_config, sub_core_grids);
 }
 
-}  // namespace core
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::core

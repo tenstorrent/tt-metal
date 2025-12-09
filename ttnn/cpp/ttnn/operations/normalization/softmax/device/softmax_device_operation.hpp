@@ -11,8 +11,7 @@
 
 #include <optional>
 
-namespace ttnn::operations::normalization {
-namespace softmax {
+namespace ttnn::operations::normalization::softmax {
 struct SoftmaxDeviceOperation {
     using operation_attributes_t = softmax::operation_attributes_t;
     using tensor_args_t = softmax::tensor_args_t;
@@ -90,8 +89,7 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
     SoftmaxProgramConfig program_config = {},
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     bool numeric_stable = true);
-}  // namespace softmax
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::operations::normalization::softmax
 
 namespace ttnn::prim {
 
