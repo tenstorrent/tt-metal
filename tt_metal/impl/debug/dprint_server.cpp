@@ -104,7 +104,8 @@ std::filesystem::path get_dprint_log_dir() {
     }
 
     // Verify the directory is writable by attempting to create and remove a temporary file
-    std::filesystem::path test_file = log_dir / ".write_test";
+    // Use a unique name to avoid conflicts in multi-process scenarios
+    std::filesystem::path test_file = log_dir / (".write_test_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     {
         std::ofstream test_stream(test_file);
         if (!test_stream) {
@@ -116,6 +117,13 @@ std::filesystem::path get_dprint_log_dir() {
         }
     }
     std::filesystem::remove(test_file, ec);
+    if (ec) {
+        log_warning(
+            tt::LogMetal,
+            "Failed to remove test file '{}': {}. Continuing anyway.",
+            test_file.string(),
+            ec.message());
+    }
 
     return log_dir;
 }
