@@ -11,9 +11,9 @@
 namespace ckernel {
 namespace sfpu {
 
-template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE>
 inline void calculate_reshuffle_rows(uint idx_addr) {
-    _calculate_reshuffle_rows_<(APPROX_MODE), ITERATIONS>(idx_addr);
+    _calculate_reshuffle_rows_(idx_addr);
 }
 
 }  // namespace sfpu
