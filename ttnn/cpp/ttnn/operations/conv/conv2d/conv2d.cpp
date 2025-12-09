@@ -259,7 +259,7 @@ Result conv2d_L1(
              sliding_window_config.get_pad_w() == 0);
 
         if (bypass_halo) {
-            // Halo is more efficent with L1 for Untilize. Using to_layout may cause OOM for large tensors.
+            // Halo is more efficient with L1 for Untilize. Using to_layout may cause OOM for large tensors.
             log_debug(tt::LogOp, "Bypassing halo operation as no padding is required for WIDTH_SHARDED layout.");
         } else {
             ttnn::Tensor halo_output = ttnn::halo(
