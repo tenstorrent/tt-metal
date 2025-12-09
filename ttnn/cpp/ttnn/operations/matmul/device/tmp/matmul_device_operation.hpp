@@ -70,6 +70,12 @@ struct MatmulDeviceOperation {
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 };
 
+MatmulDeviceOperation::operation_attributes_t create_matmul_attributes(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const MatmulDeviceOperation::operation_attributes_t& parameters,
+    const std::vector<std::optional<Tensor>>& optional_output_tensors);
+
 }  // namespace ttnn::operations::matmul
 
 namespace ttnn::prim {

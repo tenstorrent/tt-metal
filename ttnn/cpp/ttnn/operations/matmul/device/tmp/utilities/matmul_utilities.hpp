@@ -6,6 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn::operations::matmul::utilities {
 
@@ -28,5 +29,11 @@ uint32_t estimate_interm_tile_size(
     tt::tt_metal::DataType output_dtype);
 
 uint32_t get_max_l1_space(const tt::tt_metal::Tensor& input_tensor_a);
+
+bool is_input_batched(const ttnn::Shape& shape);
+
+using Activation = std::variant<std::string, ttnn::operations::unary::UnaryWithParam>;
+std::optional<ttnn::operations::unary::UnaryWithParam> get_fused_activation(
+    const std::optional<const Activation>& activation);
 
 }  // namespace ttnn::operations::matmul::utilities

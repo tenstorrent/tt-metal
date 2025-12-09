@@ -5,6 +5,7 @@
 #include "ttnn/operations/matmul/device/tmp/utilities/matmul_utilities.hpp"
 
 #include "tt-metalium/allocator.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 namespace ttnn::operations::matmul::utilities {
 
@@ -67,6 +68,33 @@ uint32_t get_max_l1_space(const tt::tt_metal::Tensor& input_tensor_a) {
     uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
     max_l1_space = max_l1_space - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     return max_l1_space;
+}
+
+bool is_input_batched(const ttnn::Shape& shape) {
+    if (shape.rank() < 2) [[unlikely]] {
+        return false;
+    }
+
+    auto is_batched = false;
+    for (auto i = 0; i < shape.rank() - 2; ++i) {
+        if (shape[i] > 1) {
+            is_batched = true;
+            break;
+        }
+    }
+    return is_batched;
+}
+
+std::optional<ttnn::operations::unary::UnaryWithParam> get_fused_activation(
+    const std::optional<const Activation>& activation) {
+    if (!activation.has_value()) {
+        return std::nullopt;
+    }
+    const auto& act = activation.value();
+    if (std::holds_alternative<std::string>(act)) {
+        return ttnn::operations::unary::utils::string_to_unary_with_param(std::get<std::string>(act));
+    }
+    return std::get<ttnn::operations::unary::UnaryWithParam>(act);
 }
 
 }  // namespace ttnn::operations::matmul::utilities

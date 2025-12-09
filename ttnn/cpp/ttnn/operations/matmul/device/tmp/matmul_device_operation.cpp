@@ -79,6 +79,83 @@ ttnn::Shape compute_matmul_output_shape(const Tensor& input_tensor_a, const Tens
     return output_shape;
 }
 
+bool get_broadcast_batch(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const MatmulProgramConfig>& matmul_program_config) {
+    uint32_t batch_size_b = get_batch_size(input_tensor_b.padded_shape());
+    bool broadcast_batch = batch_size_b == 1;
+    if (!matmul_program_config.has_value()) {
+        return broadcast_batch;
+    }
+
+    bool is_multi_core_reuse = std::visit(
+        [](const auto& program_config) -> bool {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            return static_cast<bool>(std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>);
+        },
+        matmul_program_config.value());
+    if (is_multi_core_reuse) {
+        uint32_t batch_size_a = get_batch_size(input_tensor_a.padded_shape());
+        broadcast_batch &= batch_size_a > 1;
+    }
+    return broadcast_batch;
+}
+
+tt::tt_metal::Tile get_output_tile(
+    const MemoryConfig& output_mem_config,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const std::optional<const tt::tt_metal::Tile> output_tile,
+    const std::optional<const tt::tt_metal::Tile> optional_output_tensor_tile) {
+    using namespace tt;
+    auto in0_tile_shape = in0_tile.get_tile_shape();
+    auto in1_tile_shape = in1_tile.get_tile_shape();
+    if (output_tile.has_value() or optional_output_tensor_tile.has_value()) {
+        TT_FATAL(
+            !(optional_output_tensor_tile.has_value() && output_tile.has_value()),
+            "Matmul cannot have both an output_tile and an optional_output_tensor. Configure the tile type of the "
+            "output tensor instead if both are required.");
+        const auto& override_output_tile =
+            output_tile.has_value() ? output_tile.value() : optional_output_tensor_tile.value();
+        const auto& out_tile_shape = override_output_tile.get_tile_shape();
+
+        const uint32_t in0_tile_h = in0_tile_shape[0];
+        const uint32_t in1_tile_w = in1_tile_shape[1];
+
+        TT_FATAL(out_tile_shape[1] > 0, "the override output tile width needs to be greater than zero");
+        TT_FATAL(
+            out_tile_shape[1] % in1_tile_w == 0,
+            "the override output tile width ({}) must be a multiple of in1 tile width ({})",
+            out_tile_shape[1],
+            in1_tile_w);
+        TT_FATAL(out_tile_shape[0] > 0, "the override output tile height needs to be greater than zero");
+        TT_FATAL(
+            out_tile_shape[0] == in0_tile_h,
+            "the override output tile height ({}) must equal to the in0 tile height ({})",
+            out_tile_shape[0],
+            in0_tile_h);
+        if (out_tile_shape[1] != in1_tile_w) {
+            TT_FATAL(
+                out_tile_shape[0] <= constants::FACE_HEIGHT,
+                "the override output tile height ({}) must equal or less to face height ({})",
+                out_tile_shape[0],
+                constants::FACE_HEIGHT);
+        }
+        if (!output_mem_config.is_sharded()) {
+            TT_FATAL(
+                out_tile_shape[1] == in1_tile_w,
+                "the override output tile width ({}) must equal the in0 tile width ({})",
+                out_tile_shape[1],
+                in1_tile_w);
+        }
+
+        return override_output_tile;
+    } else {
+        return tt::tt_metal::Tile({in0_tile_shape[0], in1_tile_shape[1]});
+    }
+}
+
 }  // namespace
 
 MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_factory(
@@ -215,6 +292,37 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
     }
     MatmulProgramConfig chosen_program_config =
         get_program_config(input_tensor_a, input_tensor_b, bias_single_tile_size, attributes);
+
+    if (std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config) &&
+        attributes.global_cb.has_value() && input_tensor_b.is_sharded() && input_tensor_b.buffer()->is_dram()) {
+        for (uint32_t i = 0; i < args.batched_weights.size(); ++i) {
+            TT_FATAL(
+                input_tensor_b.logical_shape() == args.batched_weights[i].logical_shape(),
+                "for multi-tensor matmul, all weight tensors must have the same logical_shape, {} is not equal to {}",
+                input_tensor_b.logical_shape(),
+                args.batched_weights[i].logical_shape());
+            TT_FATAL(
+                input_tensor_b.padded_shape() == args.batched_weights[i].padded_shape(),
+                "for multi-tensor matmul, all weight tensors must have the same padded_shape {} is not equal to {}",
+                input_tensor_b.padded_shape(),
+                args.batched_weights[i].padded_shape());
+            TT_FATAL(
+                input_tensor_b.tensor_spec() == args.batched_weights[i].tensor_spec(),
+                "for multi-tensor matmul, all weight tensors must have the same tensor_spec {} is not equal to {}",
+                input_tensor_b.tensor_spec(),
+                args.batched_weights[i].tensor_spec());
+            TT_FATAL(
+                input_tensor_b.layout() == args.batched_weights[i].layout(),
+                "for multi-tensor matmul, all weight tensors must have the same layout {} is not equal to {}",
+                input_tensor_b.layout(),
+                args.batched_weights[i].layout());
+            TT_FATAL(
+                input_tensor_b.dtype() == args.batched_weights[i].dtype(),
+                "for multi-tensor matmul, all weight tensors must have the same _dtype {} is not equal to {}",
+                input_tensor_b.dtype(),
+                args.batched_weights[i].dtype());
+        }
+    }
 
     if (optional_bias.has_value()) {
         const auto& bias = optional_bias.value();
@@ -1219,6 +1327,95 @@ MatmulDeviceOperation::create_op_performance_model(
         log_info(tt::LogOp, "\t ideal_dev_clock_cycles: {}", ideal_dev_clock_cycles);
 #endif
     return result;
+}
+
+MatmulDeviceOperation::operation_attributes_t create_matmul_attributes(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const MatmulDeviceOperation::operation_attributes_t& parameters,
+    const std::vector<std::optional<Tensor>>& optional_output_tensors) {
+    tt::tt_metal::IDevice* device = input_tensor_a.device();
+    TT_FATAL(device != nullptr, "Operand to matmul must be on device");
+    auto arch = device->arch();
+    const bool has_user_grid = parameters.user_core_coord.has_value();
+    const bool has_program_config = parameters.program_config.has_value();
+    bool are_inputs_low_precision_df =
+        ((input_tensor_a.dtype() == DataType::BFLOAT8_B || input_tensor_a.dtype() == DataType::BFLOAT4_B) &&
+         (input_tensor_b.dtype() == DataType::BFLOAT8_B || input_tensor_b.dtype() == DataType::BFLOAT4_B));
+    const auto increase_fidelity = !has_program_config && !has_user_grid && !are_inputs_low_precision_df;
+    auto math_fidelity = increase_fidelity ? MathFidelity::HiFi2 : MathFidelity::LoFi;
+    bool are_inputs_32F = (input_tensor_a.dtype() == DataType::FLOAT32 && input_tensor_b.dtype() == DataType::FLOAT32);
+    math_fidelity = are_inputs_32F ? MathFidelity::HiFi4 : math_fidelity;
+
+    bool broadcast_batch =
+        parameters.bcast_batch.value_or(get_broadcast_batch(input_tensor_a, input_tensor_b, parameters.program_config));
+    TT_FATAL(!(has_user_grid && has_program_config), "Cannot use both user core grid/coordinates and a program config");
+
+    const bool is_optional_output_tensor =
+        !optional_output_tensors.empty() && optional_output_tensors.at(0).has_value();
+    std::optional<DataType> output_dtype = parameters.output_dtype;
+    MemoryConfig output_mem_config = parameters.output_mem_config;
+
+    if (is_optional_output_tensor) {
+        const auto& optional_output_tensor = optional_output_tensors.at(0);
+        if (output_mem_config == tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+            output_mem_config = optional_output_tensor->memory_config();
+        } else {
+            TT_FATAL(
+                optional_output_tensor->memory_config() == output_mem_config,
+                "Memory config mismatch between optional output tensor {} & "
+                "output tensor {}",
+                optional_output_tensor->memory_config(),
+                output_mem_config);
+        }
+
+        if (output_dtype.has_value()) {
+            TT_FATAL(
+                optional_output_tensor->dtype() == output_dtype.value(),
+                "Type mismatch between optional output tensor {} & output tensor {}",
+                optional_output_tensor->dtype(),
+                output_dtype.value());
+        } else {
+            output_dtype = optional_output_tensor->dtype();
+        }
+    } else {
+        if (!output_dtype.has_value()) {
+            output_dtype = input_tensor_a.dtype();
+        }
+    }
+    bool is_float_32 = output_dtype == DataType::FLOAT32;
+    auto kernel_config_val = init_device_compute_kernel_config(
+        arch,
+        parameters.compute_kernel_config,
+        math_fidelity,
+        /*default_approx_mode=*/false,
+        /*default_fp32_acc=*/is_float_32,
+        /*default_l1_acc=*/!is_float_32);
+    auto in0_tile = input_tensor_a.tensor_spec().tile();
+    auto in1_tile = input_tensor_b.tensor_spec().tile();
+
+    std::optional<tt::tt_metal::Tile> optional_output_tensor_tile = std::nullopt;
+    if (is_optional_output_tensor) {
+        optional_output_tensor_tile = optional_output_tensors.at(0)->tensor_spec().tile();
+    }
+    tt::tt_metal::Tile output_tile =
+        get_output_tile(output_mem_config, in0_tile, in1_tile, parameters.output_tile, optional_output_tensor_tile);
+
+    return MatmulDeviceOperation::operation_attributes_t{
+        parameters.program_config,
+        broadcast_batch,
+        output_mem_config,
+        output_dtype,
+        kernel_config_val,
+        parameters.untilize_out,
+        parameters.user_core_coord,
+        parameters.user_fused_activation,
+        parameters.user_run_batched,
+        parameters.transpose_a,
+        parameters.transpose_b,
+        output_tile,
+        parameters.global_cb,
+        parameters.sub_device_id};
 }
 
 }  // namespace ttnn::operations::matmul

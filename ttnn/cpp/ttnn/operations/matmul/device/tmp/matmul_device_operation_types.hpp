@@ -42,6 +42,7 @@ struct tensor_args_t {
     Tensor input_tensor_b;
     std::optional<Tensor> bias;
     std::optional<Tensor> output_tensor;
+    std::vector<Tensor> batched_weights;
 };
 
 using spec_return_value_t = ttnn::TensorSpec;
