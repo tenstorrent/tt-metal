@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug/dprint.h"
-#include "dataflow_api.h"
+#include "api/debug/dprint.h"
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     ////////// RUNTIME ARGS & VARS //////////

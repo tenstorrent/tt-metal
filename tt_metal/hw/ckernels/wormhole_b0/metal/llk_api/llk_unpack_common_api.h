@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "circular_buffer.h"
+#include "internal/circular_buffer_interface.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
@@ -14,7 +14,7 @@
 #include "llk_operands.h"
 #include "llk_param_structs.h"
 #include "llk_unpack_common.h"
-#include "debug/waypoint.h"
+#include "api/debug/waypoint.h"
 
 /*************************************************************************
  * LLK UNPACK COMMON

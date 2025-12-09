@@ -12,7 +12,7 @@
 
 #include "api/ttnn/tensor/layout/layout.hpp"
 
-#include "dataflow_api.h"  // for interleaved addrgen
+#include "api/dataflow/dataflow_api.h"  // for interleaved addrgen
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/common/interpreter_backends/kernel_common/algorithms.hpp"
 
@@ -20,7 +20,7 @@ using shape_t = ttnn::ccl::Shape4D<uint32_t>;
 using address_t = uint32_t;
 
 #ifdef DEBUG_PRINT_ENABLED
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 
 void dprint(ttnn::ccl::cmd::CclCommandTensor const& command_tensor) {
     DPRINT << "\ttensor_shape.w: " << (uint32_t)command_tensor.tensor_shape.w << "\n";

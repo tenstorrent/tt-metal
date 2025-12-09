@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug/assert.h"
-#include "debug/dprint_tile.h"
-#include "debug/dprint.h"
+#include "api/debug/assert.h"
+#include "api/debug/dprint_tile.h"
+#include "api/debug/dprint.h"
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
 

@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "hw/inc/risc_attribs.h"
 
 void kernel_main() {

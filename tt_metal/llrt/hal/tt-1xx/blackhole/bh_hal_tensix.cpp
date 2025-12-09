@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #define HAL_BUILD tt::tt_metal::blackhole::tensix
-#include "dev_msgs.h"
-#include "fabric_telemetry_msgs.h"
+#include "interface/dev_msgs.h"
+#include "interface/fabric_telemetry_msgs.h"
 using namespace tt::tt_metal::blackhole::tensix;
 
 #include <cstdint>

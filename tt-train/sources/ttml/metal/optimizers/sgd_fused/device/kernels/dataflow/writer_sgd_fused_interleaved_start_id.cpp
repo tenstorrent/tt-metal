@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cstdint>
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 

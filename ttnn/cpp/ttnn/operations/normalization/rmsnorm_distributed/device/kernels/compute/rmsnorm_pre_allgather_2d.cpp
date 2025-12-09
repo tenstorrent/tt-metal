@@ -16,7 +16,7 @@ For rmsnorm it computes E(x**2) and returns it as a one tile wide output
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
-#include "debug/dprint.h"
+#include "api/debug/dprint.h"
 
 ALWI void ACQ() {
     tile_regs_acquire();

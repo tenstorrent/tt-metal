@@ -7,7 +7,7 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 #include <cstdint>
 #include <cstddef>
