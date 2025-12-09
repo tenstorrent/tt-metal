@@ -60,6 +60,10 @@ def split_list(lst, n):
     return chunks
 
 
+def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
+    return sequence_length > max_prefill_chunk_size
+
+
 class Generator:
     def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
@@ -135,6 +139,15 @@ class Generator:
                     block_size = get_block_size(kv_cache[model_id])
                     num_blocks = num_blocks_in_seq(supported_length, block_size)
                     page_table_warmup = torch.zeros(1, num_blocks, dtype=torch.int32)
+
+                # chunked prefill not supported without paged attention
+                if not page_table_warmup and max_prefill_chunk_size_cutoff(
+                    supported_length, self.model_args[0].max_prefill_chunk_size
+                ):
+                    logger.warning(
+                        "Skipping warmup for sequence lengths after: {supported_length} because they are greater than the max prefill chunk size and paged attention is disabled"
+                    )
+                    break
 
                 self.prefill_forward_text(
                     warmup_tokens,
