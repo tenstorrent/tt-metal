@@ -1201,7 +1201,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
                 device);
             dram_slice_config = determine_slice_config(
                 &op_slice_attr,
-                ttnn::Shape{batch_size, input_height, input_width, out_channels},
+                ttnn::Shape{batch_size, input_height, input_width, in_channels},
                 ttnn::Shape{batch_size, output_height, output_width, out_channels},
                 dram_slice_config_,
                 conv_config.output_layout,

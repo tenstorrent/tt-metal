@@ -211,7 +211,7 @@ Op2DSliceConfig determine_slice_config(
     if (current_num_slices > output_sliced_dim) {
         log_warning(
             tt::LogOp,
-            "DRAM Auto slice could not find suitable number of slices  Slice config = {}",
+            "DRAM Auto slice could not find suitable number of slices Slice config = {}",
             return_slice_config);
     }
     return return_slice_config;
@@ -223,7 +223,7 @@ void run_sliced_op(
     OpSliceAttr* op_slice_attr,
     const std::optional<Op2DSliceConfig> dram_slice_config_) {
     Op2DSliceConfig dram_slice_config;
-    ;
+
     if (dram_slice_config_.has_value() && dram_slice_config_.value().num_slices > 0) {
         dram_slice_config = dram_slice_config_.value();
     } else {
