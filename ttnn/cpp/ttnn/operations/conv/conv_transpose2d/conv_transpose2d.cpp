@@ -361,7 +361,8 @@ public:
         bool mirror_kernel);
     std::tuple<IOShape, IOShape> get_input_slice(IOShape output_slice_start, IOShape output_slice_end) override;
     InputWithPadding get_input_slice_and_padding(IOShape output_slice_start, IOShape output_slice_end);
-    uint32_t get_L1_usage() override;
+    uint32_t get_L1_usage(
+        IOShape output_slice_start, IOShape output_slice_end, op_slicing::Op2DSliceConfig slice_config) override;
     tt::tt_metal::MemoryConfig get_input_memory_config(IOShape output_slice_start, IOShape output_slice_end) override;
     ttnn::Tensor run_L1_op(
         const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) override;
@@ -643,7 +644,10 @@ std::tuple<ConvT2DSliceAttr::IOShape, ConvT2DSliceAttr::IOShape> ConvT2DSliceAtt
     return std::get<0>(get_input_slice_and_padding(output_slice_start, output_slice_end));
 }
 
-uint32_t ConvT2DSliceAttr::get_L1_usage() { return 0; }
+uint32_t ConvT2DSliceAttr::get_L1_usage(
+    IOShape output_slice_start, IOShape output_slice_end, op_slicing::Op2DSliceConfig slice_config) {
+    return 0;
+};
 
 tt::tt_metal::MemoryConfig ConvT2DSliceAttr::get_input_memory_config(
     IOShape output_slice_start, IOShape output_slice_end) {

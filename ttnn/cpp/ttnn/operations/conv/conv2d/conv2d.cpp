@@ -655,7 +655,7 @@ Conv2dSliceAttr::Conv2dSliceAttr(
     Tensor& weight_tensor,
     OptionalRefTensor bias_tensor,
     Conv2dConfig& conv_config,
-    DeviceComputeKernelConfig& compute_config,
+    const DeviceComputeKernelConfig& compute_config,
     MeshDevice* device) :
     batch_size(batch_size),
     input_shape(input_shape),

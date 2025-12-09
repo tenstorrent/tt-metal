@@ -45,8 +45,8 @@ public:
 
 Op2DSliceConfig determine_slice_config(
     OpSliceAttr* op_slice_attr,
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& output_tensor,
+    const ttnn::Shape& input_shape,
+    const ttnn::Shape& output_shape,
     std::optional<Op2DSliceConfig> slice_config_,
     tt::tt_metal::Layout output_layout,
     tt::tt_metal::distributed::MeshDevice* device);
