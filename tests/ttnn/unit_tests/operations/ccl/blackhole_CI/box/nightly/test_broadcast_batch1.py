@@ -185,32 +185,10 @@ def run_broadcast_impl(
             ),
         )
 
-        # DEBUG: Check what's actually on each device
-        logger.info(f"DEBUG: mesh_tensor_torch shape: {mesh_tensor_torch.shape}")
-        logger.info(f"DEBUG: mesh_mapper_config: {mesh_mapper_config}")
-
         # Convert back to host to see what's on each device - use ConcatMeshToTensor
         mesh_tensor_readback = ttnn.to_torch(
             input_tensor_mesh, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
         )
-        logger.info(f"DEBUG: mesh_tensor_readback shape: {mesh_tensor_readback.shape}")
-        logger.info(f"DEBUG: mesh_tensor_readback full content:\n{mesh_tensor_readback}")
-
-        # Get individual device tensors by slicing the concatenated result
-        slice_size = output_shape[0]  # Batch dimension per device
-        for device_idx in range(num_devices):
-            start = device_idx * slice_size
-            end = start + slice_size
-            device_data = mesh_tensor_readback[start:end, :]
-            logger.info(f"DEBUG: Device {device_idx} shape: {device_data.shape}")
-            logger.info(f"DEBUG: Device {device_idx} first 10 values: {device_data.flatten()[:10]}")
-            logger.info(f"DEBUG: Device {device_idx} values[30:40]: {device_data.flatten()[30:40]}")
-            logger.info(f"DEBUG: Device {device_idx} values[380:390]: {device_data.flatten()[380:390]}")
-            logger.info(f"DEBUG: Device {device_idx} last 10 values: {device_data.flatten()[-10:]}")
-            logger.info(
-                f"DEBUG: Device {device_idx} non-zero count: {torch.count_nonzero(device_data).item()}/{device_data.numel()}"
-            )
-
         input_tensor_mesh_list.append(input_tensor_mesh)
 
     tt_out_tensor_list = []
@@ -243,7 +221,6 @@ def run_broadcast_impl(
         logger.info(f"Done op")
 
     passed = True
-    torch.set_printoptions(threshold=float("inf"))
     # compare tensors
     for iter_idx in range(len(tt_out_tensor_list)):
         output_tensor_torch = ttnn.to_torch(
@@ -261,8 +238,6 @@ def run_broadcast_impl(
                 received.shape == sender_tensor.shape
             ), f"Shape mismatch: received {received.shape}, expected {sender_tensor.shape}"
             if input_dtype == ttnn.bfloat16:
-                # print("received:", received)
-                # print("expected:", sender_tensor)
                 eq, output = comp_equal(received, sender_tensor)
             else:
                 eq, output = comp_pcc(received, sender_tensor)
@@ -359,7 +334,7 @@ def test_broadcast_batch1(
         cluster_axis=0,
         broadcast_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
-        rand_tensor=False,
+        rand_tensor=True,
         input_shard_shape=input_shard_shape,
         input_shard_grid=input_shard_grid,
         output_shard_shape=output_shard_shape,

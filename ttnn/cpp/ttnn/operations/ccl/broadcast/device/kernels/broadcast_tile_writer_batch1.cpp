@@ -81,9 +81,8 @@ void kernel_main() {
     const uint32_t num_connections = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
 
-    auto unicast_route_id = PacketHeaderPool::allocate_header_n(num_connections);
-    auto scatter_route_id = PacketHeaderPool::allocate_header_n(num_connections);
     auto sem_route_id = PacketHeaderPool::allocate_header_n(num_connections);
+    auto fused_route_id = PacketHeaderPool::allocate_header_n(num_connections);
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
 
     open_connections(fabric_connection, num_connections, arg_for_fab);
@@ -95,16 +94,12 @@ void kernel_main() {
         starts[0] = starts[1];
         ranges[0] = ranges[1];
     }
-    fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
-        fabric_connection, unicast_route_id, starts, ranges, nullptr, tensor0_page_size);
-    fabric_multicast_noc_scatter_write_set_state<
-        UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
-        fabric_connection,
-        scatter_route_id,
-        starts,
-        ranges,
-        NocUnicastScatterCommandHeader({0, 0}, {static_cast<uint16_t>(tensor0_page_size)}),
-        tensor0_page_size * 2);
+
+    // Configure fused route for payload + semaphore increment
+    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader fused_header(0, 0, 1, true);
+    fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<
+        UnicastFusedAtomicIncUpdateMask::Val | UnicastFusedAtomicIncUpdateMask::Flush>(
+        fabric_connection, fused_route_id, starts, ranges, fused_header, tensor0_page_size);
 
     uint32_t num_total_targets = num_targets_forward_direction + num_targets_backward_direction;
 
@@ -115,9 +110,7 @@ void kernel_main() {
         sem_route_id,
         starts,
         ranges,
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-            0,  // ignore
-            static_cast<uint32_t>(1)});
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, static_cast<uint32_t>(1)});
     fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
         fabric_connection,
         sem_route_id,
@@ -141,24 +134,21 @@ void kernel_main() {
 
         DPRINT << "after writing local to noc\n";
 
-        fabric_multicast_noc_unicast_write_with_state<
-            UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
-            fabric_connection,
-            unicast_route_id,
-            l1_read_addr,
-            tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr},
-            tensor0_page_size * num_pages_to_read);
-        noc_async_writes_flushed();
-        DPRINT << "after fabric mcast\n";
-        cb_pop_front(cb0_id, packet_size_in_pages);
-
-        // 2. mcast output ready semaphore
+        // 2. Fused: mcast payload + increment output ready semaphore
         uint64_t out_ready_sem_noc_addr_in_pkt =
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);
-        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+
+        fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state<
+            UnicastFusedAtomicIncUpdateMask::WriteDstAddr | UnicastFusedAtomicIncUpdateMask::SemaphoreAddr |
+            UnicastFusedAtomicIncUpdateMask::PayloadSize>(
             fabric_connection,
-            sem_route_id,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+            fused_route_id,
+            l1_read_addr,
+            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, true},
+            tensor0_page_size * num_pages_to_read);
+        noc_async_writes_flushed();
+        DPRINT << "after fused fabric mcast + semaphore inc\n";
+        cb_pop_front(cb0_id, packet_size_in_pages);
 
         DPRINT << "after fabric semaphore inc\n";
         // increment locally
