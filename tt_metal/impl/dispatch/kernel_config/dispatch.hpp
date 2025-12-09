@@ -55,6 +55,11 @@ struct dispatch_static_config_t {
 
     std::optional<bool> is_d_variant;
     std::optional<bool> is_h_variant;
+
+    // Offsets of runtime args
+    std::optional<uint32_t> offsetof_my_dev_id;
+    std::optional<uint32_t> offsetof_to_dev_id;
+    std::optional<uint32_t> offsetof_router_direction;
 };
 
 struct dispatch_dependent_config_t {
@@ -101,6 +106,8 @@ public:
     void GenerateStaticConfigs() override;
 
     void GenerateDependentConfigs() override;
+
+    void InitializeRuntimeArgsValues() override;
 
     void ConfigureCore() override;
 
