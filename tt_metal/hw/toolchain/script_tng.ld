@@ -27,7 +27,7 @@
   We generate the following linker scripts:
   FW Firmware.  Runs at specific address, has shared globals and per-cpu TLS region
   KN-tls TLS kernel.  XIP execution, has shared globals and per-cpu TLS region
-  KN-lgc Legacy kernel.  XIP execution, hash per-cpu globals and TLS region
+  KN-lgc Legacy kernel.  XIP execution, has per-cpu globals and TLS region
 
   Kernels may access Firmware globals and TLS
   the following symbols defined by the user (via -Wl,--defsym=NAME=EXPR)
@@ -43,8 +43,8 @@
   The following limits should also be defined:
 
   __text_size -- space for code
-  __global_size -- space for globals
-  __tls_size -- space for TLS & stack (& legacy kernel globals)
+  __data_size -- space for globals
+  __tls_size  -- space for TLS & stack (& legacy kernel globals)
   __min_stack -- minimum stack size limit
 */
 

@@ -264,7 +264,7 @@ foreach(ARCH_CPU IN LISTS TLS_ARCH_CPUS)
             foreach(IX RANGE ${BOUND})
                 set(LGC "")
                 if(IX)
-                    set(LGC "-lgc")
+                    set(LGC "_lgc")
                 endif()
                 set(HW_OUTPUT_FILE "${TYPE}_${NAME}${LGC}.ld")
                 string(TOUPPER "${TYPE}=${IX}" TYPE_DEFINE)
@@ -279,10 +279,10 @@ foreach(ARCH_CPU IN LISTS TLS_ARCH_CPUS)
                     COMMAND
                         ${CMAKE_CXX_COMPILER} -DTYPE_${TYPE_DEFINE} -DCOMPILE_FOR_${PROC_DEFINE} -DARCH_${ARCH_DEFINE}
                         -I${HW_INCLUDE} -E -P -x c -o ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
-                        ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main-tls.ld
+                        ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/script_tng.ld
                     DEPENDS
                         ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt
-                        ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main-tls.ld
+                        ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/script_tng.ld
                     COMMENT "Preprocessing ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}"
                     VERBATIM
                 )
