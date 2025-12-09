@@ -17,7 +17,7 @@ enum class MathFidelity : uint8_t {
 };
 
 /**
- * Specifies mode of operation for unpacking directly to Dest regsiter.
+ * Specifies mode of operation for unpacking directly to Dest register.
  * Default mode enables all dataformats (except Float32) to be unpacked into Dest. Buffers
  * with Default mode can be used to unpack to SRCA/B or Dest.
  * UnpackToDestFp32 enables unpacking Float32 data to Dest with full precision, but makes
