@@ -140,7 +140,12 @@ void MAIN {
                     const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
                     const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
 
-                    /* QK = Q_CHUNK @ K_CHUNK */
+                    /**
+                     * QK = Q_CHUNK @ K_CHUNK
+                     *
+                     * matmul_blocks internally waits on both inputs
+                     */
+
                     pack_reconfig_data_format(cb_qk_im);
                     matmul_blocks(
                         cb_q_in,
