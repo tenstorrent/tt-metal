@@ -29,7 +29,9 @@ target_sources(
             all_gather/all_gather.hpp
             all_reduce/all_reduce.hpp
             reduce_scatter/reduce_scatter.hpp
-            all_broadcast/device/all_broadcast_op.hpp # seems odd to have some of this file, but it's needed for tt-train to consume
+            all_broadcast/device/all_broadcast_device_operation_types.hpp
+            all_broadcast/device/all_broadcast_device_operation.hpp # seems odd to have some of this file, but it's needed for tt-train to consume
+            all_broadcast/device/all_broadcast_program_factory.hpp
             ccl_common.hpp
             ccl_host_datastructures.hpp
             ccl_host_types.hpp
@@ -74,8 +76,8 @@ target_sources(
         common/host/moe_utils.cpp
         # Ops
         all_broadcast/all_broadcast.cpp
-        all_broadcast/device/all_broadcast_op.cpp
-        all_broadcast/device/all_broadcast_program.cpp
+        all_broadcast/device/all_broadcast_device_operation.cpp
+        all_broadcast/device/all_broadcast_program_factory.cpp
         all_gather/all_gather.cpp
         all_gather/device/all_gather_device_operation.cpp
         all_gather/device/all_gather_program_factory.cpp
