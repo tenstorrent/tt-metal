@@ -666,7 +666,8 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async(
         empty_fused_op_signaler,
         chunks_per_sync,
         num_workers_per_link,
-        num_buffers_per_channel);
+        num_buffers_per_channel,
+        CoreCoord{0, 0});
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helper(
@@ -712,7 +713,8 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             fused_op_signaler,
             chunks_per_sync,
             num_workers_per_link,
-            num_buffers_per_channel);
+            num_buffers_per_channel,
+            core_grid_offset);
     } else {
         TT_FATAL(topology == ccl::Topology::Linear, "Must be line or ring");
         return line_reduce_scatter_minimal_async_helper(
