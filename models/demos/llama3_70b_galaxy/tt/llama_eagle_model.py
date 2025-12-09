@@ -37,13 +37,13 @@ class TtEagleTransformer(LightweightModule):
         self.args = args
         self.vocab_size = args.vocab_size
         assert self.vocab_size > 0
-        self.n_layers = args.n_layers
+        self.n_layers = 1
         self.mesh_device = mesh_device
         self.dtype = dtype
         self.model_config = args.get_model_config()
         self.grid_size = self.args.max_grid_size
         self.enable_prefetcher_performance_mode = enable_prefetcher_performance_mode
-        state_dict_prefix = args.get_state_dict_prefix("", None)
+        self.state_dict_prefix = args.get_state_dict_prefix("", None)
         self.allocate_prefill_buffers = allocate_prefill_buffers
         self.paged_attention_config = paged_attention_config
         self.decode_mode_only = decode_mode_only
@@ -67,11 +67,9 @@ class TtEagleTransformer(LightweightModule):
         )
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
-        self.is_prefill_setup = False
         self.is_decode_setup = False
         self.prefetcher_setup = None
         self.mesh_sub_device_manager_id_decode = None
-        self.mesh_sub_device_manager_id_prefill = None
 
         # First initialization of decode CCLs and prefetcher
         self.setup_decode()
@@ -380,65 +378,62 @@ class TtEagleTransformer(LightweightModule):
 
     def forward(
         self,
-        x: ttnn.Tensor,
+        input_ids: ttnn.Tensor,
+        hidden_states: ttnn.Tensor,
         current_pos,
-        rot_mats=None,
+        rot_mat_idxs=None,
         user_id=0,
-        mode="decode",
         page_table=None,
-        chunk_page_table=None,
-        chunk_start_idx=None,
-        get_last_token=-1,
         kv_cache=None,
         batch_size=1,
     ):
-        if mode == "decode":
-            self.prefetcher_setup.create_global_cb()
-            garbage_tensor = ttnn.dram_prefetcher(
-                self.tt_tensors,
-                num_layers=self.n_layers,
-                global_cb=self.prefetcher_setup.global_circular_buffer,
-                enable_performance_mode=self.enable_prefetcher_performance_mode,
-            )
-            self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
+        self.prefetcher_setup.create_global_cb()
+        garbage_tensor = ttnn.dram_prefetcher(
+            self.tt_tensors,
+            num_layers=self.n_layers,
+            global_cb=self.prefetcher_setup.global_circular_buffer,
+            enable_performance_mode=self.enable_prefetcher_performance_mode,
+        )
+        self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
 
-        if mode == "decode" and not self.args.is_galaxy:
-            x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"])
+        rot_mats = self.rope_setup.get_rm_rot_mats(rot_mat_idxs)
+        input_embeds = self.embd(input_ids)
 
-        h = None
-        # x needs to be in bfloat16_b as it gets reused as the residual tensor
-        for i, layer in enumerate(self.layers):
-            x, h = layer(
-                x,
-                h,
-                current_pos,
-                rot_mats,
-                user_id,
-                mode,
-                page_table,
-                chunk_page_table=chunk_page_table,
-                chunk_start_idx=chunk_start_idx,
-                kv_cache=kv_cache[i] if kv_cache is not None else None,
-                batch_size=batch_size,
-            )
-        # ttnn.deallocate(h)
-        if mode == "decode":
-            ttnn.deallocate(garbage_tensor)
+        hidden_states = ttnn.to_memory_config(hidden_states, self.model_config["DECODE_RESIDUAL_MEMCFG"])
 
-            # Pre-allocated output of AllReduce in LM Head to avoid memory cloberring
-            self.tt_ccl.tt_lm_head_buffer_l1 = ttnn.to_memory_config(
-                self.tt_ccl.tt_lm_head_buffer, self.tt_ccl.lm_head_buffer_mem_cfg
-            )
+        if hidden_states.shape[-1] != input_embeds.shape[-1]:
+            # TODO: Need to fix the program configs and memory configs of this Ring Matmul
+            hidden_states = ttnn.linear(hidden_states, self.fc_weight, bias=False)
 
-        if mode == "prefill":
-            return x
-        # Output norm
-        x, res = self.norm(x, res=None, mode=mode)
+        hidden_states = self.mid_layer(
+            input_embeds,
+            hidden_states,
+            current_pos,
+            rot_mats,
+            user_id,
+            page_table,
+            kv_cache=kv_cache if kv_cache is not None else None,
+            batch_size=batch_size,
+        )
 
-        if get_last_token != -1:
-            x = x[:, :, get_last_token:, :]
+        ttnn.deallocate(garbage_tensor)
 
-        return self.lm_head(x, None if mode == "prefill" else self.prefetcher_setup.worker_sub_device_id, mode=mode)
+        hidden_states, _ = self.norm(hidden_states, res=None, mode="decode")
+
+        return self.lm_head(hidden_states, self.prefetcher_setup.worker_sub_device_id, mode="decode")
+
+    def generate_draft_tree(
+        self,
+        input_ids: ttnn.Tensor,
+        hidden_states: ttnn.Tensor,
+        current_pos: ttnn.Tensor,
+        rot_mat_idxs=None,
+        user_id=0,
+        page_table=None,
+        kv_cache=None,
+        batch_size=1,
+    ):
+        pass
 
     def __del__(self):
         self.tt_ccl.close()
