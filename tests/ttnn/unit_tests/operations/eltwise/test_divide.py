@@ -28,7 +28,7 @@ def test_div_zero(device, val_a, val_b, dtype, approx):
     x_tt = ttnn.from_torch(x_torch, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-    z_tt_div = ttnn.divide(x_tt, y_tt, approx_mode=approx)
+    z_tt_div = ttnn.divide(x_tt, y_tt, fast_and_approximate_mode=approx)
     tt_out = ttnn.to_torch(z_tt_div)
 
     # Note: torch.equal return false for if both tensors are nan
@@ -58,7 +58,7 @@ def test_divide_inplace_zero(device, val_a, val_b, dtype, approx):
 
     x_tt_inplace = ttnn.from_torch(x_torch, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt_inplace = ttnn.from_torch(y_torch, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn.divide_(x_tt_inplace, y_tt_inplace, approx_mode=approx)
+    ttnn.divide_(x_tt_inplace, y_tt_inplace, fast_and_approximate_mode=approx)
     tt_out_inplace = ttnn.to_torch(x_tt_inplace)
 
     if approx and dtype == "bfloat16":

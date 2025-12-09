@@ -256,7 +256,7 @@ def test_divide(device):
     )
 
     # Perform element-wise division with fast approximation mode
-    output = ttnn.divide(tensor1, tensor2, approx_mode=True)
+    output = ttnn.divide(tensor1, tensor2, fast_and_approximate_mode=True)
     logger.info(f"Division (tensor-tensor) result: {output}")
 
     # Create tensor and scalar for division
@@ -266,7 +266,7 @@ def test_divide(device):
     scalar = 3
 
     # Perform division by a scalar value
-    output = ttnn.divide(tensor, scalar, approx_mode=False)
+    output = ttnn.divide(tensor, scalar, fast_and_approximate_mode=False)
     logger.info(f"Division (tensor-scalar) result: {output}")
 
 
@@ -483,7 +483,7 @@ def test_div(device):
         torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
     )
 
-    output = ttnn.div(tensor1, tensor2, approx_mode=True, round_mode=None)
+    output = ttnn.div(tensor1, tensor2, fast_and_approximate_mode=True, round_mode=None)
     logger.info(f"Division result: {output}")
 
     # Create tensor and scalar for division
@@ -821,7 +821,7 @@ def test_divide_(device):
     )
 
     # Perform inplace operation
-    ttnn.divide_(tensor1, tensor2, approx_mode=True)
+    ttnn.divide_(tensor1, tensor2, fast_and_approximate_mode=True)
     logger.info("Inplace division completed")
 
 
