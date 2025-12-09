@@ -53,9 +53,7 @@
 #pragma clang diagnostic ignored "-Wunused-parameter"
 #endif
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 namespace {
 kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
@@ -2222,9 +2220,7 @@ void DeviceProfiler::destroyTracyContexts() {
 
 bool getDeviceProfilerState() { return MetalContext::instance().rtoptions().get_profiler_enabled(); }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 #if !defined(TRACY_ENABLE) && defined(__clang__)
 #pragma clang diagnostic pop
