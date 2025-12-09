@@ -982,15 +982,37 @@ Tensor construct_on_host_config_tensor(
     uint32_t extend_with_zeroes = config[0].size() % 2;
     extend_with_zeroes = extend_with_zeroes > 0 ? 2 - extend_with_zeroes : 0;
 
-    ttnn::Shape config_shape(
-        {static_cast<uint32_t>(config.size()), static_cast<uint32_t>(config[0].size()) + extend_with_zeroes});
+    const uint32_t num_input_rows = static_cast<uint32_t>(config.size());
+    const uint32_t row_width = static_cast<uint32_t>(config[0].size()) + extend_with_zeroes;
+
+    ttnn::Shape config_shape({num_input_rows, row_width});
     std::vector<uint16_t> config_vector = flatten(config, extend_with_zeroes);
 
-    const uint32_t factor = store_in_dram ? 1 : get_repeat_factor_for_replicating_nhw_config_across_grid(p_config);
-    auto repeat_config = replicate_config(config_vector, factor);
+    std::vector<uint16_t> final_config;
+    uint32_t final_num_rows;
 
-    auto config_buffer = tt::tt_metal::HostBuffer(std::move(repeat_config));
-    config_shape = ttnn::Shape({config_shape[0] * factor, config_shape[1]});
+    if (store_in_dram) {
+        // For DRAM storage: Each core uses core_index (0 to ncores-1) to read its page.
+        // We need ncores pages total, with proper mapping for each sharding scheme:
+        // - HEIGHT_SHARDED: each core has unique config, already have ncores rows
+        // - WIDTH_SHARDED: all cores share same config, replicate to ncores
+        // - BLOCK_SHARDED: not yet supported with DRAM config tensors due to complex
+        //   core-to-page mapping that depends on shard orientation
+
+        // For HEIGHT_SHARDED and WIDTH_SHARDED, simple replication works
+        const uint32_t ncores = p_config.grid.num_cores();
+        const uint32_t factor = ncores / num_input_rows;  // How many times to replicate
+        final_config = replicate_config(config_vector, factor);
+        final_num_rows = num_input_rows * factor;
+    } else {
+        // For L1_SMALL sharded storage: use scheme-specific replication factor
+        const uint32_t factor = get_repeat_factor_for_replicating_nhw_config_across_grid(p_config);
+        final_config = replicate_config(config_vector, factor);
+        final_num_rows = num_input_rows * factor;
+    }
+
+    auto config_buffer = tt::tt_metal::HostBuffer(std::move(final_config));
+    config_shape = ttnn::Shape({final_num_rows, row_width});
     return Tensor(std::move(config_buffer), config_shape, DataType::UINT16, Layout::ROW_MAJOR);
 }
 

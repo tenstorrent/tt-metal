@@ -127,7 +127,8 @@ uint32_t calculate_L1_usage(
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
     const Layout& output_layout,
-    const DataType& output_dtype);
+    const DataType& output_dtype,
+    std::optional<uint32_t> reader_indices_page_size = std::nullopt);
 
 // pool specific validations are done in validate_pool2d, but we want to validate basic inputs to ensure
 // they are sensical to avoid problems in sliding window config, halo and other setup procedures

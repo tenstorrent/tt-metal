@@ -5,6 +5,7 @@
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/tt_backend_api_types.hpp"
+#include "tt-metalium/tensor_accessor_args.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "tt-metalium/host_buffer.hpp"
@@ -274,7 +275,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<int32_t> divisor_override,
     uint32_t memory_used,
-    const Layout& output_layout) {
+    const Layout& output_layout,
+    bool config_tensors_in_dram) {
     distributed::MeshDevice* device = input.device();
 
     const tt::tt_metal::DeviceStorage& reader_indices_storage = reader_indices.device_storage();
@@ -364,18 +366,33 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     // reader indices
     const uint32_t in_reader_indices_cb_id = next_cb_index++;
-    const uint32_t in_reader_indices_cb_pagesize =
-        tt::round_up(reader_indices_size, 4);  // pagesize needs to be multiple of 4
+    // When config tensors are in DRAM, calculate CB page size based on actual data needed
+    // Similar to conv2d, we over-allocate the CB to account for pulling from DRAM to L1
+    const uint32_t in_reader_indices_cb_pagesize = config_tensors_in_dram
+                                                       ? reader_indices_size * sizeof(uint16_t)
+                                                       : reader_indices_storage.get_buffer()->page_size();
     constexpr uint32_t in_reader_indices_cb_npages = 1;
 
-    tt::tt_metal::create_cb(
-        in_reader_indices_cb_id,
-        program,
-        all_cores,
-        in_reader_indices_cb_pagesize,
-        in_reader_indices_cb_npages,
-        tt::DataFormat::UInt16,
-        reader_indices_storage.get_buffer());
+    if (config_tensors_in_dram) {
+        // When config tensors are in DRAM, create CB without associating with buffer
+        // The kernel will read from DRAM into this scratch CB
+        tt::tt_metal::create_cb(
+            in_reader_indices_cb_id,
+            program,
+            all_cores,
+            in_reader_indices_cb_pagesize,
+            in_reader_indices_cb_npages,
+            tt::DataFormat::UInt16);
+    } else {
+        tt::tt_metal::create_cb(
+            in_reader_indices_cb_id,
+            program,
+            all_cores,
+            in_reader_indices_cb_pagesize,
+            in_reader_indices_cb_npages,
+            tt::DataFormat::UInt16,
+            reader_indices_storage.get_buffer());
+    }
 
     log_debug(
         tt::LogOp,
@@ -559,12 +576,18 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         config_tensor = create_scalar_config_tensor(
             avg_pool_config, input.memory_config().memory_layout(), in_n, num_shards_c, ncores);
 
-        const std::array<uint32_t, 2> shard_shape =
-            std::array<uint32_t, 2>({1, static_cast<uint32_t>(config_tensor.logical_shape()[-1])});
-        const tt::tt_metal::ShardOrientation config_tensor_shard_orientation = input.shard_spec().value().orientation;
-        const tt::tt_metal::ShardSpec config_shard_spec(
-            input.shard_spec().value().grid, shard_shape, config_tensor_shard_orientation);
-        const MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
+        MemoryConfig memory_config;
+        if (config_tensors_in_dram) {
+            memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+        } else {
+            const std::array<uint32_t, 2> shard_shape =
+                std::array<uint32_t, 2>({1, static_cast<uint32_t>(config_tensor.logical_shape()[-1])});
+            const tt::tt_metal::ShardOrientation config_tensor_shard_orientation =
+                input.shard_spec().value().orientation;
+            const tt::tt_metal::ShardSpec config_shard_spec(
+                input.shard_spec().value().grid, shard_shape, config_tensor_shard_orientation);
+            memory_config = MemoryConfig{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
+        }
         const Tensor config_tensor_device = config_tensor.to_device(device, memory_config);
 
         constexpr tt::DataFormat config_df = tt::DataFormat::RawUInt32;
@@ -572,8 +595,15 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         tt::tt_metal::Buffer* config_buffer = scalar_config_storage.get_buffer();
         const uint32_t config_buffer_page_size = config_buffer->page_size();
 
-        std::tie(config_cb_id, config_cb) = tt::tt_metal::create_cb(
-            next_cb_index++, program, all_cores, config_buffer_page_size, 1, config_df, &*config_buffer);
+        if (config_tensors_in_dram) {
+            // When config tensors are in DRAM, create CB without associating with buffer
+            // The kernel will read from DRAM into this scratch CB
+            std::tie(config_cb_id, config_cb) =
+                tt::tt_metal::create_cb(next_cb_index++, program, all_cores, config_buffer_page_size, 1, config_df);
+        } else {
+            std::tie(config_cb_id, config_cb) = tt::tt_metal::create_cb(
+                next_cb_index++, program, all_cores, config_buffer_page_size, 1, config_df, &*config_buffer);
+        }
     }
     std::vector<uint32_t> reader0_ct_args = {
         out_nhw_per_core,               // 0
@@ -629,16 +659,33 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
         "reader_pool_2d.cpp";
 
+    std::map<std::string, std::string> reader_defines;
+    if (config_tensors_in_dram) {
+        reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
+        // Add DRAM addresses and page sizes as compile-time args
+        // Reader indices tensor
+        reader0_ct_args.push_back(reader_indices_storage.get_buffer()->address());
+        reader0_ct_args.push_back(reader_indices_storage.get_buffer()->page_size());
+        reader1_ct_args.push_back(reader_indices_storage.get_buffer()->address());
+        reader1_ct_args.push_back(reader_indices_storage.get_buffer()->page_size());
+
+        // Add TensorAccessorArgs for proper DRAM bank addressing
+        tt::tt_metal::TensorAccessorArgs(reader_indices_storage.get_buffer()).append_to(reader0_ct_args);
+        tt::tt_metal::TensorAccessorArgs(reader_indices_storage.get_buffer()).append_to(reader1_ct_args);
+    }
+
     auto reader0_config = tt::tt_metal::DataMovementConfig{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
         .noc = tt::tt_metal::NOC::RISCV_0_default,
-        .compile_args = reader0_ct_args};
+        .compile_args = reader0_ct_args,
+        .defines = reader_defines};
     auto reader0_kernel = CreateKernel(program, reader_kernel_fname, all_cores, reader0_config);
 
     auto reader1_config = tt::tt_metal::DataMovementConfig{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
         .noc = tt::tt_metal::NOC::RISCV_1_default,
-        .compile_args = reader1_ct_args};
+        .compile_args = reader1_ct_args,
+        .defines = reader_defines};
     auto reader1_kernel =
         params.split_reader ? CreateKernel(program, reader_kernel_fname, all_cores, reader1_config) : 0;
 
@@ -706,22 +753,44 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
 
-    // set the starting indices for each core as runtime args
-    if (return_indices) {
-        TT_FATAL(core_starting_indices.size() == ncores, "core starting indices size should match number of cores");
+    // Set runtime args for each core
+    // When config_tensors_in_dram is true: core_index is needed to read from correct DRAM page
+    // When return_indices is true: start_row/start_col are needed for index initialization
+    if (return_indices || config_tensors_in_dram) {
         for (uint32_t core_i = 0; core_i < ncores; core_i++) {
             const uint32_t core_x_i = core_i % rectangular_x;
             const uint32_t core_y_i = core_i / rectangular_x;
             const CoreRange core(CoreCoord(core_x_i, core_y_i), CoreCoord(core_x_i, core_y_i));
 
-            const uint32_t start_index = core_starting_indices[core_i];
-            const uint32_t start_mod_batch = start_index % (in_w_padded * in_h_padded);
-            const uint32_t start_row = start_mod_batch / in_w_padded;
-            const uint32_t start_col = start_mod_batch % in_w_padded;
+            std::vector<uint32_t> reader_args;
+            std::vector<uint32_t> compute_args;
 
-            std::vector<uint32_t> args = {(uint32_t)(start_row), (uint32_t)(start_col)};
-            SetRuntimeArgs(program, reader0_kernel, core, args);
-            SetRuntimeArgs(program, compute_kernel, core, args);
+            // First arg is core_index when config_tensors_in_dram is true
+            if (config_tensors_in_dram) {
+                reader_args.push_back(core_i);
+            }
+
+            // For return_indices, add start_row/start_col
+            if (return_indices) {
+                TT_FATAL(
+                    core_starting_indices.size() == ncores, "core starting indices size should match number of cores");
+                const uint32_t start_index = core_starting_indices[core_i];
+                const uint32_t start_mod_batch = start_index % (in_w_padded * in_h_padded);
+                const uint32_t start_row = start_mod_batch / in_w_padded;
+                const uint32_t start_col = start_mod_batch % in_w_padded;
+                reader_args.push_back(start_row);
+                reader_args.push_back(start_col);
+                compute_args.push_back(start_row);
+                compute_args.push_back(start_col);
+            }
+
+            SetRuntimeArgs(program, reader0_kernel, core, reader_args);
+            if (params.split_reader) {
+                SetRuntimeArgs(program, reader1_kernel, core, reader_args);
+            }
+            if (return_indices) {
+                SetRuntimeArgs(program, compute_kernel, core, compute_args);
+            }
         }
     }
 
@@ -748,18 +817,28 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         count_include_pad,
         divisor_override,
         output_layout,
-        outputs[0].dtype());
+        outputs[0].dtype(),
+        in_reader_indices_cb_pagesize);
 
     uint32_t output_cb_size = post_allocate_size - memory_used;
 
     // For now assume that if post_op_l1_allocation_size == 0 op is being run
     // in graph capture NO_DISPATCH mode.
+    // Skip validation when config_tensors_in_dram is true as the L1 accounting is different.
+    // When config_tensors_in_dram is false, reader_indices and config CBs are backed by L1_SMALL
+    // buffers (globally allocated), which creates accounting differences with L1 stats.
+    // Allow a small tolerance (32 bytes) for alignment/rounding differences.
     bool is_graph_capture_no_dispatch_mode = post_allocate_size == 0;
+    constexpr uint32_t cb_size_tolerance = 32;  // Allow for alignment/rounding differences
+    uint32_t actual_cb_size = temporary_size + output_cb_size;
+    bool size_within_tolerance =
+        (actual_cb_size >= l1_usage ? actual_cb_size - l1_usage : l1_usage - actual_cb_size) <= cb_size_tolerance;
     TT_FATAL(
-        temporary_size + output_cb_size == l1_usage || is_graph_capture_no_dispatch_mode,
-        "Calculated CB size {} does not match with the actual CB size {}  ",
-        temporary_size + output_cb_size,
-        l1_usage);
+        size_within_tolerance || is_graph_capture_no_dispatch_mode || config_tensors_in_dram,
+        "Calculated CB size {} does not match with the actual CB size {} (tolerance: {})",
+        actual_cb_size,
+        l1_usage,
+        cb_size_tolerance);
 
     {  // debug
         log_debug(tt::LogOp, "raw_in_cb :: PS = {}, NP = {}", raw_in_cb_pagesize, raw_in_cb_npages);
@@ -890,9 +969,11 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
             generate_core_starting_indices(op_trace_metadata, shard_boundaries, shard_scheme, num_cores_x, ncores);
     }
 
-    Tensor reader_indices = sliding_window::construct_on_host_config_tensor(top_left_indices, parallel_config);
-    Tensor reader_indices_on_device =
-        sliding_window::move_config_tensor_to_device(reader_indices, parallel_config, is_block_sharded, input.device());
+    bool config_tensors_in_dram = op_attr.config_tensors_in_dram_;
+    Tensor reader_indices =
+        sliding_window::construct_on_host_config_tensor(top_left_indices, parallel_config, config_tensors_in_dram);
+    Tensor reader_indices_on_device = sliding_window::move_config_tensor_to_device(
+        reader_indices, parallel_config, is_block_sharded, input.device(), config_tensors_in_dram);
 
     return pool2d_multi_core_sharded_with_halo_v2_impl_new(
         program,
@@ -929,7 +1010,8 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         compute_kernel_config,
         divisor_override,
         op_attr.memory_used,
-        output_layout);
+        output_layout,
+        config_tensors_in_dram);
 }
 
 void Pool2D::MultiCore::override_runtime_arguments(

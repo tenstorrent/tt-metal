@@ -192,7 +192,8 @@ uint32_t calculate_L1_usage(
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
     const Layout& output_layout,
-    const DataType& output_dtype) {
+    const DataType& output_dtype,
+    std::optional<uint32_t> reader_indices_page_size_opt) {
     const auto grid_size = input_memory.shard_spec().value().grid.bounding_box().grid_size();
     uint32_t num_shards_c = 0;
     if (input_memory.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -295,9 +296,36 @@ uint32_t calculate_L1_usage(
         out_idx_cb_config_size = out_cb_npages * out_cb_pagesize;
     }
 
+    // Reader indices CB - always allocated (1 page)
+    // The page size depends on the sliding window config which generates variable-length segment data.
+    // When reader_indices_page_size_opt is provided (from program factory validation path),
+    // the CB is globally allocated (backed by L1_SMALL buffer), so we don't count it here
+    // since it's not tracked in L1 statistics. For auto-shard estimation (no opt value),
+    // we use a conservative estimate.
+    uint32_t in_reader_indices_cb_size = 0;
+    if (!reader_indices_page_size_opt.has_value()) {
+        // Conservative estimate for auto-shard estimation path
+        // Each output element could have its own segment (2 uint16 per segment + 1 header)
+        const uint32_t out_nhw_per_core = output_memory.shard_spec()->shape[0];
+        in_reader_indices_cb_size = (2 * out_nhw_per_core + 2) * sizeof(uint16_t);
+    }
+    // When reader_indices_page_size_opt is provided, CB is globally allocated (L1_SMALL),
+    // so its size is not counted in L1 temporary CB size
+
+    // Scalar config CB - only allocated when !one_scalar_per_core
+    uint32_t config_cb_size = 0;
+    if (!one_scalar_per_core) {
+        // This size is determined by create_scalar_config_tensor in the program factory
+        // Page size is based on max_scalars_cnt * 3 (ScalarInfo has 3 uint16_t fields) * sizeof(uint16_t)
+        // For conservative estimation, use a reasonable upper bound based on typical scenarios
+        const uint32_t max_scalars_estimate = 64;  // Conservative estimate for max unique scalars per core
+        const uint32_t entries_per_core = 3 * max_scalars_estimate;  // 3 fields per ScalarInfo
+        config_cb_size = entries_per_core * sizeof(uint16_t);        // 1 page
+    }
+
     return in_scalar_cb_size_0 + in_scalar_cb_size_1 + clear_value_cb_size + in_cb_config_0_size + in_cb_config_1_size +
-           total_mpwi_cb_size + pre_tilize_cb_size + sliding_window::align_buffer(out_cb_config_size) +
-           sliding_window::align_buffer(out_idx_cb_config_size);
+           total_mpwi_cb_size + pre_tilize_cb_size + out_cb_config_size + out_idx_cb_config_size +
+           in_reader_indices_cb_size + config_cb_size;
 }
 
 std::optional<ParallelConfig> determine_pool_config_for_auto_shard(

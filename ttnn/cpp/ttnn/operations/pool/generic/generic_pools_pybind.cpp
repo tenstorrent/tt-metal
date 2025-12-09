@@ -47,6 +47,7 @@ void bind_max_pool2d_operation(py::module& module) {
             return_indices (bool, optional): whether to return both values and indices. When True, returns a tuple (values, indices). Defaults to `False`.
             dtype (ttnn.DataType, optional): the data format for the output tensor. Defaults to `ttnn.bfloat16`.
             output_layout (ttnn.Layout, optional): the layout for the output tensor. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
+            config_tensors_in_dram (bool, optional): if true, config tensors are stored in DRAM instead of L1_SMALL. L1_SMALL is persistent storage and gets quickly used up for large CNNs. Defaults to `False`.
 
         Returns:
             ttnn.Tensor or tuple[ttnn.Tensor, ttnn.Tensor]: the max pool convolved output tensor, or a tuple of (values, indices) if return_indices is True.
@@ -69,7 +70,8 @@ void bind_max_pool2d_operation(py::module& module) {
                bool reallocate_halo_output,
                bool return_indices,
                const DataType dtype,
-               const Layout output_layout) -> py::object {
+               const Layout output_layout,
+               bool config_tensors_in_dram) -> py::object {
                 auto result = self(
                     input_tensor,
                     batch_size,
@@ -87,7 +89,8 @@ void bind_max_pool2d_operation(py::module& module) {
                     reallocate_halo_output,
                     return_indices,
                     dtype,
-                    output_layout);
+                    output_layout,
+                    config_tensors_in_dram);
 
                 // Return single tensor or tuple based on vector size
                 if (result.size() == 1) {
@@ -113,7 +116,8 @@ void bind_max_pool2d_operation(py::module& module) {
             py::arg("reallocate_halo_output") = true,
             py::arg("return_indices") = false,
             py::arg("dtype") = DataType::BFLOAT16,
-            py::arg("output_layout") = Layout::ROW_MAJOR});
+            py::arg("output_layout") = Layout::ROW_MAJOR,
+            py::arg("config_tensors_in_dram") = false});
 }
 
 void bind_avg_pool2d_operation(py::module& module) {
@@ -146,6 +150,7 @@ void bind_avg_pool2d_operation(py::module& module) {
             dtype (ttnn.DataType, optional): the data format for the output tensor. Defaults to `ttnn.bfloat16`.
             output_layout (ttnn.Layout, optional): the layout for the output tensor. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
             compute_kernel_config (DeviceComputeKernelConfig, optional): the device compute kernel configuration. Defaults to `None`.
+            config_tensors_in_dram (bool, optional): if true, config tensors are stored in DRAM instead of L1_SMALL. L1_SMALL is persistent storage and gets quickly used up for large CNNs. Defaults to `False`.
 
         Returns:
             ttnn.Tensor: the average pool convolved output tensor.
@@ -169,7 +174,8 @@ void bind_avg_pool2d_operation(py::module& module) {
                bool deallocate_input,
                bool reallocate_halo_output,
                const DataType dtype,
-               const Layout output_layout) -> ttnn::Tensor {
+               const Layout output_layout,
+               bool config_tensors_in_dram) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     batch_size,
@@ -188,7 +194,8 @@ void bind_avg_pool2d_operation(py::module& module) {
                     deallocate_input,
                     reallocate_halo_output,
                     dtype,
-                    output_layout);
+                    output_layout,
+                    config_tensors_in_dram);
             },
             py::arg("input_tensor"),
             py::arg("batch_size"),
@@ -208,7 +215,8 @@ void bind_avg_pool2d_operation(py::module& module) {
             py::arg("deallocate_input") = false,
             py::arg("reallocate_halo_output") = true,
             py::arg("dtype") = DataType::BFLOAT16,
-            py::arg("output_layout") = Layout::ROW_MAJOR});
+            py::arg("output_layout") = Layout::ROW_MAJOR,
+            py::arg("config_tensors_in_dram") = false});
 }
 
 void py_module(py::module& module) {

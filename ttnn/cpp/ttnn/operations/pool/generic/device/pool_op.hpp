@@ -32,6 +32,7 @@ struct Pool2D {
         std::optional<int32_t> divisor_override_;
         bool return_indices_;
         uint32_t memory_used;
+        bool config_tensors_in_dram_ = false;
     };
 
     struct tensor_args_t {
@@ -103,7 +104,8 @@ struct Pool2D {
         bool count_include_pad,
         std::optional<int32_t> divisor_override,
         bool return_indices,
-        uint32_t memory_used);
+        uint32_t memory_used,
+        bool config_tensors_in_dram = false);
 };
 
 }  // namespace pool

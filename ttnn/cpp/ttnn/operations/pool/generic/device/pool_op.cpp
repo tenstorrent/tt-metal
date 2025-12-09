@@ -221,7 +221,8 @@ std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
     bool return_indices,
-    uint32_t memory_used) {
+    uint32_t memory_used,
+    bool config_tensors_in_dram) {
     return {
         operation_attributes_t{
             .sliding_window_config_ = sliding_window_config,
@@ -233,7 +234,8 @@ std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke
             .count_include_pad_ = count_include_pad,
             .divisor_override_ = divisor_override,
             .return_indices_ = return_indices,
-            .memory_used = memory_used},
+            .memory_used = memory_used,
+            .config_tensors_in_dram_ = config_tensors_in_dram},
         tensor_args_t{input_tensor}};
 }
 

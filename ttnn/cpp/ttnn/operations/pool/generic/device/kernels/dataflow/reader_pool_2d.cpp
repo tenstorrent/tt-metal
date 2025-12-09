@@ -95,7 +95,8 @@ template <
     uint32_t in_idx_cb_id,
     uint32_t right_inc_cb_id,
     uint32_t down_left_wrap_inc_cb_id,
-    uint32_t up_left_wrap_inc_cb_id>
+    uint32_t up_left_wrap_inc_cb_id,
+    uint32_t runtime_arg_offset>
 ALWI void initialize_return_indices_data() {
     // since kernels can start in padded regions we need to have "indexes" in these regions
     // we choose a paradigm where we padding indexes must satisfy the following conditions:
@@ -111,8 +112,9 @@ ALWI void initialize_return_indices_data() {
     // Calculate initial index based on padding conditions
     uint16_t init_index = 0;
     constexpr uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;
-    const uint16_t start_row = (uint16_t)get_arg_val<uint32_t>(0);
-    const uint16_t start_col = (uint16_t)get_arg_val<uint32_t>(1);
+    // runtime_arg_offset accounts for core_index being first when config_tensors_in_dram is true
+    const uint16_t start_row = (uint16_t)get_arg_val<uint32_t>(runtime_arg_offset + 0);
+    const uint16_t start_col = (uint16_t)get_arg_val<uint32_t>(runtime_arg_offset + 1);
 
     if (start_row <= pad_t) {
         // top left is in top padding, we increment from the padding index in the top left
@@ -425,6 +427,13 @@ void kernel_main() {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(44);
     constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(45);
 
+#ifdef CONFIG_TENSOR_IN_DRAM
+    constexpr uint32_t reader_indices_dram_addr = get_compile_time_arg_val(46);
+    constexpr uint32_t reader_indices_page_size = get_compile_time_arg_val(47);
+    // TensorAccessorArgs are at index 48+
+    constexpr uint32_t reader_indices_tensor_args_index = 48;
+#endif
+
     constexpr bool use_split_reader = split_reader && !return_indices;
     constexpr uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;
 
@@ -467,6 +476,13 @@ void kernel_main() {
     }
 
     if constexpr (reader_id == 0 && return_indices) {
+        // When config_tensors_in_dram is defined, core_index is at runtime arg index 0,
+        // so start_row/start_col are at indices 1 and 2. Otherwise, they're at 0 and 1.
+#ifdef CONFIG_TENSOR_IN_DRAM
+        constexpr uint32_t return_indices_runtime_arg_offset = 1;
+#else
+        constexpr uint32_t return_indices_runtime_arg_offset = 0;
+#endif
         initialize_return_indices_data<
             kernel_h,
             kernel_w,
@@ -482,7 +498,8 @@ void kernel_main() {
             in_idx_cb_id,
             right_inc_cb_id,
             down_left_wrap_inc_cb_id,
-            up_left_wrap_inc_cb_id>();
+            up_left_wrap_inc_cb_id,
+            return_indices_runtime_arg_offset>();
     }
 
     // initialize the scalar CB
@@ -495,6 +512,29 @@ void kernel_main() {
     }
 
     const uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
+
+#ifdef CONFIG_TENSOR_IN_DRAM
+    // Load reader indices from DRAM into local CB
+    // Each core reads its own page from the interleaved DRAM tensor
+    {
+        // Get core_index from runtime args (first runtime arg when config_tensors_in_dram is true)
+        uint32_t runtime_arg_idx = 0;
+        const uint32_t core_index = get_arg_val<uint32_t>(runtime_arg_idx++);
+
+        // Use TensorAccessor to read from the correct DRAM bank/page for this core
+        const auto reader_indices_tensor_args = TensorAccessorArgs<reader_indices_tensor_args_index>();
+        const auto reader_indices_accessor =
+            TensorAccessor(reader_indices_tensor_args, reader_indices_dram_addr, reader_indices_page_size);
+
+        cb_reserve_back(in_reader_indices_cb_id, 1);
+        uint64_t src_noc_addr = get_noc_addr(core_index, reader_indices_accessor);
+        noc_async_read(src_noc_addr, get_write_ptr(in_reader_indices_cb_id), reader_indices_page_size);
+        noc_async_read_barrier();
+        cb_push_back(in_reader_indices_cb_id, 1);
+    }
+    cb_wait_front(in_reader_indices_cb_id, 1);
+#endif
+
     uint32_t reader_indices_l1_addr = get_read_ptr(in_reader_indices_cb_id);
     volatile tt_l1_ptr uint32_t* reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_l1_addr);
