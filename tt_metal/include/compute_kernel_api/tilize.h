@@ -6,11 +6,13 @@
 
 #include "compute_kernel_api/common.h"
 #ifdef TRISC_MATH
-#include "llk_math_unary_datacopy_api.h"
-#include "llk_math_reduce_api.h"
+#include "llk_math_common_api.h"
 #include "llk_math_matmul_api.h"
+#include "llk_math_reduce_api.h"
+#include "llk_math_unary_datacopy_api.h"
 #endif
 #ifdef TRISC_UNPACK
+#include "llk_unpack_AB_api.h"
 #include "llk_unpack_tilize_api.h"
 #endif
 
@@ -95,17 +97,17 @@ ALWI void tilizeA_B_reduce_init(
     uint32_t ocb,
     uint32_t num_faces = 4,
     uint32_t face_r_dim = 16) {
-    UNPACK((llk_unpack_tilizeA_B_hw_configure_disaggregated<DST_ACCUM_MODE>(icb0, icb1_scaler)));
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1_scaler)));
     UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true, false, zero_srcA_reduce>(
         icb0, icb1_scaler, block, num_faces, face_r_dim, 1)));
 
     MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure_disaggregated(icb0, icb1_scaler)));
+    MATH((llk_math_hw_configure(icb0, icb1_scaler)));
 
-    PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(ocb)));
+    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>(ocb)));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE>(ocb)));
 }
 #endif
 
@@ -173,7 +175,7 @@ ALWI void tilize_init_short_with_dt_no_pack(uint32_t old_icb, uint32_t new_icb, 
 // while the *_no_pack variants do not configure the packer, testing has shown that this call is
 // still necessary to ensure the data type is properly updated
 #ifdef ARCH_BLACKHOLE
-    PACK((_llk_pack_init_<false, false, DstTileFaceLayout::RowMajor, false, true>(
+    PACK((_llk_pack_init_<false /*untilize*/, false /*zero_output*/, true /*tilize en*/>(
         pack_dst_format[new_icb],
         get_output_face_r_dim(new_icb),
         get_output_tile_c_dim(new_icb),
@@ -385,7 +387,8 @@ ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
 
 ALWI void fast_tilize_init_with_dt(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
     UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE>(icb, icb)));
-    MATH((llk_math_reconfig_data_format<true, true>(icb, icb)));
+    // NC: second template arguement was to_from_int8 = true, what to do here?
+    MATH((llk_math_reconfig_data_format<true>(icb, icb)));
 
     fast_tilize_init(icb, full_dim, ocb);
 }

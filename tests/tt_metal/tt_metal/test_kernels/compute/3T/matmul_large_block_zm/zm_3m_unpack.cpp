@@ -7,6 +7,7 @@
 #include "llk_unpack_tilize_api.h"
 #include "llk_unpack_untilize_api.h"
 #include "llk_unpack_A_api.h"
+#include "llk_unpack_AB_api.h"
 #include "llk_unpack_AB_matmul_api.h"
 namespace NAMESPACE {
 
@@ -160,7 +161,7 @@ void unpack_main() {
         matmul_out_intermediate_cb_id = 25;  // Given 24 is no longer available, we use 25 instead
     }
 
-    llk_unpack_AB_matmul_hw_configure_disaggregated(0, 1, 0);
+    llk_unpack_hw_configure(0, 1, 0);
 
     uint32_t reblock_cb_id = 26;
 

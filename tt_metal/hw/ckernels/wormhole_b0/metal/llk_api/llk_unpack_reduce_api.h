@@ -10,49 +10,6 @@
  * LLK UNPACK REDUCE
  *************************************************************************/
 
-template <
-    PoolType type,
-    ReduceDim dim,
-    bool is_fp32_dest_acc_en,
-    StochRndType stoch_rnd_mode = StochRndType::None>
-inline void llk_unpack_reduce_hw_configure(
-    const llk_unpack_reduce_params_t* unpack_reduce_params, const float const_mult) {
-    constexpr bool within_face_16x16_transpose = (ReduceDim::REDUCE_ROW == dim);
-
-    const std::uint32_t unpA_operand_id = get_operand_id(unpack_reduce_params->unpA_operand);
-    const std::uint32_t unpA_num_faces = get_operand_num_faces(unpA_operand_id);
-    const std::uint32_t unpA_face_r_dim = get_operand_face_r_dim(unpA_operand_id);
-
-    constexpr std::uint32_t unpB_src_format = (std::uint32_t)DataFormat::Float32;
-    const std::uint32_t unpB_dst_format =
-        ((std::uint32_t)unpack_dst_format[unpA_operand_id] == (std::uint32_t)DataFormat::Int8)
-            ? (std::uint32_t)DataFormat::Float16
-            :  // Int8 is treated as fp16_a
-            ((((std::uint32_t)unpack_dst_format[unpA_operand_id] >> 2) & 0x1) ? (std::uint32_t)DataFormat::Float16_b
-                                                                              : (std::uint32_t)DataFormat::Float16);
-
-    _llk_unpack_reduce_hw_configure_<is_fp32_dest_acc_en, stoch_rnd_mode>(
-        unpack_src_format[unpA_operand_id],
-        unpB_src_format,
-        unpack_dst_format[unpA_operand_id],
-        unpB_dst_format,
-        unpA_face_r_dim,
-        unpA_face_r_dim,
-        within_face_16x16_transpose,
-        unpA_num_faces,
-        unpA_num_faces);
-}
-
-template <
-    PoolType type,
-    ReduceDim dim,
-    bool is_fp32_dest_acc_en,
-    StochRndType stoch_rnd_mode = StochRndType::None>
-inline void llk_unpack_reduce_hw_configure_disaggregated(const std::uint32_t unpA_operand, const float mult) {
-    const llk_unpack_reduce_params_t unpack_reduce_params = {.unpA_operand = unpA_operand};
-    llk_unpack_reduce_hw_configure<type, dim, is_fp32_dest_acc_en, stoch_rnd_mode>(&unpack_reduce_params, mult);
-}
-
 template <PoolType type, ReduceDim dim>
 inline void llk_unpack_reduce_mop_config() {
     _llk_unpack_reduce_mop_config_<type, dim>();

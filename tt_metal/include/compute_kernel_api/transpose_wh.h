@@ -7,12 +7,13 @@
 #include "compute_kernel_api/common.h"
 #ifdef TRISC_MATH
 #include "llk_math_common_api.h"
-#include "llk_math_unary_datacopy_api.h"
 #include "llk_math_transpose_dest_api.h"
+#include "llk_math_unary_datacopy_api.h"
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_common_api.h"
 #include "llk_unpack_A_api.h"
+#include "llk_unpack_AB_api.h"
 #endif
 
 namespace ckernel {
@@ -33,23 +34,27 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb) {
     const bool is_int32 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
 
     if (is_int32) {
-        UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, true>(icb, false)));
+        // NC: Second argument doesn't exist, should be within_face_16x16_transpose = false, move to init instead.
+        UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb, icb /* second operand, unused for this operation*/)));
+        // TODO LP disable zero flags
+        UNPACK((llk_unpack_disable_src_zero_flag(true)));
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
             true, false, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(true, false, icb)));
         MATH((llk_math_transpose_dest_init<false, true>()));
     } else {
-        UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, false>(icb, true)));
+        // NC: Second argument doesn't exist, should be within_face_16x16_transpose = true, move to init instead.
+        UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb, icb /* second operand, unused for this operation*/)));
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<A2D, DST_ACCUM_MODE, BroadcastType::NONE>(true, true, icb)));
     }
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure_disaggregated(icb, icb)));
+    MATH((llk_math_hw_configure(icb, icb)));
 #endif
 
-    PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(ocb)));
+    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE>()));
 }
 
 /**
