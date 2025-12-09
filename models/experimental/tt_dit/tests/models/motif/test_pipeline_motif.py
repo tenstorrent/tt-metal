@@ -9,10 +9,8 @@ import pytest
 import ttnn
 from loguru import logger
 
+from models.perf.benchmarking_utils import BenchmarkProfiler
 from ....pipelines.motif.pipeline_motif import MotifPipeline
-from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import (
-    TimingCollector,
-)
 
 
 @pytest.mark.parametrize(
@@ -110,8 +108,6 @@ def test_motif_pipeline(
         if traced:
             pytest.skip("Skipping traced test in CI environment. Use Performance test for detailed timing analysis.")
 
-    pipeline.timing_collector = TimingCollector()
-
     prompts = [
         "cinematic film still of Kodak Motion Picture Film (Sharp Detailed Image) An Oscar winning movie for Best "
         "Cinematography a woman in a kimono standing on a subway train in Japan Kodak Motion Picture Film Style, "
@@ -131,27 +127,29 @@ def test_motif_pipeline(
         filename_prefix += "_untraced"
 
     def run(*, prompt: str, number: int, seed: int) -> None:
-        images = pipeline.run_single_prompt(
-            prompt=prompt,
-            num_inference_steps=num_inference_steps,
-            cfg_scale=5.0,
-            seed=seed,
-            traced=traced,
-        )
+        benchmark_profiler = BenchmarkProfiler()
+        with benchmark_profiler("run", iteration=0):
+            images = pipeline.run_single_prompt(
+                prompt=prompt,
+                num_inference_steps=num_inference_steps,
+                cfg_scale=5.0,
+                seed=seed,
+                traced=traced,
+                timer=benchmark_profiler,
+                timer_iteration=0,
+            )
 
         output_filename = f"{filename_prefix}_{number}.png"
         images[0].save(output_filename)
         logger.info(f"Image saved as {output_filename}")
 
-        timing_data = pipeline.timing_collector.get_timing_data()
-        logger.info(f"CLIP encoding time: {timing_data.clip_encoding_time:.2f}s")
-        logger.info(f"T5 encoding time: {timing_data.t5_encoding_time:.2f}s")
-        logger.info(f"Total encoding time: {timing_data.total_encoding_time:.2f}s")
-        logger.info(f"VAE decoding time: {timing_data.vae_decoding_time:.2f}s")
-        logger.info(f"Total pipeline time: {timing_data.total_time:.2f}s")
-        if timing_data.denoising_step_times:
-            avg_step_time = sum(timing_data.denoising_step_times) / len(timing_data.denoising_step_times)
-            logger.info(f"Average denoising step time: {avg_step_time:.2f}s")
+        logger.info(f"CLIP encoding time: {benchmark_profiler.get_duration('clip_encoding', 0):.2f}s")
+        logger.info(f"T5 encoding time: {benchmark_profiler.get_duration('t5_encoding', 0):.2f}s")
+        logger.info(f"Total encoding time: {benchmark_profiler.get_duration('encoder', 0):.2f}s")
+        logger.info(f"VAE decoding time: {benchmark_profiler.get_duration('vae', 0):.2f}s")
+        logger.info(f"Total pipeline time: {benchmark_profiler.get_duration('total', 0):.2f}s")
+        avg_step_time = benchmark_profiler.get_duration("denoising", 0) / num_inference_steps
+        logger.info(f"Average denoising step time: {avg_step_time:.2f}s")
 
     if no_prompt:
         for i, prompt in enumerate(prompts):
