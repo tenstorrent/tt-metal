@@ -256,16 +256,13 @@ void topk(
     bool ascending = false;
     int end_phase = (tiles <= 2) ? log_tiles - 1 : 5;
 
-    DPRINT << "topk: start" << ENDL();
     topk_tile_init();
     // acquire_dst();
     tile_regs_acquire();
-    DPRINT << "topk: waiting for cb_wait_front" << ENDL();
     cb_wait_front(winning_group_scores_cb_index, tiles);
     cb_wait_front(winning_group_indices_cb_index, tiles);
     // local sort first two tiles:
 
-    DPRINT << "topk: transpose first two tiles" << ENDL();
     // transpose and unpack into dest regs
     reconfig_data_format_srca(winning_group_scores_cb_index);
     transpose_wh_init_short(winning_group_scores_cb_index);
@@ -278,15 +275,12 @@ void topk(
     transpose_wh_tile(winning_group_indices_cb_index, 0, 2);
     transpose_wh_tile(winning_group_indices_cb_index, 1, 3);
     // llk_topk_sort -> inplace
-    DPRINT << "topk: local_sort and merge first two tiles" << ENDL();
     ckernel::topk_local_sort(0, (int)ascending, 4);
     ckernel::topk_merge(0, 0, 32);
 
     // Use insertion sort; discard lower half and keep upper half
     // Compare upper half with the next tile; insert into correct position
-    DPRINT << "topk: starting insertion loop, tiles=" << tiles << ENDL();
     for (uint32_t j = 2; j < tiles; j++) {
-        DPRINT << "topk: processing tile j=" << j << ENDL();
         reconfig_data_format_srca(winning_group_scores_cb_index);
         transpose_wh_init_short(winning_group_scores_cb_index);
         transpose_wh_tile(winning_group_scores_cb_index, j, 1);
@@ -298,11 +292,9 @@ void topk(
         ckernel::topk_local_sort(0, (int)ascending, 4);
         ckernel::topk_merge(0, 0, 32);
     }
-    DPRINT << "topk: rebuild" << ENDL();
     ckernel::topk_rebuild(0, (int)ascending, 0, 32, 5, true);
     tile_regs_commit();
 
-    DPRINT << "topk: packing results" << ENDL();
     tile_regs_wait();
     cb_reserve_back(post_sort_transpose_cb_index, 1);
     pack_reconfig_data_format(post_sort_transpose_cb_index);
@@ -315,15 +307,11 @@ void topk(
     tile_regs_release();
     cb_push_back(intermediate_local_sort_indices_cb_index, 1);
 
-    DPRINT << "topk: transpose_and_pack 1" << ENDL();
     transpose_and_pack(post_sort_transpose_cb_index, unnormalized_scores_cb_index, 1);
-    DPRINT << "topk: transpose_and_pack 2" << ENDL();
     transpose_and_pack(intermediate_local_sort_indices_cb_index, output_indices_cb_index, 1);
 
-    DPRINT << "topk: cleanup" << ENDL();
     cb_pop_front(winning_group_scores_cb_index, tiles);
     cb_pop_front(winning_group_indices_cb_index, tiles);
-    DPRINT << "topk: done" << ENDL();
 }
 
 void normalize_scores(
@@ -382,8 +370,8 @@ void normalize_scores(
     // 6. Broadcast multiply
     tile_regs_acquire();
     cb_wait_front(transpose_cb_index, 1);
-    // UNPACK(print_tile(transpose_cb_index, 0, true, 0, 1, 0, 1));
-    // UNPACK(print_tile(unnormalized_scores_cb_index, 0, true, 0, 1, 0, 8));
+    UNPACK(print_tile(transpose_cb_index, 0, true, 0, 1, 0, 1));
+    UNPACK(print_tile(unnormalized_scores_cb_index, 0, true, 0, 1, 0, 8));
     mul_bcast_cols_init_short(unnormalized_scores_cb_index, transpose_cb_index);
     mul_tiles_bcast<BroadcastType::COL>(
         unnormalized_scores_cb_index, transpose_cb_index, 0, 0, 0);  // tile *= 1/(sum_col(tile))
@@ -397,7 +385,7 @@ void normalize_scores(
     // PACK(DPRINT << "Reserving back normalized scores cb index" << ENDL();)
     pack_reconfig_data_format(normalized_scores_cb_index);
     pack_tile(0, normalized_scores_cb_index);
-    // PACK(print_tile(normalized_scores_cb_index, 0, true, 0, 1, 0, 8));
+    PACK(print_tile(normalized_scores_cb_index, 0, true, 0, 1, 0, 8));
     // PACK(DPRINT << "End of push back normalized scores cb index" << ENDL();)
     cb_push_back(normalized_scores_cb_index, 1);
     // PACK(DPRINT << "End of push back on normalized scores cb index" << ENDL();)
