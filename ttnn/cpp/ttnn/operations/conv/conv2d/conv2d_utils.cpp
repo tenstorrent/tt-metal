@@ -891,6 +891,162 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
     }
 }
 
+core_count_and_size calculate_L1_usage_for_conv_op(
+    uint32_t batch_size,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    uint32_t input_height,
+    uint32_t input_width,
+    uint32_t output_height,
+    uint32_t output_width,
+    const std::array<uint32_t, 2>& kernel_size,
+    const std::array<uint32_t, 2>& stride,
+    const std::array<uint32_t, 4>& padding,
+    const std::array<uint32_t, 2>& dilation,
+    uint32_t groups,
+    bool enable_bias,
+    DataType input_datatype,
+    DataType output_datatype,
+    Layout input_layout,
+    CoreCoord compute_grid_size,
+    bool is_mm_conv,
+    TensorMemoryLayout shard_layout,
+    DeviceComputeKernelConfig compute_config,
+    const Conv2dConfig& conv_config_in,
+    const std::optional<ttnn::MemoryConfig>& _halo_input_memory_config) {
+    Conv2dConfig conv_config = conv_config_in;
+    conv_config.shard_layout = shard_layout;
+
+    ShardOrientation shard_orientation =
+        conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
+
+    // Output of halo op is always ROW_MAJOR, so input for convs is either DataType::FLOAT32 or DataType::BFLOAT16
+    const tt::tt_metal::DataType conv_input_dtype = (input_datatype == tt::tt_metal::DataType::FLOAT32)
+                                                        ? tt::tt_metal::DataType::FLOAT32
+                                                        : tt::tt_metal::DataType::BFLOAT16;
+    const uint32_t input_datum_size = conv_input_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
+
+    const bool conv_is_1d_deptwise =
+        is_1d_deptwise_conv(groups, in_channels, out_channels, kernel_size[1], input_width, enable_bias);
+
+    const uint32_t input_channels_alignment =
+        get_input_channels_alignment(shard_layout, input_layout, false, is_mm_conv, std::nullopt);
+    const uint32_t in_channels_aligned = tt::round_up(in_channels, input_channels_alignment);
+    const uint32_t output_channels_padded = tt::round_up(out_channels, tt::constants::TILE_WIDTH);
+    // Note: These are not exact shapes for weights as prepare_conv_weights will pad the weights depending on the
+    // conv2d params, but these are good enough for L1 usage estimation.
+    const ttnn::Shape weights_shape(
+        {1, 1, in_channels_aligned * kernel_size[0] * kernel_size[1], output_channels_padded});
+
+    const ParallelConfig input_parallel_config = determine_parallel_config(
+        conv_config.shard_layout.value(),
+        batch_size,
+        in_channels,
+        output_height,
+        output_width,
+        out_channels,
+        input_channels_alignment,
+        compute_grid_size,
+        shard_orientation,
+        !is_mm_conv,
+        true,
+        true,
+        conv_config.act_block_h_override);
+
+    auto output_compute_grid_size = get_output_compute_grid_size(compute_grid_size, conv_config, input_parallel_config);
+    const ParallelConfig output_parallel_config = determine_output_parallel_config(
+        input_parallel_config,
+        output_compute_grid_size,
+        out_channels,
+        shard_orientation,
+        is_mm_conv /* && conv_config.shard_layout != TensorMemoryLayout::WIDTH_SHARDED*/);
+
+    const uint32_t in_channels_padded = tt::round_up(
+        in_channels, get_num_cores_channels_from_parallel_config(input_parallel_config) * input_channels_alignment);
+    auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
+        conv_config,
+        compute_config,
+        input_parallel_config,
+        output_parallel_config,
+        in_channels_padded,
+        out_channels,
+        batch_size,
+        output_height,
+        output_width,
+        kernel_size,
+        compute_grid_size);
+
+    SlidingWindowConfig sliding_window_config{
+        .input_hw = {input_height, input_width}, .window_hw = {kernel_size[0], kernel_size[1]}};
+    conv_op_l1_usage l1_usage = calculate_L1_usage(
+        compute_config,
+        opt_conv_op_block_config,
+        opt_conv_op_parallel_config,
+        weights_shape,
+        sliding_window_config,
+        dilation,
+        conv_config,
+        input_datatype,
+        output_datatype,
+        output_width,
+        enable_bias,
+        conv_is_1d_deptwise,
+        in_channels_padded);
+
+    auto halo_input_memory_config = _halo_input_memory_config.has_value()
+                                        ? _halo_input_memory_config.value()
+                                        : std::get<1>(determine_input_memory_config(
+                                              conv_config.shard_layout.value(),
+                                              shard_orientation,
+                                              batch_size,
+                                              ttnn::Shape({batch_size, input_height, input_width, in_channels}),
+                                              ttnn::Shape({batch_size, output_height, output_width, out_channels}),
+                                              is_mm_conv,
+                                              compute_grid_size,
+                                              input_layout,
+                                              BufferType::L1,
+                                              input_parallel_config,
+                                              conv_config.act_block_h_override));
+
+    auto halo_input_shard_shape = halo_input_memory_config.shard_spec().value().shape;
+
+    // Create SlidingWindowConfig for precise halo calculation
+    SlidingWindowConfig halo_config;
+    halo_config.batch_size = batch_size;
+    halo_config.input_hw = {input_height, input_width};
+    halo_config.window_hw = {kernel_size[0], kernel_size[1]};
+    halo_config.stride_hw = {stride[0], stride[1]};
+    halo_config.padding = padding;
+    halo_config.dilation_hw = {dilation[0], dilation[1]};
+    halo_config.num_cores_nhw = get_num_cores_nhw_from_parallel_config(input_parallel_config);
+    halo_config.core_range_set = halo_input_memory_config.shard_spec().value().grid;
+    halo_config.snap_to_tile = true;
+
+    uint32_t precise_input_size_per_core =
+        sliding_window::calculate_precise_halo_output_elems(halo_config, halo_input_shard_shape);
+
+    log_trace(
+        tt::LogOp,
+        "L1 usage for {}: Input {}, Output {}, CBs {}, Halo Output : {}",
+        conv_config.shard_layout,
+        halo_input_memory_config,
+        l1_usage.tensor_allocation_size,
+        l1_usage.CB_allocation_size,
+        precise_input_size_per_core);
+
+    uint32_t input_size_divider = (input_datatype == tt::tt_metal::DataType::BFLOAT8_B) ? 2 : 1;
+
+    return core_count_and_size{
+        .core_count = std::max(input_parallel_config.grid.num_cores(), output_parallel_config.grid.num_cores()),
+        .halo_input_size =
+            halo_input_shard_shape[0] * halo_input_shard_shape[1] * input_datum_size / input_size_divider,
+        .halo_output_size = precise_input_size_per_core * input_datum_size,
+        .conv_op_size = l1_usage.CB_allocation_size + l1_usage.tensor_allocation_size,
+        .total_size = l1_usage.CB_allocation_size + l1_usage.tensor_allocation_size +
+                      precise_input_size_per_core * input_datum_size,
+        .conv_config = conv_config};
+};
+
 Conv2dConfig determine_conv_config_for_auto_shard(
     const Conv2dConfig& conv_config,
     bool is_mm_conv,
@@ -931,141 +1087,33 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         conv_config.shard_layout.has_value()) {
         return conv_config;
     }
-
-    ShardOrientation shard_orientation =
-        conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
-
-    struct core_count_and_size {
-        uint32_t core_count{};
-        uint32_t size{};
-        Conv2dConfig conv_config;
-    };
-
-    // Output of halo op is always ROW_MAJOR, so input for convs is either DataType::FLOAT32 or DataType::BFLOAT16
-    const tt::tt_metal::DataType conv_input_dtype = (input_datatype == tt::tt_metal::DataType::FLOAT32)
-                                                        ? tt::tt_metal::DataType::FLOAT32
-                                                        : tt::tt_metal::DataType::BFLOAT16;
-    const uint32_t input_datum_size = conv_input_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
-
     const bool conv_is_1d_deptwise =
         is_1d_deptwise_conv(groups, in_channels, out_channels, kernel_size[1], input_width, enable_bias);
 
-    auto get_l1_usage_for_sharding = [&](TensorMemoryLayout shard_layout,
-                                         const Conv2dConfig& conv_config_in) -> core_count_and_size {
-        Conv2dConfig conv_config = conv_config_in;
-        conv_config.shard_layout = shard_layout;
-
-        const uint32_t input_channels_alignment =
-            get_input_channels_alignment(shard_layout, input_layout, false, is_mm_conv, std::nullopt);
-        const uint32_t in_channels_aligned = tt::round_up(in_channels, input_channels_alignment);
-        const uint32_t output_channels_padded = tt::round_up(out_channels, tt::constants::TILE_WIDTH);
-        // Note: These are not exact shapes for weights as prepare_conv_weights will pad the weights depending on the
-        // conv2d params, but these are good enough for L1 usage estimation.
-        const ttnn::Shape weights_shape(
-            {1, 1, in_channels_aligned * kernel_size[0] * kernel_size[1], output_channels_padded});
-
-        const ParallelConfig input_parallel_config = determine_parallel_config(
-            conv_config.shard_layout.value(),
+    auto get_l1_usage_for_sharding = [&](TensorMemoryLayout shard_layout, const Conv2dConfig& conv_config) {
+        return calculate_L1_usage_for_conv_op(
             batch_size,
             in_channels,
-            output_height,
-            output_width,
             out_channels,
-            input_channels_alignment,
-            compute_grid_size,
-            shard_orientation,
-            !is_mm_conv,
-            true,
-            true,
-            conv_config.act_block_h_override);
-
-        auto output_compute_grid_size =
-            get_output_compute_grid_size(compute_grid_size, conv_config, input_parallel_config);
-        const ParallelConfig output_parallel_config = determine_output_parallel_config(
-            input_parallel_config,
-            output_compute_grid_size,
-            out_channels,
-            shard_orientation,
-            is_mm_conv /* && conv_config.shard_layout != TensorMemoryLayout::WIDTH_SHARDED*/);
-
-        const uint32_t in_channels_padded = tt::round_up(
-            in_channels, get_num_cores_channels_from_parallel_config(input_parallel_config) * input_channels_alignment);
-        auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
-            conv_config,
-            compute_config,
-            input_parallel_config,
-            output_parallel_config,
-            in_channels_padded,
-            out_channels,
-            batch_size,
+            input_height,
+            input_width,
             output_height,
             output_width,
             kernel_size,
-            compute_grid_size);
-
-        SlidingWindowConfig sliding_window_config{
-            .input_hw = {input_height, input_width}, .window_hw = {kernel_size[0], kernel_size[1]}};
-        conv_op_l1_usage l1_usage = calculate_L1_usage(
-            compute_config,
-            opt_conv_op_block_config,
-            opt_conv_op_parallel_config,
-            weights_shape,
-            sliding_window_config,
+            stride,
+            padding,
             dilation,
-            conv_config,
+            groups,
+            enable_bias,
             input_datatype,
             output_datatype,
-            output_width,
-            enable_bias,
-            conv_is_1d_deptwise,
-            in_channels_padded);
-
-        auto halo_input_memory_config = std::get<1>(determine_input_memory_config(
-            conv_config.shard_layout.value(),
-            shard_orientation,
-            batch_size,
-            ttnn::Shape({batch_size, input_height, input_width, in_channels}),
-            ttnn::Shape({batch_size, output_height, output_width, out_channels}),
-            is_mm_conv,
-            compute_grid_size,
             input_layout,
-            BufferType::L1,
-            input_parallel_config,
-            conv_config.act_block_h_override));
-
-        auto halo_input_shard_shape = halo_input_memory_config.shard_spec().value().shape;
-
-        // Create SlidingWindowConfig for precise halo calculation
-        SlidingWindowConfig halo_config;
-        halo_config.batch_size = batch_size;
-        halo_config.input_hw = {input_height, input_width};
-        halo_config.window_hw = {kernel_size[0], kernel_size[1]};
-        halo_config.stride_hw = {stride[0], stride[1]};
-        halo_config.padding = padding;
-        halo_config.dilation_hw = {dilation[0], dilation[1]};
-        halo_config.num_cores_nhw = get_num_cores_nhw_from_parallel_config(input_parallel_config);
-        halo_config.core_range_set = halo_input_memory_config.shard_spec().value().grid;
-        halo_config.snap_to_tile = true;
-
-        uint32_t precise_input_size_per_core =
-            sliding_window::calculate_precise_halo_output_elems(halo_config, halo_input_shard_shape);
-
-        log_trace(
-            tt::LogOp,
-            "L1 usage for {}: Input {}, Output {}, CBs {}, Halo Output : {}",
-            conv_config.shard_layout,
-            halo_input_memory_config,
-            l1_usage.tensor_allocation_size,
-            l1_usage.CB_allocation_size,
-            precise_input_size_per_core);
-        l1_usage.tensor_allocation_size += precise_input_size_per_core * input_datum_size;
-
-        return core_count_and_size{
-            .core_count = std::max(input_parallel_config.grid.num_cores(), output_parallel_config.grid.num_cores()),
-            .size = l1_usage.CB_allocation_size + l1_usage.tensor_allocation_size,
-            .conv_config = conv_config};
+            compute_grid_size,
+            is_mm_conv,
+            shard_layout,
+            compute_config,
+            conv_config);
     };
-
     core_count_and_size height = get_l1_usage_for_sharding(TensorMemoryLayout::HEIGHT_SHARDED, conv_config);
 
     // 1d deptwise convs support only height sharding
@@ -1079,16 +1127,18 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     core_count_and_size& winning_config = height;
     // Make sure that BS not only has smaller size but provides at least some slicing along the channels.
     // In case we have BS that would slice the tensor only along the HS conv2d code would fail later on.
-    if (block.size < winning_config.size && block.core_count >= compute_grid_size.x) {
+    if (block.total_size < winning_config.total_size && block.core_count >= compute_grid_size.x) {
         winning_config = block;
     }
-    if (width.size < winning_config.size && !is_mm_conv) {
+    if (width.total_size < winning_config.total_size && !is_mm_conv) {
         winning_config = width;
     }
 
-
     log_trace(
-        tt::LogOp, "Selected shard layout: {}, size: {}", winning_config.conv_config.shard_layout, winning_config.size);
+        tt::LogOp,
+        "Selected shard layout: {}, size: {}",
+        winning_config.conv_config.shard_layout,
+        winning_config.total_size);
     return winning_config.conv_config;
 }
 

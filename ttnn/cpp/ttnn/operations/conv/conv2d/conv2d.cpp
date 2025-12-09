@@ -778,95 +778,38 @@ uint32_t Conv2dSliceAttr::get_L1_usage(
     if (!conv_config.shard_layout.has_value()) {
         conv_config.shard_layout = sliced_input_tensor_memory_config.memory_layout();
     }
-    ShardOrientation shard_orientation =
-        conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
-
-    sliding_window::ParallelConfig parallel_config = {
-        .grid = sliced_input_tensor_memory_config.shard_spec().value().grid,
-        .shard_scheme = sliced_input_tensor_memory_config.memory_layout(),
-        .shard_orientation = sliced_input_tensor_memory_config.shard_spec().value().orientation};
-    sliding_window::ParallelConfig output_parallel_config =
-        determine_output_parallel_config(parallel_config, compute_grid, output_channels, shard_orientation, mm_conv);
-
-    uint32_t padded_in_channels = tt::round_up(
-        input_channels, tt::constants::TILE_WIDTH * get_num_cores_channels_from_parallel_config(parallel_config));
-    uint32_t padded_out_channels = tt::round_up(
-        output_channels,
-        tt::constants::TILE_WIDTH * get_num_cores_channels_from_parallel_config(output_parallel_config));
-    ttnn::Shape folded_weights_shape({1, 1, padded_in_channels * kernel_size[0] * kernel_size[1], padded_out_channels});
-    auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
-        conv_config,
-        compute_config,
-        parallel_config,
-        output_parallel_config,
-        padded_in_channels,
-        output_channels,
+    auto conv_L1_usage = calculate_L1_usage_for_conv_op(
         batch_size,
+        input_channels,
+        output_channels,
+        input_slice_height,
+        input_slice_width,
         output_slice_height,
         output_slice_width,
         kernel_size,
-        compute_grid);
-
-    sliding_window::SlidingWindowConfig sliding_window_config{
-        .input_hw = {input_slice_height, input_slice_width}, .window_hw = {kernel_size[0], kernel_size[1]}};
-    const uint32_t input_channels_alignment = get_input_channels_alignment(
-        conv_config.shard_layout.value(),
-        conv_config.output_layout,
-        slice_config.num_slices > 1,
-        mm_conv,
-        std::nullopt);
-    const uint32_t in_channels_padded = tt::round_up(
-        input_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
-    conv_op_l1_usage l1_usage = calculate_L1_usage(
-        compute_config,
-        opt_conv_op_block_config,
-        opt_conv_op_parallel_config,
-        folded_weights_shape,
-        sliding_window_config,
+        stride,
+        slice_padding,
         dilation,
-        conv_config,
+        groups,
+        bias_tensor.has_value(),
         input_dtype,
         output_dtype,
-        output_slice_width,
-        bias_tensor.has_value(),
+        input_layout,
+        compute_grid,
         false,
-        in_channels_padded);
-
-    auto shard_shape = sliced_input_tensor_memory_config.shard_spec().value().shape;
-    // Output of halo op is always ROW_MAJOR, so input for convs is either DataType::FLOAT32 or DataType::BFLOAT16
-    const tt::tt_metal::DataType conv_input_dtype = (input_dtype == tt::tt_metal::DataType::FLOAT32)
-                                                        ? tt::tt_metal::DataType::FLOAT32
-                                                        : tt::tt_metal::DataType::BFLOAT16;
-    const uint32_t input_datum_size = conv_input_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
-    uint32_t input_size = shard_shape[0] * shard_shape[1] * input_datum_size;
-
-    // Create SlidingWindowConfig for precise halo calculation
-    sliding_window::SlidingWindowConfig slice_halo_config;
-    slice_halo_config.batch_size = batch_size;
-    slice_halo_config.input_hw = {input_slice_height, input_slice_width};
-    slice_halo_config.window_hw = {kernel_size[0], kernel_size[1]};
-    slice_halo_config.stride_hw = {stride[0], stride[1]};
-    slice_halo_config.padding = slice_padding;
-    slice_halo_config.dilation_hw = {dilation[0], dilation[1]};
-    slice_halo_config.num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
-    slice_halo_config.core_range_set = sliced_input_tensor_memory_config.shard_spec().value().grid;
-    slice_halo_config.snap_to_tile = true;
-
-    uint32_t precise_max_halo_bytes =
-        sliding_window::calculate_precise_halo_output_elems(slice_halo_config, shard_shape) * input_datum_size;
+        conv_config.shard_layout.value(),
+        compute_config,
+        conv_config,
+        sliced_input_tensor_memory_config);
 
     log_trace(
         tt::LogOp,
-        "Conv DRAM Auto slicing: num_slices = {}, input_shard_shape = {}, precise_max_halo_bytes = {}, conv size = "
-        "{}",
+        "Conv DRAM Auto slicing: num_slices = {}, input_memory_config = {}, L1 usage = {}",
         slice_config.num_slices,
-        sliced_input_tensor_memory_config.shard_spec().value(),
-        precise_max_halo_bytes,
-        l1_usage);
+        sliced_input_tensor_memory_config,
+        conv_L1_usage);
 
-    return std::max(
-        precise_max_halo_bytes + l1_usage.tensor_allocation_size + l1_usage.CB_allocation_size,
-        input_size + precise_max_halo_bytes);
+    return std::max(conv_L1_usage.halo_input_size + conv_L1_usage.halo_output_size, conv_L1_usage.total_size);
 }
 
 tt::tt_metal::MemoryConfig Conv2dSliceAttr::get_input_memory_config(

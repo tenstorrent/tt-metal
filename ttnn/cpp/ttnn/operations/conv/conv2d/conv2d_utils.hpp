@@ -170,6 +170,39 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
 
 DeviceComputeKernelConfig get_conv_default_compute_kernel_config(MeshDevice* device);
 
+struct core_count_and_size {
+    uint32_t core_count{};
+    uint32_t halo_input_size{};
+    uint32_t halo_output_size{};
+    uint32_t conv_op_size{};
+    uint32_t total_size{};
+    Conv2dConfig conv_config;
+};
+
+core_count_and_size calculate_L1_usage_for_conv_op(
+    uint32_t batch_size,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    uint32_t input_height,
+    uint32_t input_width,
+    uint32_t output_height,
+    uint32_t output_width,
+    const std::array<uint32_t, 2>& kernel_size,
+    const std::array<uint32_t, 2>& stride,
+    const std::array<uint32_t, 4>& padding,
+    const std::array<uint32_t, 2>& dilation,
+    uint32_t groups,
+    bool enable_bias,
+    DataType input_datatype,
+    DataType output_datatype,
+    Layout input_layout,
+    CoreCoord compute_grid_size,
+    bool is_mm_conv,
+    TensorMemoryLayout shard_layout,
+    DeviceComputeKernelConfig compute_config,
+    const Conv2dConfig& conv_config_in,
+    const std::optional<ttnn::MemoryConfig>& _halo_input_memory_config = std::nullopt);
+
 Conv2dConfig determine_conv_config_for_auto_shard(
     const Conv2dConfig& conv_config_,
     bool is_mm_conv,
