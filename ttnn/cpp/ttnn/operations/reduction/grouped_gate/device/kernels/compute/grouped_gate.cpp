@@ -325,13 +325,14 @@ void normalize_scores(
     const uint32_t transpose_cb_index,
     const uint32_t epsilon_cb_index,
     const uint32_t normalized_scores_cb_index) {
-    compute_kernel_hw_startup(unnormalized_scores_cb_index, reduce_scalar_cb_index, normalized_scores_cb_index);
+    compute_kernel_hw_startup(unnormalized_scores_cb_index, reduce_scalar_cb_index, intermediate_reduce_cb_index);
     reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(
         unnormalized_scores_cb_index, reduce_scalar_cb_index, intermediate_reduce_cb_index);
 
-    cb_wait_front(epsilon_cb_index, 1);
     cb_wait_front(unnormalized_scores_cb_index, 1);
+    // UNPACK(print_tile(unnormalized_scores_cb_index, 0, true, 0, 1, 0, 8));
     cb_wait_front(reduce_scalar_cb_index, 1);
+    // UNPACK(print_tile(reduce_scalar_cb_index, 0, true, 0, 32, 0, 32));
 
     // 1. Sum row (experts) to get row vector of sums [1, 32]
     tile_regs_acquire();
@@ -343,11 +344,13 @@ void normalize_scores(
     tile_regs_wait();
     cb_reserve_back(intermediate_reduce_cb_index, 1);
     pack_tile(0, intermediate_reduce_cb_index);
+    // PACK(print_tile(intermediate_reduce_cb_index, 0, true, 0, 1, 0, 1));
     tile_regs_release();
     cb_push_back(intermediate_reduce_cb_index, 1);
 
     // 3. Add epsilon
     tile_regs_acquire();
+    cb_wait_front(epsilon_cb_index, 1);
     cb_wait_front(intermediate_reduce_cb_index, 1);
     add_bcast_scalar_init_short(intermediate_reduce_cb_index, epsilon_cb_index);
     add_tiles_bcast<BroadcastType::SCALAR>(intermediate_reduce_cb_index, epsilon_cb_index, 0, 0, 0);
@@ -363,7 +366,7 @@ void normalize_scores(
     tile_regs_wait();
     cb_reserve_back(transpose_cb_index, 1);
     pack_tile(0, transpose_cb_index);
-    tile_regs_release();
+    // PACK(print_tile(transpose_cb_index, 0, true, 0, 2, 0, 2));
     cb_push_back(transpose_cb_index, 1);
 
     // 6. Broadcast multiply
@@ -378,10 +381,11 @@ void normalize_scores(
 
     tile_regs_wait();
     pack_tile(0, normalized_scores_cb_index);
+    // PACK(print_tile(normalized_scores_cb_index, 0, true, 0, 2, 0, 2));
     cb_push_back(normalized_scores_cb_index, 1);
     tile_regs_release();
 
-    cb_pop_front(intermediate_reduce_cb_index, 1);
+    cb_pop_front(transpose_cb_index, 1);
     cb_pop_front(unnormalized_scores_cb_index, 1);
 }
 

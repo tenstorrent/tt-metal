@@ -43,6 +43,7 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
     auto height_tiles = num_tiles / width_tiles;
     uint32_t experts = scores.logical_shape()[-1];
     uint32_t tokens = scores.logical_shape().volume() / experts;
+    uint32_t seq_len = scores.logical_shape()[-2];
 
     log_debug(tt::LogOp, "height_tiles: {} width_tiles: {}", height_tiles, width_tiles);
 
@@ -54,7 +55,7 @@ GroupedGateDeviceOperation::ProgramFactory::cached_program_t GroupedGateDeviceOp
          num_height_tiles_per_core_group_1,
          num_height_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, height_tiles);
 
-    uint32_t remainder_tokens_per_tile = tokens % tile_height == 0 ? tile_height : tokens % tile_height;
+    uint32_t remainder_tokens_per_tile = seq_len % tile_height == 0 ? tile_height : seq_len % tile_height;
 
     auto scores_cb_index = tt::CBIndex::c_0;
     auto bias_cb_index = tt::CBIndex::c_1;

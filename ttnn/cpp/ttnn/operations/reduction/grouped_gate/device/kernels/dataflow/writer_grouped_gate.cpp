@@ -140,8 +140,7 @@ void zero_buffer(uint32_t write_addr, int bytes) {
 
 FORCE_INLINE void generate_reduce_scalar(
     const uint32_t reduce_scalar_cb_index, const uint32_t packed_scalar, const uint32_t n_activated_experts) {
-    // 32x32 tile where a num_selected_experts x tokens_per_tile subset of the tile needs to be {1.0bf16, 1.0bf16,
-    // ..., 1.0bf16} the rest should be {0.0bf16, 0.0bf16, ..., 0.0bf16}
+    // 32x32 tile where first row of each face should be {1.0bf16, 1.0bf16, ..., 1.0bf16} up until n_activated_experts
     cb_reserve_back(reduce_scalar_cb_index, 1);
     constexpr uint32_t face_size_bytes = 512;
     constexpr uint32_t face_line_bytes = 32;
@@ -155,6 +154,19 @@ FORCE_INLINE void generate_reduce_scalar(
             write_ptr[i + 241] = scalar;
         }
     }
+    for (uint32_t i = n_activated_experts; i < 32; i++) {
+        write_ptr[i] = 0;
+        if (i == 16) {
+            noc_async_read(get_noc_addr(MEM_ZEROS_BASE), write_addr + face_size_bytes, face_line_bytes);
+        }
+    }
+    uint32_t face_3_write_addr = write_addr + 2 * face_size_bytes;
+    uint32_t face_4_write_addr = write_addr + 3 * face_size_bytes;
+    // write first face line in face 1 to face 3 and face 2 to face 4
+    noc_async_read_barrier();
+    noc_async_read(get_noc_addr(write_addr), face_3_write_addr, face_line_bytes);
+    noc_async_read(get_noc_addr(write_addr + face_size_bytes), face_4_write_addr, face_line_bytes);
+    noc_async_read_barrier();
 
     cb_push_back(reduce_scalar_cb_index, 1);
 }
