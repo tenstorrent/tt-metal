@@ -35,7 +35,7 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
         // For NORTH router (my_direction=2): EAST(0)→0, WEST(1)→1, SOUTH(3)→2
         // For SOUTH router (my_direction=3): EAST(0)→0, WEST(1)→1, NORTH(2)→2
         size_t compact_index = get_receiver_channel_compact_index(my_direction, downstream_direction);
-        this->downstream_edms_connected |= (1 << compact_index);
+        this->downstream_edms_connected_by_vc_mask.at(inbound_vc_idx) |= (1 << compact_index);
 
         // Store addresses indexed by [vc_idx][compact_index]
         this->downstream_edm_buffer_base_addresses.at(inbound_vc_idx).at(compact_index) =
@@ -47,7 +47,7 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
         this->downstream_edm_buffer_index_semaphore_addresses.at(inbound_vc_idx).at(compact_index) =
             adapter_spec.buffer_index_semaphore_id;
     } else {
-        this->downstream_edms_connected = 1;
+        this->downstream_edms_connected_by_vc_mask.at(inbound_vc_idx) = 1;
 
         // For 1D, store at compact index 0
         this->downstream_edm_buffer_base_addresses.at(inbound_vc_idx).at(0) = adapter_spec.edm_buffer_base_addr;
@@ -91,8 +91,8 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
         uint32_t num_downstream_edms = (vc_idx == 0) ? builder_config::get_vc0_downstream_edm_count(is_2D_routing)
                                                      : builder_config::get_vc1_downstream_edm_count(is_2D_routing);
 
-        // Pack connection mask (3-bit mask for 3 downstream EDMs)
-        args_out.push_back(this->downstream_edms_connected);
+        // Pack connection mask for this VC (3-bit mask for VC0, 3-bit mask for VC1)
+        args_out.push_back(this->downstream_edms_connected_by_vc_mask.at(vc_idx));
 
         // Pack buffer base addresses (one per compact index)
         for (size_t compact_idx = 0; compact_idx < num_downstream_edms; compact_idx++) {
@@ -121,7 +121,7 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
     } else {
         // For 1D: single downstream connection (only VC0 supported)
         TT_FATAL(vc_idx == 0, "VC1 is not supported for 1D routing");
-        bool has_connection = this->downstream_edms_connected != 0;
+        bool has_connection = this->downstream_edms_connected_by_vc_mask.at(vc_idx) != 0;
 
         uint32_t buffer_addr = this->downstream_edm_buffer_base_addresses[vc_idx][0].value_or(0);
 
@@ -169,9 +169,15 @@ void StaticSizedChannelConnectionWriterAdapter::pack_adaptor_to_relay_rt_args(st
     }
 }
 
-uint32_t StaticSizedChannelConnectionWriterAdapter::get_downstream_edms_connected() const {
-    return this->downstream_edms_connected;
-}
+// uint32_t StaticSizedChannelConnectionWriterAdapter::get_downstream_edms_connected() const {
+//     // Return combined mask for backward compatibility (sum of all VC masks)
+//     // Note: This may not be accurate if multiple VCs have overlapping compact indices
+//     uint32_t combined = 0;
+//     for (size_t vc_idx = 0; vc_idx < builder_config::num_max_receiver_channels; vc_idx++) {
+//         combined |= this->downstream_edms_connected_by_vc_mask.at(vc_idx);
+//     }
+//     return combined;
+// }
 
 uint32_t StaticSizedChannelConnectionWriterAdapter::pack_downstream_noc_y_rt_arg(uint32_t vc_idx) const {
     return encode_noc_ord_for_2d(

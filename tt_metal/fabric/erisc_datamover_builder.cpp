@@ -1260,6 +1260,24 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     auto remote_multi_pool_allocator = std::make_shared<tt::tt_fabric::MultiPoolChannelAllocator>(
         std::move(remote_pool_allocators), std::move(remote_pool_types));
 
+    if (local_fabric_node_id.mesh_id == peer_fabric_node_id.mesh_id) {
+        log_info(
+            tt::LogFabric,
+            "INTRAMESH: M={},D={} eth=(x={},y={})",
+            local_fabric_node_id.mesh_id.get(),
+            local_fabric_node_id.chip_id,
+            ethernet_core.x,
+            ethernet_core.y);
+    } else {
+        log_info(
+            tt::LogFabric,
+            "INTERMESH: M={},D={} eth=(x={},y={})",
+            local_fabric_node_id.mesh_id.get(),
+            local_fabric_node_id.chip_id,
+            ethernet_core.x,
+            ethernet_core.y);
+    }
+
     log_debug(
         tt::LogFabric,
         "FABRIC NODE ID: M={},D={} eth=(x={},y={})\n"
