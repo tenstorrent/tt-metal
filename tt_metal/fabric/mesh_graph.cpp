@@ -834,6 +834,12 @@ std::vector<MeshShape> generate_possible_cluster_shapes(std::uint32_t total_numb
                 auto smaller_dim = std::min(x, y);
                 MeshShape shape(larger_dim, smaller_dim);
 
+                // NOTE: Special case for t3k 4x2 mesh shape, change it to 2x4 to avoid performance issues with mesh
+                // device shape
+                if (larger_dim == 4 && smaller_dim == 2) {
+                    shape = MeshShape(2, 4);
+                }
+
                 // if odd shape then skip
                 if ((larger_dim % 2 != 0 && larger_dim != 1) || (smaller_dim % 2 != 0 && smaller_dim != 1)) {
                     continue;
