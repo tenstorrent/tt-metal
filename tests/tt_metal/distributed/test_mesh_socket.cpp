@@ -23,6 +23,7 @@
 #include <cstring>
 #include <tt-metalium/tt_align.hpp>
 #include "tt_metal/llrt/tt_cluster.hpp"
+#include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -319,19 +320,17 @@ void test_h2d_socket(
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
     std::iota(src_vec.begin(), src_vec.end(), 0);
 
-    const auto& cluster = MetalContext::instance().get_cluster();
     auto recv_core = mesh_device->worker_core_from_logical_core(CoreCoord(0, 0));
-    auto recv_device_id = mesh_device->get_device(MeshCoordinate(0, 0))->id();
     uint32_t page_size_words = page_size / sizeof(uint32_t);
+
+    auto& mesh_cq = dynamic_cast<FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
     // Write a single page at a time
     for (uint32_t i = 0; i < num_writes; i++) {
         input_socket.reserve_pages(1);
         // Write data to input socket at write ptr
-        cluster.write_core(
-            src_vec.data() + i * page_size_words,
-            page_size,
-            tt_cxy_pair(recv_device_id, recv_core),
-            input_socket.get_write_ptr());
+        DeviceMemoryAddress core_addr = {MeshCoordinate(0, 0), recv_core, input_socket.get_write_ptr()};
+        mesh_cq.enqueue_write_shard_to_core(
+            core_addr, src_vec.data() + i * page_size_words, page_size, false, {}, false);
 
         input_socket.push_pages(1);
         input_socket.notify_receiver();

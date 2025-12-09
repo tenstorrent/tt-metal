@@ -419,7 +419,8 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
     const void* src,
     uint32_t size_bytes,
     bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    bool wait_on_workers) {
     ZoneScoped;
 
     auto lock = lock_api_function_();
@@ -443,7 +444,8 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
         size_bytes,
         id_,
         expected_num_workers_completed_,
-        sub_device_ids);
+        sub_device_ids,
+        wait_on_workers);
 
     if (blocking) {
         this->finish_nolock(sub_device_ids);

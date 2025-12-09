@@ -58,10 +58,10 @@ private:
     BufferType buffer_type_ = BufferType::L1;
     uint32_t fifo_size_ = 0;
     uint32_t page_size_ = 0;
-    std::size_t bytes_sent_ = 0;
-    std::unordered_map<MeshCoreCoord, std::size_t> bytes_acked_ = {};
-    std::size_t write_ptr_ = 0;
-    std::size_t fifo_curr_size_ = 0;
+    uint32_t bytes_sent_ = 0;
+    std::unordered_map<MeshCoreCoord, uint32_t> bytes_acked_ = {};
+    uint32_t write_ptr_ = 0;
+    uint32_t fifo_curr_size_ = 0;
 };
 
 // Specifies how sender cores on a Virtual Mesh connect to receiver cores on the same or another Virtual Mesh.

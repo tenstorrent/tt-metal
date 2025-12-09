@@ -8,6 +8,7 @@
 #include "tt_metal/hw/inc/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include <tt-metalium/tt_align.hpp>
+#include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 
 using namespace tt::tt_metal::distributed::multihost;
 
@@ -240,11 +241,10 @@ void H2DSocket::reserve_pages(uint32_t num_pages) {
 
     for (const auto& recv_core : recv_cores_) {
         uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_[recv_core]);
-        std::cout << "Bytes free: " << bytes_free << std::endl;
         auto recv_virtual_core = mesh_device->worker_core_from_logical_core(recv_core.core_coord);
         auto recv_device_id = mesh_device->get_device(recv_core.device_coord)->id();
         while (bytes_free < num_bytes) {
-            std::size_t bytes_acked_value = 0;
+            uint32_t bytes_acked_value = 0;
             cluster.read_core(
                 &bytes_acked_value,
                 sizeof(bytes_acked_value),
@@ -271,14 +271,18 @@ void H2DSocket::push_pages(uint32_t num_pages) {
 }
 
 void H2DSocket::notify_receiver() {
-    const auto& cluster = MetalContext::instance().get_cluster();
     const auto& mesh_device = config_buffer_->device();
+    auto& mesh_cq = dynamic_cast<FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
     uint32_t bytes_sent_addr = config_buffer_->address() + offsetof(receiver_socket_md, bytes_sent);
     for (const auto& recv_core : recv_cores_) {
         auto recv_virtual_core = mesh_device->worker_core_from_logical_core(recv_core.core_coord);
-        auto recv_device_id = mesh_device->get_device(recv_core.device_coord)->id();
-        cluster.write_core(
-            &bytes_sent_, sizeof(bytes_sent_), tt_cxy_pair(recv_device_id, recv_virtual_core), bytes_sent_addr);
+        mesh_cq.enqueue_write_shard_to_core(
+            {recv_core.device_coord, recv_virtual_core, bytes_sent_addr},
+            &bytes_sent_,
+            sizeof(bytes_sent_),
+            false,
+            {},
+            false);
     }
 }
 
