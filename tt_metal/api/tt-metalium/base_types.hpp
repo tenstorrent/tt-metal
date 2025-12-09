@@ -29,7 +29,17 @@ enum class UnpackToDestMode : uint8_t { UnpackToDestFp32, Default };
 using MathFidelity [[deprecated("Use tt::tt_metal::MathFidelity")]] = tt::tt_metal::MathFidelity;
 using UnpackToDestMode [[deprecated("Use tt::tt_metal::UnpackToDestMode")]] = tt::tt_metal::UnpackToDestMode;
 
-std::ostream& operator<<(std::ostream& os, const tt::tt_metal::MathFidelity& fidelity);
+inline std::ostream& operator<<(std::ostream& os, const tt::tt_metal::MathFidelity& fidelity) {
+    switch (fidelity) {
+        case MathFidelity::LoFi: os << "LoFi"; break;
+        case MathFidelity::HiFi2: os << "HiFi2"; break;
+        case MathFidelity::HiFi3: os << "HiFi3"; break;
+        case MathFidelity::HiFi4: os << "HiFi4"; break;
+        case MathFidelity::Invalid: os << "Invalid"; break;
+        default: throw std::invalid_argument("Unknown format");
+    }
+    return os;
+}
 
 template <>
 struct std::hash<tt::tt_metal::MathFidelity> {
