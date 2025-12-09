@@ -14,17 +14,7 @@ from abc import ABC, abstractmethod
 from collections import OrderedDict
 from typing import Any, Dict, Optional
 
-try:
-    # Try importing RunMode from _ttml modules submodule (most likely location)
-    from ttml._ttml.modules import RunMode
-except ImportError:
-    try:
-        # Fallback: try importing from _ttml root if RunMode is exported there
-        from ttml._ttml import RunMode
-    except ImportError:
-        # Last fallback: try from ttml.modules if it's re-exported
-        # This would work if ttml/__init__.py re-exports it
-        from ttml.modules import RunMode  # type: ignore
+from .._ttml import RunMode
 
 from .exceptions import (
     DuplicateNameError,
@@ -167,7 +157,6 @@ class AbstractModuleBase(ABC):
 
         while modules_to_process:
             module_ptr, current_prefix = modules_to_process.pop(0)
-
             # Process all tensors in this module
             for tensor_name, tensor_ptr in module_ptr._named_tensors.items():
                 tensor_id = id(tensor_ptr)
@@ -224,9 +213,7 @@ class AbstractModuleBase(ABC):
         if not isinstance(name, str):
             raise TypeError(f"Module name must be a string, got {type(name)}")
         if module is None:
-            raise UninitializedModuleError(
-                f"Cannot register None module with name '{name}'"
-            )
+            raise UninitializedModuleError("Cannot register uninitialized module")
         if name in self._named_modules:
             raise DuplicateNameError(
                 f"Module with name '{name}' already exists in module '{self._name or 'unnamed'}'"
