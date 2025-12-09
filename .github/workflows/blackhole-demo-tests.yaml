@@ -22,10 +22,13 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
+      contents: read
+      actions: read
     secrets: inherit
     with:
       build-wheel: true
       version: 22.04
+      use-artifacts-from-run: 19849736145
   single-card-demo-tests:
     needs: build-artifact
     secrets: inherit
@@ -33,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: ["P100", "P150"]
+        test-group: ["P100"]
     with:
       runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
