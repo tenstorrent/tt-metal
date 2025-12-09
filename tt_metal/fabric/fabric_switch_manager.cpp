@@ -20,7 +20,7 @@ FabricSwitchManager& FabricSwitchManager::instance() {
     return inst.get();
 }
 
-void FabricSwitchManager::setup() {
+void FabricSwitchManager::setup(FabricConfig fabric_config, FabricReliabilityMode fabric_reliability_mode) {
     // Create devices for the switch mesh
     const auto& switch_device_ids =
         tt::tt_metal::MetalContext::instance().get_control_plane().get_switch_mesh_device_ids();
@@ -33,10 +33,8 @@ void FabricSwitchManager::setup() {
 
     // Set fabric config explicitly before creating devices
     // This is required for workloads that need fabric (not just minimal fabric for dispatch)
-    // Check if fabric config is already set, and if not, set it to FABRIC_2D for inter-mesh routing
-    tt::tt_fabric::FabricConfig current_fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D;
-    tt::tt_fabric::SetFabricConfig(
-        current_fabric_config, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    // The workload calling setup() knows which fabric config it needs, so we use the provided config
+    tt::tt_fabric::SetFabricConfig(fabric_config, fabric_reliability_mode);
 
     // Cache the device map returned by CreateDevices to use directly in CloseDevices
     // TODO: Issue #34040 - If routers are in standby mode, we could skip full reinitialization

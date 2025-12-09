@@ -7,6 +7,7 @@
 #include <map>
 #include <tt_stl/indestructible.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -35,8 +36,14 @@ public:
      * This method creates devices for all switch meshes using the switch mesh device IDs
      * from the control plane. It initializes the device manager with appropriate configuration
      * for switch mesh devices.
+     *
+     * @param fabric_config The fabric configuration to use for switch mesh devices.
+     *                      The workload calling this method knows which fabric config it needs.
+     * @param fabric_reliability_mode The fabric reliability mode to use. Defaults to strict mode.
      */
-    void setup();
+    void setup(
+        FabricConfig fabric_config,
+        FabricReliabilityMode fabric_reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 
     /**
      * @brief Close devices for switch meshes.
@@ -64,8 +71,6 @@ private:
 
     // Cache the device map returned by CreateDevices to use directly in CloseDevices
     std::map<tt::ChipId, tt::tt_metal::IDevice*> switch_devices_;
-    // Track if we set the fabric config so we can clean it up properly in teardown
-    bool fabric_config_was_set_by_manager_ = false;
 };
 
 }  // namespace tt::tt_fabric

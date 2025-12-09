@@ -36,8 +36,7 @@ protected:
         }
 
         // setup tt-switch manager
-        tt::tt_fabric::FabricSwitchManager::instance().setup();
-
+        tt::tt_fabric::FabricSwitchManager::instance().setup(tt::tt_fabric::FabricConfig::FABRIC_2D);
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D);
     }
 
