@@ -21,7 +21,7 @@ namespace ttnn::operations::ccl {
 
 // Import the program artifacts type from the experimental namespace
 using ReduceScatterProgramArtifacts =
-    ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::ReduceScatterProgramArtifacts;
+    ttnn::operations::experimental::ccl::reduce_scatter_minimal_async_detail::ReduceScatterProgramArtifacts;
 
 struct ReduceScatterDeviceOperation {
     struct operation_attributes_t {

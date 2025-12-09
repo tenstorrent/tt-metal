@@ -11,13 +11,13 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async {
+namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async_detail {
 
 struct ReduceScatterMinimalAsyncDeviceOperation {
-    using operation_attributes_t = reduce_scatter_minimal_async::operation_attributes_t;
-    using tensor_args_t = reduce_scatter_minimal_async::tensor_args_t;
-    using spec_return_value_t = reduce_scatter_minimal_async::spec_return_value_t;
-    using tensor_return_value_t = reduce_scatter_minimal_async::tensor_return_value_t;
+    using operation_attributes_t = reduce_scatter_minimal_async_detail::operation_attributes_t;
+    using tensor_args_t = reduce_scatter_minimal_async_detail::tensor_args_t;
+    using spec_return_value_t = reduce_scatter_minimal_async_detail::spec_return_value_t;
+    using tensor_return_value_t = reduce_scatter_minimal_async_detail::tensor_return_value_t;
     using program_factory_t = std::variant<RingReduceScatterMeshWorkloadFactory, LineReduceScatterMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
@@ -52,10 +52,11 @@ struct ReduceScatterMinimalAsyncDeviceOperation {
         std::optional<uint32_t> num_buffers_per_channel);
 };
 
-}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async
+}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async_detail
 
 namespace ttnn::prim {
 constexpr auto reduce_scatter_minimal_async = ttnn::register_operation<
     "ttnn::prim::reduce_scatter_minimal_async",
-    ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::ReduceScatterMinimalAsyncDeviceOperation>();
+    ttnn::operations::experimental::ccl::reduce_scatter_minimal_async_detail::
+        ReduceScatterMinimalAsyncDeviceOperation>();
 }  // namespace ttnn::prim

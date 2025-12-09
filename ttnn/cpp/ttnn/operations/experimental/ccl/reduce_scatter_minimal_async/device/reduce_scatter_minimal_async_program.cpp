@@ -40,7 +40,7 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 
 // Import types from the new TMP pattern
-using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::ReduceScatterProgramArtifacts;
+using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async_detail::ReduceScatterProgramArtifacts;
 
 namespace ttnn {
 
@@ -66,7 +66,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
-    const CoreCoord core_grid_offset = {0, 0});
+    const CoreCoord core_grid_offset);
 
 tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_helper(
     tt::tt_metal::Program& program,
@@ -89,7 +89,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
-    const CoreCoord core_grid_offset = {0, 0});
+    const CoreCoord core_grid_offset);
 
 tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_helper(
     tt::tt_metal::Program& program,
@@ -112,7 +112,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
-    const CoreCoord core_grid_offset = {0, 0});
+    const CoreCoord core_grid_offset);
 
 namespace operations::experimental::ccl::detail {
 
@@ -2081,7 +2081,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
 }  // namespace ttnn
 
 // Implementations for the TMP namespace - wrappers to ttnn namespace functions
-namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async {
+namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async_detail {
 
 ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_artifacts(
     tt::tt_metal::Program& program,
@@ -2302,4 +2302,4 @@ void LineReduceScatterMeshWorkloadFactory::override_runtime_arguments(
     // Implementation placeholder
 }
 
-}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async
+}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async_detail

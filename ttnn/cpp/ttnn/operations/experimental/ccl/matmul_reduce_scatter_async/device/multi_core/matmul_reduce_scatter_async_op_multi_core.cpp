@@ -23,9 +23,9 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
 // Import functions from the new namespace
-using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::
+using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async_detail::
     build_line_reduce_scatter_minimal_async_program_artifacts;
-using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async::
+using ttnn::operations::experimental::ccl::reduce_scatter_minimal_async_detail::
     build_ring_reduce_scatter_minimal_async_program_artifacts;
 
 namespace ttnn {

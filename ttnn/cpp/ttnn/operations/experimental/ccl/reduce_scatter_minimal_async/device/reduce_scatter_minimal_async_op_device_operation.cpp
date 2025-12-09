@@ -8,7 +8,7 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
-namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async {
+namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async_detail {
 
 // Forward declarations of validation functions
 void reduce_scatter_common_validates(
@@ -308,4 +308,4 @@ void reduce_scatter_common_validates(
     }
 }
 
-}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async
+}  // namespace ttnn::operations::experimental::ccl::reduce_scatter_minimal_async_detail
