@@ -18,7 +18,7 @@ body:
     attributes:
       value: |
         ## Issue Metadata
-        
+
 
   - type: input
     id: area
@@ -81,7 +81,7 @@ body:
     attributes:
       value: |
         ## Steps to Reproduce the Issue
-        
+
 
   # 1. Exact commands
   - type: textarea
@@ -213,9 +213,9 @@ body:
     attributes:
       label: Priority
       description: |
-        P0 = Blocking  
-        P1 = High  
-        P2 = Medium  
+        P0 = Blocking
+        P1 = High
+        P2 = Medium
         P3 = Low
 
         ⭐ After submitting, please add the matching label (P0–P3). Thanks! ⭐
@@ -237,3 +237,4 @@ body:
         Release or date risk:
     validations:
       required: false
+

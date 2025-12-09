@@ -21,9 +21,9 @@ body:
       label: "🎯 What Success Looks Like"
       description: "Define a list or checklist of clear, testable acceptance criteria - this is the goal the developer is chasing. They achieve all stages, we pay. Model bounties are split into 3 stages. Please modify below text as necessary."
       value: |
-        A successful submission will fulfill all requirements in the following stages. Payout is made after all stages are completed.
+        A successful submission will fulfill all requirements in the following stages. Payout is made after **all stages** are completed.
     validations:
-      required: true  
+      required: true
 
   - type: textarea
     id: stage1
