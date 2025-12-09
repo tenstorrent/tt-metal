@@ -29,15 +29,15 @@
 #include "tt_fabric_test_results.hpp"
 #include "tt_fabric_test_eth_readback.hpp"
 #include "tt_fabric_test_code_profiler.hpp"
+#include "tt_fabric_telemetry_manager.hpp"
+#include "tt_fabric_test_constants.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
-// Constants
-const std::string output_dir = "generated/fabric";
-const std::string default_built_tests_dump_file = "built_tests.yaml";
-// CI will always check the following folder for artifacts to upload
-const std::string ci_artifacts_dir = "generated/test_reports";
+using tt::tt_fabric::fabric_tests::CI_ARTIFACTS_DIR;
+using tt::tt_fabric::fabric_tests::DEFAULT_BUILT_TESTS_DUMP_FILE;
+using tt::tt_fabric::fabric_tests::OUTPUT_DIR;
 
 using TestFixture = tt::tt_fabric::fabric_tests::TestFixture;
 using TestDevice = tt::tt_fabric::fabric_tests::TestDevice;
@@ -184,6 +184,7 @@ public:
 
         // Destroy managers that hold references to eth_readback before clearing it
         code_profiler_.reset();
+        telemetry_manager_.reset();
         eth_readback_.reset();
 
         reset_local_variables();
@@ -530,7 +531,7 @@ public:
         // Create output directory
         std::filesystem::path tt_metal_home =
             std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
-        std::filesystem::path bandwidth_results_path = tt_metal_home / output_dir;
+        std::filesystem::path bandwidth_results_path = tt_metal_home / std::string(OUTPUT_DIR);
 
         if (!std::filesystem::exists(bandwidth_results_path)) {
             std::filesystem::create_directories(bandwidth_results_path);
@@ -636,7 +637,7 @@ public:
     void setup_ci_artifacts() {
         std::filesystem::path tt_metal_home =
             std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir());
-        std::filesystem::path ci_artifacts_path = tt_metal_home / ci_artifacts_dir;
+        std::filesystem::path ci_artifacts_path = tt_metal_home / std::string(CI_ARTIFACTS_DIR);
         // Create CI artifacts directory if it doesn't exist
         if (!std::filesystem::exists(ci_artifacts_path)) {
             try {
@@ -1545,7 +1546,8 @@ private:
         summary_oss << "bandwidth_summary_results_" << arch_name << ".csv";
 
         std::filesystem::path output_path =
-            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / output_dir;
+            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+            std::string(OUTPUT_DIR);
         csv_summary_file_path_ = output_path / summary_oss.str();
 
         write_bandwidth_summary_csv_to_file(csv_summary_file_path_, false);
@@ -1584,7 +1586,8 @@ private:
         upload_oss << "bandwidth_summary_results_" << arch_name << "_upload.csv";
 
         std::filesystem::path output_path =
-            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / output_dir;
+            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+            std::string(OUTPUT_DIR);
         csv_summary_upload_file_path_ = output_path / upload_oss.str();
 
         // Populate upload metadata fields
@@ -1713,7 +1716,8 @@ private:
     // Common CSV diff file initialization
     std::ofstream init_diff_csv_file(std::filesystem::path& diff_csv_path, const std::string& csv_header, const std::string& test_type) {
         std::filesystem::path output_path =
-            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / output_dir;
+            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+            std::string(OUTPUT_DIR);
         std::ostringstream diff_oss;
         auto arch_name = tt::tt_metal::hal::get_arch_name();
         diff_oss << test_type << "_diff_" << arch_name << ".csv";
@@ -1793,7 +1797,8 @@ private:
 
         // Initialize diff CSV file using common helper (note: bandwidth uses different prefix)
         std::filesystem::path output_path =
-            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / output_dir;
+            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+            std::string(OUTPUT_DIR);
         std::ostringstream diff_oss;
         auto arch_name = tt::tt_metal::hal::get_arch_name();
         diff_oss << "bandwidth_summary_results_" << arch_name << "_diff.csv";
@@ -1889,6 +1894,7 @@ private:
     // Ethernet core buffer readback helper
     std::unique_ptr<EthCoreBufferReadback> eth_readback_;
     std::unique_ptr<CodeProfiler> code_profiler_;
+    std::unique_ptr<TelemetryManager> telemetry_manager_;
 
     // Getter for lazy initialization of eth_readback_
     EthCoreBufferReadback& get_eth_readback() {
@@ -1903,5 +1909,12 @@ private:
             code_profiler_ = std::make_unique<CodeProfiler>(get_eth_readback());
         }
         return *code_profiler_;
+    }
+
+    TelemetryManager& get_telemetry_manager() {
+        if (!telemetry_manager_) {
+            telemetry_manager_ = std::make_unique<TelemetryManager>(*fixture_, get_eth_readback());
+        }
+        return *telemetry_manager_;
     }
 };
