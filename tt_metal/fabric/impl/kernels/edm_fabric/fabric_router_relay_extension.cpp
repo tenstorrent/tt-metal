@@ -133,6 +133,8 @@ constexpr uint32_t LOCAL_MUX_IDX = 0;
 constexpr uint32_t DOWNSTREAM_EN_MUX_IDX = 1;
 constexpr uint32_t DOWNSTREAM_WS_MUX_IDX = 2;
 
+constexpr bool ENABLE_RISC_CPU_DATA_CACHE = true;
+
 template <uint8_t NUM_BUFFERS>
 void wait_for_static_connection_to_ready(
     tt::tt_fabric::FabricRelayStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface) {
@@ -140,7 +142,7 @@ void wait_for_static_connection_to_ready(
         invalidate_l1_cache();
     }
 
-    worker_interface.cache_producer_noc_addr();
+    worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE>();
 }
 
 FORCE_INLINE void wait_for_mux_endpoint_ready(
@@ -409,7 +411,7 @@ void kernel_main() {
 
     status_ptr[0] = tt::tt_fabric::FabricRelayStatus::READY_FOR_TRAFFIC;
 
-    while (!got_immediate_termination_signal(termination_signal_ptr)) {
+    while (!got_immediate_termination_signal<true>(termination_signal_ptr)) {
         for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
             forward_data<direction, NUM_BUFFERS, mux_num_buffers>(
                 channel,

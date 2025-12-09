@@ -41,7 +41,7 @@ def read_ring_buffer(
 ):
     """Read watcher ring buffer for the core. Returns None if ring buffer is empty or unreadable."""
     try:
-        fw_path = dispatcher_data.get_core_data(location, risc_name).firmware_path
+        fw_path = dispatcher_data.get_cached_core_data(location, risc_name).firmware_path
     except Exception:
         return None
 

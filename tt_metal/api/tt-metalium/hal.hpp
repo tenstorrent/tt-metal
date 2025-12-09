@@ -46,6 +46,13 @@ uint32_t get_dram_alignment();
 uint32_t get_l1_alignment();
 
 /**
+ * @brief Uses the hardware abstraction layer to inform client of architecture specific PCIE alignment.
+ *
+ * @return Alignment requirement in bytes
+ */
+uint32_t get_pcie_alignment();
+
+/**
  * @brief Uses the hardware abstraction layer to inform client of architecture specific address.
  * this address corresponds to the beginning of free space in the ERISC's L1 SRAM
  *

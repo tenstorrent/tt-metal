@@ -352,7 +352,7 @@ FORCE_INLINE
         tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface,
         uint8_t transaction_id) {
     // TODO: PERF - this should already be getting checked by the caller so this should be redundant make it an ASSERT
-    ASSERT(downstream_edm_interface.edm_has_space_for_packet());  // best effort check
+    ASSERT(downstream_edm_interface.template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>());  // best effort check
 
     // This is a good place to print the packet header for debug if you are trying to inspect packets
     // because it is before we start manipulating the header for forwarding

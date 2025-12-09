@@ -643,7 +643,6 @@ void WatcherDeviceReader::Core::DumpL1Status() const {
 void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
     auto san = mbox_data_.watcher().sanitize()[noc];
     string error_msg;
-    string error_reason;
 
     switch (san.return_code()) {
         case dev_msgs::DebugSanitizeOK:
