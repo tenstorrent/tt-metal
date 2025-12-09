@@ -170,7 +170,7 @@ def read_wait_globals(
     """
 
     # If no kernel loaded, nothing to read
-    dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
+    dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
     if dispatcher_core_data.kernel_path is None:
         return None
     assert dispatcher_core_data.kernel_name is not None
@@ -319,7 +319,7 @@ def run(args, context: Context):
         # Check all RISC cores at this location for dispatcher kernels
         noc_block = location._device.get_block(location)
         for risc_name in noc_block.risc_names:
-            dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
+            dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
             if (
                 dispatcher_core_data.kernel_name is not None
                 and dispatcher_core_data.kernel_name in dispatcher_kernel_names
