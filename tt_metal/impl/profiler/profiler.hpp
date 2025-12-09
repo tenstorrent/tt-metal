@@ -23,18 +23,14 @@
 #include "profiler_types.hpp"
 #include "tracy/TracyTTDevice.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
 class ThreadPool;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 using RuntimeID = uint32_t;
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 template <typename T1, typename T2>
 struct pair_hash {
@@ -295,6 +291,4 @@ bool useFastDispatch(IDevice* device);
 
 void writeToCoreControlBuffer(IDevice* device, const CoreCoord& virtual_core, const std::vector<uint32_t>& data);
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

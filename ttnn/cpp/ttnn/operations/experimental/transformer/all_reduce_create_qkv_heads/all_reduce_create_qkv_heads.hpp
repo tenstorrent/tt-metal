@@ -13,10 +13,8 @@
 #include "ttnn/global_semaphore.hpp"
 
 namespace ttnn {
-namespace operations {
-namespace experimental {
-namespace ccl {
-namespace transformer {
+
+namespace operations::experimental::ccl::transformer {
 
 struct ExecuteAllReduceCreateQkvHeads {
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
@@ -40,10 +38,7 @@ struct ExecuteAllReduceCreateQkvHeads {
         bool use_noc1_only = false);
 };
 
-}  // namespace transformer
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl::transformer
 
 namespace experimental {
 
