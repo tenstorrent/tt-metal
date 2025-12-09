@@ -29,9 +29,7 @@
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 void AllocatorImpl::init_compute_and_storage_l1_bank_manager() {
     TT_FATAL(config_->worker_grid.contains(config_->compute_grid), "Compute grid must be a subset of worker grid");
@@ -244,6 +242,4 @@ AllocatorConfig L1BankingAllocator::generate_config(
     return config;
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal
