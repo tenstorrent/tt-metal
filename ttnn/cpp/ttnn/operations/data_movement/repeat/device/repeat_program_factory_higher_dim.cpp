@@ -44,13 +44,13 @@ RepeatProgramFactoryHigherDim::cached_program_t RepeatProgramFactoryHigherDim::c
     ttnn::Shape input_log_shape = ttnn::Shape(input.logical_shape().view());
     ttnn::Shape output_log_shape = ttnn::Shape(output.logical_shape().view());
     uint32_t page_size_bytes = input_log_shape[3] * data_size;
-    TT_ASSERT(
+    TT_FATAL(
         page_size_bytes == output_log_shape[3] * data_size,
         "Data size of output does not match requirement for repeat last dim");
     uint32_t read_start_page = 0;
     tt::tt_metal::Buffer* src_buffer = input.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     // Find how many input pages each core is responsible for so that we always start at the beginning of a read and
     // write page Since the logical volumes match, we are guaranteed that the very last page is aligned
     uint32_t number_of_higher_pages = input_log_shape[0];
