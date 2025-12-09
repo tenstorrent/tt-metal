@@ -74,10 +74,12 @@ protected:
     ~ChannelConnectionWriterAdapter() = default;
 
 private:
-    std::array<std::optional<size_t>, builder_config::num_receiver_channels> downstream_edm_vcs_noc_x = {};
-    std::array<std::optional<size_t>, builder_config::num_receiver_channels> downstream_edm_vcs_noc_y = {};
-    std::array<std::optional<size_t>, builder_config::num_receiver_channels> downstream_edm_vcs_worker_registration_address = {};
-    std::array<std::optional<size_t>, builder_config::num_receiver_channels> downstream_edm_vcs_worker_location_info_address = {};
+    std::array<std::optional<size_t>, builder_config::num_max_receiver_channels> downstream_edm_vcs_noc_x = {};
+    std::array<std::optional<size_t>, builder_config::num_max_receiver_channels> downstream_edm_vcs_noc_y = {};
+    std::array<std::optional<size_t>, builder_config::num_max_receiver_channels>
+        downstream_edm_vcs_worker_registration_address = {};
+    std::array<std::optional<size_t>, builder_config::num_max_receiver_channels>
+        downstream_edm_vcs_worker_location_info_address = {};
 };
 
 /*
@@ -117,8 +119,9 @@ private:
     uint32_t pack_downstream_noc_y_rt_arg(uint32_t vc_idx) const;
     uint32_t pack_downstream_noc_x_rt_arg(uint32_t vc_idx) const;
     uint32_t encode_noc_ord_for_2d(
-        const std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_receiver_channels>&
-            downstream_edms_connected_by_vc,
+        const std::array<
+            std::vector<std::pair<eth_chan_directions, CoreCoord>>,
+            builder_config::num_max_receiver_channels>& downstream_edms_connected_by_vc,
         uint32_t vc_idx,
         const std::function<uint32_t(CoreCoord)>& get_noc_ord) const;
 
@@ -127,35 +130,35 @@ private:
     std::unordered_set<uint32_t> downstream_edms_connected_by_vc_set;
 
     // holds which downstream cores a given receiver/inbound channel VC can feed into
-    std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_receiver_channels>
+    std::array<std::vector<std::pair<eth_chan_directions, CoreCoord>>, builder_config::num_max_receiver_channels>
         downstream_edms_connected_by_vc = {};
 
     // holds the number of buffer slots per downstream sender channel
-    std::array<std::optional<size_t>, builder_config::num_sender_channels> sender_channels_num_buffers = {};
+    std::array<std::optional<size_t>, builder_config::num_max_sender_channels> sender_channels_num_buffers = {};
 
     // holds the number of buffer slots per downstream VC. i.e. if forwarding to VC 0, use index 0 in the
     // array, if forwarding to VC 1, use index 1 in the array
-    std::array<size_t, builder_config::num_receiver_channels> downstream_sender_channels_num_buffers = {};
+    std::array<size_t, builder_config::num_max_receiver_channels> downstream_sender_channels_num_buffers = {};
 
     // For VC0: holds base addresses for up to 3 downstream EDMs (indexed by compact index)
     std::array<
         std::array<std::optional<size_t>, builder_config::max_downstream_edms>,
-        builder_config::num_receiver_channels>
+        builder_config::num_max_receiver_channels>
         downstream_edm_buffer_base_addresses = {};
 
     uint32_t downstream_edms_connected = 0;
 
     std::array<
         std::array<std::optional<size_t>, builder_config::max_downstream_edms>,
-        builder_config::num_receiver_channels>
+        builder_config::num_max_receiver_channels>
         downstream_edm_worker_registration_addresses = {};
     std::array<
         std::array<std::optional<size_t>, builder_config::max_downstream_edms>,
-        builder_config::num_receiver_channels>
+        builder_config::num_max_receiver_channels>
         downstream_edm_worker_location_info_addresses = {};
     std::array<
         std::array<std::optional<size_t>, builder_config::max_downstream_edms>,
-        builder_config::num_receiver_channels>
+        builder_config::num_max_receiver_channels>
         downstream_edm_buffer_index_semaphore_addresses = {};
 
     bool is_2D_routing = false;
