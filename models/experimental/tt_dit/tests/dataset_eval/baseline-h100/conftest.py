@@ -32,3 +32,6 @@ def evaluation_range(request):
     else:
         num_prompts = 5
     return start_from, num_prompts
+
+
+# python -m pytest model.py::test_accuracy_model -v --start-from=0 --num-prompts=5 -s
