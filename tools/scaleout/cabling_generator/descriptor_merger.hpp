@@ -13,6 +13,7 @@
 namespace tt::scaleout_tools::cabling_generator::proto {
 class ClusterDescriptor;
 class GraphTemplate;
+class NodeDescriptor;
 class PortConnections;
 class Connection;
 class Port;
@@ -104,18 +105,6 @@ public:
 private:
     static cabling_generator::proto::ClusterDescriptor load_descriptor(const std::string& file_path);
 
-    static bool merge_graph_templates(
-        cabling_generator::proto::ClusterDescriptor& target,
-        const cabling_generator::proto::ClusterDescriptor& source,
-        const std::string& source_file,
-        MergeValidationResult& result);
-
-    static bool merge_node_descriptors(
-        cabling_generator::proto::ClusterDescriptor& target,
-        const cabling_generator::proto::ClusterDescriptor& source,
-        const std::string& source_file,
-        MergeValidationResult& result);
-
     static void merge_internal_connections(
         cabling_generator::proto::GraphTemplate& target_template,
         const cabling_generator::proto::GraphTemplate& source_template,
@@ -135,11 +124,13 @@ private:
 
     static std::set<uint32_t> extract_host_ids(const cabling_generator::proto::ClusterDescriptor& descriptor);
 
-    static bool graph_templates_equal(
-        const cabling_generator::proto::GraphTemplate& a, const cabling_generator::proto::GraphTemplate& b);
+    // Get a NodeDescriptor by name (from inline descriptors or create from type)
+    static cabling_generator::proto::NodeDescriptor get_node_descriptor(
+        const std::string& node_descriptor_name, const cabling_generator::proto::ClusterDescriptor& descriptor);
 
-    static bool connections_equal(
-        const cabling_generator::proto::Connection& a, const cabling_generator::proto::Connection& b);
+    // Merge two NodeDescriptors by combining their connections
+    static cabling_generator::proto::NodeDescriptor merge_node_descriptor_connections(
+        const cabling_generator::proto::NodeDescriptor& a, const cabling_generator::proto::NodeDescriptor& b);
 
     static ConnectionEndpoint port_to_endpoint(
         const cabling_generator::proto::Port& port, const std::string& graph_template_name);

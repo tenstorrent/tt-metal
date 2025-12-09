@@ -15,6 +15,8 @@
 #include <google/protobuf/util/message_differencer.h>
 
 #include "protobuf/cluster_config.pb.h"
+#include "node/node.hpp"
+#include "node/node_types.hpp"
 
 namespace tt::scaleout_tools {
 
@@ -197,72 +199,65 @@ cabling_generator::proto::ClusterDescriptor DescriptorMerger::merge_descriptors(
 
     cabling_generator::proto::ClusterDescriptor merged = descriptors[0];
 
+    // 1. Union all graph_templates and inline node_descriptors
     for (size_t i = 1; i < descriptors.size(); ++i) {
-        std::string source_file = "descriptor[" + std::to_string(i) + "]";
-        merge_graph_templates(merged, descriptors[i], source_file, validation_result);
-        merge_node_descriptors(merged, descriptors[i], source_file, validation_result);
-    }
-
-    const auto& base_root = descriptors[0].root_instance();
-    for (size_t i = 1; i < descriptors.size(); ++i) {
-        const auto& other_root = descriptors[i].root_instance();
-        if (!base_root.template_name().empty() && !other_root.template_name().empty() &&
-            base_root.template_name() != other_root.template_name()) {
-            validation_result.add_warning(
-                "Multiple root_instance templates found. Using '" + base_root.template_name() +
-                "' from first descriptor. Found '" + other_root.template_name() + "' in descriptor[" +
-                std::to_string(i) + "]");
+        for (const auto& [name, tmpl] : descriptors[i].graph_templates()) {
+            if (merged.graph_templates().find(name) == merged.graph_templates().end()) {
+                (*merged.mutable_graph_templates())[name] = tmpl;
+            } else {
+                // Same name - merge internal_connections
+                merge_internal_connections(
+                    (*merged.mutable_graph_templates())[name],
+                    tmpl,
+                    name,
+                    "descriptor[" + std::to_string(i) + "]",
+                    validation_result);
+            }
         }
-    }
-    return merged;
-}
-
-bool DescriptorMerger::merge_graph_templates(
-    cabling_generator::proto::ClusterDescriptor& target,
-    const cabling_generator::proto::ClusterDescriptor& source,
-    const std::string& source_file,
-    MergeValidationResult& result) {
-    bool success = true;
-
-    for (const auto& [name, source_template] : source.graph_templates()) {
-        auto it = target.graph_templates().find(name);
-        if (it == target.graph_templates().end()) {
-            (*target.mutable_graph_templates())[name] = source_template;
-        } else if (graph_templates_equal(it->second, source_template)) {
-            merge_internal_connections(
-                (*target.mutable_graph_templates())[name], source_template, name, source_file, result);
-        } else {
-            result.add_error(
-                "Conflicting graph template '" + name + "' in " + source_file +
-                ". Template already exists with different structure.");
-            success = false;
-        }
-    }
-    return success;
-}
-
-bool DescriptorMerger::merge_node_descriptors(
-    cabling_generator::proto::ClusterDescriptor& target,
-    const cabling_generator::proto::ClusterDescriptor& source,
-    const std::string& source_file,
-    MergeValidationResult& result) {
-    bool success = true;
-
-    for (const auto& [name, source_descriptor] : source.node_descriptors()) {
-        auto it = target.node_descriptors().find(name);
-        if (it == target.node_descriptors().end()) {
-            (*target.mutable_node_descriptors())[name] = source_descriptor;
-        } else {
-            google::protobuf::util::MessageDifferencer differencer;
-            if (!differencer.Compare(it->second, source_descriptor)) {
-                result.add_error(
-                    "Conflicting node descriptor '" + name + "' in " + source_file +
-                    ". Node descriptor already exists with different content.");
-                success = false;
+        for (const auto& [name, desc] : descriptors[i].node_descriptors()) {
+            if (merged.node_descriptors().find(name) == merged.node_descriptors().end()) {
+                (*merged.mutable_node_descriptors())[name] = desc;
             }
         }
     }
-    return success;
+
+    // 2. Collect all node_descriptors used across all root templates
+    std::map<std::string, std::set<std::string>> child_to_descriptors;  // child_name -> set of node_descriptors
+    for (const auto& desc : descriptors) {
+        const auto& root_template_name = desc.root_instance().template_name();
+        auto it = desc.graph_templates().find(root_template_name);
+        if (it == desc.graph_templates().end()) {
+            continue;
+        }
+
+        for (const auto& child : it->second.children()) {
+            if (child.has_node_ref()) {
+                child_to_descriptors[child.name()].insert(child.node_ref().node_descriptor());
+            }
+        }
+    }
+
+    // 3. Merge node_descriptor connections where multiple types exist for same child
+    for (const auto& [child_name, desc_names] : child_to_descriptors) {
+        if (desc_names.size() <= 1) {
+            continue;
+        }
+
+        // Merge all into the first one
+        auto it = desc_names.begin();
+        std::string base_name = *it++;
+        auto base_desc = get_node_descriptor(base_name, merged);
+
+        while (it != desc_names.end()) {
+            auto other_desc = get_node_descriptor(*it, merged);
+            base_desc = merge_node_descriptor_connections(base_desc, other_desc);
+            validation_result.add_warning("Merged connections from '" + base_name + "' and '" + *it + "'");
+            ++it;
+        }
+        (*merged.mutable_node_descriptors())[base_name] = base_desc;
+    }
+
+    return merged;
 }
 
 void DescriptorMerger::merge_internal_connections(
@@ -416,91 +411,29 @@ MergeValidationResult DescriptorMerger::validate_merged_descriptor(
 
 MergeValidationResult DescriptorMerger::validate_host_consistency(const std::vector<std::string>& descriptor_paths) {
     MergeValidationResult result;
-    if (descriptor_paths.empty()) {
+    if (descriptor_paths.size() < 2) {
         return result;
     }
 
-    std::vector<std::pair<std::string, std::set<uint32_t>>> descriptor_host_ids;
-    descriptor_host_ids.reserve(descriptor_paths.size());
+    // Get host counts from descriptors that have root_instances
+    std::optional<size_t> first_host_count;
+    std::string first_path;
 
     for (const auto& path : descriptor_paths) {
-        try {
-            auto descriptor = load_descriptor(path);
-            descriptor_host_ids.emplace_back(path, extract_host_ids(descriptor));
-        } catch (const std::exception& e) {
-            result.add_error("Failed to load descriptor '" + path + "': " + e.what());
-            return result;
+        auto host_ids = extract_host_ids(load_descriptor(path));
+        if (host_ids.empty()) {
+            continue;
         }
-    }
 
-    std::vector<std::pair<std::string, std::set<uint32_t>>> descriptors_with_hosts;
-    for (const auto& [path, host_ids] : descriptor_host_ids) {
-        if (!host_ids.empty()) {
-            descriptors_with_hosts.emplace_back(path, host_ids);
-        }
-    }
-
-    if (descriptors_with_hosts.empty()) {
-        return result;
-    }
-
-    const auto& [first_path, first_host_ids] = descriptors_with_hosts[0];
-    size_t first_host_count = first_host_ids.empty() ? 0 : (*first_host_ids.rbegin() + 1);
-
-    for (size_t i = 1; i < descriptors_with_hosts.size(); ++i) {
-        const auto& [path, host_ids] = descriptors_with_hosts[i];
-        size_t host_count = host_ids.empty() ? 0 : (*host_ids.rbegin() + 1);
-
-        if (host_count != first_host_count) {
+        size_t count = *host_ids.rbegin() + 1;
+        if (!first_host_count) {
+            first_host_count = count;
+            first_path = path;
+        } else if (count != *first_host_count) {
             result.add_warning(
-                "Host count mismatch: '" + first_path + "' has " + std::to_string(first_host_count) + " hosts, but '" +
-                path + "' has " + std::to_string(host_count) + " hosts");
-        }
-
-        if (first_host_ids != host_ids) {
-            std::set<uint32_t> only_in_first, only_in_second;
-            std::set_difference(
-                first_host_ids.begin(),
-                first_host_ids.end(),
-                host_ids.begin(),
-                host_ids.end(),
-                std::inserter(only_in_first, only_in_first.begin()));
-            std::set_difference(
-                host_ids.begin(),
-                host_ids.end(),
-                first_host_ids.begin(),
-                first_host_ids.end(),
-                std::inserter(only_in_second, only_in_second.begin()));
-
-            if (!only_in_first.empty() || !only_in_second.empty()) {
-                std::ostringstream msg;
-                msg << "Host ID mismatch between '" << first_path << "' and '" << path << "': ";
-                if (!only_in_first.empty()) {
-                    msg << "IDs only in first: {";
-                    bool first = true;
-                    for (auto id : only_in_first) {
-                        if (!first) {
-                            msg << ", ";
-                        }
-                        msg << id;
-                        first = false;
-                    }
-                    msg << "} ";
-                }
-                if (!only_in_second.empty()) {
-                    msg << "IDs only in second: {";
-                    bool first = true;
-                    for (auto id : only_in_second) {
-                        if (!first) {
-                            msg << ", ";
-                        }
-                        msg << id;
-                        first = false;
-                    }
-                    msg << "}";
-                }
-                result.add_warning(msg.str());
-            }
+                "Host count mismatch: " + std::to_string(*first_host_count) + " vs " + std::to_string(count) +
+                " hosts");
+            break;
         }
     }
     return result;
@@ -521,53 +454,64 @@ MergeStatistics DescriptorMerger::get_merge_statistics(const cabling_generator::
     return stats;
 }
 
-bool DescriptorMerger::graph_templates_equal(
-    const cabling_generator::proto::GraphTemplate& a, const cabling_generator::proto::GraphTemplate& b) {
-    if (a.children().size() != b.children().size()) {
-        return false;
+cabling_generator::proto::NodeDescriptor DescriptorMerger::get_node_descriptor(
+    const std::string& node_descriptor_name, const cabling_generator::proto::ClusterDescriptor& descriptor) {
+    // First check inline descriptors
+    auto it = descriptor.node_descriptors().find(node_descriptor_name);
+    if (it != descriptor.node_descriptors().end()) {
+        return it->second;
     }
-
-    std::map<std::string, const cabling_generator::proto::ChildInstance*> a_children;
-    for (const auto& child : a.children()) {
-        a_children[child.name()] = &child;
-    }
-
-    for (const auto& b_child : b.children()) {
-        auto it = a_children.find(b_child.name());
-        if (it == a_children.end()) {
-            return false;
-        }
-
-        const auto& a_child = *it->second;
-        if (a_child.has_node_ref() != b_child.has_node_ref() || a_child.has_graph_ref() != b_child.has_graph_ref()) {
-            return false;
-        }
-        if (a_child.has_node_ref() && a_child.node_ref().node_descriptor() != b_child.node_ref().node_descriptor()) {
-            return false;
-        }
-        if (a_child.has_graph_ref() && a_child.graph_ref().graph_template() != b_child.graph_ref().graph_template()) {
-            return false;
-        }
-    }
-    return true;
+    // Fall back to creating from node type
+    auto node_type = get_node_type_from_string(node_descriptor_name);
+    return create_node_descriptor(node_type);
 }
 
-bool DescriptorMerger::connections_equal(
-    const cabling_generator::proto::Connection& a, const cabling_generator::proto::Connection& b) {
-    auto ports_equal = [](const cabling_generator::proto::Port& p1, const cabling_generator::proto::Port& p2) {
-        if (p1.path().size() != p2.path().size()) {
-            return false;
+cabling_generator::proto::NodeDescriptor DescriptorMerger::merge_node_descriptor_connections(
+    const cabling_generator::proto::NodeDescriptor& a, const cabling_generator::proto::NodeDescriptor& b) {
+    cabling_generator::proto::NodeDescriptor merged = a;
+
+    // Merge boards - use boards from 'a' as base, add any missing from 'b'
+    std::set<int32_t> existing_tray_ids;
+    for (const auto& board : merged.boards().board()) {
+        existing_tray_ids.insert(board.tray_id());
+    }
+    for (const auto& board : b.boards().board()) {
+        if (existing_tray_ids.find(board.tray_id()) == existing_tray_ids.end()) {
+            *merged.mutable_boards()->add_board() = board;
         }
-        for (int i = 0; i < p1.path().size(); ++i) {
-            if (p1.path(i) != p2.path(i)) {
-                return false;
+    }
+
+    // Merge port_type_connections - combine connections from both
+    for (const auto& [port_type, b_connections] : b.port_type_connections()) {
+        auto& merged_connections = (*merged.mutable_port_type_connections())[port_type];
+
+        // Build set of existing connections for deduplication
+        std::set<std::tuple<int32_t, int32_t, int32_t, int32_t>> existing;
+        for (const auto& conn : merged_connections.connections()) {
+            auto key = std::make_tuple(
+                conn.port_a().tray_id(), conn.port_a().port_id(), conn.port_b().tray_id(), conn.port_b().port_id());
+            existing.insert(key);
+            // Also insert reverse
+            auto rev_key = std::make_tuple(
+                conn.port_b().tray_id(), conn.port_b().port_id(), conn.port_a().tray_id(), conn.port_a().port_id());
+            existing.insert(rev_key);
+        }
+
+        // Add connections from 'b' that don't already exist
+        for (const auto& conn : b_connections.connections()) {
+            auto key = std::make_tuple(
+                conn.port_a().tray_id(), conn.port_a().port_id(), conn.port_b().tray_id(), conn.port_b().port_id());
+            if (existing.find(key) == existing.end()) {
+                *merged_connections.add_connections() = conn;
+                existing.insert(key);
+                auto rev_key = std::make_tuple(
+                    conn.port_b().tray_id(), conn.port_b().port_id(), conn.port_a().tray_id(), conn.port_a().port_id());
+                existing.insert(rev_key);
             }
         }
-        return p1.tray_id() == p2.tray_id() && p1.port_id() == p2.port_id();
-    };
+    }
 
-    return (ports_equal(a.port_a(), b.port_a()) && ports_equal(a.port_b(), b.port_b())) ||
-           (ports_equal(a.port_a(), b.port_b()) && ports_equal(a.port_b(), b.port_a()));
+    return merged;
 }
 
 ConnectionEndpoint DescriptorMerger::port_to_endpoint(
