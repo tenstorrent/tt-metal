@@ -5,6 +5,7 @@
 import pytest
 from loguru import logger
 
+import ttnn
 from models.common.utility_functions import profiler, run_for_wormhole_b0
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.experimental.mobileNetV3.runner.performant_runner_infra import MobileNetV3PerformanceRunnerInfra
@@ -13,10 +14,15 @@ from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_confi
 
 
 def run_model_pipeline(device, test_infra, num_measurement_iterations):
-    tt_inputs_host, input_mem_config = test_infra.setup_dram_interleaved_input()
+    tt_inputs_host, dram_input_mem_config, l1_input_mem_config, channels = test_infra.setup_sharded_input(device)
+
+    original_batch = test_infra.batch_size
+    original_height = test_infra.resolution[0]
+    original_width = test_infra.resolution[1]
 
     def model_wrapper(input_tensor):
-        test_infra.input_tensor = input_tensor
+        reshaped_input = ttnn.reshape(input_tensor, (original_batch, original_height, original_width, channels))
+        test_infra.input_tensor = reshaped_input
         test_infra.run()
         return test_infra.tt_output
 
@@ -24,12 +30,12 @@ def run_model_pipeline(device, test_infra, num_measurement_iterations):
         device=device,
         model=model_wrapper,
         config=PipelineConfig(
-            use_trace=False,
-            num_command_queues=1,
+            use_trace=True,
+            num_command_queues=2,
             all_transfers_on_separate_command_queue=False,
         ),
-        dram_input_memory_config=input_mem_config,
-        l1_input_memory_config=input_mem_config,
+        dram_input_memory_config=dram_input_mem_config,
+        l1_input_memory_config=l1_input_mem_config,
     )
 
     logger.info(f"Running model warmup with input shape {list(tt_inputs_host.shape)}")
@@ -47,7 +53,7 @@ def run_model_pipeline(device, test_infra, num_measurement_iterations):
     outputs = pipeline.enqueue(host_inputs).pop_all()
     profiler.end("run_model_pipeline_2cqs")
     for i, output in enumerate(outputs):
-        test_infra.validate(*output)
+        test_infra.validate(output)
         logger.info(f"Output {i} validation passed")
 
     pipeline.cleanup()
@@ -83,7 +89,7 @@ def run_perf_e2e_mobilenetV3(
     run_model_pipeline(device, test_infra, num_measurement_iterations)
 
     compile_time = profiler.get("compile")
-    inference_time_avg = profiler.get(f"run_model_pipeline_2cqs") / num_measurement_iterations
+    inference_time_avg = profiler.get("run_model_pipeline_2cqs") / num_measurement_iterations
     expected_inference_time = batch_size / expected_inference_throughput
 
     prep_perf_report(
