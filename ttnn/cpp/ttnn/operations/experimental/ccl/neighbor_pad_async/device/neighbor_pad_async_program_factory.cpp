@@ -366,7 +366,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             // Distribute work evenly across local-copy cores
             std::vector<CoreCoord> local_cores = corerange_to_cores(local_copy_cores, std::nullopt, /*row_wise=*/true);
             const uint32_t num_local_cores = local_cores.size();
-            const uint32_t total_units = (operation_attributes.dim > 0) ? outer_dim_size : num_sticks_per_halo_dim;
+            const uint32_t total_units =
+                (operation_attributes.dim > 0) ? (outer_dim_size * input_halo_dim_size) : input_halo_dim_size;
             const uint32_t base = (num_local_cores == 0) ? 0 : (total_units / num_local_cores);
             const uint32_t rem = (num_local_cores == 0) ? 0 : (total_units % num_local_cores);
 
@@ -392,20 +393,18 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 local_reader_kernel_ids.push_back(local_reader_kernel_id);
 
                 // Reader runtime args
-                const uint32_t reader_outer_dim_offset_start_id =
-                    (operation_attributes.dim > 0) ? (unit_offset * num_sticks_per_halo_dim * input_halo_dim_size) : 0;
-                const uint32_t reader_stick_start_id = (operation_attributes.dim == 0) ? unit_offset : 0;
-                const uint32_t reader_outer_dim_size = (operation_attributes.dim > 0) ? units_for_core : outer_dim_size;
-                const uint32_t reader_num_sticks_to_read =
-                    (operation_attributes.dim == 0) ? units_for_core : num_sticks_per_halo_dim;
+                const uint32_t reader_total_rows_start = unit_offset;
+                const uint32_t reader_stick_start_id = 0;
+                const uint32_t reader_rows_count = units_for_core;
+                const uint32_t reader_num_sticks_to_read = num_sticks_per_halo_dim;
 
                 std::vector<uint32_t> local_reader_rt_args = {
                     tensor_args.input_tensor.buffer()->address(),  // input_tensor_address
                     tensor_return_value.buffer()->address(),       // output_tensor_address (unused)
-                    reader_outer_dim_offset_start_id,
+                    reader_total_rows_start,
                     reader_stick_start_id,
                     input_halo_dim_size,
-                    reader_outer_dim_size,
+                    reader_rows_count,
                     reader_num_sticks_to_read,
                     num_sticks_per_halo_dim,
                 };
@@ -423,21 +422,19 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 local_writer_kernel_ids.push_back(local_writer_kernel_id);
 
                 // Writer runtime args
-                const uint32_t writer_outer_dim_offset_start_id =
-                    (operation_attributes.dim > 0) ? (unit_offset * num_sticks_per_halo_dim * output_halo_dim_size) : 0;
-                const uint32_t writer_stick_start_id = (operation_attributes.dim == 0) ? unit_offset : 0;
-                const uint32_t writer_outer_dim_size = (operation_attributes.dim > 0) ? units_for_core : outer_dim_size;
-                const uint32_t writer_num_sticks_to_read =
-                    (operation_attributes.dim == 0) ? units_for_core : num_sticks_per_halo_dim;
+                const uint32_t writer_total_rows_start = unit_offset;
+                const uint32_t writer_stick_start_id = 0;
+                const uint32_t writer_rows_count = units_for_core;
+                const uint32_t writer_num_sticks_to_read = num_sticks_per_halo_dim;
 
                 std::vector<uint32_t> local_writer_rt_args = {
                     tensor_args.input_tensor.buffer()->address(),  // input_tensor_address (unused by writer)
                     tensor_return_value.buffer()->address(),       // output_tensor_address
-                    writer_outer_dim_offset_start_id,
+                    writer_total_rows_start,
                     writer_stick_start_id,
                     input_halo_dim_size,
                     output_halo_dim_size,
-                    writer_outer_dim_size,
+                    writer_rows_count,
                     operation_attributes.padding_left,
                     writer_num_sticks_to_read,
                     num_sticks_per_halo_dim};
