@@ -28,7 +28,7 @@ jobs:
     with:
       build-wheel: true
       version: 22.04
-      user-artifacts-from-run: 19849736019
+      use-artifacts-from-run: 19849736019
   single-card-demo-tests:
     needs: build-artifact
     secrets: inherit
