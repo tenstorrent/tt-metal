@@ -1245,7 +1245,7 @@ class ModelArgs:
         # TODO: should be empty until https://github.com/tenstorrent/tt-metal/issues/33041 is fixed
         model_specific_supported_seq_lens = {
             # EXAMPLE: "gemma-3-4b": {
-            #     "N150": [128, 256, 512, 1024, 2048],
+            #     "N150": [128, 1024, 2048],
             # }
         }
 
