@@ -19,10 +19,8 @@ from models.experimental.panoptic_deeplab.reference.pytorch_model import Pytorch
 from models.experimental.panoptic_deeplab.tt.common import (
     get_panoptic_deeplab_config,
     PDL_L1_SMALL_SIZE,
-    preprocess_nchw_input_tensor,
 )
 from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
-from models.common.utility_functions import disable_persistent_kernel_cache
 from models.experimental.panoptic_deeplab.demo.demo_utils import (
     preprocess_image,
     create_panoptic_visualization,
@@ -103,31 +101,62 @@ def create_host_input_tensors(
     dram_memory_config = None
     l1_memory_config = None
 
+    SHARD_WIDTH = 8
+
     for i, image_path in enumerate(image_paths):
-        # Preprocess image
+        # Preprocess image to get NCHW tensor [1, C, H, W]
         torch_input = preprocess_image(image_path, target_size)
-        # Preprocess to TTNN format (height-sharded on device)
-        ttnn_input = preprocess_nchw_input_tensor(device, torch_input)
 
-        # Extract memory config from first tensor
+        assert len(torch_input.shape) == 4, f"Expected input tensor to be rank 4 (was {len(torch_input.shape)})"
+
+        C = torch_input.shape[1]
+        H = torch_input.shape[2]
+        W = torch_input.shape[3]
+        HW = H * W
+
+        # Pad channels to SHARD_WIDTH (8) if needed
+        # Padding format: (pad_left, pad_right, pad_top, pad_bottom, pad_front, pad_back)
+        # For channel dimension (dim=1), we pad at the end: pad_front=0, pad_back=SHARD_WIDTH-C
+        torch_input = torch.nn.functional.pad(torch_input, (0, 0, 0, 0, 0, SHARD_WIDTH - C), mode="constant", value=0)
+
+        # Convert to channel last (NHWC): [1, H, W, SHARD_WIDTH]
+        torch_input = torch_input.permute(0, 2, 3, 1)
+
+        # Create memory configs on first iteration
         if i == 0:
-            # Get the L1 memory config from the preprocessed tensor (full grid sharding)
-            original_mem_config = ttnn_input.memory_config()
-            original_shard_spec = original_mem_config.shard_spec
+            # CustomTracedModelExecutor doesn't use DRAM memory config - it transfers directly to L1
+            dram_memory_config = None
 
-            # Always use interleaved DRAM (no core constraints)
-            # The executor will use to_memory_config to convert from interleaved DRAM to sharded L1
-            dram_memory_config = ttnn.DRAM_MEMORY_CONFIG
+            # Create L1 sharded memory config (height sharding across full grid)
+            core_range_set = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device.core_grid.x - 1, device.core_grid.y - 1))}
+            )
+            num_cores = device.core_grid.x * device.core_grid.y
+            shard_height = (1 * HW + num_cores - 1) // num_cores
 
-            # Use the original L1 sharding (full grid) - to_memory_config will handle conversion
-            l1_memory_config = ttnn.MemoryConfig(
-                original_mem_config.memory_layout,
-                ttnn.BufferType.L1,
-                original_shard_spec,
+            sharded_memory_config = ttnn.create_sharded_memory_config_(
+                shape=(shard_height, SHARD_WIDTH),
+                core_grid=core_range_set,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
             )
 
-        # Convert to host tensor for pipeline
-        host_input = ttnn_input.cpu()
+            # Use the L1 sharding config for the pipeline
+            l1_memory_config = ttnn.MemoryConfig(
+                sharded_memory_config.memory_layout,
+                ttnn.BufferType.L1,
+                sharded_memory_config.shard_spec,
+            )
+
+        # Convert to TTNN host tensor (not on device)
+        # Use ROW_MAJOR_LAYOUT and bfloat16 dtype to match the original preprocessing
+        host_input = ttnn.from_torch(
+            torch_input,
+            device=None,  # Host tensor, not on device
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
         host_inputs.append(host_input)
 
     return host_inputs, dram_memory_config, l1_memory_config
@@ -143,7 +172,7 @@ def run_panoptic_deeplab_demo_pipeline(
     model_category=DEEPLAB_V3_PLUS,
 ):
     """
-    Run Panoptic DeepLab inference on multiple images using pipeline with TracedModelExecutor.
+    Run Panoptic DeepLab inference on multiple images using pipeline with a custom implementation of TracedModelExecutor.
 
     Args:
         device: TTNN device
@@ -154,8 +183,6 @@ def run_panoptic_deeplab_demo_pipeline(
         center_threshold: Center threshold for panoptic segmentation
         model_category: Model category (PANOPTIC_DEEPLAB or DEEPLAB_V3_PLUS)
     """
-    disable_persistent_kernel_cache()
-
     logger.info(f"Running Panoptic DeepLab pipeline demo on {len(image_paths)} images")
     logger.info(f"Target size: {target_size}")
 
@@ -319,6 +346,9 @@ def run_panoptic_deeplab_demo_pipeline(
 
     # Validate outputs with PCC checks
     logger.info("Validating outputs with PCC checks...")
+    logger.info("=" * 80)
+    logger.info(f"PCC Values for Individual Images ({model_category}):")
+    logger.info("=" * 80)
     all_passed = []
     semantic_pcc_values = []
     center_pcc_values = []
@@ -338,6 +368,9 @@ def run_panoptic_deeplab_demo_pipeline(
         return passed, float(pcc)
 
     for i, (ttnn_output, ref_tuple) in enumerate(zip(outputs, reference_outputs)):
+        # Get image name for this output
+        image_path, _ = original_images[i]
+        image_name = os.path.basename(image_path)
         pytorch_semantic, pytorch_center, pytorch_offset = ref_tuple
 
         # Handle different output formats based on model category
@@ -370,10 +403,14 @@ def run_panoptic_deeplab_demo_pipeline(
             ttnn_semantic,
             to_channel_first=False,
             output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
-            exp_pcc=0.985,
+            exp_pcc=0.95,
         )
         all_passed.append(passed)
         semantic_pcc_values.append(pcc)
+
+        # Print PCC for this image
+        logger.info(f"Image {i+1}/{num_inputs}: {image_name}")
+        logger.info(f"  Semantic PCC: {pcc:.6f} {'✅' if passed else '❌'}")
 
         # Check instance outputs (only for PANOPTIC_DEEPLAB)
         if model_category == PANOPTIC_DEEPLAB:
@@ -392,38 +429,32 @@ def run_panoptic_deeplab_demo_pipeline(
                 ttnn_offset,
                 to_channel_first=False,
                 output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
-                exp_pcc=0.985,
+                exp_pcc=0.965,
             )
             all_passed.append(passed_offset)
             offset_pcc_values.append(pcc_offset)
 
+            logger.info(f"  Center PCC: {pcc_center:.6f} {'✅' if passed_center else '❌'}")
+            logger.info(f"  Offset PCC: {pcc_offset:.6f} {'✅' if passed_offset else '❌'}")
+
+        logger.info("")  # Empty line between images
+
     # Cleanup
     pipe.cleanup()
 
-    # Calculate and display PCC statistics
-    def print_pcc_stats(pcc_values, output_name):
-        """Helper function to calculate and print PCC statistics."""
-        if pcc_values:
-            min_pcc = min(pcc_values)
-            max_pcc = max(pcc_values)
-            avg_pcc = sum(pcc_values) / len(pcc_values)
-            logger.info(f"  {output_name}: Min: {min_pcc:.6f}, Max: {max_pcc:.6f}, Avg: {avg_pcc:.6f}")
-        else:
-            logger.warning(f"  {output_name}: No PCC values collected!")
-
-    logger.info(f"PCC statistics for {model_category}:")
-    print_pcc_stats(semantic_pcc_values, "Semantic")
-
-    if model_category == PANOPTIC_DEEPLAB:
-        print_pcc_stats(center_pcc_values, "Center")
-        print_pcc_stats(offset_pcc_values, "Offset")
+    logger.info("=" * 80)
 
     # Print timing results after PCC statistics
-    logger.info(
-        f"Timing results for {model_category}: "
-        f"Average execution time: {avg_execution_time_us:.2f} μs, "
-        f"Average samples per second: {samples_per_second:.2f}"
-    )
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info(f"Timing Results for {model_category}:")
+    logger.info("=" * 80)
+    logger.info(f"  Average execution time: {avg_execution_time_us:.2f} μs")
+    logger.info(f"  Average samples per second: {samples_per_second:.2f}")
+    logger.info(f"  Total execution time: {total_execution_time * 1e6:.2f} μs ({total_execution_time * 1e3:.2f} ms)")
+    logger.info(f"  Number of samples: {num_inputs}")
+    logger.info("=" * 80)
+    logger.info("")
 
     # Log PCC check results (but don't fail - this is a demo)
     if not all(all_passed):

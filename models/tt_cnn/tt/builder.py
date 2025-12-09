@@ -629,8 +629,7 @@ class TtConv2d:
             slice_kwargs = self.get_conv2d_kwargs()
             slice_kwargs["in_channels"] = channels_per_slice
 
-
-            output_slice, (weight, bias) = ttnn.conv2d(
+            output_slice, (h_out, w_out), (weight, bias) = ttnn.conv2d(
                 input_tensor=input_slices[i],
                 weight_tensor=self.weight_slices[i],
                 bias_tensor=None,

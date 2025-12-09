@@ -29,6 +29,7 @@ from models.experimental.panoptic_deeplab.demo.demo_utils import (
     save_predictions,
     preprocess_input_params,
 )
+from tests.ttnn.utils_for_testing import check_with_pcc
 
 
 def run_panoptic_deeplab_demo(
@@ -145,6 +146,57 @@ def run_panoptic_deeplab_demo(
     # Run inference
     logger.info("Running TTNN inference...")
     ttnn_semantic_logits, ttnn_center_logits, ttnn_offset_logits, _ = ttnn_model.forward(ttnn_input)
+
+    # Validate outputs with PCC checks
+    logger.info("Validating outputs with PCC checks...")
+    logger.info("=" * 80)
+    logger.info(f"PCC Values for {os.path.basename(image_path)} ({model_category}):")
+    logger.info("=" * 80)
+
+    def get_pcc_value(pytorch_output, ttnn_output, to_channel_first=False, output_channels=None, exp_pcc=0.95):
+        """Helper function to get PCC value."""
+        ttnn_output_torch = ttnn.to_torch(ttnn_output)
+
+        if to_channel_first:
+            ttnn_output_torch = ttnn_output_torch.permute(0, 3, 1, 2)  # NHWC to NCHW
+
+        if output_channels is not None:
+            ttnn_output_torch = ttnn_output_torch[:, :output_channels, :, :]
+
+        passed, pcc = check_with_pcc(pytorch_output, ttnn_output_torch, exp_pcc)
+        return passed, float(pcc)
+
+    # Check semantic output
+    passed_semantic, pcc_semantic = get_pcc_value(
+        pytorch_semantic_logits,
+        ttnn_semantic_logits,
+        to_channel_first=False,
+        output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
+        exp_pcc=0.95,
+    )
+    logger.info(f"  Semantic PCC: {pcc_semantic:.6f} {'✅' if passed_semantic else '❌'}")
+
+    # Check instance outputs (only for PANOPTIC_DEEPLAB)
+    if model_category == PANOPTIC_DEEPLAB:
+        passed_center, pcc_center = get_pcc_value(
+            pytorch_center_logits,
+            ttnn_center_logits,
+            to_channel_first=False,
+            output_channels=ttnn_model.instance_head.get_center_output_channels_for_slicing(),
+            exp_pcc=0.784,
+        )
+        logger.info(f"  Center PCC: {pcc_center:.6f} {'✅' if passed_center else '❌'}")
+
+        passed_offset, pcc_offset = get_pcc_value(
+            pytorch_offset_logits,
+            ttnn_offset_logits,
+            to_channel_first=False,
+            output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
+            exp_pcc=0.984,
+        )
+        logger.info(f"  Offset PCC: {pcc_offset:.6f} {'✅' if passed_offset else '❌'}")
+
+    logger.info("=" * 80)
 
     # Process TTNN results
     logger.info("Processing TTNN results...")
