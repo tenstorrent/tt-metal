@@ -206,6 +206,7 @@ class Model:
                 kv_cache=layer_kv_cache,
             )
         logits = hidden_states
+        breakpoint()
 
         if get_last_token != -1:
             # The logits come from the shared method, slice them

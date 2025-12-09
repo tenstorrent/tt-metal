@@ -105,12 +105,14 @@ class DecoderLayer:
             kv_cache=kv_cache,
         )
         # after reduce scatter at end of attn: [1, 1, global_batch//num_rows, hidden_size/num_columns]
+        hidden_states = ttnn.permute(
+            hidden_states, (1, 0, 2)
+        )  # TODO: remove this permute by outputting the correct shape from attn
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
         residual = hidden_states
         hidden_states_post_norm = self.post_attention_layernorm(hidden_states)
         # another all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
         hidden_states = self.mlp(hidden_states_post_norm)  # diff with llama: router scores
         # TODO: replace all_reduce at end of MLP with reduce_scatter so we get [1, 1, global_batch//num_rows, hidden_size/num_columns]
-        hidden_states = ttnn.permute(hidden_states, (0, 2, 1, 3))
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
         return hidden_states

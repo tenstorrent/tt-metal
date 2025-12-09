@@ -59,7 +59,6 @@ def run_attention_component(
     reference_attention = reference_layer.self_attn
 
     # Reference attention forward
-    breakpoint()
     with torch.no_grad():
         reference_out, _ = reference_attention(
             hidden_states=hidden_states.reshape(-1, 1, hidden_states.shape[-1]),
@@ -79,7 +78,6 @@ def run_attention_component(
     )
 
     # Compare outputs
-    breakpoint()
     # passing, output = run_component_comparison(tt_out, reference_out, mesh_device, pcc_threshold=0.96)
     # assert passing, f"Attention test failed. Output: {output}"
     tt_output_torch = ttnn.to_torch(
@@ -109,15 +107,33 @@ def run_rms_norm_component(mesh_device, hidden_shape, reference_layer, decoder_l
         ref_output = reference_rms_norm(hidden_states)
 
     # Convert to TTNN tensors
-    tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    # tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    tt_hidden_states = ttnn.from_torch(
+        hidden_states.reshape(-1, 1, 2880),
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+    )
 
     # TTNN RMSNorm forward
     rms_norm_module = decoder_layer.input_layernorm
     tt_output = rms_norm_module(tt_hidden_states)
 
     # Compare outputs
-    passing, output = run_component_comparison(tt_output, ref_output, mesh_device, pcc_threshold=0.99)
-    assert passing, f"RMS norm test failed. Output: {output}"
+    # passing, output = run_component_comparison(tt_output, ref_output, mesh_device, pcc_threshold=0.99)
+    # assert passing, f"RMS norm test failed. Output: {output}"
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=tuple(mesh_device.shape)),
+    )[:, :1, :]
+
+    # Compare outputs
+    passing, output = compare_tensors(tt_output_torch, ref_output, mesh_device, pcc_threshold=0.99)
+    if passing:
+        logger.info(f"Experts test passed. Output: {output}")
+    else:
+        assert passing, f"Experts test failed. Output: {output}"
 
 
 def run_topk_router_component(mesh_device, hidden_shape, reference_layer, decoder_layer):
@@ -129,11 +145,21 @@ def run_topk_router_component(mesh_device, hidden_shape, reference_layer, decode
     # Extract reference TopK router from reference layer
     reference_router = reference_layer.mlp.router
     router_scores, router_indices = reference_router(hidden_states)
+    # We return a dense tensor of router_scores. Convert sparse router_scores to dense router_weights (note: this requires reorder the weights to match the order of the indices)
+    router_weights = torch.concat(
+        [
+            torch.tensor(
+                [router_scores[user, router_indices[user, i]] for i in range(router_indices.shape[1])]
+            ).reshape(1, -1)
+            for user in range(router_scores.shape[0])
+        ],
+        dim=0,
+    )
 
     # Convert to TTNN tensors
     # tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
     tt_hidden_states = ttnn.from_torch(
-        hidden_states,
+        hidden_states.reshape(-1, 1, 2880),
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
         layout=ttnn.TILE_LAYOUT,
@@ -142,18 +168,36 @@ def run_topk_router_component(mesh_device, hidden_shape, reference_layer, decode
 
     # Extract TT TopK router from decoder layer
     tt_router = decoder_layer.mlp.router
-    tt_router_scores, tt_router_indices, tt_router_logits = tt_router(tt_hidden_states)
-    tt_output_torch = ttnn.to_torch(
-        tt_router_scores,
+    tt_router_indices, tt_router_weights = tt_router(tt_hidden_states)
+    tt_router_indices_torch = ttnn.to_torch(
+        tt_router_indices,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=tuple(mesh_device.shape)),
-    )[:, :32]
+    )[:, :4]
+    tt_router_weights_torch = ttnn.to_torch(
+        tt_router_weights,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=tuple(mesh_device.shape)),
+    )[:, :4]
 
     # Compare outputs
-    passing, output = compare_tensors(tt_output_torch, router_scores, mesh_device, pcc_threshold=0.945)
-    if passing:
-        logger.info(f"Experts test passed. Output: {output}")
+    # We will sort the indices here as the order of the indices is not guaranteed to be the same in the reference and TT implementation.
+    sorted_tt_indices, sorted_tt_indices_order = torch.sort(tt_router_indices_torch, dim=-1)
+    sorted_ref_indices, sorted_ref_indices_order = torch.sort(router_indices, dim=-1)
+    indices_passing, indices_output = compare_tensors(
+        sorted_tt_indices, sorted_ref_indices, mesh_device, pcc_threshold=0.98
+    )
+    weights_passing, weights_output = compare_tensors(
+        tt_router_weights_torch[sorted_tt_indices_order],
+        router_weights[sorted_ref_indices_order],
+        mesh_device,
+        pcc_threshold=0.98,
+    )
+    if not (indices_passing and weights_passing):
+        assert (
+            False
+        ), f"\nTopK Router test failed (indices). Output: {indices_output}\nTopK Router test failed (weights). Output: {weights_output}"
     else:
-        assert passing, f"Experts test failed. Output: {output}"
+        logger.info(f"TopK Router indices test passed. Output: {indices_output}")
+        logger.info(f"TopK Router weights test passed. Output: {weights_output}")
     # for tt_output, reference_output in zip(tt_router_scores, router_scores):
     #     passing, output = run_component_comparison(tt_output, reference_output, mesh_device, pcc_threshold=0.945)
     #     assert passing, f"TopK router test failed. Output: {output}"
@@ -207,7 +251,7 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
     tt_router_indices = ttnn.from_torch(
         router_indices.unsqueeze(1).unsqueeze(1),
         device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.uint16,
         mesh_mapper=ttnn.ShardTensor2dMesh(dims=(0, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
     )
@@ -252,7 +296,6 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
     # Create TT MLP using TestFactory setup
     tt_mlp = decoder_layer.mlp
     tt_output = tt_mlp(tt_hidden_states)
-    breakpoint()
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
@@ -516,9 +559,8 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, te
         pcc_threshold = 0.924 if seq_len == 1 else 0.88
         tt_output_torch = ttnn.to_torch(
             tt_output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-3, 0), mesh_shape=tuple(mesh_device.shape)),
-        )[:1, :, :1, :]
-        breakpoint()
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
+        )[:1]
         passing, output = compare_tensors(
             tt_output_torch.squeeze(), reference_output.squeeze(), mesh_device, pcc_threshold=pcc_threshold
         )

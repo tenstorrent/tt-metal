@@ -140,7 +140,11 @@ class TopKRouter:
         # Detect decode mode for L1_WIDTH_SHARDED optimization (like tt-transformers MLP)
         is_decode_mode = hidden_states.shape[1] == 1
         # mem_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if is_decode_mode else ttnn.DRAM_MEMORY_CONFIG
-        mem_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if (is_decode_mode and self.weight.shape[1] > 32) else ttnn.DRAM_MEMORY_CONFIG
+        mem_config = (
+            ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+            if (is_decode_mode and self.weight.shape[1] > 32)
+            else ttnn.DRAM_MEMORY_CONFIG
+        )
 
         hidden_states = ttnn.reshape(hidden_states, (-1, self.hidden_dim))
         router_logits = ttnn.linear(

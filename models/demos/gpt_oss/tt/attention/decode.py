@@ -55,9 +55,6 @@ def decode_forward(
     xqkv_fused = ttnn.matmul(
         hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
     )
-    # xqkv_fused = ttnn.matmul(
-    #     hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    # )
     xqkv_fused = ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
 
     # Split into Q, K, V heads
@@ -71,7 +68,6 @@ def decode_forward(
         num_kv_heads=num_local_kv_heads,
         memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
     )
-    breakpoint()
 
     xqkv_fused.deallocate(True)
 
@@ -129,7 +125,6 @@ def decode_forward(
             memory_config=height_sharded_mem_config,
         )
     else:
-        # position_idx = ttnn.to_layout(position_idx, ttnn.TILE_LAYOUT)
         tt_sdpa_tensor = ttnn.transformer.scaled_dot_product_attention_decode(
             tt_q,
             k_cache,
@@ -152,18 +147,15 @@ def decode_forward(
     tt_out = ttnn.linear(
         tt_sdpa_out, weights.o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
     )
-    # tt_out = ttnn.linear(
-    #     tt_sdpa_out, weights.o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    # )
+
     tt_sdpa_out.deallocate(True)
     tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-    # tt_out = ttnn.add(tt_out, weights.o_proj_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
-    # tt_out = ttnn.reshape(
-    #     tt_out,
-    #     (batch_size, seq_len, hidden_size),
-    #     (batch_size, 32, hidden_size),
-    # )
+    tt_out = ttnn.reshape(
+        tt_out,
+        (batch_size, seq_len, hidden_size),
+        (batch_size, 32, hidden_size),
+    )
 
     # Tensor parallel allreduce
     # TODO: This will need to be a reduce scatter so outputs are [1, 1, global_batch//num_rows, hidden_size//num_columns
