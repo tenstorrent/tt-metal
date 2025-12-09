@@ -13,7 +13,7 @@
 
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"  //TODO: migrate this code to use new all_gather_async API. This code relies on the old all_gather_async device_operationheader
+#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"  //TODO: migrate this code to use new all_gather_async API. This code relies on the old all_gather_async device_operation header
 
 namespace ttnn::operations::experimental::ccl::all_gather_matmul_async {
 
