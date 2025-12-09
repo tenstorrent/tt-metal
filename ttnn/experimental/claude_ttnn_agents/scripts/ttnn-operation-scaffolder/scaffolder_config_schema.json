@@ -1,0 +1,167 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TTNN Operation Scaffolder Configuration",
+  "description": "Configuration extracted from operation spec for scaffolding TTNN operations",
+  "type": "object",
+  "required": [
+    "operation_name",
+    "operation_name_pascal",
+    "category",
+    "namespace",
+    "operation_path",
+    "parameters",
+    "input_tensors",
+    "validations",
+    "output_shape",
+    "output_dtype",
+    "output_layout"
+  ],
+  "properties": {
+    "operation_name": {
+      "type": "string",
+      "description": "Operation name in snake_case (e.g., 'my_operation')",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "operation_name_pascal": {
+      "type": "string",
+      "description": "Operation name in PascalCase (e.g., 'MyOperation')",
+      "pattern": "^[A-Z][a-zA-Z0-9]*$"
+    },
+    "category": {
+      "type": "string",
+      "description": "TTNN operation category (e.g., 'data_movement', 'eltwise')",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "namespace": {
+      "type": "string",
+      "description": "C++ namespace (e.g., 'ttnn::operations::my_operation')"
+    },
+    "operation_path": {
+      "type": "string",
+      "description": "Absolute path to operation directory (e.g., 'ttnn/cpp/ttnn/operations/data_movement/my_operation')"
+    },
+    "parameters": {
+      "type": "array",
+      "description": "Operation parameters extracted from spec's API Specification section",
+      "items": {
+        "type": "object",
+        "required": ["name", "cpp_type", "py_type", "description"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Parameter name",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          },
+          "cpp_type": {
+            "type": "string",
+            "description": "C++ type (e.g., 'uint32_t', 'float', 'std::optional<int32_t>')"
+          },
+          "py_type": {
+            "type": "string",
+            "description": "Python type for pybind (e.g., 'int', 'float', 'Optional[int]')"
+          },
+          "default": {
+            "type": ["string", "null"],
+            "description": "Default value as string, or null if required"
+          },
+          "description": {
+            "type": "string",
+            "description": "Parameter description for docstring"
+          }
+        }
+      }
+    },
+    "input_tensors": {
+      "type": "array",
+      "description": "Input tensor specifications from spec's Input Requirements section",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "cpp_name"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Tensor name in spec"
+          },
+          "cpp_name": {
+            "type": "string",
+            "description": "C++ variable name",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          },
+          "required_rank": {
+            "type": ["integer", "null"],
+            "description": "Required rank, or null if any rank allowed"
+          },
+          "required_dtypes": {
+            "type": "array",
+            "description": "List of allowed dtypes (C++ enum values)",
+            "items": {
+              "type": "string",
+              "pattern": "^DataType::[A-Z0-9_]+$"
+            }
+          },
+          "required_layout": {
+            "type": ["string", "null"],
+            "description": "Required layout (C++ enum value like 'Layout::ROW_MAJOR'), or null"
+          }
+        }
+      }
+    },
+    "validations": {
+      "type": "array",
+      "description": "Validation rules extracted from spec's Input Requirements table",
+      "items": {
+        "type": "object",
+        "required": ["condition", "error_message"],
+        "properties": {
+          "condition": {
+            "type": "string",
+            "description": "C++ boolean expression (e.g., 'input.logical_shape().rank() == 4')"
+          },
+          "error_message": {
+            "type": "string",
+            "description": "Error message with {} placeholders for format args"
+          },
+          "error_args": {
+            "type": "array",
+            "description": "C++ expressions to fill {} placeholders in error message",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "output_shape": {
+      "type": "object",
+      "description": "Output shape specification from spec's Output Specification section",
+      "required": ["formula", "cpp_code"],
+      "properties": {
+        "formula": {
+          "type": "string",
+          "description": "Human-readable formula (e.g., 'same_as_input', 'N x C x H/2 x W/2')"
+        },
+        "cpp_code": {
+          "type": "string",
+          "description": "C++ code to compute output_shape (e.g., 'ttnn::Shape output_shape = input.logical_shape();')"
+        },
+        "cpp_code_padded": {
+          "type": "string",
+          "description": "Optional C++ code to compute output_padded (defaults to 'ttnn::Shape output_padded = input.padded_shape();')"
+        }
+      }
+    },
+    "output_dtype": {
+      "type": "string",
+      "description": "Output dtype ('same_as_input' or C++ enum value like 'DataType::BFLOAT16')"
+    },
+    "output_layout": {
+      "type": "string",
+      "description": "Output layout (C++ enum value like 'Layout::ROW_MAJOR')"
+    },
+    "docstring": {
+      "type": "string",
+      "description": "Operation docstring for Python API"
+    }
+  }
+}
