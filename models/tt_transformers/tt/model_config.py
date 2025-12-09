@@ -8,7 +8,7 @@ import math
 import os
 from enum import Enum
 from pathlib import Path
-from typing import Tuple
+from typing import Dict, Tuple
 
 import torch
 from loguru import logger
@@ -466,7 +466,7 @@ class ModelArgs:
         logger.info(f"Inferring device name: {self.device_name}")
         device = mesh_device if mesh_device is not None else None
         self.cluster_shape = list(mesh_device.shape) if mesh_device is not None else None
-        self.is_galaxy = self.num_devices == 32
+        self.is_galaxy = ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
 
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
@@ -1292,7 +1292,7 @@ class ModelArgs:
             self.set_tg_attention_config()
 
             self.is_multichip = self.num_devices > 1
-            self.num_reduce_scatter_links = 1
+            self.num_reduce_scatter_links = 4 if self.is_galaxy else 1
             self.num_all_gather_links = (
                 2 if self.is_galaxy else 1
             )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
@@ -2023,6 +2023,50 @@ class ModelArgs:
             fused_activation=fused_activation,
             fuse_batch=fuse_batch,
         )
+
+    def ccl_config(self, key: str = None) -> Dict[str, int]:
+        ccl_configs = {
+            "default": {
+                "chunks_per_sync": 10,
+                "num_workers_per_link": 2,
+                "num_buffers_per_channel": 2,
+            },
+            "Llama-3.1-8B": {
+                "ALL_GATHER_PRE_FF_NORM": {
+                    "chunks_per_sync": 10,
+                    "num_workers_per_link": 3,
+                    "num_buffers_per_channel": 2,
+                },
+                "ALL_GATHER_POST_FF_NORM": {
+                    "chunks_per_sync": 10,
+                    "num_workers_per_link": 4,
+                    "num_buffers_per_channel": 2,
+                },
+                "ALL_GATHER_FF_NORM": {
+                    "chunks_per_sync": 40,
+                    "num_workers_per_link": 1,
+                    "num_buffers_per_channel": 1,
+                },
+                "ALL_GATHER_ATTN_NORM": {
+                    "chunks_per_sync": 10,
+                    "num_workers_per_link": 1,
+                    "num_buffers_per_channel": 8,
+                },
+                "ALL_REDUCE_MLP": {
+                    "chunks_per_sync": 128,
+                    "num_workers_per_link": 1,
+                    "num_buffers_per_channel": 2,
+                },
+            },
+        }
+
+        if self.base_model_name not in ccl_configs.keys():
+            return ccl_configs["default"]
+
+        if key not in ccl_configs[self.base_model_name].keys():
+            return ccl_configs["default"]
+
+        return ccl_configs[self.base_model_name][key]
 
     def dram_shard_core_grid_for_k(self, k: int) -> Tuple[int, int]:
         rows, cols = self.find_grid(k // self.tile_size)

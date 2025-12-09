@@ -8,10 +8,11 @@ from models.tt_transformers.tt.ccl import tt_distributed_rmsnorm, tt_sharded_dis
 
 
 class DistributedNorm(LightweightModule):
-    def __init__(self, norm, args, tt_ccl, TG=False):
+    def __init__(self, norm, args, tt_ccl, ccl_config_key=None, TG=False):
         self.norm = norm
         self.args = args
         self.tt_ccl = tt_ccl
+        self.ccl_config = args.ccl_config(ccl_config_key)
 
         if TG:
             core_grid_ln = (
@@ -82,9 +83,7 @@ class DistributedNorm(LightweightModule):
                 topology=self.args.ccl_topology(),
                 memory_config=input_mem_cfg,
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
+                **self.ccl_config,
             )
         else:
             x = ttnn.to_memory_config(x, input_mem_cfg)
@@ -102,9 +101,7 @@ class DistributedNorm(LightweightModule):
                 topology=self.args.ccl_topology(),
                 memory_config=x.memory_config(),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
+                **self.ccl_config,
             )
 
         return x

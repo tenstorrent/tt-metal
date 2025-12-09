@@ -113,6 +113,7 @@ class TransformerBlock(LightweightModule):
             ),
             args,
             tt_ccl=self.tt_ccl,
+            ccl_config_key="ALL_GATHER_ATTN_NORM",
             TG=args.is_galaxy,
         )
         self.ff_norm = DistributedNorm(
@@ -134,6 +135,7 @@ class TransformerBlock(LightweightModule):
             ),
             args,
             tt_ccl=self.tt_ccl,
+            ccl_config_key="ALL_GATHER_FF_NORM",
             TG=args.is_galaxy,
         )
         if f"layers.{layer_num}.pre_feedforward_layernorm.weight" in state_dict:
@@ -156,6 +158,7 @@ class TransformerBlock(LightweightModule):
                 ),
                 args,
                 tt_ccl=self.tt_ccl,
+                ccl_config_key="ALL_GATHER_PRE_FF_NORM",
                 TG=args.is_galaxy,
             )
         else:
@@ -182,6 +185,7 @@ class TransformerBlock(LightweightModule):
                 ),
                 args,
                 tt_ccl=self.tt_ccl,
+                ccl_config_key="ALL_GATHER_POST_FF_NORM",
                 TG=args.is_galaxy,
             )
         else:

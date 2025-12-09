@@ -75,6 +75,9 @@ def tt_all_reduce(
     dim=0,
     num_reduce_scatter_links=1,
     num_all_gather_links=2,
+    chunks_per_sync=10,
+    num_workers_per_link=2,
+    num_buffers_per_channel=2,
     topology=ttnn.Topology.Linear,
     memory_config=None,
     sharded=False,
@@ -109,9 +112,9 @@ def tt_all_reduce(
             memory_config=memory_config,
             intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=topology,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=chunks_per_sync,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=num_buffers_per_channel,
         )
         input_tensor.deallocate(True)
         return reduced
@@ -138,9 +141,9 @@ def tt_all_reduce(
             topology=topology,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=chunks_per_sync,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=num_buffers_per_channel,
         )
 
         if sharded:
@@ -169,9 +172,9 @@ def tt_all_reduce(
             memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
             intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=topology,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=chunks_per_sync,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=num_buffers_per_channel,
         )
 
         reduced_tensor = ttnn.experimental.all_gather_async(
@@ -184,9 +187,9 @@ def tt_all_reduce(
             topology=topology,
             memory_config=input_mem_cfg,
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=chunks_per_sync,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=num_buffers_per_channel,
         )
 
     # Reshape the reduced tensor to the original shape
@@ -202,6 +205,9 @@ def tt_all_gather(
     cluster_axis,
     dim,
     num_links=2,
+    chunks_per_sync=10,
+    num_workers_per_link=2,
+    num_buffers_per_channel=2,
     memory_config=None,
     sharded=False,
     topology=ttnn.Topology.Linear,
@@ -231,9 +237,9 @@ def tt_all_gather(
             topology=topology,
             memory_config=memory_config,
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=chunks_per_sync,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=num_buffers_per_channel,
         )
     else:
         gathered = ttnn.experimental.all_gather_async(
@@ -246,9 +252,9 @@ def tt_all_gather(
             topology=topology,
             memory_config=memory_config,
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=chunks_per_sync,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=num_buffers_per_channel,
         )
     input_tensor.deallocate(True)
     return gathered
