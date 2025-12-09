@@ -35,19 +35,17 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class Allocator;
 class CommandQueue;
 class SubDevice;
 class SystemMemoryManager;
-namespace program_cache {
-namespace detail {
+
+namespace program_cache::detail {
 struct ProgramCache;
-}  // namespace detail
-}  // namespace program_cache
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace program_cache::detail
+
+}  // namespace tt::tt_metal
 
 namespace tt::tt_fabric {
 class FabricNodeId;
@@ -192,6 +190,8 @@ public:
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     const std::unique_ptr<Allocator>& allocator() const override;
     const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const override;
+    const std::unique_ptr<AllocatorImpl>& allocator_impl() const override;
+    const std::unique_ptr<AllocatorImpl>& allocator_impl(SubDeviceId sub_device_id) const override;
     CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const override;
     uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const override;
     uint32_t dram_channel_from_virtual_core(const CoreCoord& virtual_core) const override;

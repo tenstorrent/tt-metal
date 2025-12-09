@@ -21,6 +21,7 @@
 
 #include "llrt/hal.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
+#include "tt_metal/impl/allocator/allocator.hpp"
 #include <variant>
 #include <llrt/tt_cluster.hpp>
 
@@ -141,7 +142,7 @@ inline DeviceData::DeviceData(
     // Always populate DRAM
     auto num_banks = device->allocator()->get_num_banks(BufferType::DRAM);
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
-        auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(bank_id);
+        auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
         CoreCoord phys_core = device->logical_core_from_dram_channel(dram_channel);
         int32_t bank_offset = device->allocator()->get_bank_offset(BufferType::DRAM, bank_id);
         this->all_data[phys_core][bank_id] = one_core_data_t();
@@ -190,7 +191,7 @@ inline void DeviceData::prepopulate_dram(IDevice* device, uint32_t size_words) {
 
     for (int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
         [[maybe_unused]] auto offset = device->allocator()->get_bank_offset(BufferType::DRAM, bank_id);
-        auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(bank_id);
+        auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
         auto bank_core = device->logical_core_from_dram_channel(dram_channel);
         one_core_data_t& data = this->all_data[bank_core][bank_id];
 
@@ -677,7 +678,7 @@ inline void generate_random_paged_payload(
             tt::align(cmd.write_paged.page_size, page_size_alignment_bytes) * (page_id / num_banks);
 
         if (is_dram) {
-            auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(bank_id);
+            auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
             bank_core = device->logical_core_from_dram_channel(dram_channel);
         } else {
             bank_core = device->allocator()->get_logical_core_from_bank_id(bank_id);
