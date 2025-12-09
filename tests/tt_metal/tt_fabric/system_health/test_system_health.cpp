@@ -300,7 +300,9 @@ TEST(Cluster, ReportSystemHealth) {
             if (cluster.is_ethernet_link_up(chip_id, eth_core)) {
                 eth_ss << " link UP " << connection_type;
                 CoreCoord connected_eth_core = CoreCoord{0, 0};
-                if (eth_connections.at(chip_id).find(chan) != eth_connections.at(chip_id).end()) {
+                auto eth_conn_it = eth_connections.find(chip_id);
+                if (eth_conn_it != eth_connections.end() &&
+                    eth_conn_it->second.find(chan) != eth_conn_it->second.end()) {
                     ChipId connected_chip_id = 0;
                     std::tie(connected_chip_id, connected_eth_core) =
                         cluster.get_connected_ethernet_core(std::make_tuple(chip_id, eth_core));
