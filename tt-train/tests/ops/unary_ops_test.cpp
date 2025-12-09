@@ -8,6 +8,7 @@
 #include <sys/random.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <core/ttnn_all_includes.hpp>
 #include <cstdint>
 #include <limits>
@@ -41,7 +42,10 @@ void load_random_data_from_os(std::span<float> data) {
         const auto bytes_read = getrandom(static_cast<void*>(remaining_bytes.data()), remaining_bytes.size(), 0);
 
         if (bytes_read < 0) {
-            // Fallback to std::random_device if getrandom fails
+            if (errno == EINTR) {
+                continue;  // Retry on interrupt
+            }
+            // Fallback to std::random_device for other errors
             std::random_device rd;
             std::uniform_int_distribution<std::uint8_t> dist;
             std::ranges::generate(remaining_bytes, [&]() { return static_cast<std::byte>(dist(rd)); });
