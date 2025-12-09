@@ -12,7 +12,6 @@ struct operation_attributes_t {
     uint32_t m_num_repeats{};
     bool m_is_last_dim{};
     tt::tt_metal::MemoryConfig m_output_mem_config;
-    ttnn::SmallVector<uint32_t> repetition_vector;
 };
 
 struct tensor_args_t {

@@ -86,16 +86,12 @@ RepeatDeviceOperation::create_op_performance_model(
 
 std::tuple<operation_attributes_t, tensor_args_t> RepeatDeviceOperation::invoke(
     const Tensor& input,
-    const ttnn::SmallVector<uint32_t>& repetition_vector,
     uint32_t m_num_repeats,
     bool m_is_last_dim,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
     return {
         operation_attributes_t{
-            .m_num_repeats = m_num_repeats,
-            .m_is_last_dim = m_is_last_dim,
-            .m_output_mem_config = output_mem_config,
-            .repetition_vector = repetition_vector},
+            .m_num_repeats = m_num_repeats, .m_is_last_dim = m_is_last_dim, .m_output_mem_config = output_mem_config},
         tensor_args_t{.input = input}};
 }
 }  // namespace ttnn::operations::data_movement::repeat

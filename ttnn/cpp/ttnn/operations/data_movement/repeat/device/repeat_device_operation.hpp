@@ -40,7 +40,6 @@ struct RepeatDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,
-        const ttnn::SmallVector<uint32_t>& repetition_vector,
         uint32_t m_num_repeats,
         bool m_is_last_dim,
         const tt::tt_metal::MemoryConfig& output_mem_config);
