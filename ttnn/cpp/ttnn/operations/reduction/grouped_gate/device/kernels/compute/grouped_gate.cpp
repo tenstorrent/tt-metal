@@ -105,7 +105,7 @@ void process_and_sort_tiles(
     uint32_t index_transposed_cb_index,
     uint32_t Wt,
     bool switch_dir,
-    bool& ascending,
+    bool ascending,
     int end_phase) {
     topk_tile_init();
     // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
@@ -187,7 +187,7 @@ void topk_group_scores(
     const uint32_t group_indices_cb_index,
     const uint32_t sorted_group_indices_cb_index,
     bool switch_dir,
-    bool& ascending,
+    bool ascending,
     int log_topk_groups) {
     topk_tile_init();
     cb_reserve_back(sorted_group_indices_cb_index, 1);
@@ -225,23 +225,27 @@ void topk_group_scores(
 void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_index, const uint32_t tiles) {
     reconfig_data_format_srca(input_cb_index);
     transpose_wh_init_short(input_cb_index);
-    pack_reconfig_data_format(input_cb_index);
+    PACK(DPRINT << "Transpose wh init short input cb index" << ENDL();)
+    pack_reconfig_data_format(output_cb_index);  // uncommenting this causes a hang
+    PACK(DPRINT << "Reconfig data format output cb index" << ENDL();)
     for (uint32_t i = 0; i < tiles; i++) {
-        cb_wait_front(input_cb_index, 1);
-
-        cb_reserve_back(output_cb_index, 1);
-
         tile_regs_acquire();
+        cb_wait_front(input_cb_index, 1);
         transpose_wh_tile(input_cb_index, 0, 0);
         tile_regs_commit();
 
         tile_regs_wait();
+        cb_reserve_back(output_cb_index, 1);
+        PACK(DPRINT << "Reserving back output cb index" << ENDL();)
+
         pack_tile(0, output_cb_index);
         tile_regs_release();
         cb_push_back(output_cb_index, 1);
+        PACK(DPRINT << "End of push back output cb index" << ENDL();)
 
         cb_pop_front(input_cb_index, 1);
     }
+    PACK(DPRINT << "Final tile regs release" << ENDL();)
 }
 
 void topk(
@@ -255,11 +259,8 @@ void topk(
     const uint32_t log_tiles,
     const uint32_t k,
     const uint32_t logk) {
-    uint32_t Wt = tiles;
-    uint32_t K = k;
-    bool switch_dir = (K == 64);
-    bool largest = true;
-    bool ascending = !largest;
+    bool switch_dir = (k == 64);
+    bool ascending = false;
     int end_phase = (tiles <= 2) ? log_tiles - 1 : 5;
 
     topk_tile_init();
@@ -345,11 +346,13 @@ void normalize_scores(
     // 2. Pack sums to intermediate to add epsilon
     tile_regs_wait();
     cb_reserve_back(intermediate_reduce_cb_index, 1);
+    PACK(DPRINT << "Reserving back intermediate reduce cb index" << ENDL();)
     pack_tile(0, intermediate_reduce_cb_index);
     // PACK(print_tile(intermediate_reduce_cb_index, 0, true, 0, 1, 0, 1));
     tile_regs_release();
+    PACK(DPRINT << "End of tile regs release after intermediate reduce cb index" << ENDL();)
     cb_push_back(intermediate_reduce_cb_index, 1);
-
+    PACK(DPRINT << "End of push back intermediate reduce cb index" << ENDL();)
     // 3. Add epsilon
     tile_regs_acquire();
     cb_wait_front(epsilon_cb_index, 1);
@@ -366,16 +369,19 @@ void normalize_scores(
 
     // 5. Pack reciprocals
     tile_regs_wait();
+    // PACK(DPRINT << "End of tile regs wait after recip tile" << ENDL();)
     cb_reserve_back(transpose_cb_index, 1);
+    // PACK(DPRINT << "Reserving back transpose cb index" << ENDL();)
     pack_tile(0, transpose_cb_index);
     // PACK(print_tile(transpose_cb_index, 0, true, 0, 1, 0, 1));
     cb_push_back(transpose_cb_index, 1);
+    // PACK(DPRINT << "End of push back transpose cb index" << ENDL();)
 
     // 6. Broadcast multiply
     tile_regs_acquire();
     cb_wait_front(transpose_cb_index, 1);
-    UNPACK(print_tile(transpose_cb_index, 0, true, 0, 1, 0, 1));
-    UNPACK(print_tile(unnormalized_scores_cb_index, 0, true, 0, 1, 0, 8));
+    // UNPACK(print_tile(transpose_cb_index, 0, true, 0, 1, 0, 1));
+    // UNPACK(print_tile(unnormalized_scores_cb_index, 0, true, 0, 1, 0, 8));
     mul_bcast_cols_init_short(unnormalized_scores_cb_index, transpose_cb_index);
     mul_tiles_bcast<BroadcastType::COL>(
         unnormalized_scores_cb_index, transpose_cb_index, 0, 0, 0);  // tile *= 1/(sum_col(tile))
@@ -384,12 +390,17 @@ void normalize_scores(
     cb_pop_front(unnormalized_scores_cb_index, 1);
 
     tile_regs_wait();
+
     cb_reserve_back(normalized_scores_cb_index, 1);
+    // PACK(DPRINT << "Reserving back normalized scores cb index" << ENDL();)
     pack_reconfig_data_format(normalized_scores_cb_index);
     pack_tile(0, normalized_scores_cb_index);
-    PACK(print_tile(normalized_scores_cb_index, 0, true, 0, 1, 0, 8));
+    // PACK(print_tile(normalized_scores_cb_index, 0, true, 0, 1, 0, 8));
+    // PACK(DPRINT << "End of push back normalized scores cb index" << ENDL();)
     cb_push_back(normalized_scores_cb_index, 1);
+    // PACK(DPRINT << "End of push back on normalized scores cb index" << ENDL();)
     tile_regs_release();
+    // PACK(DPRINT << "End of tile regs release after normalized scores cb index" << ENDL();)
 }
 
 void scale(const uint32_t normalized_scores_cb_index, const uint32_t scales_cb_index, const uint32_t weights_cb_index) {
@@ -468,38 +479,31 @@ void MAIN {
     binary_op_init_common(scores_cb_index, bias_cb_index, add_bias_cb_index);
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
-        uint32_t base_page = height_tile * width_tiles;
-
-        DPRINT << "Start of kernel" << ENDL();
         blocks::sigmoid(scores_cb_index, sigmoid_input_cb_index, width_tiles);
-        DPRINT << "End of sigmoid" << ENDL();
 
         // Perform add bias on sigmoid input – should I do full or partial init here?
         blocks::add_bias(sigmoid_input_cb_index, bias_cb_index, add_bias_cb_index, width_tiles);
-        DPRINT << "End of add bias" << ENDL();
 
         // Transpose tiles into dest and then perform topk_local_sort
-        bool ascending = false;
-        bool switch_dir = false;
         blocks::process_and_sort_tiles(
             add_bias_cb_index,
             topk_index_creation_cb_index,
             topk_input_cb_index,
             topk_index_cb_index,
             width_tiles,
-            switch_dir,
-            ascending,
+            false,
+            false,
             end_phase);
-        DPRINT << "End of process and sort tiles" << ENDL();
+
         blocks::sum_top_experts_per_group(summed_experts_cb_index, group_scores_cb_index, summed_experts_per_group);
         blocks::topk_group_scores(
             group_scores_cb_index,
             group_indices_cb_index,
             sorted_group_indices_cb_index,
-            switch_dir,
-            ascending,
+            false,
+            false,
             log_n_groups - 1);
-        DPRINT << "End of topk group scores" << ENDL();
+
         blocks::topk(
             winning_group_scores_cb_index,
             winning_group_indices_cb_index,
@@ -511,7 +515,6 @@ void MAIN {
             log_topk_groups,
             n_activated_experts,
             log_n_activated_experts);
-        DPRINT << "End of topk" << ENDL();
         blocks::normalize_scores(
             pre_normalized_scores_cb_index,
             reduce_scalar_cb_index,
@@ -521,7 +524,6 @@ void MAIN {
             normalized_cb_index);
         DPRINT << "End of normalize scores" << ENDL();
         blocks::scale(normalized_cb_index, scales_cb_index, weights_cb_index);
-        DPRINT << "End of scale" << ENDL();
     }
 }
 }  // namespace NAMESPACE
