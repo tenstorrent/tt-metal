@@ -14,6 +14,7 @@ std::vector<ttnn::Tensor> ExecuteReduceToRoot::invoke(
     const ttnn::Tensor& input_tensor_s,
     const ttnn::Tensor& input_tensor_m,
     const MeshCoordinate& root_coord,
+    const float scale_fp32,
     const tt::tt_fabric::Topology topology,
     const std::optional<ttnn::Tensor>& optional_output_tensor_l,
     const std::optional<ttnn::Tensor>& optional_output_tensor_s,
@@ -27,6 +28,7 @@ std::vector<ttnn::Tensor> ExecuteReduceToRoot::invoke(
                input_tensor_m,
                topology,
                root_coord,
+               scale_fp32,
                optional_output_tensor_l,
                optional_output_tensor_s,
                optional_output_tensor_m,
@@ -35,15 +37,17 @@ std::vector<ttnn::Tensor> ExecuteReduceToRoot::invoke(
         .at(1);
 }
 
-std::vector<ttnn::TensorSpec> reduce_to_root_compute_intermediate_tensor_spec(
+std::vector<ttnn::TensorSpec> reduce_to_root_tensor_spec(
     const ttnn::Tensor& input_tensor_l,
     const ttnn::Tensor& input_tensor_s,
     const ttnn::Tensor& input_tensor_m,
     const MeshCoordinate& root_coord,
+    const float scale_fp32,
     const tt::tt_fabric::Topology topology,
     const std::optional<std::vector<ttnn::CoreCoord>>& input_mux_cores) {
     ReduceToRootOp::operation_attributes_t attrs{
         root_coord,
+        scale_fp32,
         topology,
         input_mux_cores,
         {input_tensor_l.tensor_spec(), input_tensor_s.tensor_spec(), input_tensor_m.tensor_spec()}};

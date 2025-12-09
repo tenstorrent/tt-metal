@@ -159,7 +159,6 @@ ReduceToRootOp::ReduceToRoot::cached_mesh_workload_t ReduceToRootOp::ReduceToRoo
     log_debug(tt::LogOp, "Synchronize devices in reduce_to_root op done");
 
     const auto& coords = tensor_coords.coords();
-    // assume linear topology for now
     auto topology = tt::tt_fabric::Topology::Linear;
     for (const auto& coord : coords) {
         std::optional<MeshCoordinate> forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
@@ -190,11 +189,13 @@ cached_workload_t ReduceToRootOp::ReduceToRoot::create_at(
     tensor_return_value_t& tensor_return_value,
     std::vector<tt::tt_metal::GlobalSemaphore>& semaphores) {
     const auto& root_coordinate = operation_attributes.root_coord;
+    const float scale_fp32 = operation_attributes.scale_fp32;
 
     return reduce_to_root_program_factory(
         tensor_args,
         operation_attributes,
         root_coordinate,
+        scale_fp32,
         mesh_coordinate,
         forward_coord,
         backward_coord,

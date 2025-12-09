@@ -17,13 +17,14 @@ namespace operations::ccl {
 struct ReduceToRootOp {
     struct operation_attributes_t {
         const MeshCoordinate& root_coord;
+        const float scale_fp32;
         const tt::tt_fabric::Topology topology;
         const std::optional<std::vector<ttnn::CoreCoord>> input_mux_cores;
 
         const std::vector<ttnn::TensorSpec> _input_tensor_spec;
 
-        static constexpr auto attribute_names = std::forward_as_tuple("root_coord", "topology");
-        auto attribute_values() const { return std::forward_as_tuple(root_coord, topology); };
+        static constexpr auto attribute_names = std::forward_as_tuple("root_coord", "scale_fp32", "topology");
+        auto attribute_values() const { return std::forward_as_tuple(root_coord, scale_fp32, topology); };
     };
 
     struct tensor_args_t {
@@ -107,6 +108,7 @@ struct ReduceToRootOp {
         const Tensor& input_tensor_m,
         const tt::tt_fabric::Topology& topology,
         const MeshCoordinate& root_coord,
+        const float scale_fp32,
         const std::optional<Tensor>& optional_output_tensor_l = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor_s = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor_m = std::nullopt,
@@ -115,6 +117,7 @@ struct ReduceToRootOp {
         return std::make_tuple(
             operation_attributes_t{
                 root_coord,
+                scale_fp32,
                 topology,
                 input_mux_cores,
                 {input_tensor_l.tensor_spec(), input_tensor_s.tensor_spec(), input_tensor_m.tensor_spec()}},
@@ -136,6 +139,7 @@ device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_variables_t
     const ReduceToRootOp::tensor_args_t& tensor_args,
     const ReduceToRootOp::operation_attributes_t& operation_attributes,
     const MeshCoordinate& root_coord,
+    const float scale_fp32,
     const MeshCoordinate& device_coordinate,
     std::optional<MeshCoordinate>& forward_coord,
     std::optional<MeshCoordinate>& backward_coord,

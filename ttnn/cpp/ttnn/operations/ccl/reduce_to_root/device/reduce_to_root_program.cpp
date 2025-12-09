@@ -130,6 +130,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     const ReduceToRootOp::tensor_args_t& tensor_args,
     const ReduceToRootOp::operation_attributes_t& operation_attributes,
     const MeshCoordinate& root_coord,
+    const float scale_fp32,
     const MeshCoordinate& device_coordinate,
     std::optional<ttnn::MeshCoordinate>& forward_coord,
     std::optional<ttnn::MeshCoordinate>& backward_coord,
@@ -617,8 +618,8 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
             float f;
             uint32_t u;
         } scale_union{};
-        scale_union.f = 1.0f;  // Scale factor for exponential: exp((m1-m)*scale)
-        uint32_t scale_fp32 = scale_union.u;
+        scale_union.f = scale_fp32;
+        uint32_t scale_val = scale_union.u;
         uint32_t loop_size = is_root_device ? 2 : 1;
 
         auto compute_kernel_configuration = ttnn::init_device_compute_kernel_config(
@@ -630,7 +631,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
         compute_ct_args = {compute_out_cb_l, compute_cb_l,      compute_cb_2_l,    compute_cb_s,     compute_cb_2_m,
                            compute_cb_m,     compute_out_cb_m,  cb_exp_max_diff_2, compute_cb_2_s,   cb_exp_max_diff,
                            compute_out_cb_s, cb_m_temp,         cb_s_temp,         cb_s1_temp,       cb_s2_temp,
-                           cb_l1_temp,       cb_l2_temp,        scale_fp32,        Sq_chunk_t,       vDHt,
+                           cb_l1_temp,       cb_l2_temp,        scale_val,         Sq_chunk_t,       vDHt,
                            loop_size,        intermediate_cb_l, intermediate_cb_s, intermediate_cb_m};
         tt::tt_metal::CreateKernel(
             program,

@@ -39,10 +39,11 @@ void py_bind_reduce_to_root(py::module& module) {
                 >>> input_tensor = ttnn.from_torch(
                 >>>     input_tensor_torch, device=mesh_device, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)
                 >>> )
-                >>> sender_coord= ttnn.MeshCoordinate((1,0))
+                >>> root_coord= ttnn.MeshCoordinate((1,0))
                 >>> sent_tensor = ttnn.reduce_to_root(
                         input_tensor,
-                        sender_coord,
+                        root_coord,
+                        scale_fp32=1.0,
                         topology=ttnn.Topology.Linear)
             )doc";
 
@@ -57,6 +58,7 @@ void py_bind_reduce_to_root(py::module& module) {
                const ttnn::Tensor& input_tensor_s,
                const ttnn::Tensor& input_tensor_m,
                const MeshCoordinate& root_coord,
+               const float scale_fp32,
                const std::optional<ttnn::Tensor>& output_tensor_l,
                const std::optional<ttnn::Tensor>& output_tensor_s,
                const std::optional<ttnn::Tensor>& output_tensor_m,
@@ -68,6 +70,7 @@ void py_bind_reduce_to_root(py::module& module) {
                     input_tensor_s,
                     input_tensor_m,
                     root_coord,
+                    scale_fp32,
                     topology,
                     output_tensor_l,
                     output_tensor_s,
@@ -80,6 +83,7 @@ void py_bind_reduce_to_root(py::module& module) {
             py::arg("input_tensor_m").noconvert(),
             py::arg("root_coord"),
             py::kw_only(),
+            py::arg("scale_fp32") = 1.0f,
             py::arg("output_tensor_l") = std::nullopt,
             py::arg("output_tensor_s") = std::nullopt,
             py::arg("output_tensor_m") = std::nullopt,
@@ -87,12 +91,13 @@ void py_bind_reduce_to_root(py::module& module) {
             py::arg("input_mux_cores") = std::nullopt,
             py::arg("topology").noconvert() = tt::tt_fabric::Topology::Linear});
     module.def(
-        "reduce_to_root_compute_intermediate_tensor_spec",
-        reduce_to_root_compute_intermediate_tensor_spec,
+        "reduce_to_root_tensor_spec",
+        reduce_to_root_tensor_spec,
         py::arg("input_tensor_l"),
         py::arg("input_tensor_s"),
         py::arg("input_tensor_m"),
         py::arg("root_coord"),
+        py::arg("scale_fp32"),
         py::arg("topology"),
         py::arg("input_mux_cores") = std::nullopt);
 }

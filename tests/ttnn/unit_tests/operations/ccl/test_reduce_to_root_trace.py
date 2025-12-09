@@ -15,7 +15,6 @@ def compute_reference_reduce_to_root(
 ):
     """
     Compute the reference output for reduce_to_root operation.
-    See test_random_reduce_to_root.py for full implementation details.
     """
     num_devices = len(l_data_per_device)
 
@@ -94,6 +93,7 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
     root_coord = (1, 0)
     root_device_idx = root_coord[0]
     num_cores = 8
+    scale_value = float(1)
 
     # Tensor shapes
     l_shape = [8, 128 * num_cores]
@@ -231,6 +231,7 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
         s_tensor,
         m_tensor,
         root_coord=ttnn.MeshCoordinate(root_coord),
+        scale_fp32=scale_value,
         intermediate_tensor=intermediate,
         topology=ttnn.Topology.Linear,
         input_mux_cores=mux_cores,
@@ -246,6 +247,7 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
             s_tensor,
             m_tensor,
             root_coord=ttnn.MeshCoordinate(root_coord),
+            scale_fp32=scale_value,
             intermediate_tensor=intermediate,
             topology=ttnn.Topology.Linear,
             input_mux_cores=mux_cores,
@@ -262,6 +264,7 @@ def test_reduce_to_root_with_trace(bh_2d_mesh_device):
             s_tensor,
             m_tensor,
             root_coord=ttnn.MeshCoordinate(root_coord),
+            scale_fp32=scale_value,
             intermediate_tensor=intermediate,
             topology=ttnn.Topology.Linear,
             input_mux_cores=mux_cores,
