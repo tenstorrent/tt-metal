@@ -16,7 +16,6 @@
 #endif
 
 #include "dev_mem_map.h"
-#include "tensix_dev_map.h"
 
 /*
 
