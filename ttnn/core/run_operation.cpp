@@ -17,9 +17,7 @@
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/device.hpp"
 
-namespace tt::tt_metal::operation {
-
-namespace detail {
+namespace tt::tt_metal::operation::detail {
 
 distributed::MeshDevice* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors) {
     for (const auto& input_tensor : input_tensors) {
@@ -59,8 +57,7 @@ Tensor* get_tensor(T& maybe_tensor) {
     return output_tensor;
 }
 
-}  // namespace detail
-}  // namespace tt::tt_metal::operation
+}  // namespace tt::tt_metal::operation::detail
 
 namespace tt::tt_metal::operation {
 

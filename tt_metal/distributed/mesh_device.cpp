@@ -56,17 +56,15 @@
 #include <llrt/tt_cluster.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class CommandQueue;
 class SystemMemoryManager;
-namespace program_cache {
-namespace detail {
+
+namespace program_cache::detail {
 struct ProgramCache;
-}  // namespace detail
-}  // namespace program_cache
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace program_cache::detail
+
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
 namespace {

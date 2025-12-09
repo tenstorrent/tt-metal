@@ -61,9 +61,7 @@ static constexpr float EPS_QA = 1.19209e-7f;  // TODO: verify
 static constexpr float NAN_QA = 7.0040e+19;   // TODO: verify
 static constexpr float INF_QA = 1.7014e+38;   // TODO: verify
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 class HalJitBuildQueryQuasar : public hal_2xx::HalJitBuildQueryBase {
 public:
@@ -352,5 +350,4 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
     };
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

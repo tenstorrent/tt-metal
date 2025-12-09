@@ -9,8 +9,7 @@
 #include "indexed_fill.hpp"
 #include "ttnn-pybind/decorators.hpp"
 
-namespace ttnn::operations::data_movement {
-namespace detail {
+namespace ttnn::operations::data_movement::detail {
 
 void bind_indexed_fill(pybind11::module& module) {
     auto doc = fmt::format(
@@ -51,6 +50,4 @@ void bind_indexed_fill(pybind11::module& module) {
             pybind11::arg("dim") = 0});
 }
 
-}  // namespace detail
-
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::detail

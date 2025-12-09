@@ -11,9 +11,7 @@
 
 using SHAPE = std::array<std::uint32_t, 4>;
 
-namespace tt {
-
-namespace deprecated {
+namespace tt::deprecated {
 
 enum class Initialize { ZEROS = 0, ONES = 1, INCREMENT = 2, RANDOM = 3 };
 
@@ -203,6 +201,6 @@ Tensor<T> pad(Tensor<T>& input, std::array<std::array<uint32_t, 2>, 4> pad_size,
     return Tensor<T>(out, out_shape);
 }
 
-}  // end namespace deprecated
+}  // namespace tt::deprecated
 
-}  // end namespace tt
+// end namespace tt

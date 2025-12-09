@@ -20,8 +20,7 @@
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include <llrt/tt_cluster.hpp>
 
-namespace tt::tt_fabric {
-namespace physical_discovery {
+namespace tt::tt_fabric::physical_discovery {
 
 TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     using namespace tt::tt_metal::distributed::multihost;
@@ -143,5 +142,4 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     }
 }
 
-}  // namespace physical_discovery
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::physical_discovery
