@@ -213,5 +213,4 @@ LlamaAllGatherMatmulAsyncDeviceOperation::invoke(
         tensor_args_t{.input0 = input0, .input1 = input1, .intermediate = intermediate_tensor}};
 }
 
-} // namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async
-
+}  // namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async

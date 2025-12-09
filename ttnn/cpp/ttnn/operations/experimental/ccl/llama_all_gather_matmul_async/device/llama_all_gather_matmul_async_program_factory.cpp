@@ -550,5 +550,4 @@ void LlamaAllGatherMatmulAsyncProgramFactory::override_runtime_arguments(
     }
 }
 
-} // namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async::program
-
+}  // namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async::program
