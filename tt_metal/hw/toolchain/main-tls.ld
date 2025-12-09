@@ -94,7 +94,8 @@ PHDRS {
   data PT_LOAD;
   IF_KERNEL(firmdata PT_LOAD;)
 }
-
+/* If not defined data is placed per-cpu after TLS.  */
+IF_KERNEL(IF_TLS(PROVIDE_HIDDEN(DATA_START = 0);))
 SECTIONS {
 /* Text-like */
 #if defined(TYPE_KERNEL)
@@ -146,7 +147,9 @@ SECTIONS {
     *object.o(.data .bss)
   } :firmdata
 #endif
-  .data DATA_START IF_KERNEL(? DATA_START : IF_TLS(ADDR(.firmdata) + SIZEOF(.firmdata))IF_NOT_TLS(ADDR(.tbss) + SIZEOF(.tbss)))
+  .data IF_FIRMWARE(DATA_START)
+        IF_KERNEL(IF_TLS(DATA_START ? DATA_START : ADDR(.firmdata) + SIZEOF(.firmdata))
+                  IF_NOT_TLS(ADDR(.tbss) + SIZEOF(.tbss)))
   : IF_KERNEL(LOAD_AFTER_ABUT(.data, .tdata))
   {
     __ldm_data_start = .;
