@@ -104,8 +104,10 @@ std::filesystem::path get_dprint_log_dir() {
     }
 
     // Verify the directory is writable by attempting to create and remove a temporary file
-    // Use a unique name to avoid conflicts in multi-process scenarios
-    std::filesystem::path test_file = log_dir / (".write_test_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    // Use a unique name combining timestamp and thread ID to avoid conflicts in multi-process scenarios
+    auto thread_id = std::hash<std::thread::id>{}(std::this_thread::get_id());
+    auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
+    std::filesystem::path test_file = log_dir / (".write_test_" + std::to_string(timestamp) + "_" + std::to_string(thread_id));
     {
         std::ofstream test_stream(test_file);
         if (!test_stream) {
@@ -115,6 +117,7 @@ std::filesystem::path get_dprint_log_dir() {
                 log_dir.string());
             return get_null_device_path();
         }
+        test_stream.close();
     }
     std::filesystem::remove(test_file, ec);
     if (ec) {
