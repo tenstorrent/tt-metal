@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #include "pad_rm_reader_writer_multi_core_v2_program_factory.hpp"
 
@@ -13,6 +16,7 @@ static const uint32_t max_read_size = 2048;  // max read size in bytes for reade
 
 namespace ttnn::operations::data_movement::pad::program {
 
+namespace {
 uint32_t get_num_stick_per_barrier(const Tensor& input_tensor) {
     uint32_t W = input_tensor.padded_shape()[3];
     uint32_t W_bytes = W * input_tensor.element_size();
@@ -107,6 +111,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 
     return ret_val;
 }
+}  // namespace
 
 PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMultiCoreV2ProgramFactory::create(
     const operation_attributes_t& operation_attributes,

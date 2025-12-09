@@ -11,6 +11,7 @@ using namespace tt::constants;
 
 namespace ttnn::operations::data_movement::pad::program {
 
+namespace {
 inline void log_rt_args(const CoreCoord& core, std::vector<uint32_t>& args) {
     for ([[maybe_unused]] auto v : args) {
         log_debug(tt::LogOp, "{},{} :: {}", core.x, core.y, v);
@@ -150,6 +151,7 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint
         nbatch_per_core_h,
         ncores_per_batch_h);
 }
+}  // namespace
 
 PadRmReaderWriterMultiCoreProgramFactory::cached_program_t PadRmReaderWriterMultiCoreProgramFactory::create(
     const operation_attributes_t& operation_attributes,

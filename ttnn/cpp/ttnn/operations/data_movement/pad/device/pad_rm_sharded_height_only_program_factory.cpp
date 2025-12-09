@@ -11,6 +11,7 @@ using namespace tt::constants;
 
 namespace ttnn::operations::data_movement::pad::program {
 
+namespace {
 inline std::vector<std::vector<uint32_t>> group_contiguous_and_repeated_values(std::vector<uint32_t>& values) {
     std::vector<std::vector<uint32_t>> chunks;
     if (values.empty()) {
@@ -34,7 +35,9 @@ inline std::vector<std::vector<uint32_t>> group_contiguous_and_repeated_values(s
     chunks.push_back(current_chunk);
     return chunks;
 }
+}  // namespace
 
+namespace {
 inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_pad_runtime_args_rm_sharded(
     const Tensor& input_tensor,
     Tensor& output_tensor,
@@ -184,6 +187,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
     return ret_val;
 }
+}  // namespace
 
 PadRmShardedHeightOnlyProgramFactory::cached_program_t PadRmShardedHeightOnlyProgramFactory::create(
     const operation_attributes_t& operation_attributes,

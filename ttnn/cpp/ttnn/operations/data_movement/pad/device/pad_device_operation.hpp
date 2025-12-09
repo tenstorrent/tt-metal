@@ -46,6 +46,11 @@ struct PadDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
+    static tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> create_op_performance_model(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        std::vector<Tensor>& output_tensors);
+
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,
         const ttnn::Shape& output_logical_shape,
