@@ -100,13 +100,7 @@ Result conv_transpose2d_L1(
         dims.input_pad_left,
         dims.input_pad_right);
 
-    const bool mm_conv = use_matmul_for_1x1_conv(
-        kernel_size,
-        dims.CONV2D_STRIDE,
-        {dims.input_pad_top + dims.input_pad_bottom, dims.input_pad_left + dims.input_pad_right},
-        dilation,
-        groups,
-        conv_config);
+    const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups, conv_config);
 
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 
