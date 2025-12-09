@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
-#include "risc_common.h"
-#include "tt_metal/hw/inc/ethernet/dataflow_api.h"
+#include "internal/tt-1xx/risc_common.h"
+#include "internal/ethernet/dataflow_api.h"
 #include "edm_fabric_utils.hpp"
 #include "fabric_edm_packet_header_validate.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
@@ -16,8 +16,8 @@
 #include "hostdevcommon/fabric_common.h"
 #include "edm_fabric_flow_control_helpers.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
-#include "tt_metal/hw/inc/utils/utils.h"
-#include "debug/assert.h"
+#include "api/alignment.h"
+#include "api/debug/assert.h"
 
 #include <cstdint>
 #include <array>

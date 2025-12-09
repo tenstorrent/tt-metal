@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dprint.h"
-#include "debug/ring_buffer.h"
-#include "dataflow_api.h"
+#include "api/debug/ring_buffer.h"
+#include "api/dataflow/dataflow_api.h"
 void dump_tile(uint32_t cb_id) {
     uint32_t cb1_rd_addr = CB_RD_PTR(cb_id);
     volatile tt_l1_ptr uint32_t* p = (volatile tt_l1_ptr uint32_t*)cb1_rd_addr;
