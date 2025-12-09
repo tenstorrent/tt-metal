@@ -322,6 +322,14 @@ ProgramCommandSequence& MeshWorkloadImpl::get_dispatch_cmds_for_program(Program&
     return program.impl().get_cached_program_command_sequences().at(command_hash);
 }
 
+void MeshWorkloadImpl::set_metadata(const std::string_view name, const std::string_view parameters) {
+    Inspector::mesh_workload_set_metadata(this, name, parameters);
+}
+
+void MeshWorkloadImpl::set_runtime_id(uint64_t runtime_id) {
+    Inspector::mesh_workload_set_runtime_id(this, runtime_id);
+}
+
 // The functions below are for testing purposes only
 void MeshWorkloadImpl::set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq) {
     last_used_command_queue_ = mesh_cq;
@@ -436,6 +444,13 @@ const std::unordered_map<MeshCoordinateRange, Program>& MeshWorkload::get_progra
     return pimpl_->get_programs();
 }
 
+// For debug purposes
+void MeshWorkload::set_metadata(const std::string_view name, const std::string_view parameters) {
+    pimpl_->set_metadata(name, parameters);
+}
+
+void MeshWorkload::set_runtime_id(uint64_t runtime_id) { pimpl_->set_runtime_id(runtime_id); }
+
 // For testing purposes only
 void MeshWorkload::set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq) {
     pimpl_->set_last_used_command_queue_for_testing(mesh_cq);
@@ -462,7 +477,5 @@ uint32_t MeshWorkload::get_cb_size(
     std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
     return pimpl_->get_cb_size(mesh_device, logical_core, core_type);
 }
-
-uint64_t MeshWorkload::get_id() const { return pimpl_->get_id(); }
 
 }  // namespace tt::tt_metal::distributed

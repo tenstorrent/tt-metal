@@ -127,6 +127,8 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
     for (const auto& [mesh_workload_id, mesh_workload_data] : mesh_workloads_data) {
         auto mesh_workload = mesh_workloads[i++];
         mesh_workload.setMeshWorkloadId(mesh_workload_id);
+        mesh_workload.setName(mesh_workload_data.name);
+        mesh_workload.setParameters(mesh_workload_data.parameters);
 
         const auto& programs = mesh_workload_data.mesh_workload->get_programs();
         auto programs_data = mesh_workload.initPrograms(programs.size());
@@ -153,6 +155,15 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
             binary_status.setMeshId(mesh_id);
             binary_status.setStatus(convert_binary_status(status));
         }
+    }
+
+    // Add runtime IDs from global queue
+    std::lock_guard<std::mutex> runtime_lock(runtime_ids_mutex);
+    auto all_runtime_ids = results.initRuntimeIds(runtime_ids.size());
+    for (size_t i = 0; i < runtime_ids.size(); ++i) {
+        auto entry = all_runtime_ids[i];
+        entry.setWorkloadId(runtime_ids[i].workload_id);
+        entry.setRuntimeId(runtime_ids[i].runtime_id);
     }
 }
 
