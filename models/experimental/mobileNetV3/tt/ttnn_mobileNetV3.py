@@ -19,6 +19,9 @@ class ttnn_MobileNetV3:
         num_classes: int = 1000,
         block=None,
         parameters=None,
+        device=None,
+        input_height=224,
+        input_width=224,
     ) -> None:
         super().__init__()
 
@@ -43,17 +46,23 @@ class ttnn_MobileNetV3:
                 stride=2,
                 activation_layer=ttnn.hardswish,
                 parameters=parameters["features"][index],
+                device=device,
+                input_height=input_height,
+                input_width=input_width,
             )
         )
 
         index += 1
 
         # building inverted residual blocks
-        for i, cnf in enumerate(inverted_residual_setting):
+        for i, cnf in enumerate[InvertedResidualConfig](inverted_residual_setting):
             layers.append(
                 block(
                     cnf,
                     parameters=parameters["features"][index].block,
+                    device=device,
+                    input_height=input_height,
+                    input_width=input_width,
                 )
             )
             index += 1
@@ -66,6 +75,9 @@ class ttnn_MobileNetV3:
                 kernel_size=1,
                 activation_layer=ttnn.hardswish,
                 parameters=parameters["features"][index],
+                device=device,
+                input_height=input_height,
+                input_width=input_width,
             )
         )
 

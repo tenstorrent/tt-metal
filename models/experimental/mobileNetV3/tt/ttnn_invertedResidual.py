@@ -33,6 +33,8 @@ class InvertedResidualConfig:
         stride: int,
         dilation: int,
         width_mult: float,
+        input_height: int,
+        input_width: int,
     ):
         self.input_channels = self.adjust_channels(input_channels, width_mult)
         self.kernel = kernel
@@ -42,6 +44,8 @@ class InvertedResidualConfig:
         self.use_hs = activation == "HS"
         self.stride = stride
         self.dilation = dilation
+        self.input_height = input_height
+        self.input_width = input_width
 
     @staticmethod
     def adjust_channels(channels: int, width_mult: float):
@@ -139,11 +143,12 @@ class ttnn_InvertedResidual:
         se_layer=partial(SElayer, scale_activation=ttnn.hardsigmoid),
         parameters=None,
         device=None,
-        input_height=1,
-        input_width=1,
+        # input_height=1,
+        # input_width=1,
     ):
         super().__init__()
-
+        input_height = cnf.input_height
+        input_width = cnf.input_width
         self.use_res_connect = cnf.stride == 1 and cnf.input_channels == cnf.out_channels
 
         layers = []
@@ -194,8 +199,10 @@ class ttnn_InvertedResidual:
                 activation_layer=None,
                 parameters=parameters[index],
                 device=device,
-                input_height=input_height // 2,
-                input_width=input_width // 2,
+                input_height=input_height // stride,
+                input_width=input_width // stride,
+                # input_height=input_height  if cnf.expanded_channels != cnf.input_channels else input_height//2,
+                # input_width=input_width  if cnf.expanded_channels != cnf.input_channels else input_width//2,
             )
         )
 
