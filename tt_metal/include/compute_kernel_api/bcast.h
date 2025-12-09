@@ -35,7 +35,7 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb) {
 
     MATH((llk_math_eltwise_unary_datacopy_init<data_copy_type, DST_ACCUM_MODE, bcast_type>(icb)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure_disaggregated(icb, icb)));
+    MATH((llk_math_hw_configure(icb, icb)));
 
     PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(ocb)));
     PACK((llk_pack_init<false>(ocb)));
@@ -77,7 +77,7 @@ void reconfigure_unary_bcast(uint32_t old_icb, uint32_t new_icb, uint32_t old_oc
     }
 
     if (unpacker_dst_format_change) {
-        MATH((llk_math_hw_configure_disaggregated(new_icb, new_icb)));
+        MATH((llk_math_hw_configure(new_icb, new_icb)));
     }
 
     if (unpacker_dst_format_change || bcast_type_change) {
@@ -216,7 +216,7 @@ void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure_disaggregated(icb0, icb1)));
+    MATH((llk_math_hw_configure(icb0, icb1)));
 }
 
 /*
