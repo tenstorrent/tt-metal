@@ -8,18 +8,15 @@
 #include <unordered_map>
 #include <optional>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <random>
 
-namespace tt {
-namespace tt_fabric {
-class FabricNodeId;
-}  // namespace tt_fabric
-}  // namespace tt
-
 namespace tt::tt_fabric {
-namespace fabric_tests {
+class FabricNodeId;
+}  // namespace tt::tt_fabric
+
+namespace tt::tt_fabric::fabric_tests {
 
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 
@@ -44,7 +41,6 @@ public:
     virtual uint32_t get_l1_alignment() const = 0;
     virtual uint32_t get_max_payload_size_bytes() const = 0;
     virtual bool is_2D_routing_enabled() const = 0;
-    virtual bool is_dynamic_routing_enabled() const = 0;
 
     // Data reading helpers
     virtual std::unordered_map<CoreCoord, std::vector<uint32_t>> read_buffer_from_cores(
@@ -125,5 +121,4 @@ private:
     virtual void barrier() const = 0;
 };
 
-}  // namespace fabric_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_tests

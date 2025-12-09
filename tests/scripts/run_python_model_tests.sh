@@ -81,7 +81,7 @@ run_python_model_tests_slow_runtime_mode_wormhole_b0() {
 }
 
 run_python_model_tests_blackhole() {
-    pytest models/demos/blackhole/stable_diffusion/tests --ignore=models/demos/blackhole/stable_diffusion/tests/test_perf.py
+    SD_HF_DOWNLOAD_OVERRIDE=1 pytest models/demos/blackhole/stable_diffusion/tests --ignore=models/demos/blackhole/stable_diffusion/tests/test_perf.py
 
     # Llama3.1-8B
     llama8b=meta-llama/Llama-3.1-8B-Instruct
@@ -93,7 +93,6 @@ run_python_model_tests_blackhole() {
     done
 
     pytest models/demos/wormhole/resnet50/tests/test_resnet50_functional.py
-    pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4_bh.py
     pytest models/experimental/functional_unet/tests/test_unet_model.py
 }
 

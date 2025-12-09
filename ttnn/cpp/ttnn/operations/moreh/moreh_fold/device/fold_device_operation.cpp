@@ -10,7 +10,7 @@
 namespace ttnn::operations::moreh::moreh_fold {
 void MorehFoldOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto& input = tensor_args.input;
+    const auto& input = tensor_args.input;
     auto input_shape = input.logical_shape();
 
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Fold: only support input in ROW_MAJOR");

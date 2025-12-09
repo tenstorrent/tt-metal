@@ -224,10 +224,10 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceCreateQkvHeads::create_pr
     log_debug(tt::LogOp, "DEBUG: create_program is called");
 
     const auto& input_tensor = input_tensors[0];
-    auto mesh_device = input_tensor.device();
+    auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
-    const auto target_device = mesh_device->get_device(mesh_coord);
+    auto* const target_device = mesh_device->get_device(mesh_coord);
     std::vector<IDevice*> devices = (this->cluster_axis == 0) ? mesh_view.get_devices_on_column(mesh_coord[1])
                                                               : mesh_view.get_devices_on_row(mesh_coord[0]);
 
@@ -309,9 +309,7 @@ tt::tt_metal::operation::Hash AllReduceCreateQkvHeads::compute_program_hash(
         input_memory_config);
 }
 
-namespace operations {
-namespace experimental {
-namespace ccl {
+namespace operations::experimental::ccl {
 
 std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     const Tensor& input_tensor,
@@ -358,9 +356,7 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     return {output_tensors[0], output_tensors[1], output_tensors[2], output_tensors[3]};
 }
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl
 
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores_fuse(
     size_t num_links,

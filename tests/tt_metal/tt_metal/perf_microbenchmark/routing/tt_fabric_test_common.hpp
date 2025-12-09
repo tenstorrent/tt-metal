@@ -13,10 +13,9 @@
 #include <string>
 #include <cstdlib>
 
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/device_pool.hpp>
-#include <tt-metalium/fabric.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/hal.hpp>
@@ -58,8 +57,7 @@ using BufferShardingArgs = tt::tt_metal::BufferShardingArgs;
 
 using Topology = tt::tt_fabric::Topology;
 
-namespace tt::tt_fabric {
-namespace fabric_tests {
+namespace tt::tt_fabric::fabric_tests {
 
 struct pair_hash {
     template <class T1, class T2>
@@ -89,12 +87,10 @@ class TestFixture : public IDeviceInfoProvider, public IRouteManager, public IDi
     static constexpr uint32_t EW_DIM = 1;
     static constexpr uint32_t NS_DIM = 0;
 
-    static const std::unordered_map<std::pair<Topology, RoutingType>, tt::tt_fabric::FabricConfig, pair_hash>
-        topology_to_fabric_config_map;
+    static const std::unordered_map<Topology, tt::tt_fabric::FabricConfig> topology_to_fabric_config_map;
 
-    static const std::
-        unordered_map<std::tuple<Topology, std::string, RoutingType>, tt::tt_fabric::FabricConfig, tuple_hash>
-            torus_topology_to_fabric_config_map;
+    static const std::unordered_map<std::pair<Topology, std::string>, tt::tt_fabric::FabricConfig, pair_hash>
+        torus_topology_to_fabric_config_map;
 
 public:
     void init(std::optional<PhysicalMeshConfig> physical_mesh_config = std::nullopt) {
@@ -111,9 +107,8 @@ public:
             local_mesh_id_, MeshScope::LOCAL);
     }
 
-    void open_devices(const TestFabricSetup& fabric_setup) {
+    bool open_devices(const TestFabricSetup& fabric_setup) {
         const auto& topology = fabric_setup.topology;
-        const auto& routing_type = fabric_setup.routing_type.value();
         const auto& fabric_tensix_config = fabric_setup.fabric_tensix_config.value();
 
         // Fabric Reliability Mode
@@ -131,22 +126,31 @@ public:
         FabricConfig new_fabric_config;
         if (topology == Topology::Torus) {
             const auto& torus_config = fabric_setup.torus_config.value();
-            auto it = torus_topology_to_fabric_config_map.find({topology, torus_config, routing_type});
+            auto it = torus_topology_to_fabric_config_map.find({topology, torus_config});
             TT_FATAL(
                 it != torus_topology_to_fabric_config_map.end(),
-                "Unsupported topology: {} with torus_config: {} and routing type: {}",
+                "Unsupported topology: {} with torus_config: {}",
                 topology,
-                torus_config,
-                routing_type);
+                torus_config);
             new_fabric_config = it->second;
         } else {
-            auto it = topology_to_fabric_config_map.find({topology, routing_type});
-            TT_FATAL(
-                it != topology_to_fabric_config_map.end(),
-                "Unsupported topology: {} with routing type: {}",
-                topology,
-                routing_type);
+            auto it = topology_to_fabric_config_map.find(topology);
+            TT_FATAL(it != topology_to_fabric_config_map.end(), "Unsupported topology: {}", topology);
             new_fabric_config = it->second;
+        }
+
+        // Use the new ControlPlane validation API - always skip on mismatch
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        try {
+            if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::GALAXY &&
+                !control_plane.is_fabric_config_valid(new_fabric_config)) {
+                log_warning(tt::LogTest, "Fabric configuration validation failed - can't open device");
+                return false;
+            }
+        } catch (const std::exception& e) {
+            log_warning(tt::LogTest, "Fabric configuration validation failed: {} - can't open device", e.what());
+            return false;
         }
 
         if (new_fabric_config != current_fabric_config_ || fabric_tensix_config != current_fabric_tensix_config_ ||
@@ -159,10 +163,10 @@ public:
             open_devices_internal(new_fabric_config, fabric_tensix_config, reliability_mode);
 
             topology_ = topology;
-            routing_type_ = routing_type;
         } else {
             log_info(tt::LogTest, "Reusing existing device setup with fabric config: {}", current_fabric_config_);
         }
+        return true;
     }
 
     void setup_workload() {
@@ -272,13 +276,6 @@ public:
         return tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_2D_routing_enabled();
     }
 
-    bool is_dynamic_routing_enabled() const override {
-        return tt::tt_metal::MetalContext::instance()
-            .get_control_plane()
-            .get_fabric_context()
-            .is_dynamic_routing_enabled();
-    }
-
     /**
      * This function takes hop information and computes the actual destination nodes that would be visited during a ring
      * traversal multicast.
@@ -382,7 +379,6 @@ public:
         const std::vector<CoreCoord>& cores,
         uint32_t address,
         uint32_t size_bytes) const {
-
         auto mesh_buffer = create_mesh_buffer_helper(cores, address, size_bytes);
 
         const auto& buffer_distribution_spec =
@@ -409,7 +405,6 @@ public:
     // Process results after barrier_reads() has been called
     std::unordered_map<CoreCoord, std::vector<uint32_t>> complete_read_buffer_from_cores(
         const ReadBufferOperation& op) const {
-
         // Process results (existing splice logic)
         std::unordered_map<CoreCoord, std::vector<uint32_t>> results;
         auto num_words_per_core = op.size_bytes / sizeof(uint32_t);
@@ -452,7 +447,7 @@ public:
         uint32_t size_bytes,
         bool blocking,
         std::unordered_map<CoreCoord, std::vector<uint32_t>>& results_out) const {
-        auto device = mesh_device_->get_device(device_coord);
+        auto* device = mesh_device_->get_device(device_coord);
         auto num_elements = tt::align(size_bytes, sizeof(uint32_t));
         for (const auto& logical_core : cores) {
             auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
@@ -472,16 +467,14 @@ public:
         }
     }
 
-    void barrier_reads() const {
-        mesh_device_->mesh_command_queue().finish();
-    }
+    void barrier_reads() const { mesh_device_->mesh_command_queue().finish(); }
 
     void write_buffer_to_ethernet_cores(
         const MeshCoordinate& device_coord,
         const std::vector<CoreCoord>& cores,
         uint32_t address,
         const std::vector<uint8_t>& data) const {
-        auto device = mesh_device_->get_device(device_coord);
+        auto* device = mesh_device_->get_device(device_coord);
         for (const auto& logical_core : cores) {
             auto virtual_core = device->ethernet_core_from_logical_core(logical_core);
 
@@ -1480,7 +1473,6 @@ public:
 
 private:
     Topology topology_{0};
-    RoutingType routing_type_{0};
     MeshShape mesh_shape_;
     std::set<MeshId> available_mesh_ids_;
     std::vector<FabricNodeId> local_available_node_ids_;
@@ -1893,5 +1885,4 @@ private:
     }
 };
 
-}  // namespace fabric_tests
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::fabric_tests

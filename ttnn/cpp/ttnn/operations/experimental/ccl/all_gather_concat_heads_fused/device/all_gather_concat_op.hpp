@@ -9,7 +9,6 @@
 #include <tt-metalium/buffer.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
@@ -130,9 +129,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded_su
     uint32_t num_heads,
     bool use_noc1_only);
 
-namespace operations {
-namespace experimental {
-namespace ccl {
+namespace operations::experimental::ccl {
 
 Tensor all_gather_concat(
     const Tensor& input_tensor,
@@ -148,8 +145,6 @@ Tensor all_gather_concat(
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl
 
 }  // namespace ttnn

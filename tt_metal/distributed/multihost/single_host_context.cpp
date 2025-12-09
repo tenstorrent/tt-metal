@@ -104,9 +104,14 @@ void SingleHostContext::scatter(
     TT_THROW("method scatter is unsupported for single-host distributed contexts.");
 }
 
-void SingleHostContext::all_gather(
-    tt::stl::Span<std::byte> send_buf [[maybe_unused]], tt::stl::Span<std::byte> recv_buf [[maybe_unused]]) const {
-    TT_THROW("method all_gather is unsupported for single-host distributed contexts.");
+void SingleHostContext::all_gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const {
+    TT_FATAL(
+        recv_buf.size() == send_buf.size(),
+        "all_gather: recv buffer {} bytes, expected {} (world × send)",
+        recv_buf.size(),
+        send_buf.size());
+
+    std::copy(send_buf.begin(), send_buf.end(), recv_buf.begin());
 }
 
 void SingleHostContext::all_to_all(
@@ -142,7 +147,8 @@ ContextPtr SingleHostContext::duplicate() const {
 }
 
 ContextPtr SingleHostContext::split(Color color [[maybe_unused]], Key key [[maybe_unused]]) const {
-    TT_THROW("method split is unsupported for single-host distributed contexts.");
+    // nop on single-host context
+    return get_current_world();
 }
 
 ContextPtr SingleHostContext::create_sub_context(tt::stl::Span<int> ranks [[maybe_unused]]) const {

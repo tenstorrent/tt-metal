@@ -33,9 +33,19 @@ on:
         type: boolean
         default: false
       galaxy-unit:
+        description: 'Unit tests: Select all, specific model, or disabled'
         required: false
-        type: boolean
-        default: false
+        type: choice
+        options:
+          - disabled
+          - all
+          - unit
+          - fabric
+          - llama3-70b
+          - prefetcher
+          - distributed-ops
+          - gpt-oss
+        default: 'disabled'
       galaxy-demo:
         description: 'Demo tests: Select all, specific model, or disabled'
         required: false
@@ -52,6 +62,7 @@ on:
           - sentence_bert
           - sd35
           - flux1
+          - motif
           - gpt-oss
           - wan22
           - mochi
@@ -70,6 +81,7 @@ on:
           - wan22
           - mochi
           - flux1
+          - motif
         default: 'disabled'
       galaxy-model-perf:
         description: 'Model perf tests (needs tracy): Select all, specific model, or disabled'
@@ -84,6 +96,7 @@ on:
 #          - llama70b_prefill
           - sd35
           - flux1-dev
+          - motif
           - sentence_bert
 #          - wan2-2
 #          - mochi
@@ -107,7 +120,7 @@ jobs:
           case "${{ inputs.trigger_type }}" in
             "manual")
               echo "run-quick=${{ inputs.galaxy-quick }}" >> $GITHUB_OUTPUT
-              echo "run-unit=${{ inputs.galaxy-unit }}" >> $GITHUB_OUTPUT
+              echo "run-unit=${{ inputs.galaxy-unit != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-frequent=${{ inputs.galaxy-frequent != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-demo=${{ inputs.galaxy-demo != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-model-perf=${{ inputs.galaxy-model-perf != 'disabled' }}" >> $GITHUB_OUTPUT
@@ -170,7 +183,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology-6u: true
   galaxy-unit-tests:
     if: ${{ needs.determine-tests.outputs.run-unit == 'true' }}
     needs: [build-artifact, determine-tests]
@@ -181,6 +193,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-unit || 'all' }}
       topology: 'topology-6u'
   galaxy-frequent-tests:
     if: ${{ needs.determine-tests.outputs.run-frequent == 'true' }}

@@ -23,7 +23,6 @@
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
 
-#include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn-pybind/small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "ttnn/common/queue_id.hpp"
@@ -1402,7 +1401,7 @@ void pytensor_module(py::module& m_tensor) {
         )doc")
         .def(
             "device",
-            [](const Tensor& self) { return dynamic_cast<MeshDevice*>(self.device()); },
+            [](const Tensor& self) { return self.device(); },
             R"doc(
             Get the device of the tensor.
 

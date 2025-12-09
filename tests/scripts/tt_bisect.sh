@@ -85,7 +85,6 @@ fi
 # Create the virtual environment and install dependencies (including wheel)
 echo "Creating virtual environment and installing dependencies..."
 ./create_venv.sh
-pip install -r models/tt_transformers/requirements.txt
 
 
 git cat-file -e "$good_commit^{commit}" 2>/dev/null || die "Invalid good commit: $good_commit"

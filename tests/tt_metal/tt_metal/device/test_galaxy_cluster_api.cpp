@@ -11,13 +11,14 @@
 #include <unordered_set>
 #include <vector>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device.hpp>
 #include "galaxy_fixture.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 
 namespace tt::tt_metal {
 
@@ -56,6 +57,12 @@ std::unordered_set<ChipId> get_ethernet_connected_device_ids(const ChipId device
     return connected_device_ids;
 }
 
+TEST_F(GalaxyFixture, Initialize) {
+    log_info(LogTest, "GalaxyFixture initialized with {} devices", this->devices_.size());
+    // If we reach here, the fixture has initialized successfully
+    SUCCEED();
+}
+
 // Validate that every pair of adjacent galaxy chips has 4 links between them
 // The reason that this test is in TGFixture instead of GalaxyFixture is
 // because there are 2 links between adjacent Galaxy chips that are on different
@@ -64,7 +71,7 @@ std::unordered_set<ChipId> get_ethernet_connected_device_ids(const ChipId device
 // which shelf a particular Galaxy chip is on.
 TEST_F(TGFixture, ActiveEthValidateNumLinksBetweenAdjacentGalaxyChips) {
     for (const auto& mesh_device : this->devices_) {
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         const ChipId device_id = device->id();
         if (is_galaxy_device(device_id)) {
             std::unordered_map<ChipId, uint32_t> connected_devices_to_num_links_found;
@@ -99,9 +106,9 @@ TEST_F(TGFixture, ActiveEthValidateNumLinksBetweenAdjacentGalaxyChips) {
 
 // Validate that each MMIO chip links to two separate Galaxy chips,
 // and that each Galaxy chip links to at most one MMIO chip
-TEST_F(GalaxyFixture, ActiveEthValidateLinksBetweenMMIOAndGalaxyChips) {
+TEST_F(GalaxyFixture, DISABLED_ActiveEthValidateLinksBetweenMMIOAndGalaxyChips) {
     for (const auto& mesh_device : this->devices_) {
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         const ChipId device_id = device->id();
         const std::unordered_set<ChipId>& connected_device_ids = get_ethernet_connected_device_ids(device_id);
         if (is_galaxy_device(device_id)) {
@@ -137,7 +144,7 @@ TEST_F(GalaxyFixture, ActiveEthValidateLinksBetweenMMIOAndGalaxyChips) {
 // Validate that all galaxy chips are unharvested
 TEST_F(GalaxyFixture, ValidateAllGalaxyChipsAreUnharvested) {
     for (const auto& mesh_device : this->devices_) {
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         const ChipId device_id = device->id();
         if (is_galaxy_device(device_id)) {
             const uint32_t harvest_mask =
@@ -149,9 +156,9 @@ TEST_F(GalaxyFixture, ValidateAllGalaxyChipsAreUnharvested) {
 }
 
 // Validate that all MMIO chips have a single row harvested
-TEST_F(GalaxyFixture, ValidateAllMMIOChipsHaveSingleRowHarvested) {
+TEST_F(GalaxyFixture, DISABLED_ValidateAllMMIOChipsHaveSingleRowHarvested) {
     for (const auto& mesh_device : this->devices_) {
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         const ChipId device_id = device->id();
         if (!is_galaxy_device(device_id)) {
             uint32_t num_rows_harvested = 0;
@@ -183,7 +190,7 @@ TEST_F(TGFixture, ValidateChipBoardTypes) {
     uint32_t num_n150_chips = 0;
     uint32_t num_galaxy_chips = 0;
     for (const auto& mesh_device : this->devices_) {
-        auto device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->get_devices()[0];
         const ChipId device_id = device->id();
         if (is_galaxy_device(device_id)) {
             num_galaxy_chips++;

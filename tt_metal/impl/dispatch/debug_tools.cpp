@@ -23,12 +23,11 @@
 #include "system_memory_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include <llrt/tt_cluster.hpp>
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace internal {
 

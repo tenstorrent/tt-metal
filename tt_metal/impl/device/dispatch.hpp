@@ -10,8 +10,7 @@
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 
-namespace tt {
-namespace tt_metal {
+namespace tt::tt_metal {
 
 // Used so the host knows how to properly copy data into user space from the completion queue (in hugepages)
 struct ReadCoreDataDescriptor {
@@ -63,5 +62,4 @@ void read_core_data_from_completion_queue(
 
 }  // namespace device_dispatch
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal

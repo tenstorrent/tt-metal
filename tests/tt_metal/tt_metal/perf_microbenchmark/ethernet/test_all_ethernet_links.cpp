@@ -10,13 +10,14 @@
 #include <vector>
 #include <queue>
 #include <optional>
+#include <fstream>
 
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -29,7 +30,6 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/impl/profiler/profiler_paths.hpp"
 
-#include <tt-metalium/persistent_kernel_cache.hpp>
 #include <thread>
 #include "impl/context/metal_context.hpp"
 #include "common/tt_backend_api_types.hpp"
@@ -37,6 +37,7 @@
 #include "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_ubenchmark_types.hpp"
 
 #include <enchantum/enchantum.hpp>
+#include <llrt/tt_cluster.hpp>
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -108,7 +109,7 @@ struct SenderReceiverPair {
 
 tt_metal::distributed::MeshDevice* find_device_with_id(
     const std::vector<std::shared_ptr<tt_metal::distributed::MeshDevice>>& devices, ChipId chip_id) {
-    for (auto& device : devices) {
+    for (const auto& device : devices) {
         if (device->get_devices()[0]->id() == chip_id) {
             return device.get();
         }
@@ -219,7 +220,7 @@ private:
         tt_metal::distributed::ReplicatedBufferConfig global_buffer_config{
             .size = params.packet_size,
         };
-        auto device = find_device_with_id(this->devices, logical_eth_core.chip);
+        auto* device = find_device_with_id(this->devices, logical_eth_core.chip);
         auto buffer = tt_metal::distributed::MeshBuffer::create(global_buffer_config, device_local_config, device);
 
         return std::make_pair(logical_tensix, std::move(buffer));
@@ -356,8 +357,8 @@ std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper
         auto& sender_program = programs.at(chip_to_index[link.sender.chip]);
         auto& receiver_program = programs.at(chip_to_index[link.receiver.chip]);
 
-        auto sender_device = find_device_with_id(device_helper.devices, link.sender.chip);
-        auto receiver_device = find_device_with_id(device_helper.devices, link.receiver.chip);
+        auto* sender_device = find_device_with_id(device_helper.devices, link.sender.chip);
+        auto* receiver_device = find_device_with_id(device_helper.devices, link.receiver.chip);
 
         if (link.sender_tensix.has_value()) {
             TT_FATAL(
@@ -405,7 +406,7 @@ std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper
 
     // Compile all programs
     for (size_t i = 0; i < device_helper.devices.size(); i++) {
-        auto& device = device_helper.devices[i];
+        const auto& device = device_helper.devices[i];
         try {
             tt_metal::detail::CompileProgram(device.get(), programs[i]);
         } catch (std::exception& e) {
@@ -430,8 +431,8 @@ void validation(
     std::iota(std::begin(golden_vec), std::end(golden_vec), 0);
     std::vector<uint8_t> result_vec(bytes_to_read, 0);
 
-    auto sender_device = find_device_with_id(device_helper.devices, link.sender.chip);
-    auto receiver_device = find_device_with_id(device_helper.devices, link.receiver.chip);
+    auto* sender_device = find_device_with_id(device_helper.devices, link.sender.chip);
+    auto* receiver_device = find_device_with_id(device_helper.devices, link.receiver.chip);
     TT_FATAL(
         sender_device->get_devices()[0]->id() == link.sender.chip and
             receiver_device->get_devices()[0]->id() == link.receiver.chip,
@@ -446,7 +447,7 @@ void validation(
         auto buffer_to_validate = validate_receiver ? link.receiver_buffer : link.sender_buffer;
         // Use distributed::ReadShard to read from the mesh buffer
         // We need to get the device and coordinate for reading
-        auto device =
+        auto* device =
             find_device_with_id(device_helper.devices, validate_receiver ? link.receiver.chip : link.sender.chip);
         tt_metal::distributed::ReadShard(
             device->mesh_command_queue(),
@@ -498,8 +499,8 @@ void dump_eth_link_stats(
     std::vector<uint32_t> link_stats(56, 0);
     constexpr uint32_t link_stats_base_addr = 0x1EC0;
     for (const auto& link : device_helper.unique_links) {
-        auto sender_device = find_device_with_id(device_helper.devices, link.sender.chip);
-        auto receiver_device = find_device_with_id(device_helper.devices, link.receiver.chip);
+        auto* sender_device = find_device_with_id(device_helper.devices, link.sender.chip);
+        auto* receiver_device = find_device_with_id(device_helper.devices, link.receiver.chip);
         auto sender_virtual =
             sender_device->virtual_core_from_logical_core(CoreCoord(link.sender.x, link.sender.y), CoreType::ETH);
         auto receiver_virtual =
@@ -604,7 +605,7 @@ void run(
         if (slow_dispath_mode) {
             std::vector<std::thread> threads;
             for (size_t i = 0; i < device_helper.devices.size(); i++) {
-                auto& device = device_helper.devices[i];
+                const auto& device = device_helper.devices[i];
                 auto& program = programs[i];
                 tt_metal::distributed::MeshWorkload mesh_workload;
                 mesh_workload.add_program(
@@ -621,7 +622,7 @@ void run(
             }
         } else {
             for (size_t i = 0; i < device_helper.devices.size(); i++) {
-                auto& device = device_helper.devices[i];
+                const auto& device = device_helper.devices[i];
                 auto& program = programs[i];
                 program.set_runtime_id(0);
                 tt_metal::distributed::MeshWorkload mesh_workload;
@@ -632,7 +633,7 @@ void run(
                 tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
             }
             log_info(tt::LogTest, "Iteration {} Calling Finish", iteration);
-            for (auto& device : device_helper.devices) {
+            for (const auto& device : device_helper.devices) {
                 tt_metal::distributed::Finish(device->mesh_command_queue());
             }
         }

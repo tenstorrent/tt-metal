@@ -9,7 +9,6 @@
 #include <tt-metalium/buffer.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
@@ -296,9 +295,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     std::optional<uint32_t> num_buffers_per_channel,
     CoreCoord core_grid_offset);
 
-namespace operations {
-namespace experimental {
-namespace ccl {
+namespace operations::experimental::ccl {
 
 Tensor reduce_scatter_minimal_async(
     const Tensor& input_tensor,
@@ -316,8 +313,6 @@ Tensor reduce_scatter_minimal_async(
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace operations::experimental::ccl
 
 }  // namespace ttnn
